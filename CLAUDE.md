@@ -63,7 +63,7 @@ backlogguée — voir `docs/backlog.md`.
 
 # Deploy update
 rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
-  -e "ssh -i ~/.ssh/alexis" /data/projects/oto-mcp/ \
+  -e "ssh -i ~/.ssh/alexis" /data/oto/mcp/ \
   root@51.15.225.121:/opt/oto-mcp/
 ssh -i ~/.ssh/alexis root@51.15.225.121 \
   "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"

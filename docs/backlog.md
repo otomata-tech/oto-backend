@@ -1,37 +1,16 @@
 # Backlog
 
-## Auth — passer sur Logto (équivalent du MCP GR)
+## Org-gating sur l'auth Logto (optionnel)
 
-**Contexte.** Aujourd'hui : `InMemoryOAuthProvider` + DCR + un seul mot de
-passe partagé (`OTO_MCP_OAUTH_PASSWORD`). N'importe qui qui a le mot de passe
-voit tout le serveur — single-user MVP. Le MCP GR (mission Générations
-Renouvelables) utilise Logto comme IdP, ce qui donne :
-- vraies sessions par utilisateur (compte Logto)
-- client_id/secret stables émis par Logto
-- révocation par compte, audit
-- pas de mot de passe partagé qui circule
+L'auth Logto est en place (cf. `deploy/DEPLOY.md` étape 3). Pour l'instant
+n'importe quel user du tenant Logto peut récupérer un token et appeler le
+MCP. Si on veut restreindre à une organisation Logto précise, ajouter un
+`TokenVerifier` custom qui sous-classe `JWTVerifier` et vérifie un claim
+`organizations` (cf. pattern `isOrgMember` dans la mission GR :
+`/data/missions/generations-renouvelables/server/src/services/logto.ts`).
 
-**Quoi faire.**
-
-1. Créer une app M2M ou Native dans le tenant Logto utilisé par les autres
-   services oto.zone (cf. `auth.oto.zone` / `logto.oto.zone`).
-2. Configurer une resource `https://mcp.oto.ninja` côté Logto + scopes
-   (`mcp:read` minimum).
-3. Remplacer `PasswordOAuthProvider` par un délégué qui valide les access
-   tokens Logto via JWKS (vérif signature + audience + scopes).
-4. Supprimer `/login` + le form mot de passe.
-5. Mettre à jour `README.md` et `deploy/DEPLOY.md`.
-6. Brancher la redirect URI Logto sur `https://mcp.oto.ninja/callback`.
-
-**Ce qu'il faut conserver.** Le edge bearer-gate Caddy reste utile pour rejeter
-les probes anonymes avant que ça touche l'app.
-
-**Quand.** Pas urgent tant qu'on est seul user. Devient nécessaire dès qu'on
-ouvre l'accès à quelqu'un d'autre, ou si on veut ajouter des tools sensibles
-(ex. wrappers Pennylane, Attio, gmail).
-
-**Référence d'implémentation.** Regarder `mcp.memento.otomata.tech` (memento-mcp)
-ou le serveur GR qui font déjà ce pattern Logto + JWKS.
+Pas urgent — single-tenant Logto + provisioning manuel de comptes côté admin
+suffit pour l'instant.
 
 ---
 

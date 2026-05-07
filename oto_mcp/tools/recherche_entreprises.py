@@ -1,11 +1,4 @@
-"""MCP tools — first batch wraps the data.gouv.fr "API Recherche Entreprises".
-
-Backed by `oto.tools.sirene.entreprises.EntreprisesClient` (oto-cli). No API
-key needed for this provider. All responses are returned as-is from the
-upstream API; we only normalize argument shapes (lists from comma strings).
-
-Tool docstrings are how the LLM picks tools — keep them precise.
-"""
+"""data.gouv.fr "API Recherche Entreprises" — pas de clé requise."""
 from __future__ import annotations
 
 from typing import Optional
@@ -13,7 +6,7 @@ from typing import Optional
 from fastmcp import FastMCP
 
 
-def register_tools(mcp: FastMCP) -> None:
+def register(mcp: FastMCP) -> None:
     from oto.tools.sirene import EntreprisesClient
 
     client = EntreprisesClient()
@@ -33,18 +26,15 @@ def register_tools(mcp: FastMCP) -> None:
     ) -> dict:
         """Search French companies via data.gouv.fr's "API Recherche Entreprises".
 
-        Returns enriched data: identity, headquarters, NAF, employees,
-        directors (`dirigeants`), finances (`finances`), matched establishments.
-
-        At least one filter is required among:
-        query, naf, departement, code_postal, commune, employees, ca_min, ca_max.
+        Returns enriched data: identity, siege (HQ), NAF, employees, dirigeants,
+        finances, matched establishments. At least one filter is required.
 
         Args:
             query: Full-text search (company name, SIREN, brand…).
             naf: NAF activity codes, comma-separated (e.g. "62.01Z,62.02A").
             departement: French department code (e.g. "75").
             code_postal: Postal code (e.g. "75001").
-            commune: City name (e.g. "Paris").
+            commune: City name.
             employees: Employee-range codes (INSEE TEFEN), comma-separated.
             ca_min: Minimum turnover in euros.
             ca_max: Maximum turnover in euros.
@@ -68,8 +58,8 @@ def register_tools(mcp: FastMCP) -> None:
     async def recherche_entreprises_get(siren: str) -> Optional[dict]:
         """Fetch a single French company by SIREN (9 digits).
 
-        Returns the full enriched record (identity, headquarters, dirigeants,
-        finances, matching_etablissements…) or null if not found.
+        Returns the full enriched record (siege, dirigeants, finances,
+        matching_etablissements…) or null if not found.
         """
         return client.get_by_siren(siren)
 

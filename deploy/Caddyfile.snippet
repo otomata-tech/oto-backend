@@ -2,25 +2,14 @@
 # Origin Cert *.oto.ninja already at /etc/caddy/origin-certs/oto-ninja.{pem,key}.
 
 # --- oto-mcp ---
+#
+# Auth = Logto JWT validation in the FastMCP backend itself. On unauthenticated
+# requests, the backend returns 401 with `WWW-Authenticate: Bearer
+# resource_metadata="https://mcp.oto.ninja/.well-known/oauth-protected-resource/mcp"`,
+# which is the discovery hint MCP clients need to start the OAuth dance.
+# No edge bearer-gate — it would strip that header and break discovery.
 
 mcp.oto.ninja {
 	tls /etc/caddy/origin-certs/oto-ninja.pem /etc/caddy/origin-certs/oto-ninja.key
-
-	# Edge bearer-gate on /mcp* — refuse anonymous probes before they hit the app.
-	# OAuth flow endpoints (/authorize, /login, /token, /register, /.well-known/*)
-	# stay open since they ARE the auth handshake.
-	@mcp_authenticated {
-		path /mcp*
-		header Authorization "Bearer *"
-	}
-	handle @mcp_authenticated {
-		reverse_proxy localhost:9103
-	}
-	@mcp_anonymous path /mcp*
-	handle @mcp_anonymous {
-		respond "Unauthorized" 401
-	}
-	handle {
-		reverse_proxy localhost:9103
-	}
+	reverse_proxy localhost:9103
 }

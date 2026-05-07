@@ -4,8 +4,21 @@ import { DEFAULT_CONFIG, getConfig, setConfig, redirectUri } from "../lib/config
 
 const $ = (id) => document.getElementById(id);
 
+const SESSION_EXPIRED = "SESSION_EXPIRED";
+
 function show(id) { $(id).hidden = false; }
 function hide(id) { $(id).hidden = true; }
+
+// Force le popup en mode "signed-out" sans message anxiogène — l'utilisateur
+// clique simplement sur "Se connecter". Renvoie true si on a re-render.
+function handleSessionExpired(err) {
+  if (err?.message === SESSION_EXPIRED) {
+    show("signed-out");
+    hide("signed-in");
+    return true;
+  }
+  return false;
+}
 
 function flash(message, kind = "success") {
   const el = $("flash");
@@ -40,8 +53,31 @@ async function refreshLinkedinStatus() {
       label.textContent = "Aucune session côté serveur";
     }
   } catch (err) {
+    if (handleSessionExpired(err)) return;
     const status = $("li-status");
     const label = $("li-status-label");
+    status.className = "status status-red";
+    label.textContent = `Erreur: ${err.message}`;
+  }
+}
+
+async function refreshWhatsappStatus() {
+  const status = $("wa-status");
+  const label = $("wa-status-label");
+  try {
+    const wa = await send("whatsappStatus");
+    if (wa.paired) {
+      status.className = "status status-green";
+      label.textContent = "Session pairée";
+    } else if (wa.active_pairing) {
+      status.className = "status status-gray";
+      label.textContent = `Pairing en cours (${wa.active_pairing.status})`;
+    } else {
+      status.className = "status status-red";
+      label.textContent = "Non pairé";
+    }
+  } catch (err) {
+    if (handleSessionExpired(err)) return;
     status.className = "status status-red";
     label.textContent = `Erreur: ${err.message}`;
   }
@@ -58,7 +94,7 @@ async function renderAuth() {
   show("signed-in");
   $("user-name").textContent = user?.name || user?.email || user?.sub || "—";
   $("user-email").textContent = user?.email || "";
-  await refreshLinkedinStatus();
+  await Promise.all([refreshLinkedinStatus(), refreshWhatsappStatus()]);
 }
 
 async function openSettings() {
@@ -112,13 +148,28 @@ function bind() {
       flash("Session LinkedIn synchronisée.");
       await refreshLinkedinStatus();
     } catch (err) {
-      if (err.message.includes("li_at")) {
+      if (handleSessionExpired(err)) {
+        flash("Session expirée — reconnecte-toi.", "error");
+      } else if (err.message.includes("li_at")) {
         flash("Pas connecté à LinkedIn — connecte-toi d'abord.", "error");
       } else {
         flash(err.message, "error");
       }
     } finally {
       $("sync").disabled = false;
+    }
+  });
+
+  $("wa-pair").addEventListener("click", async () => {
+    try {
+      await send("whatsappPair");
+      window.close();
+    } catch (err) {
+      if (handleSessionExpired(err)) {
+        flash("Session expirée — reconnecte-toi.", "error");
+      } else {
+        flash(err.message, "error");
+      }
     }
   });
 
@@ -129,7 +180,11 @@ function bind() {
       flash("Session effacée.");
       await refreshLinkedinStatus();
     } catch (err) {
-      flash(err.message, "error");
+      if (handleSessionExpired(err)) {
+        flash("Session expirée — reconnecte-toi.", "error");
+      } else {
+        flash(err.message, "error");
+      }
     }
   });
 

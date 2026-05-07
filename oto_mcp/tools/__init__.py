@@ -15,10 +15,9 @@ def register_all(mcp: FastMCP) -> None:
     log = logging.getLogger("oto_mcp.tools")
 
     # Connecteurs API-only — fail fast (les clés sont gérées par oto.config.get_secret).
-    from . import recherche_entreprises, sirene, naf, serper, hunter
+    from . import recherche_entreprises, sirene, serper, hunter
     recherche_entreprises.register(mcp)
     sirene.register(mcp)
-    naf.register(mcp)
     serper.register(mcp)
     hunter.register(mcp)
 

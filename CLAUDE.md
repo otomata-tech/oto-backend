@@ -45,6 +45,12 @@ header `WWW-Authenticate` pointe vers `/.well-known/oauth-protected-resource/mcp
 Logto self-hosted n'expose pas DCR → les apps Claude sont pré-créées dans le
 tenant et leur `client_id` est collé à la main dans le connector Claude.
 
+**Onboarding actuel = self-serve ouvert.** Le tenant a sign-up activé par
+email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire et
+consommer les clés API serveur (Serper, Hunter, SIRENE, Groq) — LinkedIn
+reste sécurisé par le cookie per-user. Pour gater (org membership, allowlist
+domaine, sign-up fermé) cf. `docs/backlog.md`.
+
 Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`.
 
 ## REST API (consommée par oto.ninja /account)

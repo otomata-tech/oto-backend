@@ -40,7 +40,8 @@ def _build_verifier() -> JWTVerifier:
         jwks_uri=f"{issuer}/jwks",
         issuer=issuer,
         audience=audience,
-        algorithm="RS256",
+        # Logto self-hosted signs avec ES384 par défaut (vérifié sur /oidc/jwks).
+        algorithm="ES384",
     )
 
 

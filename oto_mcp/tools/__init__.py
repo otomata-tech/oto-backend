@@ -14,7 +14,9 @@ def register_all(mcp: FastMCP) -> None:
 
     log = logging.getLogger("oto_mcp.tools")
 
-    # Connecteurs API-only — fail fast (les clés sont gérées par oto.config.get_secret).
+    # Connecteurs API-only — la résolution de clé (user vs platform) se fait
+    # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
+    # les secrets soient configurés au boot.
     from . import recherche_entreprises, sirene, serper, hunter
     recherche_entreprises.register(mcp)
     sirene.register(mcp)
@@ -28,3 +30,12 @@ def register_all(mcp: FastMCP) -> None:
         linkedin.register(mcp)
     except Exception as e:
         log.warning("LinkedIn tools disabled: %s", e)
+
+    # WhatsApp — Baileys via Node.js subprocess. Réservé aux admins (pairing
+    # QR manuel pour l'instant). Gracefully disabled si Node manque ou si
+    # l'install npm pose problème.
+    try:
+        from . import whatsapp
+        whatsapp.register(mcp)
+    except Exception as e:
+        log.warning("WhatsApp tools disabled: %s", e)

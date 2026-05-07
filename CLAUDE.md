@@ -21,8 +21,9 @@ oto.ninja sous `/account` et parle au MCP via REST.
 oto_mcp/
 ├── server.py         # FastMCP + uvicorn, registre les routes /api et les tools
 ├── tools/            # 1 module par connecteur, chacun expose register(mcp)
-├── api_routes.py     # /api/me, /api/settings/linkedin (POST/DELETE), CORS oto.ninja
-├── db.py             # SQLite users(sub PK, linkedin_cookie, linkedin_user_agent…)
+├── api_routes.py     # /api/me, /api/settings/*, /api/admin/* (CORS oto.ninja)
+├── access.py         # rôles guest/member/admin, resolve_api_key, quotas
+├── db.py             # SQLite users + usage(sub, tool, day, count)
 ├── auth_hooks.py     # current_user_sub_from_token() pour le contexte tool
 └── config.py         # require_env
 
@@ -46,18 +47,36 @@ Logto self-hosted n'expose pas DCR → les apps Claude sont pré-créées dans l
 tenant et leur `client_id` est collé à la main dans le connector Claude.
 
 **Onboarding actuel = self-serve ouvert.** Le tenant a sign-up activé par
-email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire et
-consommer les clés API serveur (Serper, Hunter, SIRENE, Groq) — LinkedIn
-reste sécurisé par le cookie per-user. Pour gater (org membership, allowlist
-domaine, sign-up fermé) cf. `docs/backlog.md`.
+email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire,
+mais c'est sans risque pour les clés serveur grâce au modèle de rôles
+(cf. `access.py`).
 
-Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`.
+Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
+`OTO_MCP_ADMIN_SUB` (Logto sub d'Alexis pour bootstrap admin).
+
+## Rôles + résolution de clé API
+
+3 rôles user, source-of-truth = colonne `users.role` (Logto identifie, c'est
+tout) :
+
+- **guest** (défaut sign-up) : ne consomme JAMAIS les platform keys ; doit
+  poser sa propre clé sur `/account` pour utiliser un tool API-keyed.
+- **member** : platform key + quota daily (env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`,
+  défauts dans `access.py`). User key bypass quota.
+- **admin** : pas de quota, accès `/api/admin/*`. Bootstrap via env
+  `OTO_MCP_ADMIN_SUB` (override forcé même si DB dit autre chose).
+
+Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`) appellent
+`access.resolve_api_key(provider)` par appel — McpError actionnable pointant
+vers `/account` en cas de blocage. LinkedIn et `recherche_entreprises_*` ne
+sont pas concernés (cookie per-user / pas de clé).
 
 ## REST API (consommée par oto.ninja /account)
 
-- `GET /api/me` — profil + statut LinkedIn (configured, set_at, user_agent)
-- `POST /api/settings/linkedin` — body `{cookie, user_agent?}` → upsert
-- `DELETE /api/settings/linkedin` — clear
+- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota)
+- `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
+- `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
+- `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - CORS limité aux origines `oto.ninja` + dev locales (`OTO_MCP_CORS_ORIGINS` override)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 

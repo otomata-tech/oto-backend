@@ -31,6 +31,12 @@ deploy/
 ├── oto-mcp.service       # systemd, User=root, /opt/oto-mcp, port 9103
 ├── Caddyfile.snippet     # mcp.oto.ninja → 9103 (pas de bearer-gate, masquerait WWW-Authenticate)
 └── DEPLOY.md             # procédure DNS + Caddy + systemd + Claude.ai
+
+extension/                # Chrome MV3 — capture session LinkedIn → POST /api/settings/linkedin
+├── manifest.json         # cookies, identity, scripting, host_permissions linkedin/mcp/auth
+├── background.js         # service worker (router messages, cookie watcher, badge)
+├── lib/                  # auth (Logto PKCE), api, linkedin, badge, pkce, config
+└── popup/                # UI login + sync + paramètres (App ID Logto)
 ```
 
 ## Auth — Logto
@@ -89,17 +95,34 @@ save) — sinon LinkedIn flag rapidement les sessions cookie/UA mismatch.
 Si le user n'a rien configuré, les tools `linkedin_*` lèvent une `McpError`
 qui pointe vers `https://oto.ninja/account`.
 
+Pour les non-tech : extension Chrome `extension/` (MV3) qui capture le couple
+`(li_at, user_agent)` et le push automatiquement via `POST
+/api/settings/linkedin` (auth Logto PKCE). Auto-resync via
+`chrome.cookies.onChanged` quand LinkedIn rotate la session.
+
+## WhatsApp
+
+Tools `whatsapp_*` wrappent `oto.tools.whatsapp.WhatsAppClient` (Baileys via
+subprocess Node.js). Session per-user dans `<OTO_MCP_DATA_DIR>/whatsapp/<sub>/`
+— on override `client.auth_dir` après instantiation, pas besoin de patcher
+oto-cli. `asyncio.to_thread()` pour ne pas bloquer le event loop.
+
+**Réservé au rôle admin** tant qu'il n'y a pas d'UI pairing QR sur `/account`.
+Le pairing se fait manuellement (rsync depuis poste local ou auth interactif
+sur la machine du serveur). Backlog : streamer le QR Baileys vers le browser.
+
 ## Conventions
 
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
   enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
   le serveur si un client a une dépendance optionnelle absente.
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
-- API keys serveur (`SERPER_API_KEY`, `HUNTER_API_KEY`, `SIRENE_API_KEY`,
-  `GROQ_API_KEY`) résolues via `oto.config.get_secret()` — ne pas re-faire
-  l'env loading ici.
+- API keys serveur (`SERPER_API_KEY`, `HUNTER_API_KEY`, `SIRENE_API_KEY`)
+  résolues via `oto.config.get_secret()` — ne pas re-faire l'env loading ici.
 - LinkedIn nécessite Patchright + Chromium installés sur l'host
   (`patchright install chromium`).
+- WhatsApp nécessite Node.js installé + `node_modules` dans
+  `oto-cli/oto/tools/whatsapp/node/` (auto-installé au premier `WhatsAppClient()`).
 
 ## Commands
 

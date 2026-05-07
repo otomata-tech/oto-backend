@@ -29,7 +29,7 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP "caddy-custom reload --config /etc/caddy/C
 ```bash
 rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   -e "ssh -i ~/.ssh/alexis" \
-  /data/projects/oto-mcp/ root@REDACTED_IP:/opt/oto-mcp/
+  /data/oto/mcp/ root@REDACTED_IP:/opt/oto-mcp/
 
 ssh -i ~/.ssh/alexis root@REDACTED_IP \
   "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e ."
@@ -88,7 +88,7 @@ saisir le mot de passe enregistré à l'étape 4.
 ```bash
 rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   -e "ssh -i ~/.ssh/alexis" \
-  /data/projects/oto-mcp/ root@REDACTED_IP:/opt/oto-mcp/
+  /data/oto/mcp/ root@REDACTED_IP:/opt/oto-mcp/
 ssh -i ~/.ssh/alexis root@REDACTED_IP \
   "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
 ```

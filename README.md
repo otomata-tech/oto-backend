@@ -40,7 +40,7 @@ Hook it into Claude Code via `~/.claude/mcp.json`:
 {
   "mcpServers": {
     "oto": {
-      "command": "/data/projects/oto-mcp/.venv/bin/oto-mcp"
+      "command": "/data/oto/mcp/.venv/bin/oto-mcp"
     }
   }
 }

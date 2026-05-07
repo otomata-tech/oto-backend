@@ -23,7 +23,6 @@ def register(mcp: FastMCP) -> None:
     async def sirene_search(
         query: Optional[str] = None,
         naf: Optional[str] = None,
-        departement: Optional[str] = None,
         postal: Optional[str] = None,
         commune: Optional[str] = None,
         employees: Optional[str] = None,
@@ -35,11 +34,13 @@ def register(mcp: FastMCP) -> None:
         Plus précis que recherche-entreprises pour filtrer par effectifs ou
         établissements précis. Renvoie une liste d'établissements (SIRET).
 
+        Pour filtrer par département, utiliser `recherche_entreprises_search`
+        à la place — INSEE SIRENE n'expose pas ce filtre dans `oto-cli`.
+
         Args:
             query: Free-text query (company name).
             naf: NAF codes, comma-separated.
-            departement: Department code (e.g. "75").
-            postal: Postal code.
+            postal: Postal code (préfixes acceptés ex `13` pour Bouches-du-Rhône).
             commune: City name.
             employees: TEFEN employee-range codes, comma-separated.
             headquarters_only: If true, returns only sièges (default).
@@ -50,7 +51,6 @@ def register(mcp: FastMCP) -> None:
             name=query,
             naf=[s.strip() for s in naf.split(",")] if naf else None,
             employees=[s.strip() for s in employees.split(",")] if employees else None,
-            departement=departement,
             postal_code=postal,
             city=commune,
             headquarters_only=headquarters_only,

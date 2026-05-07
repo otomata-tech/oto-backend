@@ -1,0 +1,22 @@
+[Unit]
+Description=oto MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/oto-mcp
+EnvironmentFile=/opt/oto-mcp/.env
+Environment=MCP_TRANSPORT=streamable_http
+Environment=HOST=127.0.0.1
+Environment=PORT=9103
+Environment=LOG_LEVEL=INFO
+ExecStartPre=/opt/check-port-systemd.sh 9103 oto-mcp
+ExecStart=/opt/oto-mcp/.venv/bin/oto-mcp
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=oto-mcp
+
+[Install]
+WantedBy=multi-user.target

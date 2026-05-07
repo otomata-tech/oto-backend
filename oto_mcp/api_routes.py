@@ -101,6 +101,7 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
             "linkedin": {
                 "configured": bool(user.get("linkedin_cookie")),
                 "set_at": user.get("linkedin_cookie_set_at"),
+                "user_agent": user.get("linkedin_user_agent"),
             },
         })
 
@@ -112,10 +113,13 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
             body = await request.json()
         except Exception:
             return _json_error(request, 400, "invalid_json")
-        cookie = (body.get("cookie") or "").strip() if isinstance(body, dict) else ""
+        if not isinstance(body, dict):
+            return _json_error(request, 400, "invalid_body")
+        cookie = (body.get("cookie") or "").strip()
+        user_agent = (body.get("user_agent") or "").strip() or None
         if not cookie:
             return _json_error(request, 400, "empty_cookie")
-        db.set_linkedin_cookie(sub, cookie)
+        db.set_linkedin_cookie(sub, cookie, user_agent=user_agent)
         return _json(request, {"ok": True})
 
     async def linkedin_clear(request: Request) -> JSONResponse:

@@ -10,6 +10,9 @@ Wrappers autour des clients oto-cli. État par utilisateur stocké dans la
 SQLite locale (cf. `db.py`) — aujourd'hui le cookie LinkedIn. Nouveaux
 connecteurs : ajouter un module dans `oto_mcp/tools/` puis l'enregistrer
 dans `tools/__init__.py`.
+
+L'API REST `/api/*` (consommée par le frontend oto.ninja pour la page de
+gestion de compte) partage le même JWTVerifier que `/mcp`.
 """
 from __future__ import annotations
 
@@ -20,38 +23,32 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
-from starlette.routing import Route
 
-from . import db
+from . import api_routes, db
 from .config import require_env
-from .settings_routes import (
-    settings_get,
-    settings_linkedin_clear_post,
-    settings_linkedin_post,
-)
 from .tools import register_all
 
 logger = logging.getLogger("oto_mcp")
 
 
-def _build_auth() -> RemoteAuthProvider:
-    """Validate JWTs issued by Logto, advertise it as the auth server.
-
-    Audience = the MCP resource indicator (RFC 8707). Must match the
-    `indicator` of the Logto API resource Claude requests when getting a
-    token. Issuer = `<endpoint>/oidc` per Logto's OIDC discovery.
-    """
-    public_base = require_env("OTO_MCP_PUBLIC_URL").rstrip("/")
+def _build_verifier() -> JWTVerifier:
+    """JWT verifier partagé entre l'auth MCP et l'API REST."""
     logto_endpoint = require_env("LOGTO_ENDPOINT").rstrip("/")
     audience = require_env("MCP_AUDIENCE")
-
     issuer = f"{logto_endpoint}/oidc"
-    verifier = JWTVerifier(
+    return JWTVerifier(
         jwks_uri=f"{issuer}/jwks",
         issuer=issuer,
         audience=audience,
         algorithm="RS256",
     )
+
+
+def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
+    """Advertise Logto comme AS, valider les JWTs avec le verifier partagé."""
+    public_base = require_env("OTO_MCP_PUBLIC_URL").rstrip("/")
+    logto_endpoint = require_env("LOGTO_ENDPOINT").rstrip("/")
+    issuer = f"{logto_endpoint}/oidc"
     return RemoteAuthProvider(
         token_verifier=verifier,
         authorization_servers=[AnyHttpUrl(issuer)],
@@ -60,10 +57,10 @@ def _build_auth() -> RemoteAuthProvider:
     )
 
 
-def _build_mcp(transport: str) -> FastMCP:
+def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     kwargs: dict = {}
-    if transport in ("http", "streamable_http"):
-        kwargs["auth"] = _build_auth()
+    if transport in ("http", "streamable_http") and verifier is not None:
+        kwargs["auth"] = _build_auth(verifier)
     instance = FastMCP("oto", **kwargs)
     register_all(instance)
     return instance
@@ -80,10 +77,8 @@ def main():
     )
 
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    global mcp
-    if transport != "stdio":
-        mcp = _build_mcp(transport)
 
+    global mcp
     if transport == "stdio":
         mcp.run(transport="stdio")
         return
@@ -91,13 +86,16 @@ def main():
     if transport in ("http", "streamable_http"):
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "9103"))
+
+        verifier = _build_verifier()
+        mcp = _build_mcp(transport, verifier)
+
         db.init_db()
         app = mcp.http_app()
-        # User-facing settings UI (LinkedIn cookie). Auth interne
-        # `current_user_sub_from_request` — sera câblée à Logto.
-        app.router.routes.insert(0, Route("/settings", settings_get, methods=["GET"]))
-        app.router.routes.insert(1, Route("/settings/linkedin", settings_linkedin_post, methods=["POST"]))
-        app.router.routes.insert(2, Route("/settings/linkedin/clear", settings_linkedin_clear_post, methods=["POST"]))
+        # API REST consommée par oto.ninja (page de gestion de compte).
+        # Insérée avant les routes FastMCP pour qu'elles matchent /api/* en priorité.
+        for route in reversed(api_routes.make_routes(verifier)):
+            app.router.routes.insert(0, route)
 
         import uvicorn
         logger.info("HTTP MCP server on %s:%d", host, port)

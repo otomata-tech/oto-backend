@@ -4,6 +4,9 @@ Convention serveur : code dans `/opt/oto-mcp/`, port 9103 (slot MCP), Caddyfile
 de vérité dans `/mnt/odrive/infra/Caddyfile`. Origin Cert `*.oto.ninja` déjà
 provisionné sur le serveur.
 
+Auth : Logto (`auth.oto.zone`). Validation JWT côté backend (JWKS), audience =
+`https://mcp.oto.ninja/mcp`. Pas de form `/login`, pas de mot de passe partagé.
+
 ## 1. DNS (Cloudflare)
 
 ```bash
@@ -17,14 +20,33 @@ curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_record
 
 ## 2. Caddyfile
 
-Le bloc est déjà ajouté dans `/mnt/odrive/infra/Caddyfile`. Pousser :
+Le bloc est dans `/mnt/odrive/infra/Caddyfile`. Pas de bearer-gate edge — le
+backend renvoie déjà un 401 + `WWW-Authenticate: Bearer resource_metadata="…"`,
+indispensable au discovery OAuth des clients MCP. Pousser :
 
 ```bash
 scp -i ~/.ssh/alexis /mnt/odrive/infra/Caddyfile root@REDACTED_IP:/etc/caddy/Caddyfile
 ssh -i ~/.ssh/alexis root@REDACTED_IP "caddy-custom reload --config /etc/caddy/Caddyfile"
 ```
 
-## 3. Code + venv
+## 3. Logto — pré-créer la resource + l'app Claude
+
+Logto self-hosted ne supporte pas DCR (`registration_endpoint` absent). Il faut
+créer une fois pour toutes :
+
+1. **API resource** (Logto admin → API resources → Create) :
+   - Name : `oto MCP`
+   - Indicator : `https://mcp.oto.ninja/mcp`  ← doit matcher `MCP_AUDIENCE`
+2. **Application** type "Single Page App" pour Claude Web/Desktop :
+   - Name : `Claude (oto MCP)`
+   - Redirect URIs :
+     - `https://claude.ai/api/mcp/auth_callback`
+     - `https://claude.com/api/mcp/auth_callback`
+   - CORS allowed origins : `https://claude.ai`, `https://claude.com`
+   - Cocher la resource `oto MCP` dans l'onglet "API resources"
+3. Récupérer le `client_id` (à coller dans le connector Claude).
+
+## 4. Code + venv
 
 ```bash
 rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
@@ -35,21 +57,18 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP \
   "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e ."
 ```
 
-## 4. .env (secrets)
-
-Générer un mot de passe partagé fort :
+## 5. .env
 
 ```bash
-PASSWORD=$(openssl rand -hex 24)
-ssh -i ~/.ssh/alexis root@REDACTED_IP "cat > /opt/oto-mcp/.env" <<EOF
+ssh -i ~/.ssh/alexis root@REDACTED_IP "cat > /opt/oto-mcp/.env" <<'EOF'
 OTO_MCP_PUBLIC_URL=https://mcp.oto.ninja
-OTO_MCP_OAUTH_PASSWORD=$PASSWORD
+LOGTO_ENDPOINT=https://auth.oto.zone
+MCP_AUDIENCE=https://mcp.oto.ninja/mcp
 EOF
 ssh -i ~/.ssh/alexis root@REDACTED_IP "chmod 600 /opt/oto-mcp/.env"
-echo "OAuth password: $PASSWORD   # à conserver dans pass / 1Password"
 ```
 
-## 5. systemd
+## 6. systemd
 
 ```bash
 ssh -i ~/.ssh/alexis root@REDACTED_IP \
@@ -60,28 +79,37 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP \
    && systemctl status oto-mcp --no-pager"
 ```
 
-## 6. Vérifier
+## 7. Vérifier
 
 ```bash
-# Sur le serveur (sans bearer → 401 attendu, mais 405/406 sur autre méthode est OK)
-ssh -i ~/.ssh/alexis root@REDACTED_IP "curl -sSI http://127.0.0.1:9103/mcp/ | head"
+# Resource metadata (200 attendu)
+curl -sS https://mcp.oto.ninja/.well-known/oauth-protected-resource/mcp | jq
 
-# De l'extérieur (sans bearer → 401 attendu côté Caddy)
-curl -sSI https://mcp.oto.ninja/mcp/
+# Sans bearer (401 + WWW-Authenticate avec resource_metadata="…" attendu)
+curl -sSI -X POST https://mcp.oto.ninja/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  --data-raw '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# OAuth metadata (open, doit répondre 200)
-curl -sS https://mcp.oto.ninja/.well-known/oauth-authorization-server | jq
+# Avec un vrai token Logto (200 + JSON-RPC)
+TOKEN=...   # access_token Logto avec audience=https://mcp.oto.ninja/mcp
+curl -sS -X POST https://mcp.oto.ninja/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  --data-raw '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | head
 ```
 
-## 7. Brancher dans Claude.ai
+## 8. Brancher dans Claude.ai
 
 Settings → Connectors → Add custom connector :
-- Name: oto
-- URL: `https://mcp.oto.ninja/mcp`
-- Auth: OAuth (Claude.ai déclenche /register dynamique puis /authorize)
+- Name : `oto`
+- URL : `https://mcp.oto.ninja/mcp`
+- Auth : OAuth — coller le `client_id` Logto récupéré à l'étape 3 (Logto
+  ne supporte pas DCR donc Claude ne peut pas s'enregistrer tout seul).
 
-Au /authorize, le navigateur s'ouvre sur `https://mcp.oto.ninja/login?nonce=...` —
-saisir le mot de passe enregistré à l'étape 4.
+Claude découvre l'auth server via `/.well-known/oauth-protected-resource/mcp`,
+fait le flow OAuth contre Logto, l'utilisateur s'authentifie sur
+`auth.oto.zone`, Claude récupère un access_token et l'envoie en Bearer sur
+`/mcp`.
 
 ## Update
 

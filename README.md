@@ -18,8 +18,6 @@ First batch of tools wraps the data.gouv.fr "API Recherche Entreprises"
 oto_mcp/
 ├── server.py        # FastMCP entrypoint (stdio + streamable_http)
 ├── tools.py         # @mcp.tool wrappers around oto.tools.* clients
-├── oauth.py         # OAuth 2.1 provider gated by a shared password
-├── login_route.py   # /login GET form + POST handler
 └── config.py        # require_env helper
 ```
 
@@ -48,11 +46,12 @@ Hook it into Claude Code via `~/.claude/mcp.json`:
 
 ## Remote (HTTP, OAuth) — see `deploy/DEPLOY.md`
 
-Single shared-password OAuth 2.1 flow, compatible with Claude.ai Integrations
-dynamic client registration. No per-user accounts in this MVP — anyone with
-the password gets the same level of access.
+Auth via Logto (`auth.oto.zone`) : le backend valide les access tokens en JWT
+contre les JWKS Logto, audience = `https://mcp.oto.ninja/mcp`. Tout user avec
+un compte Logto sur le tenant peut se connecter ; révocation par compte côté
+admin Logto.
 
-Public URL: `https://mcp.oto.ninja/mcp`
+Public URL : `https://mcp.oto.ninja/mcp`
 
 ## Adding a new tool
 

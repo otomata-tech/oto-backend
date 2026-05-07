@@ -5,7 +5,7 @@ description = "MCP server exposing selected oto-cli connectors as tools (Streama
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0",
-    "oto-cli>=1.1.0",
+    "oto-cli[browser]>=1.1.0",
     "starlette>=0.37",
     "uvicorn>=0.30",
     "pydantic>=2.0",

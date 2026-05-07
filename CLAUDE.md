@@ -11,7 +11,8 @@ Public : `https://mcp.oto.ninja/mcp` — déployé sur tuls.me, port 9103.
 - `fastmcp>=2.0` (en prod : 3.2.4) + `mcp` SDK
 - `oto-cli` (PyPI) → import direct des `oto.tools.*` clients
 - `starlette` + `uvicorn` pour le HTTP transport
-- OAuth 2.1 maison via `InMemoryOAuthProvider` + DCR + mot de passe partagé
+- Auth = JWT Logto (RemoteAuthProvider + JWTVerifier sur JWKS), audience
+  = `https://mcp.oto.ninja/mcp`
 
 ## Architecture
 
@@ -19,8 +20,6 @@ Public : `https://mcp.oto.ninja/mcp` — déployé sur tuls.me, port 9103.
 oto_mcp/
 ├── server.py        # FastMCP entrypoint, transports stdio + streamable_http
 ├── tools.py         # @mcp.tool() qui wrappent oto.tools.<service>
-├── oauth.py         # PasswordOAuthProvider (porté de planity-mcp)
-├── login_route.py   # /login GET (form) + POST (validate)
 └── config.py        # require_env
 
 deploy/
@@ -45,15 +44,19 @@ Backed by `oto.tools.sirene.entreprises.EntreprisesClient` — pas de clé API r
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - Pas de cache, pas d'état. Les clients oto-cli sont stateless (HTTP requests).
 
-## Auth — choix actuel
+## Auth — Logto
 
-`InMemoryOAuthProvider` + Dynamic Client Registration + un seul mot de passe
-partagé (`OTO_MCP_OAUTH_PASSWORD`, dans `pass otomata/oto-mcp/OAUTH_PASSWORD`).
+`RemoteAuthProvider(token_verifier=JWTVerifier(jwks_uri=…), authorization_servers=[…])` :
+le backend valide la signature + issuer + audience des bearer JWT émis par
+`auth.oto.zone`. Sur 401, le header `WWW-Authenticate` pointe vers
+`/.well-known/oauth-protected-resource/mcp` (RFC 9728), ce qui amorce le
+discovery OAuth côté client MCP.
 
-Différence vs MCP GR : GR a Logto provisionné (multi-user, vrais comptes), donc
-client_id stable. Ici en standalone : DCR + password = équivalent lean. claude.ai
-web supporte DCR donc rien à coller à la main. Migration vers Logto
-backlogguée — voir `docs/backlog.md`.
+Logto self-hosted n'expose pas DCR → l'app Claude est pré-créée dans le
+tenant Logto et son `client_id` est collé manuellement dans le connector
+Claude. Voir `deploy/DEPLOY.md` étape 3.
+
+Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`.
 
 ## Commands
 
@@ -77,7 +80,8 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP "journalctl -u oto-mcp -f"
 - Server: tuls.me (REDACTED_IP), `/opt/oto-mcp/`, port 9103, User=root
 - DNS: `mcp.oto.ninja` A proxied → REDACTED_IP (zone CF `REDACTED_CF_ZONE`)
 - TLS: Origin Cert `*.oto.ninja` (déjà provisionné, `/etc/caddy/origin-certs/oto-ninja.{pem,key}`)
-- Caddyfile: source de vérité dans `/mnt/odrive/infra/Caddyfile`, edge bearer-gate sur `/mcp*`
+- Caddyfile: source de vérité dans `/mnt/odrive/infra/Caddyfile`, simple reverse_proxy
+  (pas de bearer-gate — il masquerait le `WWW-Authenticate` resource_metadata)
 - PORTS.md: `/mnt/odrive/infra/PORTS.md`
 
 ## Docs

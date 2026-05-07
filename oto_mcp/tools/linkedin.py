@@ -17,24 +17,24 @@ from .. import db
 from ..auth_hooks import current_user_sub_from_token
 
 
-def _get_cookie_or_raise() -> str:
+def _get_session_or_raise() -> dict:
     sub = current_user_sub_from_token()
     if not sub:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message="Unauthenticated — no user identity on the request.",
         ))
-    cookie = db.get_linkedin_cookie(sub)
-    if not cookie:
+    sess = db.get_linkedin_session(sub)
+    if not sess:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 "Aucun cookie LinkedIn configuré pour cet utilisateur. "
-                "Va sur https://mcp.oto.ninja/settings pour coller la valeur "
-                "du cookie `li_at` de ton compte LinkedIn."
+                "Va sur https://oto.ninja/account pour coller la valeur du cookie "
+                "`li_at` de ton compte LinkedIn (l'user-agent est capturé automatiquement)."
             ),
         ))
-    return cookie
+    return sess
 
 
 def register(mcp: FastMCP) -> None:
@@ -50,8 +50,8 @@ def register(mcp: FastMCP) -> None:
 
         Rate-limited côté LinkedIn (10/h, 80/jour pour comptes free).
         """
-        cookie = _get_cookie_or_raise()
-        async with LinkedInClient(cookie=cookie, headless=True) as li:
+        s = _get_session_or_raise()
+        async with LinkedInClient(cookie=s["cookie"], user_agent=s["user_agent"], headless=True) as li:
             return await li.scrape_profile(url)
 
     @mcp.tool()
@@ -60,15 +60,15 @@ def register(mcp: FastMCP) -> None:
 
         Returns name, tagline, industry, employee count, HQ, specialties, about.
         """
-        cookie = _get_cookie_or_raise()
-        async with LinkedInClient(cookie=cookie, headless=True) as li:
+        s = _get_session_or_raise()
+        async with LinkedInClient(cookie=s["cookie"], user_agent=s["user_agent"], headless=True) as li:
             return await li.scrape_company(url)
 
     @mcp.tool()
     async def linkedin_search_companies(query: str, limit: int = 5) -> list:
         """Search LinkedIn companies by free-text query."""
-        cookie = _get_cookie_or_raise()
-        async with LinkedInClient(cookie=cookie, headless=True) as li:
+        s = _get_session_or_raise()
+        async with LinkedInClient(cookie=s["cookie"], user_agent=s["user_agent"], headless=True) as li:
             return await li.search_companies(query=query, limit=limit)
 
     @mcp.tool()
@@ -88,8 +88,8 @@ def register(mcp: FastMCP) -> None:
             limit: Max results returned.
             pages: Max search-result pages to walk (default 3, max ~10).
         """
-        cookie = _get_cookie_or_raise()
-        async with LinkedInClient(cookie=cookie, headless=True) as li:
+        s = _get_session_or_raise()
+        async with LinkedInClient(cookie=s["cookie"], user_agent=s["user_agent"], headless=True) as li:
             return await li.search_people(
                 keywords=keywords, geo=geo, network=network, limit=limit, pages=pages,
             )
@@ -108,9 +108,9 @@ def register(mcp: FastMCP) -> None:
             keywords: Optional title/role keywords (e.g. "CEO OR CTO").
             limit: Max results.
         """
-        cookie = _get_cookie_or_raise()
+        s = _get_session_or_raise()
         kw_list = keywords.split() if keywords else None
-        async with LinkedInClient(cookie=cookie, headless=True) as li:
+        async with LinkedInClient(cookie=s["cookie"], user_agent=s["user_agent"], headless=True) as li:
             return await li.search_employees(
                 company_slug=company_slug, keywords=kw_list, limit=limit,
             )

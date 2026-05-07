@@ -103,8 +103,11 @@ curl -sS -X POST https://mcp.oto.ninja/mcp \
 Settings → Connectors → Add custom connector :
 - Name : `oto`
 - URL : `https://mcp.oto.ninja/mcp`
-- Auth : OAuth — coller le `client_id` Logto récupéré à l'étape 3 (Logto
-  ne supporte pas DCR donc Claude ne peut pas s'enregistrer tout seul).
+- Authentication : **OAuth** (obligatoire — sans, claude.ai retourne le
+  message trompeur "Couldn't reach the MCP server" alors que c'est un 401)
+- Advanced → Client ID : coller le `client_id` de la SPA Logto `Claude (oto MCP)`
+  (Logto self-hosted ne supporte pas DCR, claude.ai ne peut pas s'enregistrer)
+- Pas de Client Secret (SPA + PKCE)
 
 Claude découvre l'auth server via `/.well-known/oauth-protected-resource/mcp`,
 fait le flow OAuth contre Logto, l'utilisateur s'authentifie sur

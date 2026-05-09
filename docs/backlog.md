@@ -11,16 +11,15 @@ claim `organizations` (pattern `isOrgMember` dans GR :
 
 Pas urgent — single-tenant + invitation manuelle suffit pour l'instant.
 
-## WhatsApp pairing UI
+## CWS publication de l'extension
 
-Today : `whatsapp_*` réservé aux admins, pairing manuel (rsync session ou
-auth CLI interactif sur le serveur). Pour ouvrir aux members, il faut une UI
-sur `/account` qui :
-- déclenche un `WhatsAppClient.auth()` côté serveur
-- streame le QR code Baileys (généré sur stderr) vers le browser via SSE/WS
-- détecte la fin du pairing et persiste la session
-
-Garder l'auth_dir per-sub déjà en place (`<OTO_MCP_DATA_DIR>/whatsapp/<sub>/`).
+Le paquet `extension/dist/oto-companion-1.0.0.zip` est prêt + listing copy +
+4 screenshots dans `extension/dist/cws-screenshots/`. Reste à uploader sur
+le devconsole. Au retour : récupérer l'extension-ID assigné par CWS,
+remplacer le redirect URI Logto + `customClientMetadata.corsAllowedOrigins`
+de l'app `Oto Companion (Chrome Extension)`, puis remplacer le wording
+"installation unpacked" par un lien Web Store dans `AccountView.vue` et
+`McpView.vue` côté oto.ninja.
 
 ## Futurs connecteurs
 

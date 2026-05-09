@@ -107,9 +107,18 @@ subprocess Node.js). Session per-user dans `<OTO_MCP_DATA_DIR>/whatsapp/<sub>/`
 — on override `client.auth_dir` après instantiation, pas besoin de patcher
 oto-cli. `asyncio.to_thread()` pour ne pas bloquer le event loop.
 
-**Réservé au rôle admin** tant qu'il n'y a pas d'UI pairing QR sur `/account`.
-Le pairing se fait manuellement (rsync depuis poste local ou auth interactif
-sur la machine du serveur). Backlog : streamer le QR Baileys vers le browser.
+**Pairing QR via l'extension Chrome** (`pair/pair.html`). Endpoints :
+- `GET /api/whatsapp/status` → `{paired, active_pairing}`
+- `POST /api/whatsapp/pair/start` → `{session_id, status}`
+- `GET /api/whatsapp/pair/stream?session_id=` → SSE `{type: qr|paired|failed}`
+- `POST /api/whatsapp/pair/cancel`
+
+`oto_mcp/pairing.py` gère les sessions in-memory (1 par sub). Bridge thread
+parse le NDJSON émis par `whatsapp.mjs --json-events` et pousse dans une
+asyncio.Queue.
+
+Tools accessibles à tout user **dont l'auth_dir contient `creds.json`** (pas
+de gating role). Le pairing crée ce fichier.
 
 ## Conventions
 

@@ -1,13 +1,11 @@
 """WhatsApp — Baileys via subprocess Node.js (oto.tools.whatsapp).
 
 WhatsApp est par-utilisateur (pas de "platform session" possible). Chaque
-admin a sa propre session paired vivant dans `<DATA_DIR>/whatsapp/<sub>/`.
+user a sa propre session paired vivant dans `<DATA_DIR>/whatsapp/<sub>/`.
 
-Pour l'instant **réservé au rôle admin** parce que le pairing QR doit se
-faire manuellement (rsync d'une session existante ou pairing via la CLI sur
-la machine du serveur). Quand on aura une UI de pairing dans `/account`
-(streamage du QR vers le browser pendant le `auth`), on pourra ouvrir aux
-members. Backlog : issue séparée à créer.
+Le pairing QR est exposé via l'extension Chrome `extension/pair.html`
+(endpoints `/api/whatsapp/pair/*`). Une fois pairé, le user (member ou
+admin) peut utiliser les tools `whatsapp_*`.
 """
 from __future__ import annotations
 
@@ -28,24 +26,13 @@ def _data_dir() -> Path:
 
 def _client_for_user():
     sub = access.current_user_sub_or_raise()
-    role = access.get_user_role(sub)
-    if role != access.ADMIN:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "WhatsApp est réservé au rôle admin pour l'instant — le "
-                "pairing QR depuis l'UI n'est pas encore livré. Contacte "
-                "Alexis si tu as besoin d'utiliser ce tool."
-            ),
-        ))
-
     auth_dir = _data_dir() / "whatsapp" / sub
-    if not auth_dir.exists() or not any(auth_dir.iterdir()):
+    if not auth_dir.exists() or not (auth_dir / "creds.json").exists():
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
-                f"Session WhatsApp introuvable côté serveur ({auth_dir}). "
-                "Le pairing QR n'a pas été fait ou la session a expiré."
+                "Session WhatsApp non pairée. Ouvre l'extension Chrome oto, "
+                "section WhatsApp → 'Pair WhatsApp' pour scanner le QR."
             ),
         ))
 

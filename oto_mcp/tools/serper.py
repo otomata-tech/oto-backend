@@ -68,3 +68,21 @@ def register(mcp: FastMCP) -> None:
         if is_platform:
             access.record_platform_usage("serper")
         return result
+
+    @mcp.tool()
+    async def serper_scrape(url: str, include_markdown: bool = True) -> dict:
+        """Fetch a web page via Serper's scraper.
+
+        Returns text + JSON-LD + metadata, optionally a markdown rendition.
+        Préférable à un fetch brut : Serper gère le JS rendering et les
+        anti-bot rudimentaires.
+
+        Args:
+            url: Page URL to scrape.
+            include_markdown: Include a markdown version (default True, plus pratique pour LLM).
+        """
+        client, is_platform = _client()
+        result = client.scrape_page(url=url, include_markdown=include_markdown)
+        if is_platform:
+            access.record_platform_usage("serper")
+        return result

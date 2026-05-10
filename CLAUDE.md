@@ -32,12 +32,11 @@ deploy/
 ├── Caddyfile.snippet     # mcp.oto.ninja → 9103 (pas de bearer-gate, masquerait WWW-Authenticate)
 └── DEPLOY.md             # procédure DNS + Caddy + systemd + Claude.ai
 
-extension/                # Chrome MV3 — capture session LinkedIn → POST /api/settings/linkedin
-├── manifest.json         # cookies, identity, scripting, host_permissions linkedin/mcp/auth
-├── background.js         # service worker (router messages, cookie watcher, badge)
-├── lib/                  # auth (Logto PKCE), api, linkedin, badge, pkce, config
-└── popup/                # UI login + sync + paramètres (App ID Logto)
 ```
+
+L'extension Chrome (Oto Companion) vit dans `oto-app/extension/` (repo
+`otomata-tech/oto-app`, monorepo des fronts). Elle parle au backend via REST :
+`POST /api/settings/linkedin` + endpoints `/api/whatsapp/pair/*` (SSE).
 
 ## Auth — Logto
 
@@ -93,11 +92,11 @@ matche le browser d'origine (capturé via `navigator.userAgent` au moment du
 save) — sinon LinkedIn flag rapidement les sessions cookie/UA mismatch.
 
 Si le user n'a rien configuré, les tools `linkedin_*` lèvent une `McpError`
-qui pointe vers `https://oto.ninja/account`.
+qui pointe vers `https://app.oto.ninja/`.
 
-Pour les non-tech : extension Chrome `extension/` (MV3) qui capture le couple
-`(li_at, user_agent)` et le push automatiquement via `POST
-/api/settings/linkedin` (auth Logto PKCE). Auto-resync via
+Pour les non-tech : extension Chrome Oto Companion (repo `oto-app/extension/`,
+MV3) qui capture le couple `(li_at, user_agent)` et le push automatiquement
+via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
 `chrome.cookies.onChanged` quand LinkedIn rotate la session.
 
 ## WhatsApp

@@ -24,7 +24,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
-from . import api_routes, db
+from . import access, api_routes, db
 from .config import require_env
 from .tools import register_all
 
@@ -56,6 +56,30 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
         base_url=public_base,
         resource_name="oto MCP",
     )
+
+
+def _bootstrap_env_keys() -> None:
+    """Importe les `<PROVIDER>_API_KEY` env en `platform_keys` (label "env")
+    et grant à `OTO_MCP_ADMIN_SUB`. Idempotent — ne casse rien si une clé
+    manque (on log et on passe). Permet à la prod existante de continuer à
+    marcher sans intervention manuelle après la migration des grants.
+    """
+    try:
+        from oto.config import get_secret
+    except Exception as e:
+        logger.warning("oto.config indisponible — bootstrap env keys skippé: %s", e)
+        return
+    env_keys: dict[str, str] = {}
+    for provider in db.KEY_PROVIDERS:
+        try:
+            v = get_secret(f"{provider.upper()}_API_KEY")
+        except Exception:
+            v = None
+        if v:
+            env_keys[provider] = v
+    if env_keys:
+        access.bootstrap_env_keys(env_keys)
+        logger.info("Bootstrap env keys importées : %s", sorted(env_keys.keys()))
 
 
 def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
@@ -92,6 +116,7 @@ def main():
         mcp = _build_mcp(transport, verifier)
 
         db.init_db()
+        _bootstrap_env_keys()
         app = mcp.http_app()
         # API REST consommée par oto.ninja (page de gestion de compte).
         # Insérée avant les routes FastMCP pour qu'elles matchent /api/* en priorité.

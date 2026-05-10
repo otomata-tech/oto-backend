@@ -178,7 +178,103 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
             return err
         if access.get_user_role(sub) != access.ADMIN:
             return _json_error(request, 403, "forbidden")
-        return _json(request, {"users": db.list_users()})
+        # Inclut les grants pour la matrice users × keys côté UI.
+        users = db.list_users_with_grants()
+        # Surface le rôle "effectif" (qui peut être promu via OTO_MCP_ADMIN_SUB).
+        for u in users:
+            u["effective_role"] = access.get_user_role(u["sub"])
+        return _json(request, {"users": users})
+
+    async def admin_platform_keys_list(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        # On ne renvoie JAMAIS l'api_key brute — masque + 4 derniers chars.
+        keys = []
+        for k in db.list_platform_keys():
+            ak = k.get("api_key") or ""
+            keys.append({
+                "id": k["id"],
+                "provider": k["provider"],
+                "label": k["label"],
+                "api_key_tail": ak[-4:] if len(ak) >= 4 else "",
+                "created_at": k["created_at"],
+            })
+        return _json(request, {"platform_keys": keys})
+
+    async def admin_platform_key_create(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        if not isinstance(body, dict):
+            return _json_error(request, 400, "invalid_body")
+        provider = (body.get("provider") or "").strip()
+        label = (body.get("label") or "").strip()
+        api_key = (body.get("api_key") or "").strip()
+        if provider not in db.KEY_PROVIDERS:
+            return _json_error(request, 400, "invalid_provider")
+        if not label or not api_key:
+            return _json_error(request, 400, "missing_fields")
+        try:
+            key_id = db.create_platform_key(provider, label, api_key)
+        except ValueError:
+            return _json_error(request, 409, "duplicate_label")
+        return _json(request, {"id": key_id, "provider": provider, "label": label})
+
+    async def admin_platform_key_delete(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        try:
+            key_id = int(request.path_params["key_id"])
+        except (ValueError, KeyError):
+            return _json_error(request, 400, "invalid_id")
+        if not db.get_platform_key(key_id):
+            return _json_error(request, 404, "unknown_key")
+        db.delete_platform_key(key_id)
+        return _json(request, {"ok": True, "id": key_id})
+
+    async def admin_grant(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target_sub = request.path_params["sub"]
+        try:
+            key_id = int(request.path_params["key_id"])
+        except ValueError:
+            return _json_error(request, 400, "invalid_id")
+        if not db.get_user(target_sub):
+            return _json_error(request, 404, "unknown_user")
+        if not db.get_platform_key(key_id):
+            return _json_error(request, 404, "unknown_key")
+        db.grant_platform_key(target_sub, key_id, granted_by=sub)
+        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
+
+    async def admin_revoke(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target_sub = request.path_params["sub"]
+        try:
+            key_id = int(request.path_params["key_id"])
+        except ValueError:
+            return _json_error(request, 400, "invalid_id")
+        db.revoke_platform_key(target_sub, key_id)
+        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
 
     async def admin_set_role(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -284,4 +380,12 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
         Route("/api/admin/users", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/role", admin_set_role, methods=["POST"]),
         Route("/api/admin/users/{sub}/role", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),
+        Route("/api/admin/platform-keys", admin_platform_key_create, methods=["POST"]),
+        Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/platform-keys/{key_id}", admin_platform_key_delete, methods=["DELETE"]),
+        Route("/api/admin/platform-keys/{key_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/users/{sub}/grants/{key_id}", admin_grant, methods=["POST"]),
+        Route("/api/admin/users/{sub}/grants/{key_id}", admin_revoke, methods=["DELETE"]),
+        Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
     ]

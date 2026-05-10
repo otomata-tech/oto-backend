@@ -23,8 +23,6 @@ de l'app `Oto Companion (Chrome Extension)`, puis remplacer le wording
 
 ## Futurs connecteurs
 
-Tools déjà ajoutés : SIRENE, Serper (web+news), Hunter, LinkedIn (5), WhatsApp (3).
-
 À envisager (par ordre de pertinence prospection) :
 - `oto.tools.serper` — `serper_maps`, `serper_scrape` (manquants vs CLI)
 - `oto.tools.browser.pappers` — bilans détaillés (browser, dépend extension cookie capture, cf. `extension/`)

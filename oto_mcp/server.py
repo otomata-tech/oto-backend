@@ -83,11 +83,23 @@ def _bootstrap_env_keys() -> None:
 
 
 def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
+    # init_db idempotent — utile pour que les tables existent avant que
+    # le middleware (per-user disabled_tools) ne les interroge.
+    try:
+        db.init_db()
+    except Exception as e:
+        logger.warning("init_db at _build_mcp failed: %s", e)
+
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:
         kwargs["auth"] = _build_auth(verifier)
     instance = FastMCP("oto", **kwargs)
     register_all(instance)
+
+    # Filtrage per-user des tools (toggle individuel sur /account).
+    from .middleware import UserDisabledToolsMiddleware
+    instance.add_middleware(UserDisabledToolsMiddleware())
+
     return instance
 
 
@@ -120,7 +132,7 @@ def main():
         app = mcp.http_app()
         # API REST consommée par oto.ninja (page de gestion de compte).
         # Insérée avant les routes FastMCP pour qu'elles matchent /api/* en priorité.
-        for route in reversed(api_routes.make_routes(verifier)):
+        for route in reversed(api_routes.make_routes(verifier, mcp_instance=mcp)):
             app.router.routes.insert(0, route)
 
         import uvicorn

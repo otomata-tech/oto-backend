@@ -94,7 +94,7 @@ def _json(request: Request, payload: dict, status: int = 200) -> JSONResponse:
     )
 
 
-def make_routes(verifier: JWTVerifier) -> Iterable:
+def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     from starlette.routing import Route
 
     async def options_handler(request: Request) -> Response:
@@ -115,6 +115,11 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
                 "configured": bool(user.get("linkedin_cookie")),
                 "set_at": user.get("linkedin_cookie_set_at"),
                 "user_agent": user.get("linkedin_user_agent"),
+            },
+            "crunchbase": {
+                "configured": bool(user.get("crunchbase_cookies")),
+                "set_at": user.get("crunchbase_set_at"),
+                "user_agent": user.get("crunchbase_user_agent"),
             },
             "providers": status["providers"],
         })
@@ -141,6 +146,35 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
         if err:
             return err
         db.clear_linkedin_cookie(sub)
+        return _json(request, {"ok": True})
+
+    async def crunchbase_save(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        if not isinstance(body, dict):
+            return _json_error(request, 400, "invalid_body")
+        cookies = body.get("cookies")
+        if not isinstance(cookies, list) or not cookies:
+            return _json_error(request, 400, "cookies_must_be_non_empty_list")
+        # Sérialise tel quel — la lib browser attend une liste de dicts
+        # avec a minima `name`, `value`, `domain`.
+        for c in cookies:
+            if not isinstance(c, dict) or not c.get("name") or "value" not in c:
+                return _json_error(request, 400, "cookie_missing_name_or_value")
+        user_agent = (body.get("user_agent") or "").strip() or None
+        db.set_crunchbase_session(sub, json.dumps(cookies), user_agent=user_agent)
+        return _json(request, {"ok": True, "count": len(cookies)})
+
+    async def crunchbase_clear(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        db.clear_crunchbase_session(sub)
         return _json(request, {"ok": True})
 
     async def api_key_save(request: Request) -> JSONResponse:
@@ -295,6 +329,53 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
         db.set_user_role(target_sub, role)
         return _json(request, {"ok": True, "sub": target_sub, "role": role})
 
+    async def my_tools_list(request: Request) -> JSONResponse:
+        """Liste tous les tools du serveur avec l'état (enabled/disabled)
+        pour l'utilisateur courant.
+        """
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+
+        all_names: set[str] = set()
+        if mcp_instance is not None:
+            try:
+                tools = await mcp_instance.list_tools()
+                all_names = {t.name for t in tools}
+            except Exception:
+                pass
+
+        disabled = set(db.list_user_disabled_tools(sub))
+        # Le middleware retire déjà les disabled de `list_tools` selon le sub
+        # courant (celui de la requête REST = même token). On ré-ajoute donc
+        # les disabled pour avoir la vue complète.
+        all_names |= disabled
+
+        return _json(request, {
+            "tools": [
+                {"name": n, "enabled": n not in disabled}
+                for n in sorted(all_names)
+            ],
+        })
+
+    async def my_tools_disable(request: Request) -> JSONResponse:
+        """Désactive un tool pour l'utilisateur courant (live)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        db.add_user_disabled_tool(sub, name)
+        return _json(request, {"ok": True, "name": name, "enabled": False})
+
+    async def my_tools_enable(request: Request) -> JSONResponse:
+        """Réactive un tool pour l'utilisateur courant (live)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        db.remove_user_disabled_tool(sub, name)
+        return _json(request, {"ok": True, "name": name, "enabled": True})
+
     async def whatsapp_status(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -365,6 +446,14 @@ def make_routes(verifier: JWTVerifier) -> Iterable:
         Route("/api/settings/linkedin", linkedin_save, methods=["POST"]),
         Route("/api/settings/linkedin", linkedin_clear, methods=["DELETE"]),
         Route("/api/settings/linkedin", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/crunchbase", crunchbase_save, methods=["POST"]),
+        Route("/api/settings/crunchbase", crunchbase_clear, methods=["DELETE"]),
+        Route("/api/settings/crunchbase", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/tools", my_tools_list, methods=["GET"]),
+        Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
+        Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
+        Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),

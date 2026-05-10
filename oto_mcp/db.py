@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS users (
     hunter_api_key TEXT,
     sirene_api_key TEXT,
     attio_api_key TEXT,
+    lemlist_api_key TEXT,
+    crunchbase_cookies TEXT,
+    crunchbase_user_agent TEXT,
+    crunchbase_set_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -44,6 +48,16 @@ CREATE TABLE IF NOT EXISTS usage (
     day TEXT NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (sub, tool, day)
+);
+
+-- Tools désactivés par utilisateur. Le tool reste enregistré côté serveur,
+-- mais filtré par middleware sur `tools/list` et bloqué sur `tools/call`
+-- pour les users qui l'ont désactivé. Toggle live (pas de restart).
+CREATE TABLE IF NOT EXISTS user_disabled_tools (
+    sub TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    disabled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (sub, tool_name)
 );
 
 -- Plusieurs platform keys par provider possibles (perso, pro, client X…) ;
@@ -77,11 +91,15 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN hunter_api_key TEXT",
     "ALTER TABLE users ADD COLUMN sirene_api_key TEXT",
     "ALTER TABLE users ADD COLUMN attio_api_key TEXT",
+    "ALTER TABLE users ADD COLUMN lemlist_api_key TEXT",
+    "ALTER TABLE users ADD COLUMN crunchbase_cookies TEXT",
+    "ALTER TABLE users ADD COLUMN crunchbase_user_agent TEXT",
+    "ALTER TABLE users ADD COLUMN crunchbase_set_at TEXT",
 ]
 
 # Providers supportés pour les user keys. Aligné sur les colonnes
 # `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
-KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio")
+KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist")
 
 
 def db_path() -> Path:
@@ -204,6 +222,62 @@ def get_linkedin_cookie(sub: str) -> Optional[str]:
     return user.get("linkedin_cookie") if user else None
 
 
+# --- Crunchbase -------------------------------------------------------------
+
+def set_crunchbase_session(
+    sub: str,
+    cookies_json: str,
+    user_agent: Optional[str] = None,
+) -> None:
+    """Store cookies (JSON-encoded list) + UA. Couple cookies + UA doit
+    matcher le browser d'origine pour réduire le risque de blocage.
+    """
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+               SET crunchbase_cookies = ?,
+                   crunchbase_user_agent = COALESCE(?, crunchbase_user_agent),
+                   crunchbase_set_at = datetime('now'),
+                   updated_at = datetime('now')
+             WHERE sub = ?
+            """,
+            (cookies_json, user_agent, sub),
+        )
+
+
+def clear_crunchbase_session(sub: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+               SET crunchbase_cookies = NULL,
+                   crunchbase_user_agent = NULL,
+                   crunchbase_set_at = NULL,
+                   updated_at = datetime('now')
+             WHERE sub = ?
+            """,
+            (sub,),
+        )
+
+
+def get_crunchbase_session(sub: str) -> Optional[dict]:
+    """Renvoie `{cookies: list[dict], user_agent: str|None}` ou None."""
+    import json as _json
+    user = get_user(sub)
+    if not user or not user.get("crunchbase_cookies"):
+        return None
+    try:
+        cookies = _json.loads(user["crunchbase_cookies"])
+    except Exception:
+        return None
+    return {
+        "cookies": cookies,
+        "user_agent": user.get("crunchbase_user_agent"),
+    }
+
+
 # --- user API keys ----------------------------------------------------------
 
 def _check_provider(provider: str) -> None:
@@ -258,6 +332,43 @@ def increment_usage(sub: str, tool: str) -> int:
             (sub, tool),
         ).fetchone()
         return int(row["count"]) if row else 0
+
+
+# --- per-user disabled tools ------------------------------------------------
+
+def list_user_disabled_tools(sub: str) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT tool_name FROM user_disabled_tools WHERE sub = ? ORDER BY tool_name",
+            (sub,),
+        ).fetchall()
+        return [r["tool_name"] for r in rows]
+
+
+def is_tool_disabled_for(sub: str, tool_name: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM user_disabled_tools WHERE sub = ? AND tool_name = ?",
+            (sub, tool_name),
+        ).fetchone()
+        return row is not None
+
+
+def add_user_disabled_tool(sub: str, tool_name: str) -> None:
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO user_disabled_tools (sub, tool_name) VALUES (?, ?)",
+            (sub, tool_name),
+        )
+
+
+def remove_user_disabled_tool(sub: str, tool_name: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM user_disabled_tools WHERE sub = ? AND tool_name = ?",
+            (sub, tool_name),
+        )
 
 
 def get_usage_today(sub: str, tool: str) -> int:

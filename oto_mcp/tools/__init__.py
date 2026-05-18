@@ -55,3 +55,10 @@ def register_all(mcp: FastMCP) -> None:
         whatsapp.register(mcp)
     except Exception as e:
         log.warning("WhatsApp tools disabled: %s", e)
+
+    # Slack — platform bot token (SLACK_BOT_TOKEN). Disabled si le secret manque.
+    try:
+        from . import slack
+        slack.register(mcp)
+    except Exception as e:
+        log.warning("Slack tools disabled: %s", e)

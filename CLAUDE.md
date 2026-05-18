@@ -11,7 +11,11 @@ oto.ninja sous `/account` et parle au MCP via REST.
 
 - Python 3.10 (target `>=3.10` — c'est ce que tuls.me a)
 - `fastmcp>=2.0` (prod : 3.2.4) + `mcp` SDK
-- `oto-cli[browser]` (PyPI) → import direct des `oto.tools.*` clients
+- `oto-cli[browser]` — déclaré comme dépendance PyPI dans `pyproject.toml`, mais en
+  prod le venv est overridden par `pip install -e /opt/oto-cli/` (clone du repo
+  `otomata-tech/oto` sur le serveur). Permet de propager les nouveaux connecteurs
+  sans release PyPI — un `git pull` côté serveur suffit. La dépendance PyPI reste
+  pour les déploiements fresh (premier install du venv).
 - SQLite stdlib pour le state par utilisateur
 - Auth = JWT Logto (`RemoteAuthProvider + JWTVerifier(jwks_uri=…, algorithm="ES384")`)
 
@@ -138,11 +142,12 @@ de gating role). Le pairing crée ce fichier.
 # Local stdio (Claude Code, sans auth)
 OTO_MCP_DEV_SUB=alexis .venv/bin/oto-mcp
 
-# Deploy update
+# Deploy update — propage à la fois oto-mcp (rsync local) et oto-cli (git pull)
 rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git --exclude data \
   -e "ssh -i ~/.ssh/alexis" /data/oto/mcp/ root@51.15.225.121:/opt/oto-mcp/
 ssh -i ~/.ssh/alexis root@51.15.225.121 \
-  "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
+  "cd /opt/oto-cli && git pull origin main && \
+   cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
 
 # Logs
 ssh -i ~/.ssh/alexis root@51.15.225.121 "journalctl -u oto-mcp -f"
@@ -156,7 +161,7 @@ ssh -i ~/.ssh/alexis root@51.15.225.121 "sqlite3 /opt/oto-mcp/data/oto-mcp.sqlit
 - Server: tuls.me (51.15.225.121), `/opt/oto-mcp/`, port 9103, User=root
 - DNS: `mcp.oto.ninja` A proxied → tuls.me (zone CF `474add39245a72c0ff98749e677815d3`)
 - TLS: Origin Cert `*.oto.ninja` (`/etc/caddy/origin-certs/oto-ninja.{pem,key}`)
-- Caddyfile : source dans `/mnt/odrive/infra/Caddyfile`
+- Caddyfile : source dans `/mnt/otomata-shared/infra/Caddyfile`
 - DB SQLite : `/opt/oto-mcp/data/oto-mcp.sqlite` (override `OTO_MCP_DB_PATH`)
 
 ## Docs

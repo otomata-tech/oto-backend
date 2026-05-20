@@ -1,17 +1,23 @@
 """REST API consommée par le frontend oto.ninja (page de gestion de compte).
 
-Endpoints :
+Endpoints (ce fichier — gestion compte, LinkedIn, Crunchbase, providers,
+tools, admin, WhatsApp) :
 - `GET    /api/me`                            → infos user + rôle + statut keys
 - `POST   /api/settings/linkedin`             → enregistre cookie li_at + UA
 - `DELETE /api/settings/linkedin`             → efface
+- `POST   /api/settings/crunchbase`           → cookies + UA
+- `DELETE /api/settings/crunchbase`
 - `POST   /api/settings/api-keys/{provider}`  → pose ta propre clé (provider in {serper, hunter, sirene})
 - `DELETE /api/settings/api-keys/{provider}`  → efface
-- `GET    /api/admin/users`                   → liste tous les users (admin only)
-- `POST   /api/admin/users/{sub}/role`        → promeut/retrograde (admin only, body `{role}`)
+- `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
+- `GET    /api/admin/*`                       → admin (users, platform-keys, grants)
+- `GET    /api/whatsapp/*`                    → WhatsApp pairing
 
-Auth : Bearer JWT Logto, vérifié avec le même `JWTVerifier` que `/mcp` (le sub
-du token = identifiant utilisateur côté DB). Le frontend obtient ce token via
-le SDK `@logto/vue` après login OIDC.
+Endpoints datastore / Google OAuth / API tokens : voir `api_routes_datastore.py`.
+
+Auth : Bearer JWT Logto **ou** API token long-lived (préfixe `oto_`), vérifié
+via `_authenticate`. Le frontend obtient le token Logto via `@logto/vue`. La
+CLI utilise un API token issu sur `/account` (stocké en SOPS sous `OTO_API_KEY`).
 
 CORS : limité aux origines oto.ninja (+ localhost en dev).
 """
@@ -27,7 +33,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, db, pairing
+from . import access, api_routes_datastore, db, pairing
 
 
 def _allowed_origins() -> list[str]:
@@ -47,7 +53,7 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
         return {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
@@ -70,6 +76,17 @@ async def _authenticate(
         token = request.query_params.get("token")
     if not token:
         return None, _json_error(request, 401, "missing_bearer")
+
+    # API token long-lived (CLI) : préfixe `oto_` → lookup hash en DB.
+    # Pas de upsert_user ici : la FK CASCADE garantit que si la row user a
+    # été supprimée, le token a été supprimé avec.
+    if token.startswith("oto_"):
+        sub = db.verify_api_token(token)
+        if not sub:
+            return None, _json_error(request, 401, "invalid_api_token")
+        return sub, None
+
+    # Sinon, JWT Logto.
     access_token = await verifier.verify_token(token)
     if not access_token or not getattr(access_token, "claims", None):
         return None, _json_error(request, 401, "invalid_token")
@@ -440,6 +457,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             },
         )
 
+    datastore_routes = api_routes_datastore.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        cors_headers=_cors_headers,
+        options_handler=options_handler,
+    )
+
     return [
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
@@ -477,4 +503,5 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_grant, methods=["POST"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_revoke, methods=["DELETE"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
+        *datastore_routes,
     ]

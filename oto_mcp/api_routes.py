@@ -3,10 +3,13 @@
 Endpoints (ce fichier — gestion compte, LinkedIn, Crunchbase, providers,
 tools, admin, WhatsApp) :
 - `GET    /api/me`                            → infos user + rôle + statut keys
+- `GET    /api/settings/linkedin`             → renvoie cookie + UA + set_at (propriétaire only)
 - `POST   /api/settings/linkedin`             → enregistre cookie li_at + UA
 - `DELETE /api/settings/linkedin`             → efface
+- `GET    /api/settings/crunchbase`           → renvoie cookies + UA + set_at
 - `POST   /api/settings/crunchbase`           → cookies + UA
 - `DELETE /api/settings/crunchbase`
+- `GET    /api/settings/api-keys/{provider}`  → renvoie la clé
 - `POST   /api/settings/api-keys/{provider}`  → pose ta propre clé (provider in {serper, hunter, sirene})
 - `DELETE /api/settings/api-keys/{provider}`  → efface
 - `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
@@ -165,6 +168,23 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.clear_linkedin_cookie(sub)
         return _json(request, {"ok": True})
 
+    async def linkedin_get(request: Request) -> JSONResponse:
+        # Renvoie la valeur réelle du cookie LinkedIn au propriétaire authentifié.
+        # Permet au CLI (`oto ninja secrets get LINKEDIN_COOKIE`) de récupérer
+        # le secret stocké côté DB plutôt que de maintenir une copie SOPS.
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        sess = db.get_linkedin_session(sub)
+        if not sess:
+            return _json_error(request, 404, "not_configured")
+        user = db.get_user(sub) or {}
+        return _json(request, {
+            "cookie": sess["cookie"],
+            "user_agent": sess.get("user_agent"),
+            "set_at": user.get("linkedin_cookie_set_at"),
+        })
+
     async def crunchbase_save(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -194,6 +214,20 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.clear_crunchbase_session(sub)
         return _json(request, {"ok": True})
 
+    async def crunchbase_get(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        sess = db.get_crunchbase_session(sub)
+        if not sess:
+            return _json_error(request, 404, "not_configured")
+        user = db.get_user(sub) or {}
+        return _json(request, {
+            "cookies": sess["cookies"],
+            "user_agent": sess.get("user_agent"),
+            "set_at": user.get("crunchbase_set_at"),
+        })
+
     async def api_key_save(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -222,6 +256,18 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 404, "unknown_provider")
         db.clear_user_api_key(sub, provider)
         return _json(request, {"ok": True, "provider": provider})
+
+    async def api_key_get(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        provider = request.path_params["provider"]
+        if provider not in db.KEY_PROVIDERS:
+            return _json_error(request, 404, "unknown_provider")
+        key = db.get_user_api_key(sub, provider)
+        if not key:
+            return _json_error(request, 404, "not_configured")
+        return _json(request, {"provider": provider, "key": key})
 
     async def admin_users(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -469,9 +515,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     return [
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/linkedin", linkedin_get, methods=["GET"]),
         Route("/api/settings/linkedin", linkedin_save, methods=["POST"]),
         Route("/api/settings/linkedin", linkedin_clear, methods=["DELETE"]),
         Route("/api/settings/linkedin", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/crunchbase", crunchbase_get, methods=["GET"]),
         Route("/api/settings/crunchbase", crunchbase_save, methods=["POST"]),
         Route("/api/settings/crunchbase", crunchbase_clear, methods=["DELETE"]),
         Route("/api/settings/crunchbase", options_handler, methods=["OPTIONS"]),
@@ -480,6 +528,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),

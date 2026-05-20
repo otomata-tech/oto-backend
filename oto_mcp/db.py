@@ -1,27 +1,52 @@
-"""SQLite-backed user store.
+"""PostgreSQL-backed user store (Scaleway managed `otomata-main`).
 
 One row per Logto user (`sub` = primary key). Holds per-user settings :
 - `role` — guest / member / admin (cf. `access.py` pour les implications)
-- LinkedIn cookie + user-agent
-- API keys par provider (serper/hunter/sirene) — chiffrement none, simple
-  storage. La DB est sur disque local, accès root only.
+- LinkedIn / Crunchbase session cookies + user-agent
+- API keys par provider (serper/hunter/sirene/attio/lemlist) — plaintext,
+  isolation par ACL réseau + creds en SOPS.
 - Compteur d'usage `usage(sub, tool, day)` pour les quotas member.
 
-Path: `OTO_MCP_DB_PATH` env (default `/opt/oto-mcp/data/oto-mcp.sqlite` en
-prod, `./data/oto-mcp.sqlite` en dev). Directory created on first init.
+Connexion via `DATABASE_URL` (postgresql://…?sslmode=require). Pool psycopg
+géré au module ; toutes les fonctions restent sync.
 """
 from __future__ import annotations
 
 import hashlib
 import os
 import secrets
-import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Iterator, Optional
+from datetime import date, datetime
+from typing import Any, Iterator, Optional
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 
-_DEFAULT_PATH = "/opt/oto-mcp/data/oto-mcp.sqlite"
+def _normalize_value(v: Any) -> Any:
+    # Match the string shape SQLite returned ("YYYY-MM-DD HH:MM:SS") so downstream
+    # JSONResponse + frontends keep working unchanged.
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+    if isinstance(v, date):
+        return v.isoformat()
+    return v
+
+
+def _str_dict_row(cursor):
+    inner = dict_row(cursor)
+
+    def make_row(values):
+        d = inner(values)
+        if d:
+            for k, v in d.items():
+                if isinstance(v, (datetime, date)):
+                    d[k] = _normalize_value(v)
+        return d
+
+    return make_row
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -31,7 +56,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'guest',
     linkedin_cookie TEXT,
     linkedin_user_agent TEXT,
-    linkedin_cookie_set_at TEXT,
+    linkedin_cookie_set_at TIMESTAMPTZ,
     serper_api_key TEXT,
     hunter_api_key TEXT,
     sirene_api_key TEXT,
@@ -39,137 +64,112 @@ CREATE TABLE IF NOT EXISTS users (
     lemlist_api_key TEXT,
     crunchbase_cookies TEXT,
     crunchbase_user_agent TEXT,
-    crunchbase_set_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    crunchbase_set_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS usage (
     sub TEXT NOT NULL,
     tool TEXT NOT NULL,
-    day TEXT NOT NULL,
+    day DATE NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (sub, tool, day)
 );
 
--- Tools désactivés par utilisateur. Le tool reste enregistré côté serveur,
--- mais filtré par middleware sur `tools/list` et bloqué sur `tools/call`
--- pour les users qui l'ont désactivé. Toggle live (pas de restart).
 CREATE TABLE IF NOT EXISTS user_disabled_tools (
     sub TEXT NOT NULL,
     tool_name TEXT NOT NULL,
-    disabled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    disabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (sub, tool_name)
 );
 
--- Plusieurs platform keys par provider possibles (perso, pro, client X…) ;
--- l'admin les gère via /api/admin/platform-keys.
 CREATE TABLE IF NOT EXISTS platform_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
     label TEXT NOT NULL,
     api_key TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(provider, label)
 );
 
--- Grants explicites par (user, platform_key). Un user peut avoir 0..N grants
--- pour un même provider — à la résolution on prend le plus récemment granté.
 CREATE TABLE IF NOT EXISTS user_grants (
     sub TEXT NOT NULL,
-    platform_key_id INTEGER NOT NULL,
-    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    platform_key_id BIGINT NOT NULL,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     granted_by TEXT,
     PRIMARY KEY (sub, platform_key_id),
     FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
 );
 
--- Google OAuth — refresh_token persistant + access_token cached (refreshed
--- lazily quand expiré). Scopes = ce qui a été accordé à ce sub. Plaintext
--- (même modèle que les autres secrets dans cette DB, accès root only).
 CREATE TABLE IF NOT EXISTS user_google_oauth (
     sub TEXT PRIMARY KEY,
     refresh_token TEXT NOT NULL,
     access_token TEXT,
-    expires_at TEXT,
+    expires_at TIMESTAMPTZ,
     scopes TEXT NOT NULL,
-    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Datastore — registre par user des namespaces (= un Google Sheet chacun).
--- spreadsheet_id = file ID Drive. UNIQUE(sub, namespace).
 CREATE TABLE IF NOT EXISTS user_datastores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     sub TEXT NOT NULL,
     namespace TEXT NOT NULL,
     spreadsheet_id TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(sub, namespace)
 );
 
--- API tokens long-lived pour l'auth CLI → MCP REST. On stocke sha256(token),
--- jamais le plaintext. Le token brut n'est rendu qu'à la création.
--- Préfixe `oto_` distingue de l'auth Logto JWT dans `_authenticate`.
 CREATE TABLE IF NOT EXISTS user_api_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sub TEXT NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
     label TEXT NOT NULL DEFAULT 'cli',
     token_hash TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_used_at TEXT,
-    FOREIGN KEY (sub) REFERENCES users(sub) ON DELETE CASCADE
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 """
-
-# Migrations idempotentes — ajout de colonnes sur bases existantes.
-_MIGRATIONS = [
-    "ALTER TABLE users ADD COLUMN linkedin_user_agent TEXT",
-    "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'guest'",
-    "ALTER TABLE users ADD COLUMN serper_api_key TEXT",
-    "ALTER TABLE users ADD COLUMN hunter_api_key TEXT",
-    "ALTER TABLE users ADD COLUMN sirene_api_key TEXT",
-    "ALTER TABLE users ADD COLUMN attio_api_key TEXT",
-    "ALTER TABLE users ADD COLUMN lemlist_api_key TEXT",
-    "ALTER TABLE users ADD COLUMN crunchbase_cookies TEXT",
-    "ALTER TABLE users ADD COLUMN crunchbase_user_agent TEXT",
-    "ALTER TABLE users ADD COLUMN crunchbase_set_at TEXT",
-]
 
 # Providers supportés pour les user keys. Aligné sur les colonnes
 # `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
 KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist")
 
 
-def db_path() -> Path:
-    raw = os.environ.get("OTO_MCP_DB_PATH") or _DEFAULT_PATH
-    p = Path(raw).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+_pool: Optional[ConnectionPool] = None
+
+
+def _database_url() -> str:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL not set (managed PG connection string)")
+    return url
+
+
+def _get_pool() -> ConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = ConnectionPool(
+            conninfo=_database_url(),
+            min_size=1,
+            max_size=int(os.environ.get("OTO_MCP_DB_POOL_MAX", "8")),
+            kwargs={"row_factory": _str_dict_row},
+            open=True,
+        )
+    return _pool
+
+
+@contextmanager
+def _connect() -> Iterator[psycopg.Connection]:
+    pool = _get_pool()
+    with pool.connection() as conn:
+        yield conn
 
 
 def init_db() -> None:
     with _connect() as conn:
-        conn.executescript(_SCHEMA)
-        for stmt in _MIGRATIONS:
-            try:
-                conn.execute(stmt)
-            except sqlite3.OperationalError as e:
-                if "duplicate column" not in str(e).lower():
-                    raise
-
-
-@contextmanager
-def _connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(db_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+        conn.execute(_SCHEMA)
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
@@ -178,11 +178,11 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         conn.execute(
             """
             INSERT INTO users (sub, email, name)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             ON CONFLICT(sub) DO UPDATE SET
-                email = COALESCE(excluded.email, users.email),
-                name  = COALESCE(excluded.name,  users.name),
-                updated_at = datetime('now')
+                email = COALESCE(EXCLUDED.email, users.email),
+                name  = COALESCE(EXCLUDED.name,  users.name),
+                updated_at = NOW()
             """,
             (sub, email, name),
         )
@@ -190,7 +190,7 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
 
 def get_user(sub: str) -> Optional[dict]:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
+        row = conn.execute("SELECT * FROM users WHERE sub = %s", (sub,)).fetchone()
         return dict(row) if row else None
 
 
@@ -207,7 +207,7 @@ def list_users() -> list[dict]:
 def set_user_role(sub: str, role: str) -> None:
     with _connect() as conn:
         conn.execute(
-            "UPDATE users SET role = ?, updated_at = datetime('now') WHERE sub = ?",
+            "UPDATE users SET role = %s, updated_at = NOW() WHERE sub = %s",
             (role, sub),
         )
 
@@ -223,11 +223,11 @@ def set_linkedin_cookie(sub: str, cookie: str, user_agent: Optional[str] = None)
         conn.execute(
             """
             UPDATE users
-               SET linkedin_cookie = ?,
-                   linkedin_user_agent = COALESCE(?, linkedin_user_agent),
-                   linkedin_cookie_set_at = datetime('now'),
-                   updated_at = datetime('now')
-             WHERE sub = ?
+               SET linkedin_cookie = %s,
+                   linkedin_user_agent = COALESCE(%s, linkedin_user_agent),
+                   linkedin_cookie_set_at = NOW(),
+                   updated_at = NOW()
+             WHERE sub = %s
             """,
             (cookie, user_agent, sub),
         )
@@ -241,8 +241,8 @@ def clear_linkedin_cookie(sub: str) -> None:
                SET linkedin_cookie = NULL,
                    linkedin_user_agent = NULL,
                    linkedin_cookie_set_at = NULL,
-                   updated_at = datetime('now')
-             WHERE sub = ?
+                   updated_at = NOW()
+             WHERE sub = %s
             """,
             (sub,),
         )
@@ -278,11 +278,11 @@ def set_crunchbase_session(
         conn.execute(
             """
             UPDATE users
-               SET crunchbase_cookies = ?,
-                   crunchbase_user_agent = COALESCE(?, crunchbase_user_agent),
-                   crunchbase_set_at = datetime('now'),
-                   updated_at = datetime('now')
-             WHERE sub = ?
+               SET crunchbase_cookies = %s,
+                   crunchbase_user_agent = COALESCE(%s, crunchbase_user_agent),
+                   crunchbase_set_at = NOW(),
+                   updated_at = NOW()
+             WHERE sub = %s
             """,
             (cookies_json, user_agent, sub),
         )
@@ -296,8 +296,8 @@ def clear_crunchbase_session(sub: str) -> None:
                SET crunchbase_cookies = NULL,
                    crunchbase_user_agent = NULL,
                    crunchbase_set_at = NULL,
-                   updated_at = datetime('now')
-             WHERE sub = ?
+                   updated_at = NOW()
+             WHERE sub = %s
             """,
             (sub,),
         )
@@ -332,7 +332,7 @@ def set_user_api_key(sub: str, provider: str, key: str) -> None:
     col = f"{provider}_api_key"
     with _connect() as conn:
         conn.execute(
-            f"UPDATE users SET {col} = ?, updated_at = datetime('now') WHERE sub = ?",
+            f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
             (key, sub),
         )
 
@@ -342,7 +342,7 @@ def clear_user_api_key(sub: str, provider: str) -> None:
     col = f"{provider}_api_key"
     with _connect() as conn:
         conn.execute(
-            f"UPDATE users SET {col} = NULL, updated_at = datetime('now') WHERE sub = ?",
+            f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
             (sub,),
         )
 
@@ -360,16 +360,13 @@ def get_user_api_key(sub: str, provider: str) -> Optional[str]:
 def increment_usage(sub: str, tool: str) -> int:
     """Incrémente le compteur (sub, tool, today). Retourne la nouvelle valeur."""
     with _connect() as conn:
-        conn.execute(
+        row = conn.execute(
             """
             INSERT INTO usage (sub, tool, day, count)
-            VALUES (?, ?, date('now'), 1)
-            ON CONFLICT(sub, tool, day) DO UPDATE SET count = count + 1
+            VALUES (%s, %s, CURRENT_DATE, 1)
+            ON CONFLICT(sub, tool, day) DO UPDATE SET count = usage.count + 1
+            RETURNING count
             """,
-            (sub, tool),
-        )
-        row = conn.execute(
-            "SELECT count FROM usage WHERE sub = ? AND tool = ? AND day = date('now')",
             (sub, tool),
         ).fetchone()
         return int(row["count"]) if row else 0
@@ -380,7 +377,7 @@ def increment_usage(sub: str, tool: str) -> int:
 def list_user_disabled_tools(sub: str) -> list[str]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT tool_name FROM user_disabled_tools WHERE sub = ? ORDER BY tool_name",
+            "SELECT tool_name FROM user_disabled_tools WHERE sub = %s ORDER BY tool_name",
             (sub,),
         ).fetchall()
         return [r["tool_name"] for r in rows]
@@ -389,7 +386,7 @@ def list_user_disabled_tools(sub: str) -> list[str]:
 def is_tool_disabled_for(sub: str, tool_name: str) -> bool:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT 1 FROM user_disabled_tools WHERE sub = ? AND tool_name = ?",
+            "SELECT 1 AS x FROM user_disabled_tools WHERE sub = %s AND tool_name = %s",
             (sub, tool_name),
         ).fetchone()
         return row is not None
@@ -399,7 +396,7 @@ def add_user_disabled_tool(sub: str, tool_name: str) -> None:
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO user_disabled_tools (sub, tool_name) VALUES (?, ?)",
+            "INSERT INTO user_disabled_tools (sub, tool_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (sub, tool_name),
         )
 
@@ -407,7 +404,7 @@ def add_user_disabled_tool(sub: str, tool_name: str) -> None:
 def remove_user_disabled_tool(sub: str, tool_name: str) -> None:
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM user_disabled_tools WHERE sub = ? AND tool_name = ?",
+            "DELETE FROM user_disabled_tools WHERE sub = %s AND tool_name = %s",
             (sub, tool_name),
         )
 
@@ -415,7 +412,7 @@ def remove_user_disabled_tool(sub: str, tool_name: str) -> None:
 def get_usage_today(sub: str, tool: str) -> int:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT count FROM usage WHERE sub = ? AND tool = ? AND day = date('now')",
+            "SELECT count FROM usage WHERE sub = %s AND tool = %s AND day = CURRENT_DATE",
             (sub, tool),
         ).fetchone()
         return int(row["count"]) if row else 0
@@ -430,7 +427,7 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
     sql = "SELECT id, provider, label, api_key, created_at FROM platform_keys"
     params: tuple = ()
     if provider:
-        sql += " WHERE provider = ?"
+        sql += " WHERE provider = %s"
         params = (provider,)
     sql += " ORDER BY provider, created_at"
     with _connect() as conn:
@@ -441,7 +438,7 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
 def get_platform_key(key_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, provider, label, api_key, created_at FROM platform_keys WHERE id = ?",
+            "SELECT id, provider, label, api_key, created_at FROM platform_keys WHERE id = %s",
             (key_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -454,13 +451,13 @@ def create_platform_key(provider: str, label: str, api_key: str) -> int:
         raise ValueError("label et api_key requis")
     with _connect() as conn:
         try:
-            cur = conn.execute(
-                "INSERT INTO platform_keys (provider, label, api_key) VALUES (?, ?, ?)",
+            row = conn.execute(
+                "INSERT INTO platform_keys (provider, label, api_key) VALUES (%s, %s, %s) RETURNING id",
                 (provider, label, api_key),
-            )
-        except sqlite3.IntegrityError as e:
+            ).fetchone()
+        except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"({provider}, {label}) existe déjà") from e
-        return int(cur.lastrowid)
+        return int(row["id"])
 
 
 def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
@@ -469,26 +466,21 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
     """
     _check_provider(provider)
     with _connect() as conn:
-        cur = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO platform_keys (provider, label, api_key)
-            VALUES (?, ?, ?)
-            ON CONFLICT(provider, label) DO UPDATE SET api_key = excluded.api_key
+            VALUES (%s, %s, %s)
+            ON CONFLICT(provider, label) DO UPDATE SET api_key = EXCLUDED.api_key
+            RETURNING id
             """,
             (provider, label, api_key),
-        )
-        if cur.lastrowid:
-            return int(cur.lastrowid)
-        row = conn.execute(
-            "SELECT id FROM platform_keys WHERE provider = ? AND label = ?",
-            (provider, label),
         ).fetchone()
         return int(row["id"])
 
 
 def delete_platform_key(key_id: int) -> None:
     with _connect() as conn:
-        conn.execute("DELETE FROM platform_keys WHERE id = ?", (key_id,))
+        conn.execute("DELETE FROM platform_keys WHERE id = %s", (key_id,))
 
 
 # --- grants -----------------------------------------------------------------
@@ -499,10 +491,10 @@ def grant_platform_key(sub: str, platform_key_id: int, granted_by: Optional[str]
         conn.execute(
             """
             INSERT INTO user_grants (sub, platform_key_id, granted_at, granted_by)
-            VALUES (?, ?, datetime('now'), ?)
+            VALUES (%s, %s, NOW(), %s)
             ON CONFLICT(sub, platform_key_id) DO UPDATE SET
-                granted_at = datetime('now'),
-                granted_by = excluded.granted_by
+                granted_at = NOW(),
+                granted_by = EXCLUDED.granted_by
             """,
             (sub, platform_key_id, granted_by),
         )
@@ -511,7 +503,7 @@ def grant_platform_key(sub: str, platform_key_id: int, granted_by: Optional[str]
 def revoke_platform_key(sub: str, platform_key_id: int) -> None:
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM user_grants WHERE sub = ? AND platform_key_id = ?",
+            "DELETE FROM user_grants WHERE sub = %s AND platform_key_id = %s",
             (sub, platform_key_id),
         )
 
@@ -525,7 +517,7 @@ def list_grants_for_user(sub: str) -> list[dict]:
             SELECT pk.id AS platform_key_id, pk.provider, pk.label, ug.granted_at, ug.granted_by
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
-             WHERE ug.sub = ?
+             WHERE ug.sub = %s
              ORDER BY pk.provider, ug.granted_at DESC
             """,
             (sub,),
@@ -544,7 +536,7 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
             SELECT pk.id AS platform_key_id, pk.label, pk.api_key
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
-             WHERE ug.sub = ? AND pk.provider = ?
+             WHERE ug.sub = %s AND pk.provider = %s
              ORDER BY ug.granted_at DESC
              LIMIT 1
             """,
@@ -578,13 +570,13 @@ def set_google_oauth(
         conn.execute(
             """
             INSERT INTO user_google_oauth (sub, refresh_token, access_token, expires_at, scopes)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT(sub) DO UPDATE SET
-                refresh_token = excluded.refresh_token,
-                access_token  = excluded.access_token,
-                expires_at    = excluded.expires_at,
-                scopes        = excluded.scopes,
-                updated_at    = datetime('now')
+                refresh_token = EXCLUDED.refresh_token,
+                access_token  = EXCLUDED.access_token,
+                expires_at    = EXCLUDED.expires_at,
+                scopes        = EXCLUDED.scopes,
+                updated_at    = NOW()
             """,
             (sub, refresh_token, access_token, expires_at, scopes),
         )
@@ -596,8 +588,8 @@ def update_google_access_token(sub: str, access_token: str, expires_at: str) -> 
         conn.execute(
             """
             UPDATE user_google_oauth
-               SET access_token = ?, expires_at = ?, updated_at = datetime('now')
-             WHERE sub = ?
+               SET access_token = %s, expires_at = %s, updated_at = NOW()
+             WHERE sub = %s
             """,
             (access_token, expires_at, sub),
         )
@@ -606,14 +598,14 @@ def update_google_access_token(sub: str, access_token: str, expires_at: str) -> 
 def get_google_oauth(sub: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM user_google_oauth WHERE sub = ?", (sub,)
+            "SELECT * FROM user_google_oauth WHERE sub = %s", (sub,)
         ).fetchone()
         return dict(row) if row else None
 
 
 def delete_google_oauth(sub: str) -> None:
     with _connect() as conn:
-        conn.execute("DELETE FROM user_google_oauth WHERE sub = ?", (sub,))
+        conn.execute("DELETE FROM user_google_oauth WHERE sub = %s", (sub,))
 
 
 # --- Datastore namespaces ---------------------------------------------------
@@ -622,19 +614,19 @@ def create_datastore_namespace(sub: str, namespace: str, spreadsheet_id: str) ->
     upsert_user(sub)
     with _connect() as conn:
         try:
-            cur = conn.execute(
-                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id) VALUES (?, ?, ?)",
+            row = conn.execute(
+                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id) VALUES (%s, %s, %s) RETURNING id",
                 (sub, namespace, spreadsheet_id),
-            )
-        except sqlite3.IntegrityError as e:
+            ).fetchone()
+        except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"namespace `{namespace}` existe déjà") from e
-        return int(cur.lastrowid)
+        return int(row["id"])
 
 
 def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM user_datastores WHERE sub = ? AND namespace = ?",
+            "SELECT * FROM user_datastores WHERE sub = %s AND namespace = %s",
             (sub, namespace),
         ).fetchone()
         return dict(row) if row else None
@@ -643,7 +635,7 @@ def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
 def list_datastore_namespaces(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT namespace, spreadsheet_id, created_at FROM user_datastores WHERE sub = ? ORDER BY namespace",
+            "SELECT namespace, spreadsheet_id, created_at FROM user_datastores WHERE sub = %s ORDER BY namespace",
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -652,7 +644,7 @@ def list_datastore_namespaces(sub: str) -> list[dict]:
 def delete_datastore_namespace(sub: str, namespace: str) -> bool:
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM user_datastores WHERE sub = ? AND namespace = ?",
+            "DELETE FROM user_datastores WHERE sub = %s AND namespace = %s",
             (sub, namespace),
         )
         return cur.rowcount > 0
@@ -673,7 +665,7 @@ def create_api_token(sub: str, label: str = "cli") -> str:
     token = _TOKEN_PREFIX + secrets.token_urlsafe(32)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO user_api_tokens (sub, label, token_hash) VALUES (?, ?, ?)",
+            "INSERT INTO user_api_tokens (sub, label, token_hash) VALUES (%s, %s, %s)",
             (sub, label, _hash_token(token)),
         )
     return token
@@ -686,12 +678,12 @@ def verify_api_token(token: str) -> Optional[str]:
     h = _hash_token(token)
     with _connect() as conn:
         row = conn.execute(
-            "SELECT sub FROM user_api_tokens WHERE token_hash = ?", (h,)
+            "SELECT sub FROM user_api_tokens WHERE token_hash = %s", (h,)
         ).fetchone()
         if not row:
             return None
         conn.execute(
-            "UPDATE user_api_tokens SET last_used_at = datetime('now') WHERE token_hash = ?",
+            "UPDATE user_api_tokens SET last_used_at = NOW() WHERE token_hash = %s",
             (h,),
         )
         return row["sub"]
@@ -700,7 +692,7 @@ def verify_api_token(token: str) -> Optional[str]:
 def list_api_tokens(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, label, created_at, last_used_at FROM user_api_tokens WHERE sub = ? ORDER BY created_at DESC",
+            "SELECT id, label, created_at, last_used_at FROM user_api_tokens WHERE sub = %s ORDER BY created_at DESC",
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -709,7 +701,7 @@ def list_api_tokens(sub: str) -> list[dict]:
 def delete_api_token(sub: str, token_id: int) -> bool:
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM user_api_tokens WHERE sub = ? AND id = ?",
+            "DELETE FROM user_api_tokens WHERE sub = %s AND id = %s",
             (sub, token_id),
         )
         return cur.rowcount > 0

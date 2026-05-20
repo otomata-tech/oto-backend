@@ -16,7 +16,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
   `otomata-tech/oto-cli` sur le serveur). Permet de propager les nouveaux connecteurs
   sans release PyPI — un `git pull` côté serveur suffit. La dépendance PyPI reste
   pour les déploiements fresh (premier install du venv).
-- SQLite stdlib pour le state par utilisateur
+- `psycopg[binary]` + `psycopg-pool` (PostgreSQL managed Scaleway `otomata-main`, DB `oto_mcp`) pour le state par utilisateur — migré depuis SQLite le 2026-05-20. Row factory custom dans `db.py` (`_str_dict_row`) qui normalise `datetime`/`date` → strings "YYYY-MM-DD HH:MM:SS" : sinon `JSONResponse` crash sur `/api/me` car le code historique attend des strings comme avec SQLite.
 - Auth = JWT Logto (`RemoteAuthProvider + JWTVerifier(jwks_uri=…, algorithm="ES384")`)
 
 ## Architecture
@@ -27,7 +27,7 @@ oto_mcp/
 ├── tools/            # 1 module par connecteur, chacun expose register(mcp)
 ├── api_routes.py     # /api/me, /api/settings/*, /api/admin/* (CORS oto.ninja)
 ├── access.py         # rôles guest/member/admin, resolve_api_key, quotas
-├── db.py             # SQLite users + usage(sub, tool, day, count)
+├── db.py             # PG users + usage(sub, tool, day, count) — pool psycopg, DATABASE_URL
 ├── auth_hooks.py     # current_user_sub_from_token() pour le contexte tool
 └── config.py         # require_env
 
@@ -240,8 +240,8 @@ ssh -i ~/.ssh/alexis root@51.15.225.121 \
 # Logs
 ssh -i ~/.ssh/alexis root@51.15.225.121 "journalctl -u oto-mcp -f"
 
-# DB inspect
-ssh -i ~/.ssh/alexis root@51.15.225.121 "sqlite3 /opt/oto-mcp/data/oto-mcp.sqlite 'SELECT * FROM users'"
+# DB inspect (PG managed)
+ssh -i ~/.ssh/alexis root@51.15.225.121 'set -a; . /opt/oto-mcp/.env; set +a; psql "$DATABASE_URL" -c "SELECT sub, email, role FROM users"'
 ```
 
 ## Infra
@@ -250,7 +250,7 @@ ssh -i ~/.ssh/alexis root@51.15.225.121 "sqlite3 /opt/oto-mcp/data/oto-mcp.sqlit
 - DNS: `mcp.oto.ninja` A proxied → tuls.me (zone CF `474add39245a72c0ff98749e677815d3`)
 - TLS: Origin Cert `*.oto.ninja` (`/etc/caddy/origin-certs/oto-ninja.{pem,key}`)
 - Caddyfile : source dans `/mnt/otomata-shared/infra/Caddyfile`
-- DB SQLite : `/opt/oto-mcp/data/oto-mcp.sqlite` (override `OTO_MCP_DB_PATH`)
+- DB : PostgreSQL managed Scaleway `otomata-main` (instance `9e44fefb…`, endpoint `51.15.207.157:27996`, DB `oto_mcp`, user `oto_mcp`). Connection string en SOPS `projects/oto-mcp.yaml` (DATABASE_URL), injectée dans `/opt/oto-mcp/.env`. Backup quotidien Scaleway (rétention 7j) + snapshots SQLite legacy dans `/opt/oto-mcp/data/oto-mcp.sqlite.bak-*` (à drop après 1 semaine).
 
 ## Docs
 

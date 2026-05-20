@@ -12,7 +12,9 @@ prod, `./data/oto-mcp.sqlite` en dev). Directory created on first init.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -81,6 +83,44 @@ CREATE TABLE IF NOT EXISTS user_grants (
     PRIMARY KEY (sub, platform_key_id),
     FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
 );
+
+-- Google OAuth — refresh_token persistant + access_token cached (refreshed
+-- lazily quand expiré). Scopes = ce qui a été accordé à ce sub. Plaintext
+-- (même modèle que les autres secrets dans cette DB, accès root only).
+CREATE TABLE IF NOT EXISTS user_google_oauth (
+    sub TEXT PRIMARY KEY,
+    refresh_token TEXT NOT NULL,
+    access_token TEXT,
+    expires_at TEXT,
+    scopes TEXT NOT NULL,
+    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Datastore — registre par user des namespaces (= un Google Sheet chacun).
+-- spreadsheet_id = file ID Drive. UNIQUE(sub, namespace).
+CREATE TABLE IF NOT EXISTS user_datastores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sub TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    spreadsheet_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(sub, namespace)
+);
+
+-- API tokens long-lived pour l'auth CLI → MCP REST. On stocke sha256(token),
+-- jamais le plaintext. Le token brut n'est rendu qu'à la création.
+-- Préfixe `oto_` distingue de l'auth Logto JWT dans `_authenticate`.
+CREATE TABLE IF NOT EXISTS user_api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sub TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT 'cli',
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT,
+    FOREIGN KEY (sub) REFERENCES users(sub) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 """
 
 # Migrations idempotentes — ajout de colonnes sur bases existantes.
@@ -124,6 +164,7 @@ def init_db() -> None:
 def _connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -521,3 +562,154 @@ def list_users_with_grants() -> list[dict]:
         u["grants"] = list_grants_for_user(u["sub"])
         out.append(u)
     return out
+
+
+# --- Google OAuth -----------------------------------------------------------
+
+def set_google_oauth(
+    sub: str,
+    refresh_token: str,
+    scopes: str,
+    access_token: Optional[str] = None,
+    expires_at: Optional[str] = None,
+) -> None:
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_google_oauth (sub, refresh_token, access_token, expires_at, scopes)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(sub) DO UPDATE SET
+                refresh_token = excluded.refresh_token,
+                access_token  = excluded.access_token,
+                expires_at    = excluded.expires_at,
+                scopes        = excluded.scopes,
+                updated_at    = datetime('now')
+            """,
+            (sub, refresh_token, access_token, expires_at, scopes),
+        )
+
+
+def update_google_access_token(sub: str, access_token: str, expires_at: str) -> None:
+    """Met à jour uniquement l'access_token + expiry (sur refresh)."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE user_google_oauth
+               SET access_token = ?, expires_at = ?, updated_at = datetime('now')
+             WHERE sub = ?
+            """,
+            (access_token, expires_at, sub),
+        )
+
+
+def get_google_oauth(sub: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_google_oauth WHERE sub = ?", (sub,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_google_oauth(sub: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM user_google_oauth WHERE sub = ?", (sub,))
+
+
+# --- Datastore namespaces ---------------------------------------------------
+
+def create_datastore_namespace(sub: str, namespace: str, spreadsheet_id: str) -> int:
+    upsert_user(sub)
+    with _connect() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id) VALUES (?, ?, ?)",
+                (sub, namespace, spreadsheet_id),
+            )
+        except sqlite3.IntegrityError as e:
+            raise ValueError(f"namespace `{namespace}` existe déjà") from e
+        return int(cur.lastrowid)
+
+
+def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_datastores WHERE sub = ? AND namespace = ?",
+            (sub, namespace),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_datastore_namespaces(sub: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT namespace, spreadsheet_id, created_at FROM user_datastores WHERE sub = ? ORDER BY namespace",
+            (sub,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_datastore_namespace(sub: str, namespace: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_datastores WHERE sub = ? AND namespace = ?",
+            (sub, namespace),
+        )
+        return cur.rowcount > 0
+
+
+# --- API tokens (CLI auth) --------------------------------------------------
+
+_TOKEN_PREFIX = "oto_"
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_api_token(sub: str, label: str = "cli") -> str:
+    """Génère un token, persiste son hash, renvoie le plaintext une seule fois."""
+    upsert_user(sub)
+    token = _TOKEN_PREFIX + secrets.token_urlsafe(32)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_api_tokens (sub, label, token_hash) VALUES (?, ?, ?)",
+            (sub, label, _hash_token(token)),
+        )
+    return token
+
+
+def verify_api_token(token: str) -> Optional[str]:
+    """Renvoie le sub du token, et met à jour last_used_at. None si inconnu."""
+    if not token or not token.startswith(_TOKEN_PREFIX):
+        return None
+    h = _hash_token(token)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT sub FROM user_api_tokens WHERE token_hash = ?", (h,)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            "UPDATE user_api_tokens SET last_used_at = datetime('now') WHERE token_hash = ?",
+            (h,),
+        )
+        return row["sub"]
+
+
+def list_api_tokens(sub: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, label, created_at, last_used_at FROM user_api_tokens WHERE sub = ? ORDER BY created_at DESC",
+            (sub,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_api_token(sub: str, token_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_api_tokens WHERE sub = ? AND id = ?",
+            (sub, token_id),
+        )
+        return cur.rowcount > 0

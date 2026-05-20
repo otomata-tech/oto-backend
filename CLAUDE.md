@@ -13,7 +13,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
 - `fastmcp>=2.0` (prod : 3.2.4) + `mcp` SDK
 - `oto-cli[browser]` — déclaré comme dépendance PyPI dans `pyproject.toml`, mais en
   prod le venv est overridden par `pip install -e /opt/oto-cli/` (clone du repo
-  `otomata-tech/oto` sur le serveur). Permet de propager les nouveaux connecteurs
+  `otomata-tech/oto-cli` sur le serveur). Permet de propager les nouveaux connecteurs
   sans release PyPI — un `git pull` côté serveur suffit. La dépendance PyPI reste
   pour les déploiements fresh (premier install du venv).
 - SQLite stdlib pour le state par utilisateur
@@ -103,6 +103,88 @@ MV3) qui capture le couple `(li_at, user_agent)` et le push automatiquement
 via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
 `chrome.cookies.onChanged` quand LinkedIn rotate la session.
 
+## Datastore (Google Sheets per-user)
+
+Stockage structuré léger par user. Backend = un Google Sheet par "namespace"
+(timetrack, todos, courses…) dans le Drive du user. Schéma libre : les
+colonnes apparaissent quand de nouveaux champs sont écrits. Les 3 premières
+colonnes sont auto-managées (`_id` UUID v7-like, `_created_at`, `_updated_at`).
+
+Surfaces :
+- MCP tools `data_*` (`data_create_namespace`, `data_append`, `data_list`,
+  `data_get`, `data_update`, `data_delete_row`, `data_url`, etc.) — pour
+  Claude.ai / Claude Code.
+- REST `/api/datastore/*` — pour le CLI `oto data` + future UI.
+
+Auth :
+- MCP tools : Logto JWT comme les autres tools.
+- REST `/api/datastore/*` : Logto JWT **ou** API token long-lived (préfixe
+  `oto_`, vérifié contre `user_api_tokens`).
+
+OAuth Google per-user :
+- `GET /api/google/oauth/start` (Logto auth) → renvoie `{auth_url}` à
+  ouvrir dans le browser.
+- `GET /api/google/oauth/callback?code=…&state=…` — Google redirige ici, on
+  échange + persiste, puis redirige vers `app.oto.ninja/?datastore=connected`.
+- Scopes : `spreadsheets` + `drive.file` (accès limité aux fichiers créés
+  par l'app — pas tout le Drive).
+- Refresh token stocké en plaintext dans `user_google_oauth` (même modèle
+  que les autres secrets per-user dans cette DB, accès root only).
+
+**Pourquoi un client OAuth séparé du connecteur Logto Google** : Logto
+gère l'**identité** (scopes `openid email profile`), pas la délégation
+d'accès aux ressources Google. Mutualiser obligerait à demander
+`spreadsheets`+`drive.file` à *chaque* sign-in, même aux users qui
+n'utilisent pas le datastore. Donc deux clients OAuth distincts dans le
+même projet GCP — c'est la séparation propre identité ≠ délégation.
+
+### Setup GCP (one-shot, par projet)
+
+1. **Console GCP** → choisir/créer un projet (peut être le même que celui
+   qui héberge le connecteur Logto Google).
+2. **APIs & Services → Library** : enable
+   - `Google Sheets API`
+   - `Google Drive API`
+3. **APIs & Services → OAuth consent screen** :
+   - User type : `External` (sauf Workspace)
+   - App name : `Oto Datastore` (visible aux users sur le consent)
+   - Support email : alexis@otomata.tech
+   - Authorized domains : `oto.ninja`
+   - **Scopes** : ajouter `.../auth/spreadsheets` et `.../auth/drive.file`
+   - **Test users** (si en mode "Testing") : ajouter les emails autorisés
+     tant que l'app n'est pas publiée. `drive.file` n'est PAS un scope
+     sensible chez Google → publication auto-approuvée si demandée.
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID** :
+   - Application type : **Web application** (pas "Desktop")
+   - Name : `oto-mcp datastore`
+   - Authorized redirect URIs :
+     - `https://mcp.oto.ninja/api/google/oauth/callback` (prod)
+     - `http://localhost:9103/api/google/oauth/callback` (dev, optionnel)
+5. Copier `client_id` + `client_secret` → SOPS.
+6. Générer le state secret :
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+### Env vars requises
+
+À poser dans le `.env` systemd (ou SOPS exporté au boot) :
+
+- `GOOGLE_DATASTORE_CLIENT_ID` / `GOOGLE_DATASTORE_CLIENT_SECRET` — issus
+  de l'étape 5.
+- `OTO_MCP_OAUTH_STATE_SECRET` — étape 6, HMAC anti-CSRF du state.
+- `OTO_MCP_PUBLIC_URL` — déjà utilisée pour Logto (base du redirect URI).
+- `OTO_APP_URL` (optionnel, défaut `https://app.oto.ninja`) — base où on
+  redirige l'user après le callback OAuth. À override en dev local
+  (`http://localhost:5174`).
+
+Bootstrap d'un token CLI (pour Alexis) :
+```bash
+ssh -i ~/.ssh/alexis root@51.15.225.121 \
+  "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.issue_token <SUB> cli"
+# → imprime un `oto_…` à stocker dans SOPS comme OTO_API_KEY
+```
+
 ## WhatsApp
 
 Tools `whatsapp_*` wrappent `oto.tools.whatsapp.WhatsAppClient` (Baileys via
@@ -135,6 +217,12 @@ de gating role). Le pairing crée ce fichier.
   (`patchright install chromium`).
 - WhatsApp nécessite Node.js installé + `node_modules` dans
   `oto-cli/oto/tools/whatsapp/node/` (auto-installé au premier `WhatsAppClient()`).
+- Attio (`tools/attio.py`) expose CRUD complet : records (companies/people/deals),
+  notes (sauf update body, limite API), tasks, lists, entries, workspace_members,
+  comments, threads, meetings, call_recordings + meta (objects, attributes). Pas
+  de quota plateforme — chaque user pose sa clé sur `/account`. **Gotcha** :
+  `attio_list_threads` renvoie 400 sans `parent_object`/`parent_record_id` —
+  toujours filtrer par parent.
 
 ## Commands
 

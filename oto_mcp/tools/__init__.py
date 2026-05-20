@@ -62,3 +62,12 @@ def register_all(mcp: FastMCP) -> None:
         slack.register(mcp)
     except Exception as e:
         log.warning("Slack tools disabled: %s", e)
+
+    # Datastore — Google Sheets per-user. Requiert Google OAuth grant côté
+    # user (`/account`). On register quoi qu'il en soit ; les tools lèvent
+    # une McpError actionnable à l'appel si l'user n'a pas grant.
+    try:
+        from . import datastore
+        datastore.register(mcp)
+    except Exception as e:
+        log.warning("Datastore tools disabled: %s", e)

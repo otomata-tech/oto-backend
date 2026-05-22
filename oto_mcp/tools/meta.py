@@ -126,24 +126,48 @@ def register(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    async def oto_save_preset(name: str, ctx: Context) -> dict:
-        """Save the current enabled toolset as a named preset.
+    async def oto_save_preset(
+        name: str,
+        ctx: Context,
+        enabled_tools: Optional[list[str]] = None,
+    ) -> dict:
+        """Save a named preset (a toolset snapshot).
 
-        Snapshots which tools are currently visible (i.e. not in
-        user_disabled_tools) under `name`. Overwrites if the preset already
-        exists. Apply later with `oto_apply_preset`.
+        Default behavior (no `enabled_tools` passed): snapshots which tools
+        are currently visible (i.e. not in user_disabled_tools).
+
+        If `enabled_tools` is provided, saves that explicit list as the
+        preset's content — without altering the user's current toolset state.
+        Useful to provision a preset programmatically.
+
+        Overwrites if the preset already exists. Apply later with
+        `oto_apply_preset`.
 
         Args:
             name: Preset name (e.g. "sales", "mission-mm", "perso").
+            enabled_tools: Optional explicit list of tool names to store.
+                Names unknown to the server are rejected with INVALID_PARAMS.
         """
         sub = _require_sub()
-        if not name or not name.strip():
+        name = (name or "").strip()
+        if not name:
             raise McpError(ErrorData(code=INVALID_PARAMS, message="Preset name required."))
         all_names = await _all_tool_names(ctx)
-        disabled = set(db.list_user_disabled_tools(sub))
-        enabled = sorted(all_names - disabled)
-        db.save_user_preset(sub, name.strip(), enabled)
-        return {"name": name.strip(), "saved": True, "enabled_count": len(enabled)}
+
+        if enabled_tools is not None:
+            unknown = sorted(set(enabled_tools) - all_names)
+            if unknown:
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=f"Unknown tool names: {unknown[:5]}{'…' if len(unknown) > 5 else ''}",
+                ))
+            enabled = sorted(set(enabled_tools))
+        else:
+            disabled = set(db.list_user_disabled_tools(sub))
+            enabled = sorted(all_names - disabled)
+
+        db.save_user_preset(sub, name, enabled)
+        return {"name": name, "saved": True, "enabled_count": len(enabled)}
 
     @mcp.tool()
     async def oto_apply_preset(name: str, ctx: Context) -> dict:

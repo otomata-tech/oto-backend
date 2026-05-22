@@ -482,14 +482,37 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         })
 
     async def my_preset_save(request: Request) -> JSONResponse:
-        """Snapshot l'état courant (tools non disabled) sous ce nom."""
+        """Snapshot l'état courant sous ce nom, OU sauve une liste explicite
+        si le body contient `{"enabled_tools": [...]}`. Utile pour
+        provisionner un preset sans altérer l'état courant.
+        """
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
         name = request.path_params["name"]
         all_names = await _list_all_tool_names()
-        disabled = set(db.list_user_disabled_tools(sub))
-        enabled = sorted(all_names - disabled)
+
+        explicit: list[str] | None = None
+        # Body optionnel — un POST sans body garde le comportement snapshot
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and isinstance(body.get("enabled_tools"), list):
+                explicit = [str(t) for t in body["enabled_tools"]]
+        except Exception:
+            pass
+
+        if explicit is not None:
+            unknown = sorted(set(explicit) - all_names)
+            if unknown:
+                return _json(request, {
+                    "error": "unknown_tools",
+                    "unknown": unknown,
+                }, status_code=400)
+            enabled = sorted(set(explicit))
+        else:
+            disabled = set(db.list_user_disabled_tools(sub))
+            enabled = sorted(all_names - disabled)
+
         db.save_user_preset(sub, name, enabled)
         return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
 

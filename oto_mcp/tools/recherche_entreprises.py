@@ -21,6 +21,7 @@ def register(mcp: FastMCP) -> None:
         employees: Optional[str] = None,
         ca_min: Optional[int] = None,
         ca_max: Optional[int] = None,
+        idcc: Optional[str] = None,
         page: int = 1,
         per_page: int = 25,
     ) -> dict:
@@ -38,6 +39,8 @@ def register(mcp: FastMCP) -> None:
             employees: Employee-range codes (INSEE TEFEN), comma-separated.
             ca_min: Minimum turnover in euros.
             ca_max: Maximum turnover in euros.
+            idcc: IDCC codes (conventions collectives), comma-separated
+                (e.g. "1285,3090" pour spectacle vivant subventionné + privé).
             page: 1-based page number.
             per_page: Page size, capped at 25 by upstream.
         """
@@ -50,6 +53,7 @@ def register(mcp: FastMCP) -> None:
             employees=[s.strip() for s in employees.split(",")] if employees else None,
             ca_min=ca_min,
             ca_max=ca_max,
+            idcc=[s.strip() for s in idcc.split(",")] if idcc else None,
             page=page,
             per_page=per_page,
         )

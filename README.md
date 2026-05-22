@@ -7,7 +7,7 @@ First batch of tools wraps the data.gouv.fr "API Recherche Entreprises"
 
 | Tool | What it returns |
 | --- | --- |
-| `recherche_entreprises_search` | Filtered list of French companies (full-text + NAF / dept / postal / commune / employees / CA filters) |
+| `recherche_entreprises_search` | Filtered list of French companies (full-text + NAF / dept / postal / commune / employees / CA + **IDCC convention collective** filters) |
 | `recherche_entreprises_get` | Single enriched company by SIREN |
 | `recherche_entreprises_directors` | `dirigeants` for a SIREN |
 | `recherche_entreprises_finances` | `finances` block for a SIREN |

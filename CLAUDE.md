@@ -215,6 +215,8 @@ Source de vérité = table PG `user_disabled_tools(sub, tool_name)`. Tables sœu
 
 Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_list_presets`, `oto_save_preset`, `oto_apply_preset`, `oto_delete_preset`. Le set protégé `{oto_list_my_tools, oto_enable_tool, oto_apply_preset}` reste toujours activé pour éviter le lock-out.
 
+`oto_save_preset` (et `POST /api/me/presets/{name}`) accepte 2 modes : snapshot (par défaut, capture l'état courant) ou explicit (param `enabled_tools=[...]`, sauve sans altérer l'état courant — utile pour provisionner par script).
+
 **Limite connue** : sessions MCP déjà ouvertes au moment d'un toggle via REST (`/account`) ne sont pas notifiées live — visible au prochain refresh ou nouvelle session, parce que le hook `on_initialize` ne tape qu'à la naissance d'une session.
 
 ## Conventions

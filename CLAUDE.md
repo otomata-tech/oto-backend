@@ -85,6 +85,8 @@ sont pas concernés (cookie per-user / pas de clé).
 - `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota)
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
 - `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
+- `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
+- `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - CORS limité aux origines `oto.ninja` + dev locales (`OTO_MCP_CORS_ORIGINS` override)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
@@ -205,6 +207,16 @@ asyncio.Queue.
 Tools accessibles à tout user **dont l'auth_dir contient `creds.json`** (pas
 de gating role). Le pairing crée ce fichier.
 
+## Visibility per-user
+
+`UserDisabledToolsMiddleware` (`middleware.py`) applique au handshake `initialize` les visibility rules natives fastmcp (`disable_components` via `_visibility_rules` session state). Plus de filtrage manuel `on_list_tools`/`on_call_tool` — fastmcp émet `tools/list_changed` automatiquement quand les rules changent.
+
+Source de vérité = table PG `user_disabled_tools(sub, tool_name)`. Tables sœur `user_presets(sub, name, enabled_tools[])` pour les snapshots nommés.
+
+Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_list_presets`, `oto_save_preset`, `oto_apply_preset`, `oto_delete_preset`. Le set protégé `{oto_list_my_tools, oto_enable_tool, oto_apply_preset}` reste toujours activé pour éviter le lock-out.
+
+**Limite connue** : sessions MCP déjà ouvertes au moment d'un toggle via REST (`/account`) ne sont pas notifiées live — visible au prochain refresh ou nouvelle session, parce que le hook `on_initialize` ne tape qu'à la naissance d'une session.
+
 ## Conventions
 
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
@@ -230,12 +242,12 @@ de gating role). Le pairing crée ce fichier.
 # Local stdio (Claude Code, sans auth)
 OTO_MCP_DEV_SUB=alexis .venv/bin/oto-mcp
 
-# Deploy update — propage à la fois oto-mcp (rsync local) et oto-cli (git pull)
-rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git --exclude data \
-  -e "ssh -i ~/.ssh/alexis" /data/oto/mcp/ root@REDACTED_IP:/opt/oto-mcp/
-ssh -i ~/.ssh/alexis root@REDACTED_IP \
-  "cd /opt/oto-cli && git pull origin main && \
-   cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
+# Deploy — push main déclenche `.github/workflows/deploy.yml` (git reset --hard
+# origin/main + pip install -e . + systemctl restart oto-mcp). Idem côté
+# oto-cli qui a son propre workflow déclenchant `systemctl restart oto-mcp`
+# pour propager les nouveaux modules (`pip install -e` ne re-collecte pas les
+# imports déjà en mémoire).
+git push origin main
 
 # Logs
 ssh -i ~/.ssh/alexis root@REDACTED_IP "journalctl -u oto-mcp -f"

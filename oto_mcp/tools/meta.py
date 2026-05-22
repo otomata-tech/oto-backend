@@ -9,6 +9,7 @@ en DB (`user_disabled_tools`), et les changements émettent immédiatement
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.transforms.visibility import (

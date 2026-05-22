@@ -439,6 +439,94 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.remove_user_disabled_tool(sub, name)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
+    # --- presets ------------------------------------------------------------
+
+    _PROTECTED_TOOLS = {"oto_enable_tool", "oto_list_my_tools", "oto_apply_preset"}
+
+    async def _list_all_tool_names() -> set[str]:
+        if mcp_instance is None:
+            return set()
+        tools = await mcp_instance.list_tools(run_middleware=False)
+        return {t.name for t in tools}
+
+    async def my_presets_list(request: Request) -> JSONResponse:
+        """Liste les presets sauvés du user."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        presets = db.list_user_presets(sub)
+        return _json(request, {
+            "presets": [
+                {
+                    "name": p["name"],
+                    "tool_count": len(p["enabled_tools"]),
+                    "updated_at": str(p["updated_at"]) if p["updated_at"] else None,
+                }
+                for p in presets
+            ],
+        })
+
+    async def my_preset_get(request: Request) -> JSONResponse:
+        """Récupère le détail d'un preset (liste exhaustive de enabled_tools)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        preset = db.get_user_preset(sub, name)
+        if not preset:
+            return _json(request, {"error": "not_found", "name": name}, status_code=404)
+        return _json(request, {
+            "name": preset["name"],
+            "enabled_tools": preset["enabled_tools"],
+            "updated_at": str(preset["updated_at"]) if preset["updated_at"] else None,
+        })
+
+    async def my_preset_save(request: Request) -> JSONResponse:
+        """Snapshot l'état courant (tools non disabled) sous ce nom."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        all_names = await _list_all_tool_names()
+        disabled = set(db.list_user_disabled_tools(sub))
+        enabled = sorted(all_names - disabled)
+        db.save_user_preset(sub, name, enabled)
+        return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
+
+    async def my_preset_apply(request: Request) -> JSONResponse:
+        """Bascule user_disabled_tools selon le preset. Ne notifie pas les
+        sessions MCP en cours — elles verront le nouvel état au prochain
+        handshake (le hook on_initialize relit la DB).
+        """
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        preset = db.get_user_preset(sub, name)
+        if not preset:
+            return _json(request, {"error": "not_found", "name": name}, status_code=404)
+        all_names = await _list_all_tool_names()
+        enabled = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
+        disabled = sorted(all_names - enabled)
+        db.replace_user_disabled_tools(sub, disabled)
+        return _json(request, {
+            "ok": True,
+            "applied": name,
+            "enabled_count": len(enabled),
+            "disabled_count": len(disabled),
+        })
+
+    async def my_preset_delete(request: Request) -> JSONResponse:
+        """Supprime un preset par nom."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        deleted = db.delete_user_preset(sub, name)
+        if not deleted:
+            return _json(request, {"error": "not_found", "name": name}, status_code=404)
+        return _json(request, {"ok": True, "name": name, "deleted": True})
+
     async def whatsapp_status(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -528,6 +616,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/presets", my_presets_list, methods=["GET"]),
+        Route("/api/me/presets", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/presets/{name}", my_preset_get, methods=["GET"]),
+        Route("/api/me/presets/{name}", my_preset_save, methods=["POST"]),
+        Route("/api/me/presets/{name}", my_preset_delete, methods=["DELETE"]),
+        Route("/api/me/presets/{name}", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/presets/{name}/apply", my_preset_apply, methods=["POST"]),
+        Route("/api/me/presets/{name}/apply", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),

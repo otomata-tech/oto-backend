@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS user_disabled_tools (
     PRIMARY KEY (sub, tool_name)
 );
 
+CREATE TABLE IF NOT EXISTS user_presets (
+    sub TEXT NOT NULL,
+    name TEXT NOT NULL,
+    enabled_tools TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, name)
+);
+
 CREATE TABLE IF NOT EXISTS platform_keys (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
@@ -407,6 +416,77 @@ def remove_user_disabled_tool(sub: str, tool_name: str) -> None:
             "DELETE FROM user_disabled_tools WHERE sub = %s AND tool_name = %s",
             (sub, tool_name),
         )
+
+
+def replace_user_disabled_tools(sub: str, tool_names: list[str]) -> None:
+    """Remplace l'ensemble des disabled_tools du user par celui passé.
+
+    Utilisé par `apply_user_preset` pour basculer en un appel atomique.
+    """
+    upsert_user(sub)
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute("DELETE FROM user_disabled_tools WHERE sub = %s", (sub,))
+            if tool_names:
+                conn.executemany(
+                    "INSERT INTO user_disabled_tools (sub, tool_name) VALUES (%s, %s)",
+                    [(sub, t) for t in tool_names],
+                )
+
+
+# --- per-user presets -------------------------------------------------------
+
+def list_user_presets(sub: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT name, enabled_tools, updated_at FROM user_presets "
+            "WHERE sub = %s ORDER BY name",
+            (sub,),
+        ).fetchall()
+        return [
+            {
+                "name": r["name"],
+                "enabled_tools": list(r["enabled_tools"] or []),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
+
+def get_user_preset(sub: str, name: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT name, enabled_tools, updated_at FROM user_presets "
+            "WHERE sub = %s AND name = %s",
+            (sub, name),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "name": row["name"],
+            "enabled_tools": list(row["enabled_tools"] or []),
+            "updated_at": row["updated_at"],
+        }
+
+
+def save_user_preset(sub: str, name: str, enabled_tools: list[str]) -> None:
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_presets (sub, name, enabled_tools) VALUES (%s, %s, %s) "
+            "ON CONFLICT (sub, name) DO UPDATE SET "
+            "enabled_tools = EXCLUDED.enabled_tools, updated_at = NOW()",
+            (sub, name, enabled_tools),
+        )
+
+
+def delete_user_preset(sub: str, name: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_presets WHERE sub = %s AND name = %s",
+            (sub, name),
+        )
+        return (cur.rowcount or 0) > 0
 
 
 def get_usage_today(sub: str, tool: str) -> int:

@@ -14,6 +14,11 @@ def register_all(mcp: FastMCP) -> None:
 
     log = logging.getLogger("oto_mcp.tools")
 
+    # Méta-tools — pilotage de la visibility par l'user depuis la conversation.
+    # Pas de dépendance externe, register en premier.
+    from . import meta
+    meta.register(mcp)
+
     # Connecteurs API-only — la résolution de clé (user vs platform) se fait
     # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
     # les secrets soient configurés au boot.

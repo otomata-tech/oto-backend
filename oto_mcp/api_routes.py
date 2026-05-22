@@ -120,6 +120,31 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     async def options_handler(request: Request) -> Response:
         return Response(status_code=204, headers=_cors_headers(request.headers.get("origin")))
 
+    async def mcp_catalog(request: Request) -> JSONResponse:
+        """Liste publique des tools MCP exposés — alimente l'autodoc oto.ninja.
+
+        Pas d'auth : la doc des tools (nom, description, schémas) est de toute
+        façon découvrable via tools/list du protocole MCP. CORS large pour
+        permettre fetch côté oto.ninja.
+        """
+        if mcp_instance is None:
+            return _json(request, {"tools": []})
+        try:
+            tools = await mcp_instance.list_tools(run_middleware=False)
+        except Exception as e:
+            return _json_error(request, 500, f"list_tools_failed:{e}")
+        payload = []
+        for t in tools:
+            # Tool object exposes name, description, parameters (input schema),
+            # output_schema. Some attributes may be None depending on the type.
+            payload.append({
+                "name": t.name,
+                "description": (t.description or "").strip(),
+                "input_schema": getattr(t, "parameters", None),
+                "output_schema": getattr(t, "output_schema", None),
+            })
+        return _json(request, {"tools": payload, "count": len(payload)})
+
     async def me(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -624,6 +649,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     )
 
     return [
+        Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
+        Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/linkedin", linkedin_get, methods=["GET"]),

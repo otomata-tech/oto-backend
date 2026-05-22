@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS users (
     sirene_api_key TEXT,
     attio_api_key TEXT,
     lemlist_api_key TEXT,
+    kaspr_api_key TEXT,
     crunchbase_cookies TEXT,
     crunchbase_user_agent TEXT,
     crunchbase_set_at TIMESTAMPTZ,
@@ -143,7 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
 # Providers supportés pour les user keys. Aligné sur les colonnes
 # `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
-KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist")
+KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr")
 
 
 _pool: Optional[ConnectionPool] = None
@@ -179,6 +180,10 @@ def _connect() -> Iterator[psycopg.Connection]:
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(_SCHEMA)
+        # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas
+        # les nouvelles colonnes sur les tables existantes. Ajouter ici à chaque
+        # nouveau provider key.
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS kaspr_api_key TEXT")
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:

@@ -47,11 +47,15 @@ def register(mcp: FastMCP) -> None:
         Cost: 1 credit per email, +1 per phone if `with_phone=True`.
         """
         client, is_platform = _client()
+        # with_phone=True → include "phone" in data_to_get (costs extra credits)
+        effective_data = data_to_get
+        if effective_data is None and with_phone:
+            effective_data = ["workEmail", "phone"]
         result = client.enrich_linkedin(
             linkedin_id=linkedin_id,
             name=name,
             is_phone_required=with_phone,
-            data_to_get=data_to_get,
+            data_to_get=effective_data,
         )
         if is_platform:
             access.record_platform_usage("kaspr")

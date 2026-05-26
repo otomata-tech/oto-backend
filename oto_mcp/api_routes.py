@@ -36,7 +36,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, db, pairing
+from . import access, api_routes_datastore, db, linkedin_pairing, pairing
 
 
 def _allowed_origins() -> list[str]:
@@ -160,6 +160,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "configured": bool(user.get("linkedin_cookie")),
                 "set_at": user.get("linkedin_cookie_set_at"),
                 "user_agent": user.get("linkedin_user_agent"),
+                "browser_profile": linkedin_pairing.has_profile(sub),
             },
             "crunchbase": {
                 "configured": bool(user.get("crunchbase_cookies")),
@@ -583,6 +584,72 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})
 
+    # ── LinkedIn browser-session pairing (VNC) ──────────────────────
+
+    async def linkedin_browser_status(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        active = linkedin_pairing.get_active_for_sub(sub)
+        return _json(request, {
+            "has_profile": linkedin_pairing.has_profile(sub),
+            "active_pairing": {
+                "session_id": active.session_id,
+                "status": active.status,
+            } if active else None,
+        })
+
+    async def linkedin_browser_start(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        loop = asyncio.get_running_loop()
+        session = linkedin_pairing.start(sub, loop)
+        return _json(request, {"session_id": session.session_id, "status": session.status})
+
+    async def linkedin_browser_cancel(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        active = linkedin_pairing.get_active_for_sub(sub)
+        if not active:
+            return _json_error(request, 404, "no_active_pairing")
+        active.cancel()
+        return _json(request, {"ok": True})
+
+    async def linkedin_browser_stream(request: Request) -> Response:
+        sub, err = await _authenticate(request, verifier, allow_query_token=True)
+        if err:
+            return err
+        session_id = request.query_params.get("session_id", "")
+        session = linkedin_pairing.get_session(session_id)
+        if not session or session.sub != sub:
+            return _json_error(request, 404, "unknown_session")
+
+        async def event_stream():
+            yield f": ok\ndata: {json.dumps({'type': 'connected', 'status': session.status})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(session.queue.get(), timeout=20)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                **_cors_headers(request.headers.get("origin")),
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # ── WhatsApp pairing ──────────────────────────────────────────
+
     async def whatsapp_status(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -686,6 +753,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/linkedin/browser/status", linkedin_browser_status, methods=["GET"]),
+        Route("/api/settings/linkedin/browser/status", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/linkedin/browser/start", linkedin_browser_start, methods=["POST"]),
+        Route("/api/settings/linkedin/browser/start", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/linkedin/browser/cancel", linkedin_browser_cancel, methods=["POST"]),
+        Route("/api/settings/linkedin/browser/cancel", options_handler, methods=["OPTIONS"]),
+        Route("/api/settings/linkedin/browser/stream", linkedin_browser_stream, methods=["GET"]),
+        Route("/api/settings/linkedin/browser/stream", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/status", whatsapp_status, methods=["GET"]),
         Route("/api/whatsapp/status", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/pair/start", whatsapp_pair_start, methods=["POST"]),

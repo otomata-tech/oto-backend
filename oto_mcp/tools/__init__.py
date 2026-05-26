@@ -22,16 +22,15 @@ def register_all(mcp: FastMCP) -> None:
     # Connecteurs API-only — la résolution de clé (user vs platform) se fait
     # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
     # les secrets soient configurés au boot.
-    from . import recherche_entreprises, sirene, serper, hunter, attio
-    recherche_entreprises.register(mcp)
-    sirene.register(mcp)
+    from . import fr, serper, hunter, attio
+    fr.register(mcp)
     serper.register(mcp)
     hunter.register(mcp)
     attio.register(mcp)
 
     # Connecteurs récents — wrapper en try/except au cas où la version d'oto-cli
     # déployée serait en retard sur le module attendu.
-    for mod_name in ("reddit", "lemlist", "culture", "kaspr", "inpi", "boamp"):
+    for mod_name in ("reddit", "lemlist", "culture", "kaspr"):
         try:
             mod = __import__(f"oto_mcp.tools.{mod_name}", fromlist=[mod_name])
             mod.register(mcp)

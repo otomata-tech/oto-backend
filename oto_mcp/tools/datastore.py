@@ -169,12 +169,38 @@ def register(mcp: FastMCP) -> None:
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
 
+    def _drive_share(sub: str, spreadsheet_id: str, email: str, role: str) -> None:
+        """Share a Google Sheet via Drive API using the owner's credentials."""
+        from .. import google_oauth
+        creds = google_oauth.credentials_for(sub)
+        from googleapiclient.discovery import build
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        drive.permissions().create(
+            fileId=spreadsheet_id,
+            body={"type": "user", "role": role, "emailAddress": email},
+            sendNotificationEmail=False,
+        ).execute()
+
+    def _drive_unshare(sub: str, spreadsheet_id: str, email: str) -> None:
+        """Remove a user's Drive permission on a Google Sheet."""
+        from .. import google_oauth
+        creds = google_oauth.credentials_for(sub)
+        from googleapiclient.discovery import build
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        perms = drive.permissions().list(
+            fileId=spreadsheet_id, fields="permissions(id,emailAddress)",
+        ).execute().get("permissions", [])
+        for p in perms:
+            if (p.get("emailAddress") or "").lower() == email.lower():
+                drive.permissions().delete(fileId=spreadsheet_id, permissionId=p["id"]).execute()
+                return
+
     @mcp.tool()
     async def data_share(namespace: str, email: str, permission: str = "write") -> dict:
         """Share a namespace with another oto user (by email).
 
-        The Google Sheet must also be shared in Google Drive with the recipient.
-        Both users need a connected Google account.
+        Shares both in the oto DB and in Google Drive (so the recipient
+        can access the Sheet with their own Google account).
 
         Args:
             namespace: Namespace to share (must be owned by you).
@@ -187,15 +213,24 @@ def register(mcp: FastMCP) -> None:
         recipient = db.get_user_by_email(email)
         if not recipient:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
+        ns = db.get_datastore_namespace(sub, namespace)
+        if not ns:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` not found"))
         try:
             db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        drive_role = "writer" if permission == "write" else "reader"
+        try:
+            _drive_share(sub, ns["spreadsheet_id"], email, drive_role)
+        except Exception as e:
+            return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission,
+                    "drive_warning": f"DB partagé mais Drive share échoué : {e}"}
         return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
 
     @mcp.tool()
     async def data_unshare(namespace: str, email: str) -> dict:
-        """Remove a user's access to a shared namespace.
+        """Remove a user's access to a shared namespace (DB + Google Drive).
 
         Args:
             namespace: Namespace to unshare (must be owned by you).
@@ -205,7 +240,13 @@ def register(mcp: FastMCP) -> None:
         recipient = db.get_user_by_email(email)
         if not recipient:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
+        ns = db.get_datastore_namespace(sub, namespace)
         removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
         if not removed:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"pas de partage actif pour {email} sur {namespace}"))
+        if ns:
+            try:
+                _drive_unshare(sub, ns["spreadsheet_id"], email)
+            except Exception:
+                pass
         return {"ok": True, "namespace": namespace, "removed": email}

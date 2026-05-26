@@ -17,10 +17,13 @@ Résolution d'une clé API par appel (`resolve_api_key`) :
    récemment grantée.
 3. Sinon (et y compris pour un admin sans grant) → McpError actionnable.
 
-Quota daily lu via `OTO_MCP_QUOTA_<PROVIDER>_DAILY` env (défauts dans
-`_QUOTA_DEFAULTS`). Un admin peut s'auto-grant donc reste soumis au quota
-comme tout le monde — c'est une protection contre une fuite plus qu'une
-politique d'accès.
+Quota daily : chaque grant porte un `daily_quota` optionnel (per-user,
+posé par l'admin au moment du grant). Si null, fallback sur
+`OTO_MCP_QUOTA_<PROVIDER>_DAILY` env ou `_QUOTA_DEFAULTS`.
+
+Les clés plateforme sont importées au boot (`bootstrap_env_keys`) mais
+ne sont PAS auto-grantées — l'admin doit accorder l'accès explicitement
+via l'API admin.
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ _QUOTA_DEFAULTS = {
     "hunter": 10,
     "sirene": 200,
     "attio": 200,
+    "kaspr": 5,
 }
 
 _ACCOUNT_URL = "https://oto.ninja/account"
@@ -99,7 +103,7 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
         ))
 
     used = db.get_usage_today(sub, provider)
-    limit = quota_for(provider)
+    limit = grant.get("daily_quota") or quota_for(provider)
     if limit and used >= limit:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -134,7 +138,7 @@ def status_for(sub: str) -> dict:
         user_key = db.get_user_api_key(sub, provider)
         grant = db.get_active_grant(sub, provider)
         used = db.get_usage_today(sub, provider)
-        limit = quota_for(provider)
+        limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 
         if user_key:
             mode = "user"
@@ -157,25 +161,22 @@ def status_for(sub: str) -> dict:
 
 def bootstrap_env_keys(env_keys: dict[str, str]) -> None:
     """Au démarrage : importe les env vars `<PROVIDER>_API_KEY` en
-    `platform_keys` (label `env`), et grant à `OTO_MCP_ADMIN_SUB` s'il est
-    défini. Idempotent — appelable à chaque boot.
+    `platform_keys` (label `env`). Idempotent — appelable à chaque boot.
+
+    Les clés sont importées mais PAS auto-grantées. Un admin doit
+    explicitement accorder l'accès via `/api/admin/users/{sub}/grants/{key_id}`
+    avec un `daily_quota` par user.
 
     `env_keys` = {provider: api_key} extrait par le caller via
     `oto.config.get_secret` ; on ne touche pas l'env nous-mêmes pour rester
     découplé du runtime de secrets.
     """
-    admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
     for provider, api_key in env_keys.items():
         if not api_key:
             continue
         if provider not in db.KEY_PROVIDERS:
             continue
         try:
-            key_id = db.upsert_platform_key(provider, "env", api_key)
+            db.upsert_platform_key(provider, "env", api_key)
         except Exception:
             continue
-        if admin_sub:
-            try:
-                db.grant_platform_key(admin_sub, key_id, granted_by="bootstrap")
-            except Exception:
-                pass

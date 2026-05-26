@@ -1,12 +1,17 @@
-"""LinkedIn — scraping browser. Cookie `li_at` lu depuis la table `users` de
-la DB (mis par l'utilisateur via `/settings`).
+"""LinkedIn — scraping browser.
 
-Si l'utilisateur n'a pas configuré son cookie : message d'erreur explicite
-qui pointe vers `/settings`. Pas de fallback global pour éviter de mélanger
-les sessions LinkedIn entre utilisateurs.
+Deux modes d'auth, par ordre de priorité :
+1. Profil browser persistant dans `<DATA_DIR>/browser-profiles/linkedin-<sub>/`
+   (session TLS liée au fingerprint du browser — résiste au blocage CDN).
+2. Cookie `li_at` depuis la table `users` (legacy, sujet au blocage TLS
+   depuis ~mai 2026).
+
+Si aucun des deux n'est configuré : McpError pointant vers `/account`.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -15,6 +20,16 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import db
 from ..auth_hooks import current_user_sub_from_token
+
+_DATA_DIR = Path(os.environ.get("OTO_MCP_DATA_DIR", "/opt/oto-mcp/data"))
+
+
+def _get_browser_profile(sub: str) -> Optional[str]:
+    """Return path to persistent browser profile if it exists for this user."""
+    profile_dir = _DATA_DIR / "browser-profiles" / f"linkedin-{sub}"
+    if profile_dir.is_dir():
+        return str(profile_dir)
+    return None
 
 
 def _get_session_or_raise() -> dict:
@@ -78,32 +93,52 @@ _BYPASS_DOC = (
 def register(mcp: FastMCP) -> None:
     from oto.tools.browser.linkedin import LinkedInClient
 
-    def _client(s: dict, sub: str, bypass_rate_limit: bool) -> "LinkedInClient":
+    def _client(sub: str, bypass_rate_limit: bool, sess: Optional[dict] = None) -> "LinkedInClient":
+        profile = _get_browser_profile(sub)
+        if profile:
+            return LinkedInClient(
+                profile=profile,
+                identity=_identity_for(sub),
+                headless=True,
+                rate_limit=not bypass_rate_limit,
+            )
+        if not sess:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="Ni profil browser ni cookie LinkedIn configuré.",
+            ))
         return LinkedInClient(
-            cookie=s["cookie"],
-            user_agent=s["user_agent"],
+            cookie=sess["cookie"],
+            user_agent=sess["user_agent"],
             identity=_identity_for(sub),
             headless=True,
             rate_limit=not bypass_rate_limit,
         )
+
+    def _resolve_sub_and_client(self_bypass: bool):
+        """Return (sub, client_constructor). Profile-first, cookie fallback."""
+        sub = current_user_sub_from_token()
+        if not sub:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="Unauthenticated — no user identity on the request.",
+            ))
+        return sub, lambda: _client(sub, self_bypass, db.get_linkedin_session(sub))
 
     @mcp.tool()
     async def linkedin_scrape_profile(url: str, bypass_rate_limit: bool = False) -> dict:
         """Scrape a LinkedIn profile page (`linkedin.com/in/<slug>`).
 
         Returns identity, current/past positions, education, skills, summary.
-        Le cookie de session de l'utilisateur courant est utilisé — il doit
-        être configuré au préalable sur `/settings`.
 
         Rate-limited per user (10/h, 80/jour pour comptes free, fenêtre 8h–22h Paris).
 
         Args:
             url: LinkedIn profile URL.
             bypass_rate_limit: """ + _BYPASS_DOC
-        sub = current_user_sub_from_token()
-        s = _get_session_or_raise()
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
         try:
-            async with _client(s, sub, bypass_rate_limit) as li:
+            async with make() as li:
                 return await li.scrape_profile(url)
         except RuntimeError as e:
             raise _wrap_runtime(e) from e
@@ -117,10 +152,9 @@ def register(mcp: FastMCP) -> None:
         Args:
             url: LinkedIn company URL.
             bypass_rate_limit: """ + _BYPASS_DOC
-        sub = current_user_sub_from_token()
-        s = _get_session_or_raise()
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
         try:
-            async with _client(s, sub, bypass_rate_limit) as li:
+            async with make() as li:
                 return await li.scrape_company(url)
         except RuntimeError as e:
             raise _wrap_runtime(e) from e
@@ -135,10 +169,9 @@ def register(mcp: FastMCP) -> None:
             query: Free-text query.
             limit: Max results.
             bypass_rate_limit: """ + _BYPASS_DOC
-        sub = current_user_sub_from_token()
-        s = _get_session_or_raise()
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
         try:
-            async with _client(s, sub, bypass_rate_limit) as li:
+            async with make() as li:
                 return await li.search_companies(query=query, limit=limit)
         except RuntimeError as e:
             raise _wrap_runtime(e) from e
@@ -161,10 +194,9 @@ def register(mcp: FastMCP) -> None:
             limit: Max results returned.
             pages: Max search-result pages to walk (default 3, max ~10).
             bypass_rate_limit: """ + _BYPASS_DOC
-        sub = current_user_sub_from_token()
-        s = _get_session_or_raise()
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
         try:
-            async with _client(s, sub, bypass_rate_limit) as li:
+            async with make() as li:
                 return await li.search_people(
                     keywords=keywords, geo=geo, network=network, limit=limit, pages=pages,
                 )
@@ -186,11 +218,10 @@ def register(mcp: FastMCP) -> None:
             keywords: Optional title/role keywords (e.g. "CEO OR CTO").
             limit: Max results.
             bypass_rate_limit: """ + _BYPASS_DOC
-        sub = current_user_sub_from_token()
-        s = _get_session_or_raise()
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
         kw_list = keywords.split() if keywords else None
         try:
-            async with _client(s, sub, bypass_rate_limit) as li:
+            async with make() as li:
                 return await li.search_employees(
                     company_slug=company_slug, keywords=kw_list, limit=limit,
                 )

@@ -184,6 +184,7 @@ def init_db() -> None:
         # les nouvelles colonnes sur les tables existantes. Ajouter ici à chaque
         # nouveau provider key.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS kaspr_api_key TEXT")
+        conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
@@ -570,18 +571,24 @@ def delete_platform_key(key_id: int) -> None:
 
 # --- grants -----------------------------------------------------------------
 
-def grant_platform_key(sub: str, platform_key_id: int, granted_by: Optional[str] = None) -> None:
+def grant_platform_key(
+    sub: str,
+    platform_key_id: int,
+    granted_by: Optional[str] = None,
+    daily_quota: Optional[int] = None,
+) -> None:
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO user_grants (sub, platform_key_id, granted_at, granted_by)
-            VALUES (%s, %s, NOW(), %s)
+            INSERT INTO user_grants (sub, platform_key_id, granted_at, granted_by, daily_quota)
+            VALUES (%s, %s, NOW(), %s, %s)
             ON CONFLICT(sub, platform_key_id) DO UPDATE SET
                 granted_at = NOW(),
-                granted_by = EXCLUDED.granted_by
+                granted_by = EXCLUDED.granted_by,
+                daily_quota = EXCLUDED.daily_quota
             """,
-            (sub, platform_key_id, granted_by),
+            (sub, platform_key_id, granted_by, daily_quota),
         )
 
 
@@ -599,7 +606,8 @@ def list_grants_for_user(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT pk.id AS platform_key_id, pk.provider, pk.label, ug.granted_at, ug.granted_by
+            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
+                   ug.granted_at, ug.granted_by, ug.daily_quota
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
              WHERE ug.sub = %s
@@ -618,7 +626,7 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT pk.id AS platform_key_id, pk.label, pk.api_key
+            SELECT pk.id AS platform_key_id, pk.label, pk.api_key, ug.daily_quota
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
              WHERE ug.sub = %s AND pk.provider = %s

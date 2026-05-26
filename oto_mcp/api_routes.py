@@ -381,8 +381,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 404, "unknown_user")
         if not db.get_platform_key(key_id):
             return _json_error(request, 404, "unknown_key")
-        db.grant_platform_key(target_sub, key_id, granted_by=sub)
-        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
+        daily_quota: int | None = None
+        try:
+            body = await request.json()
+            raw = body.get("daily_quota")
+            if raw is not None:
+                daily_quota = max(1, int(raw))
+        except Exception:
+            pass
+        db.grant_platform_key(target_sub, key_id, granted_by=sub, daily_quota=daily_quota)
+        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id, "daily_quota": daily_quota})
 
     async def admin_revoke(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, db
 from ..datastore import (
     GoogleNotConnected,
     NamespaceExists,
@@ -168,3 +168,44 @@ def register(mcp: FastMCP) -> None:
             return {"url": store.get_url(namespace)}
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+
+    @mcp.tool()
+    async def data_share(namespace: str, email: str, permission: str = "write") -> dict:
+        """Share a namespace with another oto user (by email).
+
+        The Google Sheet must also be shared in Google Drive with the recipient.
+        Both users need a connected Google account.
+
+        Args:
+            namespace: Namespace to share (must be owned by you).
+            email: Email of the recipient oto user.
+            permission: 'read' or 'write' (default write).
+        """
+        sub = access.current_user_sub_or_raise()
+        if permission not in ("read", "write"):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="permission must be 'read' or 'write'"))
+        recipient = db.get_user_by_email(email)
+        if not recipient:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
+        try:
+            db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
+
+    @mcp.tool()
+    async def data_unshare(namespace: str, email: str) -> dict:
+        """Remove a user's access to a shared namespace.
+
+        Args:
+            namespace: Namespace to unshare (must be owned by you).
+            email: Email of the user to remove.
+        """
+        sub = access.current_user_sub_or_raise()
+        recipient = db.get_user_by_email(email)
+        if not recipient:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
+        removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
+        if not removed:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"pas de partage actif pour {email} sur {namespace}"))
+        return {"ok": True, "namespace": namespace, "removed": email}

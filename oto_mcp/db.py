@@ -131,6 +131,18 @@ CREATE TABLE IF NOT EXISTS user_datastores (
     UNIQUE(sub, namespace)
 );
 
+CREATE TABLE IF NOT EXISTS datastore_shares (
+    id BIGSERIAL PRIMARY KEY,
+    owner_sub TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    spreadsheet_id TEXT NOT NULL,
+    shared_with_sub TEXT NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'write',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(owner_sub, namespace, shared_with_sub)
+);
+CREATE INDEX IF NOT EXISTS idx_datastore_shares_recipient ON datastore_shares(shared_with_sub, namespace);
+
 CREATE TABLE IF NOT EXISTS user_api_tokens (
     id BIGSERIAL PRIMARY KEY,
     sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
@@ -206,6 +218,12 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
 def get_user(sub: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE sub = %s", (sub,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()
         return dict(row) if row else None
 
 
@@ -741,6 +759,59 @@ def delete_datastore_namespace(sub: str, namespace: str) -> bool:
             (sub, namespace),
         )
         return cur.rowcount > 0
+
+
+# --- Datastore shares --------------------------------------------------------
+
+def share_datastore_namespace(
+    owner_sub: str, namespace: str, shared_with_sub: str, permission: str = "write",
+) -> int:
+    ns = get_datastore_namespace(owner_sub, namespace)
+    if not ns:
+        raise ValueError(f"namespace `{namespace}` not found for owner")
+    with _connect() as conn:
+        try:
+            row = conn.execute(
+                "INSERT INTO datastore_shares (owner_sub, namespace, spreadsheet_id, shared_with_sub, permission) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (owner_sub, namespace, ns["spreadsheet_id"], shared_with_sub, permission),
+            ).fetchone()
+        except psycopg.errors.UniqueViolation:
+            conn.execute(
+                "UPDATE datastore_shares SET permission = %s, spreadsheet_id = %s "
+                "WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
+                (permission, ns["spreadsheet_id"], owner_sub, namespace, shared_with_sub),
+            )
+            return 0
+        return int(row["id"])
+
+
+def unshare_datastore_namespace(owner_sub: str, namespace: str, shared_with_sub: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM datastore_shares WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
+            (owner_sub, namespace, shared_with_sub),
+        )
+        return cur.rowcount > 0
+
+
+def get_shared_namespace(sub: str, namespace: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM datastore_shares WHERE shared_with_sub = %s AND namespace = %s LIMIT 1",
+            (sub, namespace),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_shared_namespaces(sub: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT namespace, spreadsheet_id, owner_sub, permission, created_at "
+            "FROM datastore_shares WHERE shared_with_sub = %s ORDER BY namespace",
+            (sub,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- API tokens (CLI auth) --------------------------------------------------

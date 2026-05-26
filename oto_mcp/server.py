@@ -31,17 +31,41 @@ from .tools import register_all
 logger = logging.getLogger("oto_mcp")
 
 
+class _IatGatedVerifier(JWTVerifier):
+    """JWTVerifier qui rejette en plus tout token avec `iat < MIN_TOKEN_IAT`.
+
+    Permet une déco globale "soft" : bumper l'env `MIN_TOKEN_IAT` à `now()`
+    invalide tous les tokens en cours sans toucher à Logto. Les clients
+    reçoivent un 401 + WWW-Authenticate et re-lancent l'OAuth dance.
+    """
+
+    def __init__(self, *args, min_iat: int = 0, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._min_iat = min_iat
+
+    async def verify_token(self, token):
+        result = await super().verify_token(token)
+        if result and getattr(result, "claims", None) and self._min_iat > 0:
+            iat = result.claims.get("iat") or 0
+            if iat < self._min_iat:
+                logger.info(f"iat-gate reject sub={result.claims.get('sub')} iat={iat} < min_iat={self._min_iat}")
+                return None
+        return result
+
+
 def _build_verifier() -> JWTVerifier:
     """JWT verifier partagé entre l'auth MCP et l'API REST."""
     logto_endpoint = require_env("LOGTO_ENDPOINT").rstrip("/")
     audience = require_env("MCP_AUDIENCE")
     issuer = f"{logto_endpoint}/oidc"
-    return JWTVerifier(
+    min_iat = int(os.environ.get("MIN_TOKEN_IAT", "0") or "0")
+    return _IatGatedVerifier(
         jwks_uri=f"{issuer}/jwks",
         issuer=issuer,
         audience=audience,
         # Logto self-hosted signs avec ES384 par défaut (vérifié sur /oidc/jwks).
         algorithm="ES384",
+        min_iat=min_iat,
     )
 
 
@@ -82,6 +106,29 @@ def _bootstrap_env_keys() -> None:
         logger.info("Bootstrap env keys importées : %s", sorted(env_keys.keys()))
 
 
+_SERVER_INSTRUCTIONS = """\
+Oto — toolkit d'automatisation pour la prospection B2B et l'intelligence commerciale.
+
+Namespaces :
+• fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
+• linkedin_* — scraping LinkedIn via browser persistant. Cookie requis (oto.ninja/account).
+• attio_* — CRM Attio complet (companies, people, deals, notes, tasks, lists, entries, threads).
+• serper_* — recherche web (Serper API) : web, news, scrape.
+• hunter_* — emails : domain search, finder, vérification.
+• kaspr_* — enrichissement contacts depuis profil LinkedIn.
+• lemlist_* — campagnes cold outreach.
+• crunchbase_* — données startups, levées de fonds.
+• reddit_* — recherche et posts Reddit.
+• slack_* — messagerie Slack.
+• whatsapp_* — messagerie WhatsApp (pairing QR requis).
+• data_* — datastore tabulaire per-user (backend Google Sheets).
+• culture_spectacle_* — entreprises du spectacle vivant.
+• oto_* — méta-tools : list/enable/disable tools, presets nommés.
+
+Configuration compte : https://oto.ninja/account (cookie LinkedIn, clés API, presets de toolset).\
+"""
+
+
 def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # init_db idempotent — utile pour que les tables existent avant que
     # le middleware (per-user disabled_tools) ne les interroge.
@@ -93,7 +140,7 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:
         kwargs["auth"] = _build_auth(verifier)
-    instance = FastMCP("oto", **kwargs)
+    instance = FastMCP("oto", instructions=_SERVER_INSTRUCTIONS, **kwargs)
     register_all(instance)
 
     # Filtrage per-user des tools (toggle individuel sur /account).

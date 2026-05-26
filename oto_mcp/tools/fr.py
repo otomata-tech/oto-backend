@@ -68,14 +68,40 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def fr_get(siren: str) -> Optional[dict]:
-        """Fetch a French company by SIREN — full record with siège, directors,
-        finances, matching establishments. Returns null if not found.
+    async def fr_get(siren: str) -> dict:
+        """Full company profile by SIREN: identity (siège, directors, NAF,
+        employees) + latest INPI/BCE financial ratios + recent BODACC legal
+        events. Aggregates 3 open data sources in parallel.
+        Use this as first call when investigating a company.
 
         Args:
             siren: SIREN number (9 digits).
         """
-        return entreprises.get_by_siren(siren)
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_identity = pool.submit(entreprises.get_by_siren, siren)
+            f_bilans = pool.submit(inpi.list_exercises, siren)
+            f_events = pool.submit(bodacc.search_by_siren, siren, None, 10)
+
+        identity = f_identity.result()
+        if not identity:
+            return {"error": "not_found", "siren": siren}
+
+        exercises = f_bilans.result()
+        latest_bilan = None
+        if exercises:
+            latest_bilan = inpi.get_bilan(siren, exercises[0]["date_cloture_exercice"])
+
+        events_data = f_events.result()
+
+        return {
+            "siren": siren,
+            "identity": identity,
+            "latest_bilan": latest_bilan,
+            "recent_events": events_data.get("results", []),
+            "events_total": events_data.get("total_count", 0),
+        }
 
     @mcp.tool()
     async def fr_directors(siren: str) -> list[dict]:
@@ -211,40 +237,3 @@ def register(mcp: FastMCP) -> None:
             return {"error": "not_found", "idweb": idweb}
         return result
 
-    # --- Profil agrégé ---
-
-    @mcp.tool()
-    async def fr_profile(siren: str) -> dict:
-        """Full company profile: identity + latest financial ratios + recent legal events.
-
-        Aggregates 3 open data sources in parallel (API Entreprises + INPI/BCE + BODACC).
-        Use this as first call when investigating a company.
-
-        Args:
-            siren: SIREN number (9 digits).
-        """
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            f_identity = pool.submit(entreprises.get_by_siren, siren)
-            f_bilans = pool.submit(inpi.list_exercises, siren)
-            f_events = pool.submit(bodacc.search_by_siren, siren, None, 10)
-
-        identity = f_identity.result()
-        if not identity:
-            return {"error": "not_found", "siren": siren}
-
-        exercises = f_bilans.result()
-        latest_bilan = None
-        if exercises:
-            latest_bilan = inpi.get_bilan(siren, exercises[0]["date_cloture_exercice"])
-
-        events_data = f_events.result()
-
-        return {
-            "siren": siren,
-            "identity": identity,
-            "latest_bilan": latest_bilan,
-            "recent_events": events_data.get("results", []),
-            "events_total": events_data.get("total_count", 0),
-        }

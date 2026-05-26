@@ -26,10 +26,12 @@ def _get_session_or_raise() -> dict:
         ))
     sess = db.get_linkedin_session(sub)
     if not sess:
+        user = db.get_user(sub) or {}
+        email = user.get("email") or "<no row>"
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
-                "Aucun cookie LinkedIn configuré pour cet utilisateur. "
+                f"Aucun cookie LinkedIn configuré pour cet utilisateur (sub={sub}, email={email}). "
                 "Va sur https://oto.ninja/account pour coller la valeur du cookie "
                 "`li_at` de ton compte LinkedIn (l'user-agent est capturé automatiquement)."
             ),
@@ -50,6 +52,14 @@ def _identity_for(sub: str) -> str:
 
 def _wrap_runtime(e: RuntimeError) -> McpError:
     msg = str(e)
+    if "session expired" in msg.lower() or "li_at" in msg:
+        return McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                "Cookie LinkedIn expiré. L'utilisateur doit le rafraîchir sur "
+                "https://oto.ninja/account (ou via l'extension Oto Companion)."
+            ),
+        ))
     if "Outside active hours" in msg or "Rate limit" in msg:
         return McpError(ErrorData(
             code=INVALID_PARAMS,

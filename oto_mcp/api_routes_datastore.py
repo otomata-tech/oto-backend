@@ -318,6 +318,86 @@ def make_routes(
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
 
+    async def ds_share(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        email = (body.get("email") or "").strip()
+        permission = (body.get("permission") or "write").strip()
+        if not email:
+            return json_error(request, 400, "email_required")
+        if permission not in ("read", "write"):
+            return json_error(request, 400, "permission must be 'read' or 'write'")
+        recipient = db.get_user_by_email(email)
+        if not recipient:
+            return json_error(request, 404, f"no oto user with email {email}")
+        ns = db.get_datastore_namespace(sub, namespace)
+        if not ns:
+            return json_error(request, 404, "namespace_not_found")
+        try:
+            db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
+        except ValueError as e:
+            return json_error(request, 400, str(e))
+        drive_role = "writer" if permission == "write" else "reader"
+        drive_warning = None
+        try:
+            creds = google_oauth.credentials_for(sub)
+            from googleapiclient.discovery import build
+            drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+            drive.permissions().create(
+                fileId=ns["spreadsheet_id"],
+                body={"type": "user", "role": drive_role, "emailAddress": email},
+                sendNotificationEmail=False,
+            ).execute()
+        except Exception as e:
+            drive_warning = str(e)
+        result = {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
+        if drive_warning:
+            result["drive_warning"] = drive_warning
+        return json_response(request, result)
+
+    async def ds_unshare(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        email = (body.get("email") or "").strip()
+        if not email:
+            return json_error(request, 400, "email_required")
+        recipient = db.get_user_by_email(email)
+        if not recipient:
+            return json_error(request, 404, f"no oto user with email {email}")
+        removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
+        if not removed:
+            return json_error(request, 404, f"no active share for {email} on {namespace}")
+        ns = db.get_datastore_namespace(sub, namespace)
+        if ns:
+            try:
+                creds = google_oauth.credentials_for(sub)
+                from googleapiclient.discovery import build
+                drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+                perms = drive.permissions().list(
+                    fileId=ns["spreadsheet_id"], fields="permissions(id,emailAddress)",
+                ).execute().get("permissions", [])
+                for p in perms:
+                    if (p.get("emailAddress") or "").lower() == email.lower():
+                        drive.permissions().delete(
+                            fileId=ns["spreadsheet_id"], permissionId=p["id"],
+                        ).execute()
+                        break
+            except Exception:
+                pass
+        return json_response(request, {"ok": True, "namespace": namespace, "removed": email})
+
     return [
         # Google OAuth
         Route("/api/google/oauth/start", google_oauth_start, methods=["GET"]),
@@ -348,4 +428,7 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_update_row, methods=["PATCH"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_delete_row, methods=["DELETE"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/share", ds_share, methods=["POST"]),
+        Route("/api/datastore/namespaces/{namespace}/share", ds_unshare, methods=["DELETE"]),
+        Route("/api/datastore/namespaces/{namespace}/share", options_handler, methods=["OPTIONS"]),
     ]

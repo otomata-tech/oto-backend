@@ -148,10 +148,15 @@ class DatastoreSheets:
     # --- namespace lifecycle -------------------------------------------------
 
     def list_namespaces(self) -> list[dict]:
-        ns = db.list_datastore_namespaces(self.sub)
-        for n in ns:
+        own = db.list_datastore_namespaces(self.sub)
+        for n in own:
             n["url"] = f"https://docs.google.com/spreadsheets/d/{n['spreadsheet_id']}/edit"
-        return ns
+            n["shared"] = False
+        shared = db.list_shared_namespaces(self.sub)
+        for n in shared:
+            n["url"] = f"https://docs.google.com/spreadsheets/d/{n['spreadsheet_id']}/edit"
+            n["shared"] = True
+        return own + shared
 
     def create_namespace(self, namespace: str) -> dict:
         title = f"oto.{namespace}"
@@ -210,6 +215,8 @@ class DatastoreSheets:
     def get_url(self, namespace: str) -> str:
         ns = db.get_datastore_namespace(self.sub, namespace)
         if not ns:
+            ns = db.get_shared_namespace(self.sub, namespace)
+        if not ns:
             raise NamespaceNotFound(namespace)
         return f"https://docs.google.com/spreadsheets/d/{ns['spreadsheet_id']}/edit"
 
@@ -217,6 +224,8 @@ class DatastoreSheets:
 
     def _spreadsheet_id(self, namespace: str) -> str:
         ns = db.get_datastore_namespace(self.sub, namespace)
+        if not ns:
+            ns = db.get_shared_namespace(self.sub, namespace)
         if not ns:
             raise NamespaceNotFound(namespace)
         return ns["spreadsheet_id"]

@@ -67,12 +67,26 @@ def register(mcp: FastMCP) -> None:
             page=page, per_page=per_page,
         )
 
+    # 7 ratios top B2B + métadonnées d'exercice. Le reste (marge_brute, ebit,
+    # capacite_de_remboursement, couverture_des_interets, caf_sur_ca,
+    # ratio_de_vetuste) reste accessible via fr_bilan(siren, date).
+    _LATEST_BILAN_KEYS = (
+        "date_cloture_exercice", "type_bilan",
+        "chiffre_d_affaires", "resultat_net", "ebe",
+        "marge_ebe", "autonomie_financiere", "taux_d_endettement",
+        "ratio_de_liquidite",
+    )
+
     @mcp.tool()
     async def fr_get(siren: str) -> dict:
         """Full company profile by SIREN: identity (siège, directors, NAF,
-        employees) + latest INPI/BCE financial ratios + recent BODACC legal
-        events. Aggregates 3 open data sources in parallel.
+        employees) + 7 top financial ratios from the latest INPI/BCE filing
+        + recent BODACC legal events. Aggregates 3 open data sources in parallel.
         Use this as first call when investigating a company.
+
+        `latest_bilan` is trimmed to 7 B2B-relevant ratios (CA, résultat net,
+        EBE, marge EBE, autonomie financière, taux d'endettement, liquidité).
+        For the full ratio set, call `fr_bilan(siren, date_cloture)`.
 
         Args:
             siren: SIREN number (9 digits).
@@ -91,7 +105,9 @@ def register(mcp: FastMCP) -> None:
         exercises = f_bilans.result()
         latest_bilan = None
         if exercises:
-            latest_bilan = inpi.get_bilan(siren, exercises[0]["date_cloture_exercice"])
+            full = inpi.get_bilan(siren, exercises[0]["date_cloture_exercice"])
+            if full:
+                latest_bilan = {k: full.get(k) for k in _LATEST_BILAN_KEYS}
 
         events_data = f_events.result()
 

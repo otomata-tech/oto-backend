@@ -23,7 +23,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
 
 ```
 oto_mcp/
-├── server.py         # FastMCP + uvicorn, registre les routes /api et les tools
+├── server.py         # FastMCP + uvicorn, _SERVER_INSTRUCTIONS, routes /api, tools
 ├── tools/            # 1 module par connecteur, chacun expose register(mcp)
 ├── api_routes.py     # /api/me, /api/settings/*, /api/admin/* (CORS oto.ninja)
 ├── access.py         # rôles guest/member/admin, resolve_api_key, quotas
@@ -57,28 +57,37 @@ tenant et leur `client_id` est collé à la main dans le connector Claude.
 
 **Onboarding actuel = self-serve ouvert.** Le tenant a sign-up activé par
 email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire,
-mais c'est sans risque pour les clés serveur grâce au modèle de rôles
-(cf. `access.py`).
+mais c'est sans risque pour les clés serveur car les platform keys ne sont
+accessibles qu'avec un grant explicite (cf. `access.py`).
 
 Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 `OTO_MCP_ADMIN_SUB` (Logto sub d'Alexis pour bootstrap admin).
 
 ## Rôles + résolution de clé API
 
-3 rôles user, source-of-truth = colonne `users.role` (Logto identifie, c'est
-tout) :
+Le rôle (`users.role`) ne sert qu'à décider qui voit l'admin UI :
 
-- **guest** (défaut sign-up) : ne consomme JAMAIS les platform keys ; doit
-  poser sa propre clé sur `/account` pour utiliser un tool API-keyed.
-- **member** : platform key + quota daily (env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`,
-  défauts dans `access.py`). User key bypass quota.
-- **admin** : pas de quota, accès `/api/admin/*`. Bootstrap via env
-  `OTO_MCP_ADMIN_SUB` (override forcé même si DB dit autre chose).
+- **admin** : accès `/api/admin/*`. Bootstrap via env `OTO_MCP_ADMIN_SUB`.
+- **guest** / **member** : alias historiques, pas d'effet sur l'accès aux tools.
 
-Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`) appellent
-`access.resolve_api_key(provider)` par appel — McpError actionnable pointant
-vers `/account` en cas de blocage. LinkedIn et `recherche_entreprises_*` ne
-sont pas concernés (cookie per-user / pas de clé).
+L'accès aux clés API se décide par `user_grants` explicites (admin grante
+manuellement via `/api/admin/users/{sub}/grants/{key_id}`). Résolution par
+appel (`resolve_api_key`) :
+
+1. User key posée sur `/account` → prise directement, sans quota.
+2. Grant explicite dans `user_grants` → platform key avec quota.
+3. Ni l'un ni l'autre → McpError actionnable pointant vers `/account`.
+
+Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
+au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
+ou `_QUOTA_DEFAULTS` dans `access.py`. User key bypass quota.
+
+Au boot, `bootstrap_env_keys` importe les clés env en `platform_keys` (label
+`env`) mais ne les grante à personne — l'admin décide qui a accès.
+
+Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`) appellent
+`resolve_api_key(provider)`. LinkedIn et WhatsApp ne sont pas concernés
+(cookie/session per-user).
 
 ## REST API (consommée par oto.ninja /account)
 
@@ -88,12 +97,14 @@ sont pas concernés (cookie per-user / pas de clé).
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
 - `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
-- CORS limité aux origines `oto.ninja` + dev locales (`OTO_MCP_CORS_ORIGINS` override)
+- `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
+- `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
+- CORS hardcoded : `oto.ninja`, `app.oto.ninja`, `localhost:5173/4173/5182/5184` (override via `OTO_MCP_CORS_ORIGINS`)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 
 ## LinkedIn cookies
 
-Le couple `(li_at, user_agent)` est stocké par `sub` dans SQLite. Le UA
+Le couple `(li_at, user_agent)` est stocké par `sub` en PG. Le UA
 matche le browser d'origine (capturé via `navigator.userAgent` au moment du
 save) — sinon LinkedIn flag rapidement les sessions cookie/UA mismatch.
 
@@ -104,6 +115,16 @@ Pour les non-tech : extension Chrome Oto Companion (repo `oto-app/extension/`,
 MV3) qui capture le couple `(li_at, user_agent)` et le push automatiquement
 via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
 `chrome.cookies.onChanged` quand LinkedIn rotate la session.
+
+## SIRENE stock (DuckDB sur parquet INSEE)
+
+Stock complet (~35M établissements, parquet ~2GB) accessible via DuckDB :
+- Path canonique : `/opt/oto-mcp/data/sirene/StockEtablissement.parquet` (env `SIRENE_STOCK_PARQUET_PATH`)
+- Refresh mensuel via `deploy/refresh_sirene_stock.sh` (cron sur tuls.me)
+- Query layer : `oto_mcp/sirene_duckdb.py`
+- 4 MCP tools `sirene_stock_*` (siege, etablissements, siret, search)
+- 5 REST endpoints `/api/sirene/{siege,etablissements,siret,search,info}`
+- Consommé par `oto-cli` (`SireneStock` HTTP client) — voir [ADR 0001](../docs/adr/0001-sirene-stock-served-via-mcp.md) dans le meta-repo `otomata`
 
 ## Datastore (Google Sheets per-user)
 

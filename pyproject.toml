@@ -13,6 +13,7 @@ dependencies = [
     "google-auth>=2.0",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
+    "duckdb>=1.1",
 ]
 
 [project.optional-dependencies]

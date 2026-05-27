@@ -30,7 +30,7 @@ def register_all(mcp: FastMCP) -> None:
 
     # Connecteurs récents — wrapper en try/except au cas où la version d'oto-cli
     # déployée serait en retard sur le module attendu.
-    for mod_name in ("reddit", "lemlist", "culture", "kaspr"):
+    for mod_name in ("reddit", "lemlist", "culture", "kaspr", "fullenrich"):
         try:
             mod = __import__(f"oto_mcp.tools.{mod_name}", fromlist=[mod_name])
             mod.register(mcp)

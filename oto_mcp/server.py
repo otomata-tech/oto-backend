@@ -116,6 +116,7 @@ Namespaces :
 • serper_* — recherche web (Serper API) : web, news, scrape.
 • hunter_* — emails : domain search, finder, vérification.
 • kaspr_* — enrichissement contacts depuis profil LinkedIn.
+• fullenrich_* — enrichissement contacts waterfall multi-provider (phones ~70% hit).
 • lemlist_* — campagnes cold outreach.
 • crunchbase_* — données startups, levées de fonds.
 • reddit_* — recherche et posts Reddit.

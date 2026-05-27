@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import sirene_duckdb, sirene_resolve
+from .. import sirene_duckdb
 
 
 def register(mcp: FastMCP) -> None:
@@ -104,45 +104,3 @@ def register(mcp: FastMCP) -> None:
             offset=offset,
         )
         return {"items": items, "count": len(items), "limit": limit, "offset": offset}
-
-    @mcp.tool()
-    async def sirene_stock_search_by_address(
-        adresse: str,
-        code_commune: str,
-        naf2_hint: Optional[str] = None,
-        top_n: int = 3,
-    ) -> dict:
-        """Resolve a free-form address to candidate SIRET(s), scored.
-
-        Uses INSEE local stock + UniteLegale parquets. Filters by INSEE
-        commune code (auto-expands Paris/Lyon/Marseille arrondissements ↔
-        global codes), matches the address libelle via tokens OR fallback
-        on enseigne (Carrefour, Lidl…) / denomination usuelle.
-
-        Score factors :
-        - commune match (always, baseline)
-        - voie libelle match (+0.3) OR enseigne match (+0.2)
-        - exact numero match (+0.3)
-        - NAF2 hint match (+0.5) vs mismatch (+0.1) vs no hint (+0.2)
-        - is siège (+0.1)
-        - NAF section C (manufacturing) (+0.1)
-
-        Excludes sections K (finance), L (immo), O (admin pub), S (autres
-        services personnels). Returns up to `top_n` candidates sorted by
-        descending confidence.
-
-        Args:
-            adresse: free-form, e.g. "12 RUE DE LA PAIX" or "ZA LES PINS".
-            code_commune: INSEE COG (5 digits or 2A/2B + 3 for Corsica).
-                          For Paris/Lyon/Marseille, pass the global OR an
-                          arrondissement code — both work, expansion is auto.
-            naf2_hint: optional 2-digit NAF prefix hint, e.g. "10" (agro).
-            top_n: 1..10, default 3.
-        """
-        candidates = sirene_resolve.lookup_by_address(
-            adresse=adresse,
-            code_commune=code_commune,
-            naf2_hint=naf2_hint,
-            top_n=top_n,
-        )
-        return {"candidates": candidates, "count": len(candidates)}

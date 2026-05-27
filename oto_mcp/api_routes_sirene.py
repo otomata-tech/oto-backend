@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import sirene_duckdb, sirene_resolve
+from . import sirene_duckdb
 
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
@@ -113,40 +113,6 @@ def make_routes(
             return err
         return json_response(request, sirene_duckdb.parquet_info())
 
-    async def search_by_address(request: Request) -> JSONResponse:
-        """POST body: {adresse, code_commune (str|list), naf2_hint?, top_n?}"""
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        try:
-            body = await request.json()
-        except Exception:
-            return json_error(request, 400, "invalid_json")
-        if not isinstance(body, dict):
-            return json_error(request, 400, "invalid_body")
-        adresse = body.get("adresse")
-        code_commune = body.get("code_commune")
-        if not adresse or not code_commune:
-            return json_error(request, 400, "missing_adresse_or_code_commune")
-        if not isinstance(adresse, str):
-            return json_error(request, 400, "invalid_adresse")
-        if not isinstance(code_commune, (str, list)):
-            return json_error(request, 400, "invalid_code_commune")
-        candidates = sirene_resolve.lookup_by_address(
-            adresse=adresse,
-            code_commune=code_commune,
-            naf2_hint=body.get("naf2_hint"),
-            top_n=int(body.get("top_n", 3)),
-        )
-        return json_response(request, {"candidates": candidates, "count": len(candidates)})
-
-    async def stats_endpoint(request: Request) -> JSONResponse:
-        """Healthcheck élargi : count des UL + etabs + path des 2 parquets."""
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        return json_response(request, sirene_resolve.stats())
-
     return [
         Route("/api/sirene/siege", siege, methods=["GET"]),
         Route("/api/sirene/siege", options_handler, methods=["OPTIONS"]),
@@ -158,8 +124,4 @@ def make_routes(
         Route("/api/sirene/search", options_handler, methods=["OPTIONS"]),
         Route("/api/sirene/info", info, methods=["GET"]),
         Route("/api/sirene/info", options_handler, methods=["OPTIONS"]),
-        Route("/api/sirene/search_by_address", search_by_address, methods=["POST"]),
-        Route("/api/sirene/search_by_address", options_handler, methods=["OPTIONS"]),
-        Route("/api/sirene/stats", stats_endpoint, methods=["GET"]),
-        Route("/api/sirene/stats", options_handler, methods=["OPTIONS"]),
     ]

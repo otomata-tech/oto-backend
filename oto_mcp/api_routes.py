@@ -13,7 +13,7 @@ tools, admin, WhatsApp) :
 - `POST   /api/settings/api-keys/{provider}`  → pose ta propre clé (provider in {serper, hunter, sirene})
 - `DELETE /api/settings/api-keys/{provider}`  → efface
 - `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
-- `GET    /api/admin/*`                       → admin (users, platform-keys, grants)
+- `GET    /api/admin/*`                       → admin (users, platform-keys, grants, tokens)
 - `GET    /api/whatsapp/*`                    → WhatsApp pairing
 
 Endpoints datastore / Google OAuth / API tokens : voir `api_routes_datastore.py`.
@@ -407,6 +407,50 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.revoke_platform_key(target_sub, key_id)
         return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
 
+    async def admin_tokens_list(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target_sub = request.path_params["sub"]
+        if not db.get_user(target_sub):
+            return _json_error(request, 404, "unknown_user")
+        return _json(request, {"tokens": db.list_api_tokens(target_sub)})
+
+    async def admin_tokens_create(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target_sub = request.path_params["sub"]
+        if not db.get_user(target_sub):
+            return _json_error(request, 404, "unknown_user")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        label = (body or {}).get("label") or "cli"
+        token = db.create_api_token(target_sub, label=label.strip()[:32])
+        return _json(request, {"token": token, "label": label})
+
+    async def admin_tokens_delete(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target_sub = request.path_params["sub"]
+        try:
+            token_id = int(request.path_params["token_id"])
+        except ValueError:
+            return _json_error(request, 400, "invalid_id")
+        ok = db.delete_api_token(target_sub, token_id)
+        if not ok:
+            return _json_error(request, 404, "unknown_token")
+        return _json(request, {"ok": True, "id": token_id})
+
     async def admin_set_role(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -781,5 +825,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_grant, methods=["POST"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_revoke, methods=["DELETE"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
+        Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
+        Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/users/{sub}/tokens/{token_id}", admin_tokens_delete, methods=["DELETE"]),
+        Route("/api/admin/users/{sub}/tokens/{token_id}", options_handler, methods=["OPTIONS"]),
         *datastore_routes,
     ]

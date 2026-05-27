@@ -75,3 +75,11 @@ def register_all(mcp: FastMCP) -> None:
         datastore.register(mcp)
     except Exception as e:
         log.warning("Datastore tools disabled: %s", e)
+
+    # SIRENE stock — DuckDB sur parquet INSEE local. Gracefully disabled si
+    # duckdb manque ou parquet introuvable (on log à l'appel, pas au register).
+    try:
+        from . import sirene_stock
+        sirene_stock.register(mcp)
+    except Exception as e:
+        log.warning("SIRENE stock tools disabled: %s", e)

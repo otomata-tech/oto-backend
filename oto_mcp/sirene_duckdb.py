@@ -13,6 +13,7 @@ INSEE). NULLs explicites au lieu de strings vides.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import os
 from typing import Any, Optional
 
@@ -80,13 +81,17 @@ def _from_parquet() -> str:
 
 
 def _row_to_dict(row: tuple, columns: list[str]) -> dict[str, Any]:
-    """Normalise les bools/strings vides issus du parquet."""
+    """Normalise les types non-JSON-serializable issus du parquet : dates
+    DuckDB → strings ISO, strings vides → None, etablissementSiege → bool."""
     out: dict[str, Any] = {}
     for col, val in zip(columns, row):
         if val == "" or val is None:
             out[col] = None
+        elif isinstance(val, (_dt.datetime, _dt.date)):
+            # Couvre les colonnes date_* (DATE) et timestamp (TIMESTAMP).
+            out[col] = val.isoformat()
         elif col == "is_siege":
-            out[col] = bool(val) if val is not None else None
+            out[col] = bool(val)
         else:
             out[col] = val
     return out

@@ -46,8 +46,11 @@ def _allowed_origins() -> list[str]:
     return [
         "https://oto.ninja",
         "https://www.oto.ninja",
+        "https://app.oto.ninja",
         "http://localhost:5173",
         "http://localhost:4173",
+        "http://localhost:5182",
+        "http://localhost:5184",
     ]
 
 

@@ -28,7 +28,7 @@ _NOVNC_WEB = Path("/usr/share/novnc")
 
 DISPLAY_NUM = 98
 VNC_PORT = 5998
-WS_PORT = 6080
+WS_PORT = 6098  # 6080 occupé par le container Docker o-browser sur tuls.me
 TIMEOUT_S = 300  # 5 min
 
 
@@ -100,7 +100,16 @@ def _run_bridge(session: LinkedInPairingSession) -> None:
     """Worker thread: start VNC stack + Patchright, poll for login."""
     display = f":{DISPLAY_NUM}"
     profile = str(profile_dir_for(session.sub))
-    Path(profile).mkdir(parents=True, exist_ok=True)
+    profile_path = Path(profile)
+    profile_path.mkdir(parents=True, exist_ok=True)
+    # Chrome refuse de relancer sur un profil qui a un Singleton* résiduel (run
+    # précédent crashé / kill -9). Les fichiers sont des symlinks pointant vers
+    # un PID disparu — Chrome interprète "session already open" et exit 0.
+    for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            (profile_path / lock).unlink(missing_ok=True)
+        except OSError:
+            pass
     procs = session._procs
     env = {**os.environ, "DISPLAY": display}
 

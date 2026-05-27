@@ -21,10 +21,15 @@ import duckdb
 
 
 DEFAULT_PATH = "/opt/oto-mcp/data/sirene/StockEtablissement.parquet"
+DEFAULT_UL_PATH = "/opt/oto-mcp/data/sirene/StockUniteLegale.parquet"
 
 
 def parquet_path() -> str:
     return os.environ.get("SIRENE_STOCK_PARQUET_PATH", DEFAULT_PATH)
+
+
+def ul_parquet_path() -> str:
+    return os.environ.get("SIRENE_STOCK_UL_PATH", DEFAULT_UL_PATH)
 
 
 # Colonnes parquet INSEE → snake_case stable côté API.

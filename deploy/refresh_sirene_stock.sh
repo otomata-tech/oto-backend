@@ -13,28 +13,38 @@
 
 set -euo pipefail
 
-URL="https://object.files.data.gouv.fr/data-pipeline-open/siren/stock/StockEtablissement_utf8.parquet"
+ETAB_URL="https://object.files.data.gouv.fr/data-pipeline-open/siren/stock/StockEtablissement_utf8.parquet"
+UL_URL="https://object.files.data.gouv.fr/data-pipeline-open/siren/stock/StockUniteLegale_utf8.parquet"
 DEST_DIR="${SIRENE_STOCK_DIR:-/opt/oto-mcp/data/sirene}"
-DEST_FILE="${DEST_DIR}/StockEtablissement.parquet"
-TMP_FILE="${DEST_FILE}.tmp"
 
 mkdir -p "${DEST_DIR}"
 
-echo "[$(date -Iseconds)] downloading SIRENE stock from data.gouv → ${TMP_FILE}"
+download_and_swap() {
+  local url="$1"
+  local dest="$2"
+  local min_size="$3"
+  local tmp="${dest}.tmp"
 
-# -L follow redirects, -f fail on HTTP error, -# progress bar, -C - resume if interrupted
-# Pas de --silent : on veut voir la progression dans le log.
-curl -L -f -# -C - -o "${TMP_FILE}" "${URL}"
+  echo "[$(date -Iseconds)] downloading ${url##*/} → ${tmp}"
+  curl -L -f -# -C - -o "${tmp}" "${url}"
 
-SIZE=$(stat -c '%s' "${TMP_FILE}")
-if [ "${SIZE}" -lt 1000000000 ]; then  # < 1 GB → fichier probablement tronqué
-  echo "[$(date -Iseconds)] ERROR: downloaded file too small (${SIZE} bytes), aborting"
-  rm -f "${TMP_FILE}"
-  exit 1
-fi
+  local size
+  size=$(stat -c '%s' "${tmp}")
+  if [ "${size}" -lt "${min_size}" ]; then
+    echo "[$(date -Iseconds)] ERROR: ${tmp} too small (${size} < ${min_size}), aborting"
+    rm -f "${tmp}"
+    exit 1
+  fi
+  echo "[$(date -Iseconds)] atomic swap → ${dest} (${size} bytes)"
+  mv -f "${tmp}" "${dest}"
+}
 
-echo "[$(date -Iseconds)] atomic swap → ${DEST_FILE} (${SIZE} bytes)"
-mv -f "${TMP_FILE}" "${DEST_FILE}"
+# Establishement parquet (~2 GB, ~43M rows).
+download_and_swap "${ETAB_URL}" "${DEST_DIR}/StockEtablissement.parquet" 1000000000
+
+# UniteLegale parquet (~1 GB, ~32M unités légales) — raison sociale, NAF société,
+# dates de création, forme juridique. Joint avec StockEtablissement sur siren.
+download_and_swap "${UL_URL}" "${DEST_DIR}/StockUniteLegale.parquet" 500000000
 
 # Restart oto-mcp pour reset les éventuelles file descriptors ouverts (DuckDB
 # n'en garde pas en pratique vu qu'on ouvre/ferme par requête, mais propre).

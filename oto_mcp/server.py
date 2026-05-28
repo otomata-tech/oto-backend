@@ -93,8 +93,14 @@ def _bootstrap_env_keys() -> None:
     except Exception as e:
         logger.warning("oto.config indisponible — bootstrap env keys skippé: %s", e)
         return
+    # Providers strictement clé-per-user : on ne les importe JAMAIS en clé
+    # plateforme (données perso, ex. compta Pennylane). Chaque user pose la
+    # sienne sur /account.
+    USER_ONLY = {"pennylane"}
     env_keys: dict[str, str] = {}
     for provider in db.KEY_PROVIDERS:
+        if provider in USER_ONLY:
+            continue
         try:
             v = get_secret(f"{provider.upper()}_API_KEY")
         except Exception:

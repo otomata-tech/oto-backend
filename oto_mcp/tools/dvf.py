@@ -37,6 +37,41 @@ def register(mcp: FastMCP) -> None:
         return client.stats(code_commune=code_commune, type_local=type_local, years=years)
 
     @mcp.tool()
+    async def dvf_comparables_by_address(
+        adresse: str,
+        radius_m: int = 500,
+        type_local: Optional[str] = None,
+        surface_min: Optional[float] = None,
+        surface_max: Optional[float] = None,
+        years: int = 3,
+        limit: int = 50,
+    ) -> dict:
+        """Comparable sales around a precise address (geocode + radius filter).
+
+        Geocodes the free-form address via the BAN (Base Adresse Nationale),
+        then returns DVF mono-bien sales within `radius_m` metres, sorted by
+        distance, with a `distance_m` field and the local median €/m². Much
+        sharper than commune-level stats for valuing one specific property.
+
+        Args:
+            adresse: free-form address (e.g. "44 la canebière marseille").
+            radius_m: search radius in metres around the geocoded point (default 500).
+            type_local: "Appartement" | "Maison" (default: both).
+            surface_min / surface_max: surface bâtie band m².
+            years: lookback in years with data (default 3).
+            limit: max comparables, nearest first (default 50).
+        """
+        return client.comparables_by_address(
+            adresse=adresse,
+            radius_m=radius_m,
+            type_local=type_local,
+            surface_min=surface_min,
+            surface_max=surface_max,
+            years=years,
+            limit=limit,
+        )
+
+    @mcp.tool()
     async def dvf_comparables(
         code_commune: str,
         type_local: Optional[str] = None,

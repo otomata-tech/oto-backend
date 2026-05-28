@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS users (
     attio_api_key TEXT,
     lemlist_api_key TEXT,
     kaspr_api_key TEXT,
+    pennylane_api_key TEXT,
     crunchbase_cookies TEXT,
     crunchbase_user_agent TEXT,
     crunchbase_set_at TIMESTAMPTZ,
@@ -156,7 +157,7 @@ CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
 # Providers supportés pour les user keys. Aligné sur les colonnes
 # `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
-KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr")
+KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane")
 
 
 _pool: Optional[ConnectionPool] = None
@@ -196,6 +197,7 @@ def init_db() -> None:
         # les nouvelles colonnes sur les tables existantes. Ajouter ici à chaque
         # nouveau provider key.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS kaspr_api_key TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pennylane_api_key TEXT")
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
 
 

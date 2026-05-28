@@ -83,11 +83,29 @@ au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
 ou `_QUOTA_DEFAULTS` dans `access.py`. User key bypass quota.
 
 Au boot, `bootstrap_env_keys` importe les clés env en `platform_keys` (label
-`env`) mais ne les grante à personne — l'admin décide qui a accès.
+`env`) mais ne les grante à personne — l'admin décide qui a accès. Modèle
+identique pour tous les providers : user key (prio, no quota) OU platform
+key + grant + quota OU erreur. `serper/hunter/sirene` sont les seuls
+réellement partagés (commodité) ; `attio/lemlist/kaspr/pennylane/slack` sont des
+comptes privés → clé plateforme présente mais grantée à personne (sauf
+équipe Otomata). **Slack** = cas particulier : pas de `SLACK_API_KEY`, le
+provider porte le **user token** (`xoxp`) du user. La clé plateforme est
+bootstrappée depuis `SLACK_USER_TOKEN` (override dans `_bootstrap_env_keys`),
+et les tools `slack_*` postent/lisent en `as_user` (le mode bot `xoxb` n'est
+pas exposé en multi-tenant — viendra avec l'OAuth install, issue #4).
 
-Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`) appellent
-`resolve_api_key(provider)`. LinkedIn et WhatsApp ne sont pas concernés
-(cookie/session per-user).
+**Gotcha bootstrap** : `_bootstrap_env_keys` (server.py) itère sur TOUT
+`KEY_PROVIDERS` et importe chaque `<PROVIDER>_API_KEY` trouvé en SOPS comme
+clé plateforme (sauf override de nom de secret, cf. `slack`→`SLACK_USER_TOKEN`).
+Donc ajouter un provider perso à `KEY_PROVIDERS` crée
+involontairement une clé plateforme depuis ta clé perso. Importer ≠ partager
+(inaccessible sans grant), mais à surveiller : vérifier `/api/admin/platform-keys`
+après ajout, et ne grant que l'équipe pour les comptes privés.
+
+Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,
+`attio_*`, `pennylane_*`, `slack_*`…) appellent `resolve_api_key(provider)`.
+LinkedIn, WhatsApp et Datastore ne sont pas concernés (cookie/session/oauth
+per-user).
 
 ## REST API (consommée par oto.ninja /account)
 

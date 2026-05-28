@@ -1,12 +1,13 @@
-"""Slack — outbound messaging via user token + automation via bot token.
+"""Slack — outbound messaging + reads on behalf of the authenticated user.
 
-Single-tenant for now: reads `SLACK_BOT_TOKEN` and `SLACK_USER_TOKEN` from the
-server's secrets. Multi-tenant migration tracked in #4 (per-user tokens in
-the `users` table, OAuth install flow, token rotation).
+Per-user : chaque user pose son propre **user token** (`xoxp-`) sur
+`/account` (provider `slack`), ou un admin lui grant la clé plateforme
+(bootstrappée depuis `SLACK_USER_TOKEN`). La clé est résolue par appel via
+`access.resolve_api_key("slack")` — pas de token serveur partagé en clair.
 
-Default mode for `slack_post_message` is **as_user=True** — outbound human-style
-com sent on behalf of the installed user (signature "Oto pour Alexis"). Switch
-to `as_user=False` for bot-style automation (notifications, reactions).
+Tous les appels passent par le user token (`as_user=True`) : les messages
+apparaissent comme l'humain qui a installé l'app. Le mode bot (`xoxb-`) n'est
+pas exposé en multi-tenant — il viendra avec l'OAuth install flow (issue #4).
 """
 from __future__ import annotations
 
@@ -14,20 +15,27 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
+from .. import access
+
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.slack import SlackClient
+    from oto.tools.slack.client import SlackClient
 
-    client = SlackClient(default_as_user=True)
+    def _client() -> tuple[SlackClient, bool]:
+        key, is_platform = access.resolve_api_key("slack")
+        return SlackClient(user_token=key, default_as_user=True), is_platform
+
+    def _record_if_platform(is_platform: bool) -> None:
+        if is_platform:
+            access.record_platform_usage("slack")
 
     @mcp.tool()
     async def slack_post_message(
         channel: str,
         text: str,
         thread_ts: Optional[str] = None,
-        as_user: bool = True,
     ) -> dict:
-        """Send a Slack message to a channel or DM.
+        """Send a Slack message to a channel or DM (appears as you).
 
         Args:
             channel: Channel ID (e.g. C0123456789), DM channel ID (D…), or an
@@ -35,36 +43,36 @@ def register(mcp: FastMCP) -> None:
                 `slack_find_user_by_email` + `slack_open_dm` first to get the channel ID.
             text: Message text (Slack mrkdwn supported).
             thread_ts: Parent message ts to reply into a thread.
-            as_user: True (default) → message appears as the human user who installed
-                the app. False → appears as the bot app. Prefer True for outbound
-                human-style com, False for automated notifications.
         """
-        return client.post_message(channel, text=text, thread_ts=thread_ts, as_user=as_user)
+        client, is_platform = _client()
+        result = client.post_message(channel, text=text, thread_ts=thread_ts)
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
-    async def slack_delete_message(
-        channel: str,
-        ts: str,
-        as_user: bool = True,
-    ) -> dict:
-        """Delete a previously posted message.
+    async def slack_delete_message(channel: str, ts: str) -> dict:
+        """Delete a message you previously posted.
 
         Args:
             channel: Channel ID.
             ts: Message timestamp returned by `slack_post_message`.
-            as_user: Must match the token used to post (True for user-posted,
-                False for bot-posted).
         """
-        return client.delete_message(channel, ts, as_user=as_user)
+        client, is_platform = _client()
+        result = client.delete_message(channel, ts)
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
     async def slack_list_channels(types: str = "public_channel") -> dict:
-        """List Slack channels visible to the app.
+        """List Slack channels visible to you.
 
         Args:
             types: Comma-separated channel types — public_channel, private_channel, mpim, im.
         """
-        return {"channels": client.list_channels(types=types)}
+        client, is_platform = _client()
+        result = {"channels": client.list_channels(types=types)}
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
     async def slack_read_history(
@@ -79,12 +87,18 @@ def register(mcp: FastMCP) -> None:
             limit: Max messages (capped at 100 by Slack).
             cursor: Pagination cursor returned by a previous call.
         """
-        return client.history(channel, limit=limit, cursor=cursor)
+        client, is_platform = _client()
+        result = client.history(channel, limit=limit, cursor=cursor)
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
     async def slack_find_user_by_email(email: str) -> dict:
         """Look up a Slack user by email. Returns the user object (id, name, profile)."""
-        return client.find_user_by_email(email)
+        client, is_platform = _client()
+        result = client.find_user_by_email(email)
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
     async def slack_open_dm(user: str) -> dict:
@@ -93,7 +107,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             user: Slack user ID (U…). For email lookup, call `slack_find_user_by_email` first.
         """
-        return client.open_dm(user)
+        client, is_platform = _client()
+        result = client.open_dm(user)
+        _record_if_platform(is_platform)
+        return result
 
     @mcp.tool()
     async def slack_add_reaction(channel: str, ts: str, name: str) -> dict:
@@ -104,4 +121,7 @@ def register(mcp: FastMCP) -> None:
             ts: Message timestamp.
             name: Emoji name without colons (e.g. `white_check_mark`).
         """
-        return client.add_reaction(channel, ts, name)
+        client, is_platform = _client()
+        result = client.add_reaction(channel, ts, name)
+        _record_if_platform(is_platform)
+        return result

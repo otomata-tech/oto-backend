@@ -97,10 +97,15 @@ def _bootstrap_env_keys() -> None:
     # que l'admin PUISSE les grant au cas par cas (modèle serper : user key OU
     # platform key + quota). Importer ≠ partager : une clé plateforme n'est
     # accessible qu'avec un grant explicite (cf. access.resolve_api_key).
+    # La plupart des providers exposent `<PROVIDER>_API_KEY` ; slack n'a pas de
+    # clé unique mais un user token (`SLACK_USER_TOKEN`, xoxp) — c'est lui qu'on
+    # importe comme clé plateforme (mode `as_user` côté tool).
+    env_secret_names = {"slack": "SLACK_USER_TOKEN"}
     env_keys: dict[str, str] = {}
     for provider in db.KEY_PROVIDERS:
+        secret_name = env_secret_names.get(provider, f"{provider.upper()}_API_KEY")
         try:
-            v = get_secret(f"{provider.upper()}_API_KEY")
+            v = get_secret(secret_name)
         except Exception:
             v = None
         if v:

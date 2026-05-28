@@ -65,6 +65,7 @@ def register(mcp: FastMCP) -> None:
         naf: Optional[str] = None,
         code_commune: Optional[str] = None,
         code_postal: Optional[str] = None,
+        departement: Optional[str] = None,
         denomination: Optional[str] = None,
         enseigne: Optional[str] = None,
         active_only: bool = True,
@@ -79,12 +80,16 @@ def register(mcp: FastMCP) -> None:
         Use cases:
         - All NAF 4711F (supermarchés) in Marseille (`code_commune=13201` or `code_postal=13001`)
         - All "Carrefour Express" branded locations (`enseigne='carrefour express'`)
+        - All "Intermarché" supermarkets in a département (`enseigne='intermarché', naf='47.11F', departement='26'`)
         - All active establishments of a given activity in a commune
 
         Args:
             naf: APE/NAF code exact match (ex. "4711F").
             code_commune: INSEE COG code (5 digits, ex. "13201").
             code_postal: 5 digits (ex. "13001").
+            departement: 2 chars métropole (ex. "26") ou 3 chars DOM (ex. "971").
+                Match sur le préfixe du code postal — enseigne+naf+departement
+                énumère tous les sites d'une enseigne dans un département.
             denomination: case-insensitive substring on denomination usuelle.
             enseigne: case-insensitive substring across enseigne 1/2/3.
             active_only: filter etatAdministratif='A' (default True).
@@ -96,6 +101,7 @@ def register(mcp: FastMCP) -> None:
             naf=naf,
             code_commune=code_commune,
             code_postal=code_postal,
+            departement=departement,
             denomination=denomination,
             enseigne=enseigne,
             active_only=active_only,

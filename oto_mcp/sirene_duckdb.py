@@ -155,6 +155,7 @@ def search(
     naf: Optional[str] = None,
     code_commune: Optional[str] = None,
     code_postal: Optional[str] = None,
+    departement: Optional[str] = None,
     denomination: Optional[str] = None,
     enseigne: Optional[str] = None,
     active_only: bool = True,
@@ -168,6 +169,9 @@ def search(
         naf: code APE (ex. "4711F", "10.71C") — match exact sur activitePrincipale
         code_commune: code INSEE COG (ex. "13201" pour Marseille 1er)
         code_postal: ex. "13001"
+        departement: code département 2 chars métropole (ex. "26") ou 3 chars DOM
+            (ex. "971"). Match sur le préfixe du code postal. Permet "tous les X
+            du dept Y" sans énumérer les communes.
         denomination: substring case-insensitive sur denomination ou enseigne
         enseigne: substring case-insensitive sur enseigne1/2/3
         active_only: filtre etat='A'
@@ -193,6 +197,10 @@ def search(
     if code_postal:
         where.append("codePostalEtablissement = ?")
         params.append(code_postal)
+    if departement:
+        # Préfixe du code postal : 2 chars (métropole 01..95) ou 3 chars (DOM 971..976).
+        where.append("LEFT(codePostalEtablissement, ?) = ?")
+        params.extend([len(departement), departement])
     if denomination:
         where.append("LOWER(denominationUsuelleEtablissement) LIKE ?")
         params.append(f"%{denomination.lower()}%")

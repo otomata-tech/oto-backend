@@ -91,6 +91,7 @@ def make_routes(
             naf=_qp(request, "naf"),
             code_commune=_qp(request, "code_commune"),
             code_postal=_qp(request, "code_postal"),
+            departement=_qp(request, "departement"),
             denomination=_qp(request, "denomination"),
             enseigne=_qp(request, "enseigne"),
             active_only=_qp_bool(request, "active_only", True),

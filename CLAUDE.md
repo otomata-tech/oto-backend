@@ -263,6 +263,12 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
   enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
   le serveur si un client a une dépendance optionnelle absente.
+- **Tool API-keyé = déclarer le provider à 3 endroits sinon `resolve_api_key`
+  lève `Unknown provider` à l'appel** (le tool peut être écrit + enregistré et
+  planter quand même) : (1) tuple `KEY_PROVIDERS` dans `db.py`, (2) colonne
+  `<provider>_api_key` dans `_SCHEMA`, (3) `ALTER TABLE … ADD COLUMN IF NOT
+  EXISTS` dans `init_db()`. Si le secret env n'est pas `<PROVIDER>_API_KEY`,
+  ajouter un override dans `_bootstrap_env_keys` (cf. `slack`→`SLACK_USER_TOKEN`).
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - API keys serveur (`SERPER_API_KEY`, `HUNTER_API_KEY`, `SIRENE_API_KEY`)
   résolues via `oto.config.get_secret()` — ne pas re-faire l'env loading ici.

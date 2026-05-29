@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS users (
     kaspr_api_key TEXT,
     pennylane_api_key TEXT,
     slack_api_key TEXT,
+    fullenrich_api_key TEXT,
     crunchbase_cookies TEXT,
     crunchbase_user_agent TEXT,
     crunchbase_set_at TIMESTAMPTZ,
@@ -158,7 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
 # Providers supportés pour les user keys. Aligné sur les colonnes
 # `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
-KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane", "slack")
+KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane", "slack", "fullenrich")
 
 
 _pool: Optional[ConnectionPool] = None
@@ -200,6 +201,7 @@ def init_db() -> None:
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS kaspr_api_key TEXT")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pennylane_api_key TEXT")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_api_key TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fullenrich_api_key TEXT")
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
 
 

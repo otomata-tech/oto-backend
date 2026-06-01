@@ -132,6 +132,7 @@ Namespaces :
 • slack_* — messagerie Slack.
 • whatsapp_* — messagerie WhatsApp (pairing QR requis).
 • data_* — datastore tabulaire per-user (backend Google Sheets).
+• gmail_* — Gmail per-user, multi-compte (search, get, send, reply, draft, archive, trash). OAuth Google requis (app.oto.ninja). gmail_list_accounts liste les comptes ; param `account` (email) pour cibler un compte précis.
 • culture_spectacle_* — entreprises du spectacle vivant.
 • oto_* — méta-tools : list/enable/disable tools, presets nommés.
 

@@ -116,11 +116,13 @@ CREATE TABLE IF NOT EXISTS user_grants (
 );
 
 CREATE TABLE IF NOT EXISTS user_google_oauth (
-    sub TEXT PRIMARY KEY,
+    sub TEXT NOT NULL,
+    google_email TEXT,
     refresh_token TEXT NOT NULL,
     access_token TEXT,
     expires_at TIMESTAMPTZ,
     scopes TEXT NOT NULL,
+    is_default BOOLEAN NOT NULL DEFAULT TRUE,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -203,6 +205,19 @@ def init_db() -> None:
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_api_key TEXT")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fullenrich_api_key TEXT")
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
+        # Google OAuth : passage mono-compte → multi-compte par user.
+        # L'ancienne table avait `sub` en PRIMARY KEY (1 compte). On ajoute
+        # google_email + is_default, on droppe la PK sur sub, et on unicise
+        # par (sub, google_email). Les lignes existantes ont google_email NULL
+        # (compte « legacy ») : elles restent servies comme défaut et sont
+        # claimées proprement au prochain consentement (cf. set_google_oauth).
+        conn.execute("ALTER TABLE user_google_oauth ADD COLUMN IF NOT EXISTS google_email TEXT")
+        conn.execute("ALTER TABLE user_google_oauth ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT TRUE")
+        conn.execute("ALTER TABLE user_google_oauth DROP CONSTRAINT IF EXISTS user_google_oauth_pkey")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS user_google_oauth_sub_email "
+            "ON user_google_oauth(sub, google_email)"
+        )
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
@@ -677,52 +692,152 @@ def list_users_with_grants() -> list[dict]:
 
 def set_google_oauth(
     sub: str,
+    google_email: str,
     refresh_token: str,
     scopes: str,
     access_token: Optional[str] = None,
     expires_at: Optional[str] = None,
+    make_default: Optional[bool] = None,
 ) -> None:
+    """Upsert un compte Google (sub, google_email).
+
+    `make_default` None → devient défaut si c'est le 1er compte du user.
+    Claime au passage l'éventuelle ligne legacy à google_email NULL (migration
+    mono→multi compte) en la supprimant avant l'insert.
+    """
     upsert_user(sub)
     with _connect() as conn:
+        n_existing = conn.execute(
+            "SELECT COUNT(*) AS n FROM user_google_oauth "
+            "WHERE sub = %s AND google_email IS NOT NULL",
+            (sub,),
+        ).fetchone()["n"]
+        conn.execute(
+            "DELETE FROM user_google_oauth WHERE sub = %s AND google_email IS NULL",
+            (sub,),
+        )
+        if make_default is None:
+            make_default = n_existing == 0
+        if make_default:
+            conn.execute(
+                "UPDATE user_google_oauth SET is_default = FALSE WHERE sub = %s", (sub,)
+            )
         conn.execute(
             """
-            INSERT INTO user_google_oauth (sub, refresh_token, access_token, expires_at, scopes)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT(sub) DO UPDATE SET
+            INSERT INTO user_google_oauth
+                (sub, google_email, refresh_token, access_token, expires_at, scopes, is_default)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(sub, google_email) DO UPDATE SET
                 refresh_token = EXCLUDED.refresh_token,
                 access_token  = EXCLUDED.access_token,
                 expires_at    = EXCLUDED.expires_at,
                 scopes        = EXCLUDED.scopes,
+                is_default    = user_google_oauth.is_default OR EXCLUDED.is_default,
                 updated_at    = NOW()
             """,
-            (sub, refresh_token, access_token, expires_at, scopes),
+            (sub, google_email, refresh_token, access_token, expires_at, scopes, make_default),
         )
 
 
-def update_google_access_token(sub: str, access_token: str, expires_at: str) -> None:
-    """Met à jour uniquement l'access_token + expiry (sur refresh)."""
+def update_google_access_token(
+    sub: str, google_email: Optional[str], access_token: str, expires_at: str
+) -> None:
+    """Met à jour uniquement l'access_token + expiry (sur refresh).
+
+    `google_email` None vise la ligne legacy (compte mono pré-migration).
+    """
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE user_google_oauth
-               SET access_token = %s, expires_at = %s, updated_at = NOW()
-             WHERE sub = %s
-            """,
-            (access_token, expires_at, sub),
-        )
+        if google_email is None:
+            conn.execute(
+                "UPDATE user_google_oauth SET access_token = %s, expires_at = %s, "
+                "updated_at = NOW() WHERE sub = %s AND google_email IS NULL",
+                (access_token, expires_at, sub),
+            )
+        else:
+            conn.execute(
+                "UPDATE user_google_oauth SET access_token = %s, expires_at = %s, "
+                "updated_at = NOW() WHERE sub = %s AND google_email = %s",
+                (access_token, expires_at, sub, google_email),
+            )
 
 
-def get_google_oauth(sub: str) -> Optional[dict]:
+def get_google_oauth(sub: str, account: Optional[str] = None) -> Optional[dict]:
+    """Renvoie un compte Google du user.
+
+    `account` (email) cible un compte précis ; None renvoie le défaut
+    (ou, à défaut de flag, le plus ancien — couvre la ligne legacy NULL).
+    """
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM user_google_oauth WHERE sub = %s", (sub,)
-        ).fetchone()
+        if account:
+            row = conn.execute(
+                "SELECT * FROM user_google_oauth WHERE sub = %s AND google_email = %s",
+                (sub, account),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM user_google_oauth WHERE sub = %s "
+                "ORDER BY is_default DESC, granted_at ASC LIMIT 1",
+                (sub,),
+            ).fetchone()
         return dict(row) if row else None
 
 
-def delete_google_oauth(sub: str) -> None:
+def list_google_accounts(sub: str) -> list[dict]:
+    """Liste les comptes Google connectés du user (sans les tokens)."""
     with _connect() as conn:
-        conn.execute("DELETE FROM user_google_oauth WHERE sub = %s", (sub,))
+        rows = conn.execute(
+            "SELECT google_email, is_default, scopes, granted_at, updated_at "
+            "FROM user_google_oauth WHERE sub = %s ORDER BY is_default DESC, granted_at ASC",
+            (sub,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_default_google_account(sub: str, account: str) -> bool:
+    """Marque `account` comme défaut. Renvoie False si le compte n'existe pas."""
+    with _connect() as conn:
+        hit = conn.execute(
+            "SELECT 1 FROM user_google_oauth WHERE sub = %s AND google_email = %s",
+            (sub, account),
+        ).fetchone()
+        if not hit:
+            return False
+        conn.execute(
+            "UPDATE user_google_oauth SET is_default = (google_email = %s) WHERE sub = %s",
+            (account, sub),
+        )
+        return True
+
+
+def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
+    """Supprime un compte (account=email) ou tous les comptes (account=None).
+
+    Si on supprime le compte par défaut alors qu'il en reste d'autres, on
+    promeut le plus ancien restant pour ne pas laisser le user sans défaut.
+    """
+    with _connect() as conn:
+        if account is None:
+            conn.execute("DELETE FROM user_google_oauth WHERE sub = %s", (sub,))
+            return
+        conn.execute(
+            "DELETE FROM user_google_oauth WHERE sub = %s AND google_email = %s",
+            (sub, account),
+        )
+        has_default = conn.execute(
+            "SELECT 1 FROM user_google_oauth WHERE sub = %s AND is_default = TRUE",
+            (sub,),
+        ).fetchone()
+        if not has_default:
+            conn.execute(
+                """
+                UPDATE user_google_oauth SET is_default = TRUE
+                 WHERE sub = %s AND google_email = (
+                     SELECT google_email FROM user_google_oauth
+                      WHERE sub = %s ORDER BY granted_at ASC LIMIT 1
+                 )
+                """,
+                (sub, sub),
+            )
 
 
 # --- Datastore namespaces ---------------------------------------------------

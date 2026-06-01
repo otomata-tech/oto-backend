@@ -102,19 +102,48 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        row = db.get_google_oauth(sub)
+        accounts = google_oauth.list_accounts(sub)
+        default = next((a for a in accounts if a.get("is_default")), None)
         return json_response(request, {
-            "connected": bool(row),
-            "granted_at": row["granted_at"] if row else None,
-            "scopes": row["scopes"].split() if row and row.get("scopes") else [],
+            "connected": bool(accounts),
+            # Compat : champs au niveau racine = compte par défaut.
+            "granted_at": default["granted_at"] if default else None,
+            "scopes": default["scopes"].split() if default and default.get("scopes") else [],
+            "accounts": [
+                {
+                    "email": a.get("google_email"),
+                    "is_default": a.get("is_default", False),
+                    "scopes": a["scopes"].split() if a.get("scopes") else [],
+                    "granted_at": a.get("granted_at"),
+                }
+                for a in accounts
+            ],
         })
 
     async def google_oauth_revoke(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        google_oauth.revoke(sub)
-        return json_response(request, {"ok": True})
+        # ?account=<email> révoque un compte précis ; absent = tous.
+        account = request.query_params.get("account") or None
+        google_oauth.revoke(sub, account=account)
+        return json_response(request, {"ok": True, "account": account})
+
+    async def google_oauth_set_default(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        account = (body.get("account") if isinstance(body, dict) else None) or ""
+        account = account.strip()
+        if not account:
+            return json_error(request, 400, "missing_account")
+        if not db.set_default_google_account(sub, account):
+            return json_error(request, 404, "unknown_account")
+        return json_response(request, {"ok": True, "default": account})
 
     # --- API tokens (CLI auth) -------------------------------------------
 
@@ -406,6 +435,8 @@ def make_routes(
         Route("/api/google/oauth/status", google_oauth_status, methods=["GET"]),
         Route("/api/google/oauth/status", options_handler, methods=["OPTIONS"]),
         Route("/api/google/oauth", google_oauth_revoke, methods=["DELETE"]),
+        Route("/api/google/oauth/default", google_oauth_set_default, methods=["POST"]),
+        Route("/api/google/oauth/default", options_handler, methods=["OPTIONS"]),
         Route("/api/google/oauth", options_handler, methods=["OPTIONS"]),
         # API tokens
         Route("/api/me/tokens", me_tokens_list, methods=["GET"]),

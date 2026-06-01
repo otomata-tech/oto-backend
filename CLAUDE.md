@@ -162,22 +162,37 @@ Auth :
 - REST `/api/datastore/*` : Logto JWT **ou** API token long-lived (préfixe
   `oto_`, vérifié contre `user_api_tokens`).
 
-OAuth Google per-user :
+OAuth Google per-user (flow unifié Sheets+Drive+Gmail, **multi-compte**) :
 - `GET /api/google/oauth/start` (Logto auth) → renvoie `{auth_url}` à
-  ouvrir dans le browser.
+  ouvrir dans le browser. `prompt=consent select_account` → l'user choisit
+  quel compte Google connecter (rejouer le flow ajoute un 2e compte).
 - `GET /api/google/oauth/callback?code=…&state=…` — Google redirige ici, on
-  échange + persiste, puis redirige vers `app.oto.ninja/?datastore=connected`.
-- Scopes : `spreadsheets` + `drive.file` (accès limité aux fichiers créés
-  par l'app — pas tout le Drive).
+  échange, dérive l'email du compte via le profil Gmail, persiste, puis
+  redirige vers `app.oto.ninja/?datastore=connected`.
+- `GET /api/google/oauth/status` → `{connected, accounts:[{email,is_default,scopes,granted_at}], …}`.
+- `POST /api/google/oauth/default` body `{account}` → choisit le compte par défaut.
+- `DELETE /api/google/oauth[?account=<email>]` → révoque un compte (ou tous).
+- Scopes : `spreadsheets` + `drive.file` + `gmail.modify`.
+- Multi-compte : table `user_google_oauth` clé `(sub, google_email)` +
+  `is_default`. Le datastore et les tools `gmail_*` sans param `account`
+  utilisent le compte par défaut. **Migration mono→multi** : les anciennes
+  lignes (clé `sub`, `google_email` NULL) restent servies comme défaut et
+  sont claimées proprement au prochain consentement (cf. `db.set_google_oauth`).
 - Refresh token stocké en plaintext dans `user_google_oauth` (même modèle
   que les autres secrets per-user dans cette DB, accès root only).
 
 **Pourquoi un client OAuth séparé du connecteur Logto Google** : Logto
 gère l'**identité** (scopes `openid email profile`), pas la délégation
-d'accès aux ressources Google. Mutualiser obligerait à demander
-`spreadsheets`+`drive.file` à *chaque* sign-in, même aux users qui
-n'utilisent pas le datastore. Donc deux clients OAuth distincts dans le
-même projet GCP — c'est la séparation propre identité ≠ délégation.
+d'accès aux ressources Google. Donc deux clients OAuth distincts dans le
+même projet GCP — séparation propre identité ≠ délégation.
+
+⚠️ **Conséquence de l'ajout de Gmail** : `gmail.modify` est un scope
+**restricted** Google (contrairement à `drive.file`, non-sensible). Tant que
+l'écran de consentement est en mode *Testing* (test users only), pas de
+contrainte. S'il passe en *published/external*, Google impose un audit
+sécurité annuel (CASA). Le flow étant unifié, **tout** user qui connecte
+Google pour le datastore se voit aussi demander l'accès Gmail. Choix assumé
+(substrat unique vs deux flows séparés).
 
 ### Setup GCP (one-shot, par projet)
 
@@ -186,15 +201,20 @@ même projet GCP — c'est la séparation propre identité ≠ délégation.
 2. **APIs & Services → Library** : enable
    - `Google Sheets API`
    - `Google Drive API`
+   - `Gmail API`
 3. **APIs & Services → OAuth consent screen** :
    - User type : `External` (sauf Workspace)
    - App name : `Oto Datastore` (visible aux users sur le consent)
    - Support email : alexis@otomata.tech
    - Authorized domains : `oto.ninja`
-   - **Scopes** : ajouter `.../auth/spreadsheets` et `.../auth/drive.file`
+   - **Scopes** : `.../auth/spreadsheets`, `.../auth/drive.file`,
+     `.../auth/gmail.modify`
    - **Test users** (si en mode "Testing") : ajouter les emails autorisés
-     tant que l'app n'est pas publiée. `drive.file` n'est PAS un scope
-     sensible chez Google → publication auto-approuvée si demandée.
+     tant que l'app n'est pas publiée. ⚠️ `gmail.modify` est un scope
+     **restricted** → en mode Testing c'est OK, mais publier l'app en
+     External imposerait un audit sécurité CASA annuel (cf. section OAuth
+     ci-dessus). `drive.file` reste non-sensible ; c'est Gmail qui ajoute
+     la contrainte.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID** :
    - Application type : **Web application** (pas "Desktop")
    - Name : `oto-mcp datastore`

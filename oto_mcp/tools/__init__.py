@@ -78,6 +78,16 @@ def register_all(mcp: FastMCP) -> None:
     except Exception as e:
         log.warning("Datastore tools disabled: %s", e)
 
+    # Gmail — surface oto-cli par-utilisateur, multi-compte. Mêmes credentials
+    # OAuth Google que le datastore (flow unifié Sheets+Drive+Gmail). On
+    # register quoi qu'il en soit ; les tools lèvent une McpError actionnable
+    # à l'appel si l'user n'a pas connecté de compte Google.
+    try:
+        from . import gmail
+        gmail.register(mcp)
+    except Exception as e:
+        log.warning("Gmail tools disabled: %s", e)
+
     # SIRENE stock — DuckDB sur parquet INSEE local. Gracefully disabled si
     # duckdb manque ou parquet introuvable (on log à l'appel, pas au register).
     try:

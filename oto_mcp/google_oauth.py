@@ -38,6 +38,10 @@ from . import db
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
+    # Gmail surface complète (read/send/reply/draft/archive/trash). Scope
+    # RESTRICTED chez Google → audit CASA requis si l'écran de consentement
+    # passe en published/external (OK en mode testing).
+    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -118,7 +122,9 @@ def build_auth_url(sub: str) -> str:
         "response_type": "code",
         "scope": " ".join(SCOPES),
         "access_type": "offline",
-        "prompt": "consent",  # force refresh_token à chaque grant
+        # consent → force refresh_token ; select_account → laisse l'user choisir
+        # quel compte Google connecter (clé du multi-compte).
+        "prompt": "consent select_account",
         "state": make_state(sub),
         "include_granted_scopes": "true",
     }
@@ -146,7 +152,27 @@ def exchange_code(code: str) -> dict:
     return r.json()
 
 
-def persist_token(sub: str, token_response: dict) -> None:
+def _fetch_email(access_token: str) -> str:
+    """Récupère l'adresse du compte Google qui vient de consentir.
+
+    Via le profil Gmail (scope gmail.modify déjà accordé) — évite d'ajouter
+    un scope identité juste pour connaître l'email.
+    """
+    import requests
+    r = requests.get(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=15,
+    )
+    r.raise_for_status()
+    email = r.json().get("emailAddress")
+    if not email:
+        raise RuntimeError("Profil Gmail sans emailAddress — impossible d'identifier le compte.")
+    return email
+
+
+def persist_token(sub: str, token_response: dict) -> str:
+    """Persiste les tokens et renvoie l'email du compte Google connecté."""
     refresh_token = token_response.get("refresh_token")
     if not refresh_token:
         # `build_auth_url` impose `prompt=consent` + `access_type=offline`,
@@ -160,13 +186,16 @@ def persist_token(sub: str, token_response: dict) -> None:
     expires_in = int(token_response.get("expires_in", 0) or 0)
     expires_at = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat() if expires_in else None
     scopes = token_response.get("scope") or " ".join(SCOPES)
+    email = _fetch_email(access_token)
     db.set_google_oauth(
         sub,
+        google_email=email,
         refresh_token=refresh_token,
         scopes=scopes,
         access_token=access_token,
         expires_at=expires_at,
     )
+    return email
 
 
 def _refresh_access_token(refresh_token: str) -> dict:
@@ -185,17 +214,19 @@ def _refresh_access_token(refresh_token: str) -> dict:
     return r.json()
 
 
-def credentials_for(sub: str):
+def credentials_for(sub: str, account: Optional[str] = None):
     """Renvoie un `google.oauth2.credentials.Credentials` valide pour ce sub.
 
-    Charge depuis SQLite, refresh transparent si access_token absent ou expiré.
-    Lève RuntimeError actionnable si pas d'OAuth grant.
+    `account` (email) cible un compte précis ; None = compte par défaut.
+    Charge depuis la DB, refresh transparent si access_token absent ou expiré.
+    Lève RuntimeError actionnable si pas de compte connecté.
     """
-    row = db.get_google_oauth(sub)
+    row = db.get_google_oauth(sub, account=account)
     if not row:
+        suffix = f" pour {account}" if account else ""
         raise RuntimeError(
-            "Aucun grant Google Drive. Connecte ton compte Google sur "
-            "https://app.oto.ninja/ (section datastore)."
+            f"Aucun compte Google connecté{suffix}. Connecte-le sur "
+            "https://app.oto.ninja/ (section Google)."
         )
 
     from google.oauth2.credentials import Credentials
@@ -217,7 +248,7 @@ def credentials_for(sub: str):
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
-        db.update_google_access_token(sub, access_token, new_exp)
+        db.update_google_access_token(sub, row.get("google_email"), access_token, new_exp)
 
     return Credentials(
         token=access_token,
@@ -229,17 +260,33 @@ def credentials_for(sub: str):
     )
 
 
-def revoke(sub: str) -> None:
-    """Révoque côté Google + supprime de la DB."""
-    row = db.get_google_oauth(sub)
-    if row and row.get("refresh_token"):
-        import requests
-        try:
-            requests.post(
-                "https://oauth2.googleapis.com/revoke",
-                params={"token": row["refresh_token"]},
-                timeout=10,
-            )
-        except Exception:
-            pass  # on supprime quand même en DB
-    db.delete_google_oauth(sub)
+def list_accounts(sub: str) -> list[dict]:
+    """Liste les comptes Google connectés du user (email, défaut, scopes)."""
+    return db.list_google_accounts(sub)
+
+
+def revoke(sub: str, account: Optional[str] = None) -> None:
+    """Révoque côté Google + supprime de la DB.
+
+    `account` (email) cible un compte ; None révoque tous les comptes du user.
+    """
+    import requests
+
+    if account is None:
+        rows = db.list_google_accounts(sub)
+        targets = [r.get("google_email") for r in rows]
+    else:
+        targets = [account]
+
+    for email in targets:
+        row = db.get_google_oauth(sub, account=email)
+        if row and row.get("refresh_token"):
+            try:
+                requests.post(
+                    "https://oauth2.googleapis.com/revoke",
+                    params={"token": row["refresh_token"]},
+                    timeout=10,
+                )
+            except Exception:
+                pass  # on supprime quand même en DB
+    db.delete_google_oauth(sub, account=account)

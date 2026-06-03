@@ -270,7 +270,9 @@ de gating role). Le pairing crée ce fichier.
 
 `UserDisabledToolsMiddleware` (`middleware.py`) applique au handshake `initialize` les visibility rules natives fastmcp (`disable_components` via `_visibility_rules` session state). Plus de filtrage manuel `on_list_tools`/`on_call_tool` — fastmcp émet `tools/list_changed` automatiquement quand les rules changent.
 
-Source de vérité = table PG `user_disabled_tools(sub, tool_name)`. Tables sœur `user_presets(sub, name, enabled_tools[])` pour les snapshots nommés.
+Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) + `user_enabled_tools(sub, tool_name)` (override positif). Table sœur `user_presets(sub, name, enabled_tools[])` pour les snapshots nommés.
+
+**Masqués par défaut** (`tool_visibility.py::DEFAULT_HIDDEN_TOOLS`, ex. `gocardless_*`) : namespaces sensibles/mission invisibles par défaut sur la surface authentifiée, ré-activables. Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève, `apply_preset` le réplique (`enabled ∩ DEFAULT_HIDDEN`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Ajouter un tool au set masqué = éditer `DEFAULT_HIDDEN_TOOLS`.
 
 Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_list_presets`, `oto_save_preset`, `oto_apply_preset`, `oto_delete_preset`. Le set protégé `{oto_list_my_tools, oto_enable_tool, oto_apply_preset}` reste toujours activé pour éviter le lock-out.
 

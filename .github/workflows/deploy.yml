@@ -25,6 +25,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             ./.venv/bin/pip install -e . --quiet
+            ./.venv/bin/patchright install chromium  # browser de la feature LinkedIn (idempotent : skip si déjà présent)
             systemctl restart oto-mcp
             sleep 3
             systemctl is-active --quiet oto-mcp || (journalctl -u oto-mcp -n 50 --no-pager; exit 1)

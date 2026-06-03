@@ -1,17 +1,20 @@
 """LinkedIn — scraping browser.
 
-Deux modes d'auth, par ordre de priorité :
-1. Profil browser persistant dans `<DATA_DIR>/browser-profiles/linkedin-<sub>/`
-   (session TLS liée au fingerprint du browser — résiste au blocage CDN).
-2. Cookie `li_at` depuis la table `users` (legacy, sujet au blocage TLS
-   depuis ~mai 2026).
+**Mode pur cookie** : auth via le cookie `li_at` (+ user-agent capturé) stocké par
+`sub` en table `users`. Le cookie est injecté dans un **vrai Google Chrome système**
+(`_require_chrome_channel`) pour que l'empreinte TLS matche celle du Chrome de bureau
+où l'utilisateur l'a capturé — sinon LinkedIn bloque (le Chromium bundlé de Patchright
+a une empreinte différente, cassé depuis ~mai 2026).
 
-Si aucun des deux n'est configuré : McpError pointant vers `/account`.
+Le provisioning de profil navigateur (VNC, `linkedin_pairing.py` + endpoints
+`/api/settings/linkedin/browser/*`) existe toujours mais n'est **pas** consulté ici :
+on isole d'abord le chemin cookie pour diagnostiquer ce qui bloque.
+
+Si aucun cookie n'est configuré : McpError pointant vers app.oto.ninja/connections.
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
+import shutil
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -21,37 +24,29 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import db
 from ..auth_hooks import current_user_sub_from_token
 
-_DATA_DIR = Path(os.environ.get("OTO_MCP_DATA_DIR", "/opt/oto-mcp/data"))
 
+def _require_chrome_channel() -> str:
+    """Return the real Google Chrome channel, or raise.
 
-def _get_browser_profile(sub: str) -> Optional[str]:
-    """Return path to persistent browser profile if it exists for this user."""
-    profile_dir = _DATA_DIR / "browser-profiles" / f"linkedin-{sub}"
-    if profile_dir.is_dir():
-        return str(profile_dir)
-    return None
+    LinkedIn lie le cookie `li_at` (et la session du profil) à l'empreinte TLS du
+    navigateur qui l'a créée — un Chrome de bureau. Le Chromium bundlé de Patchright
+    a une empreinte différente → blocage. On force donc le **vrai** Chrome système,
+    de la même famille que celui où l'utilisateur a capturé le cookie.
 
-
-def _get_session_or_raise() -> dict:
-    sub = current_user_sub_from_token()
-    if not sub:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message="Unauthenticated — no user identity on the request.",
-        ))
-    sess = db.get_linkedin_session(sub)
-    if not sess:
-        user = db.get_user(sub) or {}
-        email = user.get("email") or "<no row>"
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Aucun cookie LinkedIn configuré pour cet utilisateur (sub={sub}, email={email}). "
-                "Va sur https://oto.ninja/account pour coller la valeur du cookie "
-                "`li_at` de ton compte LinkedIn (l'user-agent est capturé automatiquement)."
-            ),
-        ))
-    return sess
+    Pas de fallback silencieux vers Chromium (ce qui re-casserait l'injection en
+    douce) : si Chrome n'est pas installé, on lève une erreur actionnable.
+    """
+    for channel, binary in (("chrome", "google-chrome"), ("chrome-beta", "google-chrome-beta")):
+        if shutil.which(binary):
+            return channel
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(
+            "Google Chrome système absent du serveur — requis pour que l'empreinte TLS "
+            "matche le cookie/profil LinkedIn (le Chromium bundlé est bloqué par LinkedIn). "
+            "Installer : apt-get install -y google-chrome-stable."
+        ),
+    ))
 
 
 def _identity_for(sub: str) -> str:
@@ -65,16 +60,29 @@ def _identity_for(sub: str) -> str:
     return f"mcp:{sub}"
 
 
-def _wrap_runtime(e: RuntimeError) -> McpError:
+_ACCOUNT_URL = "https://app.oto.ninja/connections"
+
+
+def _auth_wall_message(sub: str) -> str:
+    """Actionable remediation for an auth-wall, en mode pur cookie."""
+    if db.get_linkedin_session(sub):
+        return (
+            f"Cookie LinkedIn expiré ou invalide. Rafraîchis-le sur {_ACCOUNT_URL} "
+            "ou via l'extension Oto Companion (capture le cookie depuis ton Chrome "
+            "de bureau pour que l'empreinte TLS matche)."
+        )
+    return (
+        f"Aucun cookie LinkedIn configuré. Ajoute-le sur {_ACCOUNT_URL} "
+        "ou via l'extension Oto Companion."
+    )
+
+
+def _wrap_runtime(e: RuntimeError, sub: str) -> McpError:
+    from oto.tools.browser.linkedin import LinkedInAuthWallError
+
+    if isinstance(e, LinkedInAuthWallError):
+        return McpError(ErrorData(code=INVALID_PARAMS, message=_auth_wall_message(sub)))
     msg = str(e)
-    if "session expired" in msg.lower() or "li_at" in msg:
-        return McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "Cookie LinkedIn expiré. L'utilisateur doit le rafraîchir sur "
-                "https://oto.ninja/account (ou via l'extension Oto Companion)."
-            ),
-        ))
     if "Outside active hours" in msg or "Rate limit" in msg:
         return McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -94,22 +102,15 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.browser.linkedin import LinkedInClient
 
     def _client(sub: str, bypass_rate_limit: bool, sess: Optional[dict] = None) -> "LinkedInClient":
-        profile = _get_browser_profile(sub)
-        if profile:
-            return LinkedInClient(
-                profile=profile,
-                identity=_identity_for(sub),
-                headless=True,
-                rate_limit=not bypass_rate_limit,
-            )
         if not sess:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message="Ni profil browser ni cookie LinkedIn configuré.",
+                message=_auth_wall_message(sub),
             ))
         return LinkedInClient(
             cookie=sess["cookie"],
-            user_agent=sess["user_agent"],
+            user_agent=sess["user_agent"],  # masque le leak HeadlessChrome
+            channel=_require_chrome_channel(),  # vrai Chrome → empreinte TLS qui matche
             identity=_identity_for(sub),
             headless=True,
             rate_limit=not bypass_rate_limit,
@@ -141,7 +142,7 @@ def register(mcp: FastMCP) -> None:
             async with make() as li:
                 return await li.scrape_profile(url)
         except RuntimeError as e:
-            raise _wrap_runtime(e) from e
+            raise _wrap_runtime(e, sub) from e
 
     @mcp.tool()
     async def linkedin_scrape_company(url: str, bypass_rate_limit: bool = False) -> dict:
@@ -157,7 +158,7 @@ def register(mcp: FastMCP) -> None:
             async with make() as li:
                 return await li.scrape_company(url)
         except RuntimeError as e:
-            raise _wrap_runtime(e) from e
+            raise _wrap_runtime(e, sub) from e
 
     @mcp.tool()
     async def linkedin_search_companies(
@@ -174,7 +175,7 @@ def register(mcp: FastMCP) -> None:
             async with make() as li:
                 return await li.search_companies(query=query, limit=limit)
         except RuntimeError as e:
-            raise _wrap_runtime(e) from e
+            raise _wrap_runtime(e, sub) from e
 
     @mcp.tool()
     async def linkedin_search_people(
@@ -201,7 +202,7 @@ def register(mcp: FastMCP) -> None:
                     keywords=keywords, geo=geo, network=network, limit=limit, pages=pages,
                 )
         except RuntimeError as e:
-            raise _wrap_runtime(e) from e
+            raise _wrap_runtime(e, sub) from e
 
     @mcp.tool()
     async def linkedin_search_company_employees(
@@ -226,4 +227,4 @@ def register(mcp: FastMCP) -> None:
                     company_slug=company_slug, keywords=kw_list, limit=limit,
                 )
         except RuntimeError as e:
-            raise _wrap_runtime(e) from e
+            raise _wrap_runtime(e, sub) from e

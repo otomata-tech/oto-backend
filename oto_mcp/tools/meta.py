@@ -22,6 +22,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import db
 from ..auth_hooks import current_user_sub_from_token
+from ..tool_visibility import DEFAULT_HIDDEN_TOOLS, is_tool_visible
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,15 @@ def register(mcp: FastMCP) -> None:
         """
         sub = _require_sub()
         disabled = set(db.list_user_disabled_tools(sub))
+        enabled_override = set(db.list_user_enabled_tools(sub))
         # run_middleware=False : on veut la liste complète (y compris les
-        # tools désactivés pour ce user), sinon on n'affiche pas leur état.
+        # tools masqués pour ce user), sinon on n'affiche pas leur état.
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
         names = sorted(t.name for t in all_tools)
+        states = {n: is_tool_visible(n, disabled, enabled_override) for n in names}
         return {
-            "tools": [{"name": n, "enabled": n not in disabled} for n in names],
-            "disabled_count": len(disabled),
+            "tools": [{"name": n, "enabled": states[n]} for n in names],
+            "disabled_count": sum(1 for v in states.values() if not v),
         }
 
     @mcp.tool()
@@ -83,6 +86,7 @@ def register(mcp: FastMCP) -> None:
                 message=f"`{name}` is required to manage your toolset — refusing to disable.",
             ))
         db.add_user_disabled_tool(sub, name)
+        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override
         await disable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": False, "persistent": True}
 
@@ -95,6 +99,10 @@ def register(mcp: FastMCP) -> None:
         """
         sub = _require_sub()
         db.remove_user_disabled_tool(sub, name)
+        # Override positif : nécessaire pour rendre visible un tool masqué par
+        # défaut (sinon le middleware le re-masque à la session suivante).
+        if name in DEFAULT_HIDDEN_TOOLS:
+            db.add_user_enabled_tool(sub, name)
         await enable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": True, "persistent": True}
 
@@ -165,7 +173,10 @@ def register(mcp: FastMCP) -> None:
             enabled = sorted(set(enabled_tools))
         else:
             disabled = set(db.list_user_disabled_tools(sub))
-            enabled = sorted(all_names - disabled)
+            enabled_override = set(db.list_user_enabled_tools(sub))
+            enabled = sorted(
+                n for n in all_names if is_tool_visible(n, disabled, enabled_override)
+            )
 
         db.save_user_preset(sub, name, enabled)
         return {"name": name, "saved": True, "enabled_count": len(enabled)}
@@ -196,6 +207,9 @@ def register(mcp: FastMCP) -> None:
         disabled = sorted(all_names - enabled)
 
         db.replace_user_disabled_tools(sub, disabled)
+        # Les tools masqués par défaut listés par le preset doivent recevoir un
+        # override positif ; les autres voient le leur effacé.
+        db.replace_user_enabled_tools(sub, sorted(enabled & DEFAULT_HIDDEN_TOOLS))
 
         # Reset session visibility and re-apply the new state. Notifications
         # are emitted by fastmcp inside these calls.

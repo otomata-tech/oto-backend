@@ -88,6 +88,17 @@ CREATE TABLE IF NOT EXISTS user_disabled_tools (
     PRIMARY KEY (sub, tool_name)
 );
 
+-- Ensemble positif explicite : tools que l'user a activé alors qu'ils sont
+-- masqués par défaut (DEFAULT_HIDDEN_TOOLS). Sans cette table, un tool
+-- default-hidden ne pourrait jamais être rendu visible (le modèle de base
+-- n'a qu'un ensemble négatif).
+CREATE TABLE IF NOT EXISTS user_enabled_tools (
+    sub TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    enabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, tool_name)
+);
+
 CREATE TABLE IF NOT EXISTS user_presets (
     sub TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -475,6 +486,48 @@ def replace_user_disabled_tools(sub: str, tool_names: list[str]) -> None:
             if tool_names:
                 conn.executemany(
                     "INSERT INTO user_disabled_tools (sub, tool_name) VALUES (%s, %s)",
+                    [(sub, t) for t in tool_names],
+                )
+
+
+# --- per-user enabled overrides (pour les tools masqués par défaut) ---------
+
+
+def list_user_enabled_tools(sub: str) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT tool_name FROM user_enabled_tools WHERE sub = %s ORDER BY tool_name",
+            (sub,),
+        ).fetchall()
+        return [r["tool_name"] for r in rows]
+
+
+def add_user_enabled_tool(sub: str, tool_name: str) -> None:
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_enabled_tools (sub, tool_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (sub, tool_name),
+        )
+
+
+def remove_user_enabled_tool(sub: str, tool_name: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM user_enabled_tools WHERE sub = %s AND tool_name = %s",
+            (sub, tool_name),
+        )
+
+
+def replace_user_enabled_tools(sub: str, tool_names: list[str]) -> None:
+    """Remplace l'ensemble des enabled-overrides du user (bascule preset)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute("DELETE FROM user_enabled_tools WHERE sub = %s", (sub,))
+            if tool_names:
+                conn.executemany(
+                    "INSERT INTO user_enabled_tools (sub, tool_name) VALUES (%s, %s)",
                     [(sub, t) for t in tool_names],
                 )
 

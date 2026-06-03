@@ -228,3 +228,53 @@ def register(mcp: FastMCP) -> None:
                 )
         except RuntimeError as e:
             raise _wrap_runtime(e, sub) from e
+
+    @mcp.tool()
+    async def linkedin_send_message(
+        profile_url: str,
+        message: str,
+        dry_run: bool = False,
+        bypass_rate_limit: bool = False,
+    ) -> dict:
+        """Send a direct message to a LinkedIn **1st-degree connection**.
+
+        Action d'écriture (envoie réellement le message en ton nom). Le
+        destinataire doit être une connexion 1er degré — sinon LinkedIn n'affiche
+        pas de bouton « Message » et le tool lève une erreur (utiliser
+        `linkedin_send_invitation` pour se connecter d'abord). Rate-limité par user.
+
+        Args:
+            profile_url: URL du profil destinataire (`linkedin.com/in/<slug>`).
+            message: Corps du message.
+            dry_run: Si True, tape le message mais ne clique PAS « envoyer »
+                (screenshot côté serveur). Sert à valider la cible sans envoyer.
+            bypass_rate_limit: """ + _BYPASS_DOC
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
+        try:
+            async with make() as li:
+                return await li.send_message(profile_url, message, dry_run=dry_run)
+        except RuntimeError as e:
+            raise _wrap_runtime(e, sub) from e
+
+    @mcp.tool()
+    async def linkedin_send_invitation(
+        profile_url: str,
+        note: Optional[str] = None,
+        dry_run: bool = False,
+        bypass_rate_limit: bool = False,
+    ) -> dict:
+        """Send a LinkedIn connection invitation (cold-outreach primitive).
+
+        Action d'écriture (envoie réellement l'invitation en ton nom). Rate-limité.
+
+        Args:
+            profile_url: URL du profil cible (`linkedin.com/in/<slug>`).
+            note: Note d'accompagnement optionnelle (≤300 caractères).
+            dry_run: Si True, ouvre la modale mais n'envoie PAS (screenshot serveur).
+            bypass_rate_limit: """ + _BYPASS_DOC
+        sub, make = _resolve_sub_and_client(bypass_rate_limit)
+        try:
+            async with make() as li:
+                return await li.send_invitation(profile_url, note=note, dry_run=dry_run)
+        except RuntimeError as e:
+            raise _wrap_runtime(e, sub) from e

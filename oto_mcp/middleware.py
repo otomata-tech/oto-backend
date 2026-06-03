@@ -8,21 +8,24 @@ from fastmcp.server.transforms.visibility import disable_components
 
 from . import db
 from .auth_hooks import current_user_sub_from_token
+from .tool_visibility import DEFAULT_HIDDEN_TOOLS, effective_disabled
 
 logger = logging.getLogger(__name__)
 
 
 class UserDisabledToolsMiddleware(Middleware):
-    """Applique les tools désactivés du user à sa session MCP.
+    """Applique la visibilité des tools du user à sa session MCP.
 
-    Au handshake `initialize`, on lit la table `user_disabled_tools` pour le
-    `sub` JWT courant et on pose une visibility rule session-scopée via
-    `disable_components`. Le reste — filtrage `tools/list`, blocage
-    `tools/call`, émission de `tools/list_changed` — est géré nativement par
-    fastmcp.
+    Au handshake `initialize`, pour le `sub` JWT courant, on calcule
+    l'ensemble effectif des tools à masquer = `user_disabled_tools` ∪
+    (tools masqués par défaut non explicitement activés). On pose une
+    visibility rule session-scopée via `disable_components`. Le reste —
+    filtrage `tools/list`, blocage `tools/call`, émission de
+    `tools/list_changed` — est géré nativement par fastmcp.
 
-    Si pas de sub identifiable (stdio local, discovery non-authentifié) ou
-    aucune préférence en DB, on ne fait rien.
+    Pas de sub identifiable (stdio local, discovery non-authentifié) → on ne
+    filtre rien : la machine du dev a accès complet, le masquage par défaut
+    ne concerne que la surface multi-user authentifiée.
     """
 
     async def on_initialize(self, context, call_next):
@@ -33,23 +36,28 @@ class UserDisabledToolsMiddleware(Middleware):
             sub = None
         if not sub:
             return result
-        try:
-            disabled = db.list_user_disabled_tools(sub)
-        except Exception as e:
-            logger.warning("Cannot read user_disabled_tools for %s: %s", sub, e)
-            return result
-        if not disabled:
-            return result
         ctx = context.fastmcp_context
         if ctx is None:
             logger.warning("fastmcp_context is None at on_initialize for sub=%s", sub)
             return result
         try:
-            await disable_components(
-                ctx,
-                names=set(disabled),
-                components={"tool"},
-            )
+            disabled = set(db.list_user_disabled_tools(sub))
+            enabled_override = set(db.list_user_enabled_tools(sub))
         except Exception as e:
-            logger.warning("Failed to apply disabled tools for %s: %s", sub, e)
+            logger.warning("Cannot read tool visibility for %s: %s", sub, e)
+            return result
+        try:
+            all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
+            all_names = {t.name for t in all_tools}
+        except Exception as e:
+            logger.warning("Cannot list tools for %s: %s", sub, e)
+            # repli : au moins les disabled explicites + les masqués connus
+            all_names = disabled | DEFAULT_HIDDEN_TOOLS
+        to_hide = effective_disabled(all_names, disabled, enabled_override)
+        if not to_hide:
+            return result
+        try:
+            await disable_components(ctx, names=to_hide, components={"tool"})
+        except Exception as e:
+            logger.warning("Failed to apply tool visibility for %s: %s", sub, e)
         return result

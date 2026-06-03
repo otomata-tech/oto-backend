@@ -54,8 +54,14 @@ rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   /data/oto/mcp/ root@REDACTED_IP:/opt/oto-mcp/
 
 ssh -i ~/.ssh/alexis root@REDACTED_IP \
-  "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e ."
+  "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e . && ./.venv/bin/patchright install chromium"
 ```
+
+### Feature LinkedIn — dépendances browser (sinon `linkedin_*` + pairing VNC cassés)
+
+- **Chromium patchright** : `./.venv/bin/patchright install chromium` (~170 Mo dans `~/.cache/ms-playwright`). Provisionné automatiquement par le deploy CI (`.github/workflows/deploy.yml`) après chaque `pip install` — idempotent. ⚠️ vit dans `~/.cache` : un nettoyage de cache le perd → le re-déclencher via un deploy (`workflow_dispatch`), pas à la main.
+- **Stack VNC** (pairing self-service depuis oto.ninja/account) — paquets système à installer une fois (root) : `apt-get install -y xvfb x11vnc websockify novnc`. Caddy route `/vnc/* → localhost:6098`.
+- Le service `oto-mcp` tourne en **root** → chromium doit être dans le cache de **root** (`/root/.cache/ms-playwright`). Les profils LinkedIn persistent dans `/opt/oto-mcp/data/browser-profiles/linkedin-<sub>/`.
 
 ## 5. .env
 
@@ -121,5 +127,7 @@ rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   -e "ssh -i ~/.ssh/alexis" \
   /data/oto/mcp/ root@REDACTED_IP:/opt/oto-mcp/
 ssh -i ~/.ssh/alexis root@REDACTED_IP \
-  "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
+  "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && ./.venv/bin/patchright install chromium && systemctl restart oto-mcp"
 ```
+
+> Le deploy CI (`.github/workflows/deploy.yml`) fait déjà `pip install` + `patchright install chromium` + restart. Préférer un push sur `main` (ou `workflow_dispatch`) au déploiement manuel.

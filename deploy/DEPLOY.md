@@ -54,14 +54,14 @@ rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   /data/oto/mcp/ root@51.15.225.121:/opt/oto-mcp/
 
 ssh -i ~/.ssh/alexis root@51.15.225.121 \
-  "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e . && ./.venv/bin/patchright install chromium"
+  "cd /opt/oto-mcp && python3 -m venv .venv && ./.venv/bin/pip install -e ."
 ```
 
 ### Feature LinkedIn — dépendances browser (sinon `linkedin_*` + pairing VNC cassés)
 
-- **Chromium patchright** : `./.venv/bin/patchright install chromium` (~170 Mo dans `~/.cache/ms-playwright`). Provisionné automatiquement par le deploy CI (`.github/workflows/deploy.yml`) après chaque `pip install` — idempotent. ⚠️ vit dans `~/.cache` : un nettoyage de cache le perd → le re-déclencher via un deploy (`workflow_dispatch`), pas à la main.
+- **Google Chrome (système)** : `apt-get install -y google-chrome-stable` (one-time, root). o-browser/patchright **auto-détecte le channel** (`_detect_channel()` → `google-chrome` présent ⇒ `channel="chrome"` ⇒ vrai Chrome `/opt/google/chrome`, **pas** le chromium bundled). Durable (apt, hors `~/.cache`). Fallback seulement si Chrome absent : `./.venv/bin/patchright install chromium`.
 - **Stack VNC** (pairing self-service depuis oto.ninja/account) — paquets système à installer une fois (root) : `apt-get install -y xvfb x11vnc websockify novnc`. Caddy route `/vnc/* → localhost:6098`.
-- Le service `oto-mcp` tourne en **root** → chromium doit être dans le cache de **root** (`/root/.cache/ms-playwright`). Les profils LinkedIn persistent dans `/opt/oto-mcp/data/browser-profiles/linkedin-<sub>/`.
+- Le service `oto-mcp` tourne en **root**. Les profils LinkedIn persistent dans `/opt/oto-mcp/data/browser-profiles/linkedin-<sub>/`.
 
 ## 5. .env
 
@@ -127,7 +127,7 @@ rsync -avz --exclude .venv --exclude .env --exclude __pycache__ --exclude .git \
   -e "ssh -i ~/.ssh/alexis" \
   /data/oto/mcp/ root@51.15.225.121:/opt/oto-mcp/
 ssh -i ~/.ssh/alexis root@51.15.225.121 \
-  "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && ./.venv/bin/patchright install chromium && systemctl restart oto-mcp"
+  "cd /opt/oto-mcp && ./.venv/bin/pip install -e . && systemctl restart oto-mcp"
 ```
 
-> Le deploy CI (`.github/workflows/deploy.yml`) fait déjà `pip install` + `patchright install chromium` + restart. Préférer un push sur `main` (ou `workflow_dispatch`) au déploiement manuel.
+> Le deploy CI (`.github/workflows/deploy.yml`) fait `pip install` + restart. Préférer un push sur `main` (ou `workflow_dispatch`) au déploiement manuel. (Le browser de la feature LinkedIn = `google-chrome-stable` apt, dép système one-time, pas re-provisionnée à chaque deploy.)

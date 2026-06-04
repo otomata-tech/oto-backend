@@ -35,6 +35,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from . import db, org_store
 from .auth_hooks import current_user_sub_from_token
+from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
 # Rôles
 GUEST = "guest"
@@ -71,6 +72,51 @@ def get_user_role(sub: str) -> str:
     user = db.get_user(sub)
     role = (user or {}).get("role") or GUEST
     return role if role in ROLES else GUEST
+
+
+def granted_namespaces_for(sub: str) -> frozenset:
+    """Namespaces auxquels le `sub` a droit = grants per-user UNION entitlements
+    de son org active.
+
+    SOURCE UNIQUE de la visibilité des namespaces gouvernés (grant-only),
+    consommée par le middleware, les meta-tools MCP ET les gardes REST — pour
+    qu'aucune surface ne diverge (sinon un namespace refusé côté MCP serait
+    contournable côté /account). Cf. project_oto_mcp_org_tier.
+    """
+    ns = set(db.list_user_granted_namespaces(sub))
+    active_org = org_store.get_active_org(sub)
+    if active_org is not None:
+        ns |= set(org_store.list_org_entitled_namespaces(active_org))
+    return frozenset(ns)
+
+
+def require_namespace(namespace: str) -> None:
+    """Backstop d'autorisation AU CALL-TIME pour un namespace gouverné
+    (grant-only) à credential SERVEUR — lève si le sub courant n'y a pas droit.
+
+    Indépendant de la visibilité : l'autorisation ne doit JAMAIS reposer sur le
+    seul masquage (qui peut fail-open si `list_tools` échoue au handshake →
+    denylist incomplète). `gocardless` a déjà ce backstop via `resolve_api_key`
+    (clé per-user) ; `mm` utilise un secret serveur (MM_REFRESH_TOKEN) sans clé
+    per-user, d'où ce garde explicite à appeler dans son `_client()`.
+
+    stdio local (sub=None) = accès complet, cohérent avec le middleware.
+    """
+    if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
+        return
+    sub = current_user_sub_from_token()
+    if sub is None:
+        return
+    if get_user_role(sub) == ADMIN:
+        return
+    if namespace not in granted_namespaces_for(sub):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                f"Accès au namespace `{namespace}` non accordé. Demande à un "
+                f"admin de te l'accorder (per-user ou via l'entitlement de ton org)."
+            ),
+        ))
 
 
 def current_user_sub_or_raise() -> str:

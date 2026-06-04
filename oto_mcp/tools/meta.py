@@ -49,8 +49,12 @@ def _require_sub() -> str:
 
 
 def _user_access(sub: str) -> tuple[frozenset, bool]:
-    """(namespaces grantés, is_admin) pour décider la visibilité grant-only."""
-    granted = frozenset(db.list_user_granted_namespaces(sub))
+    """(namespaces grantés, is_admin) pour décider la visibilité grant-only.
+
+    `granted` = grants per-user ∪ entitlements de l'org active (source unique
+    `access.granted_namespaces_for` — même calcul que le middleware et les
+    gardes REST, pour qu'aucune surface ne diverge)."""
+    granted = access.granted_namespaces_for(sub)
     is_admin = access.get_user_role(sub) == access.ADMIN
     return granted, is_admin
 

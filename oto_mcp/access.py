@@ -33,7 +33,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import db
+from . import db, org_store
 from .auth_hooks import current_user_sub_from_token
 
 # Rôles
@@ -107,9 +107,9 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     # credential appartient à l'org (coût fixe), jamais métré sur un quota
     # plateforme. Override perso (ci-dessus) prime toujours.
     if provider in ORG_SHAREABLE_PROVIDERS:
-        active_org = db.get_active_org(sub)
+        active_org = org_store.get_active_org(sub)
         if active_org is not None:
-            org_key = db.get_org_secret(active_org, provider)
+            org_key = org_store.get_org_secret(active_org, provider)
             if org_key:
                 return org_key, False
 
@@ -158,12 +158,12 @@ def status_for(sub: str) -> dict:
     # Org active résolue une fois (perf : sinon 1 lookup/provider). None pour
     # tout user sans org → la branche org_secret ci-dessous est inerte et
     # status_for reste identique à avant.
-    active_org = db.get_active_org(sub)
+    active_org = org_store.get_active_org(sub)
     out: dict = {"role": role, "active_org": active_org, "providers": {}}
     for provider in db.KEY_PROVIDERS:
         user_key = db.get_user_api_key(sub, provider)
         org_key = (
-            db.get_org_secret(active_org, provider)
+            org_store.get_org_secret(active_org, provider)
             if active_org is not None and provider in ORG_SHAREABLE_PROVIDERS
             else None
         )

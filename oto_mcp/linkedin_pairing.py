@@ -96,12 +96,38 @@ def _kill_procs(procs: list) -> None:
                     pass
 
 
+def _kill_profile_holders(profile: str) -> None:
+    """Kill any browser process still holding this profile dir.
+
+    Le Chrome lancé par Patchright n'est PAS dans `session._procs` (o_browser le
+    lance, pas nous) → `_kill_procs` ne le tue pas. Un Chrome orphelin d'une session
+    annulée garde le profil verrouillé → la relance hang sur about:blank (écran noir
+    côté VNC). On le tue explicitement. Match sur le chemin ET sa cible résolue (le
+    profil peut être un symlink dual-subs).
+    """
+    paths = {profile}
+    try:
+        paths.add(str(Path(profile).resolve()))
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            subprocess.run(["pkill", "-9", "-f", f"--user-data-dir={p}"],
+                           check=False, timeout=10)
+        except Exception:
+            pass
+
+
 def _run_bridge(session: LinkedInPairingSession) -> None:
     """Worker thread: start VNC stack + Patchright, poll for login."""
     display = f":{DISPLAY_NUM}"
     profile = str(profile_dir_for(session.sub))
     profile_path = Path(profile)
     profile_path.mkdir(parents=True, exist_ok=True)
+    # Tue tout Chrome orphelin tenant encore ce profil (session précédente annulée
+    # dont le browser Patchright a survécu) — sinon la relance hang sur about:blank.
+    _kill_profile_holders(profile)
+    time.sleep(0.5)
     # Chrome refuse de relancer sur un profil qui a un Singleton* résiduel (run
     # précédent crashé / kill -9). Les fichiers sont des symlinks pointant vers
     # un PID disparu — Chrome interprète "session already open" et exit 0.
@@ -156,6 +182,7 @@ def _run_bridge(session: LinkedInPairingSession) -> None:
     finally:
         session.finished_at = time.time()
         _kill_procs(procs)
+        _kill_profile_holders(profile)  # le Chrome Patchright n'est pas dans procs
         _push_threadsafe(session, None)
 
         def _delayed_drop():

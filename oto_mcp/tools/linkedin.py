@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import urllib.request
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -40,6 +41,22 @@ _ACCOUNT_URL = "https://app.oto.ninja/connections"
 def _remote_profile(sub: str) -> str:
     """Nom du profil dédié du user dans le volume o-browser-full."""
     return f"linkedin-{sub}"
+
+
+def _end_session() -> None:
+    """Termine la session o-browser-full courante (best-effort).
+
+    En mode cdp, `LinkedInClient.close()` ne ferme que la **page** ; la session (et
+    le Chrome) du conteneur survit. Option A (un seul Chrome par conteneur) → on la
+    termine après chaque scrape pour libérer le slot, sinon le prochain user (profil
+    différent) tombe sur « Session already running ». À défaut, le watchdog du
+    conteneur l'expire (~30 min).
+    """
+    try:
+        req = urllib.request.Request(f"{_OBROWSER_URL}/api/sessions/current", method="DELETE")
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception:
+        pass
 
 
 def _has_remote_profile(sub: str) -> bool:
@@ -127,12 +144,15 @@ def register(mcp: FastMCP) -> None:
                 ))
             # cdp_url → LinkedInClient se connecte au Chrome distant (profil déjà loggé),
             # pas d'injection cookie (le profil porte la session).
-            async with LinkedInClient(
-                cdp_url=cdp_url,
-                identity=_identity_for(sub),
-                rate_limit=not bypass_rate_limit,
-            ) as li:
-                yield li
+            try:
+                async with LinkedInClient(
+                    cdp_url=cdp_url,
+                    identity=_identity_for(sub),
+                    rate_limit=not bypass_rate_limit,
+                ) as li:
+                    yield li
+            finally:
+                _end_session()  # libère le Chrome unique (option A)
 
     def _resolve_sub_and_client(self_bypass: bool):
         """Return (sub, session_factory). Profil dédié distant, sans fallback cookie."""

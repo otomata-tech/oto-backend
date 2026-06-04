@@ -26,6 +26,12 @@ logger = logging.getLogger("oto_mcp.linkedin_pairing")
 _DATA_DIR = Path(os.environ.get("OTO_MCP_DATA_DIR", "/opt/oto-mcp/data"))
 _NOVNC_WEB = Path("/usr/share/novnc")
 
+# Les profils LinkedIn vivent dans le volume du conteneur o-browser-full (même box) :
+# le pairing (qui les crée ici) et le scraping délégué (tools/linkedin.py, qui les lit
+# via le conteneur) partagent ainsi le même répertoire. has_profile / /api/me restent
+# cohérents avec ce que voit le conteneur. Réf otomata-tech/oto-app#11.
+_PROFILES_DIR = Path(os.environ.get("OBROWSER_PROFILES_DIR", "/var/lib/o-browser/profiles"))
+
 DISPLAY_NUM = 98
 VNC_PORT = 5998
 WS_PORT = 6098  # 6080 occupé par le container Docker o-browser sur tuls.me
@@ -33,7 +39,7 @@ TIMEOUT_S = 300  # 5 min
 
 
 def profile_dir_for(sub: str) -> Path:
-    return _DATA_DIR / "browser-profiles" / f"linkedin-{sub}"
+    return _PROFILES_DIR / f"linkedin-{sub}"
 
 
 def has_profile(sub: str) -> bool:

@@ -19,6 +19,11 @@ def register_all(mcp: FastMCP) -> None:
     from . import meta
     meta.register(mcp)
 
+    # Meta-tools du palier organization (gestion orgs/membres/secrets +
+    # switcher d'org active). Pas de dépendance externe non plus.
+    from . import orgs
+    orgs.register(mcp)
+
     # Connecteurs API-only — la résolution de clé (user vs platform) se fait
     # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
     # les secrets soient configurés au boot.

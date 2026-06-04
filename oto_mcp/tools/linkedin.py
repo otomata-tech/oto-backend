@@ -1,16 +1,17 @@
 """LinkedIn — scraping browser.
 
-**Mode pur cookie** : auth via le cookie `li_at` (+ user-agent capturé) stocké par
-`sub` en table `users`. Le cookie est injecté dans un **vrai Google Chrome système**
-(`_require_chrome_channel`) pour que l'empreinte TLS matche celle du Chrome de bureau
-où l'utilisateur l'a capturé — sinon LinkedIn bloque (le Chromium bundlé de Patchright
-a une empreinte différente, cassé depuis ~mai 2026).
+Deux modes d'auth, **profil d'abord** (cf issue oto-mcp#5) :
+1. **Profil navigateur dédié au serveur** (`<DATA_DIR>/browser-profiles/linkedin-<sub>/`,
+   via pairing VNC `linkedin_pairing.py`). Le serveur s'est loggé lui-même → session
+   `li_at` **indépendante** de celle de l'utilisateur → l'utiliser ne le déconnecte pas.
+2. **Cookie `li_at`** de l'utilisateur (fallback). ⚠️ Partager le cookie perso côté
+   serveur **déconnecte la session de l'utilisateur** (une seule session, IP datacenter
+   → LinkedIn l'invalide). À n'utiliser qu'en dépannage. C'est pourquoi le profil prime.
 
-Le provisioning de profil navigateur (VNC, `linkedin_pairing.py` + endpoints
-`/api/settings/linkedin/browser/*`) existe toujours mais n'est **pas** consulté ici :
-on isole d'abord le chemin cookie pour diagnostiquer ce qui bloque.
+Dans les deux cas, l'injection se fait dans le **vrai Google Chrome système**
+(`_require_chrome_channel`) — le Chromium bundlé a une empreinte TLS bloquée.
 
-Si aucun cookie n'est configuré : McpError pointant vers app.oto.ninja/connections.
+Si rien n'est configuré : McpError pointant vers app.oto.ninja/connections.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import db
+from .. import db, linkedin_pairing
 from ..auth_hooks import current_user_sub_from_token
 
 
@@ -49,6 +50,18 @@ def _require_chrome_channel() -> str:
     ))
 
 
+def _get_browser_profile(sub: str) -> Optional[str]:
+    """Path du profil navigateur dédié serveur, s'il existe (dir non-vide).
+
+    Source de vérité unique = `linkedin_pairing.has_profile` (idem `/api/me`). Le
+    pairing fait `mkdir` avant le login → un pairing avorté laisse un dossier vide
+    qu'il ne faut pas traiter comme un profil valide.
+    """
+    if linkedin_pairing.has_profile(sub):
+        return str(linkedin_pairing.profile_dir_for(sub))
+    return None
+
+
 def _identity_for(sub: str) -> str:
     """Bucket de rate-limit dédié par utilisateur Logto.
 
@@ -64,16 +77,22 @@ _ACCOUNT_URL = "https://app.oto.ninja/connections"
 
 
 def _auth_wall_message(sub: str) -> str:
-    """Actionable remediation for an auth-wall, en mode pur cookie."""
+    """Remédiation actionnable, selon le mode d'auth réel (profil prime sur cookie)."""
+    if _get_browser_profile(sub):
+        return (
+            "Profil navigateur LinkedIn du serveur déconnecté : sa session ne "
+            f"s'authentifie plus (l'IP datacenter a pu être challengée). Re-paire-le "
+            f"sur {_ACCOUNT_URL} (LinkedIn → session navigateur → « reconfigurer »)."
+        )
     if db.get_linkedin_session(sub):
         return (
             f"Cookie LinkedIn expiré ou invalide. Rafraîchis-le sur {_ACCOUNT_URL} "
-            "ou via l'extension Oto Companion (capture le cookie depuis ton Chrome "
-            "de bureau pour que l'empreinte TLS matche)."
+            "ou via l'extension. ⚠️ L'usage du cookie côté serveur peut te déconnecter "
+            "— préfère configurer une session navigateur dédiée."
         )
     return (
-        f"Aucun cookie LinkedIn configuré. Ajoute-le sur {_ACCOUNT_URL} "
-        "ou via l'extension Oto Companion."
+        f"Aucune session LinkedIn configurée. Configure-la sur {_ACCOUNT_URL} "
+        "(session navigateur dédiée recommandée ; le cookie peut te déconnecter)."
     )
 
 
@@ -102,6 +121,18 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.browser.linkedin import LinkedInClient
 
     def _client(sub: str, bypass_rate_limit: bool, sess: Optional[dict] = None) -> "LinkedInClient":
+        channel = _require_chrome_channel()  # vrai Chrome → empreinte TLS qui matche
+        # Profil dédié serveur EN PRIORITÉ : session propre, ne déco pas l'user.
+        profile = _get_browser_profile(sub)
+        if profile:
+            return LinkedInClient(
+                profile=profile,
+                channel=channel,
+                identity=_identity_for(sub),
+                headless=True,
+                rate_limit=not bypass_rate_limit,
+            )
+        # Fallback cookie (dépannage) — ⚠️ peut déconnecter l'user (session partagée).
         if not sess:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
@@ -110,7 +141,7 @@ def register(mcp: FastMCP) -> None:
         return LinkedInClient(
             cookie=sess["cookie"],
             user_agent=sess["user_agent"],  # masque le leak HeadlessChrome
-            channel=_require_chrome_channel(),  # vrai Chrome → empreinte TLS qui matche
+            channel=channel,
             identity=_identity_for(sub),
             headless=True,
             rate_limit=not bypass_rate_limit,

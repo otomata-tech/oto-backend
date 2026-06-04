@@ -20,9 +20,16 @@ from fastmcp.server.transforms.visibility import (
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import db
+from .. import access, db
 from ..auth_hooks import current_user_sub_from_token
-from ..tool_visibility import DEFAULT_HIDDEN_TOOLS, is_tool_visible
+from ..tool_visibility import (
+    ADMIN_GRANT_ONLY_NAMESPACES,
+    DEFAULT_HIDDEN_TOOLS,
+    is_entitled,
+    is_grant_only,
+    is_tool_visible,
+    namespace_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,13 @@ def _require_sub() -> str:
     return sub
 
 
+def _user_access(sub: str) -> tuple[frozenset, bool]:
+    """(namespaces grantés, is_admin) pour décider la visibilité grant-only."""
+    granted = frozenset(db.list_user_granted_namespaces(sub))
+    is_admin = access.get_user_role(sub) == access.ADMIN
+    return granted, is_admin
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def oto_list_my_tools(ctx: Context) -> dict:
@@ -51,11 +65,15 @@ def register(mcp: FastMCP) -> None:
         sub = _require_sub()
         disabled = set(db.list_user_disabled_tools(sub))
         enabled_override = set(db.list_user_enabled_tools(sub))
+        granted, is_admin = _user_access(sub)
         # run_middleware=False : on veut la liste complète (y compris les
         # tools masqués pour ce user), sinon on n'affiche pas leur état.
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
         names = sorted(t.name for t in all_tools)
-        states = {n: is_tool_visible(n, disabled, enabled_override) for n in names}
+        states = {
+            n: is_tool_visible(n, disabled, enabled_override, granted, is_admin)
+            for n in names
+        }
         return {
             "tools": [{"name": n, "enabled": states[n]} for n in names],
             "disabled_count": sum(1 for v in states.values() if not v),
@@ -94,14 +112,28 @@ def register(mcp: FastMCP) -> None:
     async def oto_enable_tool(name: str, ctx: Context) -> dict:
         """Re-enable a previously disabled tool for the current user.
 
+        Tools in an admin-grant-only namespace (e.g. `gocardless_*`, `mm_*`)
+        cannot be self-enabled by a non-admin: an admin must grant the namespace
+        first (`oto_admin_grant_namespace`). The call is refused otherwise.
+
         Args:
             name: Exact tool name to re-enable.
         """
         sub = _require_sub()
+        granted, is_admin = _user_access(sub)
+        if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"`{name}` relève du namespace contrôlé `{namespace_of(name)}` "
+                    f"(accès sensible). Auto-activation refusée — demande à un admin "
+                    f"de t'accorder ce namespace (oto_admin_grant_namespace)."
+                ),
+            ))
         db.remove_user_disabled_tool(sub, name)
-        # Override positif : nécessaire pour rendre visible un tool masqué par
-        # défaut (sinon le middleware le re-masque à la session suivante).
-        if name in DEFAULT_HIDDEN_TOOLS:
+        # Override positif requis pour rendre visible un masqué-par-défaut, ou un
+        # grant-only côté admin (côté user granté, le grant suffit à le révéler).
+        if name in DEFAULT_HIDDEN_TOOLS or (is_grant_only(name) and is_admin):
             db.add_user_enabled_tool(sub, name)
         await enable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": True, "persistent": True}
@@ -174,8 +206,10 @@ def register(mcp: FastMCP) -> None:
         else:
             disabled = set(db.list_user_disabled_tools(sub))
             enabled_override = set(db.list_user_enabled_tools(sub))
+            granted, is_admin = _user_access(sub)
             enabled = sorted(
-                n for n in all_names if is_tool_visible(n, disabled, enabled_override)
+                n for n in all_names
+                if is_tool_visible(n, disabled, enabled_override, granted, is_admin)
             )
 
         db.save_user_preset(sub, name, enabled)
@@ -201,15 +235,22 @@ def register(mcp: FastMCP) -> None:
                 message=f"Preset `{name}` not found. Use oto_list_presets.",
             ))
         all_names = await _all_tool_names(ctx)
-        enabled = set(preset["enabled_tools"]) | _PROTECTED
-        # Keep only enabled tools that still exist on the server.
-        enabled &= all_names
+        granted, is_admin = _user_access(sub)
+        requested = (set(preset["enabled_tools"]) | _PROTECTED) & all_names
+        # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade).
+        enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
         disabled = sorted(all_names - enabled)
 
         db.replace_user_disabled_tools(sub, disabled)
-        # Les tools masqués par défaut listés par le preset doivent recevoir un
-        # override positif ; les autres voient le leur effacé.
-        db.replace_user_enabled_tools(sub, sorted(enabled & DEFAULT_HIDDEN_TOOLS))
+        # Override positif pour les tools qui en ont besoin pour être visibles :
+        # masqués-par-défaut, et grant-only côté admin.
+        db.replace_user_enabled_tools(
+            sub,
+            sorted(
+                n for n in enabled
+                if n in DEFAULT_HIDDEN_TOOLS or (is_grant_only(n) and is_admin)
+            ),
+        )
 
         # Reset session visibility and re-apply the new state. Notifications
         # are emitted by fastmcp inside these calls.
@@ -229,3 +270,64 @@ def register(mcp: FastMCP) -> None:
         sub = _require_sub()
         deleted = db.delete_user_preset(sub, name)
         return {"name": name, "deleted": deleted}
+
+    # --- admin : grants de namespace sensible -------------------------------
+
+    def _require_admin() -> str:
+        sub = _require_sub()
+        if access.get_user_role(sub) != access.ADMIN:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS, message="Réservé aux admins.",
+            ))
+        return sub
+
+    def _resolve_target_sub(target: str) -> str:
+        if "@" in target:
+            user = db.get_user_by_email(target)
+            if not user:
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=f"Aucun user connu avec l'email `{target}`.",
+                ))
+            return user["sub"]
+        return target
+
+    def _check_grant_namespace(namespace: str) -> None:
+        if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"`{namespace}` n'est pas un namespace contrôlé. "
+                    f"Contrôlés : {sorted(ADMIN_GRANT_ONLY_NAMESPACES)}."
+                ),
+            ))
+
+    @mcp.tool()
+    async def oto_admin_grant_namespace(target: str, namespace: str, ctx: Context) -> dict:
+        """[admin] Accorde à un user l'accès à un namespace sensible (grant-only).
+
+        Args:
+            target: `sub` Logto, ou email du user destinataire.
+            namespace: namespace contrôlé (`mm`, `gocardless`).
+        """
+        admin_sub = _require_admin()
+        _check_grant_namespace(namespace)
+        target_sub = _resolve_target_sub(target)
+        db.grant_namespace(target_sub, namespace, granted_by=admin_sub)
+        return {"granted": namespace, "to": target_sub}
+
+    @mcp.tool()
+    async def oto_admin_revoke_namespace(target: str, namespace: str, ctx: Context) -> dict:
+        """[admin] Révoque l'accès d'un user à un namespace sensible."""
+        _require_admin()
+        target_sub = _resolve_target_sub(target)
+        existed = db.revoke_namespace(target_sub, namespace)
+        return {"revoked": namespace, "from": target_sub, "existed": existed}
+
+    @mcp.tool()
+    async def oto_admin_list_namespace_grants(
+        ctx: Context, namespace: Optional[str] = None
+    ) -> dict:
+        """[admin] Liste les grants de namespace (tous, ou filtrés par namespace)."""
+        _require_admin()
+        return {"grants": db.list_namespace_grants(namespace)}

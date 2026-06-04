@@ -126,6 +126,17 @@ CREATE TABLE IF NOT EXISTS user_grants (
     FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
 );
 
+-- Grants de namespace sensible (deny-by-default). Un user non-admin ne voit/
+-- n'appelle un tool d'un ADMIN_GRANT_ONLY_NAMESPACE que s'il a une ligne ici,
+-- posée par un admin. Distinct de user_grants (qui porte une platform_key/quota).
+CREATE TABLE IF NOT EXISTS user_namespace_grants (
+    sub TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, namespace)
+);
+
 CREATE TABLE IF NOT EXISTS user_google_oauth (
     sub TEXT NOT NULL,
     google_email TEXT,
@@ -739,6 +750,56 @@ def list_users_with_grants() -> list[dict]:
         u["grants"] = list_grants_for_user(u["sub"])
         out.append(u)
     return out
+
+
+# --- namespace grants (deny-by-default pour namespaces sensibles) -----------
+
+def grant_namespace(sub: str, namespace: str, granted_by: Optional[str] = None) -> None:
+    """Accorde à `sub` l'accès au namespace sensible `namespace` (idempotent)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_namespace_grants (sub, namespace, granted_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT(sub, namespace) DO UPDATE SET
+                granted_at = NOW(),
+                granted_by = EXCLUDED.granted_by
+            """,
+            (sub, namespace, granted_by),
+        )
+
+
+def revoke_namespace(sub: str, namespace: str) -> bool:
+    """Révoque l'accès. Renvoie True si un grant existait."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_namespace_grants WHERE sub = %s AND namespace = %s",
+            (sub, namespace),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+def list_user_granted_namespaces(sub: str) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT namespace FROM user_namespace_grants WHERE sub = %s ORDER BY namespace",
+            (sub,),
+        ).fetchall()
+        return [r["namespace"] for r in rows]
+
+
+def list_namespace_grants(namespace: Optional[str] = None) -> list[dict]:
+    """Tous les grants de namespace (vue admin), filtrable par namespace."""
+    sql = "SELECT sub, namespace, granted_by, granted_at FROM user_namespace_grants"
+    params: tuple = ()
+    if namespace:
+        sql += " WHERE namespace = %s"
+        params = (namespace,)
+    sql += " ORDER BY namespace, granted_at DESC"
+    with _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- Google OAuth -----------------------------------------------------------

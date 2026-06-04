@@ -6,7 +6,7 @@ import logging
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
 
-from . import db
+from . import access, db
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import DEFAULT_HIDDEN_TOOLS, effective_disabled
 
@@ -43,9 +43,14 @@ class UserDisabledToolsMiddleware(Middleware):
         try:
             disabled = set(db.list_user_disabled_tools(sub))
             enabled_override = set(db.list_user_enabled_tools(sub))
+            granted = frozenset(db.list_user_granted_namespaces(sub))
         except Exception as e:
             logger.warning("Cannot read tool visibility for %s: %s", sub, e)
             return result
+        try:
+            is_admin = access.get_user_role(sub) == access.ADMIN
+        except Exception:
+            is_admin = False
         try:
             all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
             all_names = {t.name for t in all_tools}
@@ -53,7 +58,7 @@ class UserDisabledToolsMiddleware(Middleware):
             logger.warning("Cannot list tools for %s: %s", sub, e)
             # repli : au moins les disabled explicites + les masqués connus
             all_names = disabled | DEFAULT_HIDDEN_TOOLS
-        to_hide = effective_disabled(all_names, disabled, enabled_override)
+        to_hide = effective_disabled(all_names, disabled, enabled_override, granted, is_admin)
         if not to_hide:
             return result
         try:

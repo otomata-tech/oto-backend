@@ -118,6 +118,22 @@ def _kill_profile_holders(profile: str) -> None:
             pass
 
 
+def _kill_stale_vnc_stack() -> None:
+    """Kill orphan Xvfb/x11vnc/websockify on our fixed display + ports.
+
+    Le pairing utilise display + ports fixes (DISPLAY 98, VNC 5998, WS 6098) → une
+    seule session à la fois. Un orphelin (session crashée non trackée) squatte ces
+    ressources → `Xvfb :98` re-fail / websockify ne peut plus bind 6098 → la stack
+    ne remonte pas. On les tue avant de lancer.
+    """
+    for pat in (f"Xvfb :{DISPLAY_NUM}", f"rfbport {VNC_PORT}",
+                f"websockify --web {_NOVNC_WEB} {WS_PORT}"):
+        try:
+            subprocess.run(["pkill", "-9", "-f", pat], check=False, timeout=10)
+        except Exception:
+            pass
+
+
 def _run_bridge(session: LinkedInPairingSession) -> None:
     """Worker thread: start VNC stack + Patchright, poll for login."""
     display = f":{DISPLAY_NUM}"
@@ -127,6 +143,8 @@ def _run_bridge(session: LinkedInPairingSession) -> None:
     # Tue tout Chrome orphelin tenant encore ce profil (session précédente annulée
     # dont le browser Patchright a survécu) — sinon la relance hang sur about:blank.
     _kill_profile_holders(profile)
+    # Tue les orphelins Xvfb/x11vnc/websockify squattant le display + ports fixes.
+    _kill_stale_vnc_stack()
     time.sleep(0.5)
     # Chrome refuse de relancer sur un profil qui a un Singleton* résiduel (run
     # précédent crashé / kill -9). Les fichiers sont des symlinks pointant vers

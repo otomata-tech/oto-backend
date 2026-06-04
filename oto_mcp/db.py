@@ -179,6 +179,59 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
     last_used_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
+
+-- Palier organization (= périmètre / store serveur). Une org possède des
+-- secrets propres (org_secrets), un set de namespaces autorisés
+-- (org_entitlements), et des opérateurs (org_members). Source de vérité de
+-- l'appartenance = ces tables, résolues par `sub` — JAMAIS un claim du token
+-- Logto (le token MCP ne porte que sub). Cf. project_oto_mcp_org_tier.
+-- NB barreau 1 : tables seules, aucun helper ne les lit encore (canari de
+-- déploiement). Le câblage (resolve_api_key, visibilité, meta-tools) suit.
+CREATE TABLE IF NOT EXISTS orgs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- org_role : 'org_admin' | 'org_member' (validé en code, pas par CHECK, comme
+-- users.role). is_active = org courante du sub (au plus une TRUE par sub,
+-- garantie par l'index partiel + l'écriture ; même pattern que
+-- user_google_oauth.is_default).
+CREATE TABLE IF NOT EXISTS org_members (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    org_role TEXT NOT NULL DEFAULT 'org_member',
+    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, sub)
+);
+CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);
+CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHERE is_active;
+
+-- Credential de compte POSSÉDÉ par l'org et partagé à ses membres (Attio,
+-- Pennylane, MM token, clé API stateless…). provider validé contre
+-- KEY_PROVIDERS, restreint aux ORG_SHAREABLE (jamais slack/linkedin/google :
+-- sessions physiologiquement personnelles).
+CREATE TABLE IF NOT EXISTS org_secrets (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    set_by TEXT,
+    set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, provider)
+);
+
+-- Plafond de visibilité plateforme -> org : généralise
+-- ADMIN_GRANT_ONLY_NAMESPACES + user_namespace_grants au niveau org. Débloque
+-- un namespace gouverné (mm, gocardless) pour les membres de l'org.
+CREATE TABLE IF NOT EXISTS org_entitlements (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    namespace TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, namespace)
+);
 """
 
 # Providers supportés pour les user keys. Aligné sur les colonnes

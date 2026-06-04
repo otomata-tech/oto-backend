@@ -50,6 +50,16 @@ _QUOTA_DEFAULTS = {
     "kaspr": 5,
 }
 
+# Providers dont le secret peut être POSSÉDÉ par une org et partagé à ses
+# membres (org_secret). Sous-ensemble de db.KEY_PROVIDERS : exclut `slack`
+# (user token xoxp → poste en as_user = identité du propriétaire du token, pas
+# du membre appelant). linkedin/google/whatsapp/crunchbase ne passent pas par
+# resolve_api_key (sessions per-user). Cf. project_oto_mcp_org_tier — un
+# org_secret ne s'applique qu'aux credentials de compte fongibles.
+ORG_SHAREABLE_PROVIDERS = frozenset({
+    "serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane", "fullenrich",
+})
+
 _ACCOUNT_URL = "https://oto.ninja/account"
 
 
@@ -90,6 +100,18 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     user_key = db.get_user_api_key(sub, provider)
     if user_key:
         return user_key, False
+
+    # Palier org : secret partagé possédé par l'org active du user. Sauté tant
+    # que l'user n'a pas d'org active (get_active_org -> None) → comportement
+    # strictement identique à avant pour tout user flat. is_platform=False : le
+    # credential appartient à l'org (coût fixe), jamais métré sur un quota
+    # plateforme. Override perso (ci-dessus) prime toujours.
+    if provider in ORG_SHAREABLE_PROVIDERS:
+        active_org = db.get_active_org(sub)
+        if active_org is not None:
+            org_key = db.get_org_secret(active_org, provider)
+            if org_key:
+                return org_key, False
 
     grant = db.get_active_grant(sub, provider)
     if not grant:
@@ -133,15 +155,28 @@ def status_for(sub: str) -> dict:
               | `forbidden` (ni user key ni grant)
     """
     role = get_user_role(sub)
-    out: dict = {"role": role, "providers": {}}
+    # Org active résolue une fois (perf : sinon 1 lookup/provider). None pour
+    # tout user sans org → la branche org_secret ci-dessous est inerte et
+    # status_for reste identique à avant.
+    active_org = db.get_active_org(sub)
+    out: dict = {"role": role, "active_org": active_org, "providers": {}}
     for provider in db.KEY_PROVIDERS:
         user_key = db.get_user_api_key(sub, provider)
+        org_key = (
+            db.get_org_secret(active_org, provider)
+            if active_org is not None and provider in ORG_SHAREABLE_PROVIDERS
+            else None
+        )
         grant = db.get_active_grant(sub, provider)
         used = db.get_usage_today(sub, provider)
         limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 
+        # Miroir EXACT de la cascade de resolve_api_key : user_key > org_secret
+        # > grant plateforme. Toute divergence = /api/me ment sur le mode réel.
         if user_key:
             mode = "user"
+        elif org_key:
+            mode = "org"
         elif not grant:
             mode = "forbidden"
         elif limit and used >= limit:
@@ -152,6 +187,7 @@ def status_for(sub: str) -> dict:
         out["providers"][provider] = {
             "mode": mode,
             "user_key_configured": bool(user_key),
+            "org_secret_configured": bool(org_key),
             "platform_key_label": grant["label"] if grant else None,
             "quota_used_today": used,
             "quota_daily": limit if grant else None,

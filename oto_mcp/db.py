@@ -855,6 +855,41 @@ def list_namespace_grants(namespace: Optional[str] = None) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# --- org tier (palier organization / périmètre) ----------------------------
+# Lecture seule pour le barreau 2 : resolve_api_key + status_for consomment
+# get_active_org + get_org_secret. Les écritures (create_org, add_org_member,
+# set_org_secret…) arrivent avec les meta-tools (barreau 3).
+
+def get_active_org(sub: str) -> Optional[int]:
+    """org_id de l'organisation active du `sub`, ou None s'il n'en a aucune.
+
+    L'index partiel `org_members_one_active` garantit au plus une ligne active
+    par sub ; LIMIT 1 reste défensif (ne jamais supposer exactement une TRUE).
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT org_id FROM org_members WHERE sub = %s AND is_active LIMIT 1",
+            (sub,),
+        ).fetchone()
+        return int(row["org_id"]) if row else None
+
+
+def get_org_secret(org_id: int, provider: str) -> Optional[str]:
+    """Clé du secret partagé `provider` possédé par l'org, ou None.
+
+    `provider` validé contre KEY_PROVIDERS (même verrou que les clés perso).
+    La restriction aux providers org-partageables (exclut slack) est portée
+    par la couche access (ORG_SHAREABLE_PROVIDERS) et le write-path (barreau 3).
+    """
+    _check_provider(provider)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT api_key FROM org_secrets WHERE org_id = %s AND provider = %s",
+            (org_id, provider),
+        ).fetchone()
+        return row["api_key"] if row else None
+
+
 # --- Google OAuth -----------------------------------------------------------
 
 def set_google_oauth(

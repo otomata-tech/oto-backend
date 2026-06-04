@@ -1,99 +1,89 @@
-"""LinkedIn — scraping browser.
+"""LinkedIn — scraping browser (délégué à o-browser-full).
 
-Deux modes d'auth, **profil d'abord** (cf issue oto-mcp#5) :
-1. **Profil navigateur dédié au serveur** (`<DATA_DIR>/browser-profiles/linkedin-<sub>/`,
-   via pairing VNC `linkedin_pairing.py`). Le serveur s'est loggé lui-même → session
-   `li_at` **indépendante** de celle de l'utilisateur → l'utiliser ne le déconnecte pas.
-2. **Cookie `li_at`** de l'utilisateur (fallback). ⚠️ Partager le cookie perso côté
-   serveur **déconnecte la session de l'utilisateur** (une seule session, IP datacenter
-   → LinkedIn l'invalide). À n'utiliser qu'en dépannage. C'est pourquoi le profil prime.
+oto-mcp ne lance plus de Chrome en propre : le scraping est **délégué au conteneur
+o-browser-full** (cappé en mémoire, séparé du process auth). On ouvre une session
+distante sur le **profil dédié du user** (`linkedin-<sub>`, créé par le pairing VNC)
+et on pilote le Chrome distant via CDP. Un OOM du browser ne touche donc plus
+`/api/me`. Réf : otomata-tech/oto-app#11.
 
-Dans les deux cas, l'injection se fait dans le **vrai Google Chrome système**
-(`_require_chrome_channel`) — le Chromium bundlé a une empreinte TLS bloquée.
+**Profil d'abord, sans fallback cookie** : une session cookie côté serveur déconnecte
+l'utilisateur (IP datacenter, session `li_at` partagée — issue oto-mcp#5). Sans profil
+dédié → erreur actionnable pointant vers le pairing.
 
-Si rien n'est configuré : McpError pointant vers app.oto.ninja/connections.
+**Sérialisation (option A)** : un seul Chrome par conteneur → un verrou global
+sérialise les scrapes concurrents.
 """
 from __future__ import annotations
 
-import shutil
+import asyncio
+import json
+import os
+import urllib.request
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import db, linkedin_pairing
 from ..auth_hooks import current_user_sub_from_token
 
 
-def _require_chrome_channel() -> str:
-    """Return the real Google Chrome channel, or raise.
+# Conteneur o-browser-full (même box, localhost par défaut). Override via env.
+_OBROWSER_URL = os.environ.get("OBROWSER_URL", "http://127.0.0.1:8080").rstrip("/")
 
-    LinkedIn lie le cookie `li_at` (et la session du profil) à l'empreinte TLS du
-    navigateur qui l'a créée — un Chrome de bureau. Le Chromium bundlé de Patchright
-    a une empreinte différente → blocage. On force donc le **vrai** Chrome système,
-    de la même famille que celui où l'utilisateur a capturé le cookie.
+# Option A : un seul Chrome par conteneur → sérialiser les scrapes concurrents.
+_BROWSER_LOCK = asyncio.Lock()
 
-    Pas de fallback silencieux vers Chromium (ce qui re-casserait l'injection en
-    douce) : si Chrome n'est pas installé, on lève une erreur actionnable.
+_ACCOUNT_URL = "https://app.oto.ninja/connections"
+
+
+def _remote_profile(sub: str) -> str:
+    """Nom du profil dédié du user dans le volume o-browser-full."""
+    return f"linkedin-{sub}"
+
+
+def _has_remote_profile(sub: str) -> bool:
+    """Le conteneur o-browser-full a-t-il un profil dédié pour ce user ?
+
+    Source de vérité = `GET /api/profiles` du conteneur (les profils vivent dans
+    son volume, plus sur le FS local d'oto-mcp). Idem `/api/me`.
     """
-    for channel, binary in (("chrome", "google-chrome"), ("chrome-beta", "google-chrome-beta")):
-        if shutil.which(binary):
-            return channel
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(
-            "Google Chrome système absent du serveur — requis pour que l'empreinte TLS "
-            "matche le cookie/profil LinkedIn (le Chromium bundlé est bloqué par LinkedIn). "
-            "Installer : apt-get install -y google-chrome-stable."
-        ),
-    ))
+    try:
+        with urllib.request.urlopen(f"{_OBROWSER_URL}/api/profiles", timeout=5) as resp:
+            names = {p.get("name") for p in json.loads(resp.read()).get("profiles", [])}
+    except Exception:
+        return False
+    return _remote_profile(sub) in names
 
 
-def _get_browser_profile(sub: str) -> Optional[str]:
-    """Path du profil navigateur dédié serveur, s'il existe (dir non-vide).
+def _no_profile_message() -> str:
+    return (
+        f"Aucune session LinkedIn configurée. Configure-la sur {_ACCOUNT_URL} "
+        "(session navigateur dédiée — le pairing connecte un profil propre au "
+        "serveur, indépendant de ta session, qui ne te déconnecte pas)."
+    )
 
-    Source de vérité unique = `linkedin_pairing.has_profile` (idem `/api/me`). Le
-    pairing fait `mkdir` avant le login → un pairing avorté laisse un dossier vide
-    qu'il ne faut pas traiter comme un profil valide.
-    """
-    if linkedin_pairing.has_profile(sub):
-        return str(linkedin_pairing.profile_dir_for(sub))
-    return None
+
+def _auth_wall_message(sub: str) -> str:
+    """Remédiation quand la session du profil distant ne s'authentifie plus."""
+    if _has_remote_profile(sub):
+        return (
+            "Profil navigateur LinkedIn déconnecté : sa session ne s'authentifie "
+            f"plus (l'IP datacenter a pu être challengée). Re-paire-le sur {_ACCOUNT_URL} "
+            "(LinkedIn → session navigateur → « reconfigurer »)."
+        )
+    return _no_profile_message()
 
 
 def _identity_for(sub: str) -> str:
     """Bucket de rate-limit dédié par utilisateur Logto.
 
-    Le LinkedInRateLimiter partage un fichier JSON (`~/.cache/otomata/rate_limits.json`)
-    — si on n'isole pas par sub, tous les users du MCP tapent dans le même
-    compteur 10/h, 80/jour. On préfixe `mcp:` pour éviter toute collision
-    avec les identités CLI locales.
+    Le LinkedInRateLimiter partage un fichier JSON — si on n'isole pas par sub,
+    tous les users du MCP tapent dans le même compteur 10/h, 80/jour. On préfixe
+    `mcp:` pour éviter toute collision avec les identités CLI locales.
     """
     return f"mcp:{sub}"
-
-
-_ACCOUNT_URL = "https://app.oto.ninja/connections"
-
-
-def _auth_wall_message(sub: str) -> str:
-    """Remédiation actionnable, selon le mode d'auth réel (profil prime sur cookie)."""
-    if _get_browser_profile(sub):
-        return (
-            "Profil navigateur LinkedIn du serveur déconnecté : sa session ne "
-            f"s'authentifie plus (l'IP datacenter a pu être challengée). Re-paire-le "
-            f"sur {_ACCOUNT_URL} (LinkedIn → session navigateur → « reconfigurer »)."
-        )
-    if db.get_linkedin_session(sub):
-        return (
-            f"Cookie LinkedIn expiré ou invalide. Rafraîchis-le sur {_ACCOUNT_URL} "
-            "ou via l'extension. ⚠️ L'usage du cookie côté serveur peut te déconnecter "
-            "— préfère configurer une session navigateur dédiée."
-        )
-    return (
-        f"Aucune session LinkedIn configurée. Configure-la sur {_ACCOUNT_URL} "
-        "(session navigateur dédiée recommandée ; le cookie peut te déconnecter)."
-    )
 
 
 def _wrap_runtime(e: RuntimeError, sub: str) -> McpError:
@@ -118,44 +108,44 @@ _BYPASS_DOC = (
 
 
 def register(mcp: FastMCP) -> None:
+    from o_browser import RemoteBrowser
     from oto.tools.browser.linkedin import LinkedInClient
 
-    def _client(sub: str, bypass_rate_limit: bool, sess: Optional[dict] = None) -> "LinkedInClient":
-        channel = _require_chrome_channel()  # vrai Chrome → empreinte TLS qui matche
-        # Profil dédié serveur EN PRIORITÉ : session propre, ne déco pas l'user.
-        profile = _get_browser_profile(sub)
-        if profile:
-            return LinkedInClient(
-                profile=profile,
-                channel=channel,
+    @asynccontextmanager
+    async def _session(sub: str, bypass_rate_limit: bool):
+        """Session LinkedIn distante (profil dédié sur o-browser-full), sérialisée.
+
+        Profil dédié EN PRIORITÉ : session propre côté serveur, ne déconnecte pas
+        l'user. Pas de fallback cookie (déconnecte l'user — issue oto-mcp#5).
+        Lève McpError si pas de profil dédié, ou si le conteneur est injoignable.
+        """
+        if not _has_remote_profile(sub):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_no_profile_message()))
+        async with _BROWSER_LOCK:  # option A : un Chrome à la fois sur le conteneur
+            cdp_url = RemoteBrowser.ensure_session(_OBROWSER_URL, profile=_remote_profile(sub))
+            if not cdp_url:
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message="Service navigateur (o-browser-full) injoignable. Réessaie plus tard.",
+                ))
+            # cdp_url → LinkedInClient se connecte au Chrome distant (profil déjà loggé),
+            # pas d'injection cookie (le profil porte la session).
+            async with LinkedInClient(
+                cdp_url=cdp_url,
                 identity=_identity_for(sub),
-                headless=True,
                 rate_limit=not bypass_rate_limit,
-            )
-        # Fallback cookie (dépannage) — ⚠️ peut déconnecter l'user (session partagée).
-        if not sess:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=_auth_wall_message(sub),
-            ))
-        return LinkedInClient(
-            cookie=sess["cookie"],
-            user_agent=sess["user_agent"],  # masque le leak HeadlessChrome
-            channel=channel,
-            identity=_identity_for(sub),
-            headless=True,
-            rate_limit=not bypass_rate_limit,
-        )
+            ) as li:
+                yield li
 
     def _resolve_sub_and_client(self_bypass: bool):
-        """Return (sub, client_constructor). Profile-first, cookie fallback."""
+        """Return (sub, session_factory). Profil dédié distant, sans fallback cookie."""
         sub = current_user_sub_from_token()
         if not sub:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message="Unauthenticated — no user identity on the request.",
             ))
-        return sub, lambda: _client(sub, self_bypass, db.get_linkedin_session(sub))
+        return sub, lambda: _session(sub, self_bypass)
 
     @mcp.tool()
     async def linkedin_scrape_profile(url: str, bypass_rate_limit: bool = False) -> dict:

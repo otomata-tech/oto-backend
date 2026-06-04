@@ -37,6 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from . import access, api_routes_datastore, api_routes_sirene, db, linkedin_pairing, pairing
+from .tool_visibility import is_entitled, is_grant_only, namespace_of
 
 
 def _allowed_origins() -> list[str]:
@@ -512,11 +513,24 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         return _json(request, {"ok": True, "name": name, "enabled": False})
 
     async def my_tools_enable(request: Request) -> JSONResponse:
-        """Réactive un tool pour l'utilisateur courant (live)."""
+        """Réactive un tool pour l'utilisateur courant (live).
+
+        Refuse l'activation d'un tool d'un namespace gouverné (grant-only) si
+        l'user n'y a pas droit — même barrière que le meta-tool MCP
+        `oto_enable_tool`, sinon le plafond org serait contournable via /account.
+        """
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
         name = request.path_params["name"]
+        granted = access.granted_namespaces_for(sub)
+        is_admin = access.get_user_role(sub) == access.ADMIN
+        if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
+            return _json(request, {
+                "error": "forbidden",
+                "name": name,
+                "detail": f"namespace `{namespace_of(name)}` non accordé",
+            }, status_code=403)
         db.remove_user_disabled_tool(sub, name)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
@@ -610,7 +624,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         all_names = await _list_all_tool_names()
-        enabled = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
+        granted = access.granted_namespaces_for(sub)
+        is_admin = access.get_user_role(sub) == access.ADMIN
+        requested = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
+        # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade,
+        # miroir de oto_apply_preset côté MCP).
+        enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
         disabled = sorted(all_names - enabled)
         db.replace_user_disabled_tools(sub, disabled)
         return _json(request, {

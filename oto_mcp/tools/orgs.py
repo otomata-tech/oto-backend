@@ -26,6 +26,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, org_store
 from ..access import ORG_SHAREABLE_PROVIDERS
+from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
 logger = logging.getLogger(__name__)
 
@@ -219,3 +220,40 @@ def register(mcp: FastMCP) -> None:
         (never returns the keys themselves)."""
         _require_admin()
         return {"org_id": org_id, "secrets": org_store.list_org_secrets(org_id)}
+
+    # --- entitlements : plafond plateforme -> org sur les namespaces gouvernés -
+
+    @mcp.tool()
+    async def oto_admin_grant_org_entitlement(org_id: int, namespace: str, ctx: Context) -> dict:
+        """[platform admin] Entitle an org to a controlled (grant-only) namespace.
+
+        Unlocks that namespace's tools for the org's members (e.g. `mm`,
+        `gocardless`). Only controlled namespaces are accepted — by-right
+        namespaces (attio, fr, serper…) need no entitlement.
+        """
+        admin = _require_admin()
+        if not org_store.get_org(org_id):
+            raise _err(f"Org #{org_id} inconnue.")
+        if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
+            raise _err(
+                f"`{namespace}` n'est pas un namespace gouverné. "
+                f"Gouvernés : {sorted(ADMIN_GRANT_ONLY_NAMESPACES)}. "
+                f"Les autres sont visibles de droit (pas d'entitlement requis)."
+            )
+        org_store.grant_org_entitlement(org_id, namespace, granted_by=admin)
+        return {"org_id": org_id, "namespace": namespace, "granted": True}
+
+    @mcp.tool()
+    async def oto_admin_revoke_org_entitlement(org_id: int, namespace: str, ctx: Context) -> dict:
+        """[platform admin] Revoke an org's entitlement to a controlled namespace.
+
+        Lazy on open sessions (members keep it until their next handshake)."""
+        _require_admin()
+        existed = org_store.revoke_org_entitlement(org_id, namespace)
+        return {"org_id": org_id, "namespace": namespace, "revoked": existed}
+
+    @mcp.tool()
+    async def oto_admin_list_org_entitlements(org_id: int, ctx: Context) -> dict:
+        """[platform admin] List an org's controlled-namespace entitlements."""
+        _require_admin()
+        return {"org_id": org_id, "entitlements": org_store.list_org_entitlements(org_id)}

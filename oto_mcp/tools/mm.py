@@ -12,11 +12,19 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from .. import access
+
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.mm import MovinmotionClient
 
     def _client() -> MovinmotionClient:
+        # Backstop d'autorisation AU CALL-TIME : le credential est un secret
+        # serveur (MM_REFRESH_TOKEN), pas une clé per-user, donc la résolution
+        # de clé ne protège pas (contrairement à gocardless). On vérifie
+        # l'entitlement ici pour ne PAS dépendre du seul masquage de visibilité
+        # (qui peut fail-open si list_tools échoue au handshake).
+        access.require_namespace("mm")
         return MovinmotionClient()
 
     @mcp.tool()

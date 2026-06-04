@@ -120,7 +120,24 @@ per-user).
 - CORS hardcoded : `oto.ninja`, `app.oto.ninja`, `localhost:5173/4173/5182/5184` (override via `OTO_MCP_CORS_ORIGINS`)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 
+## Browser automation — délégué à o-browser-full (issue oto-app#11)
+
+- oto-mcp **ne lance plus Chrome in-process**. `tools/linkedin.py` délègue au conteneur **o-browser-full** (Docker, `OBROWSER_URL` défaut `http://127.0.0.1:8080`, cappé `--memory 2.5g` sur la même box) → un OOM browser ne touche pas `/api/me` (découplage **cgroup**, pas machine).
+- Flux : `RemoteBrowser.ensure_session(OBROWSER_URL, "linkedin-<sub>")` → `cdp_url` → `LinkedInClient(cdp_url=…)`. Session fermée après chaque scrape (`DELETE /api/sessions/current`) — **option A** : 1 Chrome/conteneur, verrou global `_BROWSER_LOCK`.
+- Profils dans le **volume conteneur** `/var/lib/o-browser/profiles/linkedin-<sub>` (override `OBROWSER_PROFILES_DIR`), partagé avec le pairing. `linkedin_pairing.has_profile` (check **FS**, suit les symlinks) = source de vérité de `/api/me` (le `GET /api/profiles` du conteneur, lui, filtre les symlinks).
+- Dépend de **`o-browser>=0.4.0`** (RemoteBrowser `profile`/`ensure_session`). Publier o-browser = tag `vX.Y.Z` → CI PyPI (trusted publishing).
+- Reste in-process (à migrer) : **Crunchbase** (`tools/crunchbase.py`) et le **pairing** LinkedIn (rare, supervisé).
+
 ## LinkedIn cookies
+
+⚠️ **Isolation de session (constaté 2026-06-04, issue #5 ouverte)** : injecter le
+cookie `li_at` d'un user **côté serveur** (IP datacenter ≠ son IP) **déconnecte sa
+propre session LinkedIn** (LinkedIn invalide/rotate le `li_at` partagé). Le vrai
+Chrome règle l'empreinte TLS mais PAS ce partage de session. → l'outreach par un
+user réel doit passer par une **session dédiée** (profil/VNC côté serveur, ou CLI
+local sur son device), pas par son cookie injecté côté serveur. ✅ Le scraping
+serveur est désormais **profil-only** (fallback cookie **supprimé**) et délégué au
+conteneur (voir §Browser automation). #5 reste ouvert pour le pairing/CLI local.
 
 Le couple `(li_at, user_agent)` est stocké par `sub` en PG. Le UA
 matche le browser d'origine (capturé via `navigator.userAgent` au moment du
@@ -294,8 +311,10 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - API keys serveur (`SERPER_API_KEY`, `HUNTER_API_KEY`, `SIRENE_API_KEY`)
   résolues via `oto.config.get_secret()` — ne pas re-faire l'env loading ici.
-- LinkedIn nécessite Patchright + Chromium installés sur l'host
-  (`patchright install chromium`).
+- LinkedIn nécessite le **vrai Google Chrome système** (`google-chrome-stable`, apt)
+  sur l'host — PAS le Chromium bundlé Patchright (empreinte TLS ≠ Chrome de bureau
+  → bloqué par LinkedIn). `_require_chrome_channel` (`tools/linkedin.py`) force
+  `channel="chrome"` et lève une erreur si absent.
 - WhatsApp nécessite Node.js installé + `node_modules` dans
   `oto-cli/oto/tools/whatsapp/node/` (auto-installé au premier `WhatsAppClient()`).
 - Attio (`tools/attio.py`) expose CRUD complet : records (companies/people/deals),

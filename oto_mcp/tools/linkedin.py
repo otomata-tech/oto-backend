@@ -16,9 +16,7 @@ sérialise les scrapes concurrents.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import urllib.request
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -26,6 +24,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
+from .. import linkedin_pairing
 from ..auth_hooks import current_user_sub_from_token
 
 
@@ -44,17 +43,15 @@ def _remote_profile(sub: str) -> str:
 
 
 def _has_remote_profile(sub: str) -> bool:
-    """Le conteneur o-browser-full a-t-il un profil dédié pour ce user ?
+    """Le user a-t-il un profil dédié ?
 
-    Source de vérité = `GET /api/profiles` du conteneur (les profils vivent dans
-    son volume, plus sur le FS local d'oto-mcp). Idem `/api/me`.
+    Check **FS** (`linkedin_pairing.has_profile`) sur le volume partagé avec le
+    conteneur — même source de vérité que `/api/me`, et il **suit les symlinks**
+    (un sub peut pointer sur le profil d'un autre via symlink ; `GET /api/profiles`
+    du conteneur, lui, filtre les symlinks). Le conteneur charge sans souci un
+    user-data-dir symlinké, donc le check FS est le bon.
     """
-    try:
-        with urllib.request.urlopen(f"{_OBROWSER_URL}/api/profiles", timeout=5) as resp:
-            names = {p.get("name") for p in json.loads(resp.read()).get("profiles", [])}
-    except Exception:
-        return False
-    return _remote_profile(sub) in names
+    return linkedin_pairing.has_profile(sub)
 
 
 def _no_profile_message() -> str:

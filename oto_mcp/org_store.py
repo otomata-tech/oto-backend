@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import credentials_store
 from .db import _check_provider, _connect, upsert_user
 
 ORG_ROLES = ("org_admin", "org_member")
@@ -205,6 +206,8 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
             """,
             (org_id, provider, api_key, set_by),
         )
+    # Dual-write (Phase 2/C3) vers la table canonique (entité 'org').
+    credentials_store.set_credential("org", str(org_id), provider, api_key, set_by=set_by)
 
 
 def delete_org_secret(org_id: int, provider: str) -> bool:
@@ -212,7 +215,9 @@ def delete_org_secret(org_id: int, provider: str) -> bool:
         cur = conn.execute(
             "DELETE FROM org_secrets WHERE org_id = %s AND provider = %s", (org_id, provider)
         )
-        return (cur.rowcount or 0) > 0
+        removed = (cur.rowcount or 0) > 0
+    credentials_store.clear_credential("org", str(org_id), provider)
+    return removed
 
 
 def list_org_secrets(org_id: int) -> list[dict]:

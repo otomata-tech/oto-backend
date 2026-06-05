@@ -23,6 +23,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from . import connectors
+
 
 def _normalize_value(v: Any) -> Any:
     # Match the string shape SQLite returned ("YYYY-MM-DD HH:MM:SS") so downstream
@@ -234,9 +236,9 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
 );
 """
 
-# Providers supportés pour les user keys. Aligné sur les colonnes
-# `<provider>_api_key` ci-dessus et sur `oto.config.get_secret(<UPPER>_API_KEY)`.
-KEY_PROVIDERS = ("serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane", "slack", "fullenrich")
+# Providers supportés pour les user keys. DÉRIVÉ du registre source unique
+# (`connectors.py`) — ne plus éditer ici, déclarer le connecteur dans le registre.
+KEY_PROVIDERS = connectors.KEY_PROVIDERS
 
 
 _pool: Optional[ConnectionPool] = None

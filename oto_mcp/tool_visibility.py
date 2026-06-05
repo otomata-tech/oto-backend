@@ -22,9 +22,11 @@ Modèle de visibilité effective :
 """
 from __future__ import annotations
 
-# Namespaces sensibles : accès sur grant admin explicite uniquement.
-# compta GoCardless (prélèvements) + back-office Movinmotion (compte de service).
-ADMIN_GRANT_ONLY_NAMESPACES = frozenset({"gocardless", "mm"})
+from . import connectors
+
+# Namespaces sensibles : accès sur grant admin explicite uniquement. DÉRIVÉ du
+# registre (connecteurs `availability=platform_granted`) — gocardless + mm.
+ADMIN_GRANT_ONLY_NAMESPACES = connectors.ADMIN_GRANT_ONLY_NAMESPACES
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset()

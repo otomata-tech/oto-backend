@@ -536,11 +536,11 @@ def clear_user_api_key(sub: str, provider: str) -> None:
 
 
 def get_user_api_key(sub: str, provider: str) -> Optional[str]:
-    _check_provider(provider)
-    user = get_user(sub)
-    if not user:
-        return None
-    return user.get(f"{provider}_api_key")
+    # Cutover (Phase 2/C4) : lit la table canonique connector_credentials (et
+    # non plus la colonne legacy users.<provider>_api_key, toujours dual-written
+    # pour le rollback). Import lazy (anti-cycle). require_keyed dans le store.
+    from . import credentials_store
+    return credentials_store.get_credential("user", sub, provider)
 
 
 # --- usage counters ---------------------------------------------------------

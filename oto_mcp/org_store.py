@@ -38,17 +38,14 @@ def get_active_org(sub: str) -> Optional[int]:
 def get_org_secret(org_id: int, provider: str) -> Optional[str]:
     """Clé du secret partagé `provider` possédé par l'org, ou None.
 
-    `provider` validé contre KEY_PROVIDERS (même verrou que les clés perso).
-    La restriction aux providers org-partageables (exclut slack) est portée
-    par la couche access (ORG_SHAREABLE_PROVIDERS) et le write-path.
+    `provider` validé dans le store (require_keyed). La restriction aux providers
+    org-partageables (exclut slack) est portée par la couche access et le
+    write-path.
+
+    Cutover (Phase 2/C4) : lit connector_credentials (entité 'org'), non plus la
+    table legacy org_secrets (toujours dual-written pour le rollback).
     """
-    _check_provider(provider)
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT api_key FROM org_secrets WHERE org_id = %s AND provider = %s",
-            (org_id, provider),
-        ).fetchone()
-        return row["api_key"] if row else None
+    return credentials_store.get_credential("org", str(org_id), provider)
 
 
 # --- écritures + lectures de gestion (barreau 3, meta-tools platform_admin) --

@@ -234,6 +234,25 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, namespace)
 );
+
+-- Credentials génériques per-entité (user OU org) — table unique qui remplace
+-- les 9 colonnes users.<provider>_api_key + org_secrets. entity_id = sub (user)
+-- ou org_id::text (org) ; toujours requêter (entity_type, entity_id) ENSEMBLE.
+-- `secret` en clair pour l'instant ; chiffré par enveloppe en Phase 7 (le
+-- déchiffrement JIT vivra dans resolve_api_key). meta JSONB pour les satellites
+-- futurs (user_agent, scopes…). Source canonique des credentials keyed.
+CREATE TABLE IF NOT EXISTS connector_credentials (
+    entity_type TEXT NOT NULL,            -- 'user' | 'org'
+    entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text
+    connector   TEXT NOT NULL,            -- nom de connecteur (registre)
+    secret      TEXT,
+    secret_kind TEXT NOT NULL DEFAULT 'api_key',
+    meta        JSONB NOT NULL DEFAULT '{}',
+    set_by      TEXT,
+    set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (entity_type, entity_id, connector)
+);
+CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -295,6 +314,38 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS user_google_oauth_sub_email "
             "ON user_google_oauth(sub, google_email)"
         )
+        _backfill_connector_credentials(conn)
+
+
+def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
+    """Recopie idempotente des credentials legacy → connector_credentials
+    (Phase 2/C2). Rejoué à chaque boot, no-op après le 1er via ON CONFLICT DO
+    NOTHING : ne remplit que les lignes manquantes, n'écrase jamais (le
+    dual-write garde connector_credentials à jour ensuite).
+
+    - 9 colonnes users.<provider>_api_key (provider keyed) → entity 'user'.
+    - org_secrets → entity 'org' (org_id::text).
+    secret_kind dérivé du registre (slack=refresh_token, sinon api_key).
+    """
+    for provider in KEY_PROVIDERS:
+        c = connectors.REGISTRY.get(provider)
+        kind = c.secret_kind if c else "api_key"
+        col = f"{provider}_api_key"
+        conn.execute(
+            f"""
+            INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind)
+            SELECT 'user', sub, %s, {col}, %s FROM users WHERE {col} IS NOT NULL
+            ON CONFLICT (entity_type, entity_id, connector) DO NOTHING
+            """,
+            (provider, kind),
+        )
+    conn.execute(
+        """
+        INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind, set_by, set_at)
+        SELECT 'org', org_id::text, provider, api_key, 'api_key', set_by, set_at FROM org_secrets
+        ON CONFLICT (entity_type, entity_id, connector) DO NOTHING
+        """
+    )
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
@@ -466,6 +517,10 @@ def set_user_api_key(sub: str, provider: str, key: str) -> None:
             f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
             (key, sub),
         )
+    # Dual-write (Phase 2/C3) vers la table canonique. Import lazy : db ne doit
+    # pas importer credentials_store au niveau module (cycle).
+    from . import credentials_store
+    credentials_store.set_credential("user", sub, provider, key, set_by=sub)
 
 
 def clear_user_api_key(sub: str, provider: str) -> None:
@@ -476,6 +531,8 @@ def clear_user_api_key(sub: str, provider: str) -> None:
             f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
             (sub,),
         )
+    from . import credentials_store
+    credentials_store.clear_credential("user", sub, provider)
 
 
 def get_user_api_key(sub: str, provider: str) -> Optional[str]:

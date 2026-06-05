@@ -193,27 +193,30 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
     _check_provider(provider)
     if not api_key:
         raise ValueError("api_key requise")
+    # Dual-write ATOMIQUE (legacy org_secrets + canonique) dans une transaction.
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO org_secrets (org_id, provider, api_key, set_by)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (org_id, provider) DO UPDATE SET
-                api_key = EXCLUDED.api_key, set_by = EXCLUDED.set_by, set_at = NOW()
-            """,
-            (org_id, provider, api_key, set_by),
-        )
-    # Dual-write (Phase 2/C3) vers la table canonique (entité 'org').
-    credentials_store.set_credential("org", str(org_id), provider, api_key, set_by=set_by)
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO org_secrets (org_id, provider, api_key, set_by)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (org_id, provider) DO UPDATE SET
+                    api_key = EXCLUDED.api_key, set_by = EXCLUDED.set_by, set_at = NOW()
+                """,
+                (org_id, provider, api_key, set_by),
+            )
+            credentials_store.set_credential(
+                "org", str(org_id), provider, api_key, set_by=set_by, conn=conn)
 
 
 def delete_org_secret(org_id: int, provider: str) -> bool:
     with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM org_secrets WHERE org_id = %s AND provider = %s", (org_id, provider)
-        )
-        removed = (cur.rowcount or 0) > 0
-    credentials_store.clear_credential("org", str(org_id), provider)
+        with conn.transaction():
+            cur = conn.execute(
+                "DELETE FROM org_secrets WHERE org_id = %s AND provider = %s", (org_id, provider)
+            )
+            removed = (cur.rowcount or 0) > 0
+            credentials_store.clear_credential("org", str(org_id), provider, conn=conn)
     return removed
 
 

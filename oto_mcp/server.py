@@ -24,7 +24,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
-from . import access, api_routes, db
+from . import access, api_routes, connectors, db
 from .config import require_env
 from .tools import register_all
 
@@ -100,10 +100,9 @@ def _bootstrap_env_keys() -> None:
     # La plupart des providers exposent `<PROVIDER>_API_KEY` ; slack n'a pas de
     # clé unique mais un user token (`SLACK_USER_TOKEN`, xoxp) — c'est lui qu'on
     # importe comme clé plateforme (mode `as_user` côté tool).
-    env_secret_names = {"slack": "SLACK_USER_TOKEN"}
     env_keys: dict[str, str] = {}
     for provider in db.KEY_PROVIDERS:
-        secret_name = env_secret_names.get(provider, f"{provider.upper()}_API_KEY")
+        secret_name = connectors.ENV_SECRET_NAMES.get(provider, f"{provider.upper()}_API_KEY")
         try:
             v = get_secret(secret_name)
         except Exception:

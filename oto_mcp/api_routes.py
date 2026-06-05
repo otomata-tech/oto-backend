@@ -36,7 +36,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, api_routes_sirene, db, linkedin_pairing, pairing
+from . import access, api_routes_datastore, api_routes_sirene, connectors, db, linkedin_pairing, pairing
 from .tool_visibility import is_entitled, is_grant_only, namespace_of
 
 
@@ -148,6 +148,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "output_schema": getattr(t, "output_schema", None),
             })
         return _json(request, {"tools": payload, "count": len(payload)})
+
+    async def connectors_catalog(request: Request) -> JSONResponse:
+        """Catalogue public des connecteurs (registre source unique).
+
+        Sans secret ni auth : remplace la liste `PROVIDERS` hardcodée du
+        frontend (account.ts) — chaque connecteur avec sa disponibilité, ses
+        modes d'auth, son secret_kind. Source = connectors.public_catalog().
+        """
+        return _json(request, {"connectors": connectors.public_catalog()})
 
     async def me(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -800,6 +809,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     return [
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
+        Route("/api/connectors", connectors_catalog, methods=["GET"]),
+        Route("/api/connectors", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/linkedin", linkedin_get, methods=["GET"]),

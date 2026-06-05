@@ -33,7 +33,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import db, org_store
+from . import connectors, db, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -43,23 +43,13 @@ MEMBER = "member"
 ADMIN = "admin"
 ROLES = (GUEST, MEMBER, ADMIN)
 
-_QUOTA_DEFAULTS = {
-    "serper": 50,
-    "hunter": 10,
-    "sirene": 200,
-    "attio": 200,
-    "kaspr": 5,
-}
-
-# Providers dont le secret peut être POSSÉDÉ par une org et partagé à ses
-# membres (org_secret). Sous-ensemble de db.KEY_PROVIDERS : exclut `slack`
-# (user token xoxp → poste en as_user = identité du propriétaire du token, pas
-# du membre appelant). linkedin/google/whatsapp/crunchbase ne passent pas par
-# resolve_api_key (sessions per-user). Cf. project_oto_mcp_org_tier — un
-# org_secret ne s'applique qu'aux credentials de compte fongibles.
-ORG_SHAREABLE_PROVIDERS = frozenset({
-    "serper", "hunter", "sirene", "attio", "lemlist", "kaspr", "pennylane", "fullenrich",
-})
+# DÉRIVÉS du registre source unique (connectors.py) :
+# - _QUOTA_DEFAULTS : quota daily par provider (fallback si pas d'env/grant).
+# - ORG_SHAREABLE_PROVIDERS : providers dont le secret peut être POSSÉDÉ par une
+#   org et partagé (auth_mode byo_org) — exclut slack (xoxp = identité perso) et
+#   les sessions per-user (linkedin/google/whatsapp/crunchbase).
+_QUOTA_DEFAULTS = connectors.QUOTA_DEFAULTS
+ORG_SHAREABLE_PROVIDERS = connectors.ORG_SHAREABLE_PROVIDERS
 
 _ACCOUNT_URL = "https://oto.ninja/account"
 

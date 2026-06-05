@@ -39,6 +39,33 @@ def get_credential(entity_type: str, entity_id: str, connector: str) -> Optional
         return row["secret"] if row else None
 
 
+def _upsert(conn, entity_type, entity_id, connector, secret, set_by, meta) -> None:
+    conn.execute(
+        """
+        INSERT INTO connector_credentials
+            (entity_type, entity_id, connector, secret, secret_kind, meta, set_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (entity_type, entity_id, connector) DO UPDATE SET
+            secret = EXCLUDED.secret,
+            secret_kind = EXCLUDED.secret_kind,
+            meta = EXCLUDED.meta,
+            set_by = EXCLUDED.set_by,
+            set_at = NOW()
+        """,
+        (entity_type, entity_id, connector, secret, _secret_kind(connector),
+         json.dumps(meta or {}), set_by),
+    )
+
+
+def _delete(conn, entity_type, entity_id, connector) -> bool:
+    cur = conn.execute(
+        "DELETE FROM connector_credentials "
+        "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
+        (entity_type, entity_id, connector),
+    )
+    return (cur.rowcount or 0) > 0
+
+
 def set_credential(
     entity_type: str,
     entity_id: str,
@@ -46,37 +73,30 @@ def set_credential(
     secret: str,
     set_by: Optional[str] = None,
     meta: Optional[dict] = None,
+    conn=None,
 ) -> None:
-    """Pose/rote le secret (UPSERT). secret_kind dérivé du registre."""
+    """Pose/rote le secret (UPSERT). secret_kind dérivé du registre.
+
+    `conn` : si fourni, participe à la transaction de l'appelant (dual-write
+    ATOMIQUE — le write legacy et le write canonique commitent ou rollback
+    ensemble). Sinon ouvre sa propre transaction.
+    """
     connectors.require_keyed(connector)
     if not secret:
         raise ValueError("secret requis")
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO connector_credentials
-                (entity_type, entity_id, connector, secret, secret_kind, meta, set_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (entity_type, entity_id, connector) DO UPDATE SET
-                secret = EXCLUDED.secret,
-                secret_kind = EXCLUDED.secret_kind,
-                meta = EXCLUDED.meta,
-                set_by = EXCLUDED.set_by,
-                set_at = NOW()
-            """,
-            (entity_type, entity_id, connector, secret, _secret_kind(connector),
-             json.dumps(meta or {}), set_by),
-        )
+    if conn is not None:
+        _upsert(conn, entity_type, entity_id, connector, secret, set_by, meta)
+    else:
+        with _connect() as c:
+            _upsert(c, entity_type, entity_id, connector, secret, set_by, meta)
 
 
-def clear_credential(entity_type: str, entity_id: str, connector: str) -> bool:
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM connector_credentials "
-            "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
-            (entity_type, entity_id, connector),
-        )
-        return (cur.rowcount or 0) > 0
+def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None) -> bool:
+    """Supprime le credential. `conn` fourni → transaction de l'appelant."""
+    if conn is not None:
+        return _delete(conn, entity_type, entity_id, connector)
+    with _connect() as c:
+        return _delete(c, entity_type, entity_id, connector)
 
 
 def list_credentials(entity_type: str, entity_id: str) -> list[dict]:

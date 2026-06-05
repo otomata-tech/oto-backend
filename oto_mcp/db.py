@@ -511,28 +511,32 @@ def _check_provider(provider: str) -> None:
 def set_user_api_key(sub: str, provider: str, key: str) -> None:
     _check_provider(provider)
     upsert_user(sub)
+    # Dual-write (Phase 2/C3) ATOMIQUE : colonne legacy + table canonique dans
+    # UNE transaction (même conn), sinon un crash entre les deux divergerait les
+    # stores (clé révoquée encore résolue / clé posée invisible). Import lazy
+    # (db ne doit pas importer credentials_store au niveau module — cycle).
+    from . import credentials_store
     col = f"{provider}_api_key"
     with _connect() as conn:
-        conn.execute(
-            f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
-            (key, sub),
-        )
-    # Dual-write (Phase 2/C3) vers la table canonique. Import lazy : db ne doit
-    # pas importer credentials_store au niveau module (cycle).
-    from . import credentials_store
-    credentials_store.set_credential("user", sub, provider, key, set_by=sub)
+        with conn.transaction():
+            conn.execute(
+                f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
+                (key, sub),
+            )
+            credentials_store.set_credential("user", sub, provider, key, set_by=sub, conn=conn)
 
 
 def clear_user_api_key(sub: str, provider: str) -> None:
     _check_provider(provider)
+    from . import credentials_store
     col = f"{provider}_api_key"
     with _connect() as conn:
-        conn.execute(
-            f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
-            (sub,),
-        )
-    from . import credentials_store
-    credentials_store.clear_credential("user", sub, provider)
+        with conn.transaction():
+            conn.execute(
+                f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
+                (sub,),
+            )
+            credentials_store.clear_credential("user", sub, provider, conn=conn)
 
 
 def get_user_api_key(sub: str, provider: str) -> Optional[str]:

@@ -93,6 +93,14 @@ def register_all(mcp: FastMCP) -> None:
     except Exception as e:
         log.warning("Gmail tools disabled: %s", e)
 
+    # Google Tasks — surface oto-cli par-utilisateur, multi-compte. Mêmes
+    # credentials OAuth Google que Gmail/datastore (flow unifié, scope tasks).
+    try:
+        from . import tasks
+        tasks.register(mcp)
+    except Exception as e:
+        log.warning("Tasks tools disabled: %s", e)
+
     # SIRENE stock — DuckDB sur parquet INSEE local. Gracefully disabled si
     # duckdb manque ou parquet introuvable (on log à l'appel, pas au register).
     try:

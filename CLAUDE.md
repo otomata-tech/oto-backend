@@ -189,7 +189,7 @@ OAuth Google per-user (flow unifié Sheets+Drive+Gmail, **multi-compte**) :
 - `GET /api/google/oauth/status` → `{connected, accounts:[{email,is_default,scopes,granted_at}], …}`.
 - `POST /api/google/oauth/default` body `{account}` → choisit le compte par défaut.
 - `DELETE /api/google/oauth[?account=<email>]` → révoque un compte (ou tous).
-- Scopes : `spreadsheets` + `drive.file` + `gmail.modify`.
+- Scopes : `spreadsheets` + `drive.file` + `gmail.modify` + `tasks`.
 - Multi-compte : table `user_google_oauth` clé `(sub, google_email)` +
   `is_default`. Le datastore et les tools `gmail_*` sans param `account`
   utilisent le compte par défaut. **Migration mono→multi** : les anciennes
@@ -225,7 +225,8 @@ Google pour le datastore se voit aussi demander l'accès Gmail. Choix assumé
    - Support email : alexis@otomata.tech
    - Authorized domains : `oto.ninja`
    - **Scopes** : `.../auth/spreadsheets`, `.../auth/drive.file`,
-     `.../auth/gmail.modify`
+     `.../auth/gmail.modify`, `.../auth/tasks`
+   - **API à activer** : ajouter aussi `Google Tasks API` dans APIs & Services → Library
    - **Test users** (si en mode "Testing") : ajouter les emails autorisés
      tant que l'app n'est pas publiée. ⚠️ `gmail.modify` est un scope
      **restricted** → en mode Testing c'est OK, mais publier l'app en

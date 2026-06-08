@@ -175,6 +175,33 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     return grant["api_key"], True
 
 
+def resolve_org_credential(provider: str) -> str:
+    """Résout un credential POSSÉDÉ par l'org active du sub courant et le renvoie
+    pour **injection** dans le connecteur (jamais d'auto-résolution serveur).
+
+    Pour les connecteurs org-only non-keyed (`mm`) : le secret vit sur l'org
+    (`connector_credentials`/`org_secrets`), pas en SOPS serveur. C'est le pendant
+    de la branche org de `resolve_api_key`, mais pour un provider hors
+    `KEY_PROVIDERS`. Lève une McpError actionnable si l'org active du sub n'a pas
+    ce credential — **pas** de fallback SOPS côté serveur (cf. Phase 6 ;
+    `require_secret` ne survit qu'en CLI local).
+    """
+    sub = current_user_sub_or_raise()
+    active_org = org_store.get_active_org(sub)
+    if active_org is not None:
+        secret = org_store.get_org_secret(active_org, provider)
+        if secret:
+            return secret
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(
+            f"Aucun credential `{provider}` sur ton org active. Un admin doit le "
+            f"poser sur l'org propriétaire (`oto_admin_set_org_secret`) et t'y "
+            f"rattacher."
+        ),
+    ))
+
+
 def record_platform_usage(provider: str) -> None:
     """À appeler APRÈS un appel réussi avec la platform key. No-op si pas authentifié."""
     sub = current_user_sub_from_token()

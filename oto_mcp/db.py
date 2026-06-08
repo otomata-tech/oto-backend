@@ -212,9 +212,9 @@ CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);
 CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHERE is_active;
 
 -- Credential de compte POSSÉDÉ par l'org et partagé à ses membres (Attio,
--- Pennylane, MM token, clé API stateless…). provider validé contre
--- KEY_PROVIDERS, restreint aux ORG_SHAREABLE (jamais slack/linkedin/google :
--- sessions physiologiquement personnelles).
+-- Pennylane, MM token, clé API stateless…). provider validé comme org-partageable
+-- (byo_org) via le registre : inclut mm (org-only, non-keyed), exclut
+-- slack/linkedin/google (sessions physiologiquement personnelles).
 CREATE TABLE IF NOT EXISTS org_secrets (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,

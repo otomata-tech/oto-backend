@@ -102,10 +102,13 @@ _REGISTRY_LIST = [
     _c("gocardless", ["gocardless"], availability="platform_granted", secret_kind="api_key",
        env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
-    # mm : compte de service org-only (Movinmotion). Credential = MM_REFRESH_TOKEN
-    # serveur ; injection DB en phase ultérieure (auth_modes={platform} à venir).
-    _c("mm", ["mm"], availability="platform_granted", secret_kind="refresh_token",
-       env_secret_name="MM_REFRESH_TOKEN", in_default_bundle=False,
+    # mm : compte de service ORG-ONLY (Movinmotion). Le token MM_REFRESH_TOKEN est
+    # un credential POSSÉDÉ par l'org Movinmotion et partagé à ses membres →
+    # auth_modes={byo_org} (org-partageable, jamais per-user). availability
+    # platform_granted (réservé à l'org entitled). Injecté au runtime depuis le
+    # credential d'org (Phase 5) — plus de lecture SOPS serveur.
+    _c("mm", ["mm"], availability="platform_granted", auth_modes={"byo_org"},
+       secret_kind="refresh_token", env_secret_name="MM_REFRESH_TOKEN", in_default_bundle=False,
        label="Movinmotion BO", help="back-office Movinmotion (lecture)"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
@@ -168,6 +171,17 @@ def require_keyed(name: str) -> None:
     """Remplace db._check_provider : lève si `name` n'est pas un provider keyed."""
     if not is_keyed(name):
         raise ValueError(f"Unknown provider {name!r} (allowed: {KEY_PROVIDERS})")
+
+
+def require_credential(entity_type: str, name: str) -> None:
+    """Lève si le connecteur ne peut PAS porter un credential à ce niveau d'entité.
+    user → doit être keyed (byo_user, résolu via resolve_api_key) ; org → doit être
+    org-partageable (byo_org, ex. mm org-only). Utilisé par credentials_store."""
+    if entity_type == "org":
+        if not is_org_shareable(name):
+            raise ValueError(f"{name!r} n'est pas un credential org-partageable")
+    else:
+        require_keyed(name)
 
 
 def is_org_shareable(name: str) -> bool:

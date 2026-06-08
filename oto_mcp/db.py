@@ -323,6 +323,27 @@ def init_db() -> None:
         # en place les credentials encore en clair, dans la même transaction.
         from . import credentials_store
         credentials_store.encrypt_existing_rows(conn)
+        _drop_plaintext_after_soak(conn)
+
+
+def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
+    """Runbook FINAL du chiffrement-at-rest (Phase 7) : retire les 3 emplacements
+    plaintext résiduels. DÉLIBÉRÉ — ne tourne QUE si chiffrement activé ET
+    `OTO_MCP_CRYPTO_DROP_PLAINTEXT=1` (à poser une fois le déchiffrement éprouvé
+    en prod). Sinon no-op (soak : on garde le plaintext en filet).
+
+    Ordre : self-check + null de connector_credentials.secret (lève si une ligne
+    chiffrée ne déchiffre pas → abort), puis les 9 colonnes users.<provider>_api_key,
+    puis org_secrets (DELETE — api_key est NOT NULL ; les données sont dans
+    connector_credentials chiffrées). Idempotent. Dans la transaction d'init_db."""
+    from . import credentials_store, crypto
+    if not (crypto.encryption_enabled() and os.environ.get("OTO_MCP_CRYPTO_DROP_PLAINTEXT") == "1"):
+        return
+    credentials_store.verify_and_null_plaintext(conn)
+    for provider in KEY_PROVIDERS:
+        col = f"{provider}_api_key"
+        conn.execute(f"UPDATE users SET {col} = NULL WHERE {col} IS NOT NULL")
+    conn.execute("DELETE FROM org_secrets")
 
 
 def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
@@ -523,14 +544,18 @@ def set_user_api_key(sub: str, provider: str, key: str) -> None:
     # UNE transaction (même conn), sinon un crash entre les deux divergerait les
     # stores (clé révoquée encore résolue / clé posée invisible). Import lazy
     # (db ne doit pas importer credentials_store au niveau module — cycle).
-    from . import credentials_store
+    from . import credentials_store, crypto
     col = f"{provider}_api_key"
     with _connect() as conn:
         with conn.transaction():
-            conn.execute(
-                f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
-                (key, sub),
-            )
+            # Chiffrement OFF : dual-write legacy (rollback Phase 2). Chiffrement
+            # ON : on n'écrit PLUS de plaintext en legacy (canonique chiffré seul) ;
+            # le legacy résiduel est nullé par le runbook de soak (_drop_plaintext).
+            if not crypto.encryption_enabled():
+                conn.execute(
+                    f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
+                    (key, sub),
+                )
             credentials_store.set_credential("user", sub, provider, key, set_by=sub, conn=conn)
 
 

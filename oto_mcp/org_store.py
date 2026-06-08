@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from . import credentials_store
+from . import credentials_store, crypto
 from .db import _check_provider, _connect, upsert_user
 
 ORG_ROLES = ("org_admin", "org_member")
@@ -200,17 +200,19 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
     if not api_key:
         raise ValueError("api_key requise")
     # Dual-write ATOMIQUE (legacy org_secrets + canonique) dans une transaction.
+    # Chiffrement ON : on n'écrit plus de plaintext en legacy (cf. set_user_api_key).
     with _connect() as conn:
         with conn.transaction():
-            conn.execute(
-                """
-                INSERT INTO org_secrets (org_id, provider, api_key, set_by)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (org_id, provider) DO UPDATE SET
-                    api_key = EXCLUDED.api_key, set_by = EXCLUDED.set_by, set_at = NOW()
-                """,
-                (org_id, provider, api_key, set_by),
-            )
+            if not crypto.encryption_enabled():
+                conn.execute(
+                    """
+                    INSERT INTO org_secrets (org_id, provider, api_key, set_by)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (org_id, provider) DO UPDATE SET
+                        api_key = EXCLUDED.api_key, set_by = EXCLUDED.set_by, set_at = NOW()
+                    """,
+                    (org_id, provider, api_key, set_by),
+                )
             credentials_store.set_credential(
                 "org", str(org_id), provider, api_key, set_by=set_by, conn=conn)
 

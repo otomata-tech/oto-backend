@@ -12,10 +12,13 @@ déchiffrement JIT vit dans `resolve_api_key`. Réutilise `db._connect` (comme
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from . import connectors, crypto
 from .db import _connect
+
+logger = logging.getLogger(__name__)
 
 USER = "user"
 ORG = "org"
@@ -36,8 +39,9 @@ def get_credential(entity_type: str, entity_id: str, connector: str) -> Optional
     JIT si la ligne est chiffrée (secret_enc) ; fallback plaintext (secret) pour
     les lignes non-migrées / chiffrement désactivé. Lève si connecteur non-keyed.
 
-    C'est le SEUL chemin qui déchiffre (appelé par resolve_api_key). status_for
-    utilise `has_credential` (présence, sans déchiffrer)."""
+    Primitive de déchiffrement : appelée par resolve_api_key (résolution, injecte
+    au connecteur) ET api_key_get (lecture de SA clé par le propriétaire).
+    status_for utilise `has_credential` (présence, sans déchiffrer)."""
     connectors.require_keyed(connector)
     with _connect() as conn:
         row = conn.execute(
@@ -48,7 +52,19 @@ def get_credential(entity_type: str, entity_id: str, connector: str) -> Optional
     if not row:
         return None
     if row["secret_enc"]:
-        return crypto.decrypt(row["secret_enc"], _aad(entity_type, entity_id, connector))
+        try:
+            return crypto.decrypt(row["secret_enc"], _aad(entity_type, entity_id, connector))
+        except Exception:
+            # Incident clé pendant le soak : si le plaintext est encore là
+            # (pas encore nullé), fallback gracieux + warning ; sinon on relève
+            # (échec bruyant — pas de secret silencieusement faux).
+            if row["secret"] is not None:
+                logger.warning(
+                    "decrypt KO %s/%s/%s — fallback plaintext (soak) ; vérifier la master key",
+                    entity_type, entity_id, connector,
+                )
+                return row["secret"]
+            raise
     return row["secret"]
 
 
@@ -109,6 +125,22 @@ def encrypt_existing_rows(conn) -> int:
             "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
             (enc, r["entity_type"], r["entity_id"], r["connector"]),
         )
+    return len(rows)
+
+
+def verify_and_null_plaintext(conn) -> int:
+    """Étape FINALE du soak (runbook prod, délibérée) : nulle le plaintext
+    résiduel de connector_credentials. SELF-CHECK : déchiffre chaque secret_enc
+    AVANT — si UNE ligne ne déchiffre pas, on LÈVE (abort, rollback) plutôt que
+    de perdre le plaintext. À orchestrer avec le nulling des 9 colonnes
+    users.<provider>_api_key + org_secrets côté db (cf. _drop_plaintext)."""
+    rows = conn.execute(
+        "SELECT entity_type, entity_id, connector, secret_enc FROM connector_credentials "
+        "WHERE secret IS NOT NULL AND secret_enc IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        crypto.decrypt(r["secret_enc"], _aad(r["entity_type"], r["entity_id"], r["connector"]))
+    conn.execute("UPDATE connector_credentials SET secret = NULL WHERE secret_enc IS NOT NULL")
     return len(rows)
 
 

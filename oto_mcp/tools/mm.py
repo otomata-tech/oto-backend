@@ -2,8 +2,15 @@
 
 Surface **masquée par défaut et grant-only** (cf. `tool_visibility`) : un user
 non-admin ne voit ces tools que si un admin lui a accordé le namespace `mm`
-(`oto_admin_grant_namespace`). Le credential est un secret serveur
-(`MM_REFRESH_TOKEN`), pas une clé par-user : compte de service unique « Admin 2 ».
+(`oto_admin_grant_namespace`). Le credential (refresh_token Movinmotion) est un
+**secret d'org** posé sur l'org propriétaire (`oto_admin_set_org_secret`, mm est
+org-partageable), pas une clé par-user ni un secret serveur SOPS : il est résolu
+depuis l'org active du sub et **injecté** dans le client (cf. Phase 5/coffre).
+
+Le client vit dans le package **privé** `oto-mm` (hors core public `oto-cli`,
+cf. otomata-tech/oto-cli#9). Doit donc être installé dans l'environnement
+d'oto-mcp ; sinon ce module est gracieusement désactivé au register (try/except
+dans `tools/__init__.py`).
 
 ⚠️ Tout est prod, aucune mutation exposée. Périmètre actuel = la seule société
 Movinmotion (l'accès staff cross-clients reste à obtenir).
@@ -13,19 +20,25 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from .. import access
+from ..auth_hooks import current_user_sub_from_token
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.mm import MovinmotionClient
+    from oto_mm import MovinmotionClient
 
     def _client() -> MovinmotionClient:
-        # Backstop d'autorisation AU CALL-TIME : le credential est un secret
-        # serveur (MM_REFRESH_TOKEN), pas une clé per-user, donc la résolution
-        # de clé ne protège pas (contrairement à gocardless). On vérifie
-        # l'entitlement ici pour ne PAS dépendre du seul masquage de visibilité
-        # (qui peut fail-open si list_tools échoue au handshake).
+        # Backstop d'autorisation AU CALL-TIME : mm est grant-only à credential
+        # NON per-user, donc la résolution de clé ne protège pas (contrairement
+        # à gocardless). On vérifie l'entitlement ici pour ne PAS dépendre du seul
+        # masquage de visibilité (qui peut fail-open si list_tools échoue).
         access.require_namespace("mm")
-        return MovinmotionClient()
+        # stdio local (sub=None, CLI-like) : MovinmotionClient s'auto-résout via
+        # require_secret (fallback CLI). Contexte serveur authentifié : injection
+        # du refresh_token depuis le credential de l'org active, jamais de lecture
+        # SOPS serveur (cf. Phase 6).
+        if current_user_sub_from_token() is None:
+            return MovinmotionClient()
+        return MovinmotionClient(refresh_token=access.resolve_org_credential("mm"))
 
     @mcp.tool()
     async def mm_subscription_companies() -> dict:

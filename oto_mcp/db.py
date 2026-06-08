@@ -245,7 +245,8 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     entity_type TEXT NOT NULL,            -- 'user' | 'org'
     entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
-    secret      TEXT,
+    secret      TEXT,                     -- clair (chiffrement off, ou soak)
+    secret_enc  TEXT,                     -- enveloppe AES-256-GCM (Phase 7)
     secret_kind TEXT NOT NULL DEFAULT 'api_key',
     meta        JSONB NOT NULL DEFAULT '{}',
     set_by      TEXT,
@@ -314,7 +315,14 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS user_google_oauth_sub_email "
             "ON user_google_oauth(sub, google_email)"
         )
+        # Phase 7 : colonne chiffrée (idempotent — couvre le cas où la table a été
+        # créée par la Phase 2 avant ce déploiement).
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         _backfill_connector_credentials(conn)
+        # Migration de chiffrement (no-op si OTO_MCP_MASTER_KEY absente) : chiffre
+        # en place les credentials encore en clair, dans la même transaction.
+        from . import credentials_store
+        credentials_store.encrypt_existing_rows(conn)
 
 
 def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
@@ -543,8 +551,15 @@ def get_user_api_key(sub: str, provider: str) -> Optional[str]:
     # Cutover (Phase 2/C4) : lit la table canonique connector_credentials (et
     # non plus la colonne legacy users.<provider>_api_key, toujours dual-written
     # pour le rollback). Import lazy (anti-cycle). require_keyed dans le store.
+    # Déchiffre si nécessaire (Phase 7) — chemin de RÉSOLUTION.
     from . import credentials_store
     return credentials_store.get_credential("user", sub, provider)
+
+
+def has_user_api_key(sub: str, provider: str) -> bool:
+    """Présence d'une clé perso SANS la déchiffrer (status_for / /api/me)."""
+    from . import credentials_store
+    return credentials_store.has_credential("user", sub, provider)
 
 
 # --- usage counters ---------------------------------------------------------

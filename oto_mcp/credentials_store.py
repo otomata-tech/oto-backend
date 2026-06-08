@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from . import connectors
+from . import connectors, crypto
 from .db import _connect
 
 USER = "user"
@@ -26,35 +26,90 @@ def _secret_kind(connector: str) -> str:
     return c.secret_kind if c else "api_key"
 
 
+def _aad(entity_type: str, entity_id: str, connector: str) -> str:
+    """AAD liant le ciphertext à SA ligne (anti-transplant)."""
+    return f"connector_credentials:{entity_type}:{entity_id}:{connector}"
+
+
 def get_credential(entity_type: str, entity_id: str, connector: str) -> Optional[str]:
-    """Secret du connecteur pour cette entité, ou None. Lève si connecteur
-    inconnu/non-keyed (même verrou que l'ancien _check_provider)."""
+    """Secret en CLAIR du connecteur pour cette entité, ou None. Déchiffrement
+    JIT si la ligne est chiffrée (secret_enc) ; fallback plaintext (secret) pour
+    les lignes non-migrées / chiffrement désactivé. Lève si connecteur non-keyed.
+
+    C'est le SEUL chemin qui déchiffre (appelé par resolve_api_key). status_for
+    utilise `has_credential` (présence, sans déchiffrer)."""
     connectors.require_keyed(connector)
     with _connect() as conn:
         row = conn.execute(
-            "SELECT secret FROM connector_credentials "
+            "SELECT secret, secret_enc FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
             (entity_type, entity_id, connector),
         ).fetchone()
-        return row["secret"] if row else None
+    if not row:
+        return None
+    if row["secret_enc"]:
+        return crypto.decrypt(row["secret_enc"], _aad(entity_type, entity_id, connector))
+    return row["secret"]
+
+
+def has_credential(entity_type: str, entity_id: str, connector: str) -> bool:
+    """Présence d'un secret SANS déchiffrer (pour status_for / surface d'attaque
+    réduite : /api/me n'a besoin que du booléen, jamais de la valeur)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM connector_credentials WHERE entity_type = %s AND entity_id = %s "
+            "AND connector = %s AND (secret IS NOT NULL OR secret_enc IS NOT NULL)",
+            (entity_type, entity_id, connector),
+        ).fetchone()
+        return row is not None
 
 
 def _upsert(conn, entity_type, entity_id, connector, secret, set_by, meta) -> None:
+    # Chiffré → secret_enc porte le ciphertext, secret=NULL (jamais de plaintext
+    # en clair pour un nouveau write). Désactivé → secret en clair, secret_enc=NULL.
+    if crypto.encryption_enabled():
+        plain, enc = None, crypto.encrypt(secret, _aad(entity_type, entity_id, connector))
+    else:
+        plain, enc = secret, None
     conn.execute(
         """
         INSERT INTO connector_credentials
-            (entity_type, entity_id, connector, secret, secret_kind, meta, set_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (entity_type, entity_id, connector, secret, secret_enc, secret_kind, meta, set_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (entity_type, entity_id, connector) DO UPDATE SET
             secret = EXCLUDED.secret,
+            secret_enc = EXCLUDED.secret_enc,
             secret_kind = EXCLUDED.secret_kind,
             meta = EXCLUDED.meta,
             set_by = EXCLUDED.set_by,
             set_at = NOW()
         """,
-        (entity_type, entity_id, connector, secret, _secret_kind(connector),
+        (entity_type, entity_id, connector, plain, enc, _secret_kind(connector),
          json.dumps(meta or {}), set_by),
     )
+
+
+def encrypt_existing_rows(conn) -> int:
+    """Migration (Phase 7) : chiffre en place les lignes encore en clair.
+
+    Idempotent (WHERE secret_enc IS NULL). No-op si chiffrement désactivé.
+    GARDE le plaintext (`secret`) pendant le soak — fallback/rollback ; nullé
+    dans une étape ultérieure délibérée une fois le déchiffrement éprouvé.
+    Tourne dans la transaction de l'appelant (init_db)."""
+    if not crypto.encryption_enabled():
+        return 0
+    rows = conn.execute(
+        "SELECT entity_type, entity_id, connector, secret FROM connector_credentials "
+        "WHERE secret IS NOT NULL AND secret_enc IS NULL"
+    ).fetchall()
+    for r in rows:
+        enc = crypto.encrypt(r["secret"], _aad(r["entity_type"], r["entity_id"], r["connector"]))
+        conn.execute(
+            "UPDATE connector_credentials SET secret_enc = %s "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
+            (enc, r["entity_type"], r["entity_id"], r["connector"]),
+        )
+    return len(rows)
 
 
 def _delete(conn, entity_type, entity_id, connector) -> bool:

@@ -197,11 +197,12 @@ def status_for(sub: str) -> dict:
     active_org = org_store.get_active_org(sub)
     out: dict = {"role": role, "active_org": active_org, "providers": {}}
     for provider in db.KEY_PROVIDERS:
-        user_key = db.get_user_api_key(sub, provider)
-        org_key = (
-            org_store.get_org_secret(active_org, provider)
+        # PRÉSENCE seulement (pas de déchiffrement sur le chemin /api/me).
+        user_has = db.has_user_api_key(sub, provider)
+        org_has = (
+            org_store.has_org_secret(active_org, provider)
             if active_org is not None and provider in ORG_SHAREABLE_PROVIDERS
-            else None
+            else False
         )
         grant = db.get_active_grant(sub, provider)
         used = db.get_usage_today(sub, provider)
@@ -209,9 +210,9 @@ def status_for(sub: str) -> dict:
 
         # Miroir EXACT de la cascade de resolve_api_key : user_key > org_secret
         # > grant plateforme. Toute divergence = /api/me ment sur le mode réel.
-        if user_key:
+        if user_has:
             mode = "user"
-        elif org_key:
+        elif org_has:
             mode = "org"
         elif not grant:
             mode = "forbidden"
@@ -222,8 +223,8 @@ def status_for(sub: str) -> dict:
 
         out["providers"][provider] = {
             "mode": mode,
-            "user_key_configured": bool(user_key),
-            "org_secret_configured": bool(org_key),
+            "user_key_configured": user_has,
+            "org_secret_configured": org_has,
             "platform_key_label": grant["label"] if grant else None,
             "quota_used_today": used,
             "quota_daily": limit if grant else None,

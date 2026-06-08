@@ -43,9 +43,15 @@ def get_org_secret(org_id: int, provider: str) -> Optional[str]:
     write-path.
 
     Cutover (Phase 2/C4) : lit connector_credentials (entité 'org'), non plus la
-    table legacy org_secrets (toujours dual-written pour le rollback).
+    table legacy org_secrets (toujours dual-written pour le rollback). Déchiffre
+    si nécessaire (Phase 7).
     """
     return credentials_store.get_credential("org", str(org_id), provider)
+
+
+def has_org_secret(org_id: int, provider: str) -> bool:
+    """Présence d'un org_secret SANS le déchiffrer (status_for)."""
+    return credentials_store.has_credential("org", str(org_id), provider)
 
 
 # --- écritures + lectures de gestion (barreau 3, meta-tools platform_admin) --

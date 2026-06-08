@@ -3,7 +3,7 @@
 Domaine isolé du monolithe `db.py` : les tables org (orgs, org_members,
 org_secrets, org_entitlements) restent déclarées dans `db._SCHEMA` (DDL
 centralisée, jouée par `init_db`), mais leurs requêtes vivent ici. Réutilise
-les primitives partagées de `db` (`_connect`, `_check_provider`, `upsert_user`)
+les primitives partagées de `db` (`_connect`, `upsert_user`)
 plutôt que de les dupliquer.
 
 Consommé par : `access.resolve_api_key`/`status_for` (reads org_secret) et
@@ -14,7 +14,8 @@ from __future__ import annotations
 from typing import Optional
 
 from . import credentials_store, crypto
-from .db import _check_provider, _connect, upsert_user
+from . import connectors
+from .db import _connect, upsert_user
 
 ORG_ROLES = ("org_admin", "org_member")
 
@@ -193,10 +194,10 @@ def get_org_role(org_id: int, sub: str) -> Optional[str]:
 
 
 def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[str] = None) -> None:
-    """Pose/rote le secret partagé `provider` de l'org. `provider` validé contre
-    KEY_PROVIDERS ; la restriction org-shareable (exclut slack) est portée par
-    la couche tool (access.ORG_SHAREABLE_PROVIDERS)."""
-    _check_provider(provider)
+    """Pose/rote le secret partagé `provider` de l'org. `provider` validé comme
+    org-partageable (byo_org : exclut slack/linkedin, inclut mm org-only) via le
+    registre — plus restrictif que KEY_PROVIDERS puisque mm n'est pas keyed."""
+    connectors.require_credential("org", provider)
     if not api_key:
         raise ValueError("api_key requise")
     # Dual-write ATOMIQUE (legacy org_secrets + canonique) dans une transaction.

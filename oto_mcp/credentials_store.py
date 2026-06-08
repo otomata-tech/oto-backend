@@ -37,12 +37,13 @@ def _aad(entity_type: str, entity_id: str, connector: str) -> str:
 def get_credential(entity_type: str, entity_id: str, connector: str) -> Optional[str]:
     """Secret en CLAIR du connecteur pour cette entité, ou None. Déchiffrement
     JIT si la ligne est chiffrée (secret_enc) ; fallback plaintext (secret) pour
-    les lignes non-migrées / chiffrement désactivé. Lève si connecteur non-keyed.
+    les lignes non-migrées / chiffrement désactivé. Lève si le connecteur ne peut
+    pas porter un credential à ce niveau d'entité (user→keyed, org→org-partageable).
 
     Primitive de déchiffrement : appelée par resolve_api_key (résolution, injecte
     au connecteur) ET api_key_get (lecture de SA clé par le propriétaire).
     status_for utilise `has_credential` (présence, sans déchiffrer)."""
-    connectors.require_keyed(connector)
+    connectors.require_credential(entity_type, connector)
     with _connect() as conn:
         row = conn.execute(
             "SELECT secret, secret_enc FROM connector_credentials "
@@ -168,7 +169,7 @@ def set_credential(
     ATOMIQUE — le write legacy et le write canonique commitent ou rollback
     ensemble). Sinon ouvre sa propre transaction.
     """
-    connectors.require_keyed(connector)
+    connectors.require_credential(entity_type, connector)
     if not secret:
         raise ValueError("secret requis")
     if conn is not None:

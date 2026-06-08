@@ -13,6 +13,7 @@ géré au module ; toutes les fonctions restent sync.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 from contextlib import contextmanager
@@ -24,6 +25,8 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from . import connectors
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_value(v: Any) -> Any:
@@ -114,7 +117,8 @@ CREATE TABLE IF NOT EXISTS platform_keys (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
     label TEXT NOT NULL,
-    api_key TEXT NOT NULL,
+    api_key TEXT,                          -- plaintext (soak/legacy) ; NULL une fois chiffré
+    api_key_enc TEXT,                      -- enveloppe AES-256-GCM (Phase 7 folding)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(provider, label)
 );
@@ -319,23 +323,28 @@ def init_db() -> None:
         # créée par la Phase 2 avant ce déploiement).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         _backfill_connector_credentials(conn)
+        # platform_keys : colonne chiffrée + api_key nullable (Phase 7 folding,
+        # idempotent — couvre les tables créées avant ce déploiement).
+        conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
+        conn.execute("ALTER TABLE platform_keys ALTER COLUMN api_key DROP NOT NULL")
         # Migration de chiffrement (no-op si OTO_MCP_MASTER_KEY absente) : chiffre
-        # en place les credentials encore en clair, dans la même transaction.
+        # en place les secrets encore en clair, dans la même transaction.
         from . import credentials_store
         credentials_store.encrypt_existing_rows(conn)
+        _encrypt_existing_platform_keys(conn)
         _drop_plaintext_after_soak(conn)
 
 
 def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
-    """Runbook FINAL du chiffrement-at-rest (Phase 7) : retire les 3 emplacements
+    """Runbook FINAL du chiffrement-at-rest (Phase 7) : retire les 4 emplacements
     plaintext résiduels. DÉLIBÉRÉ — ne tourne QUE si chiffrement activé ET
     `OTO_MCP_CRYPTO_DROP_PLAINTEXT=1` (à poser une fois le déchiffrement éprouvé
     en prod). Sinon no-op (soak : on garde le plaintext en filet).
 
     Ordre : self-check + null de connector_credentials.secret (lève si une ligne
     chiffrée ne déchiffre pas → abort), puis les 9 colonnes users.<provider>_api_key,
-    puis org_secrets (DELETE — api_key est NOT NULL ; les données sont dans
-    connector_credentials chiffrées). Idempotent. Dans la transaction d'init_db."""
+    puis org_secrets (DELETE), puis platform_keys.api_key (self-check decrypt +
+    null). Idempotent. Dans la transaction d'init_db."""
     from . import credentials_store, crypto
     if not (crypto.encryption_enabled() and os.environ.get("OTO_MCP_CRYPTO_DROP_PLAINTEXT") == "1"):
         return
@@ -344,6 +353,15 @@ def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
         col = f"{provider}_api_key"
         conn.execute(f"UPDATE users SET {col} = NULL WHERE {col} IS NOT NULL")
     conn.execute("DELETE FROM org_secrets")
+    # platform_keys : self-check decrypt de chaque ligne chiffrée AVANT de nuller
+    # (lève → abort/rollback plutôt que perdre le plaintext), puis null.
+    pk_rows = conn.execute(
+        "SELECT provider, label, api_key_enc FROM platform_keys "
+        "WHERE api_key IS NOT NULL AND api_key_enc IS NOT NULL"
+    ).fetchall()
+    for r in pk_rows:
+        crypto.decrypt(r["api_key_enc"], _pk_aad(r["provider"], r["label"]))
+    conn.execute("UPDATE platform_keys SET api_key = NULL WHERE api_key_enc IS NOT NULL")
 
 
 def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
@@ -764,12 +782,50 @@ def get_usage_today(sub: str, tool: str) -> int:
 
 
 # --- platform keys (admin-managed) ------------------------------------------
+#
+# Chiffrement au repos (Phase 7 folding) : miroir EXACT du pattern
+# connector_credentials (cf. credentials_store). `api_key_enc` porte l'enveloppe
+# AES-256-GCM ; `api_key` reste en clair tant que le chiffrement est OFF (pas de
+# master key) OU pendant le soak (filet avant le null final). AAD = (provider,
+# label) — stable sur l'UNIQUE(provider, label), anti-transplant. Inerte sans
+# OTO_MCP_MASTER_KEY (encryption_enabled() == False → comportement identique).
+
+def _pk_aad(provider: str, label: str) -> str:
+    return f"platform_keys:{provider}:{label}"
+
+
+def _pk_store(provider: str, label: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+    """(plaintext, enveloppe) à écrire : chiffré → (None, ct) ; OFF → (api_key, None)."""
+    from . import crypto
+    if crypto.encryption_enabled():
+        return None, crypto.encrypt(api_key, _pk_aad(provider, label))
+    return api_key, None
+
+
+def _pk_reveal(row: dict, provider: str) -> Optional[str]:
+    """api_key en clair depuis une ligne platform_keys : déchiffre `api_key_enc`
+    s'il est présent (fallback plaintext pendant le soak), sinon `api_key`."""
+    enc = row.get("api_key_enc")
+    if enc:
+        from . import crypto
+        try:
+            return crypto.decrypt(enc, _pk_aad(provider, row["label"]))
+        except Exception:
+            if row.get("api_key") is not None:
+                logger.warning(
+                    "decrypt KO platform_key %s/%s — fallback plaintext (soak) ; "
+                    "vérifier la master key", provider, row.get("label"),
+                )
+                return row["api_key"]
+            raise
+    return row.get("api_key")
+
 
 def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
-    """Liste les platform keys. **Inclut `api_key`** — réservé à l'admin
-    backend, jamais retourné via /api (la route admin masque ce champ).
+    """Liste les platform keys. **Inclut `api_key`** (déchiffré) — réservé à
+    l'admin backend, jamais retourné via /api (la route admin masque ce champ).
     """
-    sql = "SELECT id, provider, label, api_key, created_at FROM platform_keys"
+    sql = "SELECT id, provider, label, api_key, api_key_enc, created_at FROM platform_keys"
     params: tuple = ()
     if provider:
         sql += " WHERE provider = %s"
@@ -777,16 +833,28 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
     sql += " ORDER BY provider, created_at"
     with _connect() as conn:
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["api_key"] = _pk_reveal(d, d["provider"])
+        d.pop("api_key_enc", None)
+        out.append(d)
+    return out
 
 
 def get_platform_key(key_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, provider, label, api_key, created_at FROM platform_keys WHERE id = %s",
+            "SELECT id, provider, label, api_key, api_key_enc, created_at "
+            "FROM platform_keys WHERE id = %s",
             (key_id,),
         ).fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    d["api_key"] = _pk_reveal(d, d["provider"])
+    d.pop("api_key_enc", None)
+    return d
 
 
 def create_platform_key(provider: str, label: str, api_key: str) -> int:
@@ -794,11 +862,13 @@ def create_platform_key(provider: str, label: str, api_key: str) -> int:
     _check_provider(provider)
     if not label or not api_key:
         raise ValueError("label et api_key requis")
+    plain, enc = _pk_store(provider, label, api_key)
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO platform_keys (provider, label, api_key) VALUES (%s, %s, %s) RETURNING id",
-                (provider, label, api_key),
+                "INSERT INTO platform_keys (provider, label, api_key, api_key_enc) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (provider, label, plain, enc),
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"({provider}, {label}) existe déjà") from e
@@ -810,15 +880,17 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
     par le bootstrap des env vars au démarrage.
     """
     _check_provider(provider)
+    plain, enc = _pk_store(provider, label, api_key)
     with _connect() as conn:
         row = conn.execute(
             """
-            INSERT INTO platform_keys (provider, label, api_key)
-            VALUES (%s, %s, %s)
-            ON CONFLICT(provider, label) DO UPDATE SET api_key = EXCLUDED.api_key
+            INSERT INTO platform_keys (provider, label, api_key, api_key_enc)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT(provider, label) DO UPDATE SET
+                api_key = EXCLUDED.api_key, api_key_enc = EXCLUDED.api_key_enc
             RETURNING id
             """,
-            (provider, label, api_key),
+            (provider, label, plain, enc),
         ).fetchone()
         return int(row["id"])
 
@@ -826,6 +898,24 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
 def delete_platform_key(key_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM platform_keys WHERE id = %s", (key_id,))
+
+
+def _encrypt_existing_platform_keys(conn: psycopg.Connection) -> int:
+    """Migration (Phase 7 folding) : chiffre en place les platform_keys encore en
+    clair. Idempotent (WHERE api_key_enc IS NULL). No-op si chiffrement OFF. GARDE
+    le plaintext (soak) — nullé par `_drop_plaintext_after_soak`. Miroir de
+    credentials_store.encrypt_existing_rows. Dans la transaction d'init_db."""
+    from . import crypto
+    if not crypto.encryption_enabled():
+        return 0
+    rows = conn.execute(
+        "SELECT id, provider, label, api_key FROM platform_keys "
+        "WHERE api_key IS NOT NULL AND api_key_enc IS NULL"
+    ).fetchall()
+    for r in rows:
+        enc = crypto.encrypt(r["api_key"], _pk_aad(r["provider"], r["label"]))
+        conn.execute("UPDATE platform_keys SET api_key_enc = %s WHERE id = %s", (enc, r["id"]))
+    return len(rows)
 
 
 # --- grants -----------------------------------------------------------------
@@ -885,7 +975,8 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT pk.id AS platform_key_id, pk.label, pk.api_key, ug.daily_quota
+            SELECT pk.id AS platform_key_id, pk.label, pk.api_key, pk.api_key_enc,
+                   ug.daily_quota
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
              WHERE ug.sub = %s AND pk.provider = %s
@@ -894,7 +985,12 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
             """,
             (sub, provider),
         ).fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    d["api_key"] = _pk_reveal(d, provider)   # déchiffre JIT (resolve_api_key)
+    d.pop("api_key_enc", None)
+    return d
 
 
 def list_users_with_grants() -> list[dict]:

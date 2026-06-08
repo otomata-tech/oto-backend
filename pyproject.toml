@@ -18,6 +18,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Connecteur Movinmotion privé (hors core public oto-cli, cf. oto-cli#9). Extra
+# OPTIONNEL, jamais dans le core : sinon `pip install -e .` au déploiement
+# forcerait un clone SSH du repo privé à chaque deploy (clé SSH serveur). En
+# prod, comme oto-cli, le venv est overridé par un clone editable
+# (`pip install -e /opt/oto-mm`) ; `tools/mm.py` se désactive gracieusement si
+# `oto_mm` est absent (try/except dans tools/__init__.py).
+mm = [
+    "oto-mm @ git+ssh://git@github.com/otomata-tech/oto-mm.git",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

@@ -84,3 +84,26 @@ def register(mcp: FastMCP) -> None:
         will_attempt_retry). Si will_attempt_retry est True, GoCardless va
         retenter — ne pas émettre d'avoir tant que ce n'est pas False."""
         return _client().failure_reason(payment_id)
+
+    @mcp.tool()
+    async def gocardless_failed(
+        since: Optional[str] = None,
+        limit: int = 200,
+    ) -> list:
+        """Prélèvements refusés enrichis, en un seul appel.
+
+        Renvoie une ligne par échec avec client (nom/email), montant,
+        charge_date, failed_at, cause/reason_code, will_attempt_retry et
+        état du mandat — la chaîne payment→mandat→customer + le motif sont
+        résolus côté serveur. Triés par date d'échec décroissante.
+
+        ⚠️ Faits seulement, pas d'action décidée : « relancer vs refaire un
+        mandat » reste un jugement métier (agent/doctrine). Et tant que
+        will_attempt_retry est True, ne rien émettre — GoCardless va retenter.
+
+        Args:
+            since: ISO8601 (ex '2026-05-25'). Filtre sur created_at : un
+                paiement créé avant mais échoué après ne ressort pas.
+            limit: taille de page des failed à enrichir (max 500).
+        """
+        return _client().failed_payments(since=since, limit=limit)

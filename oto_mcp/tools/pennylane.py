@@ -5,9 +5,12 @@ clé-per-user (comme Attio), pas de clé plateforme. Chaque utilisateur pose
 sa propre clé Pennylane sur `app.oto.ninja/api-keys` — sa compta n'est
 visible que par lui.
 
-Surface en lecture seule (analyse compta). Les opérations d'écriture
-(création facture/client) restent côté CLI `oto pennylane` pour éviter
-qu'un agent crée des écritures par erreur.
+Surface en lecture + lettrage. Les opérations qui *créent une écriture*
+(création facture/client, finalisation, upload) restent côté CLI
+`oto pennylane` pour éviter qu'un agent les déclenche par erreur. Le
+lettrage (`pennylane_match`) est exposé : c'est un lien de rapprochement
+réversible, pas une écriture — nécessaire pour qu'un agent solde les
+factures payées et évite les relances à tort.
 """
 from __future__ import annotations
 
@@ -69,3 +72,23 @@ def register(mcp: FastMCP) -> None:
     async def pennylane_categories() -> list:
         """Catégories de dépenses."""
         return _client().get_categories()
+
+    @mcp.tool()
+    async def pennylane_match(
+        invoice_id: int,
+        transaction_id: int,
+        invoice_type: str = "customer",
+    ) -> dict:
+        """Lettre (rapproche) une transaction bancaire avec une facture.
+
+        Lien de rapprochement réversible, pas une écriture comptable. À
+        utiliser pour solder une facture payée dont le virement entrant
+        n'est pas lettré (sinon Pennylane la garde `late` et relance le
+        client à tort).
+
+        Args:
+            invoice_id: ID de la facture (client ou fournisseur).
+            transaction_id: ID de la transaction bancaire.
+            invoice_type: "customer" (ventes) ou "supplier" (achats).
+        """
+        return _client().match_transaction(invoice_id, transaction_id, invoice_type)

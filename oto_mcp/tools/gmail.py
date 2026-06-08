@@ -126,6 +126,9 @@ def register(mcp: FastMCP) -> None:
         markdown: bool = True,
         account: Optional[str] = None,
     ) -> dict:
+        # TODO(#17): markdown=True (le défaut) crashe sur le MCP déployé avec
+        # "No module named 'markdown'" → dépendance absente du venv de prod (mcp/.venv).
+        # Ajouter la dép, ou dégrader proprement en texte brut au lieu de lever.
         """Reply to a message, preserving thread, subject, and headers.
 
         Args:
@@ -157,6 +160,10 @@ def register(mcp: FastMCP) -> None:
         html: Optional[str] = None,
         account: Optional[str] = None,
     ) -> dict:
+        # TODO(#18): impossible de créer un brouillon DE RÉPONSE (rattaché à un fil).
+        # Ni reply_to_message_id ni threadId ici → brouillon toujours isolé ; gmail_reply
+        # thread bien mais envoie direct. Ajouter reply_to_message_id (threadId +
+        # In-Reply-To/References), ou un flag draft=True à gmail_reply.
         """Create a draft email (not sent).
 
         Args:

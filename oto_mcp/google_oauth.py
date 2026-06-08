@@ -42,6 +42,9 @@ SCOPES = [
     # RESTRICTED chez Google → audit CASA requis si l'écran de consentement
     # passe en published/external (OK en mode testing).
     "https://www.googleapis.com/auth/gmail.modify",
+    # Google Tasks (read/write). Scope SENSIBLE (pas restricted comme Gmail) →
+    # vérification Google requise si l'app passe en published, pas d'audit CASA.
+    "https://www.googleapis.com/auth/tasks",
 ]
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"

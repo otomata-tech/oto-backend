@@ -175,13 +175,21 @@ def require_keyed(name: str) -> None:
 
 def require_credential(entity_type: str, name: str) -> None:
     """Lève si le connecteur ne peut PAS porter un credential à ce niveau d'entité.
-    user → doit être keyed (byo_user, résolu via resolve_api_key) ; org → doit être
-    org-partageable (byo_org, ex. mm org-only). Utilisé par credentials_store."""
+    user → doit accepter `byo_user` (clé API keyed OU secret de session :
+    linkedin/crunchbase/google/slack…) ; org → doit être org-partageable (byo_org,
+    ex. mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
     else:
-        require_keyed(name)
+        if not is_byo_user(name):
+            raise ValueError(
+                f"{name!r} n'accepte pas de credential per-user (byo_user requis)")
+
+
+def is_byo_user(name: str) -> bool:
+    c = REGISTRY.get(name)
+    return bool(c and "byo_user" in c.auth_modes)
 
 
 def is_org_shareable(name: str) -> bool:

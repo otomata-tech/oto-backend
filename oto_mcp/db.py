@@ -330,6 +330,7 @@ def init_db() -> None:
         conn.execute("ALTER TABLE connector_credentials DROP CONSTRAINT IF EXISTS connector_credentials_pkey")
         conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
         _backfill_connector_credentials(conn)
+        _backfill_session_secrets(conn)   # folding linkedin/crunchbase → coffre
         # platform_keys : colonne chiffrée + api_key nullable (Phase 7 folding,
         # idempotent — couvre les tables créées avant ce déploiement).
         conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
@@ -369,6 +370,13 @@ def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
     for r in pk_rows:
         crypto.decrypt(r["api_key_enc"], _pk_aad(r["provider"], r["label"]))
     conn.execute("UPDATE platform_keys SET api_key = NULL WHERE api_key_enc IS NOT NULL")
+    # Secrets de session foldés (linkedin/crunchbase) : le coffre est canonique
+    # et chiffré ; on nulle les colonnes legacy résiduelles sur users.
+    conn.execute(
+        "UPDATE users SET linkedin_cookie = NULL, linkedin_user_agent = NULL, "
+        "crunchbase_cookies = NULL, crunchbase_user_agent = NULL "
+        "WHERE linkedin_cookie IS NOT NULL OR crunchbase_cookies IS NOT NULL"
+    )
 
 
 def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
@@ -397,6 +405,35 @@ def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
         """
         INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind, set_by, set_at)
         SELECT 'org', org_id::text, provider, api_key, 'api_key', set_by, set_at FROM org_secrets
+        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
+        """
+    )
+
+
+def _backfill_session_secrets(conn: psycopg.Connection) -> None:
+    """Recopie idempotente des secrets de session legacy → connector_credentials
+    (folding LinkedIn/Crunchbase). Colonnes `users` → coffre ; UA dans meta ;
+    set_at préservé. ON CONFLICT DO NOTHING (le dual-write garde le coffre à jour
+    ensuite). Google (`user_google_oauth`, multi-compte) = barreau séparé."""
+    conn.execute(
+        """
+        INSERT INTO connector_credentials
+            (entity_type, entity_id, connector, secret, secret_kind, meta, set_at)
+        SELECT 'user', sub, 'linkedin', linkedin_cookie, 'cookie',
+               jsonb_build_object('user_agent', linkedin_user_agent),
+               COALESCE(linkedin_cookie_set_at, NOW())
+        FROM users WHERE linkedin_cookie IS NOT NULL
+        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO connector_credentials
+            (entity_type, entity_id, connector, secret, secret_kind, meta, set_at)
+        SELECT 'user', sub, 'crunchbase', crunchbase_cookies, 'cookie',
+               jsonb_build_object('user_agent', crunchbase_user_agent),
+               COALESCE(crunchbase_set_at, NOW())
+        FROM users WHERE crunchbase_cookies IS NOT NULL
         ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
         """
     )
@@ -451,52 +488,69 @@ def set_user_role(sub: str, role: str) -> None:
 # --- LinkedIn ---------------------------------------------------------------
 
 def set_linkedin_cookie(sub: str, cookie: str, user_agent: Optional[str] = None) -> None:
-    """Store/refresh le cookie li_at + UA d'un user. Le couple cookie + UA
-    doit matcher le browser d'origine pour réduire le risque de ban.
-    """
+    """Store/refresh le cookie li_at + UA d'un user. Le couple cookie + UA doit
+    matcher le browser d'origine pour réduire le risque de ban.
+
+    Coffre unique (folding) : secret = cookie, UA dans meta. Dual-write ATOMIQUE
+    legacy `users` + connector_credentials (conditionnel au chiffrement, comme
+    set_user_api_key). UA effectif résolu depuis le coffre si non fourni
+    (équivalent du COALESCE legacy, robuste même colonnes legacy nullées)."""
     upsert_user(sub)
+    from . import credentials_store, crypto
+    ua = user_agent
+    if ua is None:
+        cur = credentials_store.get_credential_with_meta("user", sub, "linkedin")
+        ua = cur["meta"].get("user_agent") if cur else None
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE users
-               SET linkedin_cookie = %s,
-                   linkedin_user_agent = COALESCE(%s, linkedin_user_agent),
-                   linkedin_cookie_set_at = NOW(),
-                   updated_at = NOW()
-             WHERE sub = %s
-            """,
-            (cookie, user_agent, sub),
-        )
+        with conn.transaction():
+            if not crypto.encryption_enabled():
+                conn.execute(
+                    "UPDATE users SET linkedin_cookie = %s, linkedin_user_agent = %s, "
+                    "linkedin_cookie_set_at = NOW(), updated_at = NOW() WHERE sub = %s",
+                    (cookie, ua, sub),
+                )
+            credentials_store.set_credential(
+                "user", sub, "linkedin", cookie, set_by=sub,
+                meta={"user_agent": ua}, conn=conn)
 
 
 def clear_linkedin_cookie(sub: str) -> None:
+    from . import credentials_store
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE users
-               SET linkedin_cookie = NULL,
-                   linkedin_user_agent = NULL,
-                   linkedin_cookie_set_at = NULL,
-                   updated_at = NOW()
-             WHERE sub = %s
-            """,
-            (sub,),
-        )
+        with conn.transaction():
+            conn.execute(
+                "UPDATE users SET linkedin_cookie = NULL, linkedin_user_agent = NULL, "
+                "linkedin_cookie_set_at = NULL, updated_at = NOW() WHERE sub = %s",
+                (sub,),
+            )
+            credentials_store.clear_credential("user", sub, "linkedin", conn=conn)
 
 
 def get_linkedin_session(sub: str) -> Optional[dict]:
-    user = get_user(sub)
-    if not user or not user.get("linkedin_cookie"):
+    """Cutover (folding) : lit le coffre (déchiffre), non plus les colonnes legacy."""
+    from . import credentials_store
+    cur = credentials_store.get_credential_with_meta("user", sub, "linkedin")
+    if not cur or not cur["secret"]:
         return None
     return {
-        "cookie": user["linkedin_cookie"],
-        "user_agent": user.get("linkedin_user_agent"),
+        "cookie": cur["secret"],
+        "user_agent": cur["meta"].get("user_agent"),
+        "set_at": cur["set_at"],
     }
 
 
 def get_linkedin_cookie(sub: str) -> Optional[str]:
-    user = get_user(sub)
-    return user.get("linkedin_cookie") if user else None
+    from . import credentials_store
+    return credentials_store.get_credential("user", sub, "linkedin")
+
+
+def get_linkedin_status(sub: str) -> Optional[dict]:
+    """Statut SANS déchiffrer (pour /api/me) : {set_at, user_agent} ou None."""
+    from . import credentials_store
+    st = credentials_store.credential_status("user", sub, "linkedin")
+    if not st:
+        return None
+    return {"set_at": st["set_at"], "user_agent": st["meta"].get("user_agent")}
 
 
 # --- Crunchbase -------------------------------------------------------------
@@ -506,53 +560,66 @@ def set_crunchbase_session(
     cookies_json: str,
     user_agent: Optional[str] = None,
 ) -> None:
-    """Store cookies (JSON-encoded list) + UA. Couple cookies + UA doit
-    matcher le browser d'origine pour réduire le risque de blocage.
-    """
+    """Store cookies (JSON-encoded list) + UA. Coffre unique (folding) : secret =
+    cookies_json, UA dans meta. Dual-write ATOMIQUE legacy + coffre (cf.
+    set_linkedin_cookie)."""
     upsert_user(sub)
+    from . import credentials_store, crypto
+    ua = user_agent
+    if ua is None:
+        cur = credentials_store.get_credential_with_meta("user", sub, "crunchbase")
+        ua = cur["meta"].get("user_agent") if cur else None
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE users
-               SET crunchbase_cookies = %s,
-                   crunchbase_user_agent = COALESCE(%s, crunchbase_user_agent),
-                   crunchbase_set_at = NOW(),
-                   updated_at = NOW()
-             WHERE sub = %s
-            """,
-            (cookies_json, user_agent, sub),
-        )
+        with conn.transaction():
+            if not crypto.encryption_enabled():
+                conn.execute(
+                    "UPDATE users SET crunchbase_cookies = %s, crunchbase_user_agent = %s, "
+                    "crunchbase_set_at = NOW(), updated_at = NOW() WHERE sub = %s",
+                    (cookies_json, ua, sub),
+                )
+            credentials_store.set_credential(
+                "user", sub, "crunchbase", cookies_json, set_by=sub,
+                meta={"user_agent": ua}, conn=conn)
 
 
 def clear_crunchbase_session(sub: str) -> None:
+    from . import credentials_store
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE users
-               SET crunchbase_cookies = NULL,
-                   crunchbase_user_agent = NULL,
-                   crunchbase_set_at = NULL,
-                   updated_at = NOW()
-             WHERE sub = %s
-            """,
-            (sub,),
-        )
+        with conn.transaction():
+            conn.execute(
+                "UPDATE users SET crunchbase_cookies = NULL, crunchbase_user_agent = NULL, "
+                "crunchbase_set_at = NULL, updated_at = NOW() WHERE sub = %s",
+                (sub,),
+            )
+            credentials_store.clear_credential("user", sub, "crunchbase", conn=conn)
 
 
 def get_crunchbase_session(sub: str) -> Optional[dict]:
-    """Renvoie `{cookies: list[dict], user_agent: str|None}` ou None."""
+    """Renvoie `{cookies: list[dict], user_agent, set_at}` ou None. Cutover :
+    lit le coffre (déchiffre)."""
     import json as _json
-    user = get_user(sub)
-    if not user or not user.get("crunchbase_cookies"):
+    from . import credentials_store
+    cur = credentials_store.get_credential_with_meta("user", sub, "crunchbase")
+    if not cur or not cur["secret"]:
         return None
     try:
-        cookies = _json.loads(user["crunchbase_cookies"])
+        cookies = _json.loads(cur["secret"])
     except Exception:
         return None
     return {
         "cookies": cookies,
-        "user_agent": user.get("crunchbase_user_agent"),
+        "user_agent": cur["meta"].get("user_agent"),
+        "set_at": cur["set_at"],
     }
+
+
+def get_crunchbase_status(sub: str) -> Optional[dict]:
+    """Statut SANS déchiffrer (pour /api/me) : {set_at, user_agent} ou None."""
+    from . import credentials_store
+    st = credentials_store.credential_status("user", sub, "crunchbase")
+    if not st:
+        return None
+    return {"set_at": st["set_at"], "user_agent": st["meta"].get("user_agent")}
 
 
 # --- user API keys ----------------------------------------------------------

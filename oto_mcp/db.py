@@ -249,13 +249,14 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     entity_type TEXT NOT NULL,            -- 'user' | 'org'
     entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
+    account     TEXT NOT NULL DEFAULT '', -- discriminant multi-compte ('' = mono ; ex. email Google)
     secret      TEXT,                     -- clair (chiffrement off, ou soak)
     secret_enc  TEXT,                     -- enveloppe AES-256-GCM (Phase 7)
     secret_kind TEXT NOT NULL DEFAULT 'api_key',
     meta        JSONB NOT NULL DEFAULT '{}',
     set_by      TEXT,
     set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (entity_type, entity_id, connector)
+    PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);
 """
@@ -322,6 +323,12 @@ def init_db() -> None:
         # Phase 7 : colonne chiffrée (idempotent — couvre le cas où la table a été
         # créée par la Phase 2 avant ce déploiement).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
+        # Multi-compte : discriminant `account` dans la PK (folding session secrets).
+        # Idempotent ; account='' pour les lignes existantes (mono-compte) → la PG
+        # à 4 colonnes reste unique. DROP+ADD PK chaque boot (table sans FK entrante).
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE connector_credentials DROP CONSTRAINT IF EXISTS connector_credentials_pkey")
+        conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
         _backfill_connector_credentials(conn)
         # platform_keys : colonne chiffrée + api_key nullable (Phase 7 folding,
         # idempotent — couvre les tables créées avant ce déploiement).
@@ -382,7 +389,7 @@ def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
             f"""
             INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind)
             SELECT 'user', sub, %s, {col}, %s FROM users WHERE {col} IS NOT NULL
-            ON CONFLICT (entity_type, entity_id, connector) DO NOTHING
+            ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
             """,
             (provider, kind),
         )
@@ -390,7 +397,7 @@ def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
         """
         INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind, set_by, set_at)
         SELECT 'org', org_id::text, provider, api_key, 'api_key', set_by, set_at FROM org_secrets
-        ON CONFLICT (entity_type, entity_id, connector) DO NOTHING
+        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
         """
     )
 

@@ -17,7 +17,7 @@ import logging
 import os
 import secrets
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Iterator, Optional
 
 import psycopg
@@ -377,6 +377,8 @@ def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
         "crunchbase_cookies = NULL, crunchbase_user_agent = NULL "
         "WHERE linkedin_cookie IS NOT NULL OR crunchbase_cookies IS NOT NULL"
     )
+    # Google foldé → coffre chiffré canonique : on vide la table legacy.
+    conn.execute("DELETE FROM user_google_oauth")
 
 
 def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
@@ -434,6 +436,22 @@ def _backfill_session_secrets(conn: psycopg.Connection) -> None:
                jsonb_build_object('user_agent', crunchbase_user_agent),
                COALESCE(crunchbase_set_at, NOW())
         FROM users WHERE crunchbase_cookies IS NOT NULL
+        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
+        """
+    )
+    # Google : multi-compte → account = email (COALESCE '' pour la ligne mono
+    # legacy NULL). Satellites dans meta. isoformat 'T' (cohérent avec le code).
+    conn.execute(
+        """
+        INSERT INTO connector_credentials
+            (entity_type, entity_id, connector, account, secret, secret_kind, meta, set_at)
+        SELECT 'user', sub, 'google', COALESCE(google_email, ''), refresh_token, 'oauth',
+               jsonb_build_object(
+                   'access_token', access_token, 'expires_at', expires_at,
+                   'scopes', scopes, 'is_default', is_default,
+                   'granted_at', to_char(granted_at, 'YYYY-MM-DD"T"HH24:MI:SS+00:00')),
+               updated_at
+        FROM user_google_oauth WHERE refresh_token IS NOT NULL
         ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
         """
     )
@@ -1130,6 +1148,25 @@ def list_namespace_grants(namespace: Optional[str] = None) -> list[dict]:
 
 # --- Google OAuth -----------------------------------------------------------
 
+GOOGLE = "google"   # connecteur Google dans le coffre (account = email)
+
+
+def _google_row(account: str, cur: dict) -> dict:
+    """Reconstruit le dict legacy (contrat google_oauth.py) depuis une ligne coffre
+    (cur = {secret, meta, set_at})."""
+    m = cur["meta"]
+    return {
+        "google_email": account or None,
+        "refresh_token": cur["secret"],
+        "access_token": m.get("access_token"),
+        "expires_at": m.get("expires_at"),
+        "scopes": m.get("scopes"),
+        "is_default": bool(m.get("is_default")),
+        "granted_at": m.get("granted_at"),
+        "updated_at": cur["set_at"],
+    }
+
+
 def set_google_oauth(
     sub: str,
     google_email: str,
@@ -1139,145 +1176,174 @@ def set_google_oauth(
     expires_at: Optional[str] = None,
     make_default: Optional[bool] = None,
 ) -> None:
-    """Upsert un compte Google (sub, google_email).
+    """Upsert un compte Google dans le COFFRE (connector='google', account=email ;
+    satellites — access_token/expires_at/scopes/is_default/granted_at — dans meta).
 
-    `make_default` None → devient défaut si c'est le 1er compte du user.
-    Claime au passage l'éventuelle ligne legacy à google_email NULL (migration
-    mono→multi compte) en la supprimant avant l'insert.
+    `make_default` None → défaut si 1er compte. is_default conservé si déjà défaut
+    (existing OR new). Claime la ligne legacy mono (account='' coffre + google_email
+    NULL legacy). Dual-write legacy ATOMIQUE conditionnel au chiffrement (rollback).
     """
     upsert_user(sub)
+    from . import credentials_store, crypto
+    account = google_email or ""
+    accts = credentials_store.list_accounts("user", sub, GOOGLE)
+    n_named = sum(1 for a in accts if a["account"])
+    prior = next((a for a in accts if a["account"] == account), None)
+    if make_default is None:
+        make_default = n_named == 0
+    is_default = bool(prior and prior["meta"].get("is_default")) or make_default
+    granted_at = (prior["meta"].get("granted_at") if prior else None) \
+        or datetime.now(timezone.utc).isoformat()
+    meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
+            "is_default": is_default, "granted_at": granted_at}
     with _connect() as conn:
-        n_existing = conn.execute(
-            "SELECT COUNT(*) AS n FROM user_google_oauth "
-            "WHERE sub = %s AND google_email IS NOT NULL",
-            (sub,),
-        ).fetchone()["n"]
-        conn.execute(
-            "DELETE FROM user_google_oauth WHERE sub = %s AND google_email IS NULL",
-            (sub,),
-        )
-        if make_default is None:
-            make_default = n_existing == 0
-        if make_default:
-            conn.execute(
-                "UPDATE user_google_oauth SET is_default = FALSE WHERE sub = %s", (sub,)
-            )
-        conn.execute(
-            """
-            INSERT INTO user_google_oauth
-                (sub, google_email, refresh_token, access_token, expires_at, scopes, is_default)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(sub, google_email) DO UPDATE SET
-                refresh_token = EXCLUDED.refresh_token,
-                access_token  = EXCLUDED.access_token,
-                expires_at    = EXCLUDED.expires_at,
-                scopes        = EXCLUDED.scopes,
-                is_default    = user_google_oauth.is_default OR EXCLUDED.is_default,
-                updated_at    = NOW()
-            """,
-            (sub, google_email, refresh_token, access_token, expires_at, scopes, make_default),
-        )
+        with conn.transaction():
+            if account:   # claim l'éventuelle ligne mono pré-migration (account='')
+                credentials_store.clear_credential("user", sub, GOOGLE, account="", conn=conn)
+            if make_default:   # un seul défaut : retire le flag aux autres comptes
+                conn.execute(
+                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'false') "
+                    "WHERE entity_type='user' AND entity_id=%s AND connector=%s AND account<>%s",
+                    (sub, GOOGLE, account),
+                )
+            credentials_store.set_credential(
+                "user", sub, GOOGLE, refresh_token, set_by=sub,
+                meta=meta, account=account, conn=conn)
+            if not crypto.encryption_enabled():   # mirror legacy (rollback)
+                conn.execute(
+                    "DELETE FROM user_google_oauth WHERE sub=%s AND google_email IS NULL", (sub,))
+                if make_default:
+                    conn.execute(
+                        "UPDATE user_google_oauth SET is_default=FALSE WHERE sub=%s", (sub,))
+                conn.execute(
+                    """
+                    INSERT INTO user_google_oauth
+                        (sub, google_email, refresh_token, access_token, expires_at, scopes, is_default)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(sub, google_email) DO UPDATE SET
+                        refresh_token = EXCLUDED.refresh_token,
+                        access_token  = EXCLUDED.access_token,
+                        expires_at    = EXCLUDED.expires_at,
+                        scopes        = EXCLUDED.scopes,
+                        is_default    = user_google_oauth.is_default OR EXCLUDED.is_default,
+                        updated_at    = NOW()
+                    """,
+                    (sub, google_email, refresh_token, access_token, expires_at, scopes, make_default),
+                )
 
 
 def update_google_access_token(
     sub: str, google_email: Optional[str], access_token: str, expires_at: str
 ) -> None:
-    """Met à jour uniquement l'access_token + expiry (sur refresh).
-
-    `google_email` None vise la ligne legacy (compte mono pré-migration).
-    """
-    with _connect() as conn:
-        if google_email is None:
-            conn.execute(
-                "UPDATE user_google_oauth SET access_token = %s, expires_at = %s, "
-                "updated_at = NOW() WHERE sub = %s AND google_email IS NULL",
-                (access_token, expires_at, sub),
-            )
-        else:
-            conn.execute(
-                "UPDATE user_google_oauth SET access_token = %s, expires_at = %s, "
-                "updated_at = NOW() WHERE sub = %s AND google_email = %s",
-                (access_token, expires_at, sub, google_email),
-            )
+    """Met à jour SEULEMENT l'access_token + expiry (sur refresh) — merge meta dans
+    le coffre, SANS re-chiffrer le refresh_token. `google_email` None = compte mono
+    (account=''). Dual-write legacy conditionnel au chiffrement."""
+    from . import credentials_store, crypto
+    account = google_email or ""
+    credentials_store.update_meta(
+        "user", sub, GOOGLE, account,
+        {"access_token": access_token, "expires_at": expires_at})
+    if not crypto.encryption_enabled():
+        with _connect() as conn:
+            if google_email is None:
+                conn.execute(
+                    "UPDATE user_google_oauth SET access_token=%s, expires_at=%s, "
+                    "updated_at=NOW() WHERE sub=%s AND google_email IS NULL",
+                    (access_token, expires_at, sub))
+            else:
+                conn.execute(
+                    "UPDATE user_google_oauth SET access_token=%s, expires_at=%s, "
+                    "updated_at=NOW() WHERE sub=%s AND google_email=%s",
+                    (access_token, expires_at, sub, google_email))
 
 
 def get_google_oauth(sub: str, account: Optional[str] = None) -> Optional[dict]:
-    """Renvoie un compte Google du user.
-
-    `account` (email) cible un compte précis ; None renvoie le défaut
-    (ou, à défaut de flag, le plus ancien — couvre la ligne legacy NULL).
-    """
-    with _connect() as conn:
-        if account:
-            row = conn.execute(
-                "SELECT * FROM user_google_oauth WHERE sub = %s AND google_email = %s",
-                (sub, account),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM user_google_oauth WHERE sub = %s "
-                "ORDER BY is_default DESC, granted_at ASC LIMIT 1",
-                (sub,),
-            ).fetchone()
-        return dict(row) if row else None
+    """Renvoie un compte Google du user depuis le COFFRE (déchiffre le
+    refresh_token). `account` (email) cible un compte ; None = le défaut
+    (meta.is_default), à défaut le plus ancien (granted_at)."""
+    from . import credentials_store
+    if account:
+        cur = credentials_store.get_credential_with_meta("user", sub, GOOGLE, account=account)
+        return _google_row(account, cur) if cur else None
+    accts = credentials_store.list_accounts("user", sub, GOOGLE)
+    if not accts:
+        return None
+    chosen = next((a for a in accts if a["meta"].get("is_default")), None) \
+        or min(accts, key=lambda a: a["meta"].get("granted_at") or "")
+    cur = credentials_store.get_credential_with_meta("user", sub, GOOGLE, account=chosen["account"])
+    return _google_row(chosen["account"], cur) if cur else None
 
 
 def list_google_accounts(sub: str) -> list[dict]:
-    """Liste les comptes Google connectés du user (sans les tokens)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT google_email, is_default, scopes, granted_at, updated_at "
-            "FROM user_google_oauth WHERE sub = %s ORDER BY is_default DESC, granted_at ASC",
-            (sub,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    """Liste les comptes Google connectés (sans les tokens) — depuis le coffre."""
+    from . import credentials_store
+    accts = credentials_store.list_accounts("user", sub, GOOGLE)
+    out = [{
+        "google_email": a["account"] or None,
+        "is_default": bool(a["meta"].get("is_default")),
+        "scopes": a["meta"].get("scopes"),
+        "granted_at": a["meta"].get("granted_at"),
+        "updated_at": a["set_at"],
+    } for a in accts]
+    out.sort(key=lambda r: (not r["is_default"], r["granted_at"] or ""))
+    return out
 
 
 def set_default_google_account(sub: str, account: str) -> bool:
-    """Marque `account` comme défaut. Renvoie False si le compte n'existe pas."""
+    """Marque `account` comme défaut (meta.is_default) dans le coffre. False si le
+    compte n'existe pas. Dual-write legacy conditionnel au chiffrement."""
+    from . import credentials_store, crypto
+    accts = credentials_store.list_accounts("user", sub, GOOGLE)
+    if not any(a["account"] == account for a in accts):
+        return False
     with _connect() as conn:
-        hit = conn.execute(
-            "SELECT 1 FROM user_google_oauth WHERE sub = %s AND google_email = %s",
-            (sub, account),
-        ).fetchone()
-        if not hit:
-            return False
-        conn.execute(
-            "UPDATE user_google_oauth SET is_default = (google_email = %s) WHERE sub = %s",
-            (account, sub),
-        )
-        return True
+        with conn.transaction():
+            conn.execute(
+                "UPDATE connector_credentials "
+                "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
+                "WHERE entity_type='user' AND entity_id=%s AND connector=%s",
+                (account, sub, GOOGLE),
+            )
+            if not crypto.encryption_enabled():
+                conn.execute(
+                    "UPDATE user_google_oauth SET is_default=(google_email=%s) WHERE sub=%s",
+                    (account, sub))
+    return True
 
 
 def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
-    """Supprime un compte (account=email) ou tous les comptes (account=None).
-
-    Si on supprime le compte par défaut alors qu'il en reste d'autres, on
-    promeut le plus ancien restant pour ne pas laisser le user sans défaut.
-    """
+    """Supprime un compte (account=email) ou tous (account=None) du coffre. Si on
+    retire le défaut et qu'il reste des comptes, promeut le plus ancien. Dual-write
+    legacy conditionnel au chiffrement."""
+    from . import credentials_store, crypto
+    enc = crypto.encryption_enabled()
     with _connect() as conn:
-        if account is None:
-            conn.execute("DELETE FROM user_google_oauth WHERE sub = %s", (sub,))
-            return
-        conn.execute(
-            "DELETE FROM user_google_oauth WHERE sub = %s AND google_email = %s",
-            (sub, account),
-        )
-        has_default = conn.execute(
-            "SELECT 1 FROM user_google_oauth WHERE sub = %s AND is_default = TRUE",
-            (sub,),
-        ).fetchone()
-        if not has_default:
-            conn.execute(
-                """
-                UPDATE user_google_oauth SET is_default = TRUE
-                 WHERE sub = %s AND google_email = (
-                     SELECT google_email FROM user_google_oauth
-                      WHERE sub = %s ORDER BY granted_at ASC LIMIT 1
-                 )
-                """,
-                (sub, sub),
-            )
+        with conn.transaction():
+            if account is None:
+                conn.execute(
+                    "DELETE FROM connector_credentials "
+                    "WHERE entity_type='user' AND entity_id=%s AND connector=%s", (sub, GOOGLE))
+                if not enc:
+                    conn.execute("DELETE FROM user_google_oauth WHERE sub=%s", (sub,))
+                return
+            credentials_store.clear_credential("user", sub, GOOGLE, account=account, conn=conn)
+            if not enc:
+                conn.execute(
+                    "DELETE FROM user_google_oauth WHERE sub=%s AND google_email=%s", (sub, account))
+            # promotion du défaut : lire le RESTANT dans CETTE transaction (voit le delete)
+            rem = conn.execute(
+                "SELECT account, meta FROM connector_credentials "
+                "WHERE entity_type='user' AND entity_id=%s AND connector=%s", (sub, GOOGLE)).fetchall()
+            if rem and not any((r["meta"] or {}).get("is_default") for r in rem):
+                oldest = min(rem, key=lambda r: (r["meta"] or {}).get("granted_at") or "")["account"]
+                conn.execute(
+                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
+                    "WHERE entity_type='user' AND entity_id=%s AND connector=%s AND account=%s",
+                    (sub, GOOGLE, oldest))
+                if not enc:
+                    conn.execute(
+                        "UPDATE user_google_oauth SET is_default=TRUE WHERE sub=%s AND google_email=%s",
+                        (sub, oldest))
 
 
 # --- Datastore namespaces ---------------------------------------------------

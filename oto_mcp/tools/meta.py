@@ -335,3 +335,50 @@ def register(mcp: FastMCP) -> None:
         """[admin] Liste les grants de namespace (tous, ou filtrés par namespace)."""
         _require_admin()
         return {"grants": db.list_namespace_grants(namespace)}
+
+    @mcp.tool()
+    async def oto_admin_list_platform_keys(ctx: Context) -> dict:
+        """[admin] Liste les clés plateforme (coffre DB) — provider, label, id.
+
+        Jamais la valeur du secret. La DB est la seule source des platform keys
+        (plus de bootstrap SOPS au boot) : ce qui est listé ici est exactement
+        ce que `resolve_api_key` peut servir via un grant.
+        """
+        _require_admin()
+        keys = [
+            {"id": k["id"], "provider": k["provider"], "label": k["label"]}
+            for k in db.list_platform_keys()
+        ]
+        return {"platform_keys": keys}
+
+    @mcp.tool()
+    async def oto_admin_set_platform_key(
+        provider: str, api_key: str, ctx: Context, label: str = "env"
+    ) -> dict:
+        """[admin] Pose ou rote une clé plateforme dans le coffre DB.
+
+        Remplace l'ancien import SOPS au boot : c'est LE chemin pour provisionner
+        ou roter une clé partagée (modèle : user key OU platform key + grant +
+        quota). Poser une clé ne la grante à personne.
+
+        Args:
+            provider: provider keyé du registre (serper, hunter, sirene, attio,
+                lemlist, kaspr, pennylane, slack, fullenrich).
+            api_key: la nouvelle valeur (rotation = re-poser sur le même
+                provider+label).
+            label: étiquette de la clé (défaut `env`, le label historique servi
+                par resolve_api_key).
+        """
+        _require_admin()
+        if provider not in db.KEY_PROVIDERS:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"`{provider}` n'est pas un provider keyé. "
+                    f"Valides : {sorted(db.KEY_PROVIDERS)}."
+                ),
+            ))
+        if not api_key.strip():
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="api_key vide."))
+        key_id = db.upsert_platform_key(provider, label.strip() or "env", api_key.strip())
+        return {"id": key_id, "provider": provider, "label": label.strip() or "env", "set": True}

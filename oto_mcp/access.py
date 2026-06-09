@@ -21,9 +21,10 @@ Quota daily : chaque grant porte un `daily_quota` optionnel (per-user,
 posé par l'admin au moment du grant). Si null, fallback sur
 `OTO_MCP_QUOTA_<PROVIDER>_DAILY` env ou `_QUOTA_DEFAULTS`.
 
-Les clés plateforme sont importées au boot (`bootstrap_env_keys`) mais
-ne sont PAS auto-grantées — l'admin doit accorder l'accès explicitement
-via l'API admin.
+Les clés plateforme vivent en DB (coffre `platform_keys`) — posées/rotées via la
+surface admin (REST `/api/admin/platform-keys`, meta-tools `oto_admin_*`), plus
+aucun import SOPS/env au boot (oto-mcp#12). Importer ≠ auto-granter : une clé
+n'est accessible qu'avec un grant admin explicite.
 """
 from __future__ import annotations
 
@@ -257,26 +258,3 @@ def status_for(sub: str) -> dict:
             "quota_daily": limit if grant else None,
         }
     return out
-
-
-def bootstrap_env_keys(env_keys: dict[str, str]) -> None:
-    """Au démarrage : importe les env vars `<PROVIDER>_API_KEY` en
-    `platform_keys` (label `env`). Idempotent — appelable à chaque boot.
-
-    Les clés sont importées mais PAS auto-grantées. Un admin doit
-    explicitement accorder l'accès via `/api/admin/users/{sub}/grants/{key_id}`
-    avec un `daily_quota` par user.
-
-    `env_keys` = {provider: api_key} extrait par le caller via
-    `oto.config.get_secret` ; on ne touche pas l'env nous-mêmes pour rester
-    découplé du runtime de secrets.
-    """
-    for provider, api_key in env_keys.items():
-        if not api_key:
-            continue
-        if provider not in db.KEY_PROVIDERS:
-            continue
-        try:
-            db.upsert_platform_key(provider, "env", api_key)
-        except Exception:
-            continue

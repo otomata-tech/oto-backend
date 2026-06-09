@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import sirene_duckdb
+from france_opendata import sirene_stock as sirene_duckdb
 
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]

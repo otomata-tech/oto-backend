@@ -65,6 +65,8 @@ Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 
 ## Rôles + résolution de clé API
 
+> ⚠️ Le **stockage** des credentials est désormais le **coffre `connector_credentials`** (cf. `docs/connector-vault.md`), pas les colonnes `users.<provider>_api_key`/`org_secrets` (foldées, dual-written, nullées au soak). La résolution ci-dessous reste valide dans sa cascade, mais lit le coffre via `credentials_store`.
+
 Le rôle (`users.role`) ne sert qu'à décider qui voit l'admin UI :
 
 - **admin** : accès `/api/admin/*`. Bootstrap via env `OTO_MCP_ADMIN_SUB`.
@@ -156,7 +158,7 @@ via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
 Stock complet (~35M établissements, parquet ~2GB) accessible via DuckDB :
 - Path canonique : `/opt/oto-mcp/data/sirene/StockEtablissement.parquet` (env `SIRENE_STOCK_PARQUET_PATH`)
 - Refresh mensuel via `deploy/refresh_sirene_stock.sh` (cron sur tuls.me)
-- Query layer : `oto_mcp/sirene_duckdb.py`
+- Query layer : `france_opendata.sirene_stock` (lib partagée PyPI `france-opendata[stock]`, ex-`oto_mcp/sirene_duckdb.py` — déplacé pour être consommé aussi par les apps co-localisées, ex. tuls)
 - 4 MCP tools `sirene_stock_*` (siege, etablissements, siret, search)
 - 5 REST endpoints `/api/sirene/{siege,etablissements,siret,search,info}`
 - Consommé par `oto-cli` (`SireneStock` HTTP client) — voir [ADR 0001](../docs/adr/0001-sirene-stock-served-via-mcp.md) dans le meta-repo `otomata`
@@ -355,6 +357,7 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP 'set -a; . /opt/oto-mcp/.env; set +a; psql
 
 ## Docs
 
+- `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffrable unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM dormante, résolution + palier org. À lire avant de toucher credentials/registre/résolution.
 - `README.md` — quickstart + tools catalog
 - `deploy/DEPLOY.md` — procédure complète déploiement
 - `docs/backlog.md` — initiatives à venir (issues GitHub pour le détail)

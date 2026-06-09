@@ -124,25 +124,34 @@ def register(mcp: FastMCP) -> None:
         html: Optional[str] = None,
         from_name: Optional[str] = None,
         markdown: bool = True,
+        draft: bool = False,
         account: Optional[str] = None,
     ) -> dict:
-        # TODO(#17): markdown=True (le défaut) crashe sur le MCP déployé avec
-        # "No module named 'markdown'" → dépendance absente du venv de prod (mcp/.venv).
-        # Ajouter la dép, ou dégrader proprement en texte brut au lieu de lever.
         """Reply to a message, preserving thread, subject, and headers.
+
+        With draft=True, creates a threaded reply DRAFT instead of sending —
+        for replies that need human review in Gmail before going out.
 
         Args:
             message_id: id of the message to reply to.
             body: reply body (markdown-rendered by default).
             cc: optional carbon copy.
             html: explicit HTML body (bypasses markdown rendering).
-            from_name: optional display name for the From header.
+            from_name: optional display name for the From header (ignored in draft mode).
             markdown: render `body` from markdown when `html` is not given (default True).
+            draft: save as draft in the thread instead of sending (default False).
             account: email of the Google account to use (default if omitted).
 
-        Returns {id, threadId, to}.
+        Returns {id, threadId, to} when sent ; {id, message_id, threadId} when draft=True.
         """
         client = _client_for_user(account)
+        if draft:
+            return await asyncio.to_thread(
+                lambda: client.create_draft_reply(
+                    message_id=message_id, body=body, html=html,
+                    cc=cc, markdown=markdown,
+                )
+            )
         return await asyncio.to_thread(
             lambda: client.reply(
                 message_id=message_id, body=body, html=html,
@@ -160,11 +169,10 @@ def register(mcp: FastMCP) -> None:
         html: Optional[str] = None,
         account: Optional[str] = None,
     ) -> dict:
-        # TODO(#18): impossible de créer un brouillon DE RÉPONSE (rattaché à un fil).
-        # Ni reply_to_message_id ni threadId ici → brouillon toujours isolé ; gmail_reply
-        # thread bien mais envoie direct. Ajouter reply_to_message_id (threadId +
-        # In-Reply-To/References), ou un flag draft=True à gmail_reply.
-        """Create a draft email (not sent).
+        """Create a NEW draft email (not sent, new thread).
+
+        For a threaded REPLY draft (attached to an existing conversation), use
+        gmail_reply with draft=True instead.
 
         Args:
             to: recipient(s).
@@ -174,7 +182,7 @@ def register(mcp: FastMCP) -> None:
             html: optional explicit HTML body.
             account: email of the Google account to use (default if omitted).
 
-        Returns {id, message_id}.
+        Returns {id, message_id, threadId}.
         """
         client = _client_for_user(account)
         return await asyncio.to_thread(

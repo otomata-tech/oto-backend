@@ -84,25 +84,25 @@ Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
 au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
 ou `_QUOTA_DEFAULTS` dans `access.py`. User key bypass quota.
 
-Au boot, `bootstrap_env_keys` importe les clés env en `platform_keys` (label
-`env`) mais ne les grante à personne — l'admin décide qui a accès. Modèle
-identique pour tous les providers : user key (prio, no quota) OU platform
-key + grant + quota OU erreur. `serper/hunter/sirene` sont les seuls
-réellement partagés (commodité) ; `attio/lemlist/kaspr/pennylane/slack` sont des
-comptes privés → clé plateforme présente mais grantée à personne (sauf
-équipe Otomata). **Slack** = cas particulier : pas de `SLACK_API_KEY`, le
-provider porte le **user token** (`xoxp`) du user. La clé plateforme est
-bootstrappée depuis `SLACK_USER_TOKEN` (override dans `_bootstrap_env_keys`),
-et les tools `slack_*` postent/lisent en `as_user` (le mode bot `xoxb` n'est
-pas exposé en multi-tenant — viendra avec l'OAuth install, issue #4).
+**Les platform keys vivent en DB uniquement** (coffre `platform_keys` — plus de
+bootstrap SOPS/env au boot, oto-mcp#12). Poser/roter une clé = surface admin :
+REST `POST /api/admin/platform-keys` ou meta-tool `oto_admin_set_platform_key`
+(rotation = re-poser même provider+label ; label historique servi par
+`resolve_api_key` = `env`). Poser ≠ granter : l'admin accorde l'accès au cas
+par cas. Modèle identique pour tous les providers : user key (prio, no quota)
+OU platform key + grant + quota OU erreur. `serper/hunter/sirene` sont les
+seuls réellement partagés (commodité) ; `attio/lemlist/kaspr/pennylane/slack`
+sont des comptes privés → clé plateforme présente mais grantée à personne
+(sauf équipe Otomata). **Slack** = cas particulier : pas de `SLACK_API_KEY`,
+le provider porte le **user token** (`xoxp`) — les tools `slack_*`
+postent/lisent en `as_user` (mode bot `xoxb` non exposé, viendra avec l'OAuth
+install, issue #4).
 
-**Gotcha bootstrap** : `_bootstrap_env_keys` (server.py) itère sur TOUT
-`KEY_PROVIDERS` et importe chaque `<PROVIDER>_API_KEY` trouvé en SOPS comme
-clé plateforme (sauf override de nom de secret, cf. `slack`→`SLACK_USER_TOKEN`).
-Donc ajouter un provider perso à `KEY_PROVIDERS` crée
-involontairement une clé plateforme depuis ta clé perso. Importer ≠ partager
-(inaccessible sans grant), mais à surveiller : vérifier `/api/admin/platform-keys`
-après ajout, et ne grant que l'équipe pour les comptes privés.
+**Débranchement SOPS (oto-mcp#12)** : l'unit pose `OTO_CONFIG_DISABLE_SOPS=1`
+→ côté serveur, `oto.config.get_secret` ne résout QUE l'env du process (ni
+SOPS ni `~/.otomata/secrets.env`), et tout `require_secret` résiduel échoue
+fort. L'infra bootstrap (DATABASE_URL, Logto, OAuth Google, state secret)
+reste en env de process (`/opt/oto-mcp/.env`).
 
 Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,
 `attio_*`, `pennylane_*`, `slack_*`…) appellent `resolve_api_key(provider)`.
@@ -309,11 +309,13 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
   lève `Unknown provider` à l'appel** (le tool peut être écrit + enregistré et
   planter quand même) : (1) tuple `KEY_PROVIDERS` dans `db.py`, (2) colonne
   `<provider>_api_key` dans `_SCHEMA`, (3) `ALTER TABLE … ADD COLUMN IF NOT
-  EXISTS` dans `init_db()`. Si le secret env n'est pas `<PROVIDER>_API_KEY`,
-  ajouter un override dans `_bootstrap_env_keys` (cf. `slack`→`SLACK_USER_TOKEN`).
+  EXISTS` dans `init_db()`. Puis poser la clé plateforme en DB via
+  `oto_admin_set_platform_key` (plus de bootstrap SOPS — le provider sans clé
+  DB n'a simplement pas de mode plateforme).
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
-- API keys serveur (`SERPER_API_KEY`, `HUNTER_API_KEY`, `SIRENE_API_KEY`)
-  résolues via `oto.config.get_secret()` — ne pas re-faire l'env loading ici.
+- **Aucune résolution de secret côté serveur hors DB/env de process** : pas de
+  `get_secret`/`require_secret` oto.config dans le code serveur (l'unit pose
+  `OTO_CONFIG_DISABLE_SOPS=1`, tout résidu échoue fort).
 - LinkedIn nécessite le **vrai Google Chrome système** (`google-chrome-stable`, apt)
   sur l'host — PAS le Chromium bundlé Patchright (empreinte TLS ≠ Chrome de bureau
   → bloqué par LinkedIn). `_require_chrome_channel` (`tools/linkedin.py`) force

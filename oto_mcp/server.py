@@ -24,7 +24,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
-from . import access, api_routes, connectors, db
+from . import api_routes, db
 from .config import require_env
 from .tools import register_all
 
@@ -82,37 +82,11 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
     )
 
 
-def _bootstrap_env_keys() -> None:
-    """Importe les `<PROVIDER>_API_KEY` env en `platform_keys` (label "env")
-    et grant à `OTO_MCP_ADMIN_SUB`. Idempotent — ne casse rien si une clé
-    manque (on log et on passe). Permet à la prod existante de continuer à
-    marcher sans intervention manuelle après la migration des grants.
-    """
-    try:
-        from oto.config import get_secret
-    except Exception as e:
-        logger.warning("oto.config indisponible — bootstrap env keys skippé: %s", e)
-        return
-    # Toutes les clés env sont importées en `platform_keys` (label "env") pour
-    # que l'admin PUISSE les grant au cas par cas (modèle serper : user key OU
-    # platform key + quota). Importer ≠ partager : une clé plateforme n'est
-    # accessible qu'avec un grant explicite (cf. access.resolve_api_key).
-    # La plupart des providers exposent `<PROVIDER>_API_KEY` ; slack n'a pas de
-    # clé unique mais un user token (`SLACK_USER_TOKEN`, xoxp) — c'est lui qu'on
-    # importe comme clé plateforme (mode `as_user` côté tool).
-    env_keys: dict[str, str] = {}
-    for provider in db.KEY_PROVIDERS:
-        secret_name = connectors.ENV_SECRET_NAMES.get(provider, f"{provider.upper()}_API_KEY")
-        try:
-            v = get_secret(secret_name)
-        except Exception:
-            v = None
-        if v:
-            env_keys[provider] = v
-    if env_keys:
-        access.bootstrap_env_keys(env_keys)
-        logger.info("Bootstrap env keys importées : %s", sorted(env_keys.keys()))
-
+# Plus de bootstrap SOPS→platform_keys au boot (oto-mcp#12) : la DB (coffre
+# `platform_keys`) est la SEULE source des clés plateforme. Poser/roter une clé =
+# surface admin (REST `/api/admin/platform-keys` ou meta-tool MCP), jamais SOPS.
+# L'unit pose `OTO_CONFIG_DISABLE_SOPS=1` : tout `require_secret` résiduel côté
+# serveur échoue fort au lieu de lire le filesystem.
 
 _SERVER_INSTRUCTIONS = """\
 Oto — toolkit d'automatisation pour la prospection B2B et l'intelligence commerciale.
@@ -185,7 +159,6 @@ def main():
         mcp = _build_mcp(transport, verifier)
 
         db.init_db()
-        _bootstrap_env_keys()
         app = mcp.http_app()
         # API REST consommée par oto.ninja (page de gestion de compte).
         # Insérée avant les routes FastMCP pour qu'elles matchent /api/* en priorité.

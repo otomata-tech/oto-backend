@@ -164,21 +164,23 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         user = db.get_user(sub) or {}
         status = access.status_for(sub)
+        li = db.get_linkedin_status(sub)        # coffre (folding), sans déchiffrer
+        cb = db.get_crunchbase_status(sub)
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
             "name": user.get("name"),
             "role": status["role"],
             "linkedin": {
-                "configured": bool(user.get("linkedin_cookie")),
-                "set_at": user.get("linkedin_cookie_set_at"),
-                "user_agent": user.get("linkedin_user_agent"),
+                "configured": li is not None,
+                "set_at": li["set_at"] if li else None,
+                "user_agent": li["user_agent"] if li else None,
                 "browser_profile": linkedin_pairing.has_profile(sub),
             },
             "crunchbase": {
-                "configured": bool(user.get("crunchbase_cookies")),
-                "set_at": user.get("crunchbase_set_at"),
-                "user_agent": user.get("crunchbase_user_agent"),
+                "configured": cb is not None,
+                "set_at": cb["set_at"] if cb else None,
+                "user_agent": cb["user_agent"] if cb else None,
             },
             "providers": status["providers"],
         })
@@ -217,11 +219,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sess = db.get_linkedin_session(sub)
         if not sess:
             return _json_error(request, 404, "not_configured")
-        user = db.get_user(sub) or {}
         return _json(request, {
             "cookie": sess["cookie"],
             "user_agent": sess.get("user_agent"),
-            "set_at": user.get("linkedin_cookie_set_at"),
+            "set_at": sess.get("set_at"),
         })
 
     async def crunchbase_save(request: Request) -> JSONResponse:
@@ -260,11 +261,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sess = db.get_crunchbase_session(sub)
         if not sess:
             return _json_error(request, 404, "not_configured")
-        user = db.get_user(sub) or {}
         return _json(request, {
             "cookies": sess["cookies"],
             "user_agent": sess.get("user_agent"),
-            "set_at": user.get("crunchbase_set_at"),
+            "set_at": sess.get("set_at"),
         })
 
     async def api_key_save(request: Request) -> JSONResponse:

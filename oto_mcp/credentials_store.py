@@ -37,12 +37,33 @@ def _aad(entity_type: str, entity_id: str, connector: str, account: str = "") ->
     return f"{base}:{account}" if account else base
 
 
+def _reveal(row, entity_type: str, entity_id: str, connector: str, account: str) -> Optional[str]:
+    """Secret en clair depuis une ligne : déchiffre `secret_enc` (fallback plaintext
+    pendant le soak si la clé déraille), sinon `secret`. Primitive partagée par
+    get_credential / get_credential_with_meta."""
+    if row["secret_enc"]:
+        try:
+            return crypto.decrypt(row["secret_enc"], _aad(entity_type, entity_id, connector, account))
+        except Exception:
+            # Incident clé pendant le soak : si le plaintext est encore là
+            # (pas encore nullé), fallback gracieux + warning ; sinon on relève
+            # (échec bruyant — pas de secret silencieusement faux).
+            if row["secret"] is not None:
+                logger.warning(
+                    "decrypt KO %s/%s/%s/%s — fallback plaintext (soak) ; vérifier la master key",
+                    entity_type, entity_id, connector, account,
+                )
+                return row["secret"]
+            raise
+    return row["secret"]
+
+
 def get_credential(entity_type: str, entity_id: str, connector: str, account: str = "") -> Optional[str]:
     """Secret en CLAIR du connecteur pour cette entité (et ce `account` pour le
     multi-compte ; '' = mono-compte), ou None. Déchiffrement JIT si la ligne est
     chiffrée (secret_enc) ; fallback plaintext (secret) pour les lignes
     non-migrées / chiffrement désactivé. Lève si le connecteur ne peut pas porter
-    un credential à ce niveau d'entité (user→keyed, org→org-partageable).
+    un credential à ce niveau d'entité (user→byo_user, org→org-partageable).
 
     Primitive de déchiffrement : appelée par resolve_api_key (résolution, injecte
     au connecteur) ET api_key_get (lecture de SA clé par le propriétaire).
@@ -54,23 +75,42 @@ def get_credential(entity_type: str, entity_id: str, connector: str, account: st
             "WHERE entity_type = %s AND entity_id = %s AND connector = %s AND account = %s",
             (entity_type, entity_id, connector, account),
         ).fetchone()
+    return _reveal(row, entity_type, entity_id, connector, account) if row else None
+
+
+def get_credential_with_meta(entity_type: str, entity_id: str, connector: str,
+                             account: str = "") -> Optional[dict]:
+    """`{secret (déchiffré), meta, set_at}` ou None. Pour les connecteurs dont des
+    satellites vivent dans `meta` : user_agent (linkedin/crunchbase),
+    scopes/is_default (google). Même déchiffrement JIT que get_credential."""
+    connectors.require_credential(entity_type, connector)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT secret, secret_enc, meta, set_at FROM connector_credentials "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s AND account = %s",
+            (entity_type, entity_id, connector, account),
+        ).fetchone()
     if not row:
         return None
-    if row["secret_enc"]:
-        try:
-            return crypto.decrypt(row["secret_enc"], _aad(entity_type, entity_id, connector, account))
-        except Exception:
-            # Incident clé pendant le soak : si le plaintext est encore là
-            # (pas encore nullé), fallback gracieux + warning ; sinon on relève
-            # (échec bruyant — pas de secret silencieusement faux).
-            if row["secret"] is not None:
-                logger.warning(
-                    "decrypt KO %s/%s/%s — fallback plaintext (soak) ; vérifier la master key",
-                    entity_type, entity_id, connector,
-                )
-                return row["secret"]
-            raise
-    return row["secret"]
+    return {"secret": _reveal(row, entity_type, entity_id, connector, account),
+            "meta": row["meta"] or {}, "set_at": row["set_at"]}
+
+
+def credential_status(entity_type: str, entity_id: str, connector: str,
+                      account: str = "") -> Optional[dict]:
+    """Présence + satellites NON-secrets (`meta`, `set_at`) SANS déchiffrer — pour
+    /api/me et autres surfaces de statut (mêmes garanties que has_credential :
+    jamais la valeur du secret). None si aucun credential."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT meta, set_at, (secret IS NOT NULL OR secret_enc IS NOT NULL) AS configured "
+            "FROM connector_credentials "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s AND account = %s",
+            (entity_type, entity_id, connector, account),
+        ).fetchone()
+    if not row or not row["configured"]:
+        return None
+    return {"set_at": row["set_at"], "meta": row["meta"] or {}}
 
 
 def has_credential(entity_type: str, entity_id: str, connector: str, account: Optional[str] = None) -> bool:

@@ -96,6 +96,36 @@ def get_credential_with_meta(entity_type: str, entity_id: str, connector: str,
             "meta": row["meta"] or {}, "set_at": row["set_at"]}
 
 
+def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
+                patch: dict, conn=None) -> bool:
+    """Merge `patch` dans `meta` (JSONB ||) SANS toucher secret/secret_enc — pour
+    les satellites mutables (access_token/expires_at Google sur refresh,
+    is_default…), sans re-chiffrer le refresh_token. False si ligne absente."""
+    def _do(c) -> bool:
+        cur = c.execute(
+            "UPDATE connector_credentials SET meta = meta || %s::jsonb "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (json.dumps(patch), entity_type, entity_id, connector, account),
+        )
+        return (cur.rowcount or 0) > 0
+    if conn is not None:
+        return _do(conn)
+    with _connect() as c:
+        return _do(c)
+
+
+def list_accounts(entity_type: str, entity_id: str, connector: str) -> list[dict]:
+    """Lignes (account, meta, set_at) d'un connecteur multi-compte SANS secret —
+    pour la sélection du défaut / le listing (google)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT account, meta, set_at FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s ORDER BY account",
+            (entity_type, entity_id, connector),
+        ).fetchall()
+    return [{"account": r["account"], "meta": r["meta"] or {}, "set_at": r["set_at"]} for r in rows]
+
+
 def credential_status(entity_type: str, entity_id: str, connector: str,
                       account: str = "") -> Optional[dict]:
     """Présence + satellites NON-secrets (`meta`, `set_at`) SANS déchiffrer — pour

@@ -11,6 +11,11 @@ dependencies = [
     "pydantic>=2.0",
     "google-api-python-client>=2.0",
     "google-auth>=2.0",
+    # Rendu markdown→HTML des gmail_* (défaut markdown=True). Vit dans l'extra
+    # `google` d'oto-cli, mais le serveur installe `oto-cli[browser]` → on le
+    # déclare ici pour qu'il soit installé par le `pip install -e .` du deploy
+    # (oto-mcp#17 : crash 'No module named markdown' en prod).
+    "markdown>=3.5",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
     "duckdb>=1.1",

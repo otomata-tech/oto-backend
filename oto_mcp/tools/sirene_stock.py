@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import sirene_duckdb
+from france_opendata import sirene_stock as sirene_duckdb
 
 
 def register(mcp: FastMCP) -> None:

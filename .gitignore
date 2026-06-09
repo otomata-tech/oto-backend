@@ -7,3 +7,6 @@ dist/
 build/
 .pytest_cache/
 .claude/
+
+# uv non utilisé par la CI/deploy (pip install -e) — lock local seulement
+uv.lock

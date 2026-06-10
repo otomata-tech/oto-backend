@@ -51,7 +51,7 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 - **adaptateur REST** : `api_routes`.
 - **runtime connecteurs** : `tools/*` (in-process) + `tools/remote` (forward bridges).
 
-**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ La résolution credentials+sessions passe par `access` (`resolve_api_key`/`resolve_remote_credential`/`resolve_crunchbase_session`). ⚠️ Dette restante : `tools/meta` (visibilité), `tools/datastore` (partage) tapent `db` directement → à router par interface (oto-mcp#22).
+**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_remote_credential` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
 
 ## Auth — Logto
 

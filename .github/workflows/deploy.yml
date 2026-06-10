@@ -13,7 +13,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to tuls.me
+      - name: Deploy to oto-platform box
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: REDACTED_IP

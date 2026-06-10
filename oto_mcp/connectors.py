@@ -40,6 +40,10 @@ class Connector:
     label: str = ""
     help: str = ""
     href: str | None = None
+    # "tools" = module in-process (tools/<name>.py) ; "remote" = bridge distant
+    # (ADR 0003) servi par le module générique tools/remote.py — le credential
+    # d'org est alors {secret=token M2M, meta.base_url=endpoint du bridge}.
+    kind: str = "tools"
 
     @property
     def org_shareable(self) -> bool:
@@ -53,13 +57,13 @@ class Connector:
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none", env_secret_name=None,
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       label="", help="", href=None) -> Connector:
+       label="", help="", href=None, kind="tools") -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
         secret_kind=secret_kind, env_secret_name=env_secret_name, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
-        label=label or name.capitalize(), help=help, href=href,
+        label=label or name.capitalize(), help=help, href=href, kind=kind,
     )
 
 
@@ -102,14 +106,14 @@ _REGISTRY_LIST = [
     _c("gocardless", ["gocardless"], availability="platform_granted", secret_kind="api_key",
        env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
-    # mm : compte de service ORG-ONLY (Movinmotion). Le token MM_REFRESH_TOKEN est
-    # un credential POSSÉDÉ par l'org Movinmotion et partagé à ses membres →
-    # auth_modes={byo_org} (org-partageable, jamais per-user). availability
-    # platform_granted (réservé à l'org entitled). Injecté au runtime depuis le
-    # credential d'org (Phase 5) — plus de lecture SOPS serveur.
-    _c("mm", ["mm"], availability="platform_granted", auth_modes={"byo_org"},
-       secret_kind="refresh_token", env_secret_name="MM_REFRESH_TOKEN", in_default_bundle=False,
-       label="Movinmotion BO", help="back-office Movinmotion (lecture)"),
+    # mm : connecteur REMOTE (bridge, ADR 0003). Le credential Movinmotion vit
+    # dans le service distant movinmotion-backoffice-bridge — JAMAIS ici. Le
+    # credential d'org (Movinmotion, org-partageable) = token M2M du bridge
+    # (`secret`) + endpoint (`meta.base_url`). availability platform_granted
+    # (réservé à l'org entitled). Tools servis par le générique tools/remote.py.
+    _c("mm", ["mm"], kind="remote", availability="platform_granted", auth_modes={"byo_org"},
+       secret_kind="api_key", in_default_bundle=False,
+       label="Movinmotion BO", help="back-office Movinmotion (lecture, via bridge)"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     _c("linkedin", ["linkedin"], auth_modes={"byo_user"}, personal_session=True,
@@ -150,6 +154,7 @@ QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.def
 ENV_SECRET_NAMES: dict = {c.name: c.env_secret_name for c in _REGISTRY_LIST if c.env_secret_name}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)
 DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_preset)
+REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote")
 
 
 # --- helpers ----------------------------------------------------------------

@@ -34,7 +34,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import connectors, db, org_store
+from . import connectors, credentials_store, db, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -176,23 +176,32 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     return grant["api_key"], True
 
 
-def resolve_org_credential(provider: str) -> str:
-    """Résout un credential POSSÉDÉ par l'org active du sub courant et le renvoie
-    pour **injection** dans le connecteur (jamais d'auto-résolution serveur).
+def resolve_remote_credential(provider: str) -> tuple[str, str]:
+    """Résout `(base_url, token_m2m)` du **bridge** d'un connecteur remote
+    (ADR 0003) depuis le credential de l'org active du sub courant.
 
-    Pour les connecteurs org-only non-keyed (`mm`) : le secret vit sur l'org
-    (`connector_credentials`/`org_secrets`), pas en SOPS serveur. C'est le pendant
-    de la branche org de `resolve_api_key`, mais pour un provider hors
-    `KEY_PROVIDERS`. Lève une McpError actionnable si l'org active du sub n'a pas
-    ce credential — **pas** de fallback SOPS côté serveur (cf. Phase 6 ;
-    `require_secret` ne survit qu'en CLI local).
+    Le credential d'org d'un remote n'est PAS le secret du système client (il
+    vit dans le bridge, ex. movinmotion-backoffice-bridge) : c'est le moyen
+    d'appeler le bridge — `secret` = token M2M, `meta.base_url` = endpoint.
+    Lève une McpError actionnable si l'org active n'a pas ce credential —
+    **pas** de fallback SOPS côté serveur (cf. Phase 6). Remplace
+    `resolve_org_credential` (l'injection in-process de l'ex-tools/mm.py).
     """
     sub = current_user_sub_or_raise()
     active_org = org_store.get_active_org(sub)
     if active_org is not None:
-        secret = org_store.get_org_secret(active_org, provider)
-        if secret:
-            return secret
+        cred = credentials_store.get_credential_with_meta("org", str(active_org), provider)
+        if cred and cred["secret"]:
+            base_url = (cred["meta"] or {}).get("base_url")
+            if not base_url:
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=(
+                        f"Credential `{provider}` posé sans `base_url` dans meta — "
+                        f"re-poser via `oto_admin_set_org_secret` avec l'endpoint du bridge."
+                    ),
+                ))
+            return base_url.rstrip("/"), cred["secret"]
     raise McpError(ErrorData(
         code=INVALID_PARAMS,
         message=(

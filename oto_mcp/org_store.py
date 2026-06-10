@@ -193,10 +193,13 @@ def get_org_role(org_id: int, sub: str) -> Optional[str]:
         return row["org_role"] if row else None
 
 
-def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[str] = None) -> None:
+def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[str] = None,
+                   meta: Optional[dict] = None) -> None:
     """Pose/rote le secret partagé `provider` de l'org. `provider` validé comme
     org-partageable (byo_org : exclut slack/linkedin, inclut mm org-only) via le
-    registre — plus restrictif que KEY_PROVIDERS puisque mm n'est pas keyed."""
+    registre — plus restrictif que KEY_PROVIDERS puisque mm n'est pas keyed.
+    `meta` : satellites non-secrets (ex. `base_url` du bridge d'un connecteur
+    remote, ADR 0003)."""
     connectors.require_credential("org", provider)
     if not api_key:
         raise ValueError("api_key requise")
@@ -215,7 +218,7 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
                     (org_id, provider, api_key, set_by),
                 )
             credentials_store.set_credential(
-                "org", str(org_id), provider, api_key, set_by=set_by, conn=conn)
+                "org", str(org_id), provider, api_key, set_by=set_by, meta=meta, conn=conn)
 
 
 def delete_org_secret(org_id: int, provider: str) -> bool:

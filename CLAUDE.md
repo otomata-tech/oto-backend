@@ -305,6 +305,12 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
   enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
   le serveur si un client a une dépendance optionnelle absente.
+- **Connecteur client-sensible = JAMAIS de code ici** : `kind="remote"` au
+  registre + bridge distant (service HTTP privé qui détient le credential),
+  servi par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`,
+  credential d'org = token M2M + `meta.base_url`). Pilote : mm
+  (`movinmotion-backoffice-bridge`). Cf. ADR 0003 (meta-repo) +
+  `docs/connector-vault.md` §remote.
 - **Tool API-keyé = déclarer le provider à 3 endroits sinon `resolve_api_key`
   lève `Unknown provider` à l'appel** (le tool peut être écrit + enregistré et
   planter quand même) : (1) tuple `KEY_PROVIDERS` dans `db.py`, (2) colonne

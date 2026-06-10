@@ -2,7 +2,7 @@
 
 MCP server (Streamable HTTP) qui expose une sélection de connecteurs `oto-cli`
 comme tools, branchable dans claude.ai et Claude Code. Public :
-`https://mcp.oto.ninja/mcp` (tuls.me, port 9103).
+`https://mcp.oto.ninja/mcp` (box dédiée `oto-platform` 151.115.148.128, port 9103 — cf. §Infra).
 
 La page de gestion utilisateur (cookie LinkedIn, etc.) vit dans le site Vue
 oto.ninja sous `/account` et parle au MCP via REST.
@@ -100,14 +100,18 @@ bootstrap SOPS/env au boot, oto-mcp#12). Poser/roter une clé = surface admin :
 REST `POST /api/admin/platform-keys` ou meta-tool `oto_admin_set_platform_key`
 (rotation = re-poser même provider+label ; label historique servi par
 `resolve_api_key` = `env`). Poser ≠ granter : l'admin accorde l'accès au cas
-par cas. Modèle identique pour tous les providers : user key (prio, no quota)
-OU platform key + grant + quota OU erreur. `serper/hunter/sirene` sont les
-seuls réellement partagés (commodité) ; `attio/lemlist/kaspr/pennylane/slack`
-sont des comptes privés → clé plateforme présente mais grantée à personne
-(sauf équipe Otomata). **Slack** = cas particulier : pas de `SLACK_API_KEY`,
-le provider porte le **user token** (`xoxp`) — les tools `slack_*`
-postent/lisent en `as_user` (mode bot `xoxb` non exposé, viendra avec l'OAuth
-install, issue #4).
+par cas. Modèle : user key (prio, no quota) OU platform key + grant + quota OU
+erreur. **Seuls les providers `platform`-éligibles au registre (`auth_modes`
+inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
+plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur
+`auth_modes` (audit 2026-06-11). Les comptes **privés / byo-only**
+(`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
+les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de
+l'**équipe Otomata** (attio/lemlist) vit en **credentials de l'org Otomata
+(byo_org, org id 2)** — accès par appartenance, pas par grant plateforme.
+**Slack** : pas de `SLACK_API_KEY`, le provider porte le **user token**
+(`xoxp`) per-user — `slack_*` postent en `as_user` (mode bot viendra avec
+l'OAuth install, issue #4).
 
 **Débranchement SOPS (oto-mcp#12)** : l'unit pose `OTO_CONFIG_DISABLE_SOPS=1`
 → côté serveur, `oto.config.get_secret` ne résout QUE l'env du process (ni
@@ -272,7 +276,7 @@ Google pour le datastore se voit aussi demander l'accès Gmail. Choix assumé
 
 Bootstrap d'un token CLI (pour Alexis) :
 ```bash
-ssh -i ~/.ssh/alexis root@51.15.225.121 \
+ssh -i ~/.ssh/alexis root@151.115.148.128 \
   "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.issue_token <SUB> cli"
 # → imprime un `oto_…` à stocker dans SOPS comme OTO_API_KEY
 ```
@@ -352,27 +356,29 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 # Local stdio (Claude Code, sans auth)
 OTO_MCP_DEV_SUB=alexis .venv/bin/oto-mcp
 
-# Deploy — push main déclenche `.github/workflows/deploy.yml` (git reset --hard
-# origin/main + pip install -e . + systemctl restart oto-mcp). Idem côté
-# oto-cli qui a son propre workflow déclenchant `systemctl restart oto-mcp`
-# pour propager les nouveaux modules (`pip install -e` ne re-collecte pas les
-# imports déjà en mémoire).
+# Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
+# 151.115.148.128 : git reset --hard origin/main + pip install -e . + systemctl
+# restart oto-mcp). Idem côté oto-cli (workflow restart oto-mcp). Le restart
+# relance le wrapper start-encrypted (la master key est refetchée). ⚠️ start-
+# encrypted.sh est untracked → survit au git reset.
 git push origin main
 
 # Logs
-ssh -i ~/.ssh/alexis root@51.15.225.121 "journalctl -u oto-mcp -f"
+ssh -i ~/.ssh/alexis root@151.115.148.128 "journalctl -u oto-mcp -f"
 
-# DB inspect (PG managed)
-ssh -i ~/.ssh/alexis root@51.15.225.121 'set -a; . /opt/oto-mcp/.env; set +a; psql "$DATABASE_URL" -c "SELECT sub, email, role FROM users"'
+# DB inspect (PG managed) — depuis la box (env du process inclut DATABASE_URL via .env)
+ssh -i ~/.ssh/alexis root@151.115.148.128 'set -a; . /opt/oto-mcp/.env; set +a; psql "$DATABASE_URL" -c "SELECT sub, email, role FROM users"'
 ```
 
 ## Infra
 
-- Server: tuls.me (51.15.225.121), `/opt/oto-mcp/`, port 9103, User=root
-- DNS: `mcp.oto.ninja` A proxied → tuls.me (zone CF `474add39245a72c0ff98749e677815d3`)
-- TLS: Origin Cert `*.oto.ninja` (`/etc/caddy/origin-certs/oto-ninja.{pem,key}`)
-- Caddyfile : source dans `/mnt/otomata-shared/infra/Caddyfile`
-- DB : PostgreSQL managed Scaleway `otomata-main` (instance `9e44fefb…`, endpoint `51.15.207.157:27996`, DB `oto_mcp`, user `oto_mcp`). Connection string en SOPS `projects/oto-mcp.yaml` (DATABASE_URL), injectée dans `/opt/oto-mcp/.env`. Backup quotidien Scaleway (rétention 7j) + snapshots SQLite legacy dans `/opt/oto-mcp/data/oto-mcp.sqlite.bak-*` (à drop après 1 semaine).
+⚠️ **Migré sur box dédiée (2026-06-11, ADR 0002)** — oto-mcp **ne tourne plus sur tuls.me**.
+- Server: **`oto-platform`** (Scaleway DEV1-S, fr-par-2, **`151.115.148.128`**), `/opt/oto-mcp/`, port 9103, User=root. tuls.me oto-mcp **décommissionné** (stop+disable, code gardé pour rollback). SSH `root@151.115.148.128` (clé `alexis`).
+- **Chiffrement coffre ACTIF** : master key en Secret Manager (secret `7def5e38`), fetchée au boot par le wrapper `ExecStart=/opt/oto-mcp/start-encrypted.sh` (clé IAM scopée `/etc/oto-mcp/scw.env` → curl SM → env du process, **jamais sur disque**). Drop-in `/etc/systemd/system/oto-mcp.service.d/encryption.conf`. **0 plaintext** en base.
+- DNS: `mcp.oto.ninja` A proxied → `151.115.148.128` (zone CF `474add…`, zone hors tokens SOPS standard → minter un token éphémère via `CLOUDFLARE_ADMIN_TOKEN` sur `/user/tokens`). Rollback noté otomata#18.
+- Caddy sur la box (standard, user `caddy` → cert key en `chgrp caddy chmod 640`) : `mcp.oto.ninja` → :9103, Origin Cert `oto-ninja.{pem,key}` copié de tuls.me.
+- DB : PostgreSQL managed Scaleway `otomata-main` (instance `9e44fefb…`, endpoint `51.15.207.157:27996`, DB `oto_mcp`). ACL whiteliste tuls.me **et** la box (`151.115.148.128/32`). DATABASE_URL en SOPS + `/opt/oto-mcp/.env`. Backup quotidien Scaleway 7j.
+- **Restes ADR 0002** (non bloquants) : KMS-wrap master key (SM-direct pour l'instant), Terraform control-plane, deploy par registry. Cf. otomata#18.
 
 ## Docs
 

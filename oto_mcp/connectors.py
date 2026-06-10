@@ -101,9 +101,12 @@ _REGISTRY_LIST = [
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
 
     # --- platform_granted (grant-only, deny-by-default) ----------------------
-    # gocardless : aujourd'hui grant-only non-keyed (resolve_api_key('gocardless')
-    # lève faute de provider). Reclassé BYO self_serve dans une phase ultérieure.
-    _c("gocardless", ["gocardless"], availability="platform_granted", secret_kind="api_key",
+    # gocardless : keyed BYO (user OU org), résolu via resolve_api_key comme
+    # pennylane/attio. Reste grant-only (platform_granted) → masqué + deny-by-
+    # default : un admin doit accorder le namespace avant qu'on puisse l'activer
+    # et y poser une clé (financier sensible). Pas de clé plateforme partagée.
+    _c("gocardless", ["gocardless"], availability="platform_granted",
+       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
        env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
     # mm : connecteur REMOTE (bridge, ADR 0003). Le credential Movinmotion vit

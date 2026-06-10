@@ -51,7 +51,7 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 - **adaptateur REST** : `api_routes`.
 - **runtime connecteurs** : `tools/*` (in-process) + `tools/remote` (forward bridges).
 
-**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ La résolution de credentials respecte déjà ça (les tools passent par `access`). ⚠️ Dette connue : `tools/meta` (visibilité), `tools/datastore` (partage), `tools/crunchbase` (session) tapent `db` directement → à router par interface (suivi en issue).
+**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ La résolution credentials+sessions passe par `access` (`resolve_api_key`/`resolve_remote_credential`/`resolve_crunchbase_session`). ⚠️ Dette restante : `tools/meta` (visibilité), `tools/datastore` (partage) tapent `db` directement → à router par interface (oto-mcp#22).
 
 ## Auth — Logto
 

@@ -24,6 +24,11 @@ def register_all(mcp: FastMCP) -> None:
     from . import orgs
     orgs.register(mcp)
 
+    # Connecteurs remote (bridges, ADR 0003) — middleware générique, zéro code
+    # client : forward HTTP vers le bridge résolu depuis le credential d'org.
+    from . import remote
+    remote.register(mcp)
+
     # Connecteurs API-only — la résolution de clé (user vs platform) se fait
     # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
     # les secrets soient configurés au boot.
@@ -35,7 +40,7 @@ def register_all(mcp: FastMCP) -> None:
 
     # Connecteurs récents — wrapper en try/except au cas où la version d'oto-cli
     # déployée serait en retard sur le module attendu.
-    for mod_name in ("reddit", "lemlist", "culture", "kaspr", "fullenrich", "dvf", "pennylane", "gocardless", "mm"):
+    for mod_name in ("reddit", "lemlist", "culture", "kaspr", "fullenrich", "dvf", "pennylane", "gocardless"):
         try:
             mod = __import__(f"oto_mcp.tools.{mod_name}", fromlist=[mod_name])
             mod.register(mcp)

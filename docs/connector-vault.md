@@ -45,7 +45,7 @@ Enveloppe **AES-256-GCM**. Master key **hors-DB** (env `OTO_MCP_MASTER_KEY`, hex
 
 ## Résolution + accès (`access.py`)
 
-`resolve_api_key(provider) -> (api_key, is_platform)` : (1) user key (`get_user_api_key`→coffre) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. `resolve_org_credential(provider)` = injection pour les connecteurs org-only NON-keyed (`mm`) : token de l'org active, raise si absent, **jamais de fallback SOPS serveur**.
+`resolve_api_key(provider) -> (api_key, is_platform)` : (1) user key (`get_user_api_key`→coffre) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. `resolve_remote_credential(provider)` = résolution du bridge d'un connecteur **remote** (`mm`) : `(meta.base_url, secret=token M2M)` du credential de l'org active, raise si absent, **jamais de fallback SOPS serveur**.
 `status_for` = miroir exact (modes user/org/platform/over_quota/forbidden). `granted_namespaces_for`/`require_namespace` = gate des namespaces grant-only (deny-by-default), source unique consommée par middleware + meta-tools + REST.
 
 ## Palier org
@@ -57,9 +57,9 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 - **LinkedIn / Crunchbase** : cookie = `secret`, UA dans `meta` ; `db.set/get/clear_linkedin_cookie`/`crunchbase_session` en dual-write + cutover lectures coffre ; statut /api/me via `credential_status` (sans déchiffrer). Colonnes `users.*` legacy nullées au soak.
 - **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token=`secret`, access_token/expires_at/scopes/is_default/granted_at dans `meta`. Les 6 fns db (`set/get/list/set_default/delete_google_oauth`, `update_google_access_token`) réécrites sur le coffre ; `update_google_access_token` = `update_meta` (merge, sans re-chiffrer). Flow OAuth `google_oauth.py` inchangé (seule la couche stockage change). access_token reste en clair dans meta même chiffré (bearer ~1h, dérivé) ; refresh_token chiffré.
 
-## mm — connecteur org-only fédéré-en-attente
+## Connecteurs remote — bridges (ADR 0003, pilote mm)
 
-`mm` = `auth_modes={byo_org}` non-keyed, grant-only. Token MM = credential POSSÉDÉ par l'org Movinmotion (`oto_admin_set_org_secret`), injecté au runtime (`resolve_org_credential`), plus de lecture SOPS serveur. `tools/mm.py` importe `from oto_mm` (repo privé, extra optionnel) ; désactivé gracieusement si `oto_mm` absent. Cible Level B (mount fédéré) = `otomata#16` / mémoire fédération.
+`kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. repo privé `movinmotion-backoffice-bridge`) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. Le mount MCP-to-MCP (`otomata#16`, memento) = flavor complémentaire pour les remotes déjà-MCP.
 
 ## Validation
 

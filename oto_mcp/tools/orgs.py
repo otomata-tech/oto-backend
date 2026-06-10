@@ -24,7 +24,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, org_store
+from .. import access, connectors, db, org_store
 from ..access import ORG_SHAREABLE_PROVIDERS
 from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -182,7 +182,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def oto_admin_set_org_secret(
-        org_id: int, provider: str, api_key: str, ctx: Context
+        org_id: int, provider: str, api_key: str, ctx: Context,
+        base_url: str | None = None,
     ) -> dict:
         """[platform admin] Set/rotate an org's shared account credential.
 
@@ -193,8 +194,11 @@ def register(mcp: FastMCP) -> None:
         Args:
             org_id: target org.
             provider: one of the org-shareable providers (attio, pennylane,
-                serper, hunter, sirene, lemlist, kaspr, fullenrich).
-            api_key: the credential.
+                serper, hunter, sirene, lemlist, kaspr, fullenrich) or a
+                remote connector (mm).
+            api_key: the credential (remote connector: the bridge M2M token —
+                never the client system's own secret, which stays in the bridge).
+            base_url: remote connectors only — bridge endpoint (required).
         """
         admin = _require_admin()
         if not org_store.get_org(org_id):
@@ -204,7 +208,16 @@ def register(mcp: FastMCP) -> None:
                 f"`{provider}` n'est pas org-partageable (credential de session "
                 f"personnel ou inconnu). Partageables : {sorted(ORG_SHAREABLE_PROVIDERS)}."
             )
-        org_store.set_org_secret(org_id, provider, api_key, set_by=admin)
+        c = connectors.connector_for_provider(provider)
+        if c is not None and c.kind == "remote":
+            if not base_url:
+                raise _err(f"`{provider}` est un connecteur remote : `base_url` (endpoint du bridge) requis.")
+            meta = {"base_url": base_url.rstrip("/")}
+        else:
+            if base_url:
+                raise _err(f"`base_url` n'a de sens que pour un connecteur remote, pas `{provider}`.")
+            meta = None
+        org_store.set_org_secret(org_id, provider, api_key, set_by=admin, meta=meta)
         return {"org_id": org_id, "provider": provider, "set": True}
 
     @mcp.tool()

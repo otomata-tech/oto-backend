@@ -42,6 +42,17 @@ L'extension Chrome (Oto Companion) vit dans `oto-app/extension/` (repo
 `otomata-tech/oto-app`, monorepo des fronts). Elle parle au backend via REST :
 `POST /api/settings/linkedin` + endpoints `/api/whatsapp/pair/*` (SSE).
 
+## Couches (ADR 0004 — topologie réversible)
+
+oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à sens unique** ([ADR 0004](../docs/adr/0004-layered-reversible-topology.md)) :
+
+- **backend-core** (le centre) : `db`, `credentials_store`, `org_store`, `access`, `crypto`, `connectors`, `auth_hooks`. Identité (`sub`), coffre, orgs, grants/quotas, résolution.
+- **adaptateur MCP** : `server`, `tools/*`, `middleware`, `tool_visibility`.
+- **adaptateur REST** : `api_routes`.
+- **runtime connecteurs** : `tools/*` (in-process) + `tools/remote` (forward bridges).
+
+**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ La résolution de credentials respecte déjà ça (les tools passent par `access`). ⚠️ Dette connue : `tools/meta` (visibilité), `tools/datastore` (partage), `tools/crunchbase` (session) tapent `db` directement → à router par interface (suivi en issue).
+
 ## Auth — Logto
 
 Le backend valide les bearer JWT émis par `auth.oto.zone/oidc`. Sur 401, le

@@ -150,7 +150,15 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
             if org_key:
                 return org_key, False
 
-    grant = db.get_active_grant(sub, provider)
+    # Défense en profondeur : le chemin platform-grant n'est valide que si le
+    # registre AUTORISE `platform` pour ce provider. Un provider byo-only
+    # (attio, lemlist, pennylane, fullenrich, slack…) ne doit JAMAIS être résolu
+    # via une clé plateforme — même si une clé résiduelle existait en base
+    # (seed SOPS historique). Sans ce gate, un grant suffisait à utiliser un
+    # compte privé, l'inverse du modèle (audité 2026-06-11).
+    con = connectors.connector_for_provider(provider)
+    platform_eligible = con is not None and "platform" in con.auth_modes
+    grant = db.get_active_grant(sub, provider) if platform_eligible else None
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

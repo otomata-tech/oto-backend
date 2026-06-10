@@ -368,6 +368,8 @@ def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
         return
     credentials_store.verify_and_null_plaintext(conn)
     for provider in KEY_PROVIDERS:
+        if provider not in _LEGACY_KEY_COLUMNS:
+            continue  # provider keyed né dans le coffre (ex. gocardless) — pas de colonne legacy
         col = f"{provider}_api_key"
         conn.execute(f"UPDATE users SET {col} = NULL WHERE {col} IS NOT NULL")
     conn.execute("DELETE FROM org_secrets")

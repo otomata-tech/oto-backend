@@ -265,6 +265,16 @@ CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_
 # (`connectors.py`) — ne plus éditer ici, déclarer le connecteur dans le registre.
 KEY_PROVIDERS = connectors.KEY_PROVIDERS
 
+# Providers qui ont une colonne legacy `users.<provider>_api_key` (les 9
+# d'origine, cf. _SCHEMA). Le dual-write legacy (rollback Phase 2, chiffrement
+# OFF) ne vise QUE ceux-là. Un provider keyed né APRÈS le coffre (ex. gocardless
+# reclassé keyed) n'a pas de colonne et n'en a pas besoin : le coffre est
+# canonique. À vider quand le runbook de soak nulle puis DROP les colonnes.
+_LEGACY_KEY_COLUMNS = frozenset({
+    "serper", "hunter", "sirene", "attio", "lemlist",
+    "kaspr", "pennylane", "slack", "fullenrich",
+})
+
 
 _pool: Optional[ConnectionPool] = None
 
@@ -392,6 +402,8 @@ def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
     secret_kind dérivé du registre (slack=refresh_token, sinon api_key).
     """
     for provider in KEY_PROVIDERS:
+        if provider not in _LEGACY_KEY_COLUMNS:
+            continue  # provider keyed né dans le coffre (ex. gocardless) — pas de colonne à backfiller
         c = connectors.REGISTRY.get(provider)
         kind = c.secret_kind if c else "api_key"
         col = f"{provider}_api_key"
@@ -661,7 +673,7 @@ def set_user_api_key(sub: str, provider: str, key: str) -> None:
             # Chiffrement OFF : dual-write legacy (rollback Phase 2). Chiffrement
             # ON : on n'écrit PLUS de plaintext en legacy (canonique chiffré seul) ;
             # le legacy résiduel est nullé par le runbook de soak (_drop_plaintext).
-            if not crypto.encryption_enabled():
+            if not crypto.encryption_enabled() and provider in _LEGACY_KEY_COLUMNS:
                 conn.execute(
                     f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
                     (key, sub),
@@ -675,10 +687,11 @@ def clear_user_api_key(sub: str, provider: str) -> None:
     col = f"{provider}_api_key"
     with _connect() as conn:
         with conn.transaction():
-            conn.execute(
-                f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
-                (sub,),
-            )
+            if provider in _LEGACY_KEY_COLUMNS:
+                conn.execute(
+                    f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
+                    (sub,),
+                )
             credentials_store.clear_credential("user", sub, provider, conn=conn)
 
 

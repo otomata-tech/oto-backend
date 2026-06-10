@@ -55,7 +55,7 @@ def register(mcp: FastMCP) -> None:
             page: 1-based page number.
             per_page: Page size (max 25).
         """
-        return entreprises.search(
+        res = entreprises.search(
             query=query,
             naf=[s.strip() for s in naf.split(",")] if naf else None,
             departement=departement,
@@ -66,6 +66,11 @@ def register(mcp: FastMCP) -> None:
             idcc=[s.strip() for s in idcc.split(",")] if idcc else None,
             page=page, per_page=per_page,
         )
+        # Même compactage que fr_get : le payload brut (sièges 30+ champs,
+        # matching_etablissements géo intégrale) explose vite (vu 48k chars).
+        # Les établissements compactés restent là — test de co-localisation.
+        res["results"] = [_compact_identity(r) for r in res.get("results", [])]
+        return res
 
     # 7 ratios top B2B + métadonnées d'exercice. Le reste (marge_brute, ebit,
     # capacite_de_remboursement, couverture_des_interets, caf_sur_ca,
@@ -76,6 +81,49 @@ def register(mcp: FastMCP) -> None:
         "marge_ebe", "autonomie_financiere", "taux_d_endettement",
         "ratio_de_liquidite",
     )
+
+    # fr_get compact : le payload brut recherche-entreprises pèse jusqu'à 40k chars
+    # (matching_etablissements intégraux avec géo, compléments, sièges 30+ champs).
+    # On garde tout ce qu'un agent de prospection consomme — identité, NAF,
+    # effectifs, dirigeants, finances, et la LISTE des établissements (compactée :
+    # nécessaire au test de co-localisation commune INSEE / établissement actif).
+    _ETAB_KEEP = (
+        "siret", "adresse", "code_postal", "commune", "libelle_commune",
+        "etat_administratif", "est_siege", "activite_principale",
+        "liste_enseignes", "nom_commercial", "date_creation",
+    )
+    _DIRIGEANT_KEEP = (
+        "nom", "prenoms", "denomination", "siren", "qualite",
+        "annee_de_naissance", "type_dirigeant",
+    )
+    _IDENTITY_KEEP = (
+        "siren", "nom_complet", "nom_raison_sociale", "sigle",
+        "etat_administratif", "nature_juridique", "activite_principale",
+        "section_activite_principale", "tranche_effectif_salarie",
+        "annee_tranche_effectif_salarie", "categorie_entreprise",
+        "date_creation", "date_fermeture", "site_internet",
+        "nombre_etablissements", "nombre_etablissements_ouverts", "finances",
+    )
+    _EVENT_KEEP = (
+        "id", "dateparution", "familleavis", "familleavis_lib", "typeavis",
+        "typeavis_lib", "tribunal", "commercant", "jugement", "registre",
+    )
+
+    def _pick(d: dict, keys: tuple) -> dict:
+        return {k: d[k] for k in keys if k in d and d[k] is not None}
+
+    def _compact_identity(identity: dict) -> dict:
+        out = _pick(identity, _IDENTITY_KEEP)
+        siege = identity.get("siege")
+        if isinstance(siege, dict):
+            out["siege"] = _pick(siege, _ETAB_KEEP)
+        dirigeants = identity.get("dirigeants") or []
+        out["dirigeants"] = [_pick(d, _DIRIGEANT_KEEP) for d in dirigeants[:10]]
+        etabs = identity.get("matching_etablissements") or []
+        out["etablissements"] = [_pick(e, _ETAB_KEEP) for e in etabs[:25]]
+        if len(etabs) > 25:
+            out["_etablissements_truncated"] = len(etabs)
+        return out
 
     @mcp.tool()
     async def fr_get(siren: str) -> dict:
@@ -113,9 +161,11 @@ def register(mcp: FastMCP) -> None:
 
         return {
             "siren": siren,
-            "identity": identity,
+            "identity": _compact_identity(identity),
             "latest_bilan": latest_bilan,
-            "recent_events": events_data.get("results", []),
+            "recent_events": [
+                _pick(e, _EVENT_KEEP) for e in events_data.get("results", [])
+            ],
             "events_total": events_data.get("total_count", 0),
         }
 

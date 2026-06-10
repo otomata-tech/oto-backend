@@ -8,32 +8,14 @@ explicite qui pointe vers `/account`.
 from __future__ import annotations
 
 from fastmcp import FastMCP
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import db
-from ..auth_hooks import current_user_sub_from_token
+from .. import access
 
 
 def _get_session_or_raise() -> dict:
-    sub = current_user_sub_from_token()
-    if not sub:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message="Unauthenticated — no user identity on the request.",
-        ))
-    sess = db.get_crunchbase_session(sub)
-    if not sess:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "Aucune session Crunchbase configurée pour cet utilisateur. "
-                "Va sur https://app.oto.ninja/account (section Crunchbase) "
-                "pour coller tes cookies de session (export JSON depuis "
-                "DevTools ou une extension Cookie Editor)."
-            ),
-        ))
-    return sess
+    # Résolution via le seam `access` (broker-ready, ADR 0004) — plus d'accès
+    # `db` direct depuis un tool.
+    return access.resolve_crunchbase_session()
 
 
 def register(mcp: FastMCP) -> None:

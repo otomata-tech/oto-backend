@@ -185,10 +185,24 @@ def register(mcp: FastMCP) -> None:
         """Create a deal record.
 
         Args:
-            attributes: Attio attribute dict (`name`, `value`, `stage`,
-                `associated_company`, `owner`, etc.).
+            attributes: Attio attribute dict, value format Attio. Champs clés :
+                `name` (str ou [{"value": ...}]), `stage` (titre du status,
+                ex "Lead" | "In Discussion" | "Proposal" | "Active"),
+                `owner` (actor-reference — auto-rempli avec le 1er workspace
+                member si omis), `associated_company` / `associated_people`
+                ([{"target_object": "companies", "target_record_id": ...}]),
+                et les customs workspace : `slug` (unique, kebab-case),
+                `tjm` ({"currency_value": N} — type currency), `via`,
+                `debut`/`fin` (date).
         """
         client, is_platform = _client()
+        if "owner" not in attributes:
+            members = client.workspace_members.list().get("data", [])
+            if members:
+                attributes["owner"] = [{
+                    "referenced_actor_type": "workspace-member",
+                    "referenced_actor_id": members[0]["id"]["workspace_member_id"],
+                }]
         result = client.deals.create(**attributes)
         _record_if_platform(is_platform)
         return result
@@ -381,6 +395,10 @@ def register(mcp: FastMCP) -> None:
         workspace_access: str = "full-access",
     ) -> dict:
         """Create a new list.
+
+        `api_slug` et `workspace_member_access` sont requis par l'API Attio ;
+        le client les dérive/défaut automatiquement (slug depuis le nom,
+        accès membre vide).
 
         Args:
             name: Display name.

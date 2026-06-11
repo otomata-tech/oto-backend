@@ -106,6 +106,12 @@ _REGISTRY_LIST = [
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", env_secret_name="FULLENRICH_API_KEY",
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
+    # folk : né APRÈS le coffre — pas de colonne legacy users.folk_api_key,
+    # le coffre connector_credentials est canonique. byo-only (pas de clé
+    # plateforme) ; compte partagé équipe = credential de l'org Otomata.
+    _c("folk", ["folk"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", env_secret_name="FOLK_API_KEY",
+       label="Folk", help="CRM", href="https://app.folk.app"),
 
     # --- platform_granted (grant-only, deny-by-default) ----------------------
     # gocardless : keyed BYO (user OU org), résolu via resolve_api_key comme

@@ -8,7 +8,12 @@ from fastmcp.server.transforms.visibility import disable_components
 
 from . import access, db
 from .auth_hooks import current_user_sub_from_token
-from .tool_visibility import DEFAULT_HIDDEN_TOOLS, effective_disabled, is_grant_only
+from .tool_visibility import (
+    DEFAULT_HIDDEN_TOOLS,
+    effective_disabled,
+    is_default_hidden,
+    is_grant_only,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +24,10 @@ logger = logging.getLogger(__name__)
 # listing ; l'autorisation d'APPEL est garantie indépendamment par
 # access.require_namespace dans les tools à credential serveur (cf. mm).
 _KNOWN_GRANT_ONLY: set[str] = set()
+
+# Même repli pour les masqués-par-défaut par NAMESPACE (ex. attio) : leurs noms
+# ne sont pas connaissables statiquement, on mémorise ceux vus au listing.
+_KNOWN_DEFAULT_HIDDEN: set[str] = set()
 
 
 class UserDisabledToolsMiddleware(Middleware):
@@ -64,13 +73,16 @@ class UserDisabledToolsMiddleware(Middleware):
             all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
             all_names = {t.name for t in all_tools}
             _KNOWN_GRANT_ONLY.update(n for n in all_names if is_grant_only(n))
+            _KNOWN_DEFAULT_HIDDEN.update(n for n in all_names if is_default_hidden(n))
         except Exception as e:
             logger.warning("Cannot list tools for %s: %s", sub, e)
             # repli FAIL-CLOSED : disabled explicites + masqués connus + tous les
             # grant-only déjà vus (sinon ils resteraient visibles, denylist
             # incomplète). Les noms inconnus de ce process restent couverts par
             # le backstop call-time (access.require_namespace).
-            all_names = disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_GRANT_ONLY
+            all_names = (
+                disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN | _KNOWN_GRANT_ONLY
+            )
         to_hide = effective_disabled(all_names, disabled, enabled_override, granted, is_admin)
         if not to_hide:
             return result

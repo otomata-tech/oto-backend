@@ -2,9 +2,11 @@
 
 Deux niveaux de masquage :
 
-1. **DEFAULT_HIDDEN_TOOLS** — masqués par défaut mais **self-activables**
-   (`oto_enable_tool`). Simple découvrabilité, pas un contrôle d'accès : pour des
-   surfaces verbeuses/spécifiques sans enjeu de sécurité.
+1. **Masqués par défaut** mais **self-activables** (`oto_enable_tool`) — simple
+   découvrabilité, pas un contrôle d'accès : pour des surfaces verbeuses/spécifiques
+   sans enjeu de sécurité. Deux grains : DEFAULT_HIDDEN_TOOLS (noms individuels)
+   et DEFAULT_HIDDEN_NAMESPACES (namespaces entiers, DÉRIVÉ du registre — champ
+   `default_hidden` des connecteurs, ex. attio).
 
 2. **ADMIN_GRANT_ONLY_NAMESPACES** — namespaces sensibles (mission/prod-client).
    Deny-by-default : un user non-admin **ne peut PAS** s'auto-activer ces tools
@@ -30,11 +32,16 @@ ADMIN_GRANT_ONLY_NAMESPACES = connectors.ADMIN_GRANT_ONLY_NAMESPACES
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset()
+DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 
 def namespace_of(name: str) -> str:
     """Namespace d'un tool = préfixe avant le premier `_` (ex. `mm_company` → `mm`)."""
     return name.split("_", 1)[0]
+
+
+def is_default_hidden(name: str) -> bool:
+    return name in DEFAULT_HIDDEN_TOOLS or namespace_of(name) in DEFAULT_HIDDEN_NAMESPACES
 
 
 def is_grant_only(name: str) -> bool:
@@ -76,7 +83,7 @@ def is_tool_visible(
         return True
     if name in disabled:
         return False
-    if name in DEFAULT_HIDDEN_TOOLS:
+    if is_default_hidden(name):
         return False
     return True
 

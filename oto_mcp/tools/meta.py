@@ -24,7 +24,7 @@ from .. import access, db
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     ADMIN_GRANT_ONLY_NAMESPACES,
-    DEFAULT_HIDDEN_TOOLS,
+    is_default_hidden,
     is_entitled,
     is_grant_only,
     is_tool_visible,
@@ -137,7 +137,7 @@ def register(mcp: FastMCP) -> None:
         db.remove_user_disabled_tool(sub, name)
         # Override positif requis pour rendre visible un masqué-par-défaut, ou un
         # grant-only côté admin (côté user granté, le grant suffit à le révéler).
-        if name in DEFAULT_HIDDEN_TOOLS or (is_grant_only(name) and is_admin):
+        if is_default_hidden(name) or (is_grant_only(name) and is_admin):
             db.add_user_enabled_tool(sub, name)
         await enable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": True, "persistent": True}
@@ -252,7 +252,7 @@ def register(mcp: FastMCP) -> None:
             sub,
             sorted(
                 n for n in enabled
-                if n in DEFAULT_HIDDEN_TOOLS or (is_grant_only(n) and is_admin)
+                if is_default_hidden(n) or (is_grant_only(n) and is_admin)
             ),
         )
 

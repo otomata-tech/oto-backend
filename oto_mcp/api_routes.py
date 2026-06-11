@@ -37,7 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from . import access, api_routes_datastore, api_routes_sirene, connectors, db, linkedin_pairing, pairing
-from .tool_visibility import is_entitled, is_grant_only, namespace_of
+from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 
 def _allowed_origins() -> list[str]:
@@ -519,6 +519,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         name = request.path_params["name"]
         db.add_user_disabled_tool(sub, name)
+        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override positif
         return _json(request, {"ok": True, "name": name, "enabled": False})
 
     async def my_tools_enable(request: Request) -> JSONResponse:
@@ -541,6 +542,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "detail": f"namespace `{namespace_of(name)}` non accordé",
             }, status_code=403)
         db.remove_user_disabled_tool(sub, name)
+        # Override positif requis pour rendre visible un masqué-par-défaut, ou un
+        # grant-only côté admin — même logique que le meta-tool oto_enable_tool.
+        if is_default_hidden(name) or (is_grant_only(name) and is_admin):
+            db.add_user_enabled_tool(sub, name)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
     # --- presets ------------------------------------------------------------

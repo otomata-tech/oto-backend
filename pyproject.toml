@@ -18,7 +18,7 @@ dependencies = [
     "markdown>=3.5",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
-    "france-opendata[stock]>=0.2.0",  # reader stock SIRENE (DuckDB parquet) — source unique partagée
+    "france-opendata[stock]>=0.5.0",  # reader stock SIRENE (DuckDB parquet) — source unique partagée
     "cryptography>=42",
 ]
 

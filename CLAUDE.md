@@ -1,8 +1,13 @@
 # oto-mcp
 
-MCP server (Streamable HTTP) qui expose une sélection de connecteurs `oto-cli`
-comme tools, branchable dans claude.ai et Claude Code. Public :
-`https://mcp.oto.ninja/mcp` (box dédiée `oto-platform` REDACTED_IP, port 9103 — cf. §Infra).
+MCP server (Streamable HTTP) qui expose les connecteurs **oto-core** (`oto.tools`,
+importés directement — **plus aucune dép à la CLI**) comme tools, branchable dans
+claude.ai et Claude Code. Public : `https://mcp.oto.ninja/mcp` (box dédiée
+`oto-platform` REDACTED_IP, port 9103 — cf. §Infra).
+
+**Positionnement : oto-mcp = le produit central, déployable** (SaaS hébergé OU
+on-premise pour un client — image `Dockerfile`, config 100% par env). oto-cli =
+façade locale basse priorité (fallback LinkedIn browser). Tout open source.
 
 La page de gestion utilisateur (cookie LinkedIn, etc.) vit dans le site Vue
 oto.ninja sous `/account` et parle au MCP via REST.

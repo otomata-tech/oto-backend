@@ -1,6 +1,6 @@
 # oto-mcp
 
-MCP server exposing selected `oto-cli` connectors to Claude over Streamable HTTP.
+MCP server exposing the **oto-core** connectors (`oto.tools`) to Claude over Streamable HTTP. The central, deployable product (SaaS / on-premise) — see `Dockerfile`. Imports oto-core directly; no CLI dependency.
 
 First batch of tools wraps the data.gouv.fr "API Recherche Entreprises"
 (no upstream API key needed):

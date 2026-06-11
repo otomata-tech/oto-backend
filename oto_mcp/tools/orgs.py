@@ -276,7 +276,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             org_id: target org.
             provider: one of the org-shareable providers (attio, pennylane,
-                serper, hunter, sirene, lemlist, kaspr, fullenrich) or a
+                serper, hunter, sirene, lemlist, kaspr, fullenrich, folk) or a
                 remote connector (mm).
             api_key: the credential (remote connector: the bridge M2M token —
                 never the client system's own secret, which stays in the bridge).

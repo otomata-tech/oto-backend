@@ -6,7 +6,7 @@ Flow :
 2. User redirigé vers Google, consent, redirect vers
    `/api/google/oauth/callback?code=…&state=…`.
 3. On vérifie le state, échange le code contre refresh+access token,
-   persiste dans `user_google_oauth`.
+   persiste dans le coffre chiffré (`connector_credentials`, connector='google').
 
 Pour utiliser les credentials (côté tools datastore) : `credentials_for(sub)`
 charge depuis SQLite, refresh transparent si expiré, renvoie un

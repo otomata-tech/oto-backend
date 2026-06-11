@@ -1,12 +1,13 @@
 """Accès DB du palier organization (= périmètre / store serveur).
 
 Domaine isolé du monolithe `db.py` : les tables org (orgs, org_members,
-org_secrets, org_entitlements) restent déclarées dans `db._SCHEMA` (DDL
-centralisée, jouée par `init_db`), mais leurs requêtes vivent ici. Réutilise
-les primitives partagées de `db` (`_connect`, `upsert_user`)
-plutôt que de les dupliquer.
+org_entitlements) restent déclarées dans `db._SCHEMA` (DDL centralisée, jouée
+par `init_db`), mais leurs requêtes vivent ici. Les credentials d'org vivent
+dans le coffre chiffré `connector_credentials` (entity_type='org'), pas dans
+une table dédiée. Réutilise les primitives partagées de `db` (`_connect`,
+`upsert_user`) plutôt que de les dupliquer.
 
-Consommé par : `access.resolve_api_key`/`status_for` (reads org_secret) et
+Consommé par : `access.resolve_api_key`/`status_for` (reads org credential) et
 `tools/orgs.py` (meta-tools de gestion). Cf. project_oto_mcp_org_tier.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from . import credentials_store, crypto
+from . import credentials_store
 from . import connectors
 from .db import _connect, upsert_user
 
@@ -44,9 +45,7 @@ def get_org_secret(org_id: int, provider: str) -> Optional[str]:
     org-partageables (exclut slack) est portée par la couche access et le
     write-path.
 
-    Cutover (Phase 2/C4) : lit connector_credentials (entité 'org'), non plus la
-    table legacy org_secrets (toujours dual-written pour le rollback). Déchiffre
-    si nécessaire (Phase 7).
+    Lit le coffre chiffré `connector_credentials` (entité 'org', déchiffre).
     """
     return credentials_store.get_credential("org", str(org_id), provider)
 
@@ -204,42 +203,18 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
     connectors.require_credential("org", provider)
     if not api_key:
         raise ValueError("api_key requise")
-    # Dual-write ATOMIQUE (legacy org_secrets + canonique) dans une transaction.
-    # Chiffrement ON : on n'écrit plus de plaintext en legacy (cf. set_user_api_key).
-    with _connect() as conn:
-        with conn.transaction():
-            if not crypto.encryption_enabled():
-                conn.execute(
-                    """
-                    INSERT INTO org_secrets (org_id, provider, api_key, set_by)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (org_id, provider) DO UPDATE SET
-                        api_key = EXCLUDED.api_key, set_by = EXCLUDED.set_by, set_at = NOW()
-                    """,
-                    (org_id, provider, api_key, set_by),
-                )
-            credentials_store.set_credential(
-                "org", str(org_id), provider, api_key, set_by=set_by, meta=meta, conn=conn)
+    # Coffre chiffré, source unique (entité 'org').
+    credentials_store.set_credential(
+        "org", str(org_id), provider, api_key, set_by=set_by, meta=meta)
 
 
 def delete_org_secret(org_id: int, provider: str) -> bool:
-    with _connect() as conn:
-        with conn.transaction():
-            cur = conn.execute(
-                "DELETE FROM org_secrets WHERE org_id = %s AND provider = %s", (org_id, provider)
-            )
-            removed = (cur.rowcount or 0) > 0
-            credentials_store.clear_credential("org", str(org_id), provider, conn=conn)
-    return removed
+    return credentials_store.clear_credential("org", str(org_id), provider)
 
 
 def list_org_secrets(org_id: int) -> list[dict]:
     """Providers posés sur l'org — SANS l'api_key (jamais exposée via API).
-
-    Lit le coffre CANONIQUE (`connector_credentials` via credentials_store), pas
-    la table legacy `org_secrets` : sous chiffrement (prod), `set_org_secret`
-    n'écrit plus le legacy (cf. la garde `if not crypto.encryption_enabled()`),
-    donc lire org_secrets renverrait vide. `base_url` exposé pour les connecteurs
+    Lit le coffre (entité 'org'). `base_url` exposé pour les connecteurs
     remote (satellite non-secret dans `meta`)."""
     out: list[dict] = []
     for c in credentials_store.list_credentials("org", str(org_id)):

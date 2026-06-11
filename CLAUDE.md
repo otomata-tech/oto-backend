@@ -81,7 +81,7 @@ Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 
 ## Rôles + résolution de clé API
 
-> ⚠️ Le **stockage** des credentials est désormais le **coffre `connector_credentials`** (cf. `docs/connector-vault.md`), pas les colonnes `users.<provider>_api_key`/`org_secrets` (foldées, dual-written, nullées au soak). La résolution ci-dessous reste valide dans sa cascade, mais lit le coffre via `credentials_store`.
+> ⚠️ Le **stockage** des credentials est le **coffre chiffré unique `connector_credentials`** (cf. `docs/connector-vault.md`). Les colonnes legacy `users.<provider>_api_key`/`org_secrets`/`user_google_oauth` ont été **purgées** (DROP, 2026-06-11) ; chiffrement **obligatoire** (plus de plaintext). La résolution ci-dessous reste valide dans sa cascade, lit le coffre via `credentials_store`.
 
 Le rôle (`users.role`) ne sert qu'à décider qui voit l'admin UI :
 
@@ -218,13 +218,12 @@ OAuth Google per-user (flow unifié Sheets+Drive+Gmail, **multi-compte**) :
 - `POST /api/google/oauth/default` body `{account}` → choisit le compte par défaut.
 - `DELETE /api/google/oauth[?account=<email>]` → révoque un compte (ou tous).
 - Scopes : `spreadsheets` + `drive.file` + `gmail.modify` + `tasks`.
-- Multi-compte : table `user_google_oauth` clé `(sub, google_email)` +
-  `is_default`. Le datastore et les tools `gmail_*` sans param `account`
-  utilisent le compte par défaut. **Migration mono→multi** : les anciennes
-  lignes (clé `sub`, `google_email` NULL) restent servies comme défaut et
-  sont claimées proprement au prochain consentement (cf. `db.set_google_oauth`).
-- Refresh token stocké en plaintext dans `user_google_oauth` (même modèle
-  que les autres secrets per-user dans cette DB, accès root only).
+- Multi-compte : dans le coffre `connector_credentials` (connector='google',
+  `account=email`, `is_default` dans meta). Le datastore et les tools `gmail_*`
+  sans param `account` utilisent le compte par défaut (cf. `db.set_google_oauth`,
+  `docs/connector-vault.md`).
+- Refresh token **chiffré** (`secret_enc`) dans le coffre. access_token reste en
+  clair dans `meta` (bearer ~1h, dérivé).
 
 **Pourquoi un client OAuth séparé du connecteur Logto Google** : Logto
 gère l'**identité** (scopes `openid email profile`), pas la délégation
@@ -403,11 +402,11 @@ identifiées par `slug`, chacune versionnée :
   credential d'org = token M2M + `meta.base_url`). Pilote : mm
   (`movinmotion-backoffice-bridge`). Cf. ADR 0003 (meta-repo) +
   `docs/connector-vault.md` §remote.
-- **Tool API-keyé = déclarer le provider à 3 endroits sinon `resolve_api_key`
-  lève `Unknown provider` à l'appel** (le tool peut être écrit + enregistré et
-  planter quand même) : (1) tuple `KEY_PROVIDERS` dans `db.py`, (2) colonne
-  `<provider>_api_key` dans `_SCHEMA`, (3) `ALTER TABLE … ADD COLUMN IF NOT
-  EXISTS` dans `init_db()`. Puis poser la clé plateforme en DB via
+- **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
+  (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
+  dérivent. Le coffre `connector_credentials` est générique (pas de colonne
+  par provider) : aucune migration de schéma à ajouter. Sinon `resolve_api_key`
+  lève `Unknown provider` à l'appel. Puis poser la clé plateforme en DB via
   `oto_admin_set_platform_key` (plus de bootstrap SOPS — le provider sans clé
   DB n'a simplement pas de mode plateforme).
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
@@ -459,7 +458,7 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP 'set -a; . /opt/oto-mcp/.env; set +a; psql
 
 ## Docs
 
-- `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffrable unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM dormante, résolution + palier org. À lire avant de toucher credentials/registre/résolution.
+- `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffré unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM **obligatoire** (pas de plaintext), résolution + palier org. À lire avant de toucher credentials/registre/résolution.
 - `README.md` — quickstart + tools catalog
 - `deploy/DEPLOY.md` — procédure complète déploiement
 - `docs/backlog.md` — initiatives à venir (issues GitHub pour le détail)

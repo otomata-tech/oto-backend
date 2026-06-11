@@ -54,26 +54,13 @@ def _str_dict_row(cursor):
 
 
 _SCHEMA = """
+-- Identité seule. Les credentials (clés API, sessions linkedin/crunchbase,
+-- OAuth Google) vivent TOUS dans le coffre chiffré `connector_credentials`.
 CREATE TABLE IF NOT EXISTS users (
     sub TEXT PRIMARY KEY,
     email TEXT,
     name TEXT,
     role TEXT NOT NULL DEFAULT 'guest',
-    linkedin_cookie TEXT,
-    linkedin_user_agent TEXT,
-    linkedin_cookie_set_at TIMESTAMPTZ,
-    serper_api_key TEXT,
-    hunter_api_key TEXT,
-    sirene_api_key TEXT,
-    attio_api_key TEXT,
-    lemlist_api_key TEXT,
-    kaspr_api_key TEXT,
-    pennylane_api_key TEXT,
-    slack_api_key TEXT,
-    fullenrich_api_key TEXT,
-    crunchbase_cookies TEXT,
-    crunchbase_user_agent TEXT,
-    crunchbase_set_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -134,8 +121,7 @@ CREATE TABLE IF NOT EXISTS platform_keys (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
     label TEXT NOT NULL,
-    api_key TEXT,                          -- plaintext (soak/legacy) ; NULL une fois chiffré
-    api_key_enc TEXT,                      -- enveloppe AES-256-GCM (Phase 7 folding)
+    api_key_enc TEXT,                      -- enveloppe AES-256-GCM (chiffrement obligatoire)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(provider, label)
 );
@@ -158,18 +144,6 @@ CREATE TABLE IF NOT EXISTS user_namespace_grants (
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (sub, namespace)
-);
-
-CREATE TABLE IF NOT EXISTS user_google_oauth (
-    sub TEXT NOT NULL,
-    google_email TEXT,
-    refresh_token TEXT NOT NULL,
-    access_token TEXT,
-    expires_at TIMESTAMPTZ,
-    scopes TEXT NOT NULL,
-    is_default BOOLEAN NOT NULL DEFAULT TRUE,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS user_datastores (
@@ -204,9 +178,10 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
 -- Palier organization (= périmètre / store serveur). Une org possède des
--- secrets propres (org_secrets), un set de namespaces autorisés
--- (org_entitlements), et des opérateurs (org_members). Source de vérité de
--- l'appartenance = ces tables, résolues par `sub` — JAMAIS un claim du token
+-- credentials propres (coffre `connector_credentials`, entity_type='org'), un
+-- set de namespaces autorisés (org_entitlements), et des opérateurs
+-- (org_members). Source de vérité de l'appartenance = ces tables, résolues par
+-- `sub` — JAMAIS un claim du token
 -- Logto (le token MCP ne porte que sub). Cf. project_oto_mcp_org_tier.
 -- NB barreau 1 : tables seules, aucun helper ne les lit encore (canari de
 -- déploiement). Le câblage (resolve_api_key, visibilité, meta-tools) suit.
@@ -232,18 +207,8 @@ CREATE TABLE IF NOT EXISTS org_members (
 CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);
 CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHERE is_active;
 
--- Credential de compte POSSÉDÉ par l'org et partagé à ses membres (Attio,
--- Pennylane, MM token, clé API stateless…). provider validé comme org-partageable
--- (byo_org) via le registre : inclut mm (org-only, non-keyed), exclut
--- slack/linkedin/google (sessions physiologiquement personnelles).
-CREATE TABLE IF NOT EXISTS org_secrets (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    set_by TEXT,
-    set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, provider)
-);
+-- Les credentials d'org (Attio, Pennylane, MM token…) vivent dans le coffre
+-- chiffré `connector_credentials` (entity_type='org'), pas dans une table dédiée.
 
 -- Plafond de visibilité plateforme -> org : généralise
 -- ADMIN_GRANT_ONLY_NAMESPACES + user_namespace_grants au niveau org. Débloque
@@ -261,7 +226,7 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
 -- 'claude_md' = la doctrine de base servie d'office par get_claude_md(), les
 -- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
 -- pas un credential → hors coffre chiffré). Même principe d'accès que les
--- org_secrets : résolu par l'org active du sub (get_active_org). `version` est
+-- secrets d'org : résolu par l'org active du sub (get_active_org). `version` est
 -- incrémenté à chaque écriture, qui archive un snapshot dans la table sœur.
 CREATE TABLE IF NOT EXISTS org_instructions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -290,19 +255,18 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     PRIMARY KEY (org_id, slug, version)
 );
 
--- Credentials génériques per-entité (user OU org) — table unique qui remplace
--- les 9 colonnes users.<provider>_api_key + org_secrets. entity_id = sub (user)
--- ou org_id::text (org) ; toujours requêter (entity_type, entity_id) ENSEMBLE.
--- `secret` en clair pour l'instant ; chiffré par enveloppe en Phase 7 (le
--- déchiffrement JIT vivra dans resolve_api_key). meta JSONB pour les satellites
--- futurs (user_agent, scopes…). Source canonique des credentials keyed.
+-- Coffre unique des credentials per-entité (user OU org) : clés API, sessions
+-- linkedin/crunchbase, OAuth Google multi-compte, platform keys. entity_id = sub
+-- (user) ou org_id::text (org) ; toujours requêter (entity_type, entity_id)
+-- ENSEMBLE. Secret chiffré par enveloppe AES-256-GCM dans `secret_enc`
+-- (obligatoire — pas de colonne plaintext) ; déchiffrement JIT dans
+-- resolve_api_key. meta JSONB pour les satellites (user_agent, scopes…).
 CREATE TABLE IF NOT EXISTS connector_credentials (
     entity_type TEXT NOT NULL,            -- 'user' | 'org'
     entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
     account     TEXT NOT NULL DEFAULT '', -- discriminant multi-compte ('' = mono ; ex. email Google)
-    secret      TEXT,                     -- clair (chiffrement off, ou soak)
-    secret_enc  TEXT,                     -- enveloppe AES-256-GCM (Phase 7)
+    secret_enc  TEXT,                     -- enveloppe AES-256-GCM (obligatoire)
     secret_kind TEXT NOT NULL DEFAULT 'api_key',
     meta        JSONB NOT NULL DEFAULT '{}',
     set_by      TEXT,
@@ -315,16 +279,6 @@ CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
 # (`connectors.py`) — ne plus éditer ici, déclarer le connecteur dans le registre.
 KEY_PROVIDERS = connectors.KEY_PROVIDERS
-
-# Providers qui ont une colonne legacy `users.<provider>_api_key` (les 9
-# d'origine, cf. _SCHEMA). Le dual-write legacy (rollback Phase 2, chiffrement
-# OFF) ne vise QUE ceux-là. Un provider keyed né APRÈS le coffre (ex. gocardless
-# reclassé keyed) n'a pas de colonne et n'en a pas besoin : le coffre est
-# canonique. À vider quand le runbook de soak nulle puis DROP les colonnes.
-_LEGACY_KEY_COLUMNS = frozenset({
-    "serper", "hunter", "sirene", "attio", "lemlist",
-    "kaspr", "pennylane", "slack", "fullenrich",
-})
 
 
 _pool: Optional[ConnectionPool] = None
@@ -360,48 +314,16 @@ def _connect() -> Iterator[psycopg.Connection]:
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(_SCHEMA)
-        # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas
-        # les nouvelles colonnes sur les tables existantes. Ajouter ici à chaque
-        # nouveau provider key.
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS kaspr_api_key TEXT")
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pennylane_api_key TEXT")
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_api_key TEXT")
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fullenrich_api_key TEXT")
+        # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
+        # nouvelles colonnes sur les tables existantes.
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
-        # Google OAuth : passage mono-compte → multi-compte par user.
-        # L'ancienne table avait `sub` en PRIMARY KEY (1 compte). On ajoute
-        # google_email + is_default, on droppe la PK sur sub, et on unicise
-        # par (sub, google_email). Les lignes existantes ont google_email NULL
-        # (compte « legacy ») : elles restent servies comme défaut et sont
-        # claimées proprement au prochain consentement (cf. set_google_oauth).
-        conn.execute("ALTER TABLE user_google_oauth ADD COLUMN IF NOT EXISTS google_email TEXT")
-        conn.execute("ALTER TABLE user_google_oauth ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT TRUE")
-        conn.execute("ALTER TABLE user_google_oauth DROP CONSTRAINT IF EXISTS user_google_oauth_pkey")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS user_google_oauth_sub_email "
-            "ON user_google_oauth(sub, google_email)"
-        )
-        # Phase 7 : colonne chiffrée (idempotent — couvre le cas où la table a été
-        # créée par la Phase 2 avant ce déploiement).
+        # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
-        # Multi-compte : discriminant `account` dans la PK (folding session secrets).
-        # Idempotent ; account='' pour les lignes existantes (mono-compte) → la PG
-        # à 4 colonnes reste unique. DROP+ADD PK chaque boot (table sans FK entrante).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE connector_credentials DROP CONSTRAINT IF EXISTS connector_credentials_pkey")
         conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
-        _backfill_connector_credentials(conn)
-        _backfill_session_secrets(conn)   # folding linkedin/crunchbase → coffre
-        # platform_keys : colonne chiffrée + api_key nullable (Phase 7 folding,
-        # idempotent — couvre les tables créées avant ce déploiement).
         conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
-        conn.execute("ALTER TABLE platform_keys ALTER COLUMN api_key DROP NOT NULL")
-        # Migration de chiffrement (no-op si OTO_MCP_MASTER_KEY absente) : chiffre
-        # en place les secrets encore en clair, dans la même transaction.
-        from . import credentials_store
-        credentials_store.encrypt_existing_rows(conn)
-        _encrypt_existing_platform_keys(conn)
-        _drop_plaintext_after_soak(conn)
+        _drop_legacy_plaintext_stores(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         prune_tool_call_log(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
@@ -409,122 +331,25 @@ def init_db() -> None:
         logger.warning("prune_tool_call_log failed: %s", e)
 
 
-def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
-    """Runbook FINAL du chiffrement-at-rest (Phase 7) : retire les 4 emplacements
-    plaintext résiduels. DÉLIBÉRÉ — ne tourne QUE si chiffrement activé ET
-    `OTO_MCP_CRYPTO_DROP_PLAINTEXT=1` (à poser une fois le déchiffrement éprouvé
-    en prod). Sinon no-op (soak : on garde le plaintext en filet).
-
-    Ordre : self-check + null de connector_credentials.secret (lève si une ligne
-    chiffrée ne déchiffre pas → abort), puis les 9 colonnes users.<provider>_api_key,
-    puis org_secrets (DELETE), puis platform_keys.api_key (self-check decrypt +
-    null). Idempotent. Dans la transaction d'init_db."""
-    from . import credentials_store, crypto
-    if not (crypto.encryption_enabled() and os.environ.get("OTO_MCP_CRYPTO_DROP_PLAINTEXT") == "1"):
-        return
-    credentials_store.verify_and_null_plaintext(conn)
-    for provider in KEY_PROVIDERS:
-        if provider not in _LEGACY_KEY_COLUMNS:
-            continue  # provider keyed né dans le coffre (ex. gocardless) — pas de colonne legacy
-        col = f"{provider}_api_key"
-        conn.execute(f"UPDATE users SET {col} = NULL WHERE {col} IS NOT NULL")
-    conn.execute("DELETE FROM org_secrets")
-    # platform_keys : self-check decrypt de chaque ligne chiffrée AVANT de nuller
-    # (lève → abort/rollback plutôt que perdre le plaintext), puis null.
-    pk_rows = conn.execute(
-        "SELECT provider, label, api_key_enc FROM platform_keys "
-        "WHERE api_key IS NOT NULL AND api_key_enc IS NOT NULL"
-    ).fetchall()
-    for r in pk_rows:
-        crypto.decrypt(r["api_key_enc"], _pk_aad(r["provider"], r["label"]))
-    conn.execute("UPDATE platform_keys SET api_key = NULL WHERE api_key_enc IS NOT NULL")
-    # Secrets de session foldés (linkedin/crunchbase) : le coffre est canonique
-    # et chiffré ; on nulle les colonnes legacy résiduelles sur users.
-    conn.execute(
-        "UPDATE users SET linkedin_cookie = NULL, linkedin_user_agent = NULL, "
-        "crunchbase_cookies = NULL, crunchbase_user_agent = NULL "
-        "WHERE linkedin_cookie IS NOT NULL OR crunchbase_cookies IS NOT NULL"
-    )
-    # Google foldé → coffre chiffré canonique : on vide la table legacy.
-    conn.execute("DELETE FROM user_google_oauth")
-
-
-def _backfill_connector_credentials(conn: psycopg.Connection) -> None:
-    """Recopie idempotente des credentials legacy → connector_credentials
-    (Phase 2/C2). Rejoué à chaque boot, no-op après le 1er via ON CONFLICT DO
-    NOTHING : ne remplit que les lignes manquantes, n'écrase jamais (le
-    dual-write garde connector_credentials à jour ensuite).
-
-    - 9 colonnes users.<provider>_api_key (provider keyed) → entity 'user'.
-    - org_secrets → entity 'org' (org_id::text).
-    secret_kind dérivé du registre (slack=refresh_token, sinon api_key).
-    """
-    for provider in KEY_PROVIDERS:
-        if provider not in _LEGACY_KEY_COLUMNS:
-            continue  # provider keyed né dans le coffre (ex. gocardless) — pas de colonne à backfiller
-        c = connectors.REGISTRY.get(provider)
-        kind = c.secret_kind if c else "api_key"
-        col = f"{provider}_api_key"
-        conn.execute(
-            f"""
-            INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind)
-            SELECT 'user', sub, %s, {col}, %s FROM users WHERE {col} IS NOT NULL
-            ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
-            """,
-            (provider, kind),
-        )
-    conn.execute(
-        """
-        INSERT INTO connector_credentials (entity_type, entity_id, connector, secret, secret_kind, set_by, set_at)
-        SELECT 'org', org_id::text, provider, api_key, 'api_key', set_by, set_at FROM org_secrets
-        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
-        """
-    )
-
-
-def _backfill_session_secrets(conn: psycopg.Connection) -> None:
-    """Recopie idempotente des secrets de session legacy → connector_credentials
-    (folding LinkedIn/Crunchbase). Colonnes `users` → coffre ; UA dans meta ;
-    set_at préservé. ON CONFLICT DO NOTHING (le dual-write garde le coffre à jour
-    ensuite). Google (`user_google_oauth`, multi-compte) = barreau séparé."""
-    conn.execute(
-        """
-        INSERT INTO connector_credentials
-            (entity_type, entity_id, connector, secret, secret_kind, meta, set_at)
-        SELECT 'user', sub, 'linkedin', linkedin_cookie, 'cookie',
-               jsonb_build_object('user_agent', linkedin_user_agent),
-               COALESCE(linkedin_cookie_set_at, NOW())
-        FROM users WHERE linkedin_cookie IS NOT NULL
-        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO connector_credentials
-            (entity_type, entity_id, connector, secret, secret_kind, meta, set_at)
-        SELECT 'user', sub, 'crunchbase', crunchbase_cookies, 'cookie',
-               jsonb_build_object('user_agent', crunchbase_user_agent),
-               COALESCE(crunchbase_set_at, NOW())
-        FROM users WHERE crunchbase_cookies IS NOT NULL
-        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
-        """
-    )
-    # Google : multi-compte → account = email (COALESCE '' pour la ligne mono
-    # legacy NULL). Satellites dans meta. isoformat 'T' (cohérent avec le code).
-    conn.execute(
-        """
-        INSERT INTO connector_credentials
-            (entity_type, entity_id, connector, account, secret, secret_kind, meta, set_at)
-        SELECT 'user', sub, 'google', COALESCE(google_email, ''), refresh_token, 'oauth',
-               jsonb_build_object(
-                   'access_token', access_token, 'expires_at', expires_at,
-                   'scopes', scopes, 'is_default', is_default,
-                   'granted_at', to_char(granted_at, 'YYYY-MM-DD"T"HH24:MI:SS+00:00')),
-               updated_at
-        FROM user_google_oauth WHERE refresh_token IS NOT NULL
-        ON CONFLICT (entity_type, entity_id, connector, account) DO NOTHING
-        """
-    )
+def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
+    """Purge des emplacements plaintext supersédés par le coffre chiffré
+    `connector_credentials` (migration terminée + soak nullé en prod, cf.
+    `project_oto_connector_vault`). Idempotent (IF EXISTS) — no-op sur une DB
+    fraîche (on-prem). Le chiffrement est désormais obligatoire : plus aucun
+    chemin plaintext (writers/reveal en chiffré-seul)."""
+    # connector_credentials.secret (plaintext interne du coffre) + platform_keys.api_key
+    conn.execute("ALTER TABLE connector_credentials DROP COLUMN IF EXISTS secret")
+    conn.execute("ALTER TABLE platform_keys DROP COLUMN IF EXISTS api_key")
+    # Colonnes legacy users.<provider>_api_key + sessions linkedin/crunchbase.
+    for col in ("serper_api_key", "hunter_api_key", "sirene_api_key", "attio_api_key",
+                "lemlist_api_key", "kaspr_api_key", "pennylane_api_key", "slack_api_key",
+                "fullenrich_api_key", "linkedin_cookie", "linkedin_user_agent",
+                "linkedin_cookie_set_at", "crunchbase_cookies", "crunchbase_user_agent",
+                "crunchbase_set_at"):
+        conn.execute(f"ALTER TABLE users DROP COLUMN IF EXISTS {col}")
+    # Tables legacy entièrement foldées dans le coffre.
+    conn.execute("DROP TABLE IF EXISTS org_secrets")
+    conn.execute("DROP TABLE IF EXISTS user_google_oauth")
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
@@ -579,39 +404,21 @@ def set_linkedin_cookie(sub: str, cookie: str, user_agent: Optional[str] = None)
     """Store/refresh le cookie li_at + UA d'un user. Le couple cookie + UA doit
     matcher le browser d'origine pour réduire le risque de ban.
 
-    Coffre unique (folding) : secret = cookie, UA dans meta. Dual-write ATOMIQUE
-    legacy `users` + connector_credentials (conditionnel au chiffrement, comme
-    set_user_api_key). UA effectif résolu depuis le coffre si non fourni
-    (équivalent du COALESCE legacy, robuste même colonnes legacy nullées)."""
+    Coffre chiffré unique : secret = cookie, UA dans meta. UA effectif résolu
+    depuis le coffre si non fourni."""
     upsert_user(sub)
-    from . import credentials_store, crypto
+    from . import credentials_store
     ua = user_agent
     if ua is None:
         cur = credentials_store.get_credential_with_meta("user", sub, "linkedin")
         ua = cur["meta"].get("user_agent") if cur else None
-    with _connect() as conn:
-        with conn.transaction():
-            if not crypto.encryption_enabled():
-                conn.execute(
-                    "UPDATE users SET linkedin_cookie = %s, linkedin_user_agent = %s, "
-                    "linkedin_cookie_set_at = NOW(), updated_at = NOW() WHERE sub = %s",
-                    (cookie, ua, sub),
-                )
-            credentials_store.set_credential(
-                "user", sub, "linkedin", cookie, set_by=sub,
-                meta={"user_agent": ua}, conn=conn)
+    credentials_store.set_credential(
+        "user", sub, "linkedin", cookie, set_by=sub, meta={"user_agent": ua})
 
 
 def clear_linkedin_cookie(sub: str) -> None:
     from . import credentials_store
-    with _connect() as conn:
-        with conn.transaction():
-            conn.execute(
-                "UPDATE users SET linkedin_cookie = NULL, linkedin_user_agent = NULL, "
-                "linkedin_cookie_set_at = NULL, updated_at = NOW() WHERE sub = %s",
-                (sub,),
-            )
-            credentials_store.clear_credential("user", sub, "linkedin", conn=conn)
+    credentials_store.clear_credential("user", sub, "linkedin")
 
 
 def get_linkedin_session(sub: str) -> Optional[dict]:
@@ -648,38 +455,21 @@ def set_crunchbase_session(
     cookies_json: str,
     user_agent: Optional[str] = None,
 ) -> None:
-    """Store cookies (JSON-encoded list) + UA. Coffre unique (folding) : secret =
-    cookies_json, UA dans meta. Dual-write ATOMIQUE legacy + coffre (cf.
-    set_linkedin_cookie)."""
+    """Store cookies (JSON-encoded list) + UA. Coffre chiffré unique : secret =
+    cookies_json, UA dans meta."""
     upsert_user(sub)
-    from . import credentials_store, crypto
+    from . import credentials_store
     ua = user_agent
     if ua is None:
         cur = credentials_store.get_credential_with_meta("user", sub, "crunchbase")
         ua = cur["meta"].get("user_agent") if cur else None
-    with _connect() as conn:
-        with conn.transaction():
-            if not crypto.encryption_enabled():
-                conn.execute(
-                    "UPDATE users SET crunchbase_cookies = %s, crunchbase_user_agent = %s, "
-                    "crunchbase_set_at = NOW(), updated_at = NOW() WHERE sub = %s",
-                    (cookies_json, ua, sub),
-                )
-            credentials_store.set_credential(
-                "user", sub, "crunchbase", cookies_json, set_by=sub,
-                meta={"user_agent": ua}, conn=conn)
+    credentials_store.set_credential(
+        "user", sub, "crunchbase", cookies_json, set_by=sub, meta={"user_agent": ua})
 
 
 def clear_crunchbase_session(sub: str) -> None:
     from . import credentials_store
-    with _connect() as conn:
-        with conn.transaction():
-            conn.execute(
-                "UPDATE users SET crunchbase_cookies = NULL, crunchbase_user_agent = NULL, "
-                "crunchbase_set_at = NULL, updated_at = NOW() WHERE sub = %s",
-                (sub,),
-            )
-            credentials_store.clear_credential("user", sub, "crunchbase", conn=conn)
+    credentials_store.clear_credential("user", sub, "crunchbase")
 
 
 def get_crunchbase_session(sub: str) -> Optional[dict]:
@@ -720,44 +510,21 @@ def _check_provider(provider: str) -> None:
 def set_user_api_key(sub: str, provider: str, key: str) -> None:
     _check_provider(provider)
     upsert_user(sub)
-    # Dual-write (Phase 2/C3) ATOMIQUE : colonne legacy + table canonique dans
-    # UNE transaction (même conn), sinon un crash entre les deux divergerait les
-    # stores (clé révoquée encore résolue / clé posée invisible). Import lazy
-    # (db ne doit pas importer credentials_store au niveau module — cycle).
-    from . import credentials_store, crypto
-    col = f"{provider}_api_key"
-    with _connect() as conn:
-        with conn.transaction():
-            # Chiffrement OFF : dual-write legacy (rollback Phase 2). Chiffrement
-            # ON : on n'écrit PLUS de plaintext en legacy (canonique chiffré seul) ;
-            # le legacy résiduel est nullé par le runbook de soak (_drop_plaintext).
-            if not crypto.encryption_enabled() and provider in _LEGACY_KEY_COLUMNS:
-                conn.execute(
-                    f"UPDATE users SET {col} = %s, updated_at = NOW() WHERE sub = %s",
-                    (key, sub),
-                )
-            credentials_store.set_credential("user", sub, provider, key, set_by=sub, conn=conn)
+    # Coffre chiffré, source unique. Import lazy (db ne doit pas importer
+    # credentials_store au niveau module — cycle).
+    from . import credentials_store
+    credentials_store.set_credential("user", sub, provider, key, set_by=sub)
 
 
 def clear_user_api_key(sub: str, provider: str) -> None:
     _check_provider(provider)
     from . import credentials_store
-    col = f"{provider}_api_key"
-    with _connect() as conn:
-        with conn.transaction():
-            if provider in _LEGACY_KEY_COLUMNS:
-                conn.execute(
-                    f"UPDATE users SET {col} = NULL, updated_at = NOW() WHERE sub = %s",
-                    (sub,),
-                )
-            credentials_store.clear_credential("user", sub, provider, conn=conn)
+    credentials_store.clear_credential("user", sub, provider)
 
 
 def get_user_api_key(sub: str, provider: str) -> Optional[str]:
-    # Cutover (Phase 2/C4) : lit la table canonique connector_credentials (et
-    # non plus la colonne legacy users.<provider>_api_key, toujours dual-written
-    # pour le rollback). Import lazy (anti-cycle). require_keyed dans le store.
-    # Déchiffre si nécessaire (Phase 7) — chemin de RÉSOLUTION.
+    # Lit le coffre `connector_credentials` (déchiffre — chemin de RÉSOLUTION).
+    # Import lazy (anti-cycle) ; require_keyed dans le store.
     from . import credentials_store
     return credentials_store.get_credential("user", sub, provider)
 
@@ -1086,49 +853,38 @@ def get_usage_today(sub: str, tool: str) -> int:
 
 # --- platform keys (admin-managed) ------------------------------------------
 #
-# Chiffrement au repos (Phase 7 folding) : miroir EXACT du pattern
+# Chiffrement au repos (obligatoire) : miroir EXACT du pattern
 # connector_credentials (cf. credentials_store). `api_key_enc` porte l'enveloppe
-# AES-256-GCM ; `api_key` reste en clair tant que le chiffrement est OFF (pas de
-# master key) OU pendant le soak (filet avant le null final). AAD = (provider,
-# label) — stable sur l'UNIQUE(provider, label), anti-transplant. Inerte sans
-# OTO_MCP_MASTER_KEY (encryption_enabled() == False → comportement identique).
+# AES-256-GCM ; pas de colonne plaintext. AAD = (provider, label) — stable sur
+# l'UNIQUE(provider, label), anti-transplant.
 
 def _pk_aad(provider: str, label: str) -> str:
     return f"platform_keys:{provider}:{label}"
 
 
-def _pk_store(provider: str, label: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
-    """(plaintext, enveloppe) à écrire : chiffré → (None, ct) ; OFF → (api_key, None)."""
+def _pk_encrypt(provider: str, label: str, api_key: str) -> str:
+    """Enveloppe AES-256-GCM à écrire. crypto.encrypt lève si master key absente
+    (pas de stockage plaintext)."""
     from . import crypto
-    if crypto.encryption_enabled():
-        return None, crypto.encrypt(api_key, _pk_aad(provider, label))
-    return api_key, None
+    return crypto.encrypt(api_key, _pk_aad(provider, label))
 
 
 def _pk_reveal(row: dict, provider: str) -> Optional[str]:
-    """api_key en clair depuis une ligne platform_keys : déchiffre `api_key_enc`
-    s'il est présent (fallback plaintext pendant le soak), sinon `api_key`."""
+    """api_key en clair depuis une ligne platform_keys : déchiffre `api_key_enc`.
+    Chiffrement obligatoire (pas de plaintext) → un échec LÈVE, jamais de
+    fallback silencieux."""
     enc = row.get("api_key_enc")
-    if enc:
-        from . import crypto
-        try:
-            return crypto.decrypt(enc, _pk_aad(provider, row["label"]))
-        except Exception:
-            if row.get("api_key") is not None:
-                logger.warning(
-                    "decrypt KO platform_key %s/%s — fallback plaintext (soak) ; "
-                    "vérifier la master key", provider, row.get("label"),
-                )
-                return row["api_key"]
-            raise
-    return row.get("api_key")
+    if not enc:
+        return None
+    from . import crypto
+    return crypto.decrypt(enc, _pk_aad(provider, row["label"]))
 
 
 def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
     """Liste les platform keys. **Inclut `api_key`** (déchiffré) — réservé à
     l'admin backend, jamais retourné via /api (la route admin masque ce champ).
     """
-    sql = "SELECT id, provider, label, api_key, api_key_enc, created_at FROM platform_keys"
+    sql = "SELECT id, provider, label, api_key_enc, created_at FROM platform_keys"
     params: tuple = ()
     if provider:
         sql += " WHERE provider = %s"
@@ -1148,7 +904,7 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
 def get_platform_key(key_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, provider, label, api_key, api_key_enc, created_at "
+            "SELECT id, provider, label, api_key_enc, created_at "
             "FROM platform_keys WHERE id = %s",
             (key_id,),
         ).fetchone()
@@ -1165,13 +921,13 @@ def create_platform_key(provider: str, label: str, api_key: str) -> int:
     _check_provider(provider)
     if not label or not api_key:
         raise ValueError("label et api_key requis")
-    plain, enc = _pk_store(provider, label, api_key)
+    enc = _pk_encrypt(provider, label, api_key)
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO platform_keys (provider, label, api_key, api_key_enc) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (provider, label, plain, enc),
+                "INSERT INTO platform_keys (provider, label, api_key_enc) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (provider, label, enc),
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"({provider}, {label}) existe déjà") from e
@@ -1183,17 +939,17 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
     par le bootstrap des env vars au démarrage.
     """
     _check_provider(provider)
-    plain, enc = _pk_store(provider, label, api_key)
+    enc = _pk_encrypt(provider, label, api_key)
     with _connect() as conn:
         row = conn.execute(
             """
-            INSERT INTO platform_keys (provider, label, api_key, api_key_enc)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO platform_keys (provider, label, api_key_enc)
+            VALUES (%s, %s, %s)
             ON CONFLICT(provider, label) DO UPDATE SET
-                api_key = EXCLUDED.api_key, api_key_enc = EXCLUDED.api_key_enc
+                api_key_enc = EXCLUDED.api_key_enc
             RETURNING id
             """,
-            (provider, label, plain, enc),
+            (provider, label, enc),
         ).fetchone()
         return int(row["id"])
 
@@ -1201,24 +957,6 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
 def delete_platform_key(key_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM platform_keys WHERE id = %s", (key_id,))
-
-
-def _encrypt_existing_platform_keys(conn: psycopg.Connection) -> int:
-    """Migration (Phase 7 folding) : chiffre en place les platform_keys encore en
-    clair. Idempotent (WHERE api_key_enc IS NULL). No-op si chiffrement OFF. GARDE
-    le plaintext (soak) — nullé par `_drop_plaintext_after_soak`. Miroir de
-    credentials_store.encrypt_existing_rows. Dans la transaction d'init_db."""
-    from . import crypto
-    if not crypto.encryption_enabled():
-        return 0
-    rows = conn.execute(
-        "SELECT id, provider, label, api_key FROM platform_keys "
-        "WHERE api_key IS NOT NULL AND api_key_enc IS NULL"
-    ).fetchall()
-    for r in rows:
-        enc = crypto.encrypt(r["api_key"], _pk_aad(r["provider"], r["label"]))
-        conn.execute("UPDATE platform_keys SET api_key_enc = %s WHERE id = %s", (enc, r["id"]))
-    return len(rows)
 
 
 # --- grants -----------------------------------------------------------------
@@ -1278,7 +1016,7 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT pk.id AS platform_key_id, pk.label, pk.api_key, pk.api_key_enc,
+            SELECT pk.id AS platform_key_id, pk.label, pk.api_key_enc,
                    ug.daily_quota
               FROM user_grants ug
               JOIN platform_keys pk ON pk.id = ug.platform_key_id
@@ -1391,11 +1129,10 @@ def set_google_oauth(
     satellites — access_token/expires_at/scopes/is_default/granted_at — dans meta).
 
     `make_default` None → défaut si 1er compte. is_default conservé si déjà défaut
-    (existing OR new). Claime la ligne legacy mono (account='' coffre + google_email
-    NULL legacy). Dual-write legacy ATOMIQUE conditionnel au chiffrement (rollback).
+    (existing OR new). Claime la ligne mono pré-migration (account='').
     """
     upsert_user(sub)
-    from . import credentials_store, crypto
+    from . import credentials_store
     account = google_email or ""
     accts = credentials_store.list_accounts("user", sub, GOOGLE)
     n_named = sum(1 for a in accts if a["account"])
@@ -1420,27 +1157,6 @@ def set_google_oauth(
             credentials_store.set_credential(
                 "user", sub, GOOGLE, refresh_token, set_by=sub,
                 meta=meta, account=account, conn=conn)
-            if not crypto.encryption_enabled():   # mirror legacy (rollback)
-                conn.execute(
-                    "DELETE FROM user_google_oauth WHERE sub=%s AND google_email IS NULL", (sub,))
-                if make_default:
-                    conn.execute(
-                        "UPDATE user_google_oauth SET is_default=FALSE WHERE sub=%s", (sub,))
-                conn.execute(
-                    """
-                    INSERT INTO user_google_oauth
-                        (sub, google_email, refresh_token, access_token, expires_at, scopes, is_default)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(sub, google_email) DO UPDATE SET
-                        refresh_token = EXCLUDED.refresh_token,
-                        access_token  = EXCLUDED.access_token,
-                        expires_at    = EXCLUDED.expires_at,
-                        scopes        = EXCLUDED.scopes,
-                        is_default    = user_google_oauth.is_default OR EXCLUDED.is_default,
-                        updated_at    = NOW()
-                    """,
-                    (sub, google_email, refresh_token, access_token, expires_at, scopes, make_default),
-                )
 
 
 def update_google_access_token(
@@ -1448,24 +1164,12 @@ def update_google_access_token(
 ) -> None:
     """Met à jour SEULEMENT l'access_token + expiry (sur refresh) — merge meta dans
     le coffre, SANS re-chiffrer le refresh_token. `google_email` None = compte mono
-    (account=''). Dual-write legacy conditionnel au chiffrement."""
-    from . import credentials_store, crypto
+    (account='')."""
+    from . import credentials_store
     account = google_email or ""
     credentials_store.update_meta(
         "user", sub, GOOGLE, account,
         {"access_token": access_token, "expires_at": expires_at})
-    if not crypto.encryption_enabled():
-        with _connect() as conn:
-            if google_email is None:
-                conn.execute(
-                    "UPDATE user_google_oauth SET access_token=%s, expires_at=%s, "
-                    "updated_at=NOW() WHERE sub=%s AND google_email IS NULL",
-                    (access_token, expires_at, sub))
-            else:
-                conn.execute(
-                    "UPDATE user_google_oauth SET access_token=%s, expires_at=%s, "
-                    "updated_at=NOW() WHERE sub=%s AND google_email=%s",
-                    (access_token, expires_at, sub, google_email))
 
 
 def get_google_oauth(sub: str, account: Optional[str] = None) -> Optional[dict]:
@@ -1502,45 +1206,33 @@ def list_google_accounts(sub: str) -> list[dict]:
 
 def set_default_google_account(sub: str, account: str) -> bool:
     """Marque `account` comme défaut (meta.is_default) dans le coffre. False si le
-    compte n'existe pas. Dual-write legacy conditionnel au chiffrement."""
-    from . import credentials_store, crypto
+    compte n'existe pas."""
+    from . import credentials_store
     accts = credentials_store.list_accounts("user", sub, GOOGLE)
     if not any(a["account"] == account for a in accts):
         return False
     with _connect() as conn:
-        with conn.transaction():
-            conn.execute(
-                "UPDATE connector_credentials "
-                "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
-                "WHERE entity_type='user' AND entity_id=%s AND connector=%s",
-                (account, sub, GOOGLE),
-            )
-            if not crypto.encryption_enabled():
-                conn.execute(
-                    "UPDATE user_google_oauth SET is_default=(google_email=%s) WHERE sub=%s",
-                    (account, sub))
+        conn.execute(
+            "UPDATE connector_credentials "
+            "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
+            "WHERE entity_type='user' AND entity_id=%s AND connector=%s",
+            (account, sub, GOOGLE),
+        )
     return True
 
 
 def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
     """Supprime un compte (account=email) ou tous (account=None) du coffre. Si on
-    retire le défaut et qu'il reste des comptes, promeut le plus ancien. Dual-write
-    legacy conditionnel au chiffrement."""
-    from . import credentials_store, crypto
-    enc = crypto.encryption_enabled()
+    retire le défaut et qu'il reste des comptes, promeut le plus ancien."""
+    from . import credentials_store
     with _connect() as conn:
         with conn.transaction():
             if account is None:
                 conn.execute(
                     "DELETE FROM connector_credentials "
                     "WHERE entity_type='user' AND entity_id=%s AND connector=%s", (sub, GOOGLE))
-                if not enc:
-                    conn.execute("DELETE FROM user_google_oauth WHERE sub=%s", (sub,))
                 return
             credentials_store.clear_credential("user", sub, GOOGLE, account=account, conn=conn)
-            if not enc:
-                conn.execute(
-                    "DELETE FROM user_google_oauth WHERE sub=%s AND google_email=%s", (sub, account))
             # promotion du défaut : lire le RESTANT dans CETTE transaction (voit le delete)
             rem = conn.execute(
                 "SELECT account, meta FROM connector_credentials "
@@ -1551,10 +1243,6 @@ def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
                     "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
                     "WHERE entity_type='user' AND entity_id=%s AND connector=%s AND account=%s",
                     (sub, GOOGLE, oldest))
-                if not enc:
-                    conn.execute(
-                        "UPDATE user_google_oauth SET is_default=TRUE WHERE sub=%s AND google_email=%s",
-                        (sub, oldest))
 
 
 # --- Datastore namespaces ---------------------------------------------------

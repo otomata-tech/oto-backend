@@ -1,24 +1,20 @@
-"""Chiffrement par enveloppe des secrets au repos (Phase 7).
+"""Chiffrement par enveloppe des secrets au repos.
 
 AES-256-GCM. Master key **hors DB** : env `OTO_MCP_MASTER_KEY` (32 octets,
 base64 ou hex) — `_load_master_key` est le SEUL point à swapper pour passer à
 un KMS-unwrap-au-boot (Scaleway Key Manager) sans toucher le reste.
 
-GARDE-FOU déploiement : si la master key n'est pas posée, le chiffrement est
-DÉSACTIVÉ (`encryption_enabled()` False) — les secrets restent en clair. Permet
-de déployer ce code en NO-OP, puis d'activer le chiffrement en provisionnant la
-clé (la migration chiffre alors les lignes existantes au boot suivant).
+Chiffrement **obligatoire** : il n'existe plus aucune colonne plaintext (purge
+2026-06-11). `encryption_enabled()` reste exposé, mais `encrypt`/`decrypt`
+LÈVENT si la master key est absente → un serveur sans `OTO_MCP_MASTER_KEY` boote
+mais tout write de credential échoue fort (pas de stockage en clair silencieux).
 
 Enveloppe (base64) = key_ref(1o) ‖ nonce(12o) ‖ ciphertext+tag. L'AAD = identité
 de la ligne (table:entity_type:entity_id:connector) lie le ciphertext à SA
 ligne : un blob ne peut pas être transplanté vers un autre connecteur/entité.
 
-⚠️ « Dump Postgres = ciphertext only » n'est vrai que pour `secret_enc`. Le
-chiffrement-at-rest COMPLET exige en plus de retirer les 3 emplacements
-plaintext résiduels (étape délibérée au moment d'activer en prod, cf. runbook
-dans `credentials_store.verify_and_null_plaintext` et le plan) :
-`connector_credentials.secret` (soak), les 9 `users.<provider>_api_key`, et
-`org_secrets.api_key`. Tant que ce n'est pas fait, le dump livre encore le clair.
+« Dump Postgres = ciphertext only » : vrai. Tous les secrets vivent dans
+`secret_enc` / `platform_keys.api_key_enc` ; aucune colonne plaintext résiduelle.
 
 `_KEY_REF` est réservé à la ROTATION future (key-ring sélectionné sur blob[0]) —
 non implémentée : une seule clé. Une clé erronée → InvalidTag (échec bruyant),

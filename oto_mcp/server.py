@@ -94,7 +94,7 @@ Oto — toolkit d'automatisation pour la prospection B2B et l'intelligence comme
 Namespaces :
 • fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
 • linkedin_* — scraping LinkedIn via browser persistant. Cookie requis (oto.ninja/account).
-• attio_* — CRM Attio complet (companies, people, deals, notes, tasks, lists, entries, threads).
+• attio_* — CRM Attio complet (companies, people, deals, notes, tasks, lists, entries, threads). Masqué par défaut (préférer le MCP Attio officiel) — réactivable via oto_enable_tool.
 • serper_* — recherche web (Serper API) : web, news, scrape.
 • hunter_* — emails : domain search, finder, vérification.
 • kaspr_* — enrichissement contacts depuis profil LinkedIn.

@@ -36,7 +36,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, api_routes_sirene, connectors, db, linkedin_pairing, pairing
+from . import access, api_routes_datastore, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 
@@ -60,7 +60,7 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
         return {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
@@ -166,11 +166,21 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         status = access.status_for(sub)
         li = db.get_linkedin_status(sub)        # coffre (folding), sans déchiffrer
         cb = db.get_crunchbase_status(sub)
+        active_org = org_store.get_active_org(sub)
+        active_org_name = None
+        org_role = None
+        if active_org is not None:
+            o = org_store.get_org(active_org)
+            active_org_name = o["name"] if o else None
+            org_role = org_store.get_org_role(active_org, sub)
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
             "name": user.get("name"),
             "role": status["role"],
+            "active_org": active_org,
+            "active_org_name": active_org_name,
+            "org_role": org_role,
             "linkedin": {
                 "configured": li is not None,
                 "set_at": li["set_at"] if li else None,
@@ -664,6 +674,168 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})
 
+    # ── Doctrine & instructions de l'org active ─────────────────────
+    # Surface self-service scopée à l'ORG ACTIVE du caller (résolue depuis le
+    # token, comme les org_secrets). Lecture = tout membre ; écriture = org_admin
+    # de l'org (ou platform admin). Le store gère le versioning + l'historique.
+
+    def _active_org_edit(sub: str) -> tuple[int | None, str | None, bool]:
+        """(org_id, org_role, can_edit) pour l'org active du caller."""
+        org_id = org_store.get_active_org(sub)
+        if org_id is None:
+            return None, None, False
+        role = org_store.get_org_role(org_id, sub)
+        can_edit = role == "org_admin" or access.get_user_role(sub) == access.ADMIN
+        return org_id, role, can_edit
+
+    async def my_instructions_list(request: Request) -> JSONResponse:
+        """Doctrine de base (meta) + index des instructions nommées de l'org active."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, role, can_edit = _active_org_edit(sub)
+        if org_id is None:
+            return _json(request, {
+                "org_id": None, "org_name": None, "can_edit": False,
+                "doctrine": {"exists": False, "version": 0, "updated_at": None},
+                "instructions": [],
+            })
+        o = org_store.get_org(org_id)
+        base = org_store.get_instruction(org_id, org_store.BASE_SLUG)
+        return _json(request, {
+            "org_id": org_id,
+            "org_name": o["name"] if o else None,
+            "can_edit": can_edit,
+            "doctrine": {
+                "exists": base is not None,
+                "version": base["version"] if base else 0,
+                "updated_at": base["updated_at"] if base else None,
+            },
+            "instructions": org_store.list_instructions(org_id),
+        })
+
+    async def my_instruction_get(request: Request) -> JSONResponse:
+        """Corps complet d'une instruction (slug `claude_md` = doctrine de base).
+        `?version=` optionnel pour relire une version archivée."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, role, _ = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if role is None and access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        slug = request.path_params["slug"]
+        version = request.query_params.get("version")
+        try:
+            version = int(version) if version else None
+        except (TypeError, ValueError):
+            return _json_error(request, 400, "invalid_version")
+        instr = org_store.get_instruction(org_id, slug, version=version)
+        if not instr:
+            return _json(request, {"error": "not_found", "slug": slug}, status_code=404)
+        return _json(request, {
+            "slug": instr["slug"],
+            "title": instr["title"],
+            "description": instr["description"],
+            "version": instr["version"],
+            "body_md": instr["body_md"],
+            "set_by": instr.get("set_by"),
+            "created_at": instr.get("created_at"),
+            "updated_at": instr.get("updated_at"),
+        })
+
+    async def my_instruction_save(request: Request) -> JSONResponse:
+        """Crée/met à jour une instruction (org_admin). Incrémente la version."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, _, can_edit = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if not can_edit:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        if not slug:
+            return _json_error(request, 400, "invalid_slug")
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        if not isinstance(body, dict):
+            return _json_error(request, 400, "invalid_body")
+        body_md = (body.get("body_md") or "").strip()
+        if not body_md:
+            return _json_error(request, 400, "body_md_required")
+        title = body.get("title")
+        description = body.get("description")
+        version = org_store.set_instruction(
+            org_id, slug, body_md,
+            title=title if title is None else str(title),
+            description=description if description is None else str(description),
+            set_by=sub,
+        )
+        return _json(request, {"ok": True, "slug": slug, "version": version})
+
+    async def my_instruction_delete(request: Request) -> JSONResponse:
+        """Supprime une instruction et son historique (org_admin)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, _, can_edit = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if not can_edit:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        deleted = org_store.delete_instruction(org_id, slug)
+        if not deleted:
+            return _json(request, {"error": "not_found", "slug": slug}, status_code=404)
+        return _json(request, {"ok": True, "slug": slug, "deleted": True})
+
+    async def my_instruction_versions(request: Request) -> JSONResponse:
+        """Historique d'une instruction (metadata par version, récent d'abord)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, role, _ = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if role is None and access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        return _json(request, {
+            "slug": slug,
+            "versions": org_store.list_instruction_versions(org_id, slug),
+        })
+
+    async def my_instruction_revert(request: Request) -> JSONResponse:
+        """Restaure une version archivée comme NOUVELLE version (org_admin)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, _, can_edit = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if not can_edit:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        try:
+            target = int((body or {}).get("version"))
+        except (TypeError, ValueError):
+            return _json_error(request, 400, "invalid_version")
+        old = org_store.get_instruction(org_id, slug, version=target)
+        if not old:
+            return _json(request, {"error": "not_found", "slug": slug, "version": target}, status_code=404)
+        version = org_store.set_instruction(
+            org_id, slug, old["body_md"], title=old["title"],
+            description=old["description"], set_by=sub)
+        return _json(request, {"ok": True, "slug": slug, "version": version, "reverted_from": target})
+
     # ── LinkedIn browser-session pairing (VNC) ──────────────────────
 
     async def linkedin_browser_status(request: Request) -> JSONResponse:
@@ -839,6 +1011,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/presets/{name}", options_handler, methods=["OPTIONS"]),
         Route("/api/me/presets/{name}/apply", my_preset_apply, methods=["POST"]),
         Route("/api/me/presets/{name}/apply", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions", my_instructions_list, methods=["GET"]),
+        Route("/api/me/instructions", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions/{slug}", my_instruction_get, methods=["GET"]),
+        Route("/api/me/instructions/{slug}", my_instruction_save, methods=["PUT"]),
+        Route("/api/me/instructions/{slug}", my_instruction_delete, methods=["DELETE"]),
+        Route("/api/me/instructions/{slug}", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions/{slug}/versions", my_instruction_versions, methods=["GET"]),
+        Route("/api/me/instructions/{slug}/versions", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions/{slug}/revert", my_instruction_revert, methods=["POST"]),
+        Route("/api/me/instructions/{slug}/revert", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),

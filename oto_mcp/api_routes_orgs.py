@@ -424,8 +424,10 @@ def make_routes(
     async def _do_member_remove(request: Request, org_id: int) -> JSONResponse:
         target_sub = request.path_params["sub"]
         removed = org_store.remove_org_member(org_id, target_sub)
+        if not removed:
+            return json_error(request, 404, "not_a_member")
         return json_response(request, {"ok": True, "org_id": org_id,
-                                       "sub": target_sub, "removed": removed})
+                                       "sub": target_sub, "removed": True})
 
     async def _do_secret_put(request: Request, org_id: int, *, set_by: str) -> JSONResponse:
         if not org_store.get_org(org_id):

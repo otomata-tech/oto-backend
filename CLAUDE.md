@@ -320,6 +320,36 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 
 **Limite connue** : sessions MCP déjà ouvertes au moment d'un toggle via REST (`/account`) ne sont pas notifiées live — visible au prochain refresh ou nouvelle session, parce que le hook `on_initialize` ne tape qu'à la naissance d'une session.
 
+## Doctrines d'org
+
+Une **doctrine markdown par org** : la notice opératoire métier (workflows validés,
+règles, vocabulaire) pour les users qui pilotent oto **sans produit applicatif dédié**
+(ex. Celeste, mission Movinmotion — process avoir GoCardless → Pennylane → back-office,
+piloté directement depuis Claude sur un sous-ensemble de tools). oto est la maison
+naturelle de cette prose faute de produit. Aligné [ADR 0006](../docs/adr/0006-harnais-vs-substrat.md)
+(harnais-vs-substrat) : une org oto + sa doctrine = un **harnais sans état** (étage zéro) ;
+le jour où un workflow doit persister un pipeline/des statuts, il graduate en harnais à
+part (chemin blitz → scout).
+
+- **Service** : tool `get_claude_md()` (non préfixé `oto_` — convention cross-écosystème,
+  comme Blitz/GR/Ogic). Scopé à l'**org active** du token (`org_store.get_active_org`) —
+  **même principe d'accès que les org_secrets** : servie aux seuls membres de l'org. Réponse
+  **vide sans erreur** si pas d'org active ou pas de doctrine (`_SERVER_INSTRUCTIONS` invite
+  à l'appeler en début de session). Plusieurs workflows dans une org = des **sections** du
+  même markdown ; on n'introduit un paramètre (workflow/key) que si un doc devient trop gros.
+- **Écriture** : meta-tools admin (`tools/orgs.py`, pattern `_require_admin`) :
+  `oto_admin_set_doctrine(org_id, body_md)`, `oto_admin_get_doctrine(org_id)` (relire),
+  `oto_admin_delete_doctrine(org_id)`. À terme, éditeur dans la SPA `account/` (Phase 8,
+  oto-app#29) — pour l'instant meta-tool-only, comme les org_secrets.
+- **Store** : table `org_doctrines(org_id PK, body_md, set_by, updated_at)` (`db._SCHEMA`,
+  palier org), accès dans `org_store.py` (`get/set/delete_org_doctrine`, `get_org_doctrine_meta`).
+  **En clair** (prose, pas un credential → hors coffre chiffré). **Pas de cache** : lecture DB
+  à l'appel, comme la résolution de secrets.
+- **Pas de doctrine par namespace** : un gotcha d'outil est vrai pour tout le monde et évolue
+  avec le code du connecteur → sa place reste le repo (docstring, `_SERVER_INSTRUCTIONS`),
+  versionné avec l'outil. La doctrine de prospection de scout ne passe pas par ce mécanisme —
+  elle vit chez scout (son propre `get_claude_md()`).
+
 ## Conventions
 
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,

@@ -91,6 +91,8 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
 _SERVER_INSTRUCTIONS = """\
 Oto — toolkit d'automatisation pour la prospection B2B et l'intelligence commerciale.
 
+En début de session, appelle `get_claude_md()` — il renvoie la doctrine de ton organisation (workflows validés, règles métier, vocabulaire). Vide si ton org n'en a pas : continue normalement avec ces instructions.
+
 Namespaces :
 • fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
 • linkedin_* — scraping LinkedIn via browser persistant. Cookie requis (oto.ninja/account).

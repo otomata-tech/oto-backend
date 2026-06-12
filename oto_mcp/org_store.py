@@ -284,3 +284,50 @@ def list_org_entitlements(org_id: int) -> list[dict]:
             (org_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- doctrine markdown : notice opératoire métier servie par get_claude_md() --
+
+def get_org_doctrine(org_id: int) -> Optional[str]:
+    """Markdown de la doctrine de l'org, ou None si aucune n'est posée.
+
+    En clair (prose, pas un secret) — pas de coffre/déchiffrement, contrairement
+    à get_org_secret. Lu à l'appel (pas de cache), comme la résolution de secrets.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT body_md FROM org_doctrines WHERE org_id = %s", (org_id,)
+        ).fetchone()
+        return row["body_md"] if row else None
+
+
+def get_org_doctrine_meta(org_id: int) -> Optional[dict]:
+    """Doctrine + métadonnées (set_by, updated_at) pour l'echo/édition admin."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT body_md, set_by, updated_at FROM org_doctrines WHERE org_id = %s",
+            (org_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_org_doctrine(org_id: int, body_md: str, set_by: Optional[str] = None) -> None:
+    """Pose/remplace la doctrine de l'org. `body_md` non vide attendu (validé au tool)."""
+    if not body_md:
+        raise ValueError("body_md requis")
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO org_doctrines (org_id, body_md, set_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (org_id) DO UPDATE SET
+                body_md = EXCLUDED.body_md, set_by = EXCLUDED.set_by, updated_at = NOW()
+            """,
+            (org_id, body_md, set_by),
+        )
+
+
+def delete_org_doctrine(org_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM org_doctrines WHERE org_id = %s", (org_id,))
+        return (cur.rowcount or 0) > 0

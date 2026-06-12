@@ -767,6 +767,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         body_md = (body.get("body_md") or "").strip()
         if not body_md:
             return _json_error(request, 400, "body_md_required")
+        # Injecté dans get_claude_md() à chaque session MCP → caper pour ne pas
+        # saturer le contexte du modèle.
+        if len(body_md.encode()) > 64 * 1024:
+            return _json_error(request, 400, "body_too_large")
         title = body.get("title")
         description = body.get("description")
         version = org_store.set_instruction(
@@ -790,7 +794,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         slug = org_store.normalize_slug(request.path_params["slug"])
         deleted = org_store.delete_instruction(org_id, slug)
         if not deleted:
-            return _json(request, {"error": "not_found", "slug": slug}, status_code=404)
+            return _json_error(request, 404, "not_found")
         return _json(request, {"ok": True, "slug": slug, "deleted": True})
 
     async def my_instruction_versions(request: Request) -> JSONResponse:

@@ -221,6 +221,30 @@ def is_org_shareable(name: str) -> bool:
     return bool(c and c.org_shareable)
 
 
+def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, str | None]:
+    """Valide l'écriture d'un secret partagé d'org et calcule son `meta` satellite.
+
+    Règles (miroir de `oto_admin_set_org_secret`) : le provider doit être
+    org-partageable (sinon credential de session perso ou inconnu → refus) ; un
+    connecteur `remote` (ex. `mm`) EXIGE un `base_url` (endpoint du bridge), un
+    connecteur normal le REFUSE. Pure (registre seul) → testable hors DB.
+
+    Renvoie `(meta, error_code)`. `error_code` None = OK ; `meta` None = pas de
+    satellite (provider non-remote). Codes : `provider_not_shareable`,
+    `base_url_required`, `base_url_not_allowed`.
+    """
+    if provider not in ORG_SHAREABLE_PROVIDERS:
+        return None, "provider_not_shareable"
+    c = connector_for_provider(provider)
+    if c is not None and c.kind == "remote":
+        if not base_url:
+            return None, "base_url_required"
+        return {"base_url": base_url.rstrip("/")}, None
+    if base_url:
+        return None, "base_url_not_allowed"
+    return None, None
+
+
 def public_catalog() -> list[dict]:
     """Vue publique (GET /api/connectors) — sans secret, pour le frontend."""
     return [

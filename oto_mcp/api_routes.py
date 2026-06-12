@@ -17,6 +17,10 @@ tools, admin, WhatsApp) :
 - `GET    /api/whatsapp/*`                    → WhatsApp pairing
 
 Endpoints datastore / Google OAuth / API tokens : voir `api_routes_datastore.py`.
+Endpoints SIRENE stock : voir `api_routes_sirene.py`.
+Endpoints organisation (`/api/me/orgs`, `/api/orgs/*`, `/api/admin/orgs/*`,
+`/api/admin/namespace-grants*`) : voir `api_routes_orgs.py` — projection REST du
+palier org (mêmes fonctions de service que les meta-tools MCP `oto_admin_*org*`).
 
 Auth : Bearer JWT Logto **ou** API token long-lived (préfixe `oto_`), vérifié
 via `_authenticate`. Le frontend obtient le token Logto via `@logto/vue`. La
@@ -36,7 +40,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
+from . import access, api_routes_datastore, api_routes_orgs, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 
@@ -987,6 +991,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    orgs_routes = api_routes_orgs.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     return [
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
@@ -1064,4 +1076,5 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/tokens/{token_id}", options_handler, methods=["OPTIONS"]),
         *datastore_routes,
         *sirene_routes,
+        *orgs_routes,
     ]

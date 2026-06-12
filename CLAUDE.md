@@ -131,11 +131,12 @@ per-user).
 
 ## REST API (consommée par oto.ninja /account)
 
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota)
+- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role`
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
 - `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
 - `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
+- `GET /api/me/instructions` (doctrine de base meta + index) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — doctrine & instructions de l'**org active** (cf. §Doctrines). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par la SPA `account/` (section « doctrine »).
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
@@ -323,6 +324,52 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 `oto_save_preset` (et `POST /api/me/presets/{name}`) accepte 2 modes : snapshot (par défaut, capture l'état courant) ou explicit (param `enabled_tools=[...]`, sauve sans altérer l'état courant — utile pour provisionner par script).
 
 **Limite connue** : sessions MCP déjà ouvertes au moment d'un toggle via REST (`/account`) ne sont pas notifiées live — visible au prochain refresh ou nouvelle session, parce que le hook `on_initialize` ne tape qu'à la naissance d'une session.
+
+## Doctrines & instructions d'org
+
+Prose opératoire métier (workflows validés, règles, vocabulaire) pour les users qui pilotent
+oto **sans produit applicatif dédié** (ex. Celeste, mission Movinmotion — process avoir
+GoCardless → Pennylane → back-office, piloté directement depuis Claude sur un sous-ensemble
+de tools). oto est la maison naturelle de cette prose faute de produit. Aligné
+[ADR 0006](../docs/adr/0006-harnais-vs-substrat.md) (harnais-vs-substrat) : une org oto + sa
+doctrine = un **harnais sans état** (étage zéro) ; le jour où un workflow doit persister un
+pipeline/des statuts, il graduate en harnais à part (chemin blitz → scout).
+
+**Modèle = skills, à la Claude Code.** Une org possède des **instructions markdown**
+identifiées par `slug`, chacune versionnée :
+- Le slug réservé **`claude_md`** = la **doctrine de base**, servie d'office.
+- Les autres slugs = des **skills** chargés à la demande (progressive disclosure) : la
+  doctrine de base ne porte que l'**index** (slug + titre + quand-l'utiliser), le détail
+  se charge au besoin.
+
+- **Service (membre)** : `get_claude_md()` (non préfixé `oto_` — convention cross-écosystème,
+  comme Blitz/GR/Ogic) renvoie `{doctrine, instructions[]}` (base + index). Puis
+  `oto_list_instructions()`, `oto_get_instruction(slug[, version])`, `oto_search_instructions(query)`.
+  Tous scopés à l'**org active** du token (`org_store.get_active_org`) — **même principe d'accès
+  que les org_secrets** : servis aux seuls membres. **Vide sans erreur** si pas d'org active /
+  rien posé (`_SERVER_INSTRUCTIONS` invite à appeler `get_claude_md()` en début de session).
+- **Écriture (platform admin, `_require_admin`)** : `oto_admin_set_doctrine(org_id, body_md)`
+  (la base), `oto_admin_set_instruction(org_id, slug, body_md[, title, description])` (une skill ;
+  `claude_md` réservé), `oto_admin_list_instructions`, `oto_admin_get_instruction(…[, version])`,
+  `oto_admin_list_instruction_versions`, `oto_admin_revert_instruction(…, version)` (restaure une
+  vieille version comme nouvelle, historique conservé), `oto_admin_delete_instruction`.
+- **Écriture self-service (org_admin)** : la SPA `account/` (section « doctrine », `DoctrineView.vue`)
+  édite la doctrine + les skills de l'**org active** via REST `/api/me/instructions*` (lecture =
+  membre, écriture = `org_admin` de l'org active, gate `can_edit` renvoyé par l'API). C'est l'éditeur
+  Phase 8 (oto-app#29) — l'org_admin édite sans agent.
+- **Versioning** : chaque écriture incrémente `version` (sur le courant) et archive un snapshot
+  append-only. Revert = re-poser le corps d'une version → nouvelle version (jamais d'effacement
+  d'historique sauf `delete`).
+- **Store** : `org_instructions(org_id, slug PK partiel, title, description, body_md, version,
+  set_by, created_at, updated_at)` + `org_instruction_revisions(org_id, slug, version PK, …)`
+  (`db._SCHEMA`, palier org) ; accès dans `org_store.py` (`get/list/search/set/delete_instruction`,
+  `list_instruction_versions`, `normalize_slug`, `BASE_SLUG`). **En clair** (prose, pas un
+  credential → hors coffre chiffré). **Pas de cache** : lecture DB à l'appel. Écriture sérialisée
+  par `(org, slug)` via verrou advisory (mirroir `add_org_member`).
+- **Pas d'instruction par namespace d'outil** : un gotcha d'outil est vrai pour tout le monde et
+  évolue avec le code du connecteur → sa place reste le repo (docstring, `_SERVER_INSTRUCTIONS`),
+  versionné avec l'outil. La doctrine de prospection de scout ne passe pas par ce mécanisme —
+  elle vit chez scout (son propre `get_claude_md()`).
 
 ## Conventions
 

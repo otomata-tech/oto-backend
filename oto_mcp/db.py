@@ -239,6 +239,40 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
     PRIMARY KEY (org_id, namespace)
 );
 
+-- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
+-- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
+-- 'claude_md' = la doctrine de base servie d'office par get_claude_md(), les
+-- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
+-- pas un credential → hors coffre chiffré). Même principe d'accès que les
+-- org_secrets : résolu par l'org active du sub (get_active_org). `version` est
+-- incrémenté à chaque écriture, qui archive un snapshot dans la table sœur.
+CREATE TABLE IF NOT EXISTS org_instructions (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    set_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);
+
+-- Historique : un snapshot par version posée (revert + audit). Append-only.
+CREATE TABLE IF NOT EXISTS org_instruction_revisions (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL,
+    set_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, slug, version)
+);
+
 -- Credentials génériques per-entité (user OU org) — table unique qui remplace
 -- les 9 colonnes users.<provider>_api_key + org_secrets. entity_id = sub (user)
 -- ou org_id::text (org) ; toujours requêter (entity_type, entity_id) ENSEMBLE.

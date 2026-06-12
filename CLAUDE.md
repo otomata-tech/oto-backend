@@ -140,6 +140,7 @@ per-user).
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
+- `GET /api/admin/monitoring/summary?days=` + `GET /api/admin/monitoring/calls?limit=&sub=&tool=&errors=&days=` — journal des appels MCP, agrégats + brut (admin only, cf. §Monitoring)
 - **Palier org** (`api_routes_orgs.py`, projection 1:1 des meta-tools `oto_admin_*org*` / `oto_list_orgs`) :
   - self-service : `GET /api/me/orgs` (membre) ; `GET /api/orgs/{id}` (membre, renvoie `my_role` sur le détail) ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
   - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{namespace}`, `GET /api/admin/namespace-grants`, `POST|DELETE /api/admin/users/{sub}/namespace-grants/{namespace}`
@@ -310,6 +311,26 @@ asyncio.Queue.
 
 Tools accessibles à tout user **dont l'auth_dir contient `creds.json`** (pas
 de gating role). Le pairing crée ce fichier.
+
+## Monitoring des appels MCP
+
+`CallMonitoringMiddleware` (`middleware.py`) journalise **chaque** appel de tool
+via le hook `on_call_tool` (point d'interception unique) dans la table
+`tool_call_log(id, sub, tool_name, called_at, duration_ms, ok, error)` : `sub`
+JWT courant (nullable — stdio local non authentifié = NULL), durée, statut
+succès/échec + message tronqué. Best-effort : une erreur d'écriture du journal
+ne fait jamais échouer l'appel ni n'avale l'exception métier. Couvre les deux
+formes d'échec fastmcp (exception propagée OU résultat `isError`).
+
+Volumétrie bornée par un prune au boot (`prune_tool_call_log` dans `init_db`,
+rétention `OTO_MCP_CALL_LOG_RETENTION_DAYS`, défaut 30j) — les restarts deploy
+fréquents suffisent à garder la table petite.
+
+Surface admin : `GET /api/admin/monitoring/summary?days=` (agrégats total /
+échecs / users actifs + ventilation par tool / par user / par jour) et
+`GET /api/admin/monitoring/calls` (journal brut, filtres `limit/sub/tool/errors/days`).
+Consommé par le front `account/` (section admin « monitoring mcp »,
+`AdminMcpMonitoring.vue` + store `admin.loadMonitoring`).
 
 ## Visibility per-user
 

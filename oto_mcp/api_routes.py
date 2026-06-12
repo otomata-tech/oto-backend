@@ -497,6 +497,49 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.set_user_role(target_sub, role)
         return _json(request, {"ok": True, "sub": target_sub, "role": role})
 
+    async def admin_monitoring_summary(request: Request) -> JSONResponse:
+        """Agrégats des appels MCP (total / échecs / par tool / par user / par
+        jour) sur une fenêtre `?days=` (défaut 7). Admin only."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        try:
+            days = int(request.query_params.get("days", "7"))
+        except ValueError:
+            days = 7
+        return _json(request, db.tool_call_stats(since_days=days))
+
+    async def admin_monitoring_calls(request: Request) -> JSONResponse:
+        """Derniers appels MCP (journal brut), récent d'abord. Filtres :
+        `?limit=` (défaut 200, max 1000), `?sub=`, `?tool=`, `?errors=1`,
+        `?days=`. Admin only."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        qp = request.query_params
+        try:
+            limit = int(qp.get("limit", "200"))
+        except ValueError:
+            limit = 200
+        since_days: int | None = None
+        if qp.get("days"):
+            try:
+                since_days = int(qp["days"])
+            except ValueError:
+                since_days = None
+        calls = db.list_tool_calls(
+            limit=limit,
+            sub=qp.get("sub") or None,
+            tool_name=qp.get("tool") or None,
+            errors_only=qp.get("errors") in ("1", "true"),
+            since_days=since_days,
+        )
+        return _json(request, {"calls": calls})
+
     async def my_tools_list(request: Request) -> JSONResponse:
         """Liste tous les tools du serveur avec l'état (enabled/disabled)
         pour l'utilisateur courant.
@@ -1074,6 +1117,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens/{token_id}", admin_tokens_delete, methods=["DELETE"]),
         Route("/api/admin/users/{sub}/tokens/{token_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/monitoring/summary", admin_monitoring_summary, methods=["GET"]),
+        Route("/api/admin/monitoring/summary", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/monitoring/calls", admin_monitoring_calls, methods=["GET"]),
+        Route("/api/admin/monitoring/calls", options_handler, methods=["OPTIONS"]),
         *datastore_routes,
         *sirene_routes,
         *orgs_routes,

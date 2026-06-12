@@ -1,6 +1,7 @@
 """Middlewares FastMCP — application des préférences user au boot de session."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -79,7 +80,9 @@ class CallMonitoringMiddleware(Middleware):
         finally:
             duration_ms = int((time.perf_counter() - start) * 1000)
             try:
-                db.record_tool_call(sub, tool_name, duration_ms, ok, error)
+                # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas
+                # bloquer l'event loop sur le chemin chaud de chaque tool call.
+                await asyncio.to_thread(db.record_tool_call, sub, tool_name, duration_ms, ok, error)
             except Exception as log_err:  # best-effort, jamais bloquant
                 logger.warning("record_tool_call failed for %s: %s", tool_name, log_err)
 

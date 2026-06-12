@@ -17,10 +17,9 @@ Deux systèmes de rôles distincts : plateforme (`guest|member|admin`) vs org
 (`org_member|org_admin`). Le platform admin est toujours autorisé sur les
 surfaces org (il provisionne).
 
-Gotcha cutover coffre : `org_store.list_org_secrets` lit la table legacy
-`org_secrets` qui n'est plus dual-written quand le chiffrement est actif (prod).
-Le listing passe donc par le coffre canonique `credentials_store` (qui porte
-aussi le `base_url` des connecteurs remote dans `meta`).
+Le listing des secrets réutilise `org_store.list_org_secrets` (qui lit le coffre
+canonique `credentials_store`, jamais la clé, et porte le `base_url` des
+connecteurs remote depuis `meta`).
 """
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import access, connectors, credentials_store, db, org_store
+from . import access, connectors, db, org_store
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
@@ -61,25 +60,6 @@ def make_routes(
             })
         return out
 
-    def _secrets(org_id: int) -> list[dict]:
-        """Secrets posés sur l'org — depuis le coffre canonique, SANS la clé.
-        `base_url` exposé pour les connecteurs remote (vit dans `meta`)."""
-        out = []
-        for c in credentials_store.list_credentials("org", str(org_id)):
-            provider = c["connector"]
-            entry: dict = {
-                "provider": provider,
-                "set_at": c["set_at"],
-                "set_by": c["set_by"],
-            }
-            st = credentials_store.credential_status(
-                "org", str(org_id), provider, c.get("account") or "")
-            base_url = (st or {}).get("meta", {}).get("base_url") if st else None
-            if base_url:
-                entry["base_url"] = base_url
-            out.append(entry)
-        return out
-
     def _org_brief(org: dict, *, my_role: str | None = None) -> dict:
         brief = {
             "id": org["id"],
@@ -96,7 +76,7 @@ def make_routes(
         payload = {
             "org": _org_brief(org, my_role=my_role),
             "members": _members(org["id"]),
-            "secrets": _secrets(org["id"]),
+            "secrets": org_store.list_org_secrets(org["id"]),
         }
         if with_entitlements:
             payload["entitlements"] = [

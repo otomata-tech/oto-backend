@@ -233,13 +233,21 @@ def delete_org_secret(org_id: int, provider: str) -> bool:
 
 
 def list_org_secrets(org_id: int) -> list[dict]:
-    """Providers posés sur l'org — SANS l'api_key (jamais exposée via API)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT provider, set_by, set_at FROM org_secrets WHERE org_id = %s ORDER BY provider",
-            (org_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    """Providers posés sur l'org — SANS l'api_key (jamais exposée via API).
+
+    Lit le coffre CANONIQUE (`connector_credentials` via credentials_store), pas
+    la table legacy `org_secrets` : sous chiffrement (prod), `set_org_secret`
+    n'écrit plus le legacy (cf. la garde `if not crypto.encryption_enabled()`),
+    donc lire org_secrets renverrait vide. `base_url` exposé pour les connecteurs
+    remote (satellite non-secret dans `meta`)."""
+    out: list[dict] = []
+    for c in credentials_store.list_credentials("org", str(org_id)):
+        entry = {"provider": c["connector"], "set_by": c["set_by"], "set_at": c["set_at"]}
+        base_url = (c.get("meta") or {}).get("base_url")
+        if base_url:
+            entry["base_url"] = base_url
+        out.append(entry)
+    return out
 
 
 # --- entitlements : plafond de visibilité plateforme -> org (barreau 4) ------

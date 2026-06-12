@@ -272,12 +272,13 @@ def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None
 
 
 def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
-    """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé).
+    """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé), mais
+    AVEC `meta` (satellites non-secrets : base_url d'un bridge remote, scopes…).
     Une ligne par (connector, account) : le multi-compte apparaît en N lignes."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT connector, account, secret_kind, set_by, set_at FROM connector_credentials "
+            "SELECT connector, account, secret_kind, set_by, set_at, meta FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id = %s ORDER BY connector, account",
             (entity_type, entity_id),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "meta": r["meta"] or {}} for r in rows]

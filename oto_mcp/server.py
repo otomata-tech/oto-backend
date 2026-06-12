@@ -130,10 +130,26 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     register_all(instance)
 
     # Filtrage per-user des tools (toggle individuel sur /account).
-    from .middleware import CallMonitoringMiddleware, UserDisabledToolsMiddleware
+    from .middleware import UserDisabledToolsMiddleware
     instance.add_middleware(UserDisabledToolsMiddleware())
-    # Journalisation des appels MCP pour le monitoring admin (tool_call_log).
-    instance.add_middleware(CallMonitoringMiddleware())
+    # Journalisation des appels MCP (lib commune otomata-calllog, table tool_calls,
+    # lue par /api/admin/monitoring/*). Identité via auth_hooks (auth Logto custom —
+    # le get_access_token fastmcp par défaut ne la voit pas).
+    import asyncio
+
+    from otomata_calllog import ToolCallLogger
+
+    from .auth_hooks import current_user_sub_from_token
+
+    async def _calllog_sink(row: dict) -> None:
+        # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas bloquer
+        # l'event loop sur le chemin chaud de chaque tool call.
+        await asyncio.to_thread(db.insert_tool_call, row)
+
+    def _calllog_identity() -> dict:
+        return {"sub": current_user_sub_from_token()}
+
+    instance.add_middleware(ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity))
 
     return instance
 

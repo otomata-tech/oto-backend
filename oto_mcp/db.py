@@ -13,6 +13,7 @@ géré au module ; toutes les fonctions restent sync.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -74,21 +75,25 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 
 -- Journal des appels MCP (monitoring admin). Une ligne par appel de tool,
--- posée par CallMonitoringMiddleware (succès comme échec). Volumétrie bornée
--- par un prune au boot (cf. prune_tool_call_log + init_db). `sub` nullable :
--- les appels stdio local non authentifiés n'ont pas d'identité.
-CREATE TABLE IF NOT EXISTS tool_call_log (
+-- posée par otomata_calllog.ToolCallLogger (succès comme échec). Schéma
+-- CANONIQUE otomata-calllog (contrat inter-projets ogic/ytmusic/memento).
+-- Volumétrie bornée par un prune au boot (cf. prune_tool_calls + init_db).
+-- `sub` nullable : les appels stdio local non authentifiés n'ont pas d'identité.
+CREATE TABLE IF NOT EXISTS tool_calls (
     id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    server TEXT NOT NULL DEFAULT 'oto',
     sub TEXT,
-    tool_name TEXT NOT NULL,
-    called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    duration_ms INTEGER,
+    email TEXT,
+    tool TEXT NOT NULL,
+    args JSONB,
     ok BOOLEAN NOT NULL DEFAULT TRUE,
-    error TEXT
+    error TEXT,
+    duration_ms INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_tool_call_log_called_at ON tool_call_log(called_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tool_call_log_sub ON tool_call_log(sub);
-CREATE INDEX IF NOT EXISTS idx_tool_call_log_tool ON tool_call_log(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
 
 CREATE TABLE IF NOT EXISTS user_disabled_tools (
     sub TEXT NOT NULL,
@@ -313,6 +318,9 @@ def _connect() -> Iterator[psycopg.Connection]:
 
 def init_db() -> None:
     with _connect() as conn:
+        # AVANT _SCHEMA : renomme l'ancienne tool_call_log vers le schéma canonique
+        # (sinon CREATE IF NOT EXISTS poserait une tool_calls vide à côté).
+        _migrate_tool_call_log(conn)
         conn.execute(_SCHEMA)
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
@@ -326,9 +334,27 @@ def init_db() -> None:
         _drop_legacy_plaintext_stores(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
-        prune_tool_call_log(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
+        prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
     except Exception as e:
-        logger.warning("prune_tool_call_log failed: %s", e)
+        logger.warning("prune_tool_calls failed: %s", e)
+
+
+def _migrate_tool_call_log(conn: psycopg.Connection) -> None:
+    """tool_call_log → tool_calls (schéma canonique otomata-calllog,
+    2026-06-13) : renomme table + colonnes, ajoute server/email/args.
+    Idempotent — no-op si l'ancienne table n'existe plus (ou jamais existé)."""
+    exists = conn.execute(
+        "SELECT to_regclass('tool_call_log') IS NOT NULL AND to_regclass('tool_calls') IS NULL AS go"
+    ).fetchone()
+    if not exists or not exists["go"]:
+        return
+    conn.execute("ALTER TABLE tool_call_log RENAME TO tool_calls")
+    conn.execute("ALTER TABLE tool_calls RENAME COLUMN tool_name TO tool")
+    conn.execute("ALTER TABLE tool_calls RENAME COLUMN called_at TO created_at")
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS server TEXT NOT NULL DEFAULT 'oto'")
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS email TEXT")
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS args JSONB")
+    logger.info("tool_call_log migrée vers tool_calls (schéma canonique)")
 
 
 def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
@@ -554,22 +580,20 @@ def increment_usage(sub: str, tool: str) -> int:
 
 # --- MCP call monitoring (journal admin) ------------------------------------
 
-def record_tool_call(
-    sub: Optional[str],
-    tool_name: str,
-    duration_ms: int,
-    ok: bool,
-    error: Optional[str] = None,
-) -> None:
-    """Journalise un appel de tool MCP. Best-effort : ne JAMAIS faire échouer
-    l'appel pour un problème de logging (l'appelant gère le try/except)."""
+def insert_tool_call(row: dict) -> None:
+    """Sink otomata-calllog : insère un row canonique (server, sub, email, tool,
+    args, ok, error, duration_ms). Best-effort côté middleware — jamais bloquant."""
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO tool_call_log (sub, tool_name, duration_ms, ok, error)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO tool_calls (server, sub, email, tool, args, ok, error, duration_ms)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)
             """,
-            (sub, tool_name, duration_ms, ok, (error or None)),
+            (
+                row.get("server") or "oto", row.get("sub"), row.get("email"),
+                row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
+                bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
+            ),
         )
 
 
@@ -588,24 +612,25 @@ def list_tool_calls(
         clauses.append("l.sub = %s")
         params.append(sub)
     if tool_name:
-        clauses.append("l.tool_name = %s")
+        clauses.append("l.tool = %s")
         params.append(tool_name)
     if errors_only:
         clauses.append("l.ok = FALSE")
     if since_days is not None:
-        clauses.append("l.called_at >= NOW() - make_interval(days => %s)")
+        clauses.append("l.created_at >= NOW() - make_interval(days => %s)")
         params.append(int(since_days))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(limit)
     with _connect() as conn:
+        # Alias tool_name/called_at : compat avec l'UI admin existante.
         rows = conn.execute(
             f"""
-            SELECT l.id, l.sub, u.email, u.name, l.tool_name, l.called_at,
+            SELECT l.id, l.sub, u.email, u.name, l.tool AS tool_name, l.created_at AS called_at,
                    l.duration_ms, l.ok, l.error
-            FROM tool_call_log l
+            FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
-            ORDER BY l.called_at DESC, l.id DESC
+            ORDER BY l.created_at DESC, l.id DESC
             LIMIT %s
             """,
             tuple(params),
@@ -623,20 +648,20 @@ def tool_call_stats(since_days: int = 7) -> dict:
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    COUNT(DISTINCT sub) AS users
-            FROM tool_call_log
-            WHERE called_at >= NOW() - make_interval(days => %s)
+            FROM tool_calls
+            WHERE created_at >= NOW() - make_interval(days => %s)
             """,
             (since_days,),
         ).fetchone() or {}
         by_tool = conn.execute(
             """
-            SELECT tool_name,
+            SELECT tool AS tool_name,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    ROUND(AVG(duration_ms))::int AS avg_ms
-            FROM tool_call_log
-            WHERE called_at >= NOW() - make_interval(days => %s)
-            GROUP BY tool_name
+            FROM tool_calls
+            WHERE created_at >= NOW() - make_interval(days => %s)
+            GROUP BY tool
             ORDER BY calls DESC
             LIMIT 100
             """,
@@ -647,9 +672,9 @@ def tool_call_stats(since_days: int = 7) -> dict:
             SELECT l.sub, u.email, u.name,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT l.ok) AS errors
-            FROM tool_call_log l
+            FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
-            WHERE l.called_at >= NOW() - make_interval(days => %s)
+            WHERE l.created_at >= NOW() - make_interval(days => %s)
             GROUP BY l.sub, u.email, u.name
             ORDER BY calls DESC
             LIMIT 100
@@ -658,13 +683,13 @@ def tool_call_stats(since_days: int = 7) -> dict:
         ).fetchall()
         by_day = conn.execute(
             """
-            SELECT to_char(called_at::date, 'YYYY-MM-DD') AS day,
+            SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors
-            FROM tool_call_log
-            WHERE called_at >= NOW() - make_interval(days => %s)
-            GROUP BY called_at::date
-            ORDER BY called_at::date
+            FROM tool_calls
+            WHERE created_at >= NOW() - make_interval(days => %s)
+            GROUP BY created_at::date
+            ORDER BY created_at::date
             """,
             (since_days,),
         ).fetchall()
@@ -679,14 +704,14 @@ def tool_call_stats(since_days: int = 7) -> dict:
     }
 
 
-def prune_tool_call_log(keep_days: int = 30) -> int:
+def prune_tool_calls(keep_days: int = 30) -> int:
     """Retire les lignes de journal plus vieilles que `keep_days`. Borne la
     volumétrie (appelé au boot dans init_db). Retourne le nombre de lignes
     supprimées."""
     keep_days = max(1, int(keep_days))
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM tool_call_log WHERE called_at < NOW() - make_interval(days => %s)",
+            "DELETE FROM tool_calls WHERE created_at < NOW() - make_interval(days => %s)",
             (keep_days,),
         )
         return cur.rowcount or 0

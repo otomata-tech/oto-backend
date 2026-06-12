@@ -131,11 +131,12 @@ per-user).
 
 ## REST API (consommée par oto.ninja /account)
 
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota)
+- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role`
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
 - `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
 - `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
+- `GET /api/me/instructions` (doctrine de base meta + index) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — doctrine & instructions de l'**org active** (cf. §Doctrines). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par la SPA `account/` (section « doctrine »).
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
@@ -347,9 +348,11 @@ identifiées par `slug`, chacune versionnée :
   (la base), `oto_admin_set_instruction(org_id, slug, body_md[, title, description])` (une skill ;
   `claude_md` réservé), `oto_admin_list_instructions`, `oto_admin_get_instruction(…[, version])`,
   `oto_admin_list_instruction_versions`, `oto_admin_revert_instruction(…, version)` (restaure une
-  vieille version comme nouvelle, historique conservé), `oto_admin_delete_instruction`. À terme,
-  éditeur dans la SPA `account/` (Phase 8, oto-app#29) — pour l'instant meta-tool-only, comme
-  les org_secrets.
+  vieille version comme nouvelle, historique conservé), `oto_admin_delete_instruction`.
+- **Écriture self-service (org_admin)** : la SPA `account/` (section « doctrine », `DoctrineView.vue`)
+  édite la doctrine + les skills de l'**org active** via REST `/api/me/instructions*` (lecture =
+  membre, écriture = `org_admin` de l'org active, gate `can_edit` renvoyé par l'API). C'est l'éditeur
+  Phase 8 (oto-app#29) — l'org_admin édite sans agent.
 - **Versioning** : chaque écriture incrémente `version` (sur le courant) et archive un snapshot
   append-only. Revert = re-poser le corps d'une version → nouvelle version (jamais d'effacement
   d'historique sauf `delete`).

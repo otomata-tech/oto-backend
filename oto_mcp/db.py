@@ -86,6 +86,23 @@ CREATE TABLE IF NOT EXISTS usage (
     PRIMARY KEY (sub, tool, day)
 );
 
+-- Journal des appels MCP (monitoring admin). Une ligne par appel de tool,
+-- posée par CallMonitoringMiddleware (succès comme échec). Volumétrie bornée
+-- par un prune au boot (cf. prune_tool_call_log + init_db). `sub` nullable :
+-- les appels stdio local non authentifiés n'ont pas d'identité.
+CREATE TABLE IF NOT EXISTS tool_call_log (
+    id BIGSERIAL PRIMARY KEY,
+    sub TEXT,
+    tool_name TEXT NOT NULL,
+    called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    duration_ms INTEGER,
+    ok BOOLEAN NOT NULL DEFAULT TRUE,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_call_log_called_at ON tool_call_log(called_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_call_log_sub ON tool_call_log(sub);
+CREATE INDEX IF NOT EXISTS idx_tool_call_log_tool ON tool_call_log(tool_name);
+
 CREATE TABLE IF NOT EXISTS user_disabled_tools (
     sub TEXT NOT NULL,
     tool_name TEXT NOT NULL,
@@ -385,6 +402,11 @@ def init_db() -> None:
         credentials_store.encrypt_existing_rows(conn)
         _encrypt_existing_platform_keys(conn)
         _drop_plaintext_after_soak(conn)
+    # Borne la volumétrie du journal de monitoring (hors transaction schéma).
+    try:
+        prune_tool_call_log(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
+    except Exception as e:
+        logger.warning("prune_tool_call_log failed: %s", e)
 
 
 def _drop_plaintext_after_soak(conn: psycopg.Connection) -> None:
@@ -761,6 +783,146 @@ def increment_usage(sub: str, tool: str) -> int:
             (sub, tool),
         ).fetchone()
         return int(row["count"]) if row else 0
+
+
+# --- MCP call monitoring (journal admin) ------------------------------------
+
+def record_tool_call(
+    sub: Optional[str],
+    tool_name: str,
+    duration_ms: int,
+    ok: bool,
+    error: Optional[str] = None,
+) -> None:
+    """Journalise un appel de tool MCP. Best-effort : ne JAMAIS faire échouer
+    l'appel pour un problème de logging (l'appelant gère le try/except)."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO tool_call_log (sub, tool_name, duration_ms, ok, error)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (sub, tool_name, duration_ms, ok, (error or None)),
+        )
+
+
+def list_tool_calls(
+    limit: int = 200,
+    sub: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    errors_only: bool = False,
+    since_days: Optional[int] = None,
+) -> list[dict]:
+    """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI."""
+    limit = max(1, min(int(limit), 1000))
+    clauses: list[str] = []
+    params: list[Any] = []
+    if sub:
+        clauses.append("l.sub = %s")
+        params.append(sub)
+    if tool_name:
+        clauses.append("l.tool_name = %s")
+        params.append(tool_name)
+    if errors_only:
+        clauses.append("l.ok = FALSE")
+    if since_days is not None:
+        clauses.append("l.called_at >= NOW() - make_interval(days => %s)")
+        params.append(int(since_days))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT l.id, l.sub, u.email, u.name, l.tool_name, l.called_at,
+                   l.duration_ms, l.ok, l.error
+            FROM tool_call_log l
+            LEFT JOIN users u ON u.sub = l.sub
+            {where}
+            ORDER BY l.called_at DESC, l.id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        ).fetchall()
+        return list(rows)
+
+
+def tool_call_stats(since_days: int = 7) -> dict:
+    """Agrégats pour le dashboard de monitoring sur les `since_days` derniers jours :
+    total, échecs, ventilation par tool / par user / par jour."""
+    since_days = max(1, min(int(since_days), 365))
+    with _connect() as conn:
+        totals = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   COUNT(DISTINCT sub) AS users
+            FROM tool_call_log
+            WHERE called_at >= NOW() - make_interval(days => %s)
+            """,
+            (since_days,),
+        ).fetchone() or {}
+        by_tool = conn.execute(
+            """
+            SELECT tool_name,
+                   COUNT(*) AS calls,
+                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   ROUND(AVG(duration_ms))::int AS avg_ms
+            FROM tool_call_log
+            WHERE called_at >= NOW() - make_interval(days => %s)
+            GROUP BY tool_name
+            ORDER BY calls DESC
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+        by_user = conn.execute(
+            """
+            SELECT l.sub, u.email, u.name,
+                   COUNT(*) AS calls,
+                   COUNT(*) FILTER (WHERE NOT l.ok) AS errors
+            FROM tool_call_log l
+            LEFT JOIN users u ON u.sub = l.sub
+            WHERE l.called_at >= NOW() - make_interval(days => %s)
+            GROUP BY l.sub, u.email, u.name
+            ORDER BY calls DESC
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+        by_day = conn.execute(
+            """
+            SELECT to_char(called_at::date, 'YYYY-MM-DD') AS day,
+                   COUNT(*) AS calls,
+                   COUNT(*) FILTER (WHERE NOT ok) AS errors
+            FROM tool_call_log
+            WHERE called_at >= NOW() - make_interval(days => %s)
+            GROUP BY called_at::date
+            ORDER BY called_at::date
+            """,
+            (since_days,),
+        ).fetchall()
+    return {
+        "since_days": since_days,
+        "total_calls": int((totals or {}).get("total") or 0),
+        "error_count": int((totals or {}).get("errors") or 0),
+        "active_users": int((totals or {}).get("users") or 0),
+        "by_tool": list(by_tool),
+        "by_user": list(by_user),
+        "by_day": list(by_day),
+    }
+
+
+def prune_tool_call_log(keep_days: int = 30) -> int:
+    """Retire les lignes de journal plus vieilles que `keep_days`. Borne la
+    volumétrie (appelé au boot dans init_db). Retourne le nombre de lignes
+    supprimées."""
+    keep_days = max(1, int(keep_days))
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM tool_call_log WHERE called_at < NOW() - make_interval(days => %s)",
+            (keep_days,),
+        )
+        return cur.rowcount or 0
 
 
 # --- per-user disabled tools ------------------------------------------------

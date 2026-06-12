@@ -11,6 +11,7 @@ Consommé par : `access.resolve_api_key`/`status_for` (reads org_secret) et
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from . import credentials_store, crypto
@@ -286,48 +287,159 @@ def list_org_entitlements(org_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-# --- doctrine markdown : notice opératoire métier servie par get_claude_md() --
+# --- instructions d'org : doctrine de base + skills versionnés ----------------
+#
+# Modèle unifié servi par get_claude_md() / oto_*_instruction(s). Le slug réservé
+# BASE_SLUG ("claude_md") = la doctrine de base (servie d'office) ; les autres =
+# des skills chargés à la demande. En clair (prose, hors coffre), lu à l'appel
+# (pas de cache). Écriture = incrément de version + snapshot d'historique.
 
-def get_org_doctrine(org_id: int) -> Optional[str]:
-    """Markdown de la doctrine de l'org, ou None si aucune n'est posée.
+BASE_SLUG = "claude_md"
+_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 
-    En clair (prose, pas un secret) — pas de coffre/déchiffrement, contrairement
-    à get_org_secret. Lu à l'appel (pas de cache), comme la résolution de secrets.
-    """
+
+def normalize_slug(slug: str) -> str:
+    """Slug canonique : minuscules, [a-z0-9_-], séparateurs compactés. '' si vide."""
+    return _SLUG_RE.sub("-", (slug or "").strip().lower()).strip("-_")
+
+
+def _snippet(body: str, query: str, width: int = 200) -> str:
+    """Extrait de `body` autour de la 1ʳᵉ occurrence de `query` (pour la recherche)."""
+    i = body.lower().find(query.lower())
+    if i < 0:
+        return body[:width].strip()
+    start = max(0, i - width // 3)
+    end = min(len(body), i + len(query) + (2 * width) // 3)
+    return ("…" if start else "") + body[start:end].strip() + ("…" if end < len(body) else "")
+
+
+def get_instruction(org_id: int, slug: str, version: Optional[int] = None) -> Optional[dict]:
+    """Une instruction (courante, ou une `version` archivée précise). None si absente."""
+    slug = normalize_slug(slug)
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT body_md FROM org_doctrines WHERE org_id = %s", (org_id,)
-        ).fetchone()
-        return row["body_md"] if row else None
-
-
-def get_org_doctrine_meta(org_id: int) -> Optional[dict]:
-    """Doctrine + métadonnées (set_by, updated_at) pour l'echo/édition admin."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT body_md, set_by, updated_at FROM org_doctrines WHERE org_id = %s",
-            (org_id,),
-        ).fetchone()
+        if version is None:
+            row = conn.execute(
+                "SELECT org_id, slug, title, description, body_md, version, set_by, "
+                "created_at, updated_at FROM org_instructions "
+                "WHERE org_id = %s AND slug = %s",
+                (org_id, slug),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT org_id, slug, title, description, body_md, version, set_by, "
+                "created_at FROM org_instruction_revisions "
+                "WHERE org_id = %s AND slug = %s AND version = %s",
+                (org_id, slug, version),
+            ).fetchone()
         return dict(row) if row else None
 
 
-def set_org_doctrine(org_id: int, body_md: str, set_by: Optional[str] = None) -> None:
-    """Pose/remplace la doctrine de l'org. `body_md` non vide attendu (validé au tool)."""
-    if not body_md:
+def list_instructions(org_id: int, include_base: bool = False) -> list[dict]:
+    """Métadonnées des instructions (SANS body) = l'index des skills. Exclut la
+    doctrine de base sauf `include_base` (surface admin)."""
+    where = "org_id = %s" if include_base else "org_id = %s AND slug <> %s"
+    params: tuple = (org_id,) if include_base else (org_id, BASE_SLUG)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT slug, title, description, version, updated_at "
+            f"FROM org_instructions WHERE {where} ORDER BY slug",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def search_instructions(org_id: int, query: str, include_base: bool = False) -> list[dict]:
+    """Recherche substring (title/description/body) dans les instructions de l'org.
+    Renvoie les métadonnées + un `snippet` ; le body complet passe par get_instruction."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    base_filter = "" if include_base else "AND slug <> %s "
+    head: tuple = (org_id,) if include_base else (org_id, BASE_SLUG)
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT slug, title, description, body_md, version, updated_at "
+            "FROM org_instructions WHERE org_id = %s " + base_filter +
+            "AND (title ILIKE %s OR description ILIKE %s OR body_md ILIKE %s) "
+            "ORDER BY (title ILIKE %s) DESC, (description ILIKE %s) DESC, updated_at DESC",
+            head + (like, like, like, like, like),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["snippet"] = _snippet(d.pop("body_md", "") or "", q)
+        out.append(d)
+    return out
+
+
+def set_instruction(org_id: int, slug: str, body_md: str, title: Optional[str] = None,
+                    description: Optional[str] = None, set_by: Optional[str] = None) -> int:
+    """Crée/met à jour une instruction ; renvoie la NOUVELLE version et archive un
+    snapshot. `title`/`description` None = conserver l'existant ('' à la création).
+    Sérialisé par (org, slug) via verrou advisory (mirroir add_org_member)."""
+    slug = normalize_slug(slug)
+    if not slug:
+        raise ValueError("slug requis")
+    if not (body_md or "").strip():
         raise ValueError("body_md requis")
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO org_doctrines (org_id, body_md, set_by)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (org_id) DO UPDATE SET
-                body_md = EXCLUDED.body_md, set_by = EXCLUDED.set_by, updated_at = NOW()
-            """,
-            (org_id, body_md, set_by),
-        )
+        with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"oi:{org_id}:{slug}",))
+            cur = conn.execute(
+                "SELECT version, title, description FROM org_instructions "
+                "WHERE org_id = %s AND slug = %s",
+                (org_id, slug),
+            ).fetchone()
+            new_version = (cur["version"] + 1) if cur else 1
+            new_title = title if title is not None else (cur["title"] if cur else "")
+            new_desc = description if description is not None else (cur["description"] if cur else "")
+            conn.execute(
+                """
+                INSERT INTO org_instructions
+                    (org_id, slug, title, description, body_md, version, set_by, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (org_id, slug) DO UPDATE SET
+                    title = EXCLUDED.title, description = EXCLUDED.description,
+                    body_md = EXCLUDED.body_md, version = EXCLUDED.version,
+                    set_by = EXCLUDED.set_by, updated_at = NOW()
+                """,
+                (org_id, slug, new_title, new_desc, body_md, new_version, set_by),
+            )
+            conn.execute(
+                """
+                INSERT INTO org_instruction_revisions
+                    (org_id, slug, version, title, description, body_md, set_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (org_id, slug, new_version, new_title, new_desc, body_md, set_by),
+            )
+            return new_version
 
 
-def delete_org_doctrine(org_id: int) -> bool:
+def list_instruction_versions(org_id: int, slug: str) -> list[dict]:
+    """Historique d'une instruction (métadonnées par version, plus récent d'abord)."""
+    slug = normalize_slug(slug)
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM org_doctrines WHERE org_id = %s", (org_id,))
-        return (cur.rowcount or 0) > 0
+        rows = conn.execute(
+            "SELECT version, title, set_by, created_at FROM org_instruction_revisions "
+            "WHERE org_id = %s AND slug = %s ORDER BY version DESC",
+            (org_id, slug),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_instruction(org_id: int, slug: str) -> bool:
+    """Supprime une instruction ET son historique. False si elle n'existait pas."""
+    slug = normalize_slug(slug)
+    with _connect() as conn:
+        with conn.transaction():
+            cur = conn.execute(
+                "DELETE FROM org_instructions WHERE org_id = %s AND slug = %s", (org_id, slug)
+            )
+            removed = (cur.rowcount or 0) > 0
+            conn.execute(
+                "DELETE FROM org_instruction_revisions WHERE org_id = %s AND slug = %s",
+                (org_id, slug),
+            )
+    return removed

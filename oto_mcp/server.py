@@ -128,8 +128,10 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     register_all(instance)
 
     # Filtrage per-user des tools (toggle individuel sur /account).
-    from .middleware import UserDisabledToolsMiddleware
+    from .middleware import CallMonitoringMiddleware, UserDisabledToolsMiddleware
     instance.add_middleware(UserDisabledToolsMiddleware())
+    # Journalisation des appels MCP pour le monitoring admin (tool_call_log).
+    instance.add_middleware(CallMonitoringMiddleware())
 
     return instance
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
@@ -28,6 +29,59 @@ _KNOWN_GRANT_ONLY: set[str] = set()
 # Même repli pour les masqués-par-défaut par NAMESPACE (ex. attio) : leurs noms
 # ne sont pas connaissables statiquement, on mémorise ceux vus au listing.
 _KNOWN_DEFAULT_HIDDEN: set[str] = set()
+
+
+def _result_error_text(result) -> str:
+    """Extrait un message d'erreur lisible d'un résultat de tool `isError`."""
+    content = getattr(result, "content", None)
+    if content:
+        for block in content:
+            text = getattr(block, "text", None)
+            if text:
+                return str(text)[:500]
+    return "tool error"
+
+
+class CallMonitoringMiddleware(Middleware):
+    """Journalise chaque appel de tool MCP dans `tool_call_log` (monitoring admin).
+
+    Point d'interception unique : `on_call_tool` enveloppe l'exécution réelle,
+    capture le `sub` JWT courant, le nom du tool, la durée et le statut
+    (succès / échec + message d'erreur tronqué). Le logging est best-effort :
+    une erreur d'écriture ne doit JAMAIS faire échouer l'appel ni en masquer
+    l'exception métier. Lu par `/api/admin/monitoring/*`.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        tool_name = getattr(getattr(context, "message", None), "name", None) or "?"
+        try:
+            sub = current_user_sub_from_token()
+        except Exception:
+            sub = None
+        start = time.perf_counter()
+        ok = True
+        error: str | None = None
+        try:
+            result = await call_next(context)
+            # fastmcp peut convertir une exception de tool en résultat `isError`
+            # plutôt que de la propager : couvrir les deux formes.
+            is_err = getattr(result, "isError", None)
+            if is_err is None:
+                is_err = getattr(result, "is_error", None)
+            if is_err:
+                ok = False
+                error = _result_error_text(result)
+            return result
+        except Exception as e:
+            ok = False
+            error = f"{type(e).__name__}: {e}"[:500]
+            raise
+        finally:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            try:
+                db.record_tool_call(sub, tool_name, duration_ms, ok, error)
+            except Exception as log_err:  # best-effort, jamais bloquant
+                logger.warning("record_tool_call failed for %s: %s", tool_name, log_err)
 
 
 class UserDisabledToolsMiddleware(Middleware):

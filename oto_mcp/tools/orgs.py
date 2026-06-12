@@ -124,6 +124,29 @@ def register(mcp: FastMCP) -> None:
         o = org_store.get_org(org_id)
         return {"active_org": org_id, "name": o["name"] if o else None}
 
+    @mcp.tool()
+    async def get_claude_md(ctx: Context) -> dict:
+        """Doctrine opératoire de ton organisation — appelle-la EN DÉBUT DE SESSION.
+
+        Renvoie le markdown rédigé par le métier pour ton org active : workflows
+        validés (l'ordre des outils, les gardes-fous), vocabulaire, règles. C'est
+        la notice à suivre quand ton org pilote oto sans produit applicatif dédié.
+
+        Vide (doctrine "") si ton org n'en a pas, ou si tu n'as pas d'org active —
+        dans ce cas, continue normalement avec les instructions du serveur.
+        """
+        sub = _require_sub()
+        org_id = org_store.get_active_org(sub)
+        if org_id is None:
+            return {"org_id": None, "org": None, "doctrine": ""}
+        o = org_store.get_org(org_id)
+        body = org_store.get_org_doctrine(org_id)
+        return {
+            "org_id": org_id,
+            "org": o["name"] if o else None,
+            "doctrine": body or "",
+        }
+
     # --- platform_admin : provisioning --------------------------------------
 
     @mcp.tool()
@@ -233,6 +256,52 @@ def register(mcp: FastMCP) -> None:
         (never returns the keys themselves)."""
         _require_admin()
         return {"org_id": org_id, "secrets": org_store.list_org_secrets(org_id)}
+
+    # --- doctrine : notice opératoire métier servie par get_claude_md() -------
+
+    @mcp.tool()
+    async def oto_admin_set_doctrine(org_id: int, body_md: str, ctx: Context) -> dict:
+        """[platform admin] Set/replace an org's operating doctrine (markdown).
+
+        The doctrine is served verbatim to the org's members by `get_claude_md()`
+        at session start: validated workflows, vocabulary, business rules — for
+        orgs that drive oto without a dedicated app (e.g. an accounting workflow
+        over gocardless/pennylane/mm). Several workflows = sections of one markdown.
+
+        Args:
+            org_id: target org.
+            body_md: the full doctrine markdown (replaces any existing one).
+        """
+        admin = _require_admin()
+        if not org_store.get_org(org_id):
+            raise _err(f"Org #{org_id} inconnue.")
+        if not (body_md or "").strip():
+            raise _err("body_md vide.")
+        org_store.set_org_doctrine(org_id, body_md, set_by=admin)
+        return {"org_id": org_id, "set": True}
+
+    @mcp.tool()
+    async def oto_admin_get_doctrine(org_id: int, ctx: Context) -> dict:
+        """[platform admin] Read back an org's doctrine markdown (body + metadata).
+
+        Returns `doctrine` empty if none is set."""
+        _require_admin()
+        if not org_store.get_org(org_id):
+            raise _err(f"Org #{org_id} inconnue.")
+        meta = org_store.get_org_doctrine_meta(org_id)
+        return {
+            "org_id": org_id,
+            "doctrine": (meta or {}).get("body_md", "") or "",
+            "set_by": (meta or {}).get("set_by"),
+            "updated_at": (meta or {}).get("updated_at"),
+        }
+
+    @mcp.tool()
+    async def oto_admin_delete_doctrine(org_id: int, ctx: Context) -> dict:
+        """[platform admin] Remove an org's doctrine (get_claude_md goes empty)."""
+        _require_admin()
+        deleted = org_store.delete_org_doctrine(org_id)
+        return {"org_id": org_id, "deleted": deleted}
 
     # --- entitlements : plafond plateforme -> org sur les namespaces gouvernés -
 

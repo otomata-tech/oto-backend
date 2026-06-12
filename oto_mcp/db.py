@@ -239,6 +239,18 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
     PRIMARY KEY (org_id, namespace)
 );
 
+-- Doctrine markdown d'une org : notice opératoire métier (workflows validés,
+-- règles, vocabulaire), servie par get_claude_md() aux membres de l'org. En
+-- CLAIR (prose, pas un credential) → hors coffre chiffré. Une org = une
+-- doctrine ; plusieurs workflows = des sections du même markdown. Même principe
+-- d'accès que les org_secrets : résolue par l'org active du sub (get_active_org).
+CREATE TABLE IF NOT EXISTS org_doctrines (
+    org_id BIGINT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+    body_md TEXT NOT NULL,
+    set_by TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Credentials génériques per-entité (user OU org) — table unique qui remplace
 -- les 9 colonnes users.<provider>_api_key + org_secrets. entity_id = sub (user)
 -- ou org_id::text (org) ; toujours requêter (entity_type, entity_id) ENSEMBLE.

@@ -58,6 +58,7 @@ def _allowed_origins() -> list[str]:
         "http://localhost:5184",
         "http://localhost:5192",            # oto-dashboard dev (ADR 0007)
         "https://dashboard.otoninja.dev",   # oto-dashboard via Caddy local
+        "https://dashboard.oto.ninja",      # oto-dashboard prod
     ]
 
 

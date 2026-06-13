@@ -228,12 +228,25 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
         return [{**dict(r), "meta": r["meta"] or {}} for r in rows]
 
 
-def first_entity_with(entity_type: str, connector: str) -> Optional[str]:
-    """Premier `entity_id` ayant un credential pour ce connecteur (ordre stable),
-    ou None. Sert au fetch de catalogue partagé d'un MCP fédéré (tools/mount) :
-    le catalogue est identique pour tous, n'importe quel user connecté sert à le
-    récupérer une fois au boot."""
+def first_entity_with(entity_type: str, connector: str,
+                       prefer: Optional[str] = None) -> Optional[str]:
+    """Premier `entity_id` ayant un credential pour ce connecteur, ou None.
+
+    Sert au fetch de catalogue partagé d'un MCP fédéré (tools/mount) : le
+    catalogue est identique pour tous, n'importe quel user connecté sert à le
+    récupérer une fois au boot. `prefer` (compte désigné, ex. l'admin) est
+    privilégié s'il a un credential — pour que le boot s'appuie sur un compte
+    stable et déterministe plutôt que sur le premier user venu ; fallback sur
+    l'ordre stable `set_at` sinon."""
     with _connect() as conn:
+        if prefer:
+            row = conn.execute(
+                "SELECT entity_id FROM connector_credentials "
+                "WHERE entity_type = %s AND connector = %s AND entity_id = %s LIMIT 1",
+                (entity_type, connector, prefer),
+            ).fetchone()
+            if row:
+                return row["entity_id"]
         row = conn.execute(
             "SELECT entity_id FROM connector_credentials "
             "WHERE entity_type = %s AND connector = %s ORDER BY set_at LIMIT 1",

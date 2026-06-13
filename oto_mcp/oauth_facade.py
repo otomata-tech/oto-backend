@@ -85,6 +85,10 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         )
 
     return [
+        # Métadonnée AS servie à TOUTES les variantes de chemin que les clients
+        # MCP tentent : racine (issuer sans path) ET path-suffixée par la
+        # ressource `/mcp` (RFC 8414 path-insertion — claude.ai essaie les deux).
         Route("/.well-known/oauth-authorization-server", as_meta, methods=["GET"]),
+        Route("/.well-known/oauth-authorization-server/mcp", as_meta, methods=["GET"]),
         Route("/oauth/register", dcr, methods=["POST", "OPTIONS"]),
     ]

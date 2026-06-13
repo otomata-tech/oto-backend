@@ -155,27 +155,7 @@ def make_routes(
     # barreau 2). Routes self + admin servies par l'adaptateur REST capacité,
     # autz unifiée ORG_ADMIN_OF. Les handlers + _do_member_* ont été retirés.
 
-    async def org_secret_put(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        if not _is_org_admin(sub, org_id):
-            return json_error(request, 403, "forbidden")
-        return await _do_secret_put(request, org_id, set_by=sub)
-
-    async def org_secret_delete(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        if not _is_org_admin(sub, org_id):
-            return json_error(request, 403, "forbidden")
-        return _do_secret_delete(request, org_id)
+    # secrets (set/delete) : migrés en capacités org.secret.* (ADR 0009 barreau 2b).
 
     # === platform admin ======================================================
 
@@ -224,27 +204,7 @@ def make_routes(
     # admin_member_* : migrés en capacités org.member.* (ADR 0009 barreau 2) —
     # même handler/autz que la face self-service (multi-binding).
 
-    async def admin_secret_put(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        return await _do_secret_put(request, org_id, set_by=sub)
-
-    async def admin_secret_delete(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        return _do_secret_delete(request, org_id)
+    # admin_secret_* : migrés en capacités org.secret.* (multi-binding self+admin).
 
     async def admin_entitlement_grant(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -322,31 +282,6 @@ def make_routes(
         return json_response(request, {"ok": True, "sub": target_sub,
                                        "namespace": namespace, "existed": existed})
 
-    # --- corps partagés (self-service ↔ admin, gating déjà appliqué) ----------
-
-    async def _do_secret_put(request: Request, org_id: int, *, set_by: str) -> JSONResponse:
-        if not org_store.get_org(org_id):
-            return json_error(request, 404, "unknown_org")
-        provider = request.path_params["provider"]
-        body = await _body(request)
-        if body is None:
-            return json_error(request, 400, "invalid_body")
-        api_key = (body.get("api_key") or "").strip()
-        if not api_key:
-            return json_error(request, 400, "empty_api_key")
-        base_url = (body.get("base_url") or "").strip() or None
-        meta, code = connectors.org_secret_meta(provider, base_url)
-        if code:
-            return json_error(request, 400, code)
-        org_store.set_org_secret(org_id, provider, api_key, set_by=set_by, meta=meta)
-        return json_response(request, {"ok": True, "org_id": org_id, "provider": provider})
-
-    def _do_secret_delete(request: Request, org_id: int) -> JSONResponse:
-        provider = request.path_params["provider"]
-        deleted = org_store.delete_org_secret(org_id, provider)
-        return json_response(request, {"ok": True, "org_id": org_id,
-                                       "provider": provider, "deleted": deleted})
-
     # --- table de routage -----------------------------------------------------
 
     return [
@@ -355,18 +290,12 @@ def make_routes(
         Route("/api/me/orgs", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}", org_get, methods=["GET"]),
         Route("/api/orgs/{id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/orgs/{id}/secrets/{provider}", org_secret_put, methods=["PUT"]),
-        Route("/api/orgs/{id}/secrets/{provider}", org_secret_delete, methods=["DELETE"]),
-        Route("/api/orgs/{id}/secrets/{provider}", options_handler, methods=["OPTIONS"]),
         # platform admin
         Route("/api/admin/orgs", admin_orgs_list, methods=["GET"]),
         Route("/api/admin/orgs", admin_org_create, methods=["POST"]),
         Route("/api/admin/orgs", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/orgs/{id}", admin_org_get, methods=["GET"]),
         Route("/api/admin/orgs/{id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/orgs/{id}/secrets/{provider}", admin_secret_put, methods=["PUT"]),
-        Route("/api/admin/orgs/{id}/secrets/{provider}", admin_secret_delete, methods=["DELETE"]),
-        Route("/api/admin/orgs/{id}/secrets/{provider}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/orgs/{id}/entitlements/{namespace}", admin_entitlement_grant, methods=["POST"]),
         Route("/api/admin/orgs/{id}/entitlements/{namespace}", admin_entitlement_revoke, methods=["DELETE"]),
         Route("/api/admin/orgs/{id}/entitlements/{namespace}", options_handler, methods=["OPTIONS"]),

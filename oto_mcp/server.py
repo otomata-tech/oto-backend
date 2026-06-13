@@ -160,7 +160,22 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     def _calllog_identity() -> dict:
         return {"sub": current_user_sub_from_token()}
 
-    instance.add_middleware(ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity))
+    # otomata_calllog.ToolCallLogger n'hérite PAS de fastmcp.Middleware (juste
+    # `on_call_tool`, signature compatible) → fastmcp 3.4.2 (dispatch strict)
+    # échoue avec « 'ToolCallLogger' object is not callable » sur CHAQUE requête,
+    # cassant tout le handshake MCP. On l'adapte en vraie Middleware qui délègue.
+    # (Fix propre amont : que otomata_calllog sous-classe fastmcp.Middleware.)
+    from fastmcp.server.middleware import Middleware
+
+    class _CallLogAdapter(Middleware):
+        def __init__(self, logger):
+            self._logger = logger
+
+        async def on_call_tool(self, context, call_next):
+            return await self._logger.on_call_tool(context, call_next)
+
+    instance.add_middleware(_CallLogAdapter(
+        ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity)))
 
     return instance
 

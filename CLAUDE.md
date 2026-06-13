@@ -401,7 +401,11 @@ identifiées par `slug`, chacune versionnée :
   servi par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`,
   credential d'org = token M2M + `meta.base_url`). Pilote : mm
   (`movinmotion-backoffice-bridge`). Cf. ADR 0003 (meta-repo) +
-  `docs/connector-vault.md` §remote.
+  `docs/connector-vault.md` §remote. **Et JAMAIS dans une surface anonyme** :
+  les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
+  → pages oto.ninja/tools) filtrent les `platform_granted`/grant-only
+  (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13
+  (page marketing /tools/mm).
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne

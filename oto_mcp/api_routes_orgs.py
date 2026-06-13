@@ -60,10 +60,6 @@ def make_routes(
             })
         return out
 
-    def _count_org_admins(org_id: int) -> int:
-        return sum(1 for m in org_store.list_org_members(org_id)
-                   if m.get("org_role") == "org_admin")
-
     def _org_brief(org: dict, *, my_role: str | None = None) -> dict:
         brief = {
             "id": org["id"],
@@ -111,18 +107,6 @@ def make_routes(
         except (ValueError, KeyError):
             return None
 
-    def _resolve_target(request: Request, target: str) -> tuple[str | None, JSONResponse | None]:
-        """Email (d'un user déjà connecté) ou sub direct → sub."""
-        target = (target or "").strip()
-        if not target:
-            return None, json_error(request, 400, "missing_target")
-        if "@" in target:
-            u = db.get_user_by_email(target)
-            if not u:
-                return None, json_error(request, 404, "unknown_target_email")
-            return u["sub"], None
-        return target, None
-
     async def _body(request: Request) -> dict | None:
         try:
             body = await request.json()
@@ -167,38 +151,9 @@ def make_routes(
         # rien de sensible (juste namespace + date), gating membre déjà passé.
         return json_response(request, _org_detail(org, with_entitlements=True, my_role=my_role))
 
-    async def org_member_add(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        if not _is_org_admin(sub, org_id):
-            return json_error(request, 403, "forbidden")
-        return await _do_member_add(request, org_id)
-
-    async def org_member_role(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        if not _is_org_admin(sub, org_id):
-            return json_error(request, 403, "forbidden")
-        return await _do_member_role(request, org_id)
-
-    async def org_member_remove(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        if not _is_org_admin(sub, org_id):
-            return json_error(request, 403, "forbidden")
-        return await _do_member_remove(request, org_id)
+    # membres (add/set_role/remove) : migrés en capacités org.member.* (ADR 0009
+    # barreau 2). Routes self + admin servies par l'adaptateur REST capacité,
+    # autz unifiée ORG_ADMIN_OF. Les handlers + _do_member_* ont été retirés.
 
     async def org_secret_put(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -266,38 +221,8 @@ def make_routes(
             return json_error(request, 404, "unknown_org")
         return json_response(request, _org_detail(org, with_entitlements=True))
 
-    async def admin_member_add(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        return await _do_member_add(request, org_id)
-
-    async def admin_member_role(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        return await _do_member_role(request, org_id)
-
-    async def admin_member_remove(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        return await _do_member_remove(request, org_id)
+    # admin_member_* : migrés en capacités org.member.* (ADR 0009 barreau 2) —
+    # même handler/autz que la face self-service (multi-binding).
 
     async def admin_secret_put(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -399,53 +324,6 @@ def make_routes(
 
     # --- corps partagés (self-service ↔ admin, gating déjà appliqué) ----------
 
-    async def _do_member_add(request: Request, org_id: int) -> JSONResponse:
-        if not org_store.get_org(org_id):
-            return json_error(request, 404, "unknown_org")
-        body = await _body(request)
-        if body is None:
-            return json_error(request, 400, "invalid_body")
-        role = (body.get("role") or "org_member").strip()
-        if role not in org_store.ORG_ROLES:
-            return json_error(request, 400, "invalid_role")
-        target_sub, terr = _resolve_target(request, body.get("target") or "")
-        if terr:
-            return terr
-        org_store.add_org_member(org_id, target_sub, role)
-        return json_response(request, {"ok": True, "org_id": org_id,
-                                       "sub": target_sub, "role": role})
-
-    async def _do_member_role(request: Request, org_id: int) -> JSONResponse:
-        if not org_store.get_org(org_id):
-            return json_error(request, 404, "unknown_org")
-        target_sub = request.path_params["sub"]
-        body = await _body(request)
-        if body is None:
-            return json_error(request, 400, "invalid_body")
-        role = (body.get("role") or "").strip()
-        if role not in org_store.ORG_ROLES:
-            return json_error(request, 400, "invalid_role")
-        if org_store.get_org_role(org_id, target_sub) is None:
-            return json_error(request, 404, "not_a_member")
-        # Garde-fou anti-lockout : ne pas rétrograder le dernier org_admin.
-        if org_store.get_org_role(org_id, target_sub) == "org_admin" and role != "org_admin":
-            if _count_org_admins(org_id) <= 1:
-                return json_error(request, 409, "last_org_admin")
-        org_store.add_org_member(org_id, target_sub, role)
-        return json_response(request, {"ok": True, "org_id": org_id,
-                                       "sub": target_sub, "role": role})
-
-    async def _do_member_remove(request: Request, org_id: int) -> JSONResponse:
-        target_sub = request.path_params["sub"]
-        # Même garde-fou : ne pas retirer le dernier org_admin de l'org.
-        if org_store.get_org_role(org_id, target_sub) == "org_admin" and _count_org_admins(org_id) <= 1:
-            return json_error(request, 409, "last_org_admin")
-        removed = org_store.remove_org_member(org_id, target_sub)
-        if not removed:
-            return json_error(request, 404, "not_a_member")
-        return json_response(request, {"ok": True, "org_id": org_id,
-                                       "sub": target_sub, "removed": True})
-
     async def _do_secret_put(request: Request, org_id: int, *, set_by: str) -> JSONResponse:
         if not org_store.get_org(org_id):
             return json_error(request, 404, "unknown_org")
@@ -477,11 +355,6 @@ def make_routes(
         Route("/api/me/orgs", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}", org_get, methods=["GET"]),
         Route("/api/orgs/{id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/orgs/{id}/members", org_member_add, methods=["POST"]),
-        Route("/api/orgs/{id}/members", options_handler, methods=["OPTIONS"]),
-        Route("/api/orgs/{id}/members/{sub}", org_member_role, methods=["POST"]),
-        Route("/api/orgs/{id}/members/{sub}", org_member_remove, methods=["DELETE"]),
-        Route("/api/orgs/{id}/members/{sub}", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}/secrets/{provider}", org_secret_put, methods=["PUT"]),
         Route("/api/orgs/{id}/secrets/{provider}", org_secret_delete, methods=["DELETE"]),
         Route("/api/orgs/{id}/secrets/{provider}", options_handler, methods=["OPTIONS"]),
@@ -491,11 +364,6 @@ def make_routes(
         Route("/api/admin/orgs", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/orgs/{id}", admin_org_get, methods=["GET"]),
         Route("/api/admin/orgs/{id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/orgs/{id}/members", admin_member_add, methods=["POST"]),
-        Route("/api/admin/orgs/{id}/members", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/orgs/{id}/members/{sub}", admin_member_role, methods=["POST"]),
-        Route("/api/admin/orgs/{id}/members/{sub}", admin_member_remove, methods=["DELETE"]),
-        Route("/api/admin/orgs/{id}/members/{sub}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/orgs/{id}/secrets/{provider}", admin_secret_put, methods=["PUT"]),
         Route("/api/admin/orgs/{id}/secrets/{provider}", admin_secret_delete, methods=["DELETE"]),
         Route("/api/admin/orgs/{id}/secrets/{provider}", options_handler, methods=["OPTIONS"]),

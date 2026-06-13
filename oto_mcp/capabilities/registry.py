@@ -16,4 +16,4 @@ def caps_with_mcp() -> list[Capability]:
 
 
 def caps_with_rest() -> list[Capability]:
-    return [c for c in CAPABILITIES if c.rest is not None]
+    return [c for c in CAPABILITIES if c.rest_bindings()]

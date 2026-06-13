@@ -23,7 +23,7 @@ from ._types import AuthzDenied, Capability, RawCtx
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
 
-def _make_handler(cap: Capability, verifier, authenticate, json_response, json_error):
+def _make_handler(cap: Capability, binding, verifier, authenticate, json_response, json_error):
     async def _handler(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
@@ -38,7 +38,7 @@ def _make_handler(cap: Capability, verifier, authenticate, json_response, json_e
                 pass
         # path params : mapping explicite placeholder->champ Input, sinon nom identique.
         for ph, value in request.path_params.items():
-            field = (cap.rest.path_map or {}).get(ph, ph)
+            field = (binding.path_map or {}).get(ph, ph)
             data[field] = value
         try:
             inp = cap.Input(**data)
@@ -64,9 +64,8 @@ def make_routes(
     """Une Route (+ OPTIONS) par capacité REST. Liste vide si rien (canari)."""
     routes: list[Route] = []
     for cap in capabilities:
-        if cap.rest is None:
-            continue
-        h = _make_handler(cap, verifier, authenticate, json_response, json_error)
-        routes.append(Route(cap.rest.path, h, methods=[cap.rest.verb]))
-        routes.append(Route(cap.rest.path, options_handler, methods=["OPTIONS"]))
+        for binding in cap.rest_bindings():
+            h = _make_handler(cap, binding, verifier, authenticate, json_response, json_error)
+            routes.append(Route(binding.path, h, methods=[binding.verb]))
+            routes.append(Route(binding.path, options_handler, methods=["OPTIONS"]))
     return routes

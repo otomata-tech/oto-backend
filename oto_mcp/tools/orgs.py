@@ -49,19 +49,6 @@ def _require_admin() -> str:
     return sub
 
 
-def _resolve_target_sub(target: str) -> str:
-    """Email (d'un user déjà connecté au moins une fois) ou sub direct."""
-    if "@" in target:
-        user = db.get_user_by_email(target)
-        if not user:
-            raise _err(
-                f"Aucun user connu avec l'email `{target}`. Il doit se connecter "
-                f"une fois (magic link Logto) avant de pouvoir être ajouté."
-            )
-        return user["sub"]
-    return target
-
-
 def register(mcp: FastMCP) -> None:
     # --- user : voir / basculer son org active ------------------------------
 
@@ -188,40 +175,9 @@ def register(mcp: FastMCP) -> None:
         _require_admin()
         return {"orgs": org_store.list_all_orgs()}
 
-    @mcp.tool()
-    async def oto_admin_add_org_member(
-        org_id: int, target: str, ctx: Context, org_role: str = "org_member"
-    ) -> dict:
-        """[platform admin] Add a member to an org (org_member | org_admin).
-
-        Auto-activates the org for the member if it's their first one.
-
-        Args:
-            org_id: target org.
-            target: Logto `sub`, or email of a user who connected at least once.
-            org_role: `org_member` (default) or `org_admin`.
-        """
-        _require_admin()
-        if not org_store.get_org(org_id):
-            raise _err(f"Org #{org_id} inconnue.")
-        if org_role not in org_store.ORG_ROLES:
-            raise _err(f"org_role invalide `{org_role}` (attendu: {org_store.ORG_ROLES}).")
-        target_sub = _resolve_target_sub(target)
-        org_store.add_org_member(org_id, target_sub, org_role)
-        return {"org_id": org_id, "sub": target_sub, "role": org_role}
-
-    @mcp.tool()
-    async def oto_admin_remove_org_member(org_id: int, target: str, ctx: Context) -> dict:
-        """[platform admin] Remove a member from an org.
-
-        Note: an open MCP session of that member keeps resolving the org's
-        secrets until its next handshake (revoke is lazy). For a hard cutoff,
-        rotate the org secret at the provider.
-        """
-        _require_admin()
-        target_sub = _resolve_target_sub(target)
-        removed = org_store.remove_org_member(org_id, target_sub)
-        return {"org_id": org_id, "sub": target_sub, "removed": removed}
+    # oto_admin_add_org_member / oto_admin_remove_org_member : migrés en capacités
+    # org.member.{add,remove} (ADR 0009 barreau 2) — désormais fournis par
+    # l'adaptateur MCP, autz unifiée ORG_ADMIN_OF (org_admin self-service + escalade).
 
     @mcp.tool()
     async def oto_admin_list_org_members(org_id: int, ctx: Context) -> dict:

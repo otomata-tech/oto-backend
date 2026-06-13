@@ -26,7 +26,8 @@ def test_rest_caps_are_mounted():
     routes = _rest_adapter.make_routes(None, None, None, None, None, registry.CAPABILITIES)
     paths = {r.path for r in routes}
     for cap in registry.caps_with_rest():
-        assert cap.rest.path in paths, cap.key
+        for b in cap.rest_bindings():
+            assert b.path in paths, cap.key
 
 
 def test_mcp_names_unique_within_registry():
@@ -35,7 +36,7 @@ def test_mcp_names_unique_within_registry():
 
 
 def test_rest_paths_unique_within_registry():
-    keys = [(c.rest.verb, c.rest.path) for c in registry.caps_with_rest()]
+    keys = [(b.verb, b.path) for c in registry.caps_with_rest() for b in c.rest_bindings()]
     assert len(keys) == len(set(keys))
 
 

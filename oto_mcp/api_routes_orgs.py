@@ -60,6 +60,10 @@ def make_routes(
             })
         return out
 
+    def _count_org_admins(org_id: int) -> int:
+        return sum(1 for m in org_store.list_org_members(org_id)
+                   if m.get("org_role") == "org_admin")
+
     def _org_brief(org: dict, *, my_role: str | None = None) -> dict:
         brief = {
             "id": org["id"],
@@ -420,12 +424,19 @@ def make_routes(
             return json_error(request, 400, "invalid_role")
         if org_store.get_org_role(org_id, target_sub) is None:
             return json_error(request, 404, "not_a_member")
+        # Garde-fou anti-lockout : ne pas rétrograder le dernier org_admin.
+        if org_store.get_org_role(org_id, target_sub) == "org_admin" and role != "org_admin":
+            if _count_org_admins(org_id) <= 1:
+                return json_error(request, 409, "last_org_admin")
         org_store.add_org_member(org_id, target_sub, role)
         return json_response(request, {"ok": True, "org_id": org_id,
                                        "sub": target_sub, "role": role})
 
     async def _do_member_remove(request: Request, org_id: int) -> JSONResponse:
         target_sub = request.path_params["sub"]
+        # Même garde-fou : ne pas retirer le dernier org_admin de l'org.
+        if org_store.get_org_role(org_id, target_sub) == "org_admin" and _count_org_admins(org_id) <= 1:
+            return json_error(request, 409, "last_org_admin")
         removed = org_store.remove_org_member(org_id, target_sub)
         if not removed:
             return json_error(request, 404, "not_a_member")

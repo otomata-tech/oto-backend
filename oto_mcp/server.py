@@ -140,6 +140,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     instance = FastMCP("oto", instructions=_SERVER_INSTRUCTIONS, **kwargs)
     register_all(instance)
 
+    # Couche capacité (ADR 0009) : monte un tool par capacité déclarée
+    # (no-op tant que le registre est vide — canari). Après register_all pour
+    # que le test d'unicité voie les deux mondes (legacy + capacités).
+    from .capabilities import _mcp_adapter
+    from .capabilities import registry as _cap_registry
+    _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
+
     # Filtrage per-user des tools (toggle individuel sur /account).
     from .middleware import UserDisabledToolsMiddleware
     instance.add_middleware(UserDisabledToolsMiddleware())

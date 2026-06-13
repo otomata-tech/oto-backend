@@ -146,24 +146,8 @@ def make_routes(
             })
         return json_response(request, {"orgs": orgs})
 
-    async def me_use_org(request: Request) -> JSONResponse:
-        # Bascule l'org active du sub (pendant REST du tool MCP oto_use_org —
-        # comblait un drift de surface, cf. ADR 0009). Consommé par le switcher
-        # d'org du dashboard. Stopgap écrit-main que le barreau 1 d'ADR 0009
-        # repliera dans le descripteur de capacité `org.use_org`.
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        org_id = body.get("org_id")
-        if not isinstance(org_id, int):
-            return json_error(request, 400, "invalid_org_id")
-        if not org_store.set_active_org(sub, org_id):
-            return json_error(request, 403, "not_a_member")
-        return json_response(request, {"ok": True, "active_org": org_id})
+    # me_use_org (PUT /api/me/active-org) : migré en capacité `org.use_org`
+    # (ADR 0009, barreau 1) — la route est montée par l'adaptateur REST capacité.
 
     async def org_get(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -491,8 +475,6 @@ def make_routes(
         # self-service
         Route("/api/me/orgs", me_orgs, methods=["GET"]),
         Route("/api/me/orgs", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/active-org", me_use_org, methods=["PUT"]),
-        Route("/api/me/active-org", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}", org_get, methods=["GET"]),
         Route("/api/orgs/{id}", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}/members", org_member_add, methods=["POST"]),

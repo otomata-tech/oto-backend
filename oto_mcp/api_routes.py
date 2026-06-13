@@ -41,6 +41,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from . import access, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
+from .capabilities import _rest_adapter as _cap_rest_adapter
+from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 
@@ -1109,6 +1111,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    # Couche capacité (ADR 0009) : routes REST dérivées du registre (no-op tant
+    # qu'il est vide — canari). Même séquence autz→validation→handler que MCP.
+    capability_routes = _cap_rest_adapter.make_routes(
+        verifier, _authenticate, _json, _json_error, options_handler,
+        _cap_registry.CAPABILITIES,
+    )
+
     return [
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
@@ -1195,4 +1204,5 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *orgs_routes,
         *memento_routes,
         *scout_routes,
+        *capability_routes,
     ]

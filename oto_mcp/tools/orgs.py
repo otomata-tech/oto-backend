@@ -62,24 +62,6 @@ def _resolve_target_sub(target: str) -> str:
     return target
 
 
-def _resolve_org_for_user(sub: str, org: str) -> int:
-    """Résout `org` (id numérique ou nom) parmi les orgs DU sub. Erreur si
-    inconnu/ambigu — jamais de choix implicite (mauvaise org = mauvais secret)."""
-    org = (org or "").strip()
-    mine = org_store.list_orgs_for_user(sub)
-    if org.isdigit():
-        oid = int(org)
-        if any(o["org_id"] == oid for o in mine):
-            return oid
-        raise _err(f"Tu n'es membre d'aucune org #{oid}. Vois `oto_list_orgs`.")
-    matches = [o for o in mine if o["name"].lower() == org.lower()]
-    if len(matches) == 1:
-        return matches[0]["org_id"]
-    if not matches:
-        raise _err(f"Aucune de tes orgs ne s'appelle `{org}`. Vois `oto_list_orgs`.")
-    raise _err(f"Plusieurs de tes orgs s'appellent `{org}` — utilise l'id (oto_list_orgs).")
-
-
 def register(mcp: FastMCP) -> None:
     # --- user : voir / basculer son org active ------------------------------
 
@@ -106,23 +88,8 @@ def register(mcp: FastMCP) -> None:
             "active_org": active,
         }
 
-    @mcp.tool()
-    async def oto_use_org(org: str, ctx: Context) -> dict:
-        """Switch your active organization (by id or name).
-
-        The active org decides which shared secrets resolve for your tool calls.
-        It is global to your account (not per-session): other open sessions
-        resolve secrets from the new org on their next call too.
-
-        Args:
-            org: org id (e.g. "3") or exact org name.
-        """
-        sub = _require_sub()
-        org_id = _resolve_org_for_user(sub, org)
-        if not org_store.set_active_org(sub, org_id):
-            raise _err(f"Tu n'es pas membre de l'org #{org_id}.")
-        o = org_store.get_org(org_id)
-        return {"active_org": org_id, "name": o["name"] if o else None}
+    # oto_use_org : migré en capacité `org.use_org` (ADR 0009, barreau 1) —
+    # désormais fourni par l'adaptateur MCP de la couche capacité.
 
     @mcp.tool()
     async def get_claude_md(ctx: Context) -> dict:

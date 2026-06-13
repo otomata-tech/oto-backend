@@ -174,6 +174,25 @@ def list_orgs_for_user(sub: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def resolve_org_for_user(sub: str, org: str) -> int:
+    """Résout `org` (id numérique ou nom) parmi les orgs DU sub. Lève `ValueError`
+    si inconnu/ambigu — jamais de choix implicite (mauvaise org = mauvais secret).
+    Logique de store neutre (pas de McpError) : les adaptateurs traduisent."""
+    org = (org or "").strip()
+    mine = list_orgs_for_user(sub)
+    if org.isdigit():
+        oid = int(org)
+        if any(o["org_id"] == oid for o in mine):
+            return oid
+        raise ValueError(f"Tu n'es membre d'aucune org #{oid}.")
+    matches = [o for o in mine if o["name"].lower() == org.lower()]
+    if len(matches) == 1:
+        return matches[0]["org_id"]
+    if not matches:
+        raise ValueError(f"Aucune de tes orgs ne s'appelle `{org}`.")
+    raise ValueError(f"Plusieurs de tes orgs s'appellent `{org}` — utilise l'id.")
+
+
 def list_org_members(org_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(

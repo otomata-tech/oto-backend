@@ -155,7 +155,10 @@ def make_routes(
         if not org:
             return json_error(request, 404, "unknown_org")
         my_role = org_store.get_org_role(org_id, sub)
-        return json_response(request, _org_detail(org, with_entitlements=False, my_role=my_role))
+        # with_entitlements=True : les namespaces débloqués pour l'org sont une
+        # info légitime pour un membre (carte « entitlements » du dashboard) —
+        # rien de sensible (juste namespace + date), gating membre déjà passé.
+        return json_response(request, _org_detail(org, with_entitlements=True, my_role=my_role))
 
     async def org_member_add(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)

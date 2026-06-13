@@ -79,7 +79,7 @@ def register(mcp: FastMCP) -> None:
                                            bp_an=bp_an, idcc=idcc, created_by=sub)
         except SchemaError as e:
             raise _err(str(e))
-        return prospection.get_detail(fid)
+        return prospection.get_detail(org_id, fid)
 
     @mcp.tool()
     async def scout_add_contact(ctx: Context, prospect_id: int, nom: str,

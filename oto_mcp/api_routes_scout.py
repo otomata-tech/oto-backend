@@ -90,7 +90,7 @@ def make_routes(
             )
         except (KeyError, SchemaError):
             return json_error(request, 400, "invalid_prospect")
-        return json_response(request, prospection.get_detail(fid))
+        return json_response(request, prospection.get_detail(org_id, fid))
 
     async def add_contact(request: Request) -> JSONResponse:
         sub, org_id, err = await _auth_org(request)

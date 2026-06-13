@@ -1,8 +1,11 @@
 """Récupère l'identité de l'utilisateur courant côté MCP tool.
 
 Le bearer JWT est validé par FastMCP en amont des handlers (auth provider) ;
-ici on lit juste le sub depuis le contexte. `OTO_MCP_DEV_SUB` court-circuite
-en dev quand on tourne sans auth (`MCP_TRANSPORT=stdio`).
+ici on lit juste le sub depuis le contexte. `OTO_MCP_DEV_SUB` : repli d'identité
+en **dev local uniquement** (opt-in par env, jamais posé en prod). Depuis le
+retrait du transport stdio (2026-06-13), le serveur est toujours en
+streamable_http authentifié — ce repli ne sert plus qu'à un run http local sans
+vrai Logto, et reste sans effet tant que l'env n'est pas posée.
 """
 from __future__ import annotations
 

@@ -433,8 +433,9 @@ identifiées par `slug`, chacune versionnée :
 ## Commands
 
 ```bash
-# Local stdio (Claude Code, sans auth)
-OTO_MCP_DEV_SUB=alexis .venv/bin/oto-mcp
+# Transport stdio RETIRÉ (2026-06-13) : oto-mcp ne se sert qu'en streamable_http
+# (toujours authentifié Logto). Usage local = CLI `oto`. Pour un serveur local,
+# lancer en http avec les LOGTO_* et taper avec un bearer.
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
 # 151.115.148.128 : git reset --hard origin/main + pip install -e . + systemctl

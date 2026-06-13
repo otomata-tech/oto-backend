@@ -50,33 +50,9 @@ def _require_admin() -> str:
 
 
 def register(mcp: FastMCP) -> None:
-    # --- user : voir / basculer son org active ------------------------------
-
-    @mcp.tool()
-    async def oto_list_orgs(ctx: Context) -> dict:
-        """List the organizations you belong to and which one is active.
-
-        Acting in an org means its shared secrets (org_secrets) resolve for you.
-        Switch with `oto_use_org`.
-        """
-        sub = _require_sub()
-        orgs = org_store.list_orgs_for_user(sub)
-        active = next((o["org_id"] for o in orgs if o["is_active"]), None)
-        return {
-            "orgs": [
-                {
-                    "org_id": o["org_id"],
-                    "name": o["name"],
-                    "role": o["org_role"],
-                    "active": o["is_active"],
-                }
-                for o in orgs
-            ],
-            "active_org": active,
-        }
-
-    # oto_use_org : migré en capacité `org.use_org` (ADR 0009, barreau 1) —
-    # désormais fourni par l'adaptateur MCP de la couche capacité.
+    # orgs (list/use/admin CRUD + reads) : migrés en capacités org.* (ADR 0009,
+    # barreaux 1→2d) — fournis par les adaptateurs MCP/REST. Ne restent ici que
+    # la doctrine + les instructions (skills), hors scope couche capacité.
 
     @mcp.tool()
     async def get_claude_md(ctx: Context) -> dict:
@@ -162,33 +138,8 @@ def register(mcp: FastMCP) -> None:
 
     # --- platform_admin : provisioning --------------------------------------
 
-    # oto_admin_create_org : migré en capacité org.admin.create (ADR 0009 barreau 2c).
-
-    @mcp.tool()
-    async def oto_admin_list_orgs(ctx: Context) -> dict:
-        """[platform admin] List all organizations."""
-        _require_admin()
-        return {"orgs": org_store.list_all_orgs()}
-
-    # oto_admin_add_org_member / oto_admin_remove_org_member : migrés en capacités
-    # org.member.{add,remove} (ADR 0009 barreau 2) — désormais fournis par
-    # l'adaptateur MCP, autz unifiée ORG_ADMIN_OF (org_admin self-service + escalade).
-
-    @mcp.tool()
-    async def oto_admin_list_org_members(org_id: int, ctx: Context) -> dict:
-        """[platform admin] List members of an org (sub, role, active flag)."""
-        _require_admin()
-        return {"org_id": org_id, "members": org_store.list_org_members(org_id)}
-
-    # oto_admin_set/delete_org_secret : migrés en capacités org.secret.{set,delete}
-    # (ADR 0009 barreau 2b) — autz ORG_ADMIN_OF, validation via org_secret_meta.
-
-    @mcp.tool()
-    async def oto_admin_list_org_secrets(org_id: int, ctx: Context) -> dict:
-        """[platform admin] List providers an org has a shared secret for
-        (never returns the keys themselves)."""
-        _require_admin()
-        return {"org_id": org_id, "secrets": org_store.list_org_secrets(org_id)}
+    # Tout le CRUD + lectures orgs (create, members, secrets, entitlements,
+    # list/get) : migrés en capacités org.* (ADR 0009, barreaux 2→2d).
 
     # --- doctrine + instructions : prose métier versionnée (get_claude_md) -----
 
@@ -320,13 +271,5 @@ def register(mcp: FastMCP) -> None:
         deleted = org_store.delete_instruction(org_id, slug)
         return {"org_id": org_id, "slug": org_store.normalize_slug(slug), "deleted": deleted}
 
-    # --- entitlements : plafond plateforme -> org sur les namespaces gouvernés -
-
-    # oto_admin_grant/revoke_org_entitlement : migrés en capacités
-    # org.entitlement.{grant,revoke} (ADR 0009 barreau 2c).
-
-    @mcp.tool()
-    async def oto_admin_list_org_entitlements(org_id: int, ctx: Context) -> dict:
-        """[platform admin] List an org's controlled-namespace entitlements."""
-        _require_admin()
-        return {"org_id": org_id, "entitlements": org_store.list_org_entitlements(org_id)}
+    # entitlements (grant/revoke/list) : migrés en capacités org.entitlement.*
+    # (ADR 0009 barreaux 2c/2d).

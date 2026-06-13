@@ -172,20 +172,7 @@ def make_routes(
         ]
         return json_response(request, {"orgs": orgs})
 
-    async def admin_org_create(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        body = await _body(request)
-        if body is None:
-            return json_error(request, 400, "invalid_body")
-        name = (body.get("name") or "").strip()
-        if not name:
-            return json_error(request, 400, "missing_name")
-        org_id = org_store.create_org(name, created_by=sub)
-        return json_response(request, {"id": org_id})
+    # admin_org_create : migré en capacité org.admin.create (ADR 0009 barreau 2c).
 
     async def admin_org_get(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -206,36 +193,8 @@ def make_routes(
 
     # admin_secret_* : migrés en capacités org.secret.* (multi-binding self+admin).
 
-    async def admin_entitlement_grant(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        namespace = request.path_params["namespace"]
-        if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
-            return json_error(request, 400, "namespace_not_controlled")
-        if not org_store.get_org(org_id):
-            return json_error(request, 404, "unknown_org")
-        org_store.grant_org_entitlement(org_id, namespace, granted_by=sub)
-        return json_response(request, {"ok": True, "org_id": org_id, "namespace": namespace})
-
-    async def admin_entitlement_revoke(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        if not _is_platform_admin(sub):
-            return json_error(request, 403, "forbidden")
-        org_id = _path_org_id(request)
-        if org_id is None:
-            return json_error(request, 400, "invalid_id")
-        namespace = request.path_params["namespace"]
-        existed = org_store.revoke_org_entitlement(org_id, namespace)
-        return json_response(request, {"ok": True, "org_id": org_id,
-                                       "namespace": namespace, "existed": existed})
+    # admin_entitlement_grant/revoke : migrés en capacités org.entitlement.*
+    # (ADR 0009 barreau 2c).
 
     async def admin_namespace_grants_list(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -292,13 +251,10 @@ def make_routes(
         Route("/api/orgs/{id}", options_handler, methods=["OPTIONS"]),
         # platform admin
         Route("/api/admin/orgs", admin_orgs_list, methods=["GET"]),
-        Route("/api/admin/orgs", admin_org_create, methods=["POST"]),
         Route("/api/admin/orgs", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/orgs/{id}", admin_org_get, methods=["GET"]),
         Route("/api/admin/orgs/{id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/orgs/{id}/entitlements/{namespace}", admin_entitlement_grant, methods=["POST"]),
-        Route("/api/admin/orgs/{id}/entitlements/{namespace}", admin_entitlement_revoke, methods=["DELETE"]),
-        Route("/api/admin/orgs/{id}/entitlements/{namespace}", options_handler, methods=["OPTIONS"]),
+        # POST /api/admin/orgs + entitlements/{namespace} : capacités (ADR 0009 barreau 2c)
         Route("/api/admin/namespace-grants", admin_namespace_grants_list, methods=["GET"]),
         Route("/api/admin/namespace-grants", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/namespace-grants/{namespace}", admin_namespace_grant, methods=["POST"]),

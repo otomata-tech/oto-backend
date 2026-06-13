@@ -45,8 +45,13 @@ class Connector:
     href: str | None = None
     # "tools" = module in-process (tools/<name>.py) ; "remote" = bridge distant
     # (ADR 0003) servi par le module générique tools/remote.py — le credential
-    # d'org est alors {secret=token M2M, meta.base_url=endpoint du bridge}.
+    # d'org est alors {secret=token M2M, meta.base_url=endpoint du bridge} ;
+    # "mount" = MCP distant fédéré (otomata#16) monté via FastMCP proxy par le
+    # module générique tools/mount.py — credential per-user (token OAuth) injecté
+    # par requête, endpoint = `mount_url`.
     kind: str = "tools"
+    # Endpoint MCP du serveur distant à monter (kind="mount" uniquement).
+    mount_url: str | None = None
 
     @property
     def org_shareable(self) -> bool:
@@ -60,7 +65,8 @@ class Connector:
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none", env_secret_name=None,
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, label="", help="", href=None, kind="tools") -> Connector:
+       default_hidden=False, label="", help="", href=None, kind="tools",
+       mount_url=None) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -68,6 +74,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
         label=label or name.capitalize(), help=help, href=href, kind=kind,
+        mount_url=mount_url,
     )
 
 
@@ -174,6 +181,7 @@ DEFAULT_HIDDEN_NAMESPACES: frozenset = frozenset(
     ns for c in _REGISTRY_LIST if c.default_hidden for ns in c.namespaces
 )
 REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote")
+MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 
 
 # --- helpers ----------------------------------------------------------------

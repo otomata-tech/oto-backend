@@ -220,6 +220,30 @@ def resolve_remote_credential(provider: str) -> tuple[str, str]:
     ))
 
 
+def resolve_mount_token(provider: str) -> str:
+    """Résout le **token OAuth per-user** d'un connecteur fédéré `kind="mount"`
+    (otomata#16) depuis le coffre — entité `user` = sub courant.
+
+    Contrairement à un remote (credential d'ORG = token M2M du bridge), un mount
+    fédère un MCP distant déjà authentifié par user (ex. memento, OAuth Supabase) :
+    chaque user porte SON token, résolu par requête et injecté en bearer dans le
+    proxy (cf. tools/mount.py). Lève une McpError actionnable si le user n'a pas
+    connecté ce service — le proxy traduit ça en « tools non visibles » (le
+    ProxyProvider warn+skip), pas en crash de session.
+    """
+    sub = current_user_sub_or_raise()
+    cred = credentials_store.get_credential("user", sub, provider)
+    if cred:
+        return cred
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(
+            f"Connecteur `{provider}` non connecté pour ton compte. "
+            f"Connecte-le depuis ton dashboard (oto.ninja)."
+        ),
+    ))
+
+
 def resolve_crunchbase_session() -> dict:
     """Résout la session Crunchbase per-user du sub courant pour **injection**
     dans le client (cookies + user_agent), ou lève une McpError actionnable.

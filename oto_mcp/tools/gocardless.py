@@ -22,6 +22,13 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.gocardless import GoCardlessClient
 
     def _client() -> GoCardlessClient:
+        # Backstop d'autorisation au call-time (gocardless = namespace grant-only,
+        # financier sensible). SANS ça, l'autz reposait uniquement sur le masquage
+        # de visibilité — qu'un org_admin contourne en posant un org_secret
+        # gocardless (autorisé sans entitlement) → tout org_member pouvait appeler.
+        # Miroir de mm (remote.py) / memento (mount.py). require_namespace lit
+        # granted_namespaces_for (grants user ∪ entitlements org) + bypass admin.
+        access.require_namespace("gocardless")
         key, _is_platform = access.resolve_api_key("gocardless", "GOCARDLESS_API_KEY")
         return GoCardlessClient(api_key=key)
 

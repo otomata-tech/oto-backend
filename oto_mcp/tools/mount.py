@@ -24,6 +24,7 @@ connecté les voit et les appelle ; les autres ne les voient pas.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
@@ -65,6 +66,21 @@ def _register_one(mcp: FastMCP, c: connectors.Connector) -> None:
     log.info("mounted federated MCP %s → namespace %s", c.name, c.namespaces[0])
 
 
+def _enabled_mounts() -> set[str]:
+    """Kill-switch / activation explicite par env. Un connecteur peut être
+    déclaré au registre (kind=mount) pour porter le flow OAuth + le coffre SANS
+    être activement monté : `OTO_MCP_MOUNTS_ENABLED` (CSV) liste ceux à monter.
+    Vide/absent → aucun mount actif (défaut sûr). `*` = tous."""
+    raw = (os.environ.get("OTO_MCP_MOUNTS_ENABLED") or "").strip()
+    if raw == "*":
+        return {c.name for c in connectors.MOUNT_CONNECTORS}
+    return {n.strip() for n in raw.split(",") if n.strip()}
+
+
 def register(mcp: FastMCP) -> None:
+    enabled = _enabled_mounts()
     for c in connectors.MOUNT_CONNECTORS:
+        if c.name not in enabled:
+            log.info("mount %s déclaré mais non activé (OTO_MCP_MOUNTS_ENABLED)", c.name)
+            continue
         _register_one(mcp, c)

@@ -137,6 +137,14 @@ _REGISTRY_LIST = [
     _c("mm", ["mm"], kind="remote", availability="platform_granted", auth_modes={"byo_org"},
        secret_kind="api_key", in_default_bundle=False,
        label="Movinmotion BO", help="back-office Movinmotion (lecture, via bridge)"),
+    # memento : MCP fédéré (otomata#16, kind=mount). MCP autonome distant
+    # (mcp.mento.cc) monté via proxy FastMCP (tools/mount.py) ; credential
+    # per-user = token OAuth Supabase (flow memento_oauth.py), injecté par
+    # requête. platform_granted (grant-only, deny-by-default) + byo_user.
+    _c("memento", ["memento"], kind="mount", mount_url="https://mcp.mento.cc/mcp",
+       availability="platform_granted", auth_modes={"byo_user"}, secret_kind="oauth",
+       in_default_bundle=False, label="Memento",
+       help="base de connaissance structurée (MCP fédéré)", href="https://mento.cc"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     _c("linkedin", ["linkedin"], auth_modes={"byo_user"}, personal_session=True,

@@ -232,9 +232,15 @@ def resolve_mount_token(provider: str) -> str:
     ProxyProvider warn+skip), pas en crash de session.
     """
     sub = current_user_sub_or_raise()
-    cred = credentials_store.get_credential("user", sub, provider)
-    if cred:
-        return cred
+    # OAuth fédéré : token avec refresh transparent (mémento = pilote otomata#16).
+    # Le résolveur connector-spécifique vit hors d'access (refresh = flow OAuth).
+    if provider == "memento":
+        from . import memento_oauth
+        token = memento_oauth.access_token_for(sub)
+    else:
+        token = credentials_store.get_credential("user", sub, provider)
+    if token:
+        return token
     raise McpError(ErrorData(
         code=INVALID_PARAMS,
         message=(

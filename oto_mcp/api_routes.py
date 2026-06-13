@@ -146,6 +146,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 500, f"list_tools_failed:{e}")
         payload = []
         for t in tools:
+            # Doctrine deny-by-default : les namespaces grant-only (connecteurs
+            # client-sensibles type bridge, ADR 0003) n'apparaissent JAMAIS dans
+            # l'autodoc publique — elle alimente les pages marketing oto.ninja.
+            if is_grant_only(t.name):
+                continue
             # Tool object exposes name, description, parameters (input schema),
             # output_schema. Some attributes may be None depending on the type.
             payload.append({
@@ -157,13 +162,27 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         return _json(request, {"tools": payload, "count": len(payload)})
 
     async def connectors_catalog(request: Request) -> JSONResponse:
-        """Catalogue public des connecteurs (registre source unique).
+        """Catalogue des connecteurs (registre source unique), auth optionnelle.
 
-        Sans secret ni auth : remplace la liste `PROVIDERS` hardcodée du
-        frontend (account.ts) — chaque connecteur avec sa disponibilité, ses
-        modes d'auth, son secret_kind. Source = connectors.public_catalog().
+        Anonyme → connecteurs self-serve uniquement : les `platform_granted`
+        (dont les bridges client-sensibles, ADR 0003) sont deny-by-default,
+        comme sur la face MCP. Authentifié → + ceux dont un namespace est
+        entitled pour le sub ; admin → tout le registre (les vues admin du
+        dashboard itèrent dessus).
         """
-        return _json(request, {"connectors": connectors.public_catalog()})
+        cat = connectors.public_catalog()
+        if not request.headers.get("authorization"):
+            cat = [c for c in cat if c["availability"] != "platform_granted"]
+            return _json(request, {"connectors": cat})
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            granted = access.granted_namespaces_for(sub)
+            cat = [c for c in cat
+                   if c["availability"] != "platform_granted"
+                   or any(ns in granted for ns in c["namespaces"])]
+        return _json(request, {"connectors": cat})
 
     async def me(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

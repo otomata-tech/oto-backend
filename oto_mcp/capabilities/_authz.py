@@ -63,6 +63,24 @@ def NAMESPACE_GRANT(namespace: str):
     return rule
 
 
+def ORG_MEMBER_OF(field: str):
+    """Membre de l'org désignée par `input.<field>` (lecture d'une org par id de
+    path, ≠ org active) — OU platform_admin (escalade). Ajoutée au barreau 2d
+    (ADR 0009) pour les lectures par id. Miroir lecture d'`ORG_ADMIN_OF`."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        role = access.get_user_role(sub)
+        org_id = getattr(inp, field, None) if inp is not None else None
+        if org_id is None:
+            raise AuthzDenied(400, "missing_org", f"Champ `{field}` requis.")
+        org_id = int(org_id)
+        is_member = role == access.ADMIN or org_store.get_org_role(org_id, sub) is not None
+        if not is_member:
+            raise AuthzDenied(403, "forbidden", f"Réservé aux membres de l'org #{org_id}.")
+        return ResolvedCtx(sub=sub, org_id=org_id, role=role)
+    return rule
+
+
 def ORG_ADMIN_OF(field: str):
     """Org-admin de l'org désignée par `input.<field>` — OU platform_admin
     (escalade conservée, cf. api_routes_orgs._is_org_admin). Porte la garde

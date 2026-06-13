@@ -40,7 +40,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
+from . import access, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 
@@ -1101,6 +1101,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    scout_routes = api_routes_scout.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     return [
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
@@ -1186,4 +1194,5 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *sirene_routes,
         *orgs_routes,
         *memento_routes,
+        *scout_routes,
     ]

@@ -332,6 +332,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
         conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
         _drop_legacy_plaintext_stores(conn)
+        # Substrat « graphe de facts structurés » (ADR 0008) — schéma factgraph.
+        from .factgraph import projection as _fg_projection
+        from .factgraph import store as _fg_store
+        _fg_store.init_schema(conn)
+        _fg_projection.init_schema(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))

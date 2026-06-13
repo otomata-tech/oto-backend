@@ -1,68 +1,116 @@
-"""Connecteur universel de fédération MCP (otomata#16) — forward describe/call.
+"""Connecteur universel de fédération MCP (otomata#16) — outils NATIFS.
 
-⚠️ Réécrit après incident (2026-06-13) : l'approche live-mount via
-`FastMCPProxy.mount()` est ABANDONNÉE. Son `ProxyInitializeMiddleware` force une
-connexion au backend à CHAQUE `initialize` (chaque connexion client) — or le
-token est *per-user* et absent au handshake → l'initialize du backend lève →
-tout le connecteur oto échoue. Le modèle mount() suppose un backend joignable +
-authentifié dès le handshake, incompatible avec un credential per-user.
+Monte les outils d'un MCP distant `kind="mount"` (ex. memento) **nativement**
+dans oto : `memento_mem_search`, `memento_mem_get`… avec leurs vrais schémas,
+appelables directement (pas un tunnel describe/call).
 
-À la place — même pattern que le bridge REST `tools/remote.py`, mais vers un MCP :
-deux outils STATIQUES par connecteur `kind="mount"` :
-- `<ns>_describe` : liste les outils du MCP distant (découverte).
-- `<ns>_call(tool, arguments)` : forwarde l'appel.
+Pourquoi PAS `FastMCPProxy.mount()` (incident 2026-06-13) : il ajoute un
+`ProxyInitializeMiddleware` qui connecte+initialise le backend à CHAQUE
+`initialize` d'oto → avec un token per-user absent au handshake, ça casse tout
+le connecteur. On utilise donc `ProxyTool` **directement**, ajouté statiquement :
 
-`tools/list` d'oto ne touche jamais le réseau ni un token → handshake sûr. Le
-token per-user n'est résolu qu'à l'APPEL (`access.resolve_mount_token`), avec le
-gating `require_namespace`. Un user non connecté → McpError actionnable à l'appel,
-jamais un crash de session.
+- **Catalogue figé au boot** : on récupère la liste d'outils du MCP distant UNE
+  fois (réseau au boot, jamais au handshake), avec le token d'un user déjà
+  connecté (le catalogue est partagé — mêmes verbes pour tous). `tools/list`
+  d'oto reste 100% statique → handshake sûr.
+- **Forward per-user à l'appel** : chaque `ProxyTool` a une `client_factory`
+  appelée PAR APPEL → résout le token DU user courant (`resolve_mount_token`,
+  refresh transparent) + gating `require_namespace`. Un user non connecté →
+  McpError actionnable à l'appel, jamais un crash.
 
-(Évolution possible : outils memento NATIFS — `memento_mem_search` avec le vrai
-schéma — via sous-classe Tool + snapshot du catalogue. Plus ergonomique, mais
-demande de construire des Tools à schéma explicite ; reporté.)
+Limite v1 : le catalogue est figé au boot, donc (a) il faut ≥1 user connecté au
+démarrage pour le charger, (b) un nouvel outil distant n'apparaît qu'après
+restart. Acceptable pour le pilote ; un refresh lazy/admin viendra si besoin.
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
 
 from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.server.providers.proxy import ProxyTool
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connectors
+from .. import access, connectors, credentials_store
 from ..auth_hooks import current_user_sub_from_token
 
 log = logging.getLogger("oto_mcp.tools.mount")
-TIMEOUT = 45
+CATALOG_TIMEOUT = 20
 
 
 def _enabled_mounts() -> set[str]:
-    """Kill-switch / activation explicite par env. `OTO_MCP_MOUNTS_ENABLED` (CSV)
-    liste les connecteurs mount à activer ; vide → aucun (défaut sûr) ; `*` = tous."""
+    """Activation explicite / kill-switch par env. `OTO_MCP_MOUNTS_ENABLED` (CSV)
+    liste les mounts actifs ; vide → aucun (défaut sûr) ; `*` = tous."""
     raw = (os.environ.get("OTO_MCP_MOUNTS_ENABLED") or "").strip()
     if raw == "*":
         return {c.name for c in connectors.MOUNT_CONNECTORS}
     return {n.strip() for n in raw.split(",") if n.strip()}
 
 
-def _client(connector: connectors.Connector) -> Client:
-    """Client MCP vers le backend distant, authentifié avec le token DU USER
-    courant (résolu par requête, jamais figé). Gating namespace au call-time."""
+def _run_sync(coro):
+    """Exécute une coroutine dans un loop propre (thread dédié) — sûr depuis le
+    contexte sync de register_all, qu'un event loop tourne ou non."""
+    with concurrent.futures.ThreadPoolExecutor(1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
+def _catalog_token(connector: connectors.Connector, sub: str) -> str | None:
+    """Token (d'un user connecté) pour récupérer le catalogue PARTAGÉ au boot.
+    Connector-spécifique pour le refresh OAuth (memento)."""
+    if connector.name == "memento":
+        from .. import memento_oauth
+        return memento_oauth.access_token_for(sub)
+    return credentials_store.get_credential("user", sub, connector.name)
+
+
+def _fetch_catalog(connector: connectors.Connector) -> list:
+    """Liste d'outils du MCP distant, récupérée une fois au boot via le token
+    d'un user déjà connecté. [] si personne n'est connecté ou si l'appel échoue
+    (dégradation propre : pas d'outils fédérés, le reste d'oto intact)."""
+    sub = credentials_store.first_entity_with("user", connector.name)
+    if not sub:
+        log.info("mount %s : aucun user connecté → catalogue non chargé "
+                 "(restart après le 1er connect)", connector.name)
+        return []
+    try:
+        token = _catalog_token(connector, sub)
+        if not token:
+            return []
+
+        async def _list():
+            client = Client(StreamableHttpTransport(
+                connector.mount_url, headers={"Authorization": f"Bearer {token}"}))
+            async with client:
+                return await client.list_tools()
+
+        return _run_sync(asyncio.wait_for(_list(), CATALOG_TIMEOUT))
+    except Exception as e:
+        log.warning("mount %s : échec du fetch catalogue (%s) → 0 outil fédéré",
+                    connector.name, e)
+        return []
+
+
+def _make_factory(connector: connectors.Connector):
+    """client_factory per-appel : token DU user courant, gating au call-time."""
     ns = connector.namespaces[0]
-    access.require_namespace(ns)
-    if current_user_sub_from_token() is None:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Connecteur fédéré `{connector.name}` indisponible en stdio local "
-                f"(credential per-user serveur requis)."
-            ),
-        ))
-    token = access.resolve_mount_token(connector.name)  # lève si non connecté
-    return Client(StreamableHttpTransport(
-        connector.mount_url, headers={"Authorization": f"Bearer {token}"}))
+
+    async def factory() -> Client:
+        access.require_namespace(ns)
+        if current_user_sub_from_token() is None:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Connecteur fédéré `{connector.name}` indisponible en "
+                         f"stdio local (credential per-user serveur requis)."),
+            ))
+        token = access.resolve_mount_token(connector.name)  # lève si non connecté
+        return Client(StreamableHttpTransport(
+            connector.mount_url, headers={"Authorization": f"Bearer {token}"}))
+
+    return factory
 
 
 def _register_one(mcp: FastMCP, c: connectors.Connector) -> None:
@@ -70,43 +118,18 @@ def _register_one(mcp: FastMCP, c: connectors.Connector) -> None:
         log.warning("mount connector %s sans mount_url — ignoré", c.name)
         return
     ns = c.namespaces[0]
-
-    @mcp.tool(
-        name=f"{ns}_describe",
-        description=(
-            f"{c.label} — liste les outils disponibles du MCP fédéré ({c.help}). "
-            f"À appeler d'abord pour découvrir les outils invocables via {ns}_call."
-        ),
-    )
-    async def describe() -> dict:
-        async with _client(c) as client:
-            tools = await client.list_tools()
-        return {"tools": [
-            {"name": t.name, "description": t.description, "input_schema": t.inputSchema}
-            for t in tools
-        ]}
-
-    @mcp.tool(
-        name=f"{ns}_call",
-        description=(
-            f"{c.label} — appelle un outil du MCP fédéré ({c.help}). "
-            f"`tool` = nom de l'outil distant (voir {ns}_describe), `arguments` = "
-            f"ses paramètres. Exécuté avec TON compte {c.label} (per-user)."
-        ),
-    )
-    async def call(tool: str, arguments: dict | None = None) -> dict:
-        async with _client(c) as client:
-            res = await client.call_tool(tool, arguments or {}, raise_on_error=False)
-        if getattr(res, "is_error", False):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"{c.label} `{tool}` a renvoyé une erreur : {res.content}",
-            ))
-        return res.data if getattr(res, "data", None) is not None else {"content": [
-            getattr(b, "text", str(b)) for b in (res.content or [])
-        ]}
-
-    log.info("federated MCP %s → tools %s_describe / %s_call", c.name, ns, ns)
+    catalog = _fetch_catalog(c)
+    if not catalog:
+        return
+    factory = _make_factory(c)
+    n = 0
+    for t in catalog:
+        # ProxyTool natif (vrai schéma) renommé <ns>_<nom> → namespace gouverné.
+        # model_copy préserve le nom backend pour le forward (cf. ProxyTool).
+        pt = ProxyTool.from_mcp_tool(factory, t).model_copy(update={"name": f"{ns}_{t.name}"})
+        mcp.add_tool(pt)
+        n += 1
+    log.info("federated MCP %s → %d outils natifs montés (namespace %s)", c.name, n, ns)
 
 
 def register(mcp: FastMCP) -> None:

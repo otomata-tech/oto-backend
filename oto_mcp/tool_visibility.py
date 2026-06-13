@@ -72,13 +72,18 @@ def is_tool_visible(
 ) -> bool:
     """Règle de visibilité effective pour un tool donné."""
     if is_grant_only(name):
+        # L'admin HÉRITE de la visibilité des namespaces entitled de son org
+        # active (comme un user normal entitled). Sinon l'admin qui veut SE
+        # SERVIR d'un connecteur grant-only (ex. memento fédéré, 51 outils)
+        # devrait les activer un par un. Les namespaces NON entitled restent
+        # masqués + opt-in manuel pour l'admin (anti-encombrement de sa vue sur
+        # TOUS les connecteurs clients de la plateforme).
+        if namespace_of(name) in granted_namespaces:
+            return name not in disabled
         if is_admin:
-            # Masqué par défaut, mais l'admin peut se l'activer (override positif).
             return name in enabled_override
-        # Non-admin : nécessite un grant de namespace ; pas d'auto-activation.
-        if namespace_of(name) not in granted_namespaces:
-            return False
-        return name not in disabled
+        # Non-admin sans grant : invisible, pas d'auto-activation.
+        return False
     if name in enabled_override:
         return True
     if name in disabled:

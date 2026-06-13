@@ -70,13 +70,24 @@ def _build_verifier() -> JWTVerifier:
 
 
 def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
-    """Advertise Logto comme AS, valider les JWTs avec le verifier partagé."""
+    """Valider les JWTs Logto + se présenter en **façade AS** (cf. oauth_facade) :
+    le PRM pointe les clients vers NOUS (pas Logto direct), pour qu'ils lisent
+    notre métadonnée AS augmentée d'un `registration_endpoint` (DCR façade). Sans
+    ça, claude.ai ne peut pas s'auto-enregistrer (Logto n'a pas de DCR) et l'user
+    doit coller le client_id à la main."""
     public_base = require_env("OTO_MCP_PUBLIC_URL").rstrip("/")
-    logto_endpoint = require_env("LOGTO_ENDPOINT").rstrip("/")
-    issuer = f"{logto_endpoint}/oidc"
+    # Façade DCR active ⟺ OTO_MCP_CLAUDE_APP_ID posé : alors le PRM pointe vers
+    # NOUS (on sert l'AS metadata + /oauth/register, cf. oauth_facade + branche
+    # HTTP). Sinon, fallback au comportement historique (PRM → Logto direct,
+    # client_id collé à la main). Les deux DOIVENT rester couplés sur ce flag,
+    # sinon le PRM pointerait vers un AS metadata inexistant → discovery cassée.
+    if os.environ.get("OTO_MCP_CLAUDE_APP_ID"):
+        authz = public_base
+    else:
+        authz = f"{require_env('LOGTO_ENDPOINT').rstrip('/')}/oidc"
     return RemoteAuthProvider(
         token_verifier=verifier,
-        authorization_servers=[AnyHttpUrl(issuer)],
+        authorization_servers=[AnyHttpUrl(authz)],
         base_url=public_base,
         resource_name="oto MCP",
     )
@@ -184,6 +195,17 @@ def main():
         # Insérée avant les routes FastMCP pour qu'elles matchent /api/* en priorité.
         for route in reversed(api_routes.make_routes(verifier, mcp_instance=mcp)):
             app.router.routes.insert(0, route)
+
+        # Façade DCR (oauth_facade) : sert /.well-known/oauth-authorization-server
+        # + /oauth/register pour que claude.ai s'auto-enregistre sans coller le
+        # client_id. No-op si OTO_MCP_CLAUDE_APP_ID absent (paste manuel conservé).
+        claude_app_id = os.environ.get("OTO_MCP_CLAUDE_APP_ID")
+        if claude_app_id:
+            from . import oauth_facade
+            for route in reversed(oauth_facade.make_routes(
+                    require_env("OTO_MCP_PUBLIC_URL"), claude_app_id)):
+                app.router.routes.insert(0, route)
+            logger.info("DCR facade active (claude app %s)", claude_app_id)
 
         import uvicorn
         logger.info("HTTP MCP server on %s:%d", host, port)

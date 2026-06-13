@@ -483,8 +483,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except Exception:
             body = {}
         label = (body or {}).get("label") or "cli"
-        token = db.create_api_token(target_sub, label=label.strip()[:32])
-        return _json(request, {"token": token, "label": label})
+        ttl_raw = (body or {}).get("ttl_days")
+        ttl_days = int(ttl_raw) if isinstance(ttl_raw, (int, str)) and str(ttl_raw).isdigit() else None
+        token = db.create_api_token(target_sub, label=label.strip()[:32], ttl_days=ttl_days)
+        return _json(request, {"token": token, "label": label, "ttl_days": ttl_days})
 
     async def admin_tokens_delete(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

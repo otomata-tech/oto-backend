@@ -65,14 +65,23 @@ class Capability:
     authz: AuthzRule                            # OBLIGATOIRE (pas de défaut → oubli = TypeError)
     description: str = ""                       # contrat LLM du tool MCP
     mcp: Optional[str] = None                   # nom du tool MCP, ou None (opt-out explicite)
-    rest: Optional[RestBinding] = None          # binding REST, ou None (opt-out explicite)
+    # un OU plusieurs bindings REST (ex. routes self-service + admin sur le même
+    # métier+autz), ou None (opt-out explicite).
+    rest: "Optional[RestBinding | tuple[RestBinding, ...]]" = None
 
     def __post_init__(self):
-        if self.mcp is None and self.rest is None:
+        if self.mcp is None and not self.rest:
             raise ValueError(
                 f"Capability {self.key!r} sans surface : déclarer mcp= et/ou rest= "
                 f"(un opt-out doit être explicite, pas un oubli)."
             )
+
+    def rest_bindings(self) -> list[RestBinding]:
+        if self.rest is None:
+            return []
+        if isinstance(self.rest, RestBinding):
+            return [self.rest]
+        return list(self.rest)
 
 
 def apply_flat_signature(fn: Callable, model: type[BaseModel]) -> Callable:

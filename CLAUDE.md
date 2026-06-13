@@ -15,7 +15,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
 ## Stack
 
 - Python 3.10 (target `>=3.10` — c'est ce que tuls.me a)
-- `fastmcp>=2.0` (prod : 3.2.4) + `mcp` SDK
+- `fastmcp>=3.4.2` (plancher = dernier ; prod aligné au deploy via `pip install -e .`) + `mcp` SDK
 - `oto-cli[browser]` — déclaré comme dépendance PyPI dans `pyproject.toml`, mais en
   prod le venv est overridden par `pip install -e /opt/oto-cli/` (clone du repo
   `otomata-tech/oto-cli` sur le serveur). Permet de propager les nouveaux connecteurs

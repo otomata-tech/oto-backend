@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import time
+from urllib.parse import urlparse
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -62,22 +63,33 @@ def _cors() -> dict:
 # ou wildcard ajouté à l'app Logto rendrait le DCR ouvert + client public
 # exploitable (vol de code d'autorisation). On valide AUSSI ici (défense en
 # profondeur, fail-fast à l'enregistrement) — sans dépendre uniquement de Logto.
-_ALLOWED_REDIRECT_PREFIXES = (
-    "https://claude.ai/api/mcp/auth_callback",
-    "https://claude.com/api/mcp/auth_callback",
-    "http://localhost",      # Claude Code / desktop (port ignoré par Logto)
-    "http://127.0.0.1",
-)
+# Hôtes claude.ai/.com en https (callback MCP) + hôtes locaux en http (Claude
+# Code/desktop, port ignoré). Comparaison de host EXACTE après parsing : jamais
+# de startswith sur l'URL brute (contournable via `http://localhost.evil.com`).
+_ALLOWED_HTTPS_HOSTS = {"claude.ai", "claude.com"}
+_ALLOWED_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_CALLBACK_PATH = "/api/mcp/auth_callback"
 
 
-def _allowed_redirects() -> tuple[str, ...]:
+def _extra_https_hosts() -> set[str]:
     extra = (os.environ.get("OTO_MCP_DCR_ALLOWED_REDIRECTS") or "").strip()
-    extras = tuple(p.strip() for p in extra.split(",") if p.strip())
-    return _ALLOWED_REDIRECT_PREFIXES + extras
+    return {h.strip().lower().rstrip(".") for h in extra.split(",") if h.strip()}
 
 
 def _redirect_ok(uri: str) -> bool:
-    return isinstance(uri, str) and any(uri.startswith(p) for p in _allowed_redirects())
+    if not isinstance(uri, str):
+        return False
+    try:
+        p = urlparse(uri)
+    except Exception:
+        return False
+    host = (p.hostname or "").lower().rstrip(".")
+    if p.scheme == "https" and host in (_ALLOWED_HTTPS_HOSTS | _extra_https_hosts()) \
+            and p.path.startswith(_CALLBACK_PATH):
+        return True
+    if p.scheme == "http" and host in _ALLOWED_LOCAL_HOSTS:
+        return True
+    return False
 
 
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:

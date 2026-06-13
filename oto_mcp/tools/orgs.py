@@ -162,12 +162,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- platform_admin : provisioning --------------------------------------
 
-    @mcp.tool()
-    async def oto_admin_create_org(name: str, ctx: Context) -> dict:
-        """[platform admin] Create an organization (perimeter). Returns its id."""
-        admin = _require_admin()
-        org_id = org_store.create_org(name, created_by=admin)
-        return {"org_id": org_id, "name": name.strip()}
+    # oto_admin_create_org : migré en capacité org.admin.create (ADR 0009 barreau 2c).
 
     @mcp.tool()
     async def oto_admin_list_orgs(ctx: Context) -> dict:
@@ -327,34 +322,8 @@ def register(mcp: FastMCP) -> None:
 
     # --- entitlements : plafond plateforme -> org sur les namespaces gouvernés -
 
-    @mcp.tool()
-    async def oto_admin_grant_org_entitlement(org_id: int, namespace: str, ctx: Context) -> dict:
-        """[platform admin] Entitle an org to a controlled (grant-only) namespace.
-
-        Unlocks that namespace's tools for the org's members (e.g. `mm`,
-        `gocardless`). Only controlled namespaces are accepted — by-right
-        namespaces (attio, fr, serper…) need no entitlement.
-        """
-        admin = _require_admin()
-        if not org_store.get_org(org_id):
-            raise _err(f"Org #{org_id} inconnue.")
-        if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
-            raise _err(
-                f"`{namespace}` n'est pas un namespace gouverné. "
-                f"Gouvernés : {sorted(ADMIN_GRANT_ONLY_NAMESPACES)}. "
-                f"Les autres sont visibles de droit (pas d'entitlement requis)."
-            )
-        org_store.grant_org_entitlement(org_id, namespace, granted_by=admin)
-        return {"org_id": org_id, "namespace": namespace, "granted": True}
-
-    @mcp.tool()
-    async def oto_admin_revoke_org_entitlement(org_id: int, namespace: str, ctx: Context) -> dict:
-        """[platform admin] Revoke an org's entitlement to a controlled namespace.
-
-        Lazy on open sessions (members keep it until their next handshake)."""
-        _require_admin()
-        existed = org_store.revoke_org_entitlement(org_id, namespace)
-        return {"org_id": org_id, "namespace": namespace, "revoked": existed}
+    # oto_admin_grant/revoke_org_entitlement : migrés en capacités
+    # org.entitlement.{grant,revoke} (ADR 0009 barreau 2c).
 
     @mcp.tool()
     async def oto_admin_list_org_entitlements(org_id: int, ctx: Context) -> dict:

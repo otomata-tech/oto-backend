@@ -29,6 +29,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import remote
     remote.register(mcp)
 
+    # Connecteurs mount (fédération MCP, otomata#16) — monte un MCP distant via
+    # proxy FastMCP, credential per-user injecté par requête. Inerte tant
+    # qu'aucun connecteur kind="mount" n'est déclaré au registre (canari).
+    from . import mount
+    mount.register(mcp)
+
     # Connecteurs API-only — la résolution de clé (user vs platform) se fait
     # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
     # les secrets soient configurés au boot.

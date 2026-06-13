@@ -185,52 +185,8 @@ def register(mcp: FastMCP) -> None:
         _require_admin()
         return {"org_id": org_id, "members": org_store.list_org_members(org_id)}
 
-    @mcp.tool()
-    async def oto_admin_set_org_secret(
-        org_id: int, provider: str, api_key: str, ctx: Context,
-        base_url: str | None = None,
-    ) -> dict:
-        """[platform admin] Set/rotate an org's shared account credential.
-
-        Only org-shareable providers (account credentials usable by every
-        member). Personal-session providers (slack/linkedin/google/whatsapp)
-        are refused — they are physiologically per-user.
-
-        Args:
-            org_id: target org.
-            provider: one of the org-shareable providers (attio, pennylane,
-                serper, hunter, sirene, lemlist, kaspr, fullenrich, folk) or a
-                remote connector (mm).
-            api_key: the credential (remote connector: the bridge M2M token —
-                never the client system's own secret, which stays in the bridge).
-            base_url: remote connectors only — bridge endpoint (required).
-        """
-        admin = _require_admin()
-        if not org_store.get_org(org_id):
-            raise _err(f"Org #{org_id} inconnue.")
-        if provider not in ORG_SHAREABLE_PROVIDERS:
-            raise _err(
-                f"`{provider}` n'est pas org-partageable (credential de session "
-                f"personnel ou inconnu). Partageables : {sorted(ORG_SHAREABLE_PROVIDERS)}."
-            )
-        c = connectors.connector_for_provider(provider)
-        if c is not None and c.kind == "remote":
-            if not base_url:
-                raise _err(f"`{provider}` est un connecteur remote : `base_url` (endpoint du bridge) requis.")
-            meta = {"base_url": base_url.rstrip("/")}
-        else:
-            if base_url:
-                raise _err(f"`base_url` n'a de sens que pour un connecteur remote, pas `{provider}`.")
-            meta = None
-        org_store.set_org_secret(org_id, provider, api_key, set_by=admin, meta=meta)
-        return {"org_id": org_id, "provider": provider, "set": True}
-
-    @mcp.tool()
-    async def oto_admin_delete_org_secret(org_id: int, provider: str, ctx: Context) -> dict:
-        """[platform admin] Remove an org's shared secret for a provider."""
-        _require_admin()
-        deleted = org_store.delete_org_secret(org_id, provider)
-        return {"org_id": org_id, "provider": provider, "deleted": deleted}
+    # oto_admin_set/delete_org_secret : migrés en capacités org.secret.{set,delete}
+    # (ADR 0009 barreau 2b) — autz ORG_ADMIN_OF, validation via org_secret_meta.
 
     @mcp.tool()
     async def oto_admin_list_org_secrets(org_id: int, ctx: Context) -> dict:

@@ -76,6 +76,14 @@ def _b64url_decode(s: str) -> bytes:
 
 
 # --- PKCE + state (verifier embarqué dans le state HMAC-signé) --------------
+#
+# Note sécu (audit 2026-06-13, accepté). Le code_verifier PKCE est porté DANS le
+# state (b64url lisible, HMAC pour l'intégrité seulement, pas le secret) plutôt
+# que stocké côté serveur. C'est volontairement acceptable ici : oto est un
+# client OAuth *confidentiel* (échange en client_secret_basic, cf. _basic_auth),
+# donc PKCE n'est qu'une défense en profondeur — exposer le verifier n'ouvre
+# aucune attaque tant que le client_secret (jamais hors serveur) est requis pour
+# échanger le code. Pas de store de state serveur à introduire pour ce flow.
 
 def _pkce_pair() -> tuple[str, str]:
     verifier = _b64url(secrets.token_bytes(48))

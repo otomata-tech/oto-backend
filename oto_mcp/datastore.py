@@ -18,8 +18,11 @@ Si on passe à `--workers > 1`, deux appends concurrents sur la même
 namespace peuvent corrompre les headers. Idem pour `update_row` qui peut
 écrire sur la mauvaise row si un delete concurrent décale les indices.
 
-Le `DatastoreSheets` class est instancié **par requête** (state-less), à
-partir des credentials d'un user. Pas de cache global.
+Le `DatastoreSheets` class est instancié **par requête** (state-less) à partir
+du `sub`. Multi-compte (#9) : chaque namespace porte son compte Google
+propriétaire (`owner_email`, figé à la création) ; les ops résolvent les
+credentials de CE compte — plus de 403 quand un sheet vit hors du compte par
+défaut. Clients mis en cache par compte au sein de l'instance, pas de cache global.
 
 Encodage des cellules : on préserve les types Python via un préfixe
 sentinel `__j:` pour tout ce qui n'est pas string. Les strings utilisateur
@@ -119,31 +122,92 @@ class GoogleNotConnected(Exception):
 def make_store(sub: str) -> "DatastoreSheets":
     """Construit un DatastoreSheets pour `sub`.
 
-    Raises GoogleNotConnected si l'user n'a pas grant Drive — chaque caller
-    (MCP tool, REST handler) doit traduire en erreur de sa surface.
+    Raises GoogleNotConnected si l'user n'a aucun compte Google connecté —
+    chaque caller (MCP tool, REST handler) doit traduire en erreur de sa surface.
     """
     from . import google_oauth
     try:
-        creds = google_oauth.credentials_for(sub)
+        google_oauth.credentials_for(sub)  # valide qu'au moins un compte existe
     except RuntimeError as e:
         raise GoogleNotConnected(str(e))
-    return DatastoreSheets(sub, creds)
+    return DatastoreSheets(sub)
 
 
 class DatastoreSheets:
-    """Wrapper Sheets/Drive pour un user authentifié (via credentials).
+    """Wrapper Sheets/Drive multi-compte pour un user authentifié.
 
-    Toutes les méthodes prennent un `sub` pour le registry SQLite ; les
-    credentials Google sont injectées via constructeur pour ne pas coupler
-    cette classe à `google_oauth`.
+    Résout les credentials Google par **compte propriétaire de chaque
+    namespace** (#9) : un user multi-comptes accède à un sheet hors de son
+    compte par défaut sans 403. Les clients sont mis en cache par compte.
     """
 
-    def __init__(self, sub: str, credentials):
+    def __init__(self, sub: str):
         self.sub = sub
-        from googleapiclient.discovery import build
-        # cache_discovery=False : évite le warning oauth2client manquant
-        self._sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False)
-        self._drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        self._svc_cache: dict = {}
+
+    # --- google clients per owner account ------------------------------------
+
+    def _services(self, account: Optional[str]):
+        """(sheets, drive) pour `account` (email) ; None = compte par défaut."""
+        if account not in self._svc_cache:
+            from . import google_oauth
+            from googleapiclient.discovery import build
+            creds = google_oauth.credentials_for(self.sub, account=account)
+            # cache_discovery=False : évite le warning oauth2client manquant
+            self._svc_cache[account] = (
+                build("sheets", "v4", credentials=creds, cache_discovery=False),
+                build("drive", "v3", credentials=creds, cache_discovery=False),
+            )
+        return self._svc_cache[account]
+
+    def _default_email(self) -> Optional[str]:
+        row = db.get_google_oauth(self.sub)
+        return row.get("google_email") if row else None
+
+    def _account_for(self, namespace: str, spreadsheet_id: str) -> Optional[str]:
+        """Compte Google propriétaire du sheet de ce namespace.
+
+        `owner_email` figé → direct. Sinon (namespace créé avant le
+        multi-compte) back-fill : on essaie le défaut puis chaque compte
+        connecté, et on **fige** celui qui a accès. None = compte par défaut.
+        """
+        ns = db.get_datastore_namespace(self.sub, namespace)
+        if ns and ns.get("owner_email"):
+            return ns["owner_email"]
+        if not ns:
+            return None  # namespace partagé : tenté avec le défaut du lecteur
+        candidates: list = [None]
+        for a in db.list_google_accounts(self.sub):
+            em = a.get("google_email")
+            if em and em not in candidates:
+                candidates.append(em)
+        for acc in candidates:
+            try:
+                sheets, _ = self._services(acc)
+                sheets.spreadsheets().get(
+                    spreadsheetId=spreadsheet_id, fields="spreadsheetId"
+                ).execute()
+            except Exception:
+                continue
+            owner = acc or self._default_email()
+            if owner:
+                db.set_datastore_owner(self.sub, namespace, owner)
+            return acc
+        return None  # aucun accès trouvé — laisse l'op échouer avec l'erreur réelle
+
+    def _ns_record(self, namespace: str) -> dict:
+        rec = db.get_datastore_namespace(self.sub, namespace) \
+            or db.get_shared_namespace(self.sub, namespace)
+        if not rec:
+            raise NamespaceNotFound(namespace)
+        return rec
+
+    def _ctx(self, namespace: str):
+        """(sheets, drive, spreadsheet_id) pour un namespace existant."""
+        rec = self._ns_record(namespace)
+        sid = rec["spreadsheet_id"]
+        sheets, drive = self._services(self._account_for(namespace, sid))
+        return sheets, drive, sid
 
     # --- namespace lifecycle -------------------------------------------------
 
@@ -159,6 +223,9 @@ class DatastoreSheets:
         return own + shared
 
     def create_namespace(self, namespace: str) -> dict:
+        # Créé dans le compte par défaut, dont on fige l'email comme propriétaire.
+        sheets, drive = self._services(None)
+        owner = self._default_email()
         title = f"oto.{namespace}"
         body = {
             "properties": {"title": title},
@@ -177,18 +244,18 @@ class DatastoreSheets:
                 }],
             }],
         }
-        created = self._sheets.spreadsheets().create(
+        created = sheets.spreadsheets().create(
             body=body,
             fields="spreadsheetId,spreadsheetUrl",
         ).execute()
         sid = created["spreadsheetId"]
         try:
-            db.create_datastore_namespace(self.sub, namespace, sid)
+            db.create_datastore_namespace(self.sub, namespace, sid, owner_email=owner)
         except ValueError as e:
             # Race ou collision : on a déjà créé le sheet côté Drive,
-            # on le mette à la corbeille pour ne pas laisser d'orphelin.
+            # on le met à la corbeille pour ne pas laisser d'orphelin.
             try:
-                self._drive.files().update(fileId=sid, body={"trashed": True}).execute()
+                drive.files().update(fileId=sid, body={"trashed": True}).execute()
             except Exception:
                 pass
             raise NamespaceExists(str(e))
@@ -199,14 +266,14 @@ class DatastoreSheets:
         }
 
     def delete_namespace(self, namespace: str, *, trash: bool = True) -> None:
-        ns = db.get_datastore_namespace(self.sub, namespace)
-        if not ns:
+        rec = db.get_datastore_namespace(self.sub, namespace)
+        if not rec:
             raise NamespaceNotFound(namespace)
         if trash:
+            sid = rec["spreadsheet_id"]
+            _, drive = self._services(self._account_for(namespace, sid))
             try:
-                self._drive.files().update(
-                    fileId=ns["spreadsheet_id"], body={"trashed": True}
-                ).execute()
+                drive.files().update(fileId=sid, body={"trashed": True}).execute()
             except Exception:
                 # Si le file n'existe plus côté Drive, on continue à nettoyer la DB
                 pass
@@ -222,16 +289,8 @@ class DatastoreSheets:
 
     # --- row ops -------------------------------------------------------------
 
-    def _spreadsheet_id(self, namespace: str) -> str:
-        ns = db.get_datastore_namespace(self.sub, namespace)
-        if not ns:
-            ns = db.get_shared_namespace(self.sub, namespace)
-        if not ns:
-            raise NamespaceNotFound(namespace)
-        return ns["spreadsheet_id"]
-
-    def _read_headers(self, spreadsheet_id: str) -> list[str]:
-        result = self._sheets.spreadsheets().values().get(
+    def _read_headers(self, sheets, spreadsheet_id: str) -> list[str]:
+        result = sheets.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range="data!1:1",
             valueRenderOption="FORMATTED_VALUE",
@@ -239,12 +298,12 @@ class DatastoreSheets:
         values = result.get("values", [])
         return values[0] if values else []
 
-    def _ensure_headers(self, spreadsheet_id: str, fields: list[str]) -> list[str]:
+    def _ensure_headers(self, sheets, spreadsheet_id: str, fields: list[str]) -> list[str]:
         """S'assure que les `fields` existent comme colonnes. Renvoie l'ordre complet."""
-        headers = self._read_headers(spreadsheet_id)
+        headers = self._read_headers(sheets, spreadsheet_id)
         if not headers:
             headers = list(_META_COLS)
-            self._sheets.spreadsheets().values().update(
+            sheets.spreadsheets().values().update(
                 spreadsheetId=spreadsheet_id,
                 range="data!A1",
                 valueInputOption="RAW",
@@ -254,7 +313,7 @@ class DatastoreSheets:
         if missing:
             start = len(headers)
             new_headers = headers + missing
-            self._sheets.spreadsheets().values().update(
+            sheets.spreadsheets().values().update(
                 spreadsheetId=spreadsheet_id,
                 range=f"data!{_col_letter(start)}1",
                 valueInputOption="RAW",
@@ -264,9 +323,9 @@ class DatastoreSheets:
         return headers
 
     def append_row(self, namespace: str, data: dict) -> dict:
-        sid = self._spreadsheet_id(namespace)
+        sheets, _, sid = self._ctx(namespace)
         user_fields = [k for k in data.keys() if k not in _META_COLS]
-        headers = self._ensure_headers(sid, user_fields)
+        headers = self._ensure_headers(sheets, sid, user_fields)
         now = _now_iso()
         row_id = _new_id()
         record = dict(data)
@@ -274,7 +333,7 @@ class DatastoreSheets:
         record["_created_at"] = now
         record["_updated_at"] = now
         row = [_serialize(record.get(h)) for h in headers]
-        self._sheets.spreadsheets().values().append(
+        sheets.spreadsheets().values().append(
             spreadsheetId=sid,
             range="data!A:A",
             valueInputOption="RAW",
@@ -283,8 +342,8 @@ class DatastoreSheets:
         ).execute()
         return self._row_to_dict(headers, row)
 
-    def _read_all(self, spreadsheet_id: str) -> tuple[list[str], list[list[str]]]:
-        result = self._sheets.spreadsheets().values().get(
+    def _read_all(self, sheets, spreadsheet_id: str) -> tuple[list[str], list[list[str]]]:
+        result = sheets.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range="data",
             valueRenderOption="FORMATTED_VALUE",
@@ -302,12 +361,12 @@ class DatastoreSheets:
         padded = row + [""] * (len(headers) - len(row))
         return {h: _deserialize(padded[i]) for i, h in enumerate(headers)}
 
-    def _find_row(self, spreadsheet_id: str, row_id: str) -> Optional[tuple[int, list[str], list[str]]]:
+    def _find_row(self, sheets, spreadsheet_id: str, row_id: str) -> Optional[tuple[int, list[str], list[str]]]:
         """Renvoie `(row_index_1based, headers, raw_row)` ou None.
 
         row_index_1based : indice de la row dans la sheet (1 = headers, 2 = première data).
         """
-        headers, data_rows = self._read_all(spreadsheet_id)
+        headers, data_rows = self._read_all(sheets, spreadsheet_id)
         if not headers or "_id" not in headers:
             return None
         id_col = headers.index("_id")
@@ -317,8 +376,8 @@ class DatastoreSheets:
         return None
 
     def get_row(self, namespace: str, row_id: str) -> dict:
-        sid = self._spreadsheet_id(namespace)
-        found = self._find_row(sid, row_id)
+        sheets, _, sid = self._ctx(namespace)
+        found = self._find_row(sheets, sid, row_id)
         if not found:
             raise RowNotFound(row_id)
         _, headers, row = found
@@ -330,8 +389,8 @@ class DatastoreSheets:
         filter: Optional[dict] = None,
         limit: int = 100,
     ) -> list[dict]:
-        sid = self._spreadsheet_id(namespace)
-        headers, data_rows = self._read_all(sid)
+        sheets, _, sid = self._ctx(namespace)
+        headers, data_rows = self._read_all(sheets, sid)
         if not headers:
             return []
         out = []
@@ -348,10 +407,10 @@ class DatastoreSheets:
         return out
 
     def update_row(self, namespace: str, row_id: str, patch: dict) -> dict:
-        sid = self._spreadsheet_id(namespace)
+        sheets, _, sid = self._ctx(namespace)
         new_fields = [k for k in patch.keys() if k not in _META_COLS]
-        headers = self._ensure_headers(sid, new_fields)
-        found = self._find_row(sid, row_id)
+        headers = self._ensure_headers(sheets, sid, new_fields)
+        found = self._find_row(sheets, sid, row_id)
         if not found:
             raise RowNotFound(row_id)
         idx, found_headers, raw = found
@@ -367,7 +426,7 @@ class DatastoreSheets:
         record["_id"] = row_id  # préserve
         row_values = [_serialize(record.get(h)) for h in headers]
         last_col = _col_letter(len(headers) - 1)
-        self._sheets.spreadsheets().values().update(
+        sheets.spreadsheets().values().update(
             spreadsheetId=sid,
             range=f"data!A{idx}:{last_col}{idx}",
             valueInputOption="RAW",
@@ -376,13 +435,13 @@ class DatastoreSheets:
         return self._row_to_dict(headers, row_values)
 
     def delete_row(self, namespace: str, row_id: str) -> None:
-        sid = self._spreadsheet_id(namespace)
-        found = self._find_row(sid, row_id)
+        sheets, _, sid = self._ctx(namespace)
+        found = self._find_row(sheets, sid, row_id)
         if not found:
             raise RowNotFound(row_id)
         idx, _, _ = found
         # data sheet a sheetId=0 par défaut sur create — on récupère via meta
-        meta = self._sheets.spreadsheets().get(
+        meta = sheets.spreadsheets().get(
             spreadsheetId=sid, fields="sheets(properties(sheetId,title))"
         ).execute()
         sheet_id = next(
@@ -390,7 +449,7 @@ class DatastoreSheets:
              if s["properties"]["title"] == "data"),
             0,
         )
-        self._sheets.spreadsheets().batchUpdate(
+        sheets.spreadsheets().batchUpdate(
             spreadsheetId=sid,
             body={"requests": [{
                 "deleteDimension": {

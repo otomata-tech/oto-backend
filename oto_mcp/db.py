@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS user_datastores (
     sub TEXT NOT NULL,
     namespace TEXT NOT NULL,
     spreadsheet_id TEXT NOT NULL,
+    owner_email TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(sub, namespace)
 );
@@ -325,6 +326,8 @@ def init_db() -> None:
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
+        # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
+        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
@@ -1277,17 +1280,29 @@ def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
 
 # --- Datastore namespaces ---------------------------------------------------
 
-def create_datastore_namespace(sub: str, namespace: str, spreadsheet_id: str) -> int:
+def create_datastore_namespace(sub: str, namespace: str, spreadsheet_id: str,
+                               owner_email: Optional[str] = None) -> int:
     upsert_user(sub)
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id) VALUES (%s, %s, %s) RETURNING id",
-                (sub, namespace, spreadsheet_id),
+                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id, owner_email) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (sub, namespace, spreadsheet_id, owner_email),
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"namespace `{namespace}` existe déjà") from e
         return int(row["id"])
+
+
+def set_datastore_owner(sub: str, namespace: str, owner_email: str) -> bool:
+    """Fige le compte Google propriétaire d'un namespace (back-fill lazy, #9)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE user_datastores SET owner_email = %s WHERE sub = %s AND namespace = %s",
+            (owner_email, sub, namespace),
+        )
+        return cur.rowcount > 0
 
 
 def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:

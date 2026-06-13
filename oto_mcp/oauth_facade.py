@@ -55,6 +55,31 @@ def _cors() -> dict:
     }
 
 
+# ⚠️ INVARIANT DE SÉCURITÉ (audit 2026-06-13). Le client DCR partagé
+# (`OTO_MCP_CLAUDE_APP_ID`) n'est sûr QUE parce que l'app Logto correspondante
+# n'enregistre QUE des redirect_uris étroits (callbacks claude.ai/.com + locaux).
+# Logto valide le redirect au `/authorize` (enforcement réel) ; un redirect large
+# ou wildcard ajouté à l'app Logto rendrait le DCR ouvert + client public
+# exploitable (vol de code d'autorisation). On valide AUSSI ici (défense en
+# profondeur, fail-fast à l'enregistrement) — sans dépendre uniquement de Logto.
+_ALLOWED_REDIRECT_PREFIXES = (
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+    "http://localhost",      # Claude Code / desktop (port ignoré par Logto)
+    "http://127.0.0.1",
+)
+
+
+def _allowed_redirects() -> tuple[str, ...]:
+    extra = (os.environ.get("OTO_MCP_DCR_ALLOWED_REDIRECTS") or "").strip()
+    extras = tuple(p.strip() for p in extra.split(",") if p.strip())
+    return _ALLOWED_REDIRECT_PREFIXES + extras
+
+
+def _redirect_ok(uri: str) -> bool:
+    return isinstance(uri, str) and any(uri.startswith(p) for p in _allowed_redirects())
+
+
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
     public_url = public_url.rstrip("/")
 
@@ -68,6 +93,18 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
             body = await request.json()
         except Exception:
             body = {}
+        # Défense en profondeur (audit 2026-06-13) : on n'émet le client_id
+        # partagé QUE pour des redirect_uris connus. L'enforcement réel reste
+        # Logto au `/authorize` (cf. invariant ci-dessus), mais fail-fast ici
+        # évite de tendre un client public à un redirect non prévu.
+        requested = body.get("redirect_uris") or []
+        if not isinstance(requested, list) or any(not _redirect_ok(u) for u in requested):
+            return JSONResponse(
+                {"error": "invalid_redirect_uri",
+                 "error_description": "redirect_uri non autorisé pour ce serveur"},
+                status_code=400,
+                headers=_cors(),
+            )
         # Logto valide le redirect contre l'app pré-enregistrée : on renvoie le
         # client_id partagé + ce que le client a envoyé.
         return JSONResponse(

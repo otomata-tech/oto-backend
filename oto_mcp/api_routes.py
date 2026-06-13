@@ -562,6 +562,34 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         )
         return _json(request, {"calls": calls})
 
+    async def my_calls(request: Request) -> JSONResponse:
+        """Journal des appels MCP de l'utilisateur courant (sa propre activité).
+        Filtres `?limit=`/`?tool=`/`?errors=1`/`?days=`. Toujours scopé au sub
+        du token — un user ne voit QUE ses propres appels (≠ /api/admin/monitoring
+        qui agrège tout le monde et reste admin-only)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        qp = request.query_params
+        try:
+            limit = int(qp.get("limit", "200"))
+        except ValueError:
+            limit = 200
+        since_days: int | None = None
+        if qp.get("days"):
+            try:
+                since_days = int(qp["days"])
+            except ValueError:
+                since_days = None
+        calls = db.list_tool_calls(
+            limit=limit,
+            sub=sub,
+            tool_name=qp.get("tool") or None,
+            errors_only=qp.get("errors") in ("1", "true"),
+            since_days=since_days,
+        )
+        return _json(request, {"calls": calls})
+
     async def my_tools_list(request: Request) -> JSONResponse:
         """Liste tous les tools du serveur avec l'état (enabled/disabled)
         pour l'utilisateur courant.
@@ -1080,6 +1108,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/crunchbase", crunchbase_save, methods=["POST"]),
         Route("/api/settings/crunchbase", crunchbase_clear, methods=["DELETE"]),
         Route("/api/settings/crunchbase", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/calls", my_calls, methods=["GET"]),
+        Route("/api/me/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools", my_tools_list, methods=["GET"]),
         Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),

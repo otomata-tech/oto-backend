@@ -572,11 +572,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
 
         all_names: set[str] = set()
         if mcp_instance is not None:
-            try:
-                tools = await mcp_instance.list_tools()
-                all_names = {t.name for t in tools}
-            except Exception:
-                pass
+            # run_middleware=False : appelé hors session MCP (contexte REST), la
+            # chaîne de middleware n'a pas de Context FastMCP et lèverait → on
+            # veut la liste statique complète, le filtrage disabled est fait
+            # juste après via `disabled`. (cf. _list_all_tool_names)
+            tools = await mcp_instance.list_tools(run_middleware=False)
+            all_names = {t.name for t in tools}
 
         disabled = set(db.list_user_disabled_tools(sub))
         # Le middleware retire déjà les disabled de `list_tools` selon le sub

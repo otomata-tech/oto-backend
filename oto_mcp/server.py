@@ -1,10 +1,10 @@
 """FastMCP server exposing oto-cli connectors as MCP tools.
 
-Transports:
-- `stdio` (default): for local Claude Desktop / Claude Code, no auth needed.
-- `streamable_http`: remote transport for Claude.ai Integrations and other
-  HTTP-based clients, gated by Logto-issued JWT bearer tokens (RFC 9728
-  protected resource metadata advertises the auth server back to the client).
+Transport : `streamable_http` uniquement (défaut) — gated par JWT Logto
+(RFC 9728 : la metadata de ressource protégée annonce l'auth server au client).
+Le transport `stdio` (local, sans auth) a été **retiré** le 2026-06-13 : oto-mcp
+est toujours authentifié → la couche capacité (ADR 0009) suppose un sub résolu.
+L'usage local passe par la CLI `oto`.
 
 Wrappers autour des clients oto-cli. État par utilisateur stocké dans la
 SQLite locale (cf. `db.py`) — aujourd'hui le cookie LinkedIn. Nouveaux
@@ -165,8 +165,9 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     return instance
 
 
-# Always-available module-level instance for stdio transport + testing imports.
-mcp = _build_mcp("stdio")
+# Instance module-level (sans auth) pour les imports de test + l'enregistrement
+# des tools. Le serveur réel reconstruit avec le verifier dans main() (http).
+mcp = _build_mcp("noauth")
 
 
 def main():
@@ -175,13 +176,13 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    # stdio retiré (2026-06-13) : oto-mcp ne se sert plus qu'en streamable_http
+    # (toujours authentifié Logto). Conséquence voulue — plus de chemin local
+    # sans login → la couche capacité (ADR 0009) peut supposer un sub résolu,
+    # le cas-limite sub=None disparaît. L'usage local passe par la CLI `oto`.
+    transport = os.environ.get("MCP_TRANSPORT", "streamable_http")
 
     global mcp
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-        return
-
     if transport in ("http", "streamable_http"):
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "9103"))
@@ -217,7 +218,10 @@ def main():
         )
         return
 
-    raise ValueError(f"Unknown MCP_TRANSPORT={transport!r}")
+    raise ValueError(
+        f"MCP_TRANSPORT={transport!r} non supporté. Le transport stdio a été "
+        f"retiré (2026-06-13) — seul streamable_http est servi."
+    )
 
 
 if __name__ == "__main__":

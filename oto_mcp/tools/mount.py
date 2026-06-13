@@ -41,6 +41,10 @@ from ..auth_hooks import current_user_sub_from_token
 log = logging.getLogger("oto_mcp.tools.mount")
 CATALOG_TIMEOUT = 20
 
+# Noms d'outils fédérés actuellement enregistrés, par connecteur — pour pouvoir
+# les retirer/re-poser au refresh à chaud (oto_admin_refresh_mount) sans restart.
+_REGISTERED: dict[str, set[str]] = {}
+
 
 def _enabled_mounts() -> set[str]:
     """Activation explicite / kill-switch par env. `OTO_MCP_MOUNTS_ENABLED` (CSV)
@@ -113,29 +117,83 @@ def _make_factory(connector: connectors.Connector):
     return factory
 
 
-def _register_one(mcp: FastMCP, c: connectors.Connector) -> None:
+def _register_one(mcp: FastMCP, c: connectors.Connector) -> int:
     if not c.mount_url:
         log.warning("mount connector %s sans mount_url — ignoré", c.name)
-        return
+        return 0
     ns = c.namespaces[0]
     catalog = _fetch_catalog(c)
     if not catalog:
-        return
+        return 0
     factory = _make_factory(c)
-    n = 0
+    names: set[str] = set()
     for t in catalog:
         # ProxyTool natif (vrai schéma) renommé <ns>_<nom> → namespace gouverné.
         # model_copy préserve le nom backend pour le forward (cf. ProxyTool).
-        pt = ProxyTool.from_mcp_tool(factory, t).model_copy(update={"name": f"{ns}_{t.name}"})
-        mcp.add_tool(pt)
-        n += 1
-    log.info("federated MCP %s → %d outils natifs montés (namespace %s)", c.name, n, ns)
+        fq = f"{ns}_{t.name}"
+        mcp.add_tool(ProxyTool.from_mcp_tool(factory, t).model_copy(update={"name": fq}))
+        names.add(fq)
+    _REGISTERED[c.name] = names
+    log.info("federated MCP %s → %d outils natifs montés (namespace %s)", c.name, len(names), ns)
+    return len(names)
+
+
+def refresh(mcp: FastMCP, connector_name: str) -> dict:
+    """Re-fetch le catalogue d'un MCP fédéré et re-enregistre ses outils À CHAUD
+    (sans restart). Retire d'abord les outils précédemment montés, puis re-pose
+    depuis le catalogue frais. Un nouvel outil distant devient visible au prochain
+    `tools/list` des clients. Réservé admin (gating dans le méta-tool appelant)."""
+    c = connectors.REGISTRY.get(connector_name)
+    if c is None or c.kind != "mount":
+        raise ValueError(f"`{connector_name}` n'est pas un connecteur fédéré (kind=mount)")
+    if connector_name not in _enabled_mounts():
+        raise ValueError(f"mount `{connector_name}` non activé (OTO_MCP_MOUNTS_ENABLED)")
+    before = set(_REGISTERED.get(connector_name, set()))
+    for name in before:
+        try:
+            mcp.local_provider.remove_tool(name)  # mcp.remove_tool déprécié
+        except Exception as e:
+            log.warning("refresh %s : remove_tool %s a échoué (%s)", connector_name, name, e)
+    _REGISTERED[connector_name] = set()
+    _register_one(mcp, c)
+    after = set(_REGISTERED.get(connector_name, set()))
+    return {
+        "connector": connector_name,
+        "total": len(after),
+        "added": sorted(after - before),
+        "removed": sorted(before - after),
+    }
 
 
 def register(mcp: FastMCP) -> None:
     enabled = _enabled_mounts()
+    active = False
     for c in connectors.MOUNT_CONNECTORS:
         if c.name not in enabled:
             log.info("mount %s déclaré mais non activé (OTO_MCP_MOUNTS_ENABLED)", c.name)
             continue
         _register_one(mcp, c)
+        active = True
+
+    if not active:
+        return
+
+    @mcp.tool(
+        name="oto_admin_refresh_mount",
+        description=(
+            "[admin] Re-fetch le catalogue d'un MCP fédéré et re-enregistre ses "
+            "outils à chaud, sans restart du serveur (pour qu'un nouvel outil du "
+            "MCP distant apparaisse). `connector` = nom du connecteur mount (ex. "
+            "`memento`). Réservé aux admins plateforme."
+        ),
+    )
+    async def refresh_mount(connector: str) -> dict:
+        import asyncio as _asyncio
+        sub = current_user_sub_from_token()
+        if sub is None or access.get_user_role(sub) != access.ADMIN:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message="Réservé aux admins plateforme."))
+        try:
+            return await _asyncio.to_thread(refresh, mcp, connector)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))

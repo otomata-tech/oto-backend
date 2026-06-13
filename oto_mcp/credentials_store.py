@@ -226,3 +226,17 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
             (entity_type, entity_id),
         ).fetchall()
         return [{**dict(r), "meta": r["meta"] or {}} for r in rows]
+
+
+def first_entity_with(entity_type: str, connector: str) -> Optional[str]:
+    """Premier `entity_id` ayant un credential pour ce connecteur (ordre stable),
+    ou None. Sert au fetch de catalogue partagé d'un MCP fédéré (tools/mount) :
+    le catalogue est identique pour tous, n'importe quel user connecté sert à le
+    récupérer une fois au boot."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT entity_id FROM connector_credentials "
+            "WHERE entity_type = %s AND connector = %s ORDER BY set_at LIMIT 1",
+            (entity_type, connector),
+        ).fetchone()
+        return row["entity_id"] if row else None

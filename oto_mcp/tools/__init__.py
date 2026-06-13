@@ -24,6 +24,11 @@ def register_all(mcp: FastMCP) -> None:
     from . import orgs
     orgs.register(mcp)
 
+    # Harnais prospection « scout » (ADR 0008) — tools scout_* sur le substrat
+    # factgraph, scopés à l'org active. Pas de dépendance externe.
+    from . import scout
+    scout.register(mcp)
+
     # Connecteurs remote (bridges, ADR 0003) — middleware générique, zéro code
     # client : forward HTTP vers le bridge résolu depuis le credential d'org.
     from . import remote

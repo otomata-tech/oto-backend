@@ -6,12 +6,34 @@ en dérivent.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+import os
+
+from pydantic import BaseModel, Field
 
 from .. import org_store
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
+
+_MAX_ORGS_PER_USER = int(os.environ.get("OTO_MCP_MAX_ORGS_PER_USER", "10"))
+
+
+class CreateOrgInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
+    """Self-serve : crée un espace, en fait l'admin, le bascule actif."""
+    if org_store.count_orgs_created_by(ctx.sub) >= _MAX_ORGS_PER_USER:
+        raise AuthzDenied(429, "org_quota",
+                          f"Limite de {_MAX_ORGS_PER_USER} espaces créés atteinte.")
+    name = inp.name.strip()
+    if not name:
+        raise AuthzDenied(400, "invalid_name", "Nom d'espace requis.")
+    org_id = org_store.create_org(name, created_by=ctx.sub)
+    org_store.add_org_member(org_id, ctx.sub, "org_admin")
+    org_store.set_active_org(ctx.sub, org_id)
+    return {"org_id": org_id, "name": name, "active_org": org_id, "org_role": "org_admin"}
 
 
 class UseOrgInput(BaseModel):
@@ -29,6 +51,18 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
 
 
 CAPABILITIES += [
+    Capability(
+        key="org.create",
+        handler=_create_org,
+        Input=CreateOrgInput,
+        authz=SUB_ONLY,
+        description=(
+            "Create your own organization (workspace). You become its org_admin "
+            "and it becomes your active org. Self-serve — any authenticated user."
+        ),
+        mcp="oto_create_org",
+        rest=RestBinding("POST", "/api/me/orgs"),
+    ),
     Capability(
         key="org.use_org",
         handler=_use_org,

@@ -13,11 +13,12 @@ Consommé par : `access.resolve_api_key`/`status_for` (reads org credential) et
 from __future__ import annotations
 
 import re
+import secrets
 from typing import Optional
 
 from . import credentials_store
 from . import connectors
-from .db import _connect, upsert_user
+from .db import _connect, _hash_token, upsert_user
 
 ORG_ROLES = ("org_admin", "org_member")
 
@@ -287,6 +288,96 @@ def list_org_entitlements(org_id: int) -> list[dict]:
             (org_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- création self-serve + invitations (onboarding SaaS) --------------------
+
+def count_orgs_created_by(sub: str) -> int:
+    """Nombre d'orgs créées par ce sub (anti-abus du self-serve `org.create`)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM orgs WHERE created_by = %s", (sub,)
+        ).fetchone()["n"]
+
+
+def create_invitation(org_id: int, email: str, org_role: str, invited_by: str,
+                      ttl_days: int = 7) -> tuple[int, str]:
+    """Crée une invitation. Renvoie (id, token plaintext — exposé une seule fois,
+    seul son hash est persisté)."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        raise ValueError("email invalide")
+    if org_role not in ORG_ROLES:
+        raise ValueError(f"org_role invalide {org_role!r}")
+    token = "inv_" + secrets.token_urlsafe(32)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO org_invitations (org_id, email, org_role, token_hash, invited_by, expires_at)
+            VALUES (%s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+            RETURNING id
+            """,
+            (org_id, email, org_role, _hash_token(token), invited_by, str(int(ttl_days))),
+        ).fetchone()
+        return int(row["id"]), token
+
+
+def list_invitations(org_id: int) -> list[dict]:
+    """Invitations en attente (non acceptées, non expirées)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, email, org_role, invited_by, created_at, expires_at
+              FROM org_invitations
+             WHERE org_id = %s AND accepted_at IS NULL AND expires_at > NOW()
+             ORDER BY created_at DESC
+            """,
+            (org_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def revoke_invitation(org_id: int, inv_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_invitations WHERE org_id = %s AND id = %s AND accepted_at IS NULL",
+            (org_id, inv_id),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+def get_invitation_by_token(token: str) -> Optional[dict]:
+    """Invitation valide (non acceptée, non expirée) pour ce token, sinon None."""
+    if not token:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, org_id, email, org_role, expires_at
+              FROM org_invitations
+             WHERE token_hash = %s AND accepted_at IS NULL AND expires_at > NOW()
+            """,
+            (_hash_token(token),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def accept_invitation(token: str, sub: str) -> Optional[dict]:
+    """Ajoute le membre, bascule l'org active, marque l'invitation acceptée.
+    Renvoie {org_id, org_role} ou None si token invalide. Le contrôle d'email
+    (matche le compte) est fait par la capacité appelante."""
+    inv = get_invitation_by_token(token)
+    if not inv:
+        return None
+    add_org_member(inv["org_id"], sub, inv["org_role"])
+    set_active_org(sub, inv["org_id"])
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE org_invitations SET accepted_at = NOW(), accepted_sub = %s "
+            "WHERE id = %s AND accepted_at IS NULL",
+            (sub, inv["id"]),
+        )
+    return {"org_id": inv["org_id"], "org_role": inv["org_role"]}
 
 
 # --- instructions d'org : doctrine de base + skills versionnés ----------------

@@ -9,5 +9,6 @@ from . import orgs_members  # noqa: F401 — org.member.{add,set_role,remove}
 from . import orgs_secrets  # noqa: F401 — org.secret.{set,delete}
 from . import orgs_admin  # noqa: F401 — org.admin.create + org.entitlement.{grant,revoke}
 from . import orgs_reads  # noqa: F401 — org.list/get/admin.list/get + member/secret/entitlement.list
+from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept} + org.create
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

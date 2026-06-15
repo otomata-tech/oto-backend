@@ -228,6 +228,24 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
     PRIMARY KEY (org_id, namespace)
 );
 
+-- Invitations d'équipe (onboarding SaaS). Le token plaintext n'est jamais
+-- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
+-- un email donné ; l'acceptation exige un compte dont l'email vérifié Logto
+-- matche (anti-transfert de lien). accepted_at NULL = en attente.
+CREATE TABLE IF NOT EXISTS org_invitations (
+    id BIGSERIAL PRIMARY KEY,
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    org_role TEXT NOT NULL DEFAULT 'org_member',
+    token_hash TEXT NOT NULL UNIQUE,
+    invited_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ,
+    accepted_sub TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_org_invitations_org ON org_invitations(org_id);
+
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
 -- 'claude_md' = la doctrine de base servie d'office par get_claude_md(), les

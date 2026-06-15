@@ -110,8 +110,8 @@ _REGISTRY_LIST = [
     _c("slack", ["slack"], auth_modes={"byo_user"}, keyed=True, personal_session=True,
        secret_kind="refresh_token", env_secret_name="SLACK_USER_TOKEN",
        label="Slack", help="messagerie (user token)"),
-    _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="FULLENRICH_API_KEY",
+    _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
+       secret_kind="api_key", env_secret_name="FULLENRICH_API_KEY", default_quota=25,
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
     # folk : né APRÈS le coffre — pas de colonne legacy users.folk_api_key,
     # le coffre connector_credentials est canonique. byo-only (pas de clé

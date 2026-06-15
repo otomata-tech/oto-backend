@@ -61,6 +61,44 @@ class Connector:
     def grant_only(self) -> bool:
         return self.availability == "platform_granted"
 
+    @property
+    def family(self) -> str:
+        """Nature de l'intégration (axe *builder*, ADR 0011) — DÉRIVÉE du credential
+        + runtime : open-data | api | browser | google | federated | bridge."""
+        if self.kind == "remote":
+            return "bridge"
+        if self.kind == "mount":
+            return "federated"
+        if self.name in BROWSER_PROVIDERS:
+            return "browser"
+        if self.name == "google":
+            return "google"
+        if self.secret_kind == "none":
+            return "open-data"
+        return "api"
+
+    @property
+    def category(self) -> str:
+        """Domaine d'usage (axe *utilisateur*, ADR 0011) — CURÉ, pour grouper l'UI."""
+        return _CATEGORY_BY_CONNECTOR.get(self.name, "Autres")
+
+
+# Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
+# seul secret_kind (slack est aussi personal_session, mais c'est une API).
+BROWSER_PROVIDERS = frozenset({"linkedin", "whatsapp", "crunchbase"})
+
+# Catégorie d'usage (domaine) par connecteur — CURÉE (pas dérivable), tunable.
+_CATEGORY_BY_CONNECTOR = {
+    "serper": "Prospection", "hunter": "Prospection", "kaspr": "Prospection",
+    "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
+    "folk": "Prospection", "crunchbase": "Prospection", "linkedin": "Prospection",
+    "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
+    "foncier": "Data FR", "sante": "Data FR",
+    "pennylane": "Finance", "gocardless": "Finance",
+    "slack": "Comms", "whatsapp": "Comms", "google": "Comms",
+    "memento": "Knowledge", "planity": "Métier",
+}
+
 
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none", env_secret_name=None,
@@ -291,6 +329,8 @@ def public_catalog() -> list[dict]:
             "personal_session": c.personal_session,
             "secret_kind": c.secret_kind,
             "namespaces": list(c.namespaces),
+            "family": c.family,        # axe builder (dérivé) — ADR 0011
+            "category": c.category,    # axe utilisateur (curé) — ADR 0011
         }
         for c in _REGISTRY_LIST
     ]

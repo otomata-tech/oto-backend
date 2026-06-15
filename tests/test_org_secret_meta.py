@@ -29,17 +29,19 @@ def test_unknown_provider_refused():
     assert meta is None
 
 
-def test_remote_connector_requires_base_url():
-    # mm = connecteur remote → base_url (endpoint du bridge) obligatoire.
-    meta, code = connectors.org_secret_meta("mm", None)
-    assert code == "base_url_required"
-    assert meta is None
-
-
-def test_remote_connector_with_base_url_ok_and_stripped():
-    meta, code = connectors.org_secret_meta("mm", "https://bridge.example.com/")
+def test_data_driven_remote_with_base_url_ok_and_stripped():
+    # Remote data-driven (ADR 0003/0011) : un base_url définit un bridge, sans
+    # entrée registre ni nom client en dur. Trailing slash retiré.
+    meta, code = connectors.org_secret_meta("some-bridge", "https://bridge.example.com/")
     assert code is None
-    assert meta == {"base_url": "https://bridge.example.com"}  # trailing slash retiré
+    assert meta == {"base_url": "https://bridge.example.com"}
+
+
+def test_unknown_provider_without_base_url_not_remote():
+    # Sans base_url, un provider inconnu n'est PAS un remote → refusé.
+    meta, code = connectors.org_secret_meta("some-bridge", None)
+    assert code == "provider_not_shareable"
+    assert meta is None
 
 
 def test_normal_connector_rejects_base_url():

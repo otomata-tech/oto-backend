@@ -129,14 +129,10 @@ _REGISTRY_LIST = [
        auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
        env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
-    # mm : connecteur REMOTE (bridge, ADR 0003). Le credential Movinmotion vit
-    # dans le service distant movinmotion-backoffice-bridge — JAMAIS ici. Le
-    # credential d'org (Movinmotion, org-partageable) = token M2M du bridge
-    # (`secret`) + endpoint (`meta.base_url`). availability platform_granted
-    # (réservé à l'org entitled). Tools servis par le générique tools/remote.py.
-    _c("mm", ["mm"], kind="remote", availability="platform_granted", auth_modes={"byo_org"},
-       secret_kind="api_key", in_default_bundle=False,
-       label="Movinmotion BO", help="back-office Movinmotion (lecture, via bridge)"),
+    # (Aucune entrée remote au registre : un connecteur REMOTE (ADR 0003/0011) est
+    # défini par la DONNÉE — un credential d'org avec `meta.base_url` (l'endpoint du
+    # bridge). Zéro nom client en dur. Découvert au boot par tools/remote.py via
+    # credentials_store.list_remote_namespaces ; le credential d'org EST le grant.)
     # memento : MCP fédéré (otomata#16, kind=mount). MCP autonome distant
     # (mcp.mento.cc) monté via proxy FastMCP (tools/mount.py) ; credential
     # per-user = token OAuth Supabase (flow memento_oauth.py), injecté par
@@ -257,22 +253,26 @@ def is_org_shareable(name: str) -> bool:
 def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, str | None]:
     """Valide l'écriture d'un secret partagé d'org et calcule son `meta` satellite.
 
-    Règles (miroir de `oto_admin_set_org_secret`) : le provider doit être
-    org-partageable (sinon credential de session perso ou inconnu → refus) ; un
-    connecteur `remote` (ex. `mm`) EXIGE un `base_url` (endpoint du bridge), un
-    connecteur normal le REFUSE. Pure (registre seul) → testable hors DB.
+    Un connecteur **remote** (ADR 0003/0011) est défini par la DONNÉE : fournir un
+    `base_url` (endpoint du bridge) ⇒ c'est un remote, qu'il ait ou non une entrée
+    au registre (zéro nom client en dur). Sinon, le provider doit être un connecteur
+    org-partageable du registre (clé partagée : attio, pennylane…) et REFUSE un
+    `base_url`. Pure (registre seul) → testable hors DB.
 
-    Renvoie `(meta, error_code)`. `error_code` None = OK ; `meta` None = pas de
-    satellite (provider non-remote). Codes : `provider_not_shareable`,
-    `base_url_required`, `base_url_not_allowed`.
+    Renvoie `(meta, error_code)`. `error_code` None = OK ; `meta` = `{base_url}` pour
+    un remote, sinon None. Codes : `provider_not_shareable`, `base_url_required`,
+    `base_url_not_allowed`.
     """
-    if provider not in ORG_SHAREABLE_PROVIDERS:
-        return None, "provider_not_shareable"
     c = connector_for_provider(provider)
-    if c is not None and c.kind == "remote":
+    # remote = entrée registre kind="remote" (legacy) OU un base_url sur un provider
+    # hors registre (data-driven : le credential définit le bridge).
+    is_remote = (c is not None and c.kind == "remote") or (c is None and bool(base_url))
+    if is_remote:
         if not base_url:
             return None, "base_url_required"
         return {"base_url": base_url.rstrip("/")}, None
+    if provider not in ORG_SHAREABLE_PROVIDERS:
+        return None, "provider_not_shareable"
     if base_url:
         return None, "base_url_not_allowed"
     return None, None

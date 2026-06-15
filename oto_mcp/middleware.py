@@ -6,13 +6,14 @@ import logging
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
 
-from . import access, db
+from . import access, connector_activation, connectors, db, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
     effective_disabled,
     is_default_hidden,
     is_grant_only,
+    namespace_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,20 @@ class UserDisabledToolsMiddleware(Middleware):
                 disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN | _KNOWN_GRANT_ONLY
             )
         to_hide = effective_disabled(all_names, disabled, enabled_override, granted, is_admin)
+        # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
+        # l'org de la session — à chaud, per-org (plus de gate au chargement).
+        # Fail-OPEN (gouvernance d'exposition, pas une barrière de sécurité ; le
+        # grant-only reste fail-closed ci-dessus). Les tools plateforme (scout/oto/
+        # data/doctrine) n'ont pas de connecteur au registre → jamais gatés.
+        try:
+            exposed = connector_activation.exposed_connectors(org_store.get_active_org(sub))
+            to_hide |= {
+                n for n in all_names
+                if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                and c.name not in exposed
+            }
+        except Exception as e:
+            logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
         if not to_hide:
             return result
         try:

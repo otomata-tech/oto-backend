@@ -125,16 +125,14 @@ def register_all(mcp: FastMCP) -> None:
     except Exception as e:
         log.warning("SIRENE stock tools disabled: %s", e)
 
-    # Connecteurs open-data DÉCLARÉS au registre mais gated sur l'activation DB
-    # (ADR 0010, cran d'activation) : non chargés tant que non activés
-    # (deny-by-default — un connecteur déclaré ne s'auto-expose pas). Toute
-    # erreur (DB indisponible, table absente, connecteur OFF) = on ne charge
-    # pas, sans casser le boot.
-    from .. import connector_activation
+    # Connecteurs open-data déclarés (ADR 0010/0011) : chargés INCONDITIONNELLEMENT.
+    # L'exposition (cran d'activation) est désormais gouvernée à la VISIBILITÉ par
+    # session (UserDisabledToolsMiddleware + connector_activation), PLUS au
+    # chargement → (dés)activer prend effet à chaud (pas de restart) et l'override
+    # par org fonctionne. Un connecteur non activé reste invisible/non listé.
     for name in ("foncier", "sante"):
         try:
-            if connector_activation.is_exposed(name):
-                mod = __import__(f"oto_mcp.tools.{name}", fromlist=[name])
-                mod.register(mcp)
+            mod = __import__(f"oto_mcp.tools.{name}", fromlist=[name])
+            mod.register(mcp)
         except Exception as e:
-            log.warning("%s tools disabled (activation gate): %s", name, e)
+            log.warning("%s tools disabled: %s", name, e)

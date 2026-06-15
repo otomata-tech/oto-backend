@@ -361,6 +361,12 @@ def init_db() -> None:
         from .factgraph import store as _fg_store
         _fg_store.init_schema(conn)
         _fg_projection.init_schema(conn)
+        # Cran d'activation des connecteurs (ADR 0010, B1) — table + seed unique
+        # (snapshot du registre courant à ON). Aucun lecteur encore (canari) :
+        # le câblage catalogue/chargement suit en B2/B3.
+        from . import connector_activation as _conn_act
+        _conn_act.init_schema(conn)
+        _conn_act.seed_initial(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))

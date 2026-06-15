@@ -5,11 +5,26 @@ Provider user-only : pas de quota plateforme, chaque user pose sa clé sur
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+
+# Kaspr 500 si on lui passe une URL complète ou un slug avec slash/query : il
+# veut le slug NU. On extrait le slug d'une URL LinkedIn ou on nettoie l'entrée.
+_LINKEDIN_IN = re.compile(r"/in/([^/?#]+)", re.IGNORECASE)
+
+
+def _linkedin_slug(raw: str) -> str:
+    raw = (raw or "").strip()
+    m = _LINKEDIN_IN.search(raw)
+    if m:
+        return m.group(1)
+    return raw.rstrip("/").split("?")[0].split("#")[0]
 
 
 def register(mcp: FastMCP) -> None:
@@ -51,12 +66,25 @@ def register(mcp: FastMCP) -> None:
         effective_data = data_to_get
         if effective_data is None and with_phone:
             effective_data = ["workEmail", "phone"]
-        result = client.enrich_linkedin(
-            linkedin_id=linkedin_id,
-            name=name,
-            is_phone_required=with_phone,
-            data_to_get=effective_data,
-        )
+        slug = _linkedin_slug(linkedin_id)
+        if not slug:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message="linkedin_id vide après nettoyage."))
+        try:
+            result = client.enrich_linkedin(
+                linkedin_id=slug,
+                name=name,
+                is_phone_required=with_phone,
+                data_to_get=effective_data,
+            )
+        except Exception as e:
+            # Kaspr renvoie un 500 sur entrée non reconnue — message actionnable
+            # plutôt qu'un 500 brut (cf. 500 sur URL complète, normalisée ici).
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Kaspr n'a pas pu enrichir `{slug}` ({e}). Vérifie le slug "
+                         f"(ex. « alexis-laporte »), pas une URL complète."),
+            ))
         if is_platform:
             access.record_platform_usage("kaspr")
         return result

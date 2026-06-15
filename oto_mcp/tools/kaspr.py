@@ -53,7 +53,10 @@ def register(mcp: FastMCP) -> None:
         """Enrich a LinkedIn profile with emails and (optionally) phone numbers.
 
         Args:
-            linkedin_id: LinkedIn slug (e.g. "alexis-laporte") or full URL.
+            linkedin_id: the person's LinkedIn handle. Either the bare slug
+                ("alexis-laporte") OR the full profile URL
+                ("https://www.linkedin.com/in/alexis-laporte/") — both work, the
+                slug is extracted automatically. NOT a name or a search query.
             name: Optional fallback name if the slug alone is ambiguous.
             with_phone: Request mobile/work phones (extra credits cost).
             data_to_get: Subset of fields to retrieve (Kaspr-specific, e.g.

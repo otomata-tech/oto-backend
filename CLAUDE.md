@@ -31,7 +31,7 @@ oto_mcp/
 ├── server.py         # FastMCP + uvicorn, _SERVER_INSTRUCTIONS, routes /api, tools
 ├── tools/            # 1 module par connecteur, chacun expose register(mcp)
 ├── api_routes.py     # /api/me, /api/settings/*, /api/admin/* (CORS oto.ninja)
-├── access.py         # rôles guest/member/admin, resolve_api_key, quotas
+├── access.py         # rôles member/admin, resolve_api_key, quotas, status_for
 ├── db.py             # PG users + usage(sub, tool, day, count) — pool psycopg, DATABASE_URL
 ├── auth_hooks.py     # current_user_sub_from_token() pour le contexte tool
 └── config.py         # require_env
@@ -90,7 +90,7 @@ Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 Le rôle (`users.role`) ne sert qu'à décider qui voit l'admin UI :
 
 - **admin** : accès `/api/admin/*`. Bootstrap via env `OTO_MCP_ADMIN_SUB`.
-- **guest** / **member** : alias historiques, pas d'effet sur l'accès aux tools.
+- **member** : défaut, pas d'effet sur l'accès aux tools (`guest` retiré 2026-06-15, migré → member ; `ROLES = (member, admin)`).
 
 L'accès aux clés API se décide par `user_grants` explicites (admin grante
 manuellement via `/api/admin/users/{sub}/grants/{key_id}`). Résolution par
@@ -146,10 +146,12 @@ per-user).
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
 - `GET /api/admin/monitoring/summary?days=` + `GET /api/admin/monitoring/calls?limit=&sub=&tool=&errors=&days=` — journal des appels MCP, agrégats + brut (admin only, cf. §Monitoring)
 - **Palier org** (`api_routes_orgs.py`, projection 1:1 des meta-tools `oto_admin_*org*` / `oto_list_orgs`) :
-  - self-service : `GET /api/me/orgs` (membre) ; `GET /api/orgs/{id}` (membre, renvoie `my_role` sur le détail) ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
+  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
+  - **invitations** (onboarding SaaS) : `POST|GET /api/orgs/{id}/invitations` + `DELETE …/{inv}` (org_admin) ; `POST /api/me/invitations/accept` (`SUB_ONLY`, match email vérifié + expiry). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
+  - **fiche admin user** : `GET /api/admin/users/{sub}` = identité + accès effectif par provider (`status_for`) + grants + namespaces + orgs (membership).
   - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{namespace}`, `GET /api/admin/namespace-grants`, `POST|DELETE /api/admin/users/{sub}/namespace-grants/{namespace}`
   - secrets : jamais la clé en réponse (provider/base_url/set_at/set_by) ; providers per-user (slack/linkedin/google/whatsapp) refusés en `400` ; listing lu du coffre canonique `credentials_store` (legacy `org_secrets` plus dual-written sous chiffrement). Gating org_admin/membre via `org_store.get_org_role` (platform admin toujours autorisé). Révocation lazy sur sessions MCP ouvertes. Contrat front : `oto-app/docs/ORG_API_CONTRACT.md`.
-- CORS hardcoded : `oto.ninja`, `app.oto.ninja`, `localhost:5173/4173/5182/5184` (override via `OTO_MCP_CORS_ORIGINS`)
+- CORS : `oto.ninja`, `app.oto.ninja`, `dashboard.oto.ninja` (+ localhosts dev) — défaut dans `_allowed_origins`, override `OTO_MCP_CORS_ORIGINS`. `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 
 ## Browser automation — délégué à o-browser-full (issue oto-app#11)

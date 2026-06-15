@@ -40,7 +40,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connectors, db, linkedin_pairing, org_store, pairing
+from . import access, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, linkedin_pairing, org_store, pairing
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -166,20 +166,27 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     async def connectors_catalog(request: Request) -> JSONResponse:
         """Catalogue des connecteurs (registre source unique), auth optionnelle.
 
-        Anonyme → connecteurs self-serve uniquement : les `platform_granted`
-        (dont les bridges client-sensibles, ADR 0003) sont deny-by-default,
-        comme sur la face MCP. Authentifié → + ceux dont un namespace est
-        entitled pour le sub ; admin → tout le registre (les vues admin du
-        dashboard itèrent dessus).
+        Cran d'activation (ADR 0010) filtré EN AMONT de la visibilité : un
+        connecteur non activé (master global OFF sans override d'org ON) n'apparaît
+        pas dans la vue PRODUIT (anonyme + non-admin). L'**admin voit tout le
+        registre** — sa vue de gouvernance sert justement à activer/désactiver.
+        Ensuite, visibilité : anonyme → self-serve seuls (les `platform_granted`,
+        dont les bridges client-sensibles ADR 0003, sont deny-by-default comme sur
+        la face MCP) ; non-admin authentifié → + ceux dont un namespace est entitled
+        pour le sub (override d'org appliqué via son org active).
         """
         cat = connectors.public_catalog()
         if not request.headers.get("authorization"):
+            exposed = connector_activation.exposed_connectors(None)
+            cat = [c for c in cat if c["name"] in exposed]
             cat = [c for c in cat if c["availability"] != "platform_granted"]
             return _json(request, {"connectors": cat})
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
         if access.get_user_role(sub) != access.ADMIN:
+            exposed = connector_activation.exposed_connectors(org_store.get_active_org(sub))
+            cat = [c for c in cat if c["name"] in exposed]
             granted = access.granted_namespaces_for(sub)
             cat = [c for c in cat
                    if c["availability"] != "platform_granted"
@@ -358,6 +365,29 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         for u in users:
             u["effective_role"] = access.get_user_role(u["sub"])
         return _json(request, {"users": users})
+
+    async def admin_user_detail(request: Request) -> JSONResponse:
+        """Fiche complète d'un user (admin) : identité + accès EFFECTIF par
+        provider (own key / org / platform+quota / aucun, via status_for) +
+        grants de clé plateforme + namespaces débloqués."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        target = request.path_params["sub"]
+        u = db.get_user(target)
+        if not u:
+            return _json_error(request, 404, "unknown_user")
+        status = access.status_for(target)
+        ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
+        return _json(request, {
+            "sub": target, "email": u.get("email"), "name": u.get("name"),
+            "role": status["role"], "active_org": status.get("active_org"),
+            "providers": status["providers"],
+            "grants": db.list_grants_for_user(target),
+            "namespace_grants": ns,
+        })
 
     async def admin_platform_keys_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1182,6 +1212,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/whatsapp/pair/stream", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users", admin_users, methods=["GET"]),
         Route("/api/admin/users", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/users/{sub}", admin_user_detail, methods=["GET"]),
+        Route("/api/admin/users/{sub}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/role", admin_set_role, methods=["POST"]),
         Route("/api/admin/users/{sub}/role", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),

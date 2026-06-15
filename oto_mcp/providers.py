@@ -162,6 +162,13 @@ _REGISTRY_LIST = [
        in_default_preset=True, label="Open data", help="culture / DVF / reddit"),
     _c("sirene_stock", ["sirene_stock"], secret_kind="none", in_default_preset=True,
        label="SIRENE stock", help="établissements INSEE (DuckDB)"),
+    # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant
+    # que non activés en DB (connector_activation) — register_all gate dessus,
+    # donc absents du seed initial → OFF par défaut (deny-by-default).
+    _c("foncier", ["foncier"], secret_kind="none", in_default_bundle=False,
+       label="Foncier", help="géocodage, cadastre, bâti, risques/ICPE, solaire, immobilier (open data)"),
+    _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
+       label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

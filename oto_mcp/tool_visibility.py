@@ -44,8 +44,21 @@ def is_default_hidden(name: str) -> bool:
     return name in DEFAULT_HIDDEN_TOOLS or namespace_of(name) in DEFAULT_HIDDEN_NAMESPACES
 
 
+# Namespaces grant-only découverts au RUNTIME (sans entrée registre) : les
+# connecteurs remote data-driven (ADR 0003/0011), remplis au boot par
+# tools/remote.py. Complète ADMIN_GRANT_ONLY_NAMESPACES (registre).
+_RUNTIME_GRANT_ONLY: set[str] = set()
+
+
+def register_runtime_grant_only(namespaces) -> None:
+    """Marque des namespaces grant-only au boot (deny-by-default) sans entrée
+    registre. Idempotent. Utilisé par les connecteurs remote découverts de la donnée."""
+    _RUNTIME_GRANT_ONLY.update(namespaces)
+
+
 def is_grant_only(name: str) -> bool:
-    return namespace_of(name) in ADMIN_GRANT_ONLY_NAMESPACES
+    ns = namespace_of(name)
+    return ns in ADMIN_GRANT_ONLY_NAMESPACES or ns in _RUNTIME_GRANT_ONLY
 
 
 def is_entitled(

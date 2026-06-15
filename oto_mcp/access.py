@@ -78,6 +78,9 @@ def granted_namespaces_for(sub: str) -> frozenset:
     active_org = org_store.get_active_org(sub)
     if active_org is not None:
         ns |= set(org_store.list_org_entitled_namespaces(active_org))
+        # Remote data-driven (ADR 0003/0011) : posséder le credential d'org (avec
+        # base_url) EST le grant du namespace remote — pas d'entitlement séparé.
+        ns |= credentials_store.org_remote_namespaces(active_org)
     return frozenset(ns)
 
 

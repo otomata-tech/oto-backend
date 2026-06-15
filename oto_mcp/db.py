@@ -1,7 +1,7 @@
 """PostgreSQL-backed user store (Scaleway managed `otomata-main`).
 
 One row per Logto user (`sub` = primary key). Holds per-user settings :
-- `role` — guest / member / admin (cf. `access.py` pour les implications)
+- `role` — member (défaut) / admin (cf. `access.py` ; `guest` retiré, migré en member)
 - LinkedIn / Crunchbase session cookies + user-agent
 - API keys par provider (serper/hunter/sirene/attio/lemlist) — plaintext,
   isolation par ACL réseau + creds en SOPS.
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
     sub TEXT PRIMARY KEY,
     email TEXT,
     name TEXT,
-    role TEXT NOT NULL DEFAULT 'guest',
+    role TEXT NOT NULL DEFAULT 'member',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -345,6 +345,10 @@ def init_db() -> None:
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
+        # Retrait du rôle `guest` (2026-06-15) : défaut → member + migration des
+        # lignes existantes (guest était un alias sans effet, cf. access.py).
+        conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
+        conn.execute("UPDATE users SET role = 'member' WHERE role = 'guest'")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).

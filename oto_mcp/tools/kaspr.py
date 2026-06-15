@@ -70,13 +70,17 @@ def register(mcp: FastMCP) -> None:
                 data_to_get=effective_data,
             )
         except Exception as e:
-            # Kaspr peut renvoyer un 500 (entrée non reconnue, crédits…) — message
-            # actionnable plutôt qu'un 500 brut.
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Kaspr n'a pas pu enrichir `{linkedin_id}` ({e}). Vérifie "
-                         f"le profil LinkedIn (slug ou URL valide)."),
-            ))
+            # Distingue panne Kaspr (5xx upstream → réessayer) d'une mauvaise
+            # entrée → message actionnable plutôt qu'un 500 brut.
+            resp = getattr(e, "response", None)
+            status = getattr(resp, "status_code", None)
+            if status and status >= 500:
+                msg = ("Kaspr est momentanément indisponible (erreur serveur Kaspr "
+                       f"{status}). Réessaie dans un moment — ce n'est pas ton entrée.")
+            else:
+                msg = (f"Kaspr n'a pas pu enrichir `{linkedin_id}` ({e}). Vérifie le "
+                       f"profil LinkedIn (slug ou URL valide).")
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=msg))
         if is_platform:
             access.record_platform_usage("kaspr")
         return result

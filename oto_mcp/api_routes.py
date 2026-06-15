@@ -384,6 +384,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         return _json(request, {
             "sub": target, "email": u.get("email"), "name": u.get("name"),
             "role": status["role"], "active_org": status.get("active_org"),
+            "orgs": org_store.list_orgs_for_user(target),
             "providers": status["providers"],
             "grants": db.list_grants_for_user(target),
             "namespace_grants": ns,

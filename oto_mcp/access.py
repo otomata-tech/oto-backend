@@ -5,7 +5,7 @@ Le rôle `users.role` ne sert plus qu'à décider qui voit l'admin UI :
 - **admin** : peut gérer `platform_keys` + grants via `/api/admin/*`.
   Bootstrap : env `OTO_MCP_ADMIN_SUB` force ce sub en admin quoi qu'il y
   ait en DB.
-- **member** / **guest** : alias historiques sans effet sur l'accès aux
+- **member** : rôle par défaut (non-admin), sans effet sur l'accès aux
   tools. L'accès se décide via les `user_grants` (cf. ci-dessous).
 
 Résolution d'une clé API par appel (`resolve_api_key`) :
@@ -38,11 +38,11 @@ from . import connectors, credentials_store, db, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
-# Rôles
-GUEST = "guest"
+# Rôles : seul `admin` a un effet (voit l'admin UI). `member` = défaut non-admin.
+# `guest` retiré (2026-06-15) — c'était un alias sans effet, migré en `member`.
 MEMBER = "member"
 ADMIN = "admin"
-ROLES = (GUEST, MEMBER, ADMIN)
+ROLES = (MEMBER, ADMIN)
 
 # DÉRIVÉS du registre source unique (connectors.py) :
 # - _QUOTA_DEFAULTS : quota daily par provider (fallback si pas d'env/grant).
@@ -56,13 +56,13 @@ _ACCOUNT_URL = "https://oto.ninja/account"
 
 
 def get_user_role(sub: str) -> str:
-    """Rôle effectif du user — env override > DB > défaut guest."""
+    """Rôle effectif du user — env override > DB > défaut member."""
     admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
     if admin_sub and sub == admin_sub:
         return ADMIN
     user = db.get_user(sub)
-    role = (user or {}).get("role") or GUEST
-    return role if role in ROLES else GUEST
+    role = (user or {}).get("role") or MEMBER
+    return role if role in ROLES else MEMBER
 
 
 def granted_namespaces_for(sub: str) -> frozenset:

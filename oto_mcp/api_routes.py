@@ -9,8 +9,8 @@ tools, admin, WhatsApp) :
 - `GET    /api/settings/crunchbase`           → renvoie cookies + UA + set_at
 - `POST   /api/settings/crunchbase`           → cookies + UA
 - `DELETE /api/settings/crunchbase`
-- `GET    /api/settings/api-keys/{provider}`  → renvoie la clé
-- `POST   /api/settings/api-keys/{provider}`  → pose ta propre clé (provider in {serper, hunter, sirene})
+- `GET    /api/settings/api-keys/{provider}`  → état/clé (tout connecteur byo_user à secret simple)
+- `POST   /api/settings/api-keys/{provider}`  → pose le credential : `api_key`→`{key}` ; `basic_auth`→`{email,password}`
 - `DELETE /api/settings/api-keys/{provider}`  → efface
 - `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
 - `GET    /api/admin/*`                       → admin (users, platform-keys, grants, tokens)
@@ -312,12 +312,25 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "set_at": sess.get("set_at"),
         })
 
+    # Saisie de credential per-user, GÉNÉRIQUE (dérivée du registre, pas une liste
+    # hardcodée) : tout connecteur `byo_user` dont le secret est un "secret simple"
+    # — `api_key` (la clé) ou `basic_auth` (base64("email:password"), ex. planity).
+    # cookie/oauth ont des flows dédiés (linkedin / google / memento) → exclus ici.
+    _SETTABLE_KINDS = {"api_key", "basic_auth"}
+
+    def _credentialable(provider: str):
+        c = connectors.connector_for_provider(provider)
+        if c is None or not connectors.is_byo_user(provider) or c.secret_kind not in _SETTABLE_KINDS:
+            return None
+        return c
+
     async def api_key_save(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
         provider = request.path_params["provider"]
-        if provider not in db.KEY_PROVIDERS:
+        c = _credentialable(provider)
+        if c is None:
             return _json_error(request, 404, "unknown_provider")
         try:
             body = await request.json()
@@ -325,10 +338,20 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_json")
         if not isinstance(body, dict):
             return _json_error(request, 400, "invalid_body")
-        key = (body.get("key") or "").strip()
-        if not key:
-            return _json_error(request, 400, "empty_key")
-        db.set_user_api_key(sub, provider, key)
+        if c.secret_kind == "basic_auth":
+            import base64
+            email = (body.get("email") or "").strip()
+            password = body.get("password") or ""
+            if not email or not password:
+                return _json_error(request, 400, "missing_credentials")
+            secret = base64.b64encode(f"{email}:{password}".encode()).decode()
+        else:  # api_key
+            secret = (body.get("key") or "").strip()
+            if not secret:
+                return _json_error(request, 400, "empty_key")
+        from . import credentials_store
+        db.upsert_user(sub)
+        credentials_store.set_credential("user", sub, provider, secret, set_by=sub)
         return _json(request, {"ok": True, "provider": provider})
 
     async def api_key_clear(request: Request) -> JSONResponse:
@@ -336,9 +359,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         provider = request.path_params["provider"]
-        if provider not in db.KEY_PROVIDERS:
+        if _credentialable(provider) is None:
             return _json_error(request, 404, "unknown_provider")
-        db.clear_user_api_key(sub, provider)
+        from . import credentials_store
+        credentials_store.clear_credential("user", sub, provider)
         return _json(request, {"ok": True, "provider": provider})
 
     async def api_key_get(request: Request) -> JSONResponse:
@@ -346,12 +370,22 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         provider = request.path_params["provider"]
-        if provider not in db.KEY_PROVIDERS:
+        c = _credentialable(provider)
+        if c is None:
             return _json_error(request, 404, "unknown_provider")
-        key = db.get_user_api_key(sub, provider)
-        if not key:
+        from . import credentials_store
+        secret = credentials_store.get_credential("user", sub, provider)
+        if not secret:
             return _json_error(request, 404, "not_configured")
-        return _json(request, {"provider": provider, "key": key})
+        if c.secret_kind == "basic_auth":
+            # Ne JAMAIS renvoyer le mot de passe — juste l'état + l'email saisi.
+            import base64
+            try:
+                email = base64.b64decode(secret).decode().split(":", 1)[0]
+            except Exception:
+                email = None
+            return _json(request, {"provider": provider, "configured": True, "email": email})
+        return _json(request, {"provider": provider, "key": secret})
 
     async def admin_users(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

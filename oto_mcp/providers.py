@@ -151,7 +151,7 @@ _REGISTRY_LIST = [
     # dans le bearer (planity-mcp le décode et rejoue la chaîne d'auth Planity).
     _c("planity", ["planity"], kind="mount",
        mount_url="https://planity-mcp.oto.zone/mcp",
-       auth_modes={"byo_user"}, secret_kind="api_key", in_default_bundle=False,
+       auth_modes={"byo_user"}, secret_kind="basic_auth", in_default_bundle=False,
        label="Planity",
        help="agenda + caisse Planity (RDV, clients, CA, stats) — MCP fédéré",
        href="https://planity-mcp.oto.zone"),

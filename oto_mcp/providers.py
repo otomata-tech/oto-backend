@@ -158,8 +158,8 @@ _REGISTRY_LIST = [
        secret_kind="cookie", in_default_bundle=False, label="WhatsApp"),
 
     # --- open-data / sans credential ----------------------------------------
-    _c("fr_open", ["culture_spectacle", "dvf", "reddit"], secret_kind="none",
-       in_default_preset=True, label="Open data", help="culture / DVF / reddit"),
+    _c("fr_open", ["culture_spectacle", "reddit"], secret_kind="none",
+       in_default_preset=True, label="Open data", help="culture / reddit"),
     _c("sirene_stock", ["sirene_stock"], secret_kind="none", in_default_preset=True,
        label="SIRENE stock", help="établissements INSEE (DuckDB)"),
     # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant

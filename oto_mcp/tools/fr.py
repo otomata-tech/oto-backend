@@ -17,13 +17,11 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.inpi import InpiClient
     from oto.tools.bodacc import BodaccClient
     from oto.tools.boamp import BoampClient
-    from france_opendata.georisques import GeorisquesClient
 
     entreprises = EntreprisesClient()
     inpi = InpiClient()
     bodacc = BodaccClient()
     boamp = BoampClient()
-    georisques = GeorisquesClient()
 
     # --- Identité (API Recherche Entreprises, open data) ---
 
@@ -179,61 +177,6 @@ def register(mcp: FastMCP) -> None:
             siren: SIREN number (9 digits).
         """
         return entreprises.get_directors(siren)
-
-    # --- Géorisques ICPE (open data, sans clé) ---
-
-    # Fiche ICPE compactée : on garde le signal de magnitude industrielle
-    # (régime, IED, Seveso, état, NAF, geo, DREAL) + 3 dernières inspections.
-    # ⚠ Ne donne PAS la consommation énergétique — c'est un détecteur de gros
-    # sites industriels (présomption sourcée par code AIOT), pas un compteur.
-    _ICPE_KEEP = (
-        "raisonSociale", "siret", "adresse1", "codePostal", "codeInsee", "commune",
-        "codeNaf", "longitude", "latitude", "regime", "ied", "statutSeveso",
-        "prioriteNationale", "etatActivite", "codeAIOT", "serviceAIOT",
-        "industrie", "carriere", "eolienne", "bovins", "porcs", "volailles",
-    )
-
-    def _compact_icpe(d: dict) -> dict:
-        out = _pick(d, _ICPE_KEEP)
-        inspections = d.get("inspections") or []
-        out["inspections"] = [
-            {
-                "date": i.get("dateInspection"),
-                "url": (i.get("fichierInspection") or {}).get("urlFichier"),
-            }
-            for i in inspections[-3:]
-        ]
-        return out
-
-    @mcp.tool()
-    async def fr_icpe(
-        siret: Optional[str] = None,
-        code_insee: Optional[str] = None,
-        page: int = 1,
-    ) -> dict:
-        """ICPE registry (installations classées, Géorisques) by SIRET or commune.
-
-        Detects HEAVY INDUSTRIAL SITES when power consumption is masked in
-        Enedis open data (statistical secrecy): returns ICPE regime
-        (Déclaration/Enregistrement/Autorisation), IED status, Seveso,
-        activity state, geolocation, DREAL inspection service and latest
-        inspection reports. Grounds a SOURCED "big consumer" presumption
-        (cite the codeAIOT) — it does NOT return energy consumption.
-
-        Args:
-            siret: establishment SIRET (14 digits) — exact match.
-            code_insee: INSEE commune code — all ICPE of the commune.
-            page: 1-based page (20 per page).
-        """
-        res = georisques.installations_classees(
-            siret=siret, code_insee=code_insee, page=page,
-        )
-        return {
-            "results": res.get("results", 0),
-            "page": res.get("page", page),
-            "total_pages": res.get("total_pages", 1),
-            "data": [_compact_icpe(d) for d in res.get("data", [])],
-        }
 
     # --- INSEE SIRENE (clé payante) ---
 

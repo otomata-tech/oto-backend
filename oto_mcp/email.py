@@ -1,19 +1,46 @@
-"""Envoi d'email transactionnel (invitations d'org) via Resend.
+"""Envoi d'email transactionnel (invitations d'org) via **otomata-mailer**.
 
-Fine façade sur `oto.tools.resend` (oto-core). **Best-effort** : si Resend n'est
-pas configuré (pas de `RESEND_API_KEY` dans l'env du process) ou si l'envoi
-échoue, on ne lève pas — on renvoie False et l'appelant expose l'`invite_url`
-pour un partage manuel. Aucun secret hors env de process (OTO_CONFIG_DISABLE_SOPS).
+Standard Otomata : on n'utilise plus Resend per-app — l'endpoint générique
+`POST mailer.oto.zone/api/send` (Scaleway TEM, brand Otomata, domaines from
+vérifiés DKIM/SPF) sert les emails métier de toutes les apps. Bearer
+`OTO_MAILER_SEND_BEARER`. **Best-effort** : sans bearer configuré ou en cas
+d'échec, on ne lève pas — on renvoie False et l'appelant expose l'`invite_url`
+pour un partage manuel.
 """
 from __future__ import annotations
 
 import logging
+import os
 
 log = logging.getLogger("oto_mcp.email")
+
+_MAILER_URL = os.environ.get("OTO_MAILER_URL", "https://mailer.oto.zone/api/send")
+_MAIL_FROM = os.environ.get("OTO_MAIL_FROM", "Oto <oto@otomata.tech>")
 
 
 def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _send(to: str, subject: str, html: str) -> bool:
+    bearer = os.environ.get("OTO_MAILER_SEND_BEARER")
+    if not bearer:
+        return False
+    try:
+        import httpx
+        r = httpx.post(
+            _MAILER_URL,
+            headers={"Authorization": f"Bearer {bearer}"},
+            json={"from": _MAIL_FROM, "to": to, "subject": subject, "html": html},
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            return True
+        log.warning("mailer %s → %s %s", _MAILER_URL, r.status_code, r.text[:200])
+        return False
+    except Exception as e:  # réseau, import, etc. → best-effort
+        log.warning("email to %s not sent (%s)", to, e)
+        return False
 
 
 def send_invite_email(to: str, org_name: str, invite_url: str,
@@ -30,10 +57,4 @@ def send_invite_email(to: str, org_name: str, invite_url: str,
         f'<p style="color:#7a6c50;font-size:13px">Or paste this link: {_esc(invite_url)}</p>'
         f'</div>'
     )
-    try:
-        from oto.tools.resend import send_email
-        send_email(to=to, subject=subject, html=html)
-        return True
-    except Exception as e:  # pas de clé, package absent, erreur API → best-effort
-        log.warning("invite email to %s not sent (%s)", to, e)
-        return False
+    return _send(to, subject, html)

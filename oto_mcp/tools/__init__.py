@@ -130,7 +130,7 @@ def register_all(mcp: FastMCP) -> None:
     # (deny-by-default — un connecteur déclaré ne s'auto-expose pas). Toute
     # erreur (DB indisponible, table absente, connecteur OFF) = on ne charge
     # pas, sans casser le boot.
-    from . import connector_activation
+    from .. import connector_activation
     for name in ("foncier", "sante"):
         try:
             if connector_activation.is_exposed(name):

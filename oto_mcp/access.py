@@ -328,4 +328,22 @@ def status_for(sub: str) -> dict:
             "quota_used_today": used,
             "quota_daily": limit if grant else None,
         }
+
+    # Credentials byo_user "simples" hors KEY_PROVIDERS (mounts basic_auth, ex.
+    # planity) : pas de quota ni de grant — le credential EST le grant (cf.
+    # resolve_mount_token). `user` si posé, sinon `forbidden`. Permet au dashboard
+    # d'afficher « configuré / remove » comme pour une clé.
+    for c in connectors.REGISTRY.values():
+        if (c.name in out["providers"] or c.secret_kind != "basic_auth"
+                or "byo_user" not in c.auth_modes):
+            continue
+        has = db.has_user_api_key(sub, c.name)
+        out["providers"][c.name] = {
+            "mode": "user" if has else "forbidden",
+            "user_key_configured": has,
+            "org_secret_configured": False,
+            "platform_key_label": None,
+            "quota_used_today": 0,
+            "quota_daily": None,
+        }
     return out

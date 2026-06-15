@@ -145,6 +145,16 @@ _REGISTRY_LIST = [
        availability="platform_granted", auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Memento",
        help="base de connaissance structurée (MCP fédéré)", href="https://mento.cc"),
+    # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
+    # (planity-mcp.oto.zone) monté via proxy FastMCP ; credential per-user =
+    # base64("email:password") du compte Planity de l'user, injecté par requête
+    # dans le bearer (planity-mcp le décode et rejoue la chaîne d'auth Planity).
+    _c("planity", ["planity"], kind="mount",
+       mount_url="https://planity-mcp.oto.zone/mcp",
+       auth_modes={"byo_user"}, secret_kind="api_key", in_default_bundle=False,
+       label="Planity",
+       help="agenda + caisse Planity (RDV, clients, CA, stats) — MCP fédéré",
+       href="https://planity-mcp.oto.zone"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     _c("linkedin", ["linkedin"], auth_modes={"byo_user"}, personal_session=True,

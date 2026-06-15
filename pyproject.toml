@@ -19,7 +19,7 @@ dependencies = [
     "otomata-calllog @ git+ssh://git@github.com/otomata-tech/otomata.git#subdirectory=otomata-calllog",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
-    "france-opendata[stock]>=0.5.0",  # reader stock SIRENE (DuckDB parquet) — source unique partagée
+    "france-opendata[stock,sante]>=0.9.0",  # stock SIRENE + foncier (géocodage/cadastre/bâti/solaire) + santé (FINESS/HAS) — source unique partagée
     "cryptography>=42",
 ]
 

@@ -402,6 +402,13 @@ identifiées par `slug`, chacune versionnée :
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
   enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
   le serveur si un client a une dépendance optionnelle absente.
+- **Cran d'activation (ADR 0010)** : déclarer un connecteur au registre ne
+  l'expose PAS — gate DB `connector_activation` (`connector_activation.py`,
+  master global ± override org, deny-by-default). `register_all` skip les
+  non-activés (`is_exposed`) → (dés)activer prend effet au **restart** (gate au
+  chargement). Filtre aussi `/api/connectors`. Surface admin :
+  `/api/admin/connectors/activation` (`api_routes_connectors.py`) + écran
+  dashboard « connector activation ». 1ers gated : `foncier`/`sante` (open-data).
 - **Connecteur client-sensible = JAMAIS de code ici** : `kind="remote"` au
   registre + bridge distant (service HTTP privé qui détient le credential),
   servi par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`,

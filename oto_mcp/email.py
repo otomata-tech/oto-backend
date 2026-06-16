@@ -22,16 +22,19 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _send(to: str, subject: str, html: str) -> bool:
+def _send(to: str, subject: str, html: str, reply_to: str | None = None) -> bool:
     bearer = os.environ.get("OTO_MAILER_SEND_BEARER")
     if not bearer:
         return False
     try:
         import httpx
+        payload = {"from": _MAIL_FROM, "to": to, "subject": subject, "html": html}
+        if reply_to:
+            payload["reply_to"] = reply_to
         r = httpx.post(
             _MAILER_URL,
             headers={"Authorization": f"Bearer {bearer}"},
-            json={"from": _MAIL_FROM, "to": to, "subject": subject, "html": html},
+            json=payload,
             timeout=10.0,
         )
         if r.status_code == 200:
@@ -58,3 +61,22 @@ def send_invite_email(to: str, org_name: str, invite_url: str,
         f'</div>'
     )
     return _send(to, subject, html)
+
+
+def send_contact_email(name: str, email: str, message: str) -> bool:
+    """Message du formulaire de contact d'otomata.tech → boîte du studio.
+
+    `reply_to` = l'email du visiteur pour répondre en un clic. Destinataire
+    configurable via `OTO_CONTACT_TO` (défaut alexis@otomata.tech)."""
+    to = os.environ.get("OTO_CONTACT_TO", "alexis@otomata.tech")
+    subject = f"otomata.tech — message de {name}"
+    body = _esc(message).replace("\n", "<br>")
+    html = (
+        f'<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112">'
+        f'<p style="color:#7a6c50;font-size:13px">nouveau message via otomata.tech</p>'
+        f'<p><strong>{_esc(name)}</strong> &lt;{_esc(email)}&gt;</p>'
+        f'<hr style="border:none;border-top:1px solid #ece4d0;margin:16px 0">'
+        f'<p>{body}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html, reply_to=email)

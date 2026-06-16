@@ -135,7 +135,9 @@ per-user).
 
 ## REST API (consommée par oto.ninja /account)
 
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role`
+- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
+- `POST|DELETE /api/me/avatar` — upload (multipart `file`, png/jpeg/webp ≤ 2 Mo) / efface l'avatar user → Scaleway Object Storage, URL publique en DB
+- `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo d'org (org_admin, multipart `file`)
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
 - `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
@@ -513,6 +515,7 @@ ssh -i ~/.ssh/alexis root@151.115.148.128 'set -a; . /opt/oto-mcp/.env; set +a; 
 - DNS: `mcp.oto.ninja` A proxied → `151.115.148.128` (zone CF `474add…`, zone hors tokens SOPS standard → minter un token éphémère via `CLOUDFLARE_ADMIN_TOKEN` sur `/user/tokens`). Rollback noté otomata#18.
 - Caddy sur la box (standard, user `caddy` → cert key en `chgrp caddy chmod 640`) : `mcp.oto.ninja` → :9103, Origin Cert `oto-ninja.{pem,key}` copié de tuls.me.
 - DB : PostgreSQL managed Scaleway `otomata-main` (instance `9e44fefb…`, endpoint `51.15.207.157:27996`, DB `oto_mcp`). ACL whiteliste tuls.me **et** la box (`151.115.148.128/32`). DATABASE_URL en SOPS + `/opt/oto-mcp/.env`. Backup quotidien Scaleway 7j.
+- **Object Storage (avatars user / logos d'org)** : Scaleway Object Storage S3-compatible (`media_store.py`, boto3). Bucket `oto-media` (fr-par) avec **policy public-read anonyme** sur `oto-media/*` (sinon l'ACL `public-read` par objet n'est pas servie). Env de process (`/opt/oto-mcp/.env`) : `OTO_MCP_S3_ENDPOINT` (`https://s3.fr-par.scw.cloud`), `OTO_MCP_S3_REGION` (`fr-par`), `OTO_MCP_S3_BUCKET`, `OTO_MCP_S3_ACCESS_KEY`/`OTO_MCP_S3_SECRET_KEY` (clé API Scaleway scoped Object Storage), optionnels `OTO_MCP_S3_PUBLIC_BASE_URL` + `OTO_MCP_S3_MAX_IMAGE_BYTES`. Seule l'URL publique est persistée (`users.avatar_url`/`orgs.logo_url`, en clair — pas un secret, hors coffre). Client lazy → un stockage non configuré ne casse ni le boot ni `/api/me` (l'erreur ne tombe qu'à l'upload).
 - **Restes ADR 0002** (non bloquants) : KMS-wrap master key (SM-direct pour l'instant), Terraform control-plane, deploy par registry. Cf. otomata#18.
 
 ## Docs

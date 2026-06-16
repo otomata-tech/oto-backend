@@ -34,6 +34,7 @@ def _members(org_id: int) -> list[dict]:
     for m in org_store.list_org_members(org_id):
         u = db.get_user(m["sub"]) or {}
         out.append({"sub": m["sub"], "email": u.get("email"), "name": u.get("name"),
+                    "avatar_url": u.get("avatar_url"),
                     "role": m["org_role"], "active": m["is_active"]})
     return out
 
@@ -45,6 +46,7 @@ def _list_my_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
             active = o["org_id"]
         orgs.append({  # superset REST(id/member_count/my_role) + MCP(org_id/role/active)
             "id": o["org_id"], "org_id": o["org_id"], "name": o["name"],
+            "logo_url": o.get("logo_url"),
             "member_count": len(org_store.list_org_members(o["org_id"])),
             "my_role": o["org_role"], "role": o["org_role"], "active": o["is_active"],
         })
@@ -64,7 +66,7 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         from ._types import AuthzDenied
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     my_role = org_store.get_org_role(inp.org_id, ctx.sub)
-    brief = {"id": org["id"], "name": org["name"],
+    brief = {"id": org["id"], "name": org["name"], "logo_url": org.get("logo_url"),
              "member_count": len(org_store.list_org_members(org["id"]))}
     if my_role is not None:
         brief["my_role"] = my_role

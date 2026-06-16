@@ -40,7 +40,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, linkedin_pairing, org_store, pairing
+from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -208,6 +208,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             o = org_store.get_org(active_org)
             active_org_name = o["name"] if o else None
             org_role = org_store.get_org_role(active_org, sub)
+        # Sous-palier groupe (ADR 0012) : groupe actif + rôle effectif (escalade).
+        active_group = group_store.get_active_group(sub)
+        active_group_name = None
+        group_role = None
+        if active_group is not None:
+            from . import roles
+            g = group_store.get_group(active_group)
+            active_group_name = g["name"] if g else None
+            group_role = roles.effective_group_role(sub, active_group)
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
@@ -216,6 +225,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org": active_org,
             "active_org_name": active_org_name,
             "org_role": org_role,
+            "active_group": active_group,
+            "active_group_name": active_group_name,
+            "group_role": group_role,
             "linkedin": {
                 "configured": li is not None,
                 "set_at": li["set_at"] if li else None,

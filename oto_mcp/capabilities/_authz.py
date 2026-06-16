@@ -1,8 +1,14 @@
-"""Les 5 règles d'autz de la couche capacité (ADR 0009 §7) — liste FERMÉE.
+"""Les règles d'autz de la couche capacité (ADR 0009 §7) — liste FERMÉE.
 
 Chaque règle prend `(RawCtx, input)` et renvoie un `ResolvedCtx`, ou lève
 `AuthzDenied` (neutre). Elles **réutilisent** la logique d'autz existante
-(`access`, `org_store`) — source unique, pas de duplication.
+(`access`, `org_store`, et le résolveur de hiérarchie `roles`) — source unique,
+pas de duplication.
+
+L'escalade descendante (platform_admin > org_admin > group_admin > member) est
+portée par `roles.py` (ADR 0012), pas recopiée ici : `ORG_ADMIN_OF`,
+`GROUP_ADMIN_OF`, etc. délèguent au résolveur central. Ajouter un palier = un
+seul endroit.
 
 Depuis le retrait du transport stdio (2026-06-13) le serveur est toujours
 authentifié : plus de branche `sub is None` → accès complet. `sub` absent = refus.
@@ -13,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import access, org_store
+from .. import access, group_store, org_store, roles
 from ._types import AuthzDenied, RawCtx, ResolvedCtx
 
 
@@ -63,37 +69,69 @@ def NAMESPACE_GRANT(namespace: str):
     return rule
 
 
+def _field_int(inp: Optional[BaseModel], field: str, code: str, label: str) -> int:
+    val = getattr(inp, field, None) if inp is not None else None
+    if val is None:
+        raise AuthzDenied(400, code, f"Champ `{field}` requis.")
+    return int(val)
+
+
 def ORG_MEMBER_OF(field: str):
     """Membre de l'org désignée par `input.<field>` (lecture d'une org par id de
-    path, ≠ org active) — OU platform_admin (escalade). Ajoutée au barreau 2d
-    (ADR 0009) pour les lectures par id. Miroir lecture d'`ORG_ADMIN_OF`."""
+    path, ≠ org active) — escalade platform_admin incluse via `roles`. Miroir
+    lecture d'`ORG_ADMIN_OF`."""
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         sub = _require_sub(raw)
-        role = access.get_user_role(sub)
-        org_id = getattr(inp, field, None) if inp is not None else None
-        if org_id is None:
-            raise AuthzDenied(400, "missing_org", f"Champ `{field}` requis.")
-        org_id = int(org_id)
-        is_member = role == access.ADMIN or org_store.get_org_role(org_id, sub) is not None
-        if not is_member:
+        org_id = _field_int(inp, field, "missing_org", field)
+        if not roles.is_org_member(sub, org_id):
             raise AuthzDenied(403, "forbidden", f"Réservé aux membres de l'org #{org_id}.")
-        return ResolvedCtx(sub=sub, org_id=org_id, role=role)
+        return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
     return rule
 
 
 def ORG_ADMIN_OF(field: str):
-    """Org-admin de l'org désignée par `input.<field>` — OU platform_admin
-    (escalade conservée, cf. api_routes_orgs._is_org_admin). Porte la garde
-    « dernier admin » au niveau handler/store."""
+    """Org-admin de l'org désignée par `input.<field>` — escalade platform_admin
+    incluse via `roles` (ADR 0012). Porte la garde « dernier admin » au niveau
+    handler/store."""
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         sub = _require_sub(raw)
-        role = access.get_user_role(sub)
-        org_id = getattr(inp, field, None) if inp is not None else None
-        if org_id is None:
-            raise AuthzDenied(400, "missing_org", f"Champ `{field}` requis.")
-        org_id = int(org_id)
-        is_admin = role == access.ADMIN or org_store.get_org_role(org_id, sub) == "org_admin"
-        if not is_admin:
+        org_id = _field_int(inp, field, "missing_org", field)
+        if not roles.is_org_admin(sub, org_id):
             raise AuthzDenied(403, "forbidden", f"Réservé à un org_admin de l'org #{org_id}.")
-        return ResolvedCtx(sub=sub, org_id=org_id, role=role)
+        return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
+    return rule
+
+
+def GROUP_MEMBER_OF(field: str):
+    """Lecture d'un groupe désigné par `input.<field>` : membre du groupe, OU
+    org_admin du groupe parent, OU platform_admin (escalade descendante `roles`).
+    Injecte `group_id` + l'`org_id` parent dans le ResolvedCtx."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        group_id = _field_int(inp, field, "missing_group", field)
+        g = group_store.get_group(group_id)
+        if g is None:
+            raise AuthzDenied(404, "unknown_group", f"Groupe #{group_id} inconnu.")
+        if not roles.can_read_group(sub, group_id):
+            raise AuthzDenied(403, "forbidden", f"Réservé aux membres du groupe #{group_id}.")
+        return ResolvedCtx(sub=sub, org_id=g["org_id"], group_id=group_id,
+                           role=access.get_user_role(sub))
+    return rule
+
+
+def GROUP_ADMIN_OF(field: str):
+    """Écriture sur un groupe désigné par `input.<field>` : chef d'équipe
+    (`group_admin`), OU org_admin du groupe parent, OU platform_admin (escalade
+    descendante `roles`, ADR 0012). Injecte `group_id` + `org_id` parent."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        group_id = _field_int(inp, field, "missing_group", field)
+        g = group_store.get_group(group_id)
+        if g is None:
+            raise AuthzDenied(404, "unknown_group", f"Groupe #{group_id} inconnu.")
+        if not roles.can_admin_group(sub, group_id):
+            raise AuthzDenied(403, "forbidden",
+                              f"Réservé au chef d'équipe (ou org_admin) du groupe #{group_id}.")
+        return ResolvedCtx(sub=sub, org_id=g["org_id"], group_id=group_id,
+                           role=access.get_user_role(sub))
     return rule

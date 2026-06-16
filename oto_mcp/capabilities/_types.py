@@ -28,10 +28,12 @@ class RawCtx:
 @dataclass
 class ResolvedCtx:
     """Contexte enrichi produit par la règle d'autz, passé au handler.
-    `org_id` est injecté par la règle (jamais accepté d'un param client)."""
+    `org_id`/`group_id` sont injectés par la règle (jamais acceptés d'un param
+    client → verrou IDOR par construction)."""
     sub: str
     org_id: Optional[int] = None
     role: Optional[str] = None
+    group_id: Optional[int] = None
 
 
 class AuthzDenied(Exception):

@@ -82,8 +82,16 @@ def is_tool_visible(
     enabled_override: set[str],
     granted_namespaces: frozenset[str] = frozenset(),
     is_admin: bool = False,
+    group_baseline: "frozenset[str] | None" = None,
 ) -> bool:
-    """Règle de visibilité effective pour un tool donné."""
+    """Règle de visibilité effective pour un tool donné.
+
+    `group_baseline` (ADR 0012) = le preset de toolset que le chef du groupe ACTIF
+    a posé pour son équipe. None = pas de baseline (visibilité par défaut). Quand
+    une baseline existe, elle décide la visibilité par défaut des tools NORMAUX
+    (dans la baseline → visible, même un masqué-par-défaut ; hors baseline →
+    masqué) — mais les overrides perso priment, et elle ne touche JAMAIS les
+    grant-only (barrière de sécurité distincte, anti-escalade)."""
     if is_grant_only(name):
         # L'admin HÉRITE de la visibilité des namespaces entitled de son org
         # active (comme un user normal entitled). Sinon l'admin qui veut SE
@@ -101,6 +109,9 @@ def is_tool_visible(
         return True
     if name in disabled:
         return False
+    if group_baseline is not None:
+        # La baseline du groupe gouverne la visibilité par défaut de l'équipe.
+        return name in group_baseline
     if is_default_hidden(name):
         return False
     return True
@@ -112,10 +123,12 @@ def effective_disabled(
     enabled_override: set[str],
     granted_namespaces: frozenset[str] = frozenset(),
     is_admin: bool = False,
+    group_baseline: "frozenset[str] | None" = None,
 ) -> set[str]:
     """Ensemble des tools à masquer pour cet user, parmi `all_names`."""
     return {
         n
         for n in all_names
-        if not is_tool_visible(n, disabled, enabled_override, granted_namespaces, is_admin)
+        if not is_tool_visible(
+            n, disabled, enabled_override, granted_namespaces, is_admin, group_baseline)
     }

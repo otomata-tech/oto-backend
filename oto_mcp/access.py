@@ -34,7 +34,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import connectors, credentials_store, db, org_store
+from . import connectors, credentials_store, db, group_store, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -141,12 +141,18 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     if user_key:
         return user_key, False
 
-    # Palier org : secret partagé possédé par l'org active du user. Sauté tant
-    # que l'user n'a pas d'org active (get_active_org -> None) → comportement
-    # strictement identique à avant pour tout user flat. is_platform=False : le
-    # credential appartient à l'org (coût fixe), jamais métré sur un quota
-    # plateforme. Override perso (ci-dessus) prime toujours.
+    # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
+    # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
+    # (-> None) → comportement strictement identique à avant pour tout user flat.
+    # is_platform=False : credential possédé par le groupe/org (coût fixe), jamais
+    # métré sur un quota plateforme. Override perso (ci-dessus) prime toujours.
+    # Cascade : user_key > group_secret > org_secret > platform_grant.
     if provider in ORG_SHAREABLE_PROVIDERS:
+        active_group = group_store.get_active_group(sub)
+        if active_group is not None:
+            grp_key = group_store.get_group_secret(active_group, provider)
+            if grp_key:
+                return grp_key, False
         active_org = org_store.get_active_org(sub)
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
@@ -297,23 +303,32 @@ def status_for(sub: str) -> dict:
     # tout user sans org → la branche org_secret ci-dessous est inerte et
     # status_for reste identique à avant.
     active_org = org_store.get_active_org(sub)
-    out: dict = {"role": role, "active_org": active_org, "providers": {}}
+    active_group = group_store.get_active_group(sub)
+    out: dict = {"role": role, "active_org": active_org,
+                 "active_group": active_group, "providers": {}}
     for provider in db.KEY_PROVIDERS:
+        shareable = provider in ORG_SHAREABLE_PROVIDERS
         # PRÉSENCE seulement (pas de déchiffrement sur le chemin /api/me).
         user_has = db.has_user_api_key(sub, provider)
+        group_has = (
+            group_store.has_group_secret(active_group, provider)
+            if active_group is not None and shareable else False
+        )
         org_has = (
             org_store.has_org_secret(active_org, provider)
-            if active_org is not None and provider in ORG_SHAREABLE_PROVIDERS
-            else False
+            if active_org is not None and shareable else False
         )
         grant = db.get_active_grant(sub, provider)
         used = db.get_usage_today(sub, provider)
         limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 
-        # Miroir EXACT de la cascade de resolve_api_key : user_key > org_secret
-        # > grant plateforme. Toute divergence = /api/me ment sur le mode réel.
+        # Miroir EXACT de la cascade de resolve_api_key : user_key > group_secret
+        # > org_secret > grant plateforme. Toute divergence = /api/me ment sur le
+        # mode réel.
         if user_has:
             mode = "user"
+        elif group_has:
+            mode = "group"
         elif org_has:
             mode = "org"
         elif not grant:
@@ -326,6 +341,7 @@ def status_for(sub: str) -> dict:
         out["providers"][provider] = {
             "mode": mode,
             "user_key_configured": user_has,
+            "group_secret_configured": group_has,
             "org_secret_configured": org_has,
             "platform_key_label": grant["label"] if grant else None,
             "quota_used_today": used,

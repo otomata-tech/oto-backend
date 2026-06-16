@@ -280,15 +280,89 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     PRIMARY KEY (org_id, slug, version)
 );
 
--- Coffre unique des credentials per-entité (user OU org) : clés API, sessions
--- linkedin/crunchbase, OAuth Google multi-compte, platform keys. entity_id = sub
--- (user) ou org_id::text (org) ; toujours requêter (entity_type, entity_id)
--- ENSEMBLE. Secret chiffré par enveloppe AES-256-GCM dans `secret_enc`
--- (obligatoire — pas de colonne plaintext) ; déchiffrement JIT dans
--- resolve_api_key. meta JSONB pour les satellites (user_agent, scopes…).
+-- Sous-palier GROUPE (= départements / équipes au sein d'une org, ADR 0012).
+-- Une org se subdivise en groupes plats (pas de sous-groupes en v1) ; chaque
+-- groupe a un chef d'équipe (group_role='group_admin'). Modèle de droits
+-- hiérarchique unifié (platform_admin > org_admin > group_admin > member) :
+-- la résolution effective vit dans `roles.py`, l'appartenance dans ces tables.
+-- Un groupe GOUVERNE trois ressources, par DÉLÉGATION de l'org : la doctrine
+-- (org_group_instructions), un preset de toolset par défaut (default_tools), et
+-- des secrets partagés (coffre `connector_credentials`, entity_type='group').
+-- Source de vérité de l'appartenance = ces tables, résolues par `sub`.
+CREATE TABLE IF NOT EXISTS org_groups (
+    id BIGSERIAL PRIMARY KEY,
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    -- Preset de toolset par défaut du groupe (le chef le pose pour son équipe).
+    -- NULL = pas de baseline (les membres gardent leur visibilité par défaut) ;
+    -- non-NULL (même []) = baseline : seuls ces tools sont visibles par défaut,
+    -- sauf override perso. N'élève JAMAIS un grant-only (anti-escalade).
+    default_tools TEXT[],
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_org_groups_org ON org_groups(org_id);
+
+-- group_role : 'group_admin' (chef d'équipe) | 'group_member' (validé en code,
+-- pas par CHECK, comme org_members.org_role). is_active = groupe courant du sub
+-- (au plus une TRUE par sub, garantie par l'index partiel — même pattern que
+-- org_members.is_active). INVARIANT : le groupe actif appartient toujours à
+-- l'org active du sub (posé par set_active_group ; effacé par set_active_org
+-- quand l'org bascule).
+CREATE TABLE IF NOT EXISTS org_group_members (
+    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    group_role TEXT NOT NULL DEFAULT 'group_member',
+    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, sub)
+);
+CREATE INDEX IF NOT EXISTS idx_org_group_members_sub ON org_group_members(sub);
+CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
+    ON org_group_members(sub) WHERE is_active;
+
+-- Doctrine + skills d'un GROUPE (miroir d'org_instructions au grain groupe).
+-- Servie en COMPLÉMENT de la doctrine d'org par get_claude_md() quand l'user a
+-- un groupe actif. Même modèle versionné (slug réservé 'claude_md' = base ;
+-- autres = skills). En clair (prose, hors coffre chiffré).
+CREATE TABLE IF NOT EXISTS org_group_instructions (
+    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    set_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_org_group_instructions_group ON org_group_instructions(group_id);
+
+CREATE TABLE IF NOT EXISTS org_group_instruction_revisions (
+    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL,
+    set_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, slug, version)
+);
+
+-- Coffre unique des credentials per-entité (user OU org OU group) : clés API,
+-- sessions linkedin/crunchbase, OAuth Google multi-compte, platform keys.
+-- entity_id = sub (user) | orgs.id::text (org) | org_groups.id::text (group) ;
+-- toujours requêter (entity_type, entity_id) ENSEMBLE. Secret chiffré par
+-- enveloppe AES-256-GCM dans `secret_enc` (obligatoire — pas de colonne
+-- plaintext) ; déchiffrement JIT dans resolve_api_key. meta JSONB pour les
+-- satellites (user_agent, scopes…).
 CREATE TABLE IF NOT EXISTS connector_credentials (
-    entity_type TEXT NOT NULL,            -- 'user' | 'org'
-    entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text
+    entity_type TEXT NOT NULL,            -- 'user' | 'org' | 'group'
+    entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text | org_groups.id::text
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
     account     TEXT NOT NULL DEFAULT '', -- discriminant multi-compte ('' = mono ; ex. email Google)
     secret_enc  TEXT,                     -- enveloppe AES-256-GCM (obligatoire)

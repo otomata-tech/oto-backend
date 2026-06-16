@@ -228,6 +228,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_group": active_group,
             "active_group_name": active_group_name,
             "group_role": group_role,
+            "access": {
+                "status": user.get("access_status"),
+                "invites_left": user.get("invite_quota", 0),
+                "invited_by": user.get("invited_by"),
+            },
             "linkedin": {
                 "configured": li is not None,
                 "set_at": li["set_at"] if li else None,

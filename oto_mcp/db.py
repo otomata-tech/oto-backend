@@ -600,6 +600,26 @@ def refund_invite_quota(sub: str) -> None:
         )
 
 
+def set_invite_quota(sub: str, quota: int) -> None:
+    """Fixe le quota referral (admin top-up). Ne change pas l'access_status."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET invite_quota = %s, updated_at = NOW() WHERE sub = %s",
+            (int(quota), sub),
+        )
+
+
+def list_waitlist() -> list[dict]:
+    """Comptes en attente (cold signups non approuvés), du plus ancien au plus
+    récent — la file d'attente est une vue dérivée, pas une table."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, email, name, created_at FROM users "
+            "WHERE access_status = 'pending' ORDER BY created_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_user_by_email(email: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()

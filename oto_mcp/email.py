@@ -64,6 +64,19 @@ def send_invite_email(to: str, org_name: str, invite_url: str,
     return _send(to, subject, html)
 
 
+def send_access_granted_email(to: str, app_url: str) -> bool:
+    """Email à un compte waitlisté dont l'accès alpha vient d'être ouvert."""
+    subject = "Votre accès à l'alpha de Oto est ouvert"
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>Bonne nouvelle — votre accès à l\'<strong>alpha de Oto</strong> est ouvert.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">Ouvrir Oto</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
 def send_alpha_invite_email(to: str, invite_url: str,
                             inviter: str | None = None) -> bool:
     """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon."""

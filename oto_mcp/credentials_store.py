@@ -29,6 +29,51 @@ def _secret_kind(connector: str) -> str:
     return c.secret_kind if c else "api_key"
 
 
+def pack_secret(connector: str, fields: dict) -> str:
+    """Encode les champs d'un credential (modèle générique multi-champs, ADR 0011)
+    en UNE string stockée (chiffrée *whole* dans `secret_enc`). Trois encodages
+    selon la forme déclarée par le provider (`Connector.secret_fields`) :
+
+    - 1 champ (api_key) → la valeur brute (back-compat des données existantes) ;
+    - `basic_auth` → `base64("email:password")` (format de fil que le mount distant,
+      ex. planity-mcp, décode — NE PAS changer sans casser le bridge) ;
+    - ≥2 champs (silae & co) → `json.dumps(fields)`.
+
+    Inverse exact : `unpack_secret`."""
+    c = connectors.REGISTRY.get(connector)
+    if c is not None and c.secret_kind == "basic_auth":
+        import base64
+        return base64.b64encode(
+            f"{fields.get('email', '')}:{fields.get('password', '')}".encode()
+        ).decode()
+    schema = c.secret_fields if c is not None else ()
+    if len(schema) <= 1:
+        return next(iter(fields.values()), "") if fields else ""
+    return json.dumps(fields)
+
+
+def unpack_secret(connector: str, secret: str) -> dict:
+    """Inverse de `pack_secret` : reconstruit le dict des champs depuis la string
+    stockée. Pour l'affichage (champs non-secrets) ET la résolution in-process
+    (un client multi-secrets comme Silae s'instancie avec ces kwargs)."""
+    c = connectors.REGISTRY.get(connector)
+    schema = c.secret_fields if c is not None else ()
+    if c is not None and c.secret_kind == "basic_auth":
+        import base64
+        try:
+            email, _, password = base64.b64decode(secret).decode().partition(":")
+        except Exception:
+            return {}
+        return {"email": email, "password": password}
+    if len(schema) <= 1:
+        return {(schema[0].name if schema else "key"): secret}
+    try:
+        loaded = json.loads(secret)
+        return loaded if isinstance(loaded, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
 def _aad(entity_type: str, entity_id: str, connector: str, account: str = "") -> str:
     """AAD liant le ciphertext à SA ligne (anti-transplant). Le segment `account`
     n'est ajouté que s'il est non vide → AAD INCHANGÉE pour le mono-compte

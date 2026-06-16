@@ -329,15 +329,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "set_at": sess.get("set_at"),
         })
 
-    # Saisie de credential per-user, GÉNÉRIQUE (dérivée du registre, pas une liste
-    # hardcodée) : tout connecteur `byo_user` dont le secret est un "secret simple"
-    # — `api_key` (la clé) ou `basic_auth` (base64("email:password"), ex. planity).
-    # cookie/oauth ont des flows dédiés (linkedin / google / memento) → exclus ici.
-    _SETTABLE_KINDS = {"api_key", "basic_auth"}
-
+    # Saisie de credential per-user, GÉNÉRIQUE (modèle multi-champs, ADR 0011) :
+    # tout connecteur `byo_user` qui déclare un schéma de saisie (`secret_fields` :
+    # api_key 1 champ, basic_auth 2 champs, silae 3 champs…). Le formulaire, la
+    # validation et le packing dérivent du schéma — zéro branche par connecteur.
+    # cookie/oauth ont des flux dédiés (linkedin/google/memento) → `secret_fields`
+    # vide → exclus ici.
     def _credentialable(provider: str):
         c = connectors.connector_for_provider(provider)
-        if c is None or not connectors.is_byo_user(provider) or c.secret_kind not in _SETTABLE_KINDS:
+        if c is None or not connectors.is_byo_user(provider) or not c.secret_fields:
             return None
         return c
 
@@ -355,19 +355,18 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_json")
         if not isinstance(body, dict):
             return _json_error(request, 400, "invalid_body")
-        if c.secret_kind == "basic_auth":
-            import base64
-            email = (body.get("email") or "").strip()
-            password = body.get("password") or ""
-            if not email or not password:
+        # Tous les champs déclarés sont requis (non vides). Le packing (raw/base64/
+        # json) est encapsulé dans credentials_store.pack_secret.
+        fields: dict[str, str] = {}
+        for f in c.secret_fields:
+            raw = body.get(f.name)
+            val = raw.strip() if isinstance(raw, str) else raw
+            if not val:
                 return _json_error(request, 400, "missing_credentials")
-            secret = base64.b64encode(f"{email}:{password}".encode()).decode()
-        else:  # api_key
-            secret = (body.get("key") or "").strip()
-            if not secret:
-                return _json_error(request, 400, "empty_key")
+            fields[f.name] = val
         from . import credentials_store
         db.upsert_user(sub)
+        secret = credentials_store.pack_secret(provider, fields)
         credentials_store.set_credential("user", sub, provider, secret, set_by=sub)
         return _json(request, {"ok": True, "provider": provider})
 
@@ -394,15 +393,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         secret = credentials_store.get_credential("user", sub, provider)
         if not secret:
             return _json_error(request, 404, "not_configured")
-        if c.secret_kind == "basic_auth":
-            # Ne JAMAIS renvoyer le mot de passe — juste l'état + l'email saisi.
-            import base64
-            try:
-                email = base64.b64decode(secret).decode().split(":", 1)[0]
-            except Exception:
-                email = None
-            return _json(request, {"provider": provider, "configured": True, "email": email})
-        return _json(request, {"provider": provider, "key": secret})
+        # GÉNÉRIQUE : on dépack et on ne renvoie que les champs `reveal` (l'api_key,
+        # pour copier) ou non-`secret` (l'email). Jamais un mot de passe / secret.
+        fields = credentials_store.unpack_secret(provider, secret)
+        out: dict = {"provider": provider, "configured": True}
+        for f in c.secret_fields:
+            if f.reveal or not f.secret:
+                out[f.name] = fields.get(f.name)
+        return _json(request, out)
 
     async def admin_users(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

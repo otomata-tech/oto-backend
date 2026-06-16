@@ -193,6 +193,29 @@ def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tup
     return grant["api_key"], True
 
 
+def resolve_credential_fields(provider: str) -> dict:
+    """Résout un credential **multi-champs** byo_user (modèle générique, ADR 0011)
+    du sub courant → dict des champs déclarés (`Connector.secret_fields`).
+
+    Pour les connecteurs in-process dont le client s'instancie avec plusieurs
+    secrets (ex. Silae : client_id / client_secret / subscription_key, OAuth2
+    client-credentials). **byo-only** : pas de clé plateforme ni de quota — le
+    credential EST le grant, comme un mount. Lève une McpError actionnable si le
+    user n'a rien posé. Fait partie du seam de résolution `access` (avec
+    resolve_api_key / resolve_mount_token), candidat broker (ADR 0004)."""
+    sub = current_user_sub_or_raise()
+    secret = credentials_store.get_credential("user", sub, provider)
+    if not secret:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
+                f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+            ),
+        ))
+    return credentials_store.unpack_secret(provider, secret)
+
+
 def resolve_remote_credential(provider: str) -> tuple[str, str]:
     """Résout `(base_url, token_m2m)` du **bridge** d'un connecteur remote
     (ADR 0003) depuis le credential de l'org active du sub courant.
@@ -348,12 +371,13 @@ def status_for(sub: str) -> dict:
             "quota_daily": limit if grant else None,
         }
 
-    # Credentials byo_user "simples" hors KEY_PROVIDERS (mounts basic_auth, ex.
-    # planity) : pas de quota ni de grant — le credential EST le grant (cf.
-    # resolve_mount_token). `user` si posé, sinon `forbidden`. Permet au dashboard
-    # d'afficher « configuré / remove » comme pour une clé.
+    # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
+    # multi-champs, ADR 0011) : mounts basic_auth (planity) ET clients in-process
+    # multi-secrets (silae). Pas de quota ni de grant — le credential EST le grant
+    # (cf. resolve_mount_token / resolve_credential_fields). `user` si posé, sinon
+    # `forbidden`. Permet au dashboard d'afficher « configuré / remove » comme une clé.
     for c in connectors.REGISTRY.values():
-        if (c.name in out["providers"] or c.secret_kind != "basic_auth"
+        if (c.name in out["providers"] or not c.secret_fields
                 or "byo_user" not in c.auth_modes):
             continue
         has = db.has_user_api_key(sub, c.name)

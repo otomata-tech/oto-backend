@@ -25,6 +25,20 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class CredentialField:
+    """Un champ de saisie d'un credential (modèle générique multi-champs, ADR 0011).
+
+    SOURCE UNIQUE du formulaire de saisie (dashboard), de l'endpoint REST et du
+    packing au coffre. `secret` = masqué dans l'UI ; `reveal` = renvoyé tel quel
+    en GET (l'`api_key` se relit pour copier, un mot de passe/secret jamais)."""
+    name: str
+    label: str
+    secret: bool = True
+    reveal: bool = False
+    help: str = ""
+
+
+@dataclass(frozen=True)
 class Connector:
     name: str                          # identité = clé de credential
     namespaces: tuple[str, ...]        # préfixes de tools possédés
@@ -52,6 +66,11 @@ class Connector:
     kind: str = "tools"
     # Endpoint MCP du serveur distant à monter (kind="mount" uniquement).
     mount_url: str | None = None
+    # Schéma de saisie EXPLICITE du credential (modèle générique multi-champs).
+    # Vide → dérivé du secret_kind (cf. `secret_fields`). Renseigné pour les
+    # credentials à >1 champ qui ne sont ni api_key ni basic_auth (ex. Silae :
+    # client_id + client_secret + subscription_key).
+    credential_fields: tuple[CredentialField, ...] = ()
 
     @property
     def org_shareable(self) -> bool:
@@ -82,6 +101,22 @@ class Connector:
         """Domaine d'usage (axe *utilisateur*, ADR 0011) — CURÉ, pour grouper l'UI."""
         return _CATEGORY_BY_CONNECTOR.get(self.name, "Autres")
 
+    @property
+    def secret_fields(self) -> tuple[CredentialField, ...]:
+        """Schéma de saisie du credential — SOURCE UNIQUE pour l'UI, l'endpoint REST,
+        `status_for` et le packing. Déclaré explicitement (`credential_fields`),
+        sinon dérivé des formes simples. Vide = pas de saisie générique : `cookie`
+        (linkedin/crunchbase), `oauth` (google/memento) et `none` (open-data) ont
+        des flux dédiés, pas un formulaire de champs."""
+        if self.credential_fields:
+            return self.credential_fields
+        if self.secret_kind == "api_key":
+            return (CredentialField("key", "API key", secret=True, reveal=True),)
+        if self.secret_kind == "basic_auth":
+            return (CredentialField("email", "Email", secret=False),
+                    CredentialField("password", "Mot de passe", secret=True))
+        return ()
+
 
 # Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
 # seul secret_kind (slack est aussi personal_session, mais c'est une API).
@@ -94,7 +129,7 @@ _CATEGORY_BY_CONNECTOR = {
     "folk": "Prospection", "crunchbase": "Prospection", "linkedin": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
-    "pennylane": "Finance", "gocardless": "Finance",
+    "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "whatsapp": "Comms", "google": "Comms",
     "memento": "Knowledge", "planity": "Métier",
 }
@@ -104,7 +139,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_session=False, secret_kind="none", env_secret_name=None,
        default_quota=0, in_default_bundle=True, in_default_preset=False,
        default_hidden=False, label="", help="", href=None, kind="tools",
-       mount_url=None) -> Connector:
+       mount_url=None, credential_fields=()) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -112,7 +147,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
         label=label or name.capitalize(), help=help, href=href, kind=kind,
-        mount_url=mount_url,
+        mount_url=mount_url, credential_fields=tuple(credential_fields),
     )
 
 
@@ -157,6 +192,20 @@ _REGISTRY_LIST = [
     _c("folk", ["folk"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", env_secret_name="FOLK_API_KEY",
        label="Folk", help="CRM", href="https://app.folk.app"),
+
+    # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
+    # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets
+    # → modèle générique multi-champs (ADR 0011). PAS keyed (résolu via
+    # access.resolve_credential_fields, pas de clé plateforme ni quota : byo-only,
+    # le credential EST le grant). in_default_bundle=False → activable à la demande
+    # (cran d'activation par org). IBAN/BIC masqués avant l'agent (tools/silae.py).
+    _c("silae", ["silae"], auth_modes={"byo_user"}, secret_kind="fields",
+       in_default_bundle=False, label="Silae", help="paie FR (lecture) — API Silae Paie v1",
+       href="https://www.silae.fr", credential_fields=(
+           CredentialField("client_id", "Client ID", secret=True),
+           CredentialField("client_secret", "Client Secret", secret=True),
+           CredentialField("subscription_key", "Subscription Key", secret=True),
+       )),
 
     # --- platform_granted (grant-only, deny-by-default) ----------------------
     # gocardless : keyed BYO (user OU org), résolu via resolve_api_key comme
@@ -331,6 +380,13 @@ def public_catalog() -> list[dict]:
             "namespaces": list(c.namespaces),
             "family": c.family,        # axe builder (dérivé) — ADR 0011
             "category": c.category,    # axe utilisateur (curé) — ADR 0011
+            # Schéma de saisie du credential (modèle générique multi-champs) — le
+            # dashboard rend le formulaire en bouclant dessus. Jamais de valeur,
+            # juste la forme (name/label/secret).
+            "credential_fields": [
+                {"name": f.name, "label": f.label, "secret": f.secret}
+                for f in c.secret_fields
+            ],
         }
         for c in _REGISTRY_LIST
     ]

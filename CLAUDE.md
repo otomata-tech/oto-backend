@@ -402,19 +402,23 @@ identifiées par `slug`, chacune versionnée :
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
   enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
   le serveur si un client a une dépendance optionnelle absente.
-- **Cran d'activation (ADR 0010)** : déclarer un connecteur au registre ne
-  l'expose PAS — gate DB `connector_activation` (`connector_activation.py`,
-  master global ± override org, deny-by-default). `register_all` skip les
-  non-activés (`is_exposed`) → (dés)activer prend effet au **restart** (gate au
-  chargement). Filtre aussi `/api/connectors`. Surface admin :
-  `/api/admin/connectors/activation` (`api_routes_connectors.py`) + écran
-  dashboard « connector activation ». 1ers gated : `foncier`/`sante` (open-data).
-- **Connecteur client-sensible = JAMAIS de code ici** : `kind="remote"` au
-  registre + bridge distant (service HTTP privé qui détient le credential),
-  servi par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`,
-  credential d'org = token M2M + `meta.base_url`). Pilote : mm
-  (`movinmotion-backoffice-bridge`). Cf. ADR 0003 (meta-repo) +
-  `docs/connector-vault.md` §remote. **Et JAMAIS dans une surface anonyme** :
+- **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
+  gate DB `connector_activation.py` (master global ± override org, deny-by-default).
+  Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_
+  activation`, **fail-open**) : `register_all` charge tout inconditionnellement, le
+  middleware masque les tools d'un connecteur non activé pour l'org → (dés)activer
+  prend effet à la session suivante **sans restart**, override par org OK. Filtre
+  aussi `/api/connectors` (catalogue) ; overlays catalogue `family` (dérivée) +
+  `category` (curée). Surface admin `/api/admin/connectors/activation`
+  (`api_routes_connectors.py`) + écran dashboard « connector activation ».
+- **Connecteur client-sensible = JAMAIS de code ici** : connecteur **remote** défini
+  par la DONNÉE (ADR 0003/0011) — un credential d'org avec `meta.base_url` (endpoint
+  du bridge) suffit, **zéro nom client au registre** (plus de `_c("mm")`). Découvert
+  au boot (`credentials_store.list_remote_namespaces`, gracieux si DB indispo), servi
+  par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`) ; le credential
+  d'org **EST** le grant (`granted_namespaces_for` + grant-only runtime). Le bridge
+  distant détient le credential client (token M2M). Pilote :
+  movinmotion-backoffice-bridge. Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
   les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
   → pages oto.ninja/tools) filtrent les `platform_granted`/grant-only
   (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13

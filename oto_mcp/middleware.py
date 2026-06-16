@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
@@ -29,6 +30,19 @@ _KNOWN_GRANT_ONLY: set[str] = set()
 # Même repli pour les masqués-par-défaut par NAMESPACE (ex. attio) : leurs noms
 # ne sont pas connaissables statiquement, on mémorise ceux vus au listing.
 _KNOWN_DEFAULT_HIDDEN: set[str] = set()
+
+# Gate doux alpha (ADR 0013) : un compte non-'active' ne voit QUE ces tools —
+# accepter une invitation (réclamer son accès) + méta de visibilité (anti-lockout
+# du middleware). Tout le reste est masqué tant que le compte est en waitlist.
+ALPHA_GATE_ALLOWLIST: frozenset[str] = frozenset({
+    "oto_accept_invite", "oto_list_my_tools", "oto_enable_tool", "oto_apply_preset",
+})
+
+
+def alpha_gate_enabled() -> bool:
+    """Cran d'enforcement du gate doux (ADR 0013, barreau 4). Off par défaut :
+    tant que le flag n'est pas posé, l'état d'accès n'a aucun effet de visibilité."""
+    return os.environ.get("OTO_ALPHA_GATE_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
 
 class UserDisabledToolsMiddleware(Middleware):
@@ -109,6 +123,18 @@ class UserDisabledToolsMiddleware(Middleware):
             }
         except Exception as e:
             logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
+        # Gate doux alpha (ADR 0013, barreau 4) : si le flag est posé, un compte
+        # non-'active' (waitlist/blocked) ne voit que l'allowlist d'onboarding.
+        # Fail-OPEN (gouvernance d'accès produit, pas une barrière de sécurité) :
+        # sur glitch DB on n'enferme pas. Sans le flag, no-op total.
+        if alpha_gate_enabled():
+            try:
+                status = (db.get_user(sub) or {}).get("access_status")
+            except Exception as e:
+                logger.warning("alpha gate skipped for %s (fail-open): %s", sub, e)
+                status = "active"
+            if status not in (None, "active"):
+                to_hide |= (all_names - ALPHA_GATE_ALLOWLIST)
         if not to_hide:
             return result
         try:

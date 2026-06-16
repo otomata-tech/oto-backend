@@ -22,6 +22,51 @@ def test_mcp_caps_are_mounted():
     asyncio.run(go())
 
 
+# Modules `tools/<m>.py` que la dérivation register_all doit charger (#24). Set
+# FIGÉ : un provider kind="tools" ajouté sans module (ou avec une faute dans
+# `modules`) casse ce test — il garde la dérivation honnête sans dépendre des
+# deps optionnelles (pur registre, toujours exécuté).
+_EXPECTED_TOOL_MODULES = {
+    "serper", "hunter", "fr", "attio", "lemlist", "kaspr", "pennylane", "slack",
+    "fullenrich", "folk", "silae", "gocardless", "linkedin", "crunchbase",
+    "gmail", "datastore", "tasks", "reddit", "culture", "sirene_stock",
+    "foncier", "sante", "whatsapp",
+}
+
+
+def test_tools_module_derivation_is_frozen():
+    """register_all dérive le chargement du registre (`Connector.modules` ou le
+    nom). Le set de modules à importer = exactement les modules connus."""
+    from oto_mcp import providers
+    mods: set[str] = set()
+    for c in providers.REGISTRY.values():
+        if c.kind == "tools":
+            mods |= set(c.modules or (c.name,))
+    assert mods == _EXPECTED_TOOL_MODULES
+
+
+def test_tools_namespaces_are_matchable():
+    """Un namespace de provider kind="tools" doit pouvoir être produit par
+    `namespace_of(tool)` (= 1er token avant `_`) — sinon le gate d'activation
+    fail-open en silence. Un namespace multi-mot (`culture_spectacle`) ne matche
+    JAMAIS → bug (#24). Pur registre, dep-indépendant.
+
+    Whitelist : `sirene_stock` (namespace_of→`sirene`) reste un fail-open connu,
+    limite structurelle de namespace_of, TODO #24-bis."""
+    from oto_mcp import providers
+    from oto_mcp.tool_visibility import namespace_of
+
+    WHITELIST = {"sirene_stock"}
+    for c in providers.REGISTRY.values():
+        if c.kind != "tools":
+            continue
+        for ns in c.namespaces:
+            if ns in WHITELIST:
+                continue
+            assert namespace_of(f"{ns}_x") == ns, (
+                f"namespace non matchable {c.name}:{ns} (multi-mot → fail-open du gate)")
+
+
 def test_rest_caps_are_mounted():
     routes = _rest_adapter.make_routes(None, None, None, None, None, registry.CAPABILITIES)
     paths = {r.path for r in routes}

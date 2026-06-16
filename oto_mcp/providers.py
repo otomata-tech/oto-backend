@@ -71,6 +71,11 @@ class Connector:
     # credentials à >1 champ qui ne sont ni api_key ni basic_auth (ex. Silae :
     # client_id + client_secret + subscription_key).
     credential_fields: tuple[CredentialField, ...] = ()
+    # Modules `tools/<m>.py` à importer pour ce connecteur (kind="tools" seulement).
+    # Vide ⇒ `(name,)`. Renseigné quand le module ≠ nom du provider (sirene→fr) ou
+    # qu'un provider porte plusieurs modules (google→gmail/datastore/tasks).
+    # `register_all` DÉRIVE le chargement de ce champ (fin de la liste hardcodée, #24).
+    modules: tuple[str, ...] = ()
 
     @property
     def org_shareable(self) -> bool:
@@ -139,7 +144,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_session=False, secret_kind="none", env_secret_name=None,
        default_quota=0, in_default_bundle=True, in_default_preset=False,
        default_hidden=False, label="", help="", href=None, kind="tools",
-       mount_url=None, credential_fields=()) -> Connector:
+       mount_url=None, credential_fields=(), modules=()) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -148,6 +153,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         default_hidden=default_hidden,
         label=label or name.capitalize(), help=help, href=href, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
+        modules=tuple(modules),
     )
 
 
@@ -164,7 +170,7 @@ _REGISTRY_LIST = [
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", env_secret_name="SIRENE_API_KEY", default_quota=200,
        in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
-       href="https://api.insee.fr"),
+       href="https://api.insee.fr", modules=("fr",)),
     # attio : masqué par défaut (2026-06-11) — le MCP Attio officiel est meilleur
     # pour l'instant. Code conservé (tools/attio.py) pour d'éventuelles implems
     # custom ; self-activable via oto_enable_tool.
@@ -244,15 +250,23 @@ _REGISTRY_LIST = [
        secret_kind="cookie", in_default_preset=True, label="LinkedIn"),
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase"),
-    _c("google", ["gmail", "data", "datastore"], auth_modes={"byo_user"},
+    # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
+    # gmail_* / data_* (datastore.py) / tasks_*. PAS "datastore" (fantôme, aucun
+    # tool) ni l'absent "tasks" — sinon fail-open du gate d'activation (#24).
+    _c("google", ["gmail", "data", "tasks"], auth_modes={"byo_user"},
        personal_session=True, secret_kind="oauth", in_default_preset=True,
-       label="Google", help="Gmail + Sheets/Drive (OAuth)"),
+       label="Google", help="Gmail + Sheets/Drive + Tasks (OAuth)",
+       modules=("gmail", "datastore", "tasks")),
     _c("whatsapp", ["whatsapp"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="WhatsApp"),
 
     # --- open-data / sans credential ----------------------------------------
-    _c("fr_open", ["culture_spectacle", "reddit"], secret_kind="none",
-       in_default_preset=True, label="Open data", help="culture / reddit"),
+    # namespace = préfixe réel : culture_spectacle_* → `culture` (namespace_of =
+    # 1er token), reddit_* → `reddit`. Déclarer "culture", pas "culture_spectacle"
+    # (jamais matché → fail-open du gate, #24).
+    _c("fr_open", ["culture", "reddit"], secret_kind="none",
+       in_default_preset=True, label="Open data", help="culture / reddit",
+       modules=("culture", "reddit")),
     _c("sirene_stock", ["sirene_stock"], secret_kind="none", in_default_preset=True,
        label="SIRENE stock", help="établissements INSEE (DuckDB)"),
     # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant

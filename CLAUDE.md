@@ -397,6 +397,43 @@ identifiées par `slug`, chacune versionnée :
   versionné avec l'outil. La doctrine de prospection de scout ne passe pas par ce mécanisme —
   elle vit chez scout (son propre `get_claude_md()`).
 
+## Groupes (départements) & hiérarchie de droits (ADR 0012)
+
+Une org se subdivise en **groupes** (départements/équipes) avec un **chef
+d'équipe** (`group_role='group_admin'`). La gestion des droits est **centralisée**
+dans `roles.py` (escalade descendante, source unique) :
+
+```
+platform_admin ⊇ org_admin ⊇ group_admin (chef) ⊇ member
+```
+
+Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
+(`is_org_admin`, `can_admin_group`, `can_read_group`, `effective_group_role`) —
+plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
+`GROUP_MEMBER_OF` (en plus de `ORG_*`).
+
+Un groupe **gouverne 3 ressources** par délégation de l'org (pas les entitlements,
+restés org-level) :
+- **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
+  cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
+- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `get_claude_md()`
+  sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **preset de toolset** — `org_groups.default_tools` (NULL = pas de baseline) ;
+  baseline de visibilité au handshake (les toggles perso priment, **jamais**
+  d'élévation d'un grant-only).
+
+**Groupe actif** : ≤1 par sub (`org_group_members.is_active`, index partiel),
+**invariant** = appartient à l'org active. `set_active_group` pose aussi l'org
+active ; `set_active_org` efface le groupe actif. `oto_use_group` /
+`PUT /api/me/active-group` (+ `oto_clear_group` / `DELETE`).
+
+Stores : `group_store.py` (miroir d'`org_store` au grain groupe). `org_store`
+n'importe PAS `group_store` (SQL direct pour l'invariant org↔groupe → pas de
+cycle). Surfaces : capacités `capabilities/groups*.py` (REST `/api/orgs/{id}/groups`,
+`/api/groups/{id}*`, `/api/me/active-group` + MCP `oto_*_group*`). `/api/me`
+expose `active_group`/`active_group_name`/`group_role` ; `providers[].mode` peut
+valoir `group`. **Détails : `docs/groups-and-roles.md`.**
+
 ## Conventions
 
 - Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,

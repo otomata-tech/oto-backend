@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT,
     name TEXT,
     role TEXT NOT NULL DEFAULT 'member',
+    -- Accès plateforme & invitation virale (ADR 0013). access_status = gate doux
+    -- (pending = waitlist, active = alpha, blocked). invite_quota = budget referral
+    -- restant. invited_by = sub du parrain (arbre viral). Non appliqué tant que le
+    -- flag OTO_ALPHA_GATE_ENABLED est off (barreaux ultérieurs).
+    access_status TEXT NOT NULL DEFAULT 'pending',
+    invite_quota INTEGER NOT NULL DEFAULT 0,
+    invited_by TEXT,
+    access_granted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -232,13 +240,18 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
 -- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
 -- un email donné ; l'acceptation exige un compte dont l'email vérifié Logto
 -- matche (anti-transfert de lien). accepted_at NULL = en attente.
+-- Invitation UNIFIÉE (ADR 0013) : org_id NULLABLE — renseigné = rejoindre cette
+-- org (org-invite) ; NULL = referral alpha (l'invité crée sa propre org). Les
+-- deux saveurs accordent l'accès plateforme à l'acceptation. `source` =
+-- provenance (user_quota | admin_seed | org_admin).
 CREATE TABLE IF NOT EXISTS org_invitations (
     id BIGSERIAL PRIMARY KEY,
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
     org_role TEXT NOT NULL DEFAULT 'org_member',
     token_hash TEXT NOT NULL UNIQUE,
     invited_by TEXT,
+    source TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     accepted_at TIMESTAMPTZ,
@@ -423,6 +436,36 @@ def init_db() -> None:
         # lignes existantes (guest était un alias sans effet, cf. access.py).
         conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
         conn.execute("UPDATE users SET role = 'member' WHERE role = 'guest'")
+        # Accès plateforme & invitation virale (ADR 0013, barreau 1).
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_quota INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_granted_at TIMESTAMPTZ")
+        # access_status : backfill ONE-SHOT à la création de la colonne — les comptes
+        # existants sont pré-alpha → 'active'. Garder hors d'un ADD COLUMN ... DEFAULT
+        # (qui poserait tout le monde 'pending') ET hors d'un UPDATE inconditionnel
+        # rejoué à chaque boot (qui ré-activerait les pending et tuerait le gate).
+        _has_access = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'users' AND column_name = 'access_status'"
+        ).fetchone()
+        if not _has_access:
+            conn.execute("ALTER TABLE users ADD COLUMN access_status TEXT")
+            conn.execute("UPDATE users SET access_status = 'active', access_granted_at = NOW()")
+            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET DEFAULT 'pending'")
+            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET NOT NULL")
+        # L'admin bootstrap (OTO_MCP_ADMIN_SUB) ne tombe jamais en waitlist.
+        _admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
+        if _admin_sub:
+            conn.execute(
+                "UPDATE users SET access_status = 'active', "
+                "access_granted_at = COALESCE(access_granted_at, NOW()) "
+                "WHERE sub = %s AND access_status <> 'active'",
+                (_admin_sub,),
+            )
+        # Invitation unifiée (ADR 0013) : org_id nullable + source (idempotent pour
+        # les DB créées avant). NULL = referral alpha, l'invité crée sa propre org.
+        conn.execute("ALTER TABLE org_invitations ALTER COLUMN org_id DROP NOT NULL")
+        conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).

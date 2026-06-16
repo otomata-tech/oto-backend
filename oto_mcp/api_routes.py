@@ -40,7 +40,9 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing
+from datetime import date as _date, timedelta as _timedelta
+
+from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing, providers
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -704,6 +706,38 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             ],
         })
 
+    async def my_tools_registry(request: Request) -> JSONResponse:
+        """Registre résolu des tools exposés (ADR 0014) : nom + description
+        (1ʳᵉ ligne de la docstring = champ MCP `description`, source de vérité du
+        modèle) + source `native`/`federated`. Alimente la résolution des
+        marqueurs `<tool:slug>` d'une doctrine, l'autocomplétion et le manifeste
+        « outils référencés ». Les namespaces grant-only (bridges) sont exclus."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if mcp_instance is None:
+            return _json(request, {"tools": [], "count": 0})
+        try:
+            tools = await mcp_instance.list_tools(run_middleware=False)
+        except Exception as e:
+            return _json_error(request, 500, f"list_tools_failed:{e}")
+        out = []
+        for t in tools:
+            if is_grant_only(t.name):
+                continue
+            conn = providers.connector_for_namespace(namespace_of(t.name))
+            federated = bool(conn and conn.kind == "mount")
+            entry = {
+                "name": t.name,
+                "description": (t.description or "").strip().split("\n", 1)[0].strip(),
+                "source": "federated" if federated else "native",
+            }
+            if federated and conn:
+                entry["mcp"] = conn.name
+            out.append(entry)
+        out.sort(key=lambda e: e["name"])
+        return _json(request, {"tools": out, "count": len(out)})
+
     async def my_tools_disable(request: Request) -> JSONResponse:
         """Désactive un tool pour l'utilisateur courant (live)."""
         sub, err = await _authenticate(request, verifier)
@@ -1022,6 +1056,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             description=old["description"], set_by=sub)
         return _json(request, {"ok": True, "slug": slug, "version": version, "reverted_from": target})
 
+    async def my_instruction_usage(request: Request) -> JSONResponse:
+        """Usage d'une doctrine (ADR 0014) : nb de chargements par l'agent,
+        appelants, série journalière 30j — dérivé de `tool_calls`, scopé org."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, role, _ = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if role is None and access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        subs = [m["sub"] for m in org_store.list_org_members(org_id)]
+        # La base se charge via get_claude_md (bundle, pas de slug) ; une skill
+        # via oto_get_instruction(slug=…).
+        if slug == org_store.BASE_SLUG:
+            tool, slug_filter = "get_claude_md", None
+        else:
+            tool, slug_filter = "oto_get_instruction", slug
+        u = db.instruction_usage(subs, tool, slug_filter, days=30)
+        today = _date.today()
+        series = [u["daily"].get(str(today - _timedelta(days=29 - i)), 0) for i in range(30)]
+        return _json(request, {
+            "slug": slug, "count": u["count"], "callers": u["callers"], "series": series,
+        })
+
     # ── LinkedIn browser-session pairing (VNC) ──────────────────────
 
     async def linkedin_browser_status(request: Request) -> JSONResponse:
@@ -1224,6 +1284,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools", my_tools_list, methods=["GET"]),
         Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
+        # `registry` AVANT `{name}` sinon Starlette le capture comme nom de tool.
+        Route("/api/me/tools/registry", my_tools_registry, methods=["GET"]),
+        Route("/api/me/tools/registry", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
@@ -1243,6 +1306,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/instructions/{slug}", options_handler, methods=["OPTIONS"]),
         Route("/api/me/instructions/{slug}/versions", my_instruction_versions, methods=["GET"]),
         Route("/api/me/instructions/{slug}/versions", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions/{slug}/usage", my_instruction_usage, methods=["GET"]),
+        Route("/api/me/instructions/{slug}/usage", options_handler, methods=["OPTIONS"]),
         Route("/api/me/instructions/{slug}/revert", my_instruction_revert, methods=["POST"]),
         Route("/api/me/instructions/{slug}/revert", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),

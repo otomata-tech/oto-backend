@@ -24,7 +24,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connectors, db, org_store
+from .. import access, connectors, db, group_store, org_store
 from ..access import ORG_SHAREABLE_PROVIDERS
 from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -58,83 +58,123 @@ def register(mcp: FastMCP) -> None:
     async def get_claude_md(ctx: Context) -> dict:
         """Doctrine opératoire de ton organisation — appelle-la EN DÉBUT DE SESSION.
 
-        Renvoie deux choses pour ton org active :
-        - `doctrine` : la doctrine de base rédigée par le métier (workflows validés,
-          l'ordre des outils, gardes-fous, vocabulaire). À suivre quand ton org
-          pilote oto sans produit applicatif dédié.
-        - `instructions` : l'index des instructions nommées (skills) de l'org —
-          slug + titre + quand-l'utiliser. Charge le détail d'une skill à la demande
-          avec `oto_get_instruction(slug)` (ou cherche avec `oto_search_instructions`).
+        Renvoie, pour ton org active ET ton groupe actif (département) le cas échéant :
+        - `doctrine` : la doctrine de base de l'ORG (workflows validés, l'ordre des
+          outils, gardes-fous, vocabulaire).
+        - `group_doctrine` : la doctrine du GROUPE actif (département), à appliquer
+          EN COMPLÉMENT de celle de l'org. Vide si pas de groupe actif.
+        - `instructions` : l'index unifié des instructions nommées (skills) — chaque
+          entrée porte `slug`, `title`, `description` et `scope` (`org`|`group`).
+          Charge le détail d'une skill à la demande avec
+          `oto_get_instruction(slug, scope=…)` (ou cherche avec `oto_search_instructions`).
 
-        Tout est vide (et sans erreur) si tu n'as pas d'org active ou si elle n'a
-        rien posé : continue normalement avec les instructions du serveur.
+        Tout est vide (et sans erreur) si tu n'as ni org ni groupe actifs, ou si rien
+        n'a été posé : continue normalement avec les instructions du serveur.
         """
         sub = _require_sub()
         org_id = org_store.get_active_org(sub)
         if org_id is None:
-            return {"org_id": None, "org": None, "doctrine": "", "instructions": []}
+            return {"org_id": None, "org": None, "doctrine": "",
+                    "group_id": None, "group": None, "group_doctrine": "", "instructions": []}
         o = org_store.get_org(org_id)
         base = org_store.get_instruction(org_id, org_store.BASE_SLUG)
-        index = org_store.list_instructions(org_id)
+        index = [
+            {"slug": i["slug"], "title": i["title"], "description": i["description"], "scope": "org"}
+            for i in org_store.list_instructions(org_id)
+        ]
+        group_id = group_store.get_active_group(sub)
+        group_name, group_doctrine = None, ""
+        if group_id is not None:
+            g = group_store.get_group(group_id)
+            group_name = g["name"] if g else None
+            gbase = group_store.get_group_instruction(group_id, org_store.BASE_SLUG)
+            group_doctrine = (gbase or {}).get("body_md", "") or ""
+            index += [
+                {"slug": i["slug"], "title": i["title"], "description": i["description"],
+                 "scope": "group"}
+                for i in group_store.list_group_instructions(group_id)
+            ]
         return {
             "org_id": org_id,
             "org": o["name"] if o else None,
             "doctrine": (base or {}).get("body_md", "") or "",
-            "instructions": [
-                {"slug": i["slug"], "title": i["title"], "description": i["description"]}
-                for i in index
-            ],
+            "group_id": group_id,
+            "group": group_name,
+            "group_doctrine": group_doctrine,
+            "instructions": index,
         }
 
     @mcp.tool()
     async def oto_list_instructions(ctx: Context) -> dict:
-        """List your active org's named instructions (skills) — slug/title/description/
-        version, no body. Fetch one with `oto_get_instruction`. Excludes the base
-        doctrine (that one is served by `get_claude_md`)."""
+        """List your active org's AND active group's named instructions (skills) —
+        slug/title/description/version/scope, no body. Fetch one with
+        `oto_get_instruction(slug, scope)`. Excludes the base doctrine (served by
+        `get_claude_md`)."""
         sub = _require_sub()
         org_id = org_store.get_active_org(sub)
         if org_id is None:
             return {"org_id": None, "instructions": []}
-        return {"org_id": org_id, "instructions": org_store.list_instructions(org_id)}
+        out = [{**i, "scope": "org"} for i in org_store.list_instructions(org_id)]
+        group_id = group_store.get_active_group(sub)
+        if group_id is not None:
+            out += [{**i, "scope": "group"}
+                    for i in group_store.list_group_instructions(group_id)]
+        return {"org_id": org_id, "group_id": group_id, "instructions": out}
 
     @mcp.tool()
-    async def oto_get_instruction(slug: str, ctx: Context, version: int | None = None) -> dict:
-        """Full markdown of one named instruction (skill) of your active org.
+    async def oto_get_instruction(
+        slug: str, ctx: Context, version: int | None = None, scope: str = "org"
+    ) -> dict:
+        """Full markdown of one named instruction (skill) of your active org or group.
 
         Args:
             slug: the instruction slug (see `oto_list_instructions` / the index in
                 `get_claude_md`). `claude_md` returns the base doctrine.
             version: optional — a past version number (default = latest).
+            scope: `org` (default) or `group` — which level to read from. The index
+                returned by `get_claude_md` tags each skill with its scope.
         """
         sub = _require_sub()
-        org_id = org_store.get_active_org(sub)
-        if org_id is None:
-            raise _err("Pas d'org active — vois `oto_list_orgs`.")
-        instr = org_store.get_instruction(org_id, slug, version)
+        if scope == "group":
+            group_id = group_store.get_active_group(sub)
+            if group_id is None:
+                raise _err("Pas de groupe actif — vois `oto_list_orgs`/`oto_use_group`.")
+            instr = group_store.get_group_instruction(group_id, slug, version)
+            scope_id = {"group_id": group_id}
+        else:
+            org_id = org_store.get_active_org(sub)
+            if org_id is None:
+                raise _err("Pas d'org active — vois `oto_list_orgs`.")
+            instr = org_store.get_instruction(org_id, slug, version)
+            scope_id = {"org_id": org_id}
         if not instr:
             raise _err(
-                f"Aucune instruction `{org_store.normalize_slug(slug)}`"
+                f"Aucune instruction `{org_store.normalize_slug(slug)}` (scope {scope})"
                 + (f" en version {version}" if version is not None else "")
-                + " pour ton org. Vois `oto_list_instructions`."
+                + ". Vois `oto_list_instructions`."
             )
         return {
-            "org_id": org_id,
-            "slug": instr["slug"],
-            "title": instr["title"],
-            "description": instr["description"],
-            "version": instr["version"],
+            **scope_id, "scope": scope,
+            "slug": instr["slug"], "title": instr["title"],
+            "description": instr["description"], "version": instr["version"],
             "body_md": instr["body_md"],
         }
 
     @mcp.tool()
     async def oto_search_instructions(query: str, ctx: Context) -> dict:
-        """Search your active org's instructions (title/description/body). Returns
-        matches with a snippet; fetch a full body with `oto_get_instruction`."""
+        """Search your active org's AND active group's instructions (title/description/
+        body). Returns matches with a snippet + `scope`; fetch a full body with
+        `oto_get_instruction(slug, scope)`."""
         sub = _require_sub()
         org_id = org_store.get_active_org(sub)
         if org_id is None:
             return {"org_id": None, "results": []}
-        return {"org_id": org_id, "results": org_store.search_instructions(org_id, query)}
+        results = [{**r, "scope": "org"} for r in org_store.search_instructions(org_id, query)]
+        group_id = group_store.get_active_group(sub)
+        if group_id is not None:
+            results += [{**r, "scope": "group"}
+                        for r in group_store.search_group_instructions(group_id, query)]
+        return {"org_id": org_id, "group_id": group_id, "results": results}
 
     # --- platform_admin : provisioning --------------------------------------
 

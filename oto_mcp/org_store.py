@@ -129,6 +129,17 @@ def remove_org_member(org_id: int, sub: str) -> bool:
             )
             removed = (cur.rowcount or 0) > 0
             if removed:
+                # Retirer de l'org = sortir de tous ses groupes (ADR 0012 :
+                # l'appartenance groupe est subordonnée à l'appartenance org).
+                conn.execute(
+                    """
+                    DELETE FROM org_group_members
+                     WHERE sub = %s AND group_id IN (
+                         SELECT id FROM org_groups WHERE org_id = %s
+                     )
+                    """,
+                    (sub, org_id),
+                )
                 has_active = conn.execute(
                     "SELECT 1 FROM org_members WHERE sub = %s AND is_active", (sub,)
                 ).fetchone()
@@ -158,6 +169,15 @@ def set_active_org(sub: str, org_id: int) -> bool:
             conn.execute(
                 "UPDATE org_members SET is_active = (org_id = %s) WHERE sub = %s",
                 (org_id, sub),
+            )
+            # Invariant ADR 0012 : le groupe actif appartient à l'org active.
+            # Basculer d'org invalide donc le groupe actif (qui pointait l'ancienne
+            # org) — on l'efface ; le membre re-choisira un groupe de la nouvelle
+            # org via group_store.set_active_group. SQL direct (pas d'import
+            # group_store → pas de cycle ; org_store reste le socle).
+            conn.execute(
+                "UPDATE org_group_members SET is_active = FALSE WHERE sub = %s AND is_active",
+                (sub,),
             )
             return True
 

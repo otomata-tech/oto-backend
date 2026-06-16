@@ -6,7 +6,7 @@ import logging
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
 
-from . import access, connector_activation, connectors, db, org_store
+from . import access, connector_activation, connectors, db, group_store, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
@@ -64,12 +64,21 @@ class UserDisabledToolsMiddleware(Middleware):
             # Union grants per-user + entitlements de l'org active (source unique).
             granted = access.granted_namespaces_for(sub)
             is_admin = access.get_user_role(sub) == access.ADMIN
+            # Baseline de toolset du GROUPE actif (ADR 0012) : le preset que le chef
+            # a posé pour l'équipe. None = pas de baseline (visibilité par défaut).
+            group_baseline = None
+            active_group = group_store.get_active_group(sub)
+            if active_group is not None:
+                gt = group_store.get_group_default_tools(active_group)
+                if gt is not None:
+                    group_baseline = frozenset(gt)
         except Exception as e:
             # FAIL-CLOSED : sur erreur DB, ne PAS révéler les namespaces grant-only.
             # granted=∅ + is_admin=False → is_tool_visible masque tout grant-only
             # (la visibilité est ergonomie, mais grant-only est une vraie barrière).
             logger.warning("Cannot read tool visibility for %s (fail-closed): %s", sub, e)
             disabled, enabled_override, granted, is_admin = set(), set(), frozenset(), False
+            group_baseline = None
         try:
             all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
             all_names = {t.name for t in all_tools}
@@ -84,7 +93,8 @@ class UserDisabledToolsMiddleware(Middleware):
             all_names = (
                 disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN | _KNOWN_GRANT_ONLY
             )
-        to_hide = effective_disabled(all_names, disabled, enabled_override, granted, is_admin)
+        to_hide = effective_disabled(
+            all_names, disabled, enabled_override, granted, is_admin, group_baseline)
         # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
         # l'org de la session — à chaud, per-org (plus de gate au chargement).
         # Fail-OPEN (gouvernance d'exposition, pas une barrière de sécurité ; le

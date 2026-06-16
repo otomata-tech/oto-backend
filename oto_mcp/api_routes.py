@@ -205,10 +205,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         cb = db.get_crunchbase_status(sub)
         active_org = org_store.get_active_org(sub)
         active_org_name = None
+        active_org_logo_url = None
         org_role = None
         if active_org is not None:
             o = org_store.get_org(active_org)
             active_org_name = o["name"] if o else None
+            active_org_logo_url = o.get("logo_url") if o else None
             org_role = org_store.get_org_role(active_org, sub)
         # Sous-palier groupe (ADR 0012) : groupe actif + rôle effectif (escalade).
         active_group = group_store.get_active_group(sub)
@@ -223,9 +225,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "sub": sub,
             "email": user.get("email"),
             "name": user.get("name"),
+            "avatar_url": user.get("avatar_url"),
             "role": status["role"],
             "active_org": active_org,
             "active_org_name": active_org_name,
+            "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
             "active_group": active_group,
             "active_group_name": active_group_name,
@@ -325,6 +329,99 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "user_agent": sess.get("user_agent"),
             "set_at": sess.get("set_at"),
         })
+
+    # --- Avatar user + logo d'org (Object Storage) -------------------------
+    # Upload multipart → ne passe PAS par la couche capacité (ADR 0009 = corps
+    # JSON pydantic). Handlers plain calqués sur linkedin_save. URL publique
+    # persistée en clair (pas un secret).
+
+    async def _read_upload(request: Request):
+        """Parse un multipart, renvoie (data: bytes, err: JSONResponse|None)."""
+        try:
+            form = await request.form()
+        except Exception:
+            return None, _json_error(request, 400, "invalid_multipart")
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            return None, _json_error(request, 400, "missing_file")
+        return await upload.read(), None
+
+    async def avatar_save(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        data, err = await _read_upload(request)
+        if err:
+            return err
+        from . import media_store
+        try:
+            url = media_store.upload_image("avatars", sub, data, "")
+        except media_store.MediaError as e:
+            return _json_error(request, e.status, e.code)
+        old = (db.get_user(sub) or {}).get("avatar_url")
+        db.set_avatar_url(sub, url)
+        if old and old != url:
+            media_store.delete_by_url(old)
+        return _json(request, {"ok": True, "avatar_url": url})
+
+    async def avatar_clear(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        old = (db.get_user(sub) or {}).get("avatar_url")
+        db.set_avatar_url(sub, None)
+        if old:
+            from . import media_store
+            media_store.delete_by_url(old)
+        return _json(request, {"ok": True})
+
+    def _org_logo_gate(request: Request, sub: str):
+        """Renvoie (org_id, err). 400 id invalide, 404 org inconnue, 403 non-admin."""
+        from . import roles
+        try:
+            org_id = int(request.path_params["id"])
+        except (ValueError, KeyError):
+            return None, _json_error(request, 400, "invalid_id")
+        if not org_store.get_org(org_id):
+            return None, _json_error(request, 404, "unknown_org")
+        if not roles.is_org_admin(sub, org_id):
+            return None, _json_error(request, 403, "forbidden")
+        return org_id, None
+
+    async def org_logo_save(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, err = _org_logo_gate(request, sub)
+        if err:
+            return err
+        data, err = await _read_upload(request)
+        if err:
+            return err
+        from . import media_store
+        try:
+            url = media_store.upload_image("org-logos", str(org_id), data, "")
+        except media_store.MediaError as e:
+            return _json_error(request, e.status, e.code)
+        old = (org_store.get_org(org_id) or {}).get("logo_url")
+        org_store.set_org_logo(org_id, url)
+        if old and old != url:
+            media_store.delete_by_url(old)
+        return _json(request, {"ok": True, "logo_url": url})
+
+    async def org_logo_clear(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, err = _org_logo_gate(request, sub)
+        if err:
+            return err
+        old = (org_store.get_org(org_id) or {}).get("logo_url")
+        org_store.set_org_logo(org_id, None)
+        if old:
+            from . import media_store
+            media_store.delete_by_url(old)
+        return _json(request, {"ok": True})
 
     # Saisie de credential per-user, GÉNÉRIQUE (dérivée du registre, pas une liste
     # hardcodée) : tout connecteur `byo_user` dont le secret est un "secret simple"
@@ -1216,6 +1313,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/connectors", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/avatar", avatar_save, methods=["POST"]),
+        Route("/api/me/avatar", avatar_clear, methods=["DELETE"]),
+        Route("/api/me/avatar", options_handler, methods=["OPTIONS"]),
+        Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
+        Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
+        Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/linkedin", linkedin_get, methods=["GET"]),
         Route("/api/settings/linkedin", linkedin_save, methods=["POST"]),
         Route("/api/settings/linkedin", linkedin_clear, methods=["DELETE"]),

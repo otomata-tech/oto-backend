@@ -73,7 +73,7 @@ def create_org(name: str, created_by: Optional[str] = None) -> int:
 def get_org(org_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, name, created_by, created_at FROM orgs WHERE id = %s", (org_id,)
+            "SELECT id, name, created_by, created_at, logo_url FROM orgs WHERE id = %s", (org_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -81,9 +81,17 @@ def get_org(org_id: int) -> Optional[dict]:
 def list_all_orgs() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, name, created_by, created_at FROM orgs ORDER BY created_at"
+            "SELECT id, name, created_by, created_at, logo_url FROM orgs ORDER BY created_at"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def set_org_logo(org_id: int, url: Optional[str]) -> None:
+    """Pose (ou efface si url=None) l'URL publique du logo de l'org.
+
+    URL publique (Object Storage), pas un secret → colonne en clair."""
+    with _connect() as conn:
+        conn.execute("UPDATE orgs SET logo_url = %s WHERE id = %s", (url, org_id))
 
 
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
@@ -186,7 +194,7 @@ def list_orgs_for_user(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT m.org_id, o.name, m.org_role, m.is_active, m.joined_at
+            SELECT m.org_id, o.name, o.logo_url, m.org_role, m.is_active, m.joined_at
               FROM org_members m JOIN orgs o ON o.id = m.org_id
              WHERE m.sub = %s ORDER BY m.joined_at ASC
             """,

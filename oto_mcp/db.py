@@ -858,6 +858,51 @@ def list_tool_calls(
         return list(rows)
 
 
+def instruction_usage(
+    subs: list[str], tool: str, slug: Optional[str], days: int = 30
+) -> dict:
+    """Usage d'une doctrine dérivé de `tool_calls` (ADR 0014, « doctrine = process
+    = log d'usage ») : combien de fois elle a été chargée par l'agent, par qui,
+    et la distribution journalière sur `days` jours.
+
+    `tool` = `get_claude_md` pour la base (slug=None) ou `oto_get_instruction`
+    filtré par `args->>'slug'` pour une skill. Scopé aux `subs` (membres de
+    l'org). Lecture pure ; renvoie {count, callers, daily{date:str -> n}}.
+    """
+    if not subs:
+        return {"count": 0, "callers": [], "daily": {}}
+    days = max(1, min(int(days), 365))
+    slug_clause = " AND l.args->>'slug' = %s" if slug is not None else ""
+    base_params: list[Any] = [subs, tool]
+    if slug is not None:
+        base_params.append(slug)
+    with _connect() as conn:
+        callers = conn.execute(
+            f"""
+            SELECT u.email, COUNT(*) AS n
+            FROM tool_calls l LEFT JOIN users u ON u.sub = l.sub
+            WHERE l.sub = ANY(%s) AND l.tool = %s{slug_clause} AND l.ok
+            GROUP BY u.email ORDER BY n DESC
+            """,
+            tuple(base_params),
+        ).fetchall()
+        daily = conn.execute(
+            f"""
+            SELECT (l.created_at AT TIME ZONE 'UTC')::date AS d, COUNT(*) AS n
+            FROM tool_calls l
+            WHERE l.sub = ANY(%s) AND l.tool = %s{slug_clause} AND l.ok
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY d
+            """,
+            tuple(base_params + [days]),
+        ).fetchall()
+    return {
+        "count": sum(int(r["n"]) for r in callers),
+        "callers": [r["email"] for r in callers if r["email"]],
+        "daily": {str(r["d"]): int(r["n"]) for r in daily},
+    }
+
+
 def tool_call_stats(since_days: int = 7) -> dict:
     """Agrégats pour le dashboard de monitoring sur les `since_days` derniers jours :
     total, échecs, ventilation par tool / par user / par jour."""

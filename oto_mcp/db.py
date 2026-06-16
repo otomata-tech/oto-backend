@@ -556,6 +556,50 @@ def get_user(sub: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+# --- accès plateforme & quota d'invitation (ADR 0013) -----------------------
+
+def grant_platform_access(sub: str, *, invited_by: Optional[str] = None,
+                          quota: Optional[int] = None) -> None:
+    """Passe le compte en 'active' (alpha). Idempotent sur access_granted_at et
+    invited_by (COALESCE — ne réécrase pas un parrain déjà posé). `quota` crédite
+    le budget referral (referral alpha) ; None = ne touche pas au quota (cas
+    org-invite : le membre obtient l'accès mais pas de budget d'invitation)."""
+    sets = ["access_status = 'active'",
+            "access_granted_at = COALESCE(access_granted_at, NOW())",
+            "updated_at = NOW()"]
+    params: list = []
+    if quota is not None:
+        sets.append("invite_quota = %s")
+        params.append(int(quota))
+    if invited_by is not None:
+        sets.append("invited_by = COALESCE(invited_by, %s)")
+        params.append(invited_by)
+    params.append(sub)
+    with _connect() as conn:
+        conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE sub = %s", tuple(params))
+
+
+def consume_invite_quota(sub: str) -> bool:
+    """Décrémente atomiquement le quota referral si > 0. True si consommé, False
+    si épuisé (WHERE invite_quota > 0 → pas de course)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE users SET invite_quota = invite_quota - 1, updated_at = NOW() "
+            "WHERE sub = %s AND invite_quota > 0",
+            (sub,),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+def refund_invite_quota(sub: str) -> None:
+    """Re-crédite une invitation (rollback si la création échoue après consume)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET invite_quota = invite_quota + 1, updated_at = NOW() WHERE sub = %s",
+            (sub,),
+        )
+
+
 def get_user_by_email(email: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()

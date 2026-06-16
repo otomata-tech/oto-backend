@@ -43,18 +43,39 @@ def _send(to: str, subject: str, html: str) -> bool:
         return False
 
 
+_BTN = ('display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:none;'
+        'padding:10px 20px;border-radius:999px;font-weight:600')
+_WRAP = 'font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112'
+_FAINT = 'color:#7a6c50;font-size:13px'
+
+
 def send_invite_email(to: str, org_name: str, invite_url: str,
                       inviter: str | None = None) -> bool:
     """Email d'invitation à rejoindre une org. True si envoyé, False sinon."""
     who = f"{_esc(inviter)} " if inviter else ""
     subject = f"You're invited to {org_name} on Oto"
     html = (
-        f'<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112">'
+        f'<div style="{_WRAP}">'
         f'<p>{who}invited you to join <strong>{_esc(org_name)}</strong> on Oto.</p>'
-        f'<p><a href="{_esc(invite_url)}" '
-        f'style="display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:none;'
-        f'padding:10px 20px;border-radius:999px;font-weight:600">Accept invitation</a></p>'
-        f'<p style="color:#7a6c50;font-size:13px">Or paste this link: {_esc(invite_url)}</p>'
+        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">Accept invitation</a></p>'
+        f'<p style="{_FAINT}">Or paste this link: {_esc(invite_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
+def send_alpha_invite_email(to: str, invite_url: str,
+                            inviter: str | None = None) -> bool:
+    """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon."""
+    who = f"{_esc(inviter)} vous invite" if inviter else "Vous êtes invité·e"
+    subject = "Vous avez été invité·e à l'alpha de Oto"
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>{who} à l\'<strong>alpha de Oto</strong>.</p>'
+        f'<p>Oto automatise la prospection B2B et le travail sur vos outils '
+        f'(CRM, email, données entreprise) directement depuis Claude.</p>'
+        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">Activer mon accès</a></p>'
+        f'<p style="{_FAINT}">Ou collez ce lien : {_esc(invite_url)}</p>'
         f'</div>'
     )
     return _send(to, subject, html)

@@ -254,8 +254,14 @@ def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[st
     org-partageable (byo_org : exclut slack/linkedin, inclut mm org-only) via le
     registre — plus restrictif que KEY_PROVIDERS puisque mm n'est pas keyed.
     `meta` : satellites non-secrets (ex. `base_url` du bridge d'un connecteur
-    remote, ADR 0003)."""
-    connectors.require_credential("org", provider)
+    remote, ADR 0003).
+
+    Un connecteur **remote** (ADR 0003/0011) est défini par la DONNÉE : un `meta`
+    avec `base_url` (endpoint du bridge) ⇒ pas d'entrée registre attendue (zéro nom
+    client en dur, cf. `connectors.org_secret_meta`). Sinon, garde d'éligibilité
+    org-partageable via le registre."""
+    if not (meta and meta.get("base_url")):
+        connectors.require_credential("org", provider)
     if not api_key:
         raise ValueError("api_key requise")
     # Coffre chiffré, source unique (entité 'org').

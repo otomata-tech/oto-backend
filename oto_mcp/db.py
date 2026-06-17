@@ -269,7 +269,7 @@ CREATE INDEX IF NOT EXISTS idx_org_invitations_org ON org_invitations(org_id);
 
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
--- 'claude_md' = la doctrine de base servie d'office par get_claude_md(), les
+-- 'claude_md' = la doctrine de base servie d'office par oto_get_doctrine(), les
 -- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
 -- pas un credential → hors coffre chiffré). Même principe d'accès que les
 -- secrets d'org : résolu par l'org active du sub (get_active_org). `version` est
@@ -345,7 +345,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
     ON org_group_members(sub) WHERE is_active;
 
 -- Doctrine + skills d'un GROUPE (miroir d'org_instructions au grain groupe).
--- Servie en COMPLÉMENT de la doctrine d'org par get_claude_md() quand l'user a
+-- Servie en COMPLÉMENT de la doctrine d'org par oto_get_doctrine() quand l'user a
 -- un groupe actif. Même modèle versionné (slug réservé 'claude_md' = base ;
 -- autres = skills). En clair (prose, hors coffre chiffré).
 CREATE TABLE IF NOT EXISTS org_group_instructions (
@@ -975,8 +975,8 @@ def instruction_usage(
     = log d'usage ») : combien de fois elle a été chargée par l'agent, par qui,
     et la distribution journalière sur `days` jours.
 
-    `tool` = `get_claude_md` pour la base (slug=None) ou `oto_get_instruction`
-    filtré par `args->>'slug'` pour une skill. Scopé aux `subs` (membres de
+    `tool` = `oto_get_doctrine` (slug=None pour la base, sinon filtré par
+    `args->>'slug'` pour une skill). Scopé aux `subs` (membres de
     l'org). Lecture pure ; renvoie {count, callers, daily{date:str -> n}}.
     """
     if not subs:

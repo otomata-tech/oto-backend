@@ -2,7 +2,7 @@
 
 Source UNIQUE partagée par les deux faces :
 - REST `/api/me/tools/registry` (le dashboard résout les `<tool:slug>` côté UI) ;
-- MCP `get_claude_md` / `oto_get_instruction` (manifeste « referenced_tools »
+- MCP `oto_get_doctrine` / `oto_get_doctrine` (manifeste « referenced_tools »
   appended à la livraison, pour que l'AGENT voie les noms canoniques, la
   description tirée de l'outil, et le **drift** d'une référence morte).
 

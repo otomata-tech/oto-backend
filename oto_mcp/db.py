@@ -492,9 +492,15 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
-    """Create the user row if missing, refresh email/name if known."""
+    """Create the user row if missing, refresh email/name if known.
+
+    Fédération de compte (otomata#16) : à la **première** création (vrai INSERT),
+    on provisionne le compte memento correspondant par email (best-effort, non
+    bloquant — cf. `memento_federation`). Le `(xmax = 0)` distingue insert/update
+    sans SELECT préalable : 0 sur une ligne fraîchement insérée, ≠ 0 sur un UPDATE.
+    """
     with _connect() as conn:
-        conn.execute(
+        row = conn.execute(
             """
             INSERT INTO users (sub, email, name)
             VALUES (%s, %s, %s)
@@ -502,9 +508,15 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
                 email = COALESCE(EXCLUDED.email, users.email),
                 name  = COALESCE(EXCLUDED.name,  users.name),
                 updated_at = NOW()
+            RETURNING (xmax = 0) AS inserted
             """,
             (sub, email, name),
-        )
+        ).fetchone()
+    if row and row.get("inserted") and email:
+        # Import paresseux : la fédération est optionnelle (no-op sans secret), et
+        # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
+        from . import memento_federation
+        memento_federation.provision_async(sub, email)
 
 
 def get_user(sub: str) -> Optional[dict]:

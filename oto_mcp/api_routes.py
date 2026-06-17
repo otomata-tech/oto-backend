@@ -40,7 +40,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing
+from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, memento_oauth, org_store, pairing
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -241,6 +241,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "set_at": cb["set_at"] if cb else None,
                 "user_agent": cb["user_agent"] if cb else None,
             },
+            # Fédération MCP (otomata#16) : statut du compte memento fédéré du user
+            # — alimente l'auto-prompt « connecter memento » du dashboard.
+            "memento": memento_oauth.status_for(sub),
             "providers": status["providers"],
         })
 

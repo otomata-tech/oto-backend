@@ -78,14 +78,23 @@ class UserDisabledToolsMiddleware(Middleware):
             # Union grants per-user + entitlements de l'org active (source unique).
             granted = access.granted_namespaces_for(sub)
             is_admin = access.get_user_role(sub) == access.ADMIN
-            # Baseline de toolset du GROUPE actif (ADR 0012) : le preset que le chef
-            # a posé pour l'équipe. None = pas de baseline (visibilité par défaut).
+            # Baseline de toolset (preset de visibilité). Cascade ADR 0015/0012 :
+            # le GROUPE actif raffine l'ORG active. Le chef d'équipe a priorité ; à
+            # défaut, la baseline curée par l'org_admin pour ses membres (le toolset
+            # épuré qu'ils voient quand cette org est active). None = pas de baseline
+            # (visibilité par défaut, ex. profil perso sans org active).
             group_baseline = None
             active_group = group_store.get_active_group(sub)
             if active_group is not None:
                 gt = group_store.get_group_default_tools(active_group)
                 if gt is not None:
                     group_baseline = frozenset(gt)
+            if group_baseline is None:
+                active_org = org_store.get_active_org(sub)
+                if active_org is not None:
+                    ot = org_store.get_org_default_tools(active_org)
+                    if ot is not None:
+                        group_baseline = frozenset(ot)
         except Exception as e:
             # FAIL-CLOSED : sur erreur DB, ne PAS révéler les namespaces grant-only.
             # granted=∅ + is_admin=False → is_tool_visible masque tout grant-only

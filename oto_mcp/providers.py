@@ -174,9 +174,15 @@ _REGISTRY_LIST = [
     # memento : MCP fédéré (otomata#16, kind=mount). MCP autonome distant
     # (mcp.mento.cc) monté via proxy FastMCP (tools/mount.py) ; credential
     # per-user = token OAuth Supabase (flow memento_oauth.py), injecté par
-    # requête. platform_granted (grant-only, deny-by-default) + byo_user.
+    # requête. **Fédération systématique** : `self_serve` (PAS platform_granted)
+    # → visible dans le catalogue de TOUS les users (la carte « federated mcp » du
+    # dashboard les invite à connecter leur compte memento — auto-prompt), et ses
+    # outils sont de droit. Un appel sans compte connecté lève une McpError
+    # actionnable (resolve_mount_token) qui pointe vers le dashboard. Le compte
+    # memento est lui-même provisionné d'office à la création du compte oto
+    # (memento_federation.py). byo_user (chacun connecte SON compte).
     _c("memento", ["memento"], kind="mount", mount_url="https://mcp.mento.cc/mcp",
-       availability="platform_granted", auth_modes={"byo_user"}, secret_kind="oauth",
+       auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Memento",
        help="base de connaissance structurée (MCP fédéré)", href="https://mento.cc"),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant

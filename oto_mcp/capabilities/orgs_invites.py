@@ -51,6 +51,14 @@ class AlphaInviteAdminInput(BaseModel):
     email: str
 
 
+class AlphaInviteListInput(BaseModel):
+    pass
+
+
+class AlphaInviteRevokeInput(BaseModel):
+    id: int
+
+
 def _invite_create(ctx: ResolvedCtx, inp: InviteCreateInput) -> dict:
     if inp.role not in org_store.ORG_ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide : {inp.role!r}.")
@@ -120,6 +128,17 @@ def _alpha_invite_admin_create(ctx: ResolvedCtx, inp: AlphaInviteAdminInput) -> 
             "invite_url": invite_url}
 
 
+def _alpha_invite_list(ctx: ResolvedCtx, inp: AlphaInviteListInput) -> dict:
+    """Invitations alpha en attente (referral, pas encore acceptées)."""
+    return {"invitations": org_store.list_alpha_invitations()}
+
+
+def _alpha_invite_revoke(ctx: ResolvedCtx, inp: AlphaInviteRevokeInput) -> dict:
+    if not org_store.revoke_alpha_invitation(inp.id):
+        raise AuthzDenied(404, "unknown_invitation", "Invitation introuvable ou déjà acceptée.")
+    return {"ok": True, "revoked": inp.id}
+
+
 def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     inv = org_store.get_invitation_by_token(inp.token)
     if not inv:
@@ -183,5 +202,17 @@ CAPABILITIES += [
         description="[platform admin] Invite someone to the Oto alpha by email, without spending "
                     "your own referral quota. They get their own account/org.",
         rest=RestBinding("POST", "/api/admin/alpha-invites"),
+    ),
+    Capability(
+        key="platform.invite.alpha_list", handler=_alpha_invite_list, Input=AlphaInviteListInput,
+        authz=PLATFORM_ADMIN,
+        description="[platform admin] List pending alpha invitations (sent, not yet accepted).",
+        rest=RestBinding("GET", "/api/admin/alpha-invites"),
+    ),
+    Capability(
+        key="platform.invite.alpha_revoke", handler=_alpha_invite_revoke, Input=AlphaInviteRevokeInput,
+        authz=PLATFORM_ADMIN,
+        description="[platform admin] Revoke a pending alpha invitation by id.",
+        rest=RestBinding("DELETE", "/api/admin/alpha-invites/{id}"),
     ),
 ]

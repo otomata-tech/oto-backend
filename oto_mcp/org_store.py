@@ -383,6 +383,31 @@ def revoke_invitation(org_id: int, inv_id: int) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def list_alpha_invitations() -> list[dict]:
+    """Invitations alpha (referral, `org_id IS NULL`) en attente — non acceptées,
+    non expirées. Vue admin des invitations émises mais pas encore consommées."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, email, invited_by, source, created_at, expires_at
+              FROM org_invitations
+             WHERE org_id IS NULL AND accepted_at IS NULL AND expires_at > NOW()
+             ORDER BY created_at DESC
+            """,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def revoke_alpha_invitation(inv_id: int) -> bool:
+    """Révoque une invitation alpha (referral) en attente par id."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_invitations WHERE id = %s AND org_id IS NULL AND accepted_at IS NULL",
+            (inv_id,),
+        )
+        return (cur.rowcount or 0) > 0
+
+
 def get_invitation_by_token(token: str) -> Optional[dict]:
     """Invitation valide (non acceptée, non expirée) pour ce token, sinon None."""
     if not token:

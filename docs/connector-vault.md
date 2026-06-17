@@ -8,7 +8,9 @@ Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), 
 Module pur (aucun import oto_mcp, comme `tool_visibility.py`). Une dataclass `Connector` par connecteur, 3 axes orthogonaux :
 - **A. Disponibilité** : `availability` ∈ {`self_serve`, `platform_granted`} ; `in_default_bundle`. platform_granted = grant-only (deny-by-default, ex. `mm`, `gocardless`).
 - **B. Visibilité** : `in_default_preset` (affiché+activé par le preset de base).
-- **C. Credential** : `auth_modes` ⊆ {`byo_user`, `byo_org`, `platform`} ; `keyed` (résolu via `resolve_api_key`) ; `secret_kind` (api_key/refresh_token/oauth/cookie/none) ; `personal_session` ; `env_secret_name` ; `default_quota`.
+- **C. Credential** : `auth_modes` ⊆ {`byo_user`, `byo_org`, `platform`} ; `keyed` (résolu via `resolve_api_key`) ; `secret_kind` (api_key/basic_auth/fields/refresh_token/oauth/cookie/none) ; `personal_session` ; `env_secret_name` ; `default_quota`.
+- **Modèle de saisie multi-champs** (ADR 0011) : `secret_fields` (propriété) = schéma de saisie du credential — `credential_fields` explicites (`CredentialField` name/label/secret/reveal) ou dérivés du `secret_kind` (`api_key`=1 champ `key` ; `basic_auth`=`email`+`password`). Vide pour `cookie`/`oauth`/`none` (flux dédiés). SOURCE UNIQUE du formulaire dashboard, de l'endpoint `/api/settings/api-keys`, de `status_for` et du packing — zéro branche par connecteur (ex. Silae = 3 champs déclarés, aucun code spécifique).
+- **Chargement** : `Connector.modules` = modules `tools/<m>.py` à importer (kind="tools" ; défaut = nom du provider). Voir §Chargement dérivé.
 
 **Tout dérive du registre** (mêmes symboles, ré-export) : `KEY_PROVIDERS`, `ORG_SHAREABLE_PROVIDERS`, `ADMIN_GRANT_ONLY_NAMESPACES`, `QUOTA_DEFAULTS`, `ENV_SECRET_NAMES`, `DEFAULT_BUNDLE/PRESET`. Plus de listes en dur parallèles. `GET /api/connectors` = vue publique.
 Helpers : `require_keyed`, `is_byo_user`, `is_org_shareable`, `require_credential(entity_type, name)` (user→byo_user, org→org-partageable).
@@ -28,6 +30,7 @@ connector_credentials(entity_type, entity_id, connector, account, secret_enc,
 
 Store = `credentials_store.py` (calqué `org_store.py`, réutilise `db._connect`, jamais d'import circulaire) :
 `get_credential` / `get_credential_with_meta` (secret+meta+set_at, déchiffre) / `credential_status` (présence+meta SANS déchiffrer, pour /api/me) / `has_credential` / `set_credential` (chiffre) / `clear_credential` / `update_meta` (merge JSONB sans re-chiffrer) / `list_accounts`.
+- **Packing multi-champs** : `pack_secret(connector, fields)` / `unpack_secret(connector, secret)` encodent les `secret_fields` dans l'unique `secret_enc` — 3 formats selon la forme : 1 champ (`api_key`) = valeur brute (back-compat) ; `basic_auth` = `base64("email:password")` (format de fil que le mount distant décode, ex. planity-mcp) ; ≥2 champs = `json`. L'endpoint de saisie et `resolve_credential_fields` passent par là.
 
 ## Chiffrement au repos — `crypto.py`
 
@@ -39,7 +42,9 @@ Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiff
 ## Résolution + accès (`access.py`)
 
 `resolve_api_key(provider) -> (api_key, is_platform)` : (1) user key (`get_user_api_key`→coffre) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. `resolve_remote_credential(provider)` = résolution du bridge d'un connecteur **remote** (`mm`) : `(meta.base_url, secret=token M2M)` du credential de l'org active, raise si absent, **jamais de fallback SOPS serveur**.
-`status_for` = miroir exact (modes user/org/platform/over_quota/forbidden). `granted_namespaces_for`/`require_namespace` = gate des namespaces grant-only (deny-by-default), source unique consommée par middleware + meta-tools + REST.
+`resolve_credential_fields(provider) -> dict` : credential **multi-champs byo_user** (ex. `silae` : client_id/client_secret/subscription_key) — lit le coffre + `unpack_secret`. **byo-only, pas de platform key ni quota** (le credential EST le grant). Pour les clients in-process s'instanciant avec plusieurs secrets.
+`resolve_mount_token(provider)` : token per-user d'un MCP fédéré `kind="mount"` (OAuth memento, ou base64 basic_auth planity), injecté en bearer par le proxy.
+`status_for` = miroir exact (modes user/org/platform/over_quota/forbidden) — boucle aussi sur les byo_user à `secret_fields` hors `KEY_PROVIDERS` (planity, silae : `user`/`forbidden`). `granted_namespaces_for`/`require_namespace` = gate des namespaces grant-only (deny-by-default), source unique consommée par middleware + meta-tools + REST.
 
 ## Palier org
 

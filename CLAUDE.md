@@ -436,9 +436,16 @@ valoir `group`. **Détails : `docs/groups-and-roles.md`.**
 
 ## Conventions
 
-- Nouveau connecteur = un fichier `tools/<service>.py` exposant `register(mcp)`,
-  enregistré dans `tools/__init__.py`. Lazy imports pour ne pas faire crasher
-  le serveur si un client a une dépendance optionnelle absente.
+- Nouveau connecteur = (1) un fichier `tools/<service>.py` exposant `register(mcp)`,
+  (2) une **entrée au registre `providers.py`**. `register_all` (`tools/__init__.py`)
+  **DÉRIVE le chargement du registre** (#24, fin de la liste hardcodée) : il boucle
+  sur les providers `kind="tools"` et importe `Connector.modules` (défaut = nom du
+  provider ; renseigner `modules` si module ≠ nom, ou plusieurs modules par provider —
+  ex. `sirene`→`fr`, `google`→`gmail`/`datastore`/`tasks`). Chaque import en
+  try/except (un connecteur cassé ne fait pas tomber le serveur). `meta`/`orgs`/`scout`
+  (spine) + `remote`/`mount` (génériques) restent chargés explicitement. ⚠️ Le
+  namespace déclaré doit matcher `namespace_of(tool)` (1er token avant `_`) — pas de
+  namespace multi-mot (`culture_spectacle`→`culture`), sinon fail-open du gate.
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_
@@ -467,6 +474,17 @@ valoir `group`. **Détails : `docs/groups-and-roles.md`.**
   lève `Unknown provider` à l'appel. Puis poser la clé plateforme en DB via
   `oto_admin_set_platform_key` (plus de bootstrap SOPS — le provider sans clé
   DB n'a simplement pas de mode plateforme).
+- **Credential = champs déclarés (modèle générique multi-champs, ADR 0011)** : un
+  provider porte `credential_fields` (`CredentialField` name/label/secret/reveal) ou
+  les dérive de `secret_kind` (`api_key`=1 champ, `basic_auth`=2). Le coffre encode
+  les champs dans l'unique `secret_enc` via `credentials_store.pack_secret`/
+  `unpack_secret` (3 formats : valeur brute 1 champ / base64 `email:password` /
+  json ≥2). L'endpoint `/api/settings/api-keys/{provider}`, le formulaire dashboard
+  et `status_for` bouclent sur `secret_fields` — **zéro branche par connecteur** ;
+  un nouveau connecteur multi-secrets = une déclaration. Résolution : `resolve_api_key`
+  (1 clé keyed + platform/quota) **ou** `resolve_credential_fields` (byo multi-champs
+  sans quota, ex. `silae` : client_id/client_secret/subscription_key). `cookie`/`oauth`
+  (linkedin/google/memento) ont des flux dédiés → `secret_fields` vide.
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - **Aucune résolution de secret côté serveur hors DB/env de process** : pas de
   `get_secret`/`require_secret` oto.config dans le code serveur (l'unit pose

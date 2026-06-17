@@ -223,6 +223,17 @@ def set_active_org(sub: str, org_id: int) -> bool:
             return True
 
 
+def clear_active_org(sub: str) -> None:
+    """Désélectionne l'org active → profil perso/global (org_id=0, ADR 0015).
+    Efface aussi le groupe actif (invariant ADR 0012 : pas d'org → pas de groupe)."""
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute(
+                "UPDATE org_members SET is_active = FALSE WHERE sub = %s AND is_active", (sub,))
+            conn.execute(
+                "UPDATE org_group_members SET is_active = FALSE WHERE sub = %s AND is_active", (sub,))
+
+
 def list_orgs_for_user(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(

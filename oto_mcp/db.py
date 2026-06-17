@@ -210,6 +210,17 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Corrélation hosted-auth (B3, voie webhook) : le `name` posé sur le lien Unipile
+-- ne revient PAS dans /accounts → on pose un **nonce** aléatoire comme `name` et on
+-- le mappe au sub. Au succès, Unipile POST {name=nonce, account_id} sur le webhook ;
+-- on résout nonce→sub. Le nonce (non devinable, courte vie) sécurise un webhook
+-- non authentifié. Consommé à la résolution, pruné après expiration.
+CREATE TABLE IF NOT EXISTS unipile_pending (
+    nonce TEXT PRIMARY KEY,
+    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Palier organization (= périmètre / store serveur). Une org possède des
 -- credentials propres (coffre `connector_credentials`, entity_type='org'), un
 -- set de namespaces autorisés (org_entitlements), et des opérateurs
@@ -844,6 +855,30 @@ def get_unipile_account(sub: str) -> Optional[dict]:
 def clear_unipile_account(sub: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM unipile_accounts WHERE sub = %s", (sub,))
+
+
+def create_unipile_pending(nonce: str, sub: str) -> None:
+    """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au `sub`, pour
+    corréler au retour du webhook. Prune au passage les nonces expirés (> 1h)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute("DELETE FROM unipile_pending WHERE created_at < NOW() - INTERVAL '1 hour'")
+        conn.execute(
+            "INSERT INTO unipile_pending (nonce, sub) VALUES (%s, %s) "
+            "ON CONFLICT (nonce) DO NOTHING",
+            (nonce, sub),
+        )
+
+
+def resolve_unipile_pending(nonce: str) -> Optional[str]:
+    """Consomme un nonce → `sub` (et le supprime), ou None si inconnu/expiré (>1h)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "DELETE FROM unipile_pending WHERE nonce = %s "
+            "AND created_at >= NOW() - INTERVAL '1 hour' RETURNING sub",
+            (nonce,),
+        ).fetchone()
+    return row["sub"] if row else None
 
 
 def get_linkedin_status(sub: str) -> Optional[dict]:

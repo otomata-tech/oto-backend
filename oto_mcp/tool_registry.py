@@ -78,3 +78,15 @@ async def manifest_for(mcp_instance, *texts: str) -> list[dict]:
         return []
     registry = await build_registry(mcp_instance)
     return resolve_refs(names, registry)
+
+
+async def write_check(mcp_instance, body_md: str) -> dict:
+    """Validation à l'écriture (ADR 0014) : résout les `<tool:slug>` du corps et
+    renvoie le manifeste + les références non résolues. **Non bloquant** —
+    l'écriture a lieu, mais l'auteur (IA ou UI) reçoit le signal de drift avant
+    que l'agent n'échoue sur l'appel."""
+    manifest = await manifest_for(mcp_instance, body_md)
+    return {
+        "referenced_tools": manifest,
+        "unresolved_tools": [t["name"] for t in manifest if t.get("status") == "missing"],
+    }

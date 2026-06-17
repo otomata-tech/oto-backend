@@ -211,7 +211,8 @@ def register(mcp: FastMCP) -> None:
         if not (body_md or "").strip():
             raise _err("body_md vide.")
         version = org_store.set_instruction(org_id, org_store.BASE_SLUG, body_md, set_by=admin)
-        return {"org_id": org_id, "slug": org_store.BASE_SLUG, "version": version, "set": True}
+        return {"org_id": org_id, "slug": org_store.BASE_SLUG, "version": version, "set": True,
+                **await tool_registry.write_check(mcp, body_md)}
 
     @mcp.tool()
     async def oto_admin_set_instruction(
@@ -245,7 +246,8 @@ def register(mcp: FastMCP) -> None:
             raise _err("body_md vide.")
         version = org_store.set_instruction(
             org_id, norm, body_md, title=title, description=description, set_by=admin)
-        return {"org_id": org_id, "slug": norm, "version": version, "set": True}
+        return {"org_id": org_id, "slug": norm, "version": version, "set": True,
+                **await tool_registry.write_check(mcp, body_md)}
 
     @mcp.tool()
     async def oto_admin_list_instructions(org_id: int, ctx: Context) -> dict:

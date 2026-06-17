@@ -93,7 +93,8 @@ def _alpha_invite_create(ctx: ResolvedCtx, inp: AlphaInviteInput) -> dict:
         db.refund_invite_quota(ctx.sub)
         raise
     invite_url = f"{_app_url()}/invite?token={token}"
-    emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url, me.get("email"))
+    inviter = me.get("name") or me.get("email")
+    emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url, inviter)
     remaining = (db.get_user(ctx.sub) or {}).get("invite_quota", 0)
     return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
             "invite_url": invite_url, "invites_left": remaining}

@@ -408,6 +408,33 @@ def revoke_alpha_invitation(inv_id: int) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def preview_invitation(token: str) -> Optional[dict]:
+    """Aperçu PUBLIC d'une invitation valide (pour la page d'accueil d'invitation,
+    avant authentification) : email visé, saveur referral/org, nom de l'inviteur et
+    nom de l'org. Le token EST le secret — rien de sensible au-delà. None si
+    invalide/expirée/déjà acceptée."""
+    if not token:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT i.email, i.org_id,
+                   COALESCE(u.name, u.email) AS inviter,
+                   o.name AS org_name
+              FROM org_invitations i
+              LEFT JOIN users u ON u.sub = i.invited_by
+              LEFT JOIN orgs  o ON o.id  = i.org_id
+             WHERE i.token_hash = %s AND i.accepted_at IS NULL AND i.expires_at > NOW()
+            """,
+            (_hash_token(token),),
+        ).fetchone()
+        if not row:
+            return None
+        r = dict(row)
+        return {"email": r["email"], "referral": r["org_id"] is None,
+                "inviter": r.get("inviter"), "org_name": r.get("org_name")}
+
+
 def get_invitation_by_token(token: str) -> Optional[dict]:
     """Invitation valide (non acceptée, non expirée) pour ce token, sinon None."""
     if not token:

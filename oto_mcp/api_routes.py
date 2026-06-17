@@ -200,6 +200,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                    or any(ns in granted for ns in c["namespaces"])]
         return _json(request, {"connectors": cat})
 
+    async def invite_preview(request: Request) -> JSONResponse:
+        """Aperçu PUBLIC d'une invitation (pas d'auth — le token est le secret).
+        Alimente la page d'accueil « vous êtes invité·e » avant la création de
+        compte : email visé + inviteur, pour accompagner l'onboarding."""
+        p = org_store.preview_invitation(request.path_params.get("token", ""))
+        if not p:
+            return _json_error(request, 404, "invalid_or_expired")
+        return _json(request, p)
+
     async def me(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -1411,6 +1420,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/connectors", connectors_catalog, methods=["GET"]),
         Route("/api/connectors", options_handler, methods=["OPTIONS"]),
+        Route("/api/invitations/{token}", invite_preview, methods=["GET"]),
+        Route("/api/invitations/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),
         Route("/api/me", options_handler, methods=["OPTIONS"]),
         Route("/api/me/avatar", avatar_save, methods=["POST"]),

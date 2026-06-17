@@ -88,15 +88,19 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
     """Liste d'outils du MCP distant, récupérée une fois au boot via le token
     d'un user déjà connecté. [] si personne n'est connecté ou si l'appel échoue
     (dégradation propre : pas d'outils fédérés, le reste d'oto intact)."""
-    # Compte désigné : on s'appuie de préférence sur le credential de l'admin
-    # (compte stable) pour fetcher le catalogue partagé, fallback 1er user connecté.
-    sub = credentials_store.first_entity_with(
-        "user", connector.name, prefer=os.environ.get("OTO_MCP_ADMIN_SUB"))
-    if not sub:
-        log.info("mount %s : aucun user connecté → catalogue non chargé "
-                 "(restart après le 1er connect)", connector.name)
-        return []
+    # Dégradation propre TOTALE : tout (y compris le lookup DB du compte désigné)
+    # est sous try/except — une DB momentanément indispo au boot (warmup du pool)
+    # ne doit JAMAIS crasher le register (sinon 502). [] = pas d'outils fédérés,
+    # le reste d'oto intact ; un restart après stabilisation re-fetchera.
     try:
+        # Compte désigné : on s'appuie de préférence sur le credential de l'admin
+        # (compte stable) pour fetcher le catalogue partagé, fallback 1er user connecté.
+        sub = credentials_store.first_entity_with(
+            "user", connector.name, prefer=os.environ.get("OTO_MCP_ADMIN_SUB"))
+        if not sub:
+            log.info("mount %s : aucun user connecté → catalogue non chargé "
+                     "(restart après le 1er connect)", connector.name)
+            return []
         token = _catalog_token(connector, sub)
         if not token:
             return []

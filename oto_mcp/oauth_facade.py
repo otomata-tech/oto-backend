@@ -96,6 +96,10 @@ def _redirect_ok(uri: str) -> bool:
     if p.scheme == "https" and host == "chatgpt.com" \
             and p.path.startswith("/connector/oauth/"):
         return True
+    # Mistral (Le Chat, connecteurs MCP) : redirect FIXE callback.mistral.ai.
+    if p.scheme == "https" and host == "callback.mistral.ai" \
+            and p.path.startswith("/v1/integrations_auth/"):
+        return True
     if p.scheme == "http" and host in _ALLOWED_LOCAL_HOSTS:
         return True
     return False

@@ -70,9 +70,31 @@ ssh -i ~/.ssh/alexis root@51.15.225.121 "cat > /opt/oto-mcp/.env" <<'EOF'
 OTO_MCP_PUBLIC_URL=https://mcp.oto.ninja
 LOGTO_ENDPOINT=https://auth.oto.zone
 MCP_AUDIENCE=https://mcp.oto.ninja/mcp
+# Billing (credits par org) — cf. §Billing du CLAUDE.md
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+OTO_MCP_FREE_CALLS=1000
+OTO_DASHBOARD_URL=https://dashboard.oto.ninja
+# OTO_MCP_LOW_BALANCE_THRESHOLD=50  # optionnel, déf. 50
 EOF
 ssh -i ~/.ssh/alexis root@51.15.225.121 "chmod 600 /opt/oto-mcp/.env"
 ```
+
+### Billing — webhook Stripe (one-shot)
+
+Le débit par appel et le don de base (1000 appels/org) sont automatiques dès le déploiement
+(tables créées au boot par `init_db`). Pour activer la **recharge** :
+
+1. Stripe Dashboard → **Developers → Webhooks → Add endpoint** :
+   - URL : `https://mcp.oto.ninja/api/billing/webhook`
+   - Événement : `checkout.session.completed`
+2. Copier le **Signing secret** (`whsec_…`) → `STRIPE_WEBHOOK_SECRET` du `.env`.
+3. Copier la **clé secrète API** (`sk_live_…`) → `STRIPE_SECRET_KEY`.
+4. Caddy proxie déjà tout `mcp.oto.ninja` → :9103 — **aucun changement Caddyfile**.
+
+Test (mode test Stripe) : `stripe listen --forward-to localhost:9103/api/billing/webhook`
+puis `stripe trigger checkout.session.completed`, ou payer une vraie session avec la carte
+`4242 4242 4242 4242`. Rejouer l'event → solde inchangé (idempotence).
 
 ## 6. systemd
 

@@ -21,6 +21,7 @@ dependencies = [
     "psycopg-pool>=3.2",
     "france-opendata[stock,sante]>=0.9.0",  # stock SIRENE + foncier (géocodage/cadastre/bâti/solaire) + santé (FINESS/HAS) — source unique partagée
     "cryptography>=42",
+    "stripe>=9.0",  # billing : Checkout + webhook (achat de packs de credits d'appel)
 ]
 
 [project.optional-dependencies]

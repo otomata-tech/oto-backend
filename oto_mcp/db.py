@@ -386,6 +386,33 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);
+
+-- Palier billing : porte-monnaie de credits d'appel PAR ORGANISATION.
+-- balance = compteur entier de "call credits" restants ; peut devenir NÉGATIF
+-- (soft enforcement : on ne bloque JAMAIS un appel, cf. credits_store). base_granted
+-- = le stock gratuit unique (OTO_MCP_FREE_CALLS) a déjà été crédité (idempotence du
+-- don de bienvenue). Le débit par appel n'écrit QUE cette table (cf. ledger ci-dessous).
+CREATE TABLE IF NOT EXISTS org_credits (
+    org_id BIGINT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+    balance INTEGER NOT NULL DEFAULT 0,
+    base_granted BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Grand livre des mouvements MONÉTAIRES (un delta par top-up Stripe / don de base /
+-- ajustement admin). Volontairement PAS de ligne par appel débité (volumétrie : le
+-- détail par appel vit déjà dans tool_calls, prunée). reason : 'stripe' | 'base_grant'
+-- | 'admin_adjust'. stripe_event_id = id d'event Stripe, UNIQUE → idempotence webhook.
+CREATE TABLE IF NOT EXISTS credit_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    delta INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    stripe_event_id TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_credit_tx_org ON credit_transactions(org_id, created_at DESC);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique

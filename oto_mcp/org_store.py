@@ -12,13 +12,20 @@ Consommé par : `access.resolve_api_key`/`status_for` (reads org credential) et
 """
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from typing import Optional
 
 from . import credentials_store
 from . import connectors
+from . import db
 from .db import _connect, _hash_token, upsert_user
+
+
+def _alpha_invite_quota() -> int:
+    """Quota referral crédité à un invité alpha qui accepte (ADR 0013)."""
+    return int(os.environ.get("OTO_ALPHA_INVITE_QUOTA", "3"))
 
 ORG_ROLES = ("org_admin", "org_member")
 
@@ -320,10 +327,12 @@ def count_orgs_created_by(sub: str) -> int:
         ).fetchone()["n"]
 
 
-def create_invitation(org_id: int, email: str, org_role: str, invited_by: str,
-                      ttl_days: int = 7) -> tuple[int, str]:
-    """Crée une invitation. Renvoie (id, token plaintext — exposé une seule fois,
-    seul son hash est persisté)."""
+def create_invitation(org_id: Optional[int], email: str, org_role: str, invited_by: str,
+                      ttl_days: int = 7, source: Optional[str] = None) -> tuple[int, str]:
+    """Crée une invitation (ADR 0013, table unifiée). `org_id` renseigné = rejoindre
+    cette org ; `org_id=None` = referral alpha (l'invité crée sa propre org).
+    `org_role` n'a de sens que pour la saveur org. Renvoie (id, token plaintext —
+    exposé une seule fois, seul son hash est persisté)."""
     email = (email or "").strip().lower()
     if "@" not in email:
         raise ValueError("email invalide")
@@ -333,11 +342,11 @@ def create_invitation(org_id: int, email: str, org_role: str, invited_by: str,
     with _connect() as conn:
         row = conn.execute(
             """
-            INSERT INTO org_invitations (org_id, email, org_role, token_hash, invited_by, expires_at)
-            VALUES (%s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+            INSERT INTO org_invitations (org_id, email, org_role, token_hash, invited_by, source, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
             RETURNING id
             """,
-            (org_id, email, org_role, _hash_token(token), invited_by, str(int(ttl_days))),
+            (org_id, email, org_role, _hash_token(token), invited_by, source, str(int(ttl_days))),
         ).fetchone()
         return int(row["id"]), token
 
@@ -373,7 +382,7 @@ def get_invitation_by_token(token: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, org_id, email, org_role, expires_at
+            SELECT id, org_id, email, org_role, invited_by, source, expires_at
               FROM org_invitations
              WHERE token_hash = %s AND accepted_at IS NULL AND expires_at > NOW()
             """,
@@ -382,22 +391,38 @@ def get_invitation_by_token(token: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def accept_invitation(token: str, sub: str) -> Optional[dict]:
-    """Ajoute le membre, bascule l'org active, marque l'invitation acceptée.
-    Renvoie {org_id, org_role} ou None si token invalide. Le contrôle d'email
-    (matche le compte) est fait par la capacité appelante."""
-    inv = get_invitation_by_token(token)
-    if not inv:
-        return None
-    add_org_member(inv["org_id"], sub, inv["org_role"])
-    set_active_org(sub, inv["org_id"])
+def _mark_invitation_accepted(inv_id: int, sub: str) -> None:
     with _connect() as conn:
         conn.execute(
             "UPDATE org_invitations SET accepted_at = NOW(), accepted_sub = %s "
             "WHERE id = %s AND accepted_at IS NULL",
-            (sub, inv["id"]),
+            (sub, inv_id),
         )
-    return {"org_id": inv["org_id"], "org_role": inv["org_role"]}
+
+
+def accept_invitation(token: str, sub: str) -> Optional[dict]:
+    """Accepte une invitation (ADR 0013, table unifiée). Les DEUX saveurs accordent
+    l'accès plateforme. Renvoie {org_id, org_role, referral} ou None si token
+    invalide. Le contrôle d'email (matche le compte) est fait par la capacité
+    appelante.
+
+    - referral (`org_id=None`) : accorde l'accès + crédite le quota referral + pose
+      le parrain ; PAS de rattachement d'org (l'invité crée la sienne via org.create).
+    - org (`org_id` renseigné) : ajoute le membre, bascule l'org active, et accorde
+      aussi l'accès plateforme (un membre invité est de fait dans Oto)."""
+    inv = get_invitation_by_token(token)
+    if not inv:
+        return None
+    if inv["org_id"] is None:
+        db.grant_platform_access(sub, invited_by=inv.get("invited_by"),
+                                 quota=_alpha_invite_quota())
+        _mark_invitation_accepted(inv["id"], sub)
+        return {"org_id": None, "org_role": None, "referral": True}
+    add_org_member(inv["org_id"], sub, inv["org_role"])
+    set_active_org(sub, inv["org_id"])
+    db.grant_platform_access(sub)
+    _mark_invitation_accepted(inv["id"], sub)
+    return {"org_id": inv["org_id"], "org_role": inv["org_role"], "referral": False}
 
 
 # --- instructions d'org : doctrine de base + skills versionnés ----------------

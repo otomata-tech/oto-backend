@@ -40,99 +40,31 @@ def register_all(mcp: FastMCP) -> None:
     from . import mount
     mount.register(mcp)
 
-    # Connecteurs API-only — la résolution de clé (user vs platform) se fait
-    # par appel via `access.resolve_api_key`, pas au register. Pas besoin que
-    # les secrets soient configurés au boot.
-    from . import fr, serper, hunter, attio
-    fr.register(mcp)
-    serper.register(mcp)
-    hunter.register(mcp)
-    attio.register(mcp)
+    # Connecteurs — chargement DÉRIVÉ DU REGISTRE (ADR 0010/0011, #24). Fin de la
+    # liste hardcodée : pour chaque provider `kind="tools"`, on importe ses
+    # modules `tools/<m>.py` (`Connector.modules`, défaut = le nom du provider) et
+    # on appelle `register(mcp)`. Le registre `providers.py` est l'UNIQUE source.
+    #
+    # - `kind="mount"` (memento/planity) et `kind="remote"` sont EXCLUS : déjà
+    #   gérés par mount.register / remote.register (génériques) ci-dessus.
+    # - try/except par module (résilience uniforme) : un connecteur dont une dép
+    #   optionnelle manque (oto-cli en retard, duckdb/o-browser absents, parquet
+    #   introuvable…) se désactive en loggant un warning SANS faire tomber le
+    #   serveur — exactement la classe du 502 qu'on élimine.
+    # - L'exposition réelle reste gouvernée à la VISIBILITÉ par session
+    #   (UserDisabledToolsMiddleware + connector_activation), pas au chargement.
+    from .. import providers  # oto_mcp.providers (parent package, pas tools/)
 
-    # Connecteurs récents — wrapper en try/except au cas où la version d'oto-cli
-    # déployée serait en retard sur le module attendu.
-    for mod_name in ("reddit", "lemlist", "culture", "kaspr", "fullenrich", "pennylane", "gocardless", "folk"):
-        try:
-            mod = __import__(f"oto_mcp.tools.{mod_name}", fromlist=[mod_name])
-            mod.register(mcp)
-        except Exception as e:
-            log.warning("%s tools disabled: %s", mod_name, e)
-
-    # Browser — optionnel : si o-browser ou patchright manquent, on log et on
-    # continue sans LinkedIn plutôt que de cracher tout le MCP.
-    try:
-        from . import linkedin
-        linkedin.register(mcp)
-    except Exception as e:
-        log.warning("LinkedIn tools disabled: %s", e)
-
-    try:
-        from . import crunchbase
-        crunchbase.register(mcp)
-    except Exception as e:
-        log.warning("Crunchbase tools disabled: %s", e)
-
-    # WhatsApp — Baileys via Node.js subprocess. Réservé aux admins (pairing
-    # QR manuel pour l'instant). Gracefully disabled si Node manque ou si
-    # l'install npm pose problème.
-    try:
-        from . import whatsapp
-        whatsapp.register(mcp)
-    except Exception as e:
-        log.warning("WhatsApp tools disabled: %s", e)
-
-    # Slack — user token per-user (`/account` provider `slack`) ou clé
-    # plateforme grantée. On register quoi qu'il en soit ; les tools lèvent
-    # une McpError actionnable à l'appel si l'user n'a ni clé ni grant.
-    try:
-        from . import slack
-        slack.register(mcp)
-    except Exception as e:
-        log.warning("Slack tools disabled: %s", e)
-
-    # Datastore — Google Sheets per-user. Requiert Google OAuth grant côté
-    # user (`/account`). On register quoi qu'il en soit ; les tools lèvent
-    # une McpError actionnable à l'appel si l'user n'a pas grant.
-    try:
-        from . import datastore
-        datastore.register(mcp)
-    except Exception as e:
-        log.warning("Datastore tools disabled: %s", e)
-
-    # Gmail — surface oto-cli par-utilisateur, multi-compte. Mêmes credentials
-    # OAuth Google que le datastore (flow unifié Sheets+Drive+Gmail). On
-    # register quoi qu'il en soit ; les tools lèvent une McpError actionnable
-    # à l'appel si l'user n'a pas connecté de compte Google.
-    try:
-        from . import gmail
-        gmail.register(mcp)
-    except Exception as e:
-        log.warning("Gmail tools disabled: %s", e)
-
-    # Google Tasks — surface oto-cli par-utilisateur, multi-compte. Mêmes
-    # credentials OAuth Google que Gmail/datastore (flow unifié, scope tasks).
-    try:
-        from . import tasks
-        tasks.register(mcp)
-    except Exception as e:
-        log.warning("Tasks tools disabled: %s", e)
-
-    # SIRENE stock — DuckDB sur parquet INSEE local. Gracefully disabled si
-    # duckdb manque ou parquet introuvable (on log à l'appel, pas au register).
-    try:
-        from . import sirene_stock
-        sirene_stock.register(mcp)
-    except Exception as e:
-        log.warning("SIRENE stock tools disabled: %s", e)
-
-    # Connecteurs open-data déclarés (ADR 0010/0011) : chargés INCONDITIONNELLEMENT.
-    # L'exposition (cran d'activation) est désormais gouvernée à la VISIBILITÉ par
-    # session (UserDisabledToolsMiddleware + connector_activation), PLUS au
-    # chargement → (dés)activer prend effet à chaud (pas de restart) et l'override
-    # par org fonctionne. Un connecteur non activé reste invisible/non listé.
-    for name in ("foncier", "sante"):
-        try:
-            mod = __import__(f"oto_mcp.tools.{name}", fromlist=[name])
-            mod.register(mcp)
-        except Exception as e:
-            log.warning("%s tools disabled: %s", name, e)
+    loaded: set[str] = set()
+    for c in providers.REGISTRY.values():
+        if c.kind != "tools":
+            continue
+        for mod_name in (c.modules or (c.name,)):
+            if mod_name in loaded:
+                continue
+            loaded.add(mod_name)
+            try:
+                mod = __import__(f"oto_mcp.tools.{mod_name}", fromlist=[mod_name])
+                mod.register(mcp)
+            except Exception as e:
+                log.warning("%s tools disabled: %s", mod_name, e)

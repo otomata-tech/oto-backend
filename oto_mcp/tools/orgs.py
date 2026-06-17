@@ -24,7 +24,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connectors, db, group_store, org_store
+from .. import access, connectors, db, group_store, org_store, tool_registry
 from ..access import ORG_SHAREABLE_PROVIDERS
 from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -75,7 +75,8 @@ def register(mcp: FastMCP) -> None:
         org_id = org_store.get_active_org(sub)
         if org_id is None:
             return {"org_id": None, "org": None, "doctrine": "",
-                    "group_id": None, "group": None, "group_doctrine": "", "instructions": []}
+                    "group_id": None, "group": None, "group_doctrine": "",
+                    "instructions": [], "referenced_tools": []}
         o = org_store.get_org(org_id)
         base = org_store.get_instruction(org_id, org_store.BASE_SLUG)
         index = [
@@ -94,14 +95,19 @@ def register(mcp: FastMCP) -> None:
                  "scope": "group"}
                 for i in group_store.list_group_instructions(group_id)
             ]
+        doctrine_body = (base or {}).get("body_md", "") or ""
         return {
             "org_id": org_id,
             "org": o["name"] if o else None,
-            "doctrine": (base or {}).get("body_md", "") or "",
+            "doctrine": doctrine_body,
             "group_id": group_id,
             "group": group_name,
             "group_doctrine": group_doctrine,
             "instructions": index,
+            # Manifeste résolu des outils cités par la doctrine de base + celle du
+            # groupe (ADR 0014) : noms canoniques, descriptions tirées des outils,
+            # et drift signalé (`status=missing`). Vide si rien n'est cité.
+            "referenced_tools": await tool_registry.manifest_for(mcp, doctrine_body, group_doctrine),
         }
 
     @mcp.tool()
@@ -158,6 +164,8 @@ def register(mcp: FastMCP) -> None:
             "slug": instr["slug"], "title": instr["title"],
             "description": instr["description"], "version": instr["version"],
             "body_md": instr["body_md"],
+            # Manifeste résolu des outils cités par ce skill (ADR 0014).
+            "referenced_tools": await tool_registry.manifest_for(mcp, instr["body_md"]),
         }
 
     @mcp.tool()
@@ -203,7 +211,8 @@ def register(mcp: FastMCP) -> None:
         if not (body_md or "").strip():
             raise _err("body_md vide.")
         version = org_store.set_instruction(org_id, org_store.BASE_SLUG, body_md, set_by=admin)
-        return {"org_id": org_id, "slug": org_store.BASE_SLUG, "version": version, "set": True}
+        return {"org_id": org_id, "slug": org_store.BASE_SLUG, "version": version, "set": True,
+                **await tool_registry.write_check(mcp, body_md)}
 
     @mcp.tool()
     async def oto_admin_set_instruction(
@@ -237,7 +246,8 @@ def register(mcp: FastMCP) -> None:
             raise _err("body_md vide.")
         version = org_store.set_instruction(
             org_id, norm, body_md, title=title, description=description, set_by=admin)
-        return {"org_id": org_id, "slug": norm, "version": version, "set": True}
+        return {"org_id": org_id, "slug": norm, "version": version, "set": True,
+                **await tool_registry.write_check(mcp, body_md)}
 
     @mcp.tool()
     async def oto_admin_list_instructions(org_id: int, ctx: Context) -> dict:

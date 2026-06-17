@@ -43,6 +43,10 @@ class InviteAcceptInput(BaseModel):
     token: str = Field(min_length=1)
 
 
+class AlphaInviteInput(BaseModel):
+    email: str
+
+
 def _invite_create(ctx: ResolvedCtx, inp: InviteCreateInput) -> dict:
     if inp.role not in org_store.ORG_ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide : {inp.role!r}.")
@@ -70,6 +74,32 @@ def _invite_revoke(ctx: ResolvedCtx, inp: InviteRevokeInput) -> dict:
     return {"ok": True, "revoked": inp.invite_id}
 
 
+def _alpha_invite_create(ctx: ResolvedCtx, inp: AlphaInviteInput) -> dict:
+    """Invitation virale (ADR 0013) : un alpha-user actif dépense une de ses
+    invitations pour faire entrer quelqu'un. L'invité crée sa propre org."""
+    if "@" not in (inp.email or ""):
+        raise AuthzDenied(400, "invalid_email", "Email invalide.")
+    me = db.get_user(ctx.sub) or {}
+    if me.get("access_status") != "active":
+        raise AuthzDenied(403, "not_active",
+                          "Ton accès alpha n'est pas actif — tu ne peux pas encore inviter.")
+    if not db.consume_invite_quota(ctx.sub):
+        raise AuthzDenied(403, "no_quota", "Tu n'as plus d'invitations alpha disponibles.")
+    try:
+        _, token = org_store.create_invitation(
+            None, inp.email, "org_member", invited_by=ctx.sub,
+            ttl_days=_INVITE_TTL_DAYS, source="user_quota")
+    except Exception:
+        db.refund_invite_quota(ctx.sub)
+        raise
+    invite_url = f"{_app_url()}/invite?token={token}"
+    inviter = me.get("name") or me.get("email")
+    emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url, inviter)
+    remaining = (db.get_user(ctx.sub) or {}).get("invite_quota", 0)
+    return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
+            "invite_url": invite_url, "invites_left": remaining}
+
+
 def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     inv = org_store.get_invitation_by_token(inp.token)
     if not inv:
@@ -81,8 +111,12 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     res = org_store.accept_invitation(inp.token, ctx.sub)
     if not res:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide ou déjà utilisée.")
+    if res.get("referral"):
+        # Accès alpha accordé ; l'invité crée ensuite sa propre org (org.create).
+        return {"ok": True, "referral": True, "org_id": None, "org_role": None,
+                "active_org": None, "name": None}
     org = org_store.get_org(res["org_id"])
-    return {"ok": True, "org_id": res["org_id"], "org_role": res["org_role"],
+    return {"ok": True, "referral": False, "org_id": res["org_id"], "org_role": res["org_role"],
             "active_org": res["org_id"], "name": org["name"] if org else None}
 
 
@@ -111,8 +145,17 @@ CAPABILITIES += [
     Capability(
         key="org.invite.accept", handler=_invite_accept, Input=InviteAcceptInput,
         authz=SUB_ONLY,
-        description="Accept an org invitation with its token (must match your verified email).",
+        description="Accept an invitation with its token (must match your verified email). "
+                    "Org invite → joins the org; alpha referral → grants access, create your own org next.",
         mcp="oto_accept_invite",
         rest=RestBinding("POST", "/api/me/invitations/accept"),
+    ),
+    Capability(
+        key="platform.invite.alpha", handler=_alpha_invite_create, Input=AlphaInviteInput,
+        authz=SUB_ONLY,
+        description="Spend one of your alpha invitations to invite someone to Oto by email. "
+                    "They get their own account/org. Requires active access and remaining quota.",
+        mcp="oto_invite_to_alpha",
+        rest=RestBinding("POST", "/api/me/alpha-invites"),
     ),
 ]

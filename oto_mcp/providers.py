@@ -132,6 +132,7 @@ _CATEGORY_BY_CONNECTOR = {
     "serper": "Prospection", "hunter": "Prospection", "kaspr": "Prospection",
     "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
     "folk": "Prospection", "crunchbase": "Prospection", "linkedin": "Prospection",
+    "unipile": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
@@ -198,6 +199,26 @@ _REGISTRY_LIST = [
     _c("folk", ["folk"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", env_secret_name="FOLK_API_KEY",
        label="Folk", help="CRM", href="https://app.folk.app"),
+    # unipile : LinkedIn hébergé (recherche/scrape/messagerie) via l'API Unipile.
+    # La session LinkedIn vit chez Unipile (vrai Chrome + proxy résidentiel) →
+    # contourne empreinte TLS + isolation de session du browser local (#5).
+    # Credential **multi-champs** `{api_key, dsn}` (PAS keyed mono-valeur) : Unipile
+    # attribue un sous-domaine dédié par compte (`api<NN>.unipile.com:port`) → le dsn
+    # fait partie du credential. byo_user (BYO : l'user pose sa clé) OU byo_org
+    # (l'org pose l'abonnement Otomata, ses membres connectent leur LinkedIn par
+    # hosted-auth → account_id per-user). Résolu par `access.resolve_unipile`
+    # (cascade user > org), PAS resolve_api_key. Hors bundle par défaut : SaaS
+    # payant, opt-in. 2e provider du domaine LinkedIn (à côté du connecteur browser
+    # `linkedin`) — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
+    _c("unipile", ["unipile"], auth_modes={"byo_user", "byo_org"},
+       secret_kind="fields", env_secret_name="UNIPILE_API_KEY",
+       in_default_bundle=False, label="Unipile",
+       help="LinkedIn hébergé (recherche/scrape/messagerie)",
+       href="https://www.unipile.com", credential_fields=(
+           CredentialField("api_key", "API key", secret=True, reveal=True),
+           CredentialField("dsn", "DSN (api<NN>.unipile.com:port)", secret=False,
+                           reveal=True, help="Sous-domaine dédié de ton compte Unipile"),
+       )),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets

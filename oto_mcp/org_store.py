@@ -207,9 +207,17 @@ def set_active_org(sub: str, org_id: int) -> bool:
             ).fetchone()
             if not hit:
                 return False
+            # Deux passes (vider puis poser) : un seul UPDATE `is_active=(org_id=%s)`
+            # viole transitoirement l'index partiel `org_members_one_active` (≤1 TRUE
+            # par sub) car Postgres le vérifie ligne par ligne — la nouvelle TRUE peut
+            # exister avant que l'ancienne passe FALSE. On efface tout, puis on pose.
             conn.execute(
-                "UPDATE org_members SET is_active = (org_id = %s) WHERE sub = %s",
-                (org_id, sub),
+                "UPDATE org_members SET is_active = FALSE WHERE sub = %s AND is_active",
+                (sub,),
+            )
+            conn.execute(
+                "UPDATE org_members SET is_active = TRUE WHERE sub = %s AND org_id = %s",
+                (sub, org_id),
             )
             # Invariant ADR 0012 : le groupe actif appartient à l'org active.
             # Basculer d'org invalide donc le groupe actif (qui pointait l'ancienne

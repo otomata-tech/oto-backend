@@ -3,7 +3,7 @@
 Miroir de la doctrine d'org au grain groupe : lecture = membre du groupe
 (`GROUP_MEMBER_OF`), écriture = chef d'équipe (`GROUP_ADMIN_OF`, escalade
 org_admin/platform). Modèle versionné (slug réservé `claude_md` = doctrine de
-base servie en complément de celle de l'org par `get_claude_md`). Édité par le
+base servie en complément de celle de l'org par `oto_get_doctrine`). Édité par le
 dashboard via REST `/api/groups/{id}/instructions*`.
 """
 from __future__ import annotations

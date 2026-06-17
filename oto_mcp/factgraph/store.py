@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS factgraph.workspace (
   org_id         BIGINT NOT NULL,
   kind           TEXT NOT NULL,          -- cas d'usage : 'prospection' | 'compta' | ...
   label          TEXT,
-  doctrine       TEXT,                   -- get_claude_md() per-workspace (à câbler)
+  doctrine       TEXT,                   -- oto_get_doctrine() per-workspace (à câbler)
   scoring_config JSONB,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (org_id, kind)

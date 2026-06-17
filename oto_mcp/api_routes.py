@@ -1112,7 +1112,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         body_md = (body.get("body_md") or "").strip()
         if not body_md:
             return _json_error(request, 400, "body_md_required")
-        # Injecté dans get_claude_md() à chaque session MCP → caper pour ne pas
+        # Injecté dans oto_get_doctrine() à chaque session MCP → caper pour ne pas
         # saturer le contexte du modèle.
         if len(body_md.encode()) > 64 * 1024:
             return _json_error(request, 400, "body_too_large")

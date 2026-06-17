@@ -46,10 +46,23 @@ CATALOG_TIMEOUT = 20
 _REGISTERED: dict[str, set[str]] = {}
 
 
+# Fédération MCP systématique (otomata#16) : memento est monté **d'office** —
+# c'est la base de connaissance commune de l'écosystème, pas une intégration
+# client. Les autres mounts (ex. planity, client-spécifique) restent opt-in via
+# `OTO_MCP_MOUNTS_ENABLED`.
+_DEFAULT_ENABLED_MOUNTS = frozenset({"memento"})
+
+
 def _enabled_mounts() -> set[str]:
-    """Activation explicite / kill-switch par env. `OTO_MCP_MOUNTS_ENABLED` (CSV)
-    liste les mounts actifs ; vide → aucun (défaut sûr) ; `*` = tous."""
-    raw = (os.environ.get("OTO_MCP_MOUNTS_ENABLED") or "").strip()
+    """Mounts actifs. `OTO_MCP_MOUNTS_ENABLED` :
+    - **non défini** → défaut systématique (`_DEFAULT_ENABLED_MOUNTS`, càd memento) ;
+    - `*`           → tous les mounts déclarés ;
+    - CSV           → exactement ceux listés ;
+    - `""` (vide)   → kill-switch (aucun)."""
+    raw = os.environ.get("OTO_MCP_MOUNTS_ENABLED")
+    if raw is None:
+        return {c.name for c in connectors.MOUNT_CONNECTORS if c.name in _DEFAULT_ENABLED_MOUNTS}
+    raw = raw.strip()
     if raw == "*":
         return {c.name for c in connectors.MOUNT_CONNECTORS}
     return {n.strip() for n in raw.split(",") if n.strip()}

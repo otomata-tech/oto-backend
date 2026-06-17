@@ -408,6 +408,41 @@ def revoke_alpha_invitation(inv_id: int) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def revoke_alpha_invitations_for_email(email: str) -> int:
+    """Révoque toutes les invitations alpha en attente pour un email (supersede au
+    moment d'un renvoi, pour ne pas empiler des liens valides). Renvoie le nombre."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return 0
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_invitations WHERE org_id IS NULL AND accepted_at IS NULL AND lower(email) = %s",
+            (email,),
+        )
+        return cur.rowcount or 0
+
+
+def find_pending_alpha_invite_by_email(email: str) -> Optional[dict]:
+    """Invitation alpha en attente la plus récente pour cet email, sinon None.
+    Sert la fiche admin user (proposer un renvoi)."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, created_at, expires_at
+              FROM org_invitations
+             WHERE org_id IS NULL AND accepted_at IS NULL AND expires_at > NOW()
+               AND lower(email) = %s
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            (email,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def preview_invitation(token: str) -> Optional[dict]:
     """Aperçu PUBLIC d'une invitation valide (pour la page d'accueil d'invitation,
     avant authentification) : email visé, saveur referral/org, nom de l'inviteur et

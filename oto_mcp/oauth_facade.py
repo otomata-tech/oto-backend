@@ -90,9 +90,82 @@ def _redirect_ok(uri: str) -> bool:
     if p.scheme == "https" and host in (_ALLOWED_HTTPS_HOSTS | _extra_https_hosts()) \
             and p.path.startswith(_CALLBACK_PATH):
         return True
+    # ChatGPT (connecteurs MCP) : redirect `https://chatgpt.com/connector/oauth/<id>`
+    # où <id> est propre au connecteur (varie) → on matche le préfixe de path, pas
+    # l'URI exacte. Garde-fou réel = l'app Logto (redirect enregistré, exact).
+    if p.scheme == "https" and host == "chatgpt.com" \
+            and p.path.startswith("/connector/oauth/"):
+        return True
     if p.scheme == "http" and host in _ALLOWED_LOCAL_HOSTS:
         return True
     return False
+
+
+# ── DCR réelle : enregistrement dynamique du redirect dans l'app Logto ────────
+# Le client_id reste partagé, mais on ÉTEND la liste de redirectUris de l'app
+# Logto à chaque DCR (le redirect de ChatGPT est propre à chaque connecteur →
+# impossible à pré-enregistrer). Ainsi N'IMPORTE QUEL user installe sans
+# intervention manuelle. Les redirects sont déjà validés par _redirect_ok
+# (host allowlist) → on n'enregistre QUE des callbacks légitimes.
+_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"  # vs WAF Cloudflare (1010)
+_MGMT_RESOURCE = "https://default.logto.app/api"
+_mgmt_tok = {"value": None, "exp": 0.0}
+
+
+def _logto_base() -> str:
+    return os.environ["LOGTO_ENDPOINT"].rstrip("/")
+
+
+def _mgmt_token() -> str:
+    import requests
+    cid = os.environ.get("OTO_MCP_LOGTO_M2M_ID")
+    csec = os.environ.get("OTO_MCP_LOGTO_M2M_SECRET")
+    if not cid or not csec:
+        raise RuntimeError("M2M Logto non configuré (OTO_MCP_LOGTO_M2M_ID/SECRET)")
+    now = time.time()
+    if _mgmt_tok["value"] and _mgmt_tok["exp"] > now + 30:
+        return _mgmt_tok["value"]
+    r = requests.post(
+        f"{_logto_base()}/oidc/token",
+        data={"grant_type": "client_credentials", "resource": _MGMT_RESOURCE, "scope": "all"},
+        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=15,
+    )
+    r.raise_for_status()
+    j = r.json()
+    _mgmt_tok["value"] = j["access_token"]
+    _mgmt_tok["exp"] = now + int(j.get("expires_in", 3600))
+    return _mgmt_tok["value"]
+
+
+def _register_redirects(app_id: str, redirect_uris: list) -> None:
+    """Ajoute les `redirect_uris` (déjà validés) à l'app Logto partagée (dédup) +
+    l'origine CORS https correspondante. Idempotent ; no-op si tout est déjà là.
+    Lève si la Management API échoue (l'appelant décide quoi en faire)."""
+    import requests
+    base, tok = _logto_base(), _mgmt_token()
+    h = {"Authorization": f"Bearer {tok}", "User-Agent": _UA, "Content-Type": "application/json"}
+    data = requests.get(f"{base}/api/applications/{app_id}", headers=h, timeout=15)
+    data.raise_for_status()
+    app = data.json()
+    meta = app.get("oidcClientMetadata", {}) or {}
+    custom = app.get("customClientMetadata", {}) or {}
+    cur = list(meta.get("redirectUris", []))
+    cors = list(custom.get("corsAllowedOrigins", []))
+    new = [u for u in redirect_uris if u not in cur]
+    for u in redirect_uris:
+        pp = urlparse(u)
+        origin = f"{pp.scheme}://{pp.netloc}"
+        if pp.scheme == "https" and origin not in cors:
+            cors.append(origin)
+    if not new and set(cors) == set(custom.get("corsAllowedOrigins", []) or []):
+        return
+    meta["redirectUris"] = cur + new
+    custom["corsAllowedOrigins"] = cors
+    p = requests.patch(f"{base}/api/applications/{app_id}",
+                       json={"oidcClientMetadata": meta, "customClientMetadata": custom},
+                       headers=h, timeout=15)
+    p.raise_for_status()
+    _log.info("DCR: app %s — +%d redirect(s), cors=%s", app_id, len(new), cors)
 
 
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
@@ -122,8 +195,17 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
                 status_code=400,
                 headers=_cors(),
             )
-        # Logto valide le redirect contre l'app pré-enregistrée : on renvoie le
-        # client_id partagé + ce que le client a envoyé.
+        # DCR réelle : on enregistre dynamiquement le(s) redirect(s) dans l'app
+        # Logto partagée (le redirect de ChatGPT est propre à chaque connecteur).
+        # Fail-OPEN : si la Management API échoue, on renvoie quand même le
+        # client_id — Claude reste fonctionnel (son redirect est déjà enregistré) ;
+        # seul un NOUVEAU redirect (ChatGPT) serait alors refusé plus tard au
+        # /authorize, cas dégradé loggé, jamais une régression de l'existant.
+        try:
+            _register_redirects(claude_app_id, requested)
+        except Exception:
+            _log.exception("DCR: enregistrement Logto échoué (redirects=%r)", requested)
+        # Logto valide le redirect contre l'app : on renvoie le client_id partagé.
         return JSONResponse(
             {
                 "client_id": claude_app_id,

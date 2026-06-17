@@ -216,44 +216,19 @@ def resolve_credential_fields(provider: str) -> dict:
     return credentials_store.unpack_secret(provider, secret)
 
 
-def unipile_credential_for(sub: str) -> Optional[dict]:
-    """`{api_key, dsn}` Unipile pour `sub`, en cascade (sans lever) : credential de
-    l'user (BYO) puis de son org active (abonnement Otomata). None si aucun.
+def unipile_api_key_for(sub: str) -> Optional[str]:
+    """Clé API Unipile pour `sub`, en cascade (sans lever) : clé de l'user (BYO)
+    puis secret de son org active (abonnement Otomata). None si aucune.
 
     Pris pour `sub` EXPLICITE → utilisable hors contexte MCP (route REST connect).
-    """
-    secret = credentials_store.get_credential("user", sub, "unipile")
-    if not secret:
-        active_org = org_store.get_active_org(sub)
-        if active_org is not None:
-            secret = credentials_store.get_credential("org", str(active_org), "unipile")
-    if not secret:
-        return None
-    fields = credentials_store.unpack_secret("unipile", secret)
-    return {"api_key": fields.get("api_key"), "dsn": fields.get("dsn") or None}
-
-
-def resolve_unipile() -> dict:
-    """Résout le credential Unipile du sub courant → `{api_key, dsn, account_id}`.
-
-    Sert les deux modèles (ADR 0011) : BYO (clé de l'user) OU org-abonnement
-    (Otomata détient l'abonnement ; ses membres connectent leur LinkedIn par
-    hosted-auth). `account_id` = compte LinkedIn **per-user** capté par hosted-auth
-    (B3) ; `None` ⇒ le client auto-résout le 1er compte LINKEDIN (cas BYO
-    mono-compte). byo-only : le credential EST le grant (ni clé plateforme ni
-    quota). Membre du seam de résolution `access`."""
-    fields = unipile_credential_for(current_user_sub_or_raise())
-    if fields is None:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "Aucun compte Unipile connecté pour toi. Pose ta clé Unipile sur "
-                f"{_ACCOUNT_URL} (section Unipile), ou connecte ton LinkedIn via le "
-                "dashboard (Unipile)."
-            ),
-        ))
-    # account_id per-user (hosted-auth) — B3 (store dédié) ; None ⇒ auto-résolution.
-    return {"api_key": fields["api_key"], "dsn": fields["dsn"], "account_id": None}
+    Les tools MCP, eux, passent par `resolve_api_key("unipile")` (idiome keyed)."""
+    key = db.get_user_api_key(sub, "unipile")
+    if key:
+        return key
+    active_org = org_store.get_active_org(sub)
+    if active_org is not None:
+        return org_store.get_org_secret(active_org, "unipile")
+    return None
 
 
 def resolve_remote_credential(provider: str) -> tuple[str, str]:

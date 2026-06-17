@@ -46,19 +46,103 @@ def _send(to: str, subject: str, html: str, reply_to: str | None = None) -> bool
         return False
 
 
+_BTN = ('display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:none;'
+        'padding:10px 20px;border-radius:999px;font-weight:600')
+_WRAP = 'font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112'
+_FAINT = 'color:#7a6c50;font-size:13px'
+
+
 def send_invite_email(to: str, org_name: str, invite_url: str,
                       inviter: str | None = None) -> bool:
     """Email d'invitation à rejoindre une org. True si envoyé, False sinon."""
     who = f"{_esc(inviter)} " if inviter else ""
     subject = f"You're invited to {org_name} on Oto"
     html = (
-        f'<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112">'
+        f'<div style="{_WRAP}">'
         f'<p>{who}invited you to join <strong>{_esc(org_name)}</strong> on Oto.</p>'
-        f'<p><a href="{_esc(invite_url)}" '
-        f'style="display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:none;'
-        f'padding:10px 20px;border-radius:999px;font-weight:600">Accept invitation</a></p>'
-        f'<p style="color:#7a6c50;font-size:13px">Or paste this link: {_esc(invite_url)}</p>'
+        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">Accept invitation</a></p>'
+        f'<p style="{_FAINT}">Or paste this link: {_esc(invite_url)}</p>'
         f'</div>'
+    )
+    return _send(to, subject, html)
+
+
+def send_access_granted_email(to: str, app_url: str) -> bool:
+    """Email à un compte waitlisté dont l'accès alpha vient d'être ouvert."""
+    subject = "Votre accès à l'alpha de Oto est ouvert"
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>Bonne nouvelle — votre accès à l\'<strong>alpha de Oto</strong> est ouvert.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">Ouvrir Oto</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
+def send_alpha_invite_email(to: str, invite_url: str,
+                            inviter: str | None = None) -> bool:
+    """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon.
+
+    Copy alignée sur le positionnement oto.ninja (web/src/i18n.ts) : tutoiement +
+    minuscules (voix de marque « manuscrit chaud »)."""
+    subject = "tu es invité·e à l'alpha de oto"
+    sub_line = (
+        f'<div style="font-size:15px;color:#7a6c50;padding-bottom:24px">'
+        f'{_esc(inviter)} t\'ouvre l\'accès.</div>'
+        if inviter else '<div style="height:24px"></div>'
+    )
+    url = _esc(invite_url)
+    html = (
+        '<div style="background:#fefcf5;padding:40px 16px;'
+        'font-family:-apple-system,system-ui,\'Segoe UI\',sans-serif;color:#2c2112">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="max-width:560px;margin:0 auto">'
+
+        # En-tête : médaillon « o » + eyebrow
+        '<tr><td style="padding-bottom:32px">'
+        '<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+        '<td style="width:46px;height:46px;background:#2c2112;border-radius:50%;'
+        'text-align:center;vertical-align:middle;color:#fefcf5;font-size:25px;'
+        'font-weight:700;line-height:46px">o</td>'
+        '<td style="padding-left:14px;font-size:12px;letter-spacing:.16em;'
+        'text-transform:uppercase;color:#b08200;font-weight:600">alpha · sur invitation</td>'
+        '</tr></table></td></tr>'
+
+        # Titre = le hero oto.ninja
+        '<tr><td style="font-size:32px;line-height:1.18;font-weight:700;'
+        'padding-bottom:14px">claude connaît le monde.<br>'
+        'oto lui ouvre <span style="color:#d63d0a">tes outils</span>.</td></tr>'
+        f'<tr><td>{sub_line}</td></tr>'
+
+        # Corps = hero_sub oto.ninja, VERBATIM (web/src/i18n.ts)
+        '<tr><td style="font-size:16px;line-height:1.6;color:#2c2112;padding-bottom:18px">'
+        'crm, emails, linkedin, données entreprise france — tes agents '
+        '(claude.ai, claude code) s\'en servent avec tes clés, gardées dans un '
+        'coffre côté serveur. jamais collées dans un prompt.</td></tr>'
+
+        # 2e ligne = acc_lead oto.ninja, VERBATIM
+        '<tr><td style="font-size:16px;line-height:1.6;color:#7a6c50">'
+        'le même compte, le même coffre, le même catalogue — depuis claude code, '
+        'claude.ai ou ton terminal.</td></tr>'
+
+        # CTA
+        '<tr><td style="padding:32px 0 8px">'
+        '<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+        '<td style="background:#2c2112;border-radius:999px">'
+        f'<a href="{url}" style="display:inline-block;padding:15px 34px;color:#fefcf5;'
+        'text-decoration:none;font-weight:600;font-size:16px">activer mon accès →</a>'
+        '</td></tr></table></td></tr>'
+        f'<tr><td style="font-size:13px;color:#7a6c50;padding-bottom:32px">'
+        f'ou colle ce lien : {url}</td></tr>'
+
+        # Footer
+        '<tr><td style="border-top:1px solid #ece4d0;padding-top:20px;'
+        'font-size:12px;line-height:1.5;color:#9a8a6a">'
+        'oto, par otomata · oto.ninja<br>'
+        'tu reçois cet email car tu as été invité·e à l\'alpha.</td></tr>'
+
+        '</table></div>'
     )
     return _send(to, subject, html)
 
@@ -72,8 +156,8 @@ def send_contact_email(name: str, email: str, message: str) -> bool:
     subject = f"otomata.tech — message de {name}"
     body = _esc(message).replace("\n", "<br>")
     html = (
-        f'<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112">'
-        f'<p style="color:#7a6c50;font-size:13px">nouveau message via otomata.tech</p>'
+        f'<div style="{_WRAP}">'
+        f'<p style="{_FAINT}">nouveau message via otomata.tech</p>'
         f'<p><strong>{_esc(name)}</strong> &lt;{_esc(email)}&gt;</p>'
         f'<hr style="border:none;border-top:1px solid #ece4d0;margin:16px 0">'
         f'<p>{body}</p>'

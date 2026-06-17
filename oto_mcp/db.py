@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT,
     name TEXT,
     role TEXT NOT NULL DEFAULT 'member',
+    -- Accès plateforme & invitation virale (ADR 0013). access_status = gate doux
+    -- (pending = waitlist, active = alpha, blocked). invite_quota = budget referral
+    -- restant. invited_by = sub du parrain (arbre viral). Non appliqué tant que le
+    -- flag OTO_ALPHA_GATE_ENABLED est off (barreaux ultérieurs).
+    access_status TEXT NOT NULL DEFAULT 'pending',
+    invite_quota INTEGER NOT NULL DEFAULT 0,
+    invited_by TEXT,
+    access_granted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -232,13 +240,18 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
 -- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
 -- un email donné ; l'acceptation exige un compte dont l'email vérifié Logto
 -- matche (anti-transfert de lien). accepted_at NULL = en attente.
+-- Invitation UNIFIÉE (ADR 0013) : org_id NULLABLE — renseigné = rejoindre cette
+-- org (org-invite) ; NULL = referral alpha (l'invité crée sa propre org). Les
+-- deux saveurs accordent l'accès plateforme à l'acceptation. `source` =
+-- provenance (user_quota | admin_seed | org_admin).
 CREATE TABLE IF NOT EXISTS org_invitations (
     id BIGSERIAL PRIMARY KEY,
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
     org_role TEXT NOT NULL DEFAULT 'org_member',
     token_hash TEXT NOT NULL UNIQUE,
     invited_by TEXT,
+    source TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     accepted_at TIMESTAMPTZ,
@@ -423,6 +436,36 @@ def init_db() -> None:
         # lignes existantes (guest était un alias sans effet, cf. access.py).
         conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
         conn.execute("UPDATE users SET role = 'member' WHERE role = 'guest'")
+        # Accès plateforme & invitation virale (ADR 0013, barreau 1).
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_quota INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_granted_at TIMESTAMPTZ")
+        # access_status : backfill ONE-SHOT à la création de la colonne — les comptes
+        # existants sont pré-alpha → 'active'. Garder hors d'un ADD COLUMN ... DEFAULT
+        # (qui poserait tout le monde 'pending') ET hors d'un UPDATE inconditionnel
+        # rejoué à chaque boot (qui ré-activerait les pending et tuerait le gate).
+        _has_access = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'users' AND column_name = 'access_status'"
+        ).fetchone()
+        if not _has_access:
+            conn.execute("ALTER TABLE users ADD COLUMN access_status TEXT")
+            conn.execute("UPDATE users SET access_status = 'active', access_granted_at = NOW()")
+            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET DEFAULT 'pending'")
+            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET NOT NULL")
+        # L'admin bootstrap (OTO_MCP_ADMIN_SUB) ne tombe jamais en waitlist.
+        _admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
+        if _admin_sub:
+            conn.execute(
+                "UPDATE users SET access_status = 'active', "
+                "access_granted_at = COALESCE(access_granted_at, NOW()) "
+                "WHERE sub = %s AND access_status <> 'active'",
+                (_admin_sub,),
+            )
+        # Invitation unifiée (ADR 0013) : org_id nullable + source (idempotent pour
+        # les DB créées avant). NULL = referral alpha, l'invité crée sa propre org.
+        conn.execute("ALTER TABLE org_invitations ALTER COLUMN org_id DROP NOT NULL")
+        conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
@@ -511,6 +554,70 @@ def get_user(sub: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE sub = %s", (sub,)).fetchone()
         return dict(row) if row else None
+
+
+# --- accès plateforme & quota d'invitation (ADR 0013) -----------------------
+
+def grant_platform_access(sub: str, *, invited_by: Optional[str] = None,
+                          quota: Optional[int] = None) -> None:
+    """Passe le compte en 'active' (alpha). Idempotent sur access_granted_at et
+    invited_by (COALESCE — ne réécrase pas un parrain déjà posé). `quota` crédite
+    le budget referral (referral alpha) ; None = ne touche pas au quota (cas
+    org-invite : le membre obtient l'accès mais pas de budget d'invitation)."""
+    sets = ["access_status = 'active'",
+            "access_granted_at = COALESCE(access_granted_at, NOW())",
+            "updated_at = NOW()"]
+    params: list = []
+    if quota is not None:
+        sets.append("invite_quota = %s")
+        params.append(int(quota))
+    if invited_by is not None:
+        sets.append("invited_by = COALESCE(invited_by, %s)")
+        params.append(invited_by)
+    params.append(sub)
+    with _connect() as conn:
+        conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE sub = %s", tuple(params))
+
+
+def consume_invite_quota(sub: str) -> bool:
+    """Décrémente atomiquement le quota referral si > 0. True si consommé, False
+    si épuisé (WHERE invite_quota > 0 → pas de course)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE users SET invite_quota = invite_quota - 1, updated_at = NOW() "
+            "WHERE sub = %s AND invite_quota > 0",
+            (sub,),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+def refund_invite_quota(sub: str) -> None:
+    """Re-crédite une invitation (rollback si la création échoue après consume)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET invite_quota = invite_quota + 1, updated_at = NOW() WHERE sub = %s",
+            (sub,),
+        )
+
+
+def set_invite_quota(sub: str, quota: int) -> None:
+    """Fixe le quota referral (admin top-up). Ne change pas l'access_status."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET invite_quota = %s, updated_at = NOW() WHERE sub = %s",
+            (int(quota), sub),
+        )
+
+
+def list_waitlist() -> list[dict]:
+    """Comptes en attente (cold signups non approuvés), du plus ancien au plus
+    récent — la file d'attente est une vue dérivée, pas une table."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, email, name, created_at FROM users "
+            "WHERE access_status = 'pending' ORDER BY created_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_user_by_email(email: str) -> Optional[dict]:
@@ -749,6 +856,51 @@ def list_tool_calls(
             tuple(params),
         ).fetchall()
         return list(rows)
+
+
+def instruction_usage(
+    subs: list[str], tool: str, slug: Optional[str], days: int = 30
+) -> dict:
+    """Usage d'une doctrine dérivé de `tool_calls` (ADR 0014, « doctrine = process
+    = log d'usage ») : combien de fois elle a été chargée par l'agent, par qui,
+    et la distribution journalière sur `days` jours.
+
+    `tool` = `get_claude_md` pour la base (slug=None) ou `oto_get_instruction`
+    filtré par `args->>'slug'` pour une skill. Scopé aux `subs` (membres de
+    l'org). Lecture pure ; renvoie {count, callers, daily{date:str -> n}}.
+    """
+    if not subs:
+        return {"count": 0, "callers": [], "daily": {}}
+    days = max(1, min(int(days), 365))
+    slug_clause = " AND l.args->>'slug' = %s" if slug is not None else ""
+    base_params: list[Any] = [subs, tool]
+    if slug is not None:
+        base_params.append(slug)
+    with _connect() as conn:
+        callers = conn.execute(
+            f"""
+            SELECT u.email, COUNT(*) AS n
+            FROM tool_calls l LEFT JOIN users u ON u.sub = l.sub
+            WHERE l.sub = ANY(%s) AND l.tool = %s{slug_clause} AND l.ok
+            GROUP BY u.email ORDER BY n DESC
+            """,
+            tuple(base_params),
+        ).fetchall()
+        daily = conn.execute(
+            f"""
+            SELECT (l.created_at AT TIME ZONE 'UTC')::date AS d, COUNT(*) AS n
+            FROM tool_calls l
+            WHERE l.sub = ANY(%s) AND l.tool = %s{slug_clause} AND l.ok
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY d
+            """,
+            tuple(base_params + [days]),
+        ).fetchall()
+    return {
+        "count": sum(int(r["n"]) for r in callers),
+        "callers": [r["email"] for r in callers if r["email"]],
+        "daily": {str(r["d"]): int(r["n"]) for r in daily},
+    }
 
 
 def tool_call_stats(since_days: int = 7) -> dict:

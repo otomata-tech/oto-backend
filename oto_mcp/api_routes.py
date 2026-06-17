@@ -40,7 +40,9 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing
+from datetime import date as _date, timedelta as _timedelta
+
+from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -230,6 +232,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_group": active_group,
             "active_group_name": active_group_name,
             "group_role": group_role,
+            "access": {
+                "status": user.get("access_status"),
+                "invites_left": user.get("invite_quota", 0),
+                "invited_by": user.get("invited_by"),
+            },
             "linkedin": {
                 "configured": li is not None,
                 "set_at": li["set_at"] if li else None,
@@ -326,15 +333,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "set_at": sess.get("set_at"),
         })
 
-    # Saisie de credential per-user, GÉNÉRIQUE (dérivée du registre, pas une liste
-    # hardcodée) : tout connecteur `byo_user` dont le secret est un "secret simple"
-    # — `api_key` (la clé) ou `basic_auth` (base64("email:password"), ex. planity).
-    # cookie/oauth ont des flows dédiés (linkedin / google / memento) → exclus ici.
-    _SETTABLE_KINDS = {"api_key", "basic_auth"}
-
+    # Saisie de credential per-user, GÉNÉRIQUE (modèle multi-champs, ADR 0011) :
+    # tout connecteur `byo_user` qui déclare un schéma de saisie (`secret_fields` :
+    # api_key 1 champ, basic_auth 2 champs, silae 3 champs…). Le formulaire, la
+    # validation et le packing dérivent du schéma — zéro branche par connecteur.
+    # cookie/oauth ont des flux dédiés (linkedin/google/memento) → `secret_fields`
+    # vide → exclus ici.
     def _credentialable(provider: str):
         c = connectors.connector_for_provider(provider)
-        if c is None or not connectors.is_byo_user(provider) or c.secret_kind not in _SETTABLE_KINDS:
+        if c is None or not connectors.is_byo_user(provider) or not c.secret_fields:
             return None
         return c
 
@@ -352,19 +359,18 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_json")
         if not isinstance(body, dict):
             return _json_error(request, 400, "invalid_body")
-        if c.secret_kind == "basic_auth":
-            import base64
-            email = (body.get("email") or "").strip()
-            password = body.get("password") or ""
-            if not email or not password:
+        # Tous les champs déclarés sont requis (non vides). Le packing (raw/base64/
+        # json) est encapsulé dans credentials_store.pack_secret.
+        fields: dict[str, str] = {}
+        for f in c.secret_fields:
+            raw = body.get(f.name)
+            val = raw.strip() if isinstance(raw, str) else raw
+            if not val:
                 return _json_error(request, 400, "missing_credentials")
-            secret = base64.b64encode(f"{email}:{password}".encode()).decode()
-        else:  # api_key
-            secret = (body.get("key") or "").strip()
-            if not secret:
-                return _json_error(request, 400, "empty_key")
+            fields[f.name] = val
         from . import credentials_store
         db.upsert_user(sub)
+        secret = credentials_store.pack_secret(provider, fields)
         credentials_store.set_credential("user", sub, provider, secret, set_by=sub)
         return _json(request, {"ok": True, "provider": provider})
 
@@ -391,15 +397,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         secret = credentials_store.get_credential("user", sub, provider)
         if not secret:
             return _json_error(request, 404, "not_configured")
-        if c.secret_kind == "basic_auth":
-            # Ne JAMAIS renvoyer le mot de passe — juste l'état + l'email saisi.
-            import base64
-            try:
-                email = base64.b64decode(secret).decode().split(":", 1)[0]
-            except Exception:
-                email = None
-            return _json(request, {"provider": provider, "configured": True, "email": email})
-        return _json(request, {"provider": provider, "key": secret})
+        # GÉNÉRIQUE : on dépack et on ne renvoie que les champs `reveal` (l'api_key,
+        # pour copier) ou non-`secret` (l'email). Jamais un mot de passe / secret.
+        fields = credentials_store.unpack_secret(provider, secret)
+        out: dict = {"provider": provider, "configured": True}
+        for f in c.secret_fields:
+            if f.reveal or not f.secret:
+                out[f.name] = fields.get(f.name)
+        return _json(request, out)
 
     async def admin_users(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -703,6 +708,22 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             ],
         })
 
+    async def my_tools_registry(request: Request) -> JSONResponse:
+        """Registre résolu des tools exposés (ADR 0014) : nom + description
+        (1ʳᵉ ligne de la docstring = champ MCP `description`, source de vérité du
+        modèle) + source `native`/`federated`. Alimente la résolution des
+        marqueurs `<tool:slug>` d'une doctrine, l'autocomplétion et le manifeste
+        « outils référencés ». Les namespaces grant-only (bridges) sont exclus."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            reg = await tool_registry.build_registry(mcp_instance)
+        except Exception as e:
+            return _json_error(request, 500, f"list_tools_failed:{e}")
+        out = sorted(reg.values(), key=lambda e: e["name"])
+        return _json(request, {"tools": out, "count": len(out)})
+
     async def my_tools_disable(request: Request) -> JSONResponse:
         """Désactive un tool pour l'utilisateur courant (live)."""
         sub, err = await _authenticate(request, verifier)
@@ -960,7 +981,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             description=description if description is None else str(description),
             set_by=sub,
         )
-        return _json(request, {"ok": True, "slug": slug, "version": version})
+        # Validation à l'écriture (ADR 0014) : refs d'outils mortes signalées en
+        # warning, non bloquant (l'écriture a eu lieu).
+        return _json(request, {
+            "ok": True, "slug": slug, "version": version,
+            **await tool_registry.write_check(mcp_instance, body_md),
+        })
 
     async def my_instruction_delete(request: Request) -> JSONResponse:
         """Supprime une instruction et son historique (org_admin)."""
@@ -1020,6 +1046,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             org_id, slug, old["body_md"], title=old["title"],
             description=old["description"], set_by=sub)
         return _json(request, {"ok": True, "slug": slug, "version": version, "reverted_from": target})
+
+    async def my_instruction_usage(request: Request) -> JSONResponse:
+        """Usage d'une doctrine (ADR 0014) : nb de chargements par l'agent,
+        appelants, série journalière 30j — dérivé de `tool_calls`, scopé org."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        org_id, role, _ = _active_org_edit(sub)
+        if org_id is None:
+            return _json_error(request, 404, "no_active_org")
+        if role is None and access.get_user_role(sub) != access.ADMIN:
+            return _json_error(request, 403, "forbidden")
+        slug = org_store.normalize_slug(request.path_params["slug"])
+        subs = [m["sub"] for m in org_store.list_org_members(org_id)]
+        # La base se charge via get_claude_md (bundle, pas de slug) ; une skill
+        # via oto_get_instruction(slug=…).
+        if slug == org_store.BASE_SLUG:
+            tool, slug_filter = "get_claude_md", None
+        else:
+            tool, slug_filter = "oto_get_instruction", slug
+        u = db.instruction_usage(subs, tool, slug_filter, days=30)
+        today = _date.today()
+        series = [u["daily"].get(str(today - _timedelta(days=29 - i)), 0) for i in range(30)]
+        return _json(request, {
+            "slug": slug, "count": u["count"], "callers": u["callers"], "series": series,
+        })
 
     # ── LinkedIn browser-session pairing (VNC) ──────────────────────
 
@@ -1228,6 +1280,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools", my_tools_list, methods=["GET"]),
         Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
+        # `registry` AVANT `{name}` sinon Starlette le capture comme nom de tool.
+        Route("/api/me/tools/registry", my_tools_registry, methods=["GET"]),
+        Route("/api/me/tools/registry", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
@@ -1247,6 +1302,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/instructions/{slug}", options_handler, methods=["OPTIONS"]),
         Route("/api/me/instructions/{slug}/versions", my_instruction_versions, methods=["GET"]),
         Route("/api/me/instructions/{slug}/versions", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/instructions/{slug}/usage", my_instruction_usage, methods=["GET"]),
+        Route("/api/me/instructions/{slug}/usage", options_handler, methods=["OPTIONS"]),
         Route("/api/me/instructions/{slug}/revert", my_instruction_revert, methods=["POST"]),
         Route("/api/me/instructions/{slug}/revert", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),

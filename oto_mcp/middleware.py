@@ -134,6 +134,12 @@ class UserDisabledToolsMiddleware(Middleware):
             }
         except Exception as e:
             logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
+        # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.
+        # Inutiles à un user normal (l'autz les refuse à l'appel) → ils ne font
+        # qu'alourdir le contexte de TOUT LE MONDE. Visibilité seulement ; l'autz
+        # PLATFORM_ADMIN reste enforced au call-time (jamais une barrière ici).
+        if not is_admin:
+            to_hide |= {n for n in all_names if n.startswith("oto_admin_")}
         # Gate doux alpha (ADR 0013, barreau 4) : si le flag est posé, un compte
         # non-'active' (waitlist/blocked) ne voit que l'allowlist d'onboarding.
         # Fail-OPEN (gouvernance d'accès produit, pas une barrière de sécurité) :

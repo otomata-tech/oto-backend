@@ -133,11 +133,11 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        fields = access.unipile_credential_for(sub)
-        if not fields:
+        api_key = access.unipile_api_key_for(sub)
+        if not api_key:
             return json_error(request, 404, "unipile_not_configured")
         from oto.tools.unipile import UnipileClient
-        client = UnipileClient(api_key=fields["api_key"], dsn=fields["dsn"])
+        client = UnipileClient(api_key=api_key)
         public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         try:

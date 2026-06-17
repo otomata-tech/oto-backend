@@ -1,9 +1,9 @@
 """Unipile — LinkedIn hébergé (recherche / scrape / messagerie).
 
-Credential résolu par appel via `access.resolve_unipile()` → `{api_key, dsn,
-account_id}` : clé+dsn du compte Unipile de l'user (BYO) ou de son org active
-(abonnement Otomata). `account_id` per-user (hosted-auth) sinon None → le client
-auto-résout le 1er compte LINKEDIN connecté.
+Clé résolue par appel via `access.resolve_api_key("unipile")` (keyed, cascade
+user > org). Le dsn (`api<NN>.unipile.com:port`) et l'account_id LinkedIn sont
+résolus côté client (env `UNIPILE_DSN`, défaut api25 ; auto-résolution du 1er
+compte LINKEDIN connecté).
 
 Pourquoi à côté du connecteur browser `linkedin` : la session vit chez Unipile
 (vrai Chrome + proxy résidentiel), ce qui contourne l'empreinte TLS et
@@ -23,10 +23,8 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.unipile import UnipileClient
 
     def _client() -> UnipileClient:
-        c = access.resolve_unipile()
-        return UnipileClient(
-            api_key=c["api_key"], dsn=c["dsn"], account_id=c["account_id"],
-        )
+        key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
+        return UnipileClient(api_key=key)
 
     @mcp.tool()
     async def unipile_search(

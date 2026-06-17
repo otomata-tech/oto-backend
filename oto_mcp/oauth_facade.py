@@ -17,6 +17,7 @@ enregistrement sans risque.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from urllib.parse import urlparse
@@ -24,6 +25,8 @@ from urllib.parse import urlparse
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
+_log = logging.getLogger("oto_mcp.oauth_facade")
 
 
 def _logto_issuer() -> str:
@@ -111,6 +114,8 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # évite de tendre un client public à un redirect non prévu.
         requested = body.get("redirect_uris") or []
         if not isinstance(requested, list) or any(not _redirect_ok(u) for u in requested):
+            _log.warning("DCR refusé — redirect_uris=%r client_name=%r grant_types=%r",
+                         requested, body.get("client_name"), body.get("grant_types"))
             return JSONResponse(
                 {"error": "invalid_redirect_uri",
                  "error_description": "redirect_uri non autorisé pour ce serveur"},

@@ -35,6 +35,7 @@ from typing import Iterable
 
 import asyncio
 import json
+import logging
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
@@ -44,6 +45,8 @@ from . import access, api_routes_connectors, api_routes_contact, api_routes_data
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
+
+logger = logging.getLogger(__name__)
 
 
 def _allowed_origins() -> list[str]:
@@ -219,6 +222,21 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             g = group_store.get_group(active_group)
             active_group_name = g["name"] if g else None
             group_role = roles.effective_group_role(sub, active_group)
+        # Billing (palier credits par org) : solde du wallet de l'org active.
+        # Best-effort — ne jamais 500 /api/me (chemin critique du front) sur un
+        # hoquet DB. None si pas d'org active (caller non facturé).
+        billing_block = None
+        if active_org is not None:
+            from . import credits_store
+            try:
+                b = credits_store.get_balance(active_org)
+                billing_block = {
+                    "balance": b["balance"],
+                    "low": b["low"],
+                    "base_granted": b["base_granted"],
+                }
+            except Exception:
+                billing_block = None
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
@@ -242,6 +260,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "user_agent": cb["user_agent"] if cb else None,
             },
             "providers": status["providers"],
+            "billing": billing_block,
         })
 
     async def linkedin_save(request: Request) -> JSONResponse:
@@ -1209,7 +1228,27 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         _json, _json_error, options_handler,
     )
 
+    async def billing_webhook(request: Request) -> JSONResponse:
+        # Webhook Stripe : NON authentifié (Stripe l'appelle) mais signature-vérifié.
+        # Corps BRUT requis (la signature couvre les octets exacts) → jamais
+        # request.json() avant la vérif. Pas de CORS/OPTIONS (server-to-server).
+        payload = await request.body()
+        sig = request.headers.get("stripe-signature", "")
+        from . import billing
+        try:
+            event = billing.verify_and_parse(payload, sig)
+        except Exception:
+            return _json_error(request, 400, "invalid_signature")
+        try:
+            billing.handle_event(event)
+        except Exception:
+            logger.exception("billing webhook handling failed")
+            # 500 → Stripe rejoue ; l'idempotence (UNIQUE event id) évite le double-crédit.
+            return _json_error(request, 500, "webhook_error")
+        return _json(request, {"received": True})
+
     return [
+        Route("/api/billing/webhook", billing_webhook, methods=["POST"]),
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/connectors", connectors_catalog, methods=["GET"]),

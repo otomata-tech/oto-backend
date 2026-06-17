@@ -551,6 +551,12 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
     inv = get_invitation_by_token(token)
     if not inv:
         return None
+    return _accept_invitation_row(inv, sub)
+
+
+def _accept_invitation_row(inv: dict, sub: str) -> dict:
+    """Cœur de l'acceptation à partir d'une ligne d'invitation déjà résolue (par
+    token OU par email lors d'une réconciliation de signup). Cf. accept_invitation."""
     if inv["org_id"] is None:
         db.grant_platform_access(sub, invited_by=inv.get("invited_by"),
                                  quota=_alpha_invite_quota())
@@ -561,6 +567,31 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
     db.grant_platform_access(sub)
     _mark_invitation_accepted(inv["id"], sub)
     return {"org_id": inv["org_id"], "org_role": inv["org_role"], "referral": False}
+
+
+def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
+    """Honore une invitation par l'EMAIL au signup (ADR 0013) : si un nouvel inscrit
+    a une invitation en attente pour son email vérifié, on l'accepte automatiquement
+    — il saute la waitlist au lieu d'y rester coincé avec une invitation orpheline
+    (cas vécu : invité qui s'inscrit sans passer par le lien /invite). Sûr car
+    l'email est vérifié par Logto (signup email+code). None si aucune invitation."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, org_id, org_role, invited_by
+              FROM org_invitations
+             WHERE accepted_at IS NULL AND expires_at > NOW() AND lower(email) = %s
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            (email,),
+        ).fetchone()
+    if not row:
+        return None
+    return _accept_invitation_row(dict(row), sub)
 
 
 # --- instructions d'org : doctrine de base + skills versionnés ----------------

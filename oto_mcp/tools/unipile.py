@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db
 
@@ -23,14 +25,20 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.unipile import UnipileClient
 
     def _client() -> UnipileClient:
-        # Clé partagée (org) + account_id LinkedIn per-user (B3) : chacun agit
-        # comme LUI-MÊME sous l'abonnement Unipile commun. account_id None (user
-        # pas encore connecté) → le client auto-résout le 1er compte (rétro-compat
-        # mono-compte ; tant que tous n'ont pas connecté, un non-connecté tape sur
-        # le 1er compte de l'abonnement).
+        # Clé partagée (org) + account_id LinkedIn per-user : chacun agit comme
+        # LUI-MÊME sous l'abonnement Unipile commun. PAS de fallback : sans
+        # account_id connecté, le client oto-core retomberait sur le 1er compte de
+        # l'abonnement → **usurpation cross-user** (audit sécu 2026-06-18). On exige
+        # donc le credential per-user, sinon McpError actionnable.
         key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
         sub = access.current_user_sub_or_raise()
-        return UnipileClient(api_key=key, account_id=db.get_unipile_account_id(sub))
+        account_id = db.get_unipile_account_id(sub)
+        if not account_id:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="Connecte ton compte LinkedIn sur https://oto.ninja/account "
+                        "avant d'utiliser les outils Unipile."))
+        return UnipileClient(api_key=key, account_id=account_id)
 
     @mcp.tool()
     async def unipile_search(

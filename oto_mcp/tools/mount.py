@@ -84,6 +84,31 @@ def _catalog_token(connector: connectors.Connector, sub: str) -> str | None:
     return credentials_store.get_credential("user", sub, connector.name)
 
 
+def _service_catalog(connector: connectors.Connector) -> list | None:
+    """Catalogue via un endpoint **service-à-service** (secret partagé oto↔distant),
+    PAS un token OAuth user — fix durable (otomata#16) : le boot ne dépend plus d'un
+    token personnel révocable, ni du dual-sub. Le catalogue est product-level
+    (mêmes outils pour tous) → un credential de service stable suffit.
+
+    None si non configuré pour ce connecteur (→ fallback au token user). Renvoie des
+    `mcp.types.Tool` (même type que `client.list_tools()`), pour `_register_one`."""
+    if connector.name != "memento":
+        return None
+    url = os.environ.get("MEMENTO_FEDERATION_CATALOG_URL")
+    secret = os.environ.get("MEMENTO_FEDERATION_SECRET")
+    if not url or not secret:
+        return None
+    import requests
+    from mcp.types import Tool
+    r = requests.get(url, headers={"Authorization": f"Bearer {secret}"},
+                     timeout=CATALOG_TIMEOUT)
+    r.raise_for_status()
+    tools = (r.json() or {}).get("tools", [])
+    return [Tool(name=t["name"], description=t.get("description"),
+                 inputSchema=t.get("inputSchema") or {"type": "object"})
+            for t in tools]
+
+
 def _fetch_catalog(connector: connectors.Connector) -> list:
     """Liste d'outils du MCP distant, récupérée une fois au boot via le token
     d'un user déjà connecté. [] si personne n'est connecté ou si l'appel échoue
@@ -93,8 +118,14 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
     # ne doit JAMAIS crasher le register (sinon 502). [] = pas d'outils fédérés,
     # le reste d'oto intact ; un restart après stabilisation re-fetchera.
     try:
-        # Compte désigné : on s'appuie de préférence sur le credential de l'admin
-        # (compte stable) pour fetcher le catalogue partagé, fallback 1er user connecté.
+        # Voie durable (otomata#16) : catalogue via endpoint service (secret partagé),
+        # sans token user. Si configuré (memento + env), on s'en tient là.
+        svc = _service_catalog(connector)
+        if svc is not None:
+            log.info("mount %s : catalogue via endpoint service (%d outils)",
+                     connector.name, len(svc))
+            return svc
+        # Fallback historique : token OAuth d'un user connecté (compte désigné admin).
         sub = credentials_store.first_entity_with(
             "user", connector.name, prefer=os.environ.get("OTO_MCP_ADMIN_SUB"))
         if not sub:

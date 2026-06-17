@@ -59,6 +59,10 @@ class AlphaInviteRevokeInput(BaseModel):
     id: int
 
 
+class AlphaInviteResendInput(BaseModel):
+    email: str
+
+
 def _invite_create(ctx: ResolvedCtx, inp: InviteCreateInput) -> dict:
     if inp.role not in org_store.ORG_ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide : {inp.role!r}.")
@@ -139,6 +143,22 @@ def _alpha_invite_revoke(ctx: ResolvedCtx, inp: AlphaInviteRevokeInput) -> dict:
     return {"ok": True, "revoked": inp.id}
 
 
+def _alpha_invite_resend(ctx: ResolvedCtx, inp: AlphaInviteResendInput) -> dict:
+    """Renvoie une invitation alpha : supersede les invitations en attente pour cet
+    email (pour ne pas multiplier les liens valides), en émet une fraîche et la mail.
+    Identique à une émission admin côté droits (hors quota)."""
+    if "@" not in (inp.email or ""):
+        raise AuthzDenied(400, "invalid_email", "Email invalide.")
+    org_store.revoke_alpha_invitations_for_email(inp.email)
+    _, token = org_store.create_invitation(
+        None, inp.email, "org_member", invited_by=ctx.sub,
+        ttl_days=_INVITE_TTL_DAYS, source="admin")
+    invite_url = f"{_app_url()}/invite?token={token}"
+    emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url)
+    return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
+            "invite_url": invite_url}
+
+
 def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     inv = org_store.get_invitation_by_token(inp.token)
     if not inv:
@@ -214,5 +234,12 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="[platform admin] Revoke a pending alpha invitation by id.",
         rest=RestBinding("DELETE", "/api/admin/alpha-invites/{id}"),
+    ),
+    Capability(
+        key="platform.invite.alpha_resend", handler=_alpha_invite_resend, Input=AlphaInviteResendInput,
+        authz=PLATFORM_ADMIN,
+        description="[platform admin] Resend an alpha invitation by email (supersedes pending links, "
+                    "issues a fresh one, emails it). No referral quota spent.",
+        rest=RestBinding("POST", "/api/admin/alpha-invites/resend"),
     ),
 ]

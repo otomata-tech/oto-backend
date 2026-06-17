@@ -568,9 +568,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 404, "unknown_user")
         status = access.status_for(target)
         ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
+        pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
+                          if u.get("email") else None)
         return _json(request, {
             "sub": target, "email": u.get("email"), "name": u.get("name"),
             "role": status["role"], "active_org": status.get("active_org"),
+            "access_status": u.get("access_status"),
+            "pending_invite": pending_invite,
             "orgs": org_store.list_orgs_for_user(target),
             "providers": status["providers"],
             "grants": db.list_grants_for_user(target),

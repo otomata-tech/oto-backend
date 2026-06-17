@@ -18,6 +18,10 @@ from .registry import CAPABILITIES
 _MAX_ORGS_PER_USER = int(os.environ.get("OTO_MCP_MAX_ORGS_PER_USER", "10"))
 
 
+class NoInput(BaseModel):
+    pass
+
+
 class CreateOrgInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
@@ -50,6 +54,12 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
     return {"active_org": org_id, "name": o["name"] if o else None}
 
 
+def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
+    """Désélectionne l'org active → identité perso/globale (ADR 0015)."""
+    org_store.clear_active_org(ctx.sub)
+    return {"active_org": None}
+
+
 CAPABILITIES += [
     Capability(
         key="org.create",
@@ -75,5 +85,17 @@ CAPABILITIES += [
         ),
         mcp="oto_use_org",
         rest=RestBinding("PUT", "/api/me/active-org"),
+    ),
+    Capability(
+        key="org.clear",
+        handler=_clear_org,
+        Input=NoInput,
+        authz=SUB_ONLY,
+        description=(
+            "Deselect your active organization — switch to your personal/global "
+            "profile (no org). Your personal toolset and settings apply."
+        ),
+        mcp="oto_clear_org",
+        rest=RestBinding("DELETE", "/api/me/active-org"),
     ),
 ]

@@ -629,6 +629,16 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
             (sub, email, name),
         ).fetchone()
     if row and row.get("inserted") and email:
+        # Réconciliation invitation↔signup (ADR 0013) : un invité qui s'inscrit
+        # (par n'importe quel chemin, pas seulement le lien /invite) voit son
+        # invitation en attente honorée par l'email vérifié → il saute la waitlist
+        # au lieu d'y rester coincé avec une invitation orpheline. Synchrone (une
+        # fois, au 1er insert) mais best-effort : un échec ne casse pas l'auth.
+        try:
+            from . import org_store
+            org_store.reconcile_signup_with_invitation(sub, email)
+        except Exception:
+            pass
         # Import paresseux : la fédération est optionnelle (no-op sans secret), et
         # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
         from . import memento_federation

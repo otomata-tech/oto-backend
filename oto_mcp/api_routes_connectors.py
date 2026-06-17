@@ -15,6 +15,8 @@ réponse POST). L'override d'org est posé en DB de la même façon.
 """
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -121,9 +123,42 @@ def make_routes(
         connector_activation.clear_activation(connector, org_id)
         return json_response(request, {"ok": True, "connector": connector, "org_id": org_id})
 
+    async def unipile_connect(request: Request) -> JSONResponse:
+        """Hosted-auth Unipile (B2) : génère l'URL où l'user connecte son LinkedIn.
+
+        Per-user (pas admin). Utilise le credential Unipile résolu pour lui (sa clé
+        BYO, sinon l'abonnement de son org active). Unipile gère 2FA/checkpoints
+        sur sa page hébergée puis POST l'`account_id` sur le webhook
+        `/api/unipile/webhook` (B3) au succès."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        fields = access.unipile_credential_for(sub)
+        if not fields:
+            return json_error(request, 404, "unipile_not_configured")
+        from oto.tools.unipile import UnipileClient
+        client = UnipileClient(api_key=fields["api_key"], dsn=fields["dsn"])
+        public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
+        dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
+        try:
+            url = await asyncio.to_thread(
+                client.hosted_auth_link,
+                notify_url=f"{public}/api/unipile/webhook",
+                name=sub,
+                success_redirect_url=f"{dash}/console/connections?unipile=connected",
+                failure_redirect_url=f"{dash}/console/connections?unipile=failed",
+            )
+        except Exception as e:
+            return json_error(request, 502, f"unipile_link_failed: {e}")
+        if not url:
+            return json_error(request, 502, "unipile_link_empty")
+        return json_response(request, {"url": url})
+
     return [
         Route("/api/admin/connectors/activation", list_activation, methods=["GET"]),
         Route("/api/admin/connectors/activation", set_activation, methods=["POST"]),
         Route("/api/admin/connectors/activation", clear_override, methods=["DELETE"]),
         Route("/api/admin/connectors/activation", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/unipile/connect", unipile_connect, methods=["POST"]),
+        Route("/api/me/unipile/connect", options_handler, methods=["OPTIONS"]),
     ]

@@ -1,20 +1,17 @@
-"""Meta-tools du palier organization (= périmètre / store serveur).
+"""Meta-tools du palier organization — doctrine (prose métier versionnée).
 
-Deux niveaux de surface :
+Le CRUD/lectures orgs (create, members, secrets, entitlements, switch d'org
+active) est migré en **capacités** `org.*` (ADR 0009) — fourni par les
+adaptateurs MCP/REST. Ne restent ici que les outils **doctrine**.
 
-- **user** (`oto_list_orgs`, `oto_use_org`) : voir ses orgs et basculer l'org
-  active. La résolution des secrets (`resolve_api_key`) vise l'org active du
-  sub — bascule = changer quels `org_secrets` répondent. Comme c'est un état
-  serveur par sub (le token MCP ne porte pas l'org), le switch est résolu
-  live à chaque appel ; pas de claim dans le JWT.
-- **platform_admin** (`oto_admin_*`) : provisionne tout (créer une org, ajouter
-  des membres, poser les secrets partagés). En v1, seul le platform_admin écrit
-  — pas de self-service org_admin (les opérateurs sont peu nombreux et ajoutés
-  par `sub` après leur 1ère connexion). Le rôle `org_admin` est stocké mais pas
-  encore utilisé pour autoriser (viendra avec le self-service).
+Surface doctrine unifiée (4 outils, « moins d'outils plus d'args ») : un `org_id`
+optionnel fond membre↔platform-admin :
+- **absent** → ton **org active** (lecture = membre ; écriture = org_admin) ;
+- **présent** → cette org par id, **réservé platform_admin** (l'opérateur
+  provisionne/édite n'importe quelle org).
 
-barreau 3 : crée les orgs/secrets. Tant qu'aucune org n'existe, inerte. La
-visibilité par entitlement (org_entitlements) est câblée au barreau 4.
+La doctrine de **groupe** (département, ADR 0012) est *lisible* (`scope="group"`) ;
+son écriture reste dans sa capability dédiée.
 """
 from __future__ import annotations
 
@@ -24,9 +21,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connectors, db, group_store, org_store, tool_registry
-from ..access import ORG_SHAREABLE_PROVIDERS
-from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
+from .. import access, group_store, org_store, tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -42,284 +37,203 @@ def _require_sub() -> str:
     return sub
 
 
-def _require_admin() -> str:
-    sub = _require_sub()
-    if access.get_user_role(sub) != access.ADMIN:
-        raise _err("Réservé au platform admin.")
-    return sub
+def _is_platform_admin(sub: str) -> bool:
+    return access.get_user_role(sub) == access.ADMIN
+
+
+def _resolve_org_read(sub: str, org_id: int | None) -> int | None:
+    """org_id absent → org active (lecture membre ; peut être None = perso/pas d'org) ;
+    présent → cette org, **platform admin requis**."""
+    if org_id is None:
+        return org_store.get_active_org(sub)
+    if not _is_platform_admin(sub):
+        raise _err("`org_id` (lire la doctrine d'une autre org) est réservé au platform admin.")
+    if not org_store.get_org(org_id):
+        raise _err(f"Org #{org_id} inconnue.")
+    return org_id
+
+
+def _resolve_org_write(sub: str, org_id: int | None) -> int:
+    """org_id absent → org active (**org_admin requis**) ; présent → cette org,
+    **platform admin requis**."""
+    if org_id is not None:
+        if not _is_platform_admin(sub):
+            raise _err("`org_id` (écrire la doctrine d'une autre org) est réservé au platform admin.")
+        if not org_store.get_org(org_id):
+            raise _err(f"Org #{org_id} inconnue.")
+        return org_id
+    oid = org_store.get_active_org(sub)
+    if oid is None:
+        raise _err("Pas d'org active — `oto_use_org` d'abord (ou passe `org_id` si platform admin).")
+    if not _is_platform_admin(sub) and org_store.get_org_role(oid, sub) != "org_admin":
+        raise _err("Écrire la doctrine de ton org requiert le rôle org_admin.")
+    return oid
 
 
 def register(mcp: FastMCP) -> None:
-    # orgs (list/use/admin CRUD + reads) : migrés en capacités org.* (ADR 0009,
-    # barreaux 1→2d) — fournis par les adaptateurs MCP/REST. Ne restent ici que
-    # la doctrine + les instructions (skills), hors scope couche capacité.
 
     @mcp.tool()
-    async def get_claude_md(ctx: Context) -> dict:
-        """Doctrine opératoire de ton organisation — appelle-la EN DÉBUT DE SESSION.
-
-        Renvoie, pour ton org active ET ton groupe actif (département) le cas échéant :
-        - `doctrine` : la doctrine de base de l'ORG (workflows validés, l'ordre des
-          outils, gardes-fous, vocabulaire).
-        - `group_doctrine` : la doctrine du GROUPE actif (département), à appliquer
-          EN COMPLÉMENT de celle de l'org. Vide si pas de groupe actif.
-        - `instructions` : l'index unifié des instructions nommées (skills) — chaque
-          entrée porte `slug`, `title`, `description` et `scope` (`org`|`group`).
-          Charge le détail d'une skill à la demande avec
-          `oto_get_instruction(slug, scope=…)` (ou cherche avec `oto_search_instructions`).
-
-        Tout est vide (et sans erreur) si tu n'as ni org ni groupe actifs, ou si rien
-        n'a été posé : continue normalement avec les instructions du serveur.
-        """
-        sub = _require_sub()
-        org_id = org_store.get_active_org(sub)
-        if org_id is None:
-            return {"org_id": None, "org": None, "doctrine": "",
-                    "group_id": None, "group": None, "group_doctrine": "",
-                    "instructions": [], "referenced_tools": []}
-        o = org_store.get_org(org_id)
-        base = org_store.get_instruction(org_id, org_store.BASE_SLUG)
-        index = [
-            {"slug": i["slug"], "title": i["title"], "description": i["description"], "scope": "org"}
-            for i in org_store.list_instructions(org_id)
-        ]
-        group_id = group_store.get_active_group(sub)
-        group_name, group_doctrine = None, ""
-        if group_id is not None:
-            g = group_store.get_group(group_id)
-            group_name = g["name"] if g else None
-            gbase = group_store.get_group_instruction(group_id, org_store.BASE_SLUG)
-            group_doctrine = (gbase or {}).get("body_md", "") or ""
-            index += [
-                {"slug": i["slug"], "title": i["title"], "description": i["description"],
-                 "scope": "group"}
-                for i in group_store.list_group_instructions(group_id)
-            ]
-        doctrine_body = (base or {}).get("body_md", "") or ""
-        return {
-            "org_id": org_id,
-            "org": o["name"] if o else None,
-            "doctrine": doctrine_body,
-            "group_id": group_id,
-            "group": group_name,
-            "group_doctrine": group_doctrine,
-            "instructions": index,
-            # Manifeste résolu des outils cités par la doctrine de base + celle du
-            # groupe (ADR 0014) : noms canoniques, descriptions tirées des outils,
-            # et drift signalé (`status=missing`). Vide si rien n'est cité.
-            "referenced_tools": await tool_registry.manifest_for(mcp, doctrine_body, group_doctrine),
-        }
-
-    @mcp.tool()
-    async def oto_list_instructions(ctx: Context) -> dict:
-        """List your active org's AND active group's named instructions (skills) —
-        slug/title/description/version/scope, no body. Fetch one with
-        `oto_get_instruction(slug, scope)`. Excludes the base doctrine (served by
-        `get_claude_md`)."""
-        sub = _require_sub()
-        org_id = org_store.get_active_org(sub)
-        if org_id is None:
-            return {"org_id": None, "instructions": []}
-        out = [{**i, "scope": "org"} for i in org_store.list_instructions(org_id)]
-        group_id = group_store.get_active_group(sub)
-        if group_id is not None:
-            out += [{**i, "scope": "group"}
-                    for i in group_store.list_group_instructions(group_id)]
-        return {"org_id": org_id, "group_id": group_id, "instructions": out}
-
-    @mcp.tool()
-    async def oto_get_instruction(
-        slug: str, ctx: Context, version: int | None = None, scope: str = "org"
+    async def oto_get_doctrine(
+        ctx: Context, slug: str | None = None, org_id: int | None = None,
+        scope: str = "org", version: int | None = None, with_history: bool = False,
     ) -> dict:
-        """Full markdown of one named instruction (skill) of your active org or group.
+        """Doctrine opératoire de ton organisation. APPELLE-LA EN DÉBUT DE SESSION
+        (sans argument) : tu obtiens la doctrine de base (workflows validés, ordre
+        des outils, gardes-fous, vocabulaire) + l'index des doctrines nommées
+        (skills) à charger à la demande.
 
         Args:
-            slug: the instruction slug (see `oto_list_instructions` / the index in
-                `get_claude_md`). `claude_md` returns the base doctrine.
-            version: optional — a past version number (default = latest).
-            scope: `org` (default) or `group` — which level to read from. The index
-                returned by `get_claude_md` tags each skill with its scope.
+            slug: omis = doctrine de BASE de ton org active (+ celle de ton
+                département actif) + l'index des doctrines nommées. Donné = le
+                markdown complet de cette doctrine nommée.
+            org_id: [PLATFORM ADMIN] lire la doctrine d'une AUTRE org par id. Omis =
+                ton org active.
+            scope: `org` (défaut) ou `group` (ton département actif) — pour cibler
+                une doctrine nommée d'un niveau précis.
+            version: une version passée (défaut = la dernière).
+            with_history: si vrai, ajoute la liste des versions de la doctrine ciblée
+                (scope org).
+
+        Vide (sans erreur) si tu n'as pas d'org active : continue avec les
+        instructions du serveur.
         """
         sub = _require_sub()
-        if scope == "group":
+        target = _resolve_org_read(sub, org_id)
+
+        # Début de session : doctrine de base + index.
+        if slug is None:
+            if target is None:
+                return {"org_id": None, "org": None, "doctrine": "", "group_id": None,
+                        "group": None, "group_doctrine": "", "doctrines": [], "referenced_tools": []}
+            o = org_store.get_org(target)
+            base = org_store.get_instruction(target, org_store.BASE_SLUG)
+            index = [{"slug": i["slug"], "title": i["title"],
+                      "description": i["description"], "scope": "org"}
+                     for i in org_store.list_instructions(target)]
+            group_id = group_store.get_active_group(sub) if org_id is None else None
+            group_name, group_doctrine = None, ""
+            if group_id is not None:
+                g = group_store.get_group(group_id)
+                group_name = g["name"] if g else None
+                gbase = group_store.get_group_instruction(group_id, org_store.BASE_SLUG)
+                group_doctrine = (gbase or {}).get("body_md", "") or ""
+                index += [{"slug": i["slug"], "title": i["title"],
+                           "description": i["description"], "scope": "group"}
+                          for i in group_store.list_group_instructions(group_id)]
+            doctrine_body = (base or {}).get("body_md", "") or ""
+            return {
+                "org_id": target, "org": o["name"] if o else None, "doctrine": doctrine_body,
+                "group_id": group_id, "group": group_name, "group_doctrine": group_doctrine,
+                "doctrines": index,
+                "referenced_tools": await tool_registry.manifest_for(mcp, doctrine_body, group_doctrine),
+            }
+
+        # Une doctrine nommée précise.
+        if scope == "group" and org_id is None:
             group_id = group_store.get_active_group(sub)
             if group_id is None:
-                raise _err("Pas de groupe actif — vois `oto_list_orgs`/`oto_use_group`.")
+                raise _err("Pas de département actif — vois `oto_use_group`.")
             instr = group_store.get_group_instruction(group_id, slug, version)
-            scope_id = {"group_id": group_id}
+            scope_ref: dict = {"group_id": group_id}
         else:
-            org_id = org_store.get_active_org(sub)
-            if org_id is None:
-                raise _err("Pas d'org active — vois `oto_list_orgs`.")
-            instr = org_store.get_instruction(org_id, slug, version)
-            scope_id = {"org_id": org_id}
+            if target is None:
+                raise _err("Pas d'org active — vois `oto_use_org`.")
+            instr = org_store.get_instruction(target, slug, version)
+            scope_ref = {"org_id": target}
         if not instr:
-            raise _err(
-                f"Aucune instruction `{org_store.normalize_slug(slug)}` (scope {scope})"
-                + (f" en version {version}" if version is not None else "")
-                + ". Vois `oto_list_instructions`."
-            )
-        return {
-            **scope_id, "scope": scope,
-            "slug": instr["slug"], "title": instr["title"],
-            "description": instr["description"], "version": instr["version"],
-            "body_md": instr["body_md"],
-            # Manifeste résolu des outils cités par ce skill (ADR 0014).
-            "referenced_tools": await tool_registry.manifest_for(mcp, instr["body_md"]),
-        }
+            raise _err(f"Aucune doctrine `{org_store.normalize_slug(slug)}` (scope {scope})"
+                       + (f" en version {version}" if version is not None else "")
+                       + ". Vois `oto_list_doctrines`.")
+        out = {**scope_ref, "scope": scope, "slug": instr["slug"], "title": instr["title"],
+               "description": instr["description"], "version": instr["version"],
+               "body_md": instr["body_md"],
+               "referenced_tools": await tool_registry.manifest_for(mcp, instr["body_md"])}
+        if with_history and "org_id" in scope_ref:
+            out["versions"] = org_store.list_instruction_versions(target, slug)
+        return out
 
     @mcp.tool()
-    async def oto_search_instructions(query: str, ctx: Context) -> dict:
-        """Search your active org's AND active group's instructions (title/description/
-        body). Returns matches with a snippet + `scope`; fetch a full body with
-        `oto_get_instruction(slug, scope)`."""
-        sub = _require_sub()
-        org_id = org_store.get_active_org(sub)
-        if org_id is None:
-            return {"org_id": None, "results": []}
-        results = [{**r, "scope": "org"} for r in org_store.search_instructions(org_id, query)]
-        group_id = group_store.get_active_group(sub)
-        if group_id is not None:
-            results += [{**r, "scope": "group"}
-                        for r in group_store.search_group_instructions(group_id, query)]
-        return {"org_id": org_id, "group_id": group_id, "results": results}
-
-    # --- platform_admin : provisioning --------------------------------------
-
-    # Tout le CRUD + lectures orgs (create, members, secrets, entitlements,
-    # list/get) : migrés en capacités org.* (ADR 0009, barreaux 2→2d).
-
-    # --- doctrine + instructions : prose métier versionnée (get_claude_md) -----
-
-    @mcp.tool()
-    async def oto_admin_set_doctrine(org_id: int, body_md: str, ctx: Context) -> dict:
-        """[platform admin] Set/replace an org's BASE doctrine (slug `claude_md`).
-
-        Served verbatim to the org's members by `get_claude_md()` at session start:
-        validated workflows, vocabulary, business rules — for orgs that drive oto
-        without a dedicated app (e.g. an accounting workflow over gocardless/
-        pennylane/mm). Named skills go through `oto_admin_set_instruction`. Each
-        write bumps the version and archives a snapshot (history/revert).
+    async def oto_list_doctrines(
+        ctx: Context, query: str | None = None, org_id: int | None = None,
+        scope: str | None = None,
+    ) -> dict:
+        """Catalogue des doctrines nommées (skills) de ton org active (+ département
+        actif) — slug/title/description/version, sans le corps. Charge une doctrine
+        avec `oto_get_doctrine(slug)`.
 
         Args:
-            org_id: target org.
-            body_md: the full doctrine markdown (replaces the current one).
+            query: optionnel — recherche (titre/description/corps). Omis = tout le catalogue.
+            org_id: [PLATFORM ADMIN] lister une AUTRE org par id (inclut sa doctrine de base).
+            scope: `org` ou `group` pour restreindre ; omis = les deux.
         """
-        admin = _require_admin()
-        if not org_store.get_org(org_id):
-            raise _err(f"Org #{org_id} inconnue.")
+        sub = _require_sub()
+        target = _resolve_org_read(sub, org_id)
+        if target is None:
+            return {"org_id": None, "doctrines": []}
+        out: list = []
+        if scope in (None, "org"):
+            if query:
+                rows = org_store.search_instructions(target, query, include_base=org_id is not None)
+            else:
+                rows = org_store.list_instructions(target, include_base=org_id is not None)
+            out += [{**r, "scope": "org"} for r in rows]
+        group_id = group_store.get_active_group(sub) if (org_id is None and scope in (None, "group")) else None
+        if group_id is not None:
+            rows = (group_store.search_group_instructions(group_id, query) if query
+                    else group_store.list_group_instructions(group_id))
+            out += [{**r, "scope": "group"} for r in rows]
+        return {"org_id": target, "group_id": group_id, "doctrines": out}
+
+    @mcp.tool()
+    async def oto_set_doctrine(
+        ctx: Context, body_md: str | None = None, slug: str | None = None,
+        org_id: int | None = None, title: str | None = None,
+        description: str | None = None, from_version: int | None = None,
+    ) -> dict:
+        """Écrit la doctrine de ton org (org_admin) — ou d'une autre org (platform
+        admin via `org_id`). Chaque écriture incrémente la version + archive un
+        snapshot (historique/revert).
+
+        Args:
+            body_md: le markdown. Requis SAUF si `from_version` est fourni.
+            slug: omis = doctrine de BASE ; donné = une doctrine nommée (skill).
+            org_id: [PLATFORM ADMIN] écrire une AUTRE org par id. Omis = ton org
+                active (org_admin requis).
+            title / description: pour une doctrine nommée (le `description` = le
+                « quand l'utiliser » affiché dans l'index). Conservés si omis à l'update.
+            from_version: restaure une version passée comme NOUVELLE version (revert)
+                — `body_md` est alors ignoré.
+        """
+        sub = _require_sub()
+        target = _resolve_org_write(sub, org_id)
+        norm = org_store.normalize_slug(slug) if slug else org_store.BASE_SLUG
+        if not norm:
+            raise _err("slug invalide (attendu [a-z0-9_-]).")
+        if from_version is not None:
+            old = org_store.get_instruction(target, norm, from_version)
+            if not old:
+                raise _err(f"Pas de version {from_version} pour `{norm}` (org #{target}).")
+            body_md, title, description = old["body_md"], old["title"], old["description"]
         if not (body_md or "").strip():
-            raise _err("body_md vide.")
-        version = org_store.set_instruction(org_id, org_store.BASE_SLUG, body_md, set_by=admin)
-        return {"org_id": org_id, "slug": org_store.BASE_SLUG, "version": version, "set": True,
+            raise _err("body_md vide (ou fournis `from_version`).")
+        if norm == org_store.BASE_SLUG:
+            version = org_store.set_instruction(target, org_store.BASE_SLUG, body_md, set_by=sub)
+        else:
+            version = org_store.set_instruction(target, norm, body_md, title=title,
+                                                description=description, set_by=sub)
+        return {"org_id": target, "slug": norm, "version": version, "set": True,
+                **({"reverted_from": from_version} if from_version is not None else {}),
                 **await tool_registry.write_check(mcp, body_md)}
 
     @mcp.tool()
-    async def oto_admin_set_instruction(
-        org_id: int, slug: str, body_md: str, ctx: Context,
-        title: str | None = None, description: str | None = None,
-    ) -> dict:
-        """[platform admin] Create/update a NAMED instruction (skill) for an org.
-
-        Like a skill: members see it in the `get_claude_md` index and load it with
-        `oto_get_instruction(slug)`. Each write bumps the version and archives a
-        snapshot. Re-posting the same slug updates it (keep title/description by
-        leaving them None).
-
-        Args:
-            org_id: target org.
-            slug: identifier (normalized to [a-z0-9_-]); `claude_md` is reserved
-                for the base doctrine (use `oto_admin_set_doctrine`).
-            body_md: the instruction markdown.
-            title: short human title (optional; kept if omitted on update).
-            description: the "when to use" surfaced in the index (optional).
-        """
-        admin = _require_admin()
-        if not org_store.get_org(org_id):
-            raise _err(f"Org #{org_id} inconnue.")
+    async def oto_delete_doctrine(slug: str, ctx: Context, org_id: int | None = None) -> dict:
+        """Supprime une doctrine et son historique. Passe le slug EXACT (pour la
+        doctrine de base, slug = la valeur réservée). Ton org active (org_admin) ou
+        une autre org (platform admin via `org_id`)."""
+        sub = _require_sub()
+        target = _resolve_org_write(sub, org_id)
         norm = org_store.normalize_slug(slug)
         if not norm:
-            raise _err("slug vide ou invalide (attendu [a-z0-9_-]).")
-        if norm == org_store.BASE_SLUG:
-            raise _err("`claude_md` = doctrine de base : utilise `oto_admin_set_doctrine`.")
-        if not (body_md or "").strip():
-            raise _err("body_md vide.")
-        version = org_store.set_instruction(
-            org_id, norm, body_md, title=title, description=description, set_by=admin)
-        return {"org_id": org_id, "slug": norm, "version": version, "set": True,
-                **await tool_registry.write_check(mcp, body_md)}
-
-    @mcp.tool()
-    async def oto_admin_list_instructions(org_id: int, ctx: Context) -> dict:
-        """[platform admin] List all of an org's instructions INCLUDING the base
-        doctrine (slug/title/description/version, no body)."""
-        _require_admin()
-        return {
-            "org_id": org_id,
-            "instructions": org_store.list_instructions(org_id, include_base=True),
-        }
-
-    @mcp.tool()
-    async def oto_admin_get_instruction(
-        org_id: int, slug: str, ctx: Context, version: int | None = None
-    ) -> dict:
-        """[platform admin] Read back an org's instruction at any version (body +
-        metadata). slug `claude_md` = base doctrine. Default = latest version."""
-        _require_admin()
-        instr = org_store.get_instruction(org_id, slug, version)
-        if not instr:
-            raise _err(
-                f"Aucune instruction `{org_store.normalize_slug(slug)}`"
-                + (f" en version {version}" if version is not None else "")
-                + f" pour l'org #{org_id}."
-            )
-        return {"org_id": org_id, **instr}
-
-    @mcp.tool()
-    async def oto_admin_list_instruction_versions(org_id: int, slug: str, ctx: Context) -> dict:
-        """[platform admin] Version history of one instruction (metadata per
-        version, latest first). slug `claude_md` = base doctrine."""
-        _require_admin()
-        return {
-            "org_id": org_id,
-            "slug": org_store.normalize_slug(slug),
-            "versions": org_store.list_instruction_versions(org_id, slug),
-        }
-
-    @mcp.tool()
-    async def oto_admin_revert_instruction(
-        org_id: int, slug: str, version: int, ctx: Context
-    ) -> dict:
-        """[platform admin] Restore an older version as a NEW version (history kept).
-
-        Args:
-            org_id: target org.
-            slug: the instruction (`claude_md` = base doctrine).
-            version: the past version number to restore (see
-                `oto_admin_list_instruction_versions`).
-        """
-        admin = _require_admin()
-        old = org_store.get_instruction(org_id, slug, version)
-        if not old:
-            raise _err(
-                f"Pas de version {version} pour `{org_store.normalize_slug(slug)}` "
-                f"(org #{org_id})."
-            )
-        new_version = org_store.set_instruction(
-            org_id, slug, old["body_md"], title=old["title"],
-            description=old["description"], set_by=admin)
-        return {
-            "org_id": org_id, "slug": org_store.normalize_slug(slug),
-            "version": new_version, "reverted_from": version,
-        }
-
-    @mcp.tool()
-    async def oto_admin_delete_instruction(org_id: int, slug: str, ctx: Context) -> dict:
-        """[platform admin] Delete an instruction and its history. slug `claude_md`
-        = base doctrine (get_claude_md then serves an empty doctrine)."""
-        _require_admin()
-        deleted = org_store.delete_instruction(org_id, slug)
-        return {"org_id": org_id, "slug": org_store.normalize_slug(slug), "deleted": deleted}
-
-    # entitlements (grant/revoke/list) : migrés en capacités org.entitlement.*
-    # (ADR 0009 barreaux 2c/2d).
+            raise _err("slug requis.")
+        deleted = org_store.delete_instruction(target, norm)
+        return {"org_id": target, "slug": norm, "deleted": deleted}

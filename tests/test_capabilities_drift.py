@@ -30,7 +30,7 @@ _EXPECTED_TOOL_MODULES = {
     "serper", "hunter", "fr", "attio", "lemlist", "kaspr", "pennylane", "slack",
     "fullenrich", "folk", "silae", "gocardless", "linkedin", "crunchbase",
     "gmail", "datastore", "tasks", "reddit", "culture", "sirene_stock",
-    "foncier", "sante", "whatsapp",
+    "foncier", "sante", "whatsapp", "unipile",
 }
 
 

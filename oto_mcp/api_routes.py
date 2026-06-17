@@ -1203,12 +1203,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 403, "forbidden")
         slug = org_store.normalize_slug(request.path_params["slug"])
         subs = [m["sub"] for m in org_store.list_org_members(org_id)]
-        # La base se charge via get_claude_md (bundle, pas de slug) ; une skill
-        # via oto_get_instruction(slug=…).
-        if slug == org_store.BASE_SLUG:
-            tool, slug_filter = "get_claude_md", None
-        else:
-            tool, slug_filter = "oto_get_instruction", slug
+        # Base ET skills se chargent via `oto_get_doctrine` ; slug=None = la base.
+        tool = "oto_get_doctrine"
+        slug_filter = None if slug == org_store.BASE_SLUG else slug
         u = db.instruction_usage(subs, tool, slug_filter, days=30)
         today = _date.today()
         series = [u["daily"].get(str(today - _timedelta(days=29 - i)), 0) for i in range(30)]

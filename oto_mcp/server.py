@@ -100,9 +100,9 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
 # serveur échoue fort au lieu de lire le filesystem.
 
 _SERVER_INSTRUCTIONS = """\
-Oto — toolkit d'automatisation pour la prospection B2B et l'intelligence commerciale.
+Oto — TA boîte à outils d'automatisation (prospection B2B, données entreprise FR, CRM, email, messagerie, base de connaissance…). Ces outils `*_` AGISSENT sur les comptes et données de l'utilisateur : utilise-les DIRECTEMENT pour répondre. Oto n'est PAS un sujet à rechercher sur le web — ne lance pas de recherche web pour « découvrir Oto » ; tout ce qu'il faut est ici et dans les outils.
 
-En début de session, appelle `get_claude_md()` — il renvoie la doctrine de ton organisation (workflows validés, règles métier, vocabulaire) ET l'index de ses instructions nommées (skills), à charger à la demande via `oto_get_instruction` / `oto_search_instructions`. Vide si ton org n'en a pas : continue normalement avec ces instructions.
+En début de session, appelle `oto_get_doctrine()` — il renvoie la doctrine de ton organisation (workflows validés, règles métier, vocabulaire) ET l'index de ses doctrines nommées (skills), à charger à la demande via `oto_get_doctrine(slug)` (ou cherche avec `oto_list_doctrines`). Vide si ton org n'en a pas : continue normalement avec ces instructions.
 
 Namespaces :
 • fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.

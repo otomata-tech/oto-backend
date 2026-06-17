@@ -93,6 +93,32 @@ def list_all_orgs() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# --- baseline de toolset de l'org (preset de visibilité, ADR 0015) ----------
+
+def get_org_default_tools(org_id: int) -> Optional[list[str]]:
+    """Preset par défaut de l'org (liste de noms de tools) = baseline de visibilité
+    pour ses membres, ou None si l'org n'en impose pas. `[]` ≠ None : baseline
+    « rien ». Miroir d'`org_groups.default_tools` (ADR 0012) hissé au niveau org."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT default_tools FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+    if not row:
+        return None
+    dt = row["default_tools"]
+    return list(dt) if dt is not None else None
+
+
+def set_org_default_tools(org_id: int, tools: Optional[list[str]]) -> bool:
+    """Pose (ou efface si None) la baseline de toolset de l'org. False si absente."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE orgs SET default_tools = %s WHERE id = %s",
+            (list(tools) if tools is not None else None, org_id),
+        )
+        return (cur.rowcount or 0) > 0
+
+
 def set_org_logo(org_id: int, url: Optional[str]) -> None:
     """Pose (ou efface si url=None) l'URL publique du logo de l'org.
 

@@ -1,0 +1,144 @@
+"""Stockage d'images publiques (avatars user, logos d'org) sur Scaleway Object
+Storage (S3-compatible).
+
+Couche backend-core (ADR 0004) : possède le client S3, la validation et la
+construction d'URL publique. N'importe jamais l'adaptateur REST. Les URLs
+produites sont **publiques** (pas des secrets) → seule l'URL est persistée en
+DB (colonnes `users.avatar_url` / `orgs.logo_url`), jamais dans le coffre chiffré.
+
+Config 100% par env de process (cohérent `OTO_CONFIG_DISABLE_SOPS=1`) :
+- `OTO_MCP_S3_ENDPOINT`         ex. https://s3.fr-par.scw.cloud
+- `OTO_MCP_S3_REGION`           défaut "fr-par"
+- `OTO_MCP_S3_BUCKET`           ex. oto-media
+- `OTO_MCP_S3_ACCESS_KEY` / `OTO_MCP_S3_SECRET_KEY`  clé API Scaleway (Object Storage)
+- `OTO_MCP_S3_PUBLIC_BASE_URL`  (optionnel) base publique/CDN ; sinon dérivée virtual-hosted
+- `OTO_MCP_S3_MAX_IMAGE_BYTES`  (optionnel) défaut 2 Mo
+
+Import paresseux de boto3 + client mis en cache au 1er usage : le module se
+charge proprement même si le stockage n'est pas configuré (l'erreur ne tombe
+qu'à l'upload, jamais au boot ni sur `/api/me`).
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+from urllib.parse import quote, urlsplit
+
+# Type sniffé → extension stockée. On ne fait JAMAIS confiance au Content-Type
+# déclaré par le client : l'extension dérive des magic bytes.
+_ALLOWED = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+_DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 Mo
+
+_client = None  # singleton boto3, gardé comme db._pool
+
+
+class MediaError(Exception):
+    """Échec de validation/upload, traduit en réponse HTTP par l'adaptateur REST."""
+
+    def __init__(self, status: int, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.status = status
+        self.code = code
+
+
+def _max_bytes() -> int:
+    raw = os.environ.get("OTO_MCP_S3_MAX_IMAGE_BYTES")
+    return int(raw) if raw else _DEFAULT_MAX_BYTES
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        try:
+            import boto3  # import paresseux : pas de dép dure au boot
+        except ImportError as e:  # pragma: no cover
+            raise MediaError(500, "storage_unavailable", f"boto3 manquant: {e}")
+        from .config import require_env
+        _client = boto3.client(
+            "s3",
+            endpoint_url=require_env("OTO_MCP_S3_ENDPOINT"),
+            region_name=os.environ.get("OTO_MCP_S3_REGION", "fr-par"),
+            aws_access_key_id=require_env("OTO_MCP_S3_ACCESS_KEY"),
+            aws_secret_access_key=require_env("OTO_MCP_S3_SECRET_KEY"),
+        )
+    return _client
+
+
+def _bucket() -> str:
+    from .config import require_env
+    return require_env("OTO_MCP_S3_BUCKET")
+
+
+def _sniff_content_type(data: bytes) -> str | None:
+    """Détecte le type réel par magic bytes (PNG / JPEG / WEBP). None sinon."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def public_url(key: str) -> str:
+    base = os.environ.get("OTO_MCP_S3_PUBLIC_BASE_URL")
+    if base:
+        return f"{base.rstrip('/')}/{key}"
+    # Style virtual-hosted Scaleway : https://<bucket>.s3.fr-par.scw.cloud/<key>
+    from .config import require_env
+    parts = urlsplit(require_env("OTO_MCP_S3_ENDPOINT"))
+    return f"{parts.scheme}://{_bucket()}.{parts.netloc}/{key}"
+
+
+def upload_image(prefix: str, owner_id: str, data: bytes, content_type: str) -> str:
+    """Valide une image et l'uploade en public-read. Retourne son URL publique.
+
+    `prefix` = "avatars" | "org-logos" ; `owner_id` = sub | org_id (str).
+    Clé par hash de contenu → ré-upload identique idempotent + cache-busting
+    naturel (un nouveau contenu = une nouvelle URL).
+    """
+    if not data:
+        raise MediaError(400, "missing_file", "Fichier vide.")
+    if len(data) > _max_bytes():
+        raise MediaError(413, "image_too_large", f"Image > {_max_bytes()} octets.")
+    sniffed = _sniff_content_type(data)
+    if sniffed is None or sniffed not in _ALLOWED:
+        raise MediaError(400, "unsupported_type", "Formats acceptés : png, jpeg, webp.")
+    ext = _ALLOWED[sniffed]
+    digest = hashlib.sha256(data).hexdigest()[:32]
+    key = f"{prefix}/{quote(owner_id, safe='')}/{digest}.{ext}"
+    try:
+        _get_client().put_object(
+            Bucket=_bucket(),
+            Key=key,
+            Body=data,
+            ContentType=sniffed,
+            ACL="public-read",
+            CacheControl="public, max-age=31536000, immutable",
+        )
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+    return public_url(key)
+
+
+def delete_by_url(url: str) -> None:
+    """Supprime l'objet pointé par `url` (best-effort — n'échoue jamais).
+
+    Ne supprime que si l'URL appartient bien à notre base publique/bucket.
+    """
+    if not url:
+        return
+    try:
+        base = os.environ.get("OTO_MCP_S3_PUBLIC_BASE_URL")
+        if base and url.startswith(base.rstrip("/") + "/"):
+            key = url[len(base.rstrip("/")) + 1:]
+        else:
+            # virtual-hosted : tout après le 1er "/" du path
+            key = urlsplit(url).path.lstrip("/")
+        if not key:
+            return
+        _get_client().delete_object(Bucket=_bucket(), Key=key)
+    except Exception:
+        pass  # best-effort : un orphelin ne doit jamais casser la requête user

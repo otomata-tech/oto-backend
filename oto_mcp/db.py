@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS users (
     invite_quota INTEGER NOT NULL DEFAULT 0,
     invited_by TEXT,
     access_granted_at TIMESTAMPTZ,
+    avatar_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -203,6 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 CREATE TABLE IF NOT EXISTS orgs (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    logo_url TEXT,
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -495,6 +497,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
+        # Avatar utilisateur + logo d'org (2026-06-16) : URL publique (Scaleway
+        # Object Storage), pas un secret → colonne en clair, hors coffre.
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS logo_url TEXT")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
@@ -668,6 +674,21 @@ def set_user_role(sub: str, role: str) -> None:
         conn.execute(
             "UPDATE users SET role = %s, updated_at = NOW() WHERE sub = %s",
             (role, sub),
+        )
+
+
+# --- avatar -----------------------------------------------------------------
+
+def set_avatar_url(sub: str, url: Optional[str]) -> None:
+    """Pose (ou efface si url=None) l'URL publique de l'avatar du user.
+
+    URL publique servie depuis l'Object Storage — pas un secret, colonne en
+    clair (hors coffre chiffré)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE sub = %s",
+            (url, sub),
         )
 
 

@@ -42,7 +42,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from datetime import date as _date, timedelta as _timedelta
 
-from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing, providers
+from . import access, api_routes_connectors, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, org_store, pairing, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
@@ -715,27 +715,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if mcp_instance is None:
-            return _json(request, {"tools": [], "count": 0})
         try:
-            tools = await mcp_instance.list_tools(run_middleware=False)
+            reg = await tool_registry.build_registry(mcp_instance)
         except Exception as e:
             return _json_error(request, 500, f"list_tools_failed:{e}")
-        out = []
-        for t in tools:
-            if is_grant_only(t.name):
-                continue
-            conn = providers.connector_for_namespace(namespace_of(t.name))
-            federated = bool(conn and conn.kind == "mount")
-            entry = {
-                "name": t.name,
-                "description": (t.description or "").strip().split("\n", 1)[0].strip(),
-                "source": "federated" if federated else "native",
-            }
-            if federated and conn:
-                entry["mcp"] = conn.name
-            out.append(entry)
-        out.sort(key=lambda e: e["name"])
+        out = sorted(reg.values(), key=lambda e: e["name"])
         return _json(request, {"tools": out, "count": len(out)})
 
     async def my_tools_disable(request: Request) -> JSONResponse:

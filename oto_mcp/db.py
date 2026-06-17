@@ -198,6 +198,18 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
+-- Unipile : mapping per-user du compte LinkedIn connecté sous l'abonnement
+-- Unipile (B3). La CLÉ Unipile est partagée (org secret) ; chaque user connecte
+-- SON LinkedIn par hosted-auth → un `account_id` distinct sous la même clé. Ce
+-- n'est PAS un secret (handle opaque), d'où une table en clair (≠ coffre chiffré).
+-- `resolve` : clé partagée + account_id per-user → chacun agit comme lui-même.
+CREATE TABLE IF NOT EXISTS unipile_accounts (
+    sub TEXT PRIMARY KEY REFERENCES users(sub) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    account_name TEXT,
+    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Palier organization (= périmètre / store serveur). Une org possède des
 -- credentials propres (coffre `connector_credentials`, entity_type='org'), un
 -- set de namespaces autorisés (org_entitlements), et des opérateurs
@@ -793,6 +805,45 @@ def get_linkedin_session(sub: str) -> Optional[dict]:
 def get_linkedin_cookie(sub: str) -> Optional[str]:
     from . import credentials_store
     return credentials_store.get_credential("user", sub, "linkedin")
+
+
+def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None) -> None:
+    """Associe (upsert) le compte LinkedIn Unipile `account_id` à `sub` (B3).
+    Capté quand l'user finit le hosted-auth (endpoint sync)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO unipile_accounts (sub, account_id, account_name) "
+            "VALUES (%s, %s, %s) ON CONFLICT (sub) DO UPDATE SET "
+            "account_id = EXCLUDED.account_id, account_name = EXCLUDED.account_name, "
+            "connected_at = NOW()",
+            (sub, account_id, account_name),
+        )
+
+
+def get_unipile_account_id(sub: str) -> Optional[str]:
+    """`account_id` LinkedIn du user, ou None (→ le client auto-résout le 1er compte
+    pour la rétro-compat mono-compte)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT account_id FROM unipile_accounts WHERE sub = %s", (sub,)
+        ).fetchone()
+    return row["account_id"] if row else None
+
+
+def get_unipile_account(sub: str) -> Optional[dict]:
+    """Statut de connexion Unipile (pour /api/me / dashboard) ou None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT account_id, account_name, connected_at FROM unipile_accounts "
+            "WHERE sub = %s", (sub,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def clear_unipile_account(sub: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM unipile_accounts WHERE sub = %s", (sub,))
 
 
 def get_linkedin_status(sub: str) -> Optional[dict]:

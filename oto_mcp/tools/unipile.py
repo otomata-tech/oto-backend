@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, db
 
 
 def register(mcp: FastMCP) -> None:
@@ -23,8 +23,14 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.unipile import UnipileClient
 
     def _client() -> UnipileClient:
+        # Clé partagée (org) + account_id LinkedIn per-user (B3) : chacun agit
+        # comme LUI-MÊME sous l'abonnement Unipile commun. account_id None (user
+        # pas encore connecté) → le client auto-résout le 1er compte (rétro-compat
+        # mono-compte ; tant que tous n'ont pas connecté, un non-connecté tape sur
+        # le 1er compte de l'abonnement).
         key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
-        return UnipileClient(api_key=key)
+        sub = access.current_user_sub_or_raise()
+        return UnipileClient(api_key=key, account_id=db.get_unipile_account_id(sub))
 
     @mcp.tool()
     async def unipile_search(

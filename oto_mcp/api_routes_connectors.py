@@ -16,6 +16,7 @@ réponse POST). L'override d'org est posé en DB de la même façon.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Awaitable, Callable
 
@@ -24,7 +25,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import access, connector_activation, providers
+from . import access, connector_activation, db, providers
+
+logger = logging.getLogger(__name__)
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -124,12 +127,9 @@ def make_routes(
         return json_response(request, {"ok": True, "connector": connector, "org_id": org_id})
 
     async def unipile_connect(request: Request) -> JSONResponse:
-        """Hosted-auth Unipile (B2) : génère l'URL où l'user connecte son LinkedIn.
-
-        Per-user (pas admin). Utilise le credential Unipile résolu pour lui (sa clé
-        BYO, sinon l'abonnement de son org active). Unipile gère 2FA/checkpoints
-        sur sa page hébergée puis POST l'`account_id` sur le webhook
-        `/api/unipile/webhook` (B3) au succès."""
+        """Hosted-auth Unipile (B2) : génère l'URL où l'user connecte SON LinkedIn
+        sous l'abonnement partagé (clé de son org). `name=sub` permet de corréler
+        le compte créé à l'user au retour (sync). Per-user (pas admin)."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
@@ -138,12 +138,10 @@ def make_routes(
             return json_error(request, 404, "unipile_not_configured")
         from oto.tools.unipile import UnipileClient
         client = UnipileClient(api_key=api_key)
-        public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         try:
             url = await asyncio.to_thread(
                 client.hosted_auth_link,
-                notify_url=f"{public}/api/unipile/webhook",
                 name=sub,
                 success_redirect_url=f"{dash}/console/connections?unipile=connected",
                 failure_redirect_url=f"{dash}/console/connections?unipile=failed",
@@ -154,6 +152,57 @@ def make_routes(
             return json_error(request, 502, "unipile_link_empty")
         return json_response(request, {"url": url})
 
+    async def unipile_sync(request: Request) -> JSONResponse:
+        """B3 : capte l'`account_id` LinkedIn du user après le hosted-auth. Liste les
+        comptes de l'abonnement (clé partagée) et associe à `sub` celui dont le
+        `name == sub` (posé sur le lien connect). Logue les comptes pour instrumenter
+        la corrélation réelle. Authentifié → l'user ne réclame que SON sub. Idempotent."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        api_key = access.unipile_api_key_for(sub)
+        if not api_key:
+            return json_error(request, 404, "unipile_not_configured")
+        from oto.tools.unipile import UnipileClient
+        client = UnipileClient(api_key=api_key)
+        try:
+            accounts = await asyncio.to_thread(client.list_accounts)
+        except Exception as e:
+            return json_error(request, 502, f"unipile_list_failed: {e}")
+        logger.info(
+            "unipile sync sub=%s accounts=%s", sub,
+            [{"id": a.get("id"), "name": a.get("name"), "type": a.get("type")} for a in accounts],
+        )
+        match = next((a for a in accounts if a.get("name") == sub), None)
+        if not match:
+            return json_response(request, {
+                "connected": False, "reason": "no_account_matching_sub",
+                "account_count": len(accounts),
+            })
+        db.set_unipile_account(sub, match["id"], account_name=match.get("name"))
+        return json_response(request, {"connected": True, "account_id": match["id"]})
+
+    async def unipile_status(request: Request) -> JSONResponse:
+        """Statut de connexion Unipile per-user (pour le dashboard)."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        acc = db.get_unipile_account(sub)
+        return json_response(request, {
+            "connected": acc is not None,
+            "account_id": acc["account_id"] if acc else None,
+            "connected_at": str(acc["connected_at"]) if acc else None,
+        })
+
+    async def unipile_disconnect(request: Request) -> JSONResponse:
+        """Oublie l'association compte LinkedIn ↔ user (ne supprime pas le compte
+        chez Unipile, juste le mapping côté oto)."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        db.clear_unipile_account(sub)
+        return json_response(request, {"ok": True})
+
     return [
         Route("/api/admin/connectors/activation", list_activation, methods=["GET"]),
         Route("/api/admin/connectors/activation", set_activation, methods=["POST"]),
@@ -161,4 +210,9 @@ def make_routes(
         Route("/api/admin/connectors/activation", options_handler, methods=["OPTIONS"]),
         Route("/api/me/unipile/connect", unipile_connect, methods=["POST"]),
         Route("/api/me/unipile/connect", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/unipile/sync", unipile_sync, methods=["POST"]),
+        Route("/api/me/unipile/sync", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/unipile", unipile_status, methods=["GET"]),
+        Route("/api/me/unipile", unipile_disconnect, methods=["DELETE"]),
+        Route("/api/me/unipile", options_handler, methods=["OPTIONS"]),
     ]

@@ -24,6 +24,7 @@ from .. import access, db
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     ADMIN_GRANT_ONLY_NAMESPACES,
+    PROTECTED_TOOLS,
     is_default_hidden,
     is_entitled,
     is_grant_only,
@@ -144,7 +145,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- presets ------------------------------------------------------------
 
-    _PROTECTED = {"oto_enable_tool", "oto_list_my_tools", "oto_apply_preset"}
+    _PROTECTED = PROTECTED_TOOLS  # source unique (tool_visibility, anti-lockout)
 
     async def _all_tool_names(ctx: Context) -> set[str]:
         tools = await ctx.fastmcp.list_tools(run_middleware=False)

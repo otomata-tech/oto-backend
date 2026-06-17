@@ -12,7 +12,7 @@ import os
 from pydantic import BaseModel, Field
 
 from .. import db, email, org_store
-from ._authz import ORG_ADMIN_OF, SUB_ONLY
+from ._authz import ORG_ADMIN_OF, PLATFORM_ADMIN, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -44,6 +44,10 @@ class InviteAcceptInput(BaseModel):
 
 
 class AlphaInviteInput(BaseModel):
+    email: str
+
+
+class AlphaInviteAdminInput(BaseModel):
     email: str
 
 
@@ -98,6 +102,22 @@ def _alpha_invite_create(ctx: ResolvedCtx, inp: AlphaInviteInput) -> dict:
     remaining = (db.get_user(ctx.sub) or {}).get("invite_quota", 0)
     return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
             "invite_url": invite_url, "invites_left": remaining}
+
+
+def _alpha_invite_admin_create(ctx: ResolvedCtx, inp: AlphaInviteAdminInput) -> dict:
+    """Invitation alpha émise par un platform admin (ADR 0013) : ouvre l'accès au
+    service à un email tiers **sans entamer de quota referral** et sans exiger que
+    l'admin soit lui-même actif. C'est un referral (`org_id=None`) → à l'acceptation
+    l'invité reçoit l'accès + son propre quota et crée sa propre org."""
+    if "@" not in (inp.email or ""):
+        raise AuthzDenied(400, "invalid_email", "Email invalide.")
+    _, token = org_store.create_invitation(
+        None, inp.email, "org_member", invited_by=ctx.sub,
+        ttl_days=_INVITE_TTL_DAYS, source="admin")
+    invite_url = f"{_app_url()}/invite?token={token}"
+    emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url)
+    return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
+            "invite_url": invite_url}
 
 
 def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
@@ -155,7 +175,13 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         description="Spend one of your alpha invitations to invite someone to Oto by email. "
                     "They get their own account/org. Requires active access and remaining quota.",
-        mcp="oto_invite_to_alpha",
         rest=RestBinding("POST", "/api/me/alpha-invites"),
+    ),
+    Capability(
+        key="platform.invite.alpha_admin", handler=_alpha_invite_admin_create,
+        Input=AlphaInviteAdminInput, authz=PLATFORM_ADMIN,
+        description="[platform admin] Invite someone to the Oto alpha by email, without spending "
+                    "your own referral quota. They get their own account/org.",
+        rest=RestBinding("POST", "/api/admin/alpha-invites"),
     ),
 ]

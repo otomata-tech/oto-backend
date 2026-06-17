@@ -213,12 +213,13 @@ _REGISTRY_LIST = [
            CredentialField("subscription_key", "Subscription Key", secret=True),
        )),
 
-    # --- platform_granted (grant-only, deny-by-default) ----------------------
-    # gocardless : keyed BYO (user OU org), résolu via resolve_api_key comme
-    # pennylane/attio. Reste grant-only (platform_granted) → masqué + deny-by-
-    # default : un admin doit accorder le namespace avant qu'on puisse l'activer
-    # et y poser une clé (financier sensible). Pas de clé plateforme partagée.
-    _c("gocardless", ["gocardless"], availability="platform_granted",
+    # --- gocardless : keyed BYO self-serve -----------------------------------
+    # keyed BYO (user OU org), résolu via resolve_api_key comme pennylane/attio.
+    # self_serve : chacun connecte SON propre compte GoCardless (sandbox ou prod) —
+    # PAS de clé plateforme partagée, donc rien de sensible à gater par grant. Reste
+    # hors bundle par défaut (in_default_bundle=False) → opt-in, pas imposé. L'org MM
+    # y pose le token de son compte de service pour le POC avoirs (doctrine org 35).
+    _c("gocardless", ["gocardless"], availability="self_serve",
        auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
        env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),

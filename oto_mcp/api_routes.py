@@ -979,7 +979,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             description=description if description is None else str(description),
             set_by=sub,
         )
-        return _json(request, {"ok": True, "slug": slug, "version": version})
+        # Validation à l'écriture (ADR 0014) : refs d'outils mortes signalées en
+        # warning, non bloquant (l'écriture a eu lieu).
+        return _json(request, {
+            "ok": True, "slug": slug, "version": version,
+            **await tool_registry.write_check(mcp_instance, body_md),
+        })
 
     async def my_instruction_delete(request: Request) -> JSONResponse:
         """Supprime une instruction et son historique (org_admin)."""

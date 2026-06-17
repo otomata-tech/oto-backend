@@ -73,8 +73,12 @@ class UserDisabledToolsMiddleware(Middleware):
             logger.warning("fastmcp_context is None at on_initialize for sub=%s", sub)
             return result
         try:
-            disabled = set(db.list_user_disabled_tools(sub))
-            enabled_override = set(db.list_user_enabled_tools(sub))
+            # Profil de visibilité = (sub, org active) ; 0 = perso/global (ADR 0015).
+            # Les toggles/presets sont scopés par org → on lit ceux de l'org active.
+            active_org = org_store.get_active_org(sub)
+            prof_org = active_org or 0
+            disabled = set(db.list_user_disabled_tools(sub, prof_org))
+            enabled_override = set(db.list_user_enabled_tools(sub, prof_org))
             # Union grants per-user + entitlements de l'org active (source unique).
             granted = access.granted_namespaces_for(sub)
             is_admin = access.get_user_role(sub) == access.ADMIN
@@ -89,12 +93,10 @@ class UserDisabledToolsMiddleware(Middleware):
                 gt = group_store.get_group_default_tools(active_group)
                 if gt is not None:
                     group_baseline = frozenset(gt)
-            if group_baseline is None:
-                active_org = org_store.get_active_org(sub)
-                if active_org is not None:
-                    ot = org_store.get_org_default_tools(active_org)
-                    if ot is not None:
-                        group_baseline = frozenset(ot)
+            if group_baseline is None and active_org is not None:
+                ot = org_store.get_org_default_tools(active_org)
+                if ot is not None:
+                    group_baseline = frozenset(ot)
         except Exception as e:
             # FAIL-CLOSED : sur erreur DB, ne PAS révéler les namespaces grant-only.
             # granted=∅ + is_admin=False → is_tool_visible masque tout grant-only

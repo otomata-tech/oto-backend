@@ -20,7 +20,7 @@ from fastmcp.server.transforms.visibility import (
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db
+from .. import access, db, org_store
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     ADMIN_GRANT_ONLY_NAMESPACES,
@@ -60,6 +60,12 @@ def _user_access(sub: str) -> tuple[frozenset, bool]:
     return granted, is_admin
 
 
+def _active_org(sub: str) -> int:
+    """Org active du sub = scope du profil de visibilité (ADR 0015). 0 = perso/global
+    (aucune org active). Toggles/presets sont stockés par (sub, org_id)."""
+    return org_store.get_active_org(sub) or 0
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def oto_list_my_tools(ctx: Context) -> dict:
@@ -68,8 +74,9 @@ def register(mcp: FastMCP) -> None:
         Returns a dict with `tools` (list of {name, enabled}) and `disabled_count`.
         """
         sub = _require_sub()
-        disabled = set(db.list_user_disabled_tools(sub))
-        enabled_override = set(db.list_user_enabled_tools(sub))
+        org = _active_org(sub)
+        disabled = set(db.list_user_disabled_tools(sub, org))
+        enabled_override = set(db.list_user_enabled_tools(sub, org))
         granted, is_admin = _user_access(sub)
         # run_middleware=False : on veut la liste complète (y compris les
         # tools masqués pour ce user), sinon on n'affiche pas leur état.
@@ -108,8 +115,9 @@ def register(mcp: FastMCP) -> None:
                 code=INVALID_PARAMS,
                 message=f"`{name}` is required to manage your toolset — refusing to disable.",
             ))
-        db.add_user_disabled_tool(sub, name)
-        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override
+        org = _active_org(sub)
+        db.add_user_disabled_tool(sub, name, org)
+        db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override
         await disable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": False, "persistent": True}
 
@@ -135,11 +143,12 @@ def register(mcp: FastMCP) -> None:
                     f"de t'accorder ce namespace (oto_admin_grant_namespace)."
                 ),
             ))
-        db.remove_user_disabled_tool(sub, name)
+        org = _active_org(sub)
+        db.remove_user_disabled_tool(sub, name, org)
         # Override positif requis pour rendre visible un masqué-par-défaut, ou un
         # grant-only côté admin (côté user granté, le grant suffit à le révéler).
         if is_default_hidden(name) or (is_grant_only(name) and is_admin):
-            db.add_user_enabled_tool(sub, name)
+            db.add_user_enabled_tool(sub, name, org)
         await enable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": True, "persistent": True}
 
@@ -159,7 +168,7 @@ def register(mcp: FastMCP) -> None:
         when the preset is applied. All other tools become disabled.
         """
         sub = _require_sub()
-        presets = db.list_user_presets(sub)
+        presets = db.list_user_presets(sub, _active_org(sub))
         return {
             "presets": [
                 {
@@ -195,6 +204,7 @@ def register(mcp: FastMCP) -> None:
                 Names unknown to the server are rejected with INVALID_PARAMS.
         """
         sub = _require_sub()
+        org = _active_org(sub)
         name = (name or "").strip()
         if not name:
             raise McpError(ErrorData(code=INVALID_PARAMS, message="Preset name required."))
@@ -209,15 +219,15 @@ def register(mcp: FastMCP) -> None:
                 ))
             enabled = sorted(set(enabled_tools))
         else:
-            disabled = set(db.list_user_disabled_tools(sub))
-            enabled_override = set(db.list_user_enabled_tools(sub))
+            disabled = set(db.list_user_disabled_tools(sub, org))
+            enabled_override = set(db.list_user_enabled_tools(sub, org))
             granted, is_admin = _user_access(sub)
             enabled = sorted(
                 n for n in all_names
                 if is_tool_visible(n, disabled, enabled_override, granted, is_admin)
             )
 
-        db.save_user_preset(sub, name, enabled)
+        db.save_user_preset(sub, name, enabled, org)
         return {"name": name, "saved": True, "enabled_count": len(enabled)}
 
     @mcp.tool()
@@ -233,7 +243,8 @@ def register(mcp: FastMCP) -> None:
             name: Name of a previously saved preset (see oto_list_presets).
         """
         sub = _require_sub()
-        preset = db.get_user_preset(sub, name)
+        org = _active_org(sub)
+        preset = db.get_user_preset(sub, name, org)
         if not preset:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
@@ -246,7 +257,7 @@ def register(mcp: FastMCP) -> None:
         enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
         disabled = sorted(all_names - enabled)
 
-        db.replace_user_disabled_tools(sub, disabled)
+        db.replace_user_disabled_tools(sub, disabled, org)
         # Override positif pour les tools qui en ont besoin pour être visibles :
         # masqués-par-défaut, et grant-only côté admin.
         db.replace_user_enabled_tools(
@@ -255,6 +266,7 @@ def register(mcp: FastMCP) -> None:
                 n for n in enabled
                 if is_default_hidden(n) or (is_grant_only(n) and is_admin)
             ),
+            org,
         )
 
         # Reset session visibility and re-apply the new state. Notifications
@@ -273,7 +285,7 @@ def register(mcp: FastMCP) -> None:
     async def oto_delete_preset(name: str, ctx: Context) -> dict:
         """Delete a saved preset by name. Does not change current toolset state."""
         sub = _require_sub()
-        deleted = db.delete_user_preset(sub, name)
+        deleted = db.delete_user_preset(sub, name, _active_org(sub))
         return {"name": name, "deleted": deleted}
 
     # --- admin : grants de namespace sensible -------------------------------

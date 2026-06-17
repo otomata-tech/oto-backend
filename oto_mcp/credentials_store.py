@@ -116,18 +116,25 @@ def get_credential_with_meta(entity_type: str, entity_id: str, connector: str,
                              account: str = "") -> Optional[dict]:
     """`{secret (déchiffré), meta, set_at}` ou None. Pour les connecteurs dont des
     satellites vivent dans `meta` : user_agent (linkedin/crunchbase),
-    scopes/is_default (google). Même déchiffrement JIT que get_credential."""
-    connectors.require_credential(entity_type, connector)
+    scopes/is_default (google). Même déchiffrement JIT que get_credential.
+
+    Un connecteur **remote** (ADR 0003/0011) est défini par la DONNÉE (`meta.base_url`,
+    endpoint du bridge) → pas d'entrée registre attendue ; on lit donc la ligne
+    d'abord et on n'applique la garde d'éligibilité registre que pour un connecteur
+    NON-remote (et sur un miss)."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT secret_enc, meta, set_at FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id = %s AND connector = %s AND account = %s",
             (entity_type, entity_id, connector, account),
         ).fetchone()
+    meta = (row["meta"] if row else None) or {}
+    if not meta.get("base_url"):
+        connectors.require_credential(entity_type, connector)
     if not row:
         return None
     return {"secret": _reveal(row, entity_type, entity_id, connector, account),
-            "meta": row["meta"] or {}, "set_at": row["set_at"]}
+            "meta": meta, "set_at": row["set_at"]}
 
 
 def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
@@ -239,8 +246,12 @@ def set_credential(
     `conn` : si fourni, participe à la transaction de l'appelant (dual-write
     ATOMIQUE — le write legacy et le write canonique commitent ou rollback
     ensemble). Sinon ouvre sa propre transaction.
+
+    Remote (ADR 0003/0011) défini par la donnée (`meta.base_url`) → pas d'entrée
+    registre ; sinon, garde d'éligibilité registre.
     """
-    connectors.require_credential(entity_type, connector)
+    if not (meta and meta.get("base_url")):
+        connectors.require_credential(entity_type, connector)
     if not secret:
         raise ValueError("secret requis")
     if conn is not None:

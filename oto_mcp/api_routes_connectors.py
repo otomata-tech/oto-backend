@@ -172,15 +172,23 @@ def make_routes(
             body = json.loads(raw) if raw else {}
         except Exception:
             return JSONResponse({"ok": True})
+        # Format réel confirmé (instrumenté 2026-06-18) :
+        # {status:"CREATION_SUCCESS", account_id, name:<nonce>, account_type}.
+        # On ne lie QUE sur un succès de création — un événement d'échec/autre ne
+        # doit pas mapper un account_id. Le nonce (consommé au 1er resolve) protège
+        # déjà du double-binding.
+        status = body.get("status")
         name = body.get("name")
         account_id = body.get("account_id") or body.get("accountId") or body.get("id")
-        if name and account_id:
+        if status == "CREATION_SUCCESS" and name and account_id:
             sub = db.resolve_unipile_pending(name)
             if sub:
                 db.set_unipile_account(sub, account_id)
                 logger.info("unipile webhook: bound sub=%s account_id=%s", sub, account_id)
             else:
                 logger.warning("unipile webhook: nonce inconnu/expiré name=%s", name)
+        elif status and status != "CREATION_SUCCESS":
+            logger.info("unipile webhook: statut ignoré status=%s name=%s", status, name)
         return JSONResponse({"ok": True})
 
     async def unipile_status(request: Request) -> JSONResponse:

@@ -162,6 +162,19 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from . import credits_store
 
     async def _calllog_sink(row: dict) -> None:
+        # Corrélation (ADR 0017) : stampe session_id (session mcp) + run_id (déroulé
+        # de doctrine actif) AVANT l'insert. Best-effort — un contexte absent
+        # (ex. pas de session) ne casse jamais la journalisation.
+        try:
+            from fastmcp.server.dependencies import get_context
+
+            from . import doctrine_run
+
+            ctx = get_context()
+            row["session_id"] = ctx.session_id
+            row["run_id"] = await doctrine_run.active_run_id(ctx)
+        except Exception:
+            pass
         # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas bloquer
         # l'event loop sur le chemin chaud de chaque tool call.
         await asyncio.to_thread(db.insert_tool_call, row)

@@ -35,6 +35,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import datastore
     datastore.register(mcp)
 
+    # Déroulés de doctrine (ADR 0017) — verbes doctrine_start/finish (spine). Le
+    # run_id posé en état de session est stampé sur chaque tool_call par le sink
+    # calllog. Pas de dépendance externe.
+    from . import doctrine_run
+    doctrine_run.register(mcp)
+
     # Connecteurs remote (bridges, ADR 0003) — middleware générique, zéro code
     # client : forward HTTP vers le bridge résolu depuis le credential d'org.
     from . import remote

@@ -100,11 +100,17 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     args JSONB,
     ok BOOLEAN NOT NULL DEFAULT TRUE,
     error TEXT,
-    duration_ms INTEGER
+    duration_ms INTEGER,
+    -- Corrélation (ADR 0017, extension OTO-LOCALE — PAS dans le contrat canonique
+    -- otomata-calllog) : session_id = session mcp transport (grossier) ; run_id =
+    -- déroulé de doctrine (fin, posé par doctrine_start, stampé ici). NULL hors run.
+    session_id TEXT,
+    run_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, created_at) WHERE run_id IS NOT NULL;
 
 -- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
 -- org active), >0 = profil de cette org. Une identité par (sub, org_id).
@@ -530,6 +536,10 @@ def init_db() -> None:
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
+        # Corrélation des appels (ADR 0017, extension OTO-LOCALE de tool_calls).
+        conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
+        conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, created_at) WHERE run_id IS NOT NULL")
         # Unipile revendeur (org_id porté au compte + plafond par org).
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id)")
@@ -1084,17 +1094,21 @@ def increment_usage(sub: str, tool: str) -> int:
 
 def insert_tool_call(row: dict) -> None:
     """Sink otomata-calllog : insère un row canonique (server, sub, email, tool,
-    args, ok, error, duration_ms). Best-effort côté middleware — jamais bloquant."""
+    args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
+    ADR 0017, absents du contrat canonique → enrichis par le sink). Best-effort
+    côté middleware — jamais bloquant."""
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO tool_calls (server, sub, email, tool, args, ok, error, duration_ms)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+            INSERT INTO tool_calls
+                (server, sub, email, tool, args, ok, error, duration_ms, session_id, run_id)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("sub"), row.get("email"),
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
                 bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
+                row.get("session_id"), row.get("run_id"),
             ),
         )
 

@@ -114,6 +114,26 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool
 -- COLUMN run_id : sur une table existante, CREATE TABLE IF NOT EXISTS est un no-op
 -- donc la colonne n'existe pas encore ici (sinon crash UndefinedColumn au boot).
 
+-- Signaux d'usage volontaires (ADR 0017, barreau 3) : feedback de l'agent/humain
+-- sur un outil + cas d'usage non couverts (gap). DURABLE (hors prune 30j de
+-- tool_calls) : c'est le signal qui pilote révisions d'outils/doctrines + backlog.
+-- Le face-agent est AUSSI un tool_call (auto-journalisé, corrélé run_id) ; cette
+-- table porte le CONTENU durable. Table neuve → indexes inline sûrs.
+CREATE TABLE IF NOT EXISTS usage_signals (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sub TEXT,
+    org_id BIGINT,
+    signal TEXT NOT NULL,        -- 'tool_feedback' | 'gap'
+    kind TEXT NOT NULL,          -- feedback: bug|misleading_doc|wrong_result|praise|other ; gap: missing_tool|missing_doctrine|missing_data|other
+    target TEXT,                 -- feedback: nom de l'outil ; gap: l'intention (ce qu'on voulait faire)
+    body TEXT,                   -- description libre
+    session_id TEXT,             -- corrélation session (face-agent) ; NULL côté humain
+    source TEXT NOT NULL DEFAULT 'agent'   -- 'agent' (MCP) | 'human' (REST dashboard)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_signals_signal ON usage_signals(signal, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_signals_target ON usage_signals(signal, target, created_at DESC);
+
 -- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
 -- org active), >0 = profil de cette org. Une identité par (sub, org_id).
 CREATE TABLE IF NOT EXISTS user_disabled_tools (
@@ -1113,6 +1133,46 @@ def insert_tool_call(row: dict) -> None:
                 row.get("session_id"), row.get("run_id"),
             ),
         )
+
+
+# --- Signaux d'usage volontaires (ADR 0017, barreau 3) ----------------------
+
+def insert_usage_signal(
+    *, sub: Optional[str], org_id: Optional[int], signal: str, kind: str,
+    target: Optional[str], body: Optional[str], session_id: Optional[str],
+    source: str = "agent",
+) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO usage_signals
+                (sub, org_id, signal, kind, target, body, session_id, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (sub, org_id, signal, kind, target, body, session_id, source),
+        ).fetchone()
+        return int(row["id"])
+
+
+def list_usage_signals(
+    signal: Optional[str] = None, target: Optional[str] = None, limit: int = 200,
+) -> list[dict]:
+    """Signaux récents (récent d'abord), filtrables par type / cible — base des
+    projections (qualité d'outil, manques) du barreau 4."""
+    limit = max(1, min(int(limit), 1000))
+    sql = ("SELECT id, created_at, sub, org_id, signal, kind, target, body, "
+           "session_id, source FROM usage_signals")
+    clauses, params = [], []
+    if signal:
+        clauses.append("signal = %s"); params.append(signal)
+    if target:
+        clauses.append("target = %s"); params.append(target)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    params.append(limit)
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
 
 
 def list_tool_calls(

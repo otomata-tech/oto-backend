@@ -1175,6 +1175,81 @@ def list_usage_signals(
         return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
 
 
+# --- Projections « déroulés / usage » (ADR 0017, barreau 4) ------------------
+# Lecture seule, dérivées de tool_calls (run_id stampé) + usage_signals. Le
+# `slug`/`outcome` d'un run viennent des appels doctrine_start/doctrine_finish.
+
+def list_doctrine_runs(limit: int = 100) -> list[dict]:
+    """Runs récents (un par run_id ouvert via doctrine_start) avec slug, acteur,
+    bornes, outcome (si fermé) et nb d'appels du déroulé."""
+    limit = max(1, min(int(limit), 500))
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT s.run_id,
+                   s.args->>'slug'   AS slug,
+                   s.sub,
+                   s.created_at      AS started_at,
+                   f.created_at      AS finished_at,
+                   f.args->>'outcome' AS outcome,
+                   COALESCE(c.n_calls, 0) AS n_calls
+            FROM tool_calls s
+            LEFT JOIN LATERAL (
+                SELECT created_at, args FROM tool_calls
+                WHERE tool = 'doctrine_finish' AND args->>'run_id' = s.run_id
+                ORDER BY created_at DESC LIMIT 1
+            ) f ON TRUE
+            LEFT JOIN (
+                SELECT run_id, count(*) AS n_calls FROM tool_calls
+                WHERE run_id IS NOT NULL GROUP BY run_id
+            ) c ON c.run_id = s.run_id
+            WHERE s.tool = 'doctrine_start' AND s.run_id IS NOT NULL
+            ORDER BY s.created_at DESC LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()]
+
+
+def get_doctrine_run(run_id: str) -> list[dict]:
+    """Timeline d'un déroulé : tous les appels du run, dans l'ordre."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT created_at, tool, args, ok, error, duration_ms
+            FROM tool_calls WHERE run_id = %s ORDER BY created_at
+            """,
+            (run_id,),
+        ).fetchall()]
+
+
+def aggregate_gaps(days: int = 30) -> list[dict]:
+    """Manques agrégés (cas d'usage non couverts) — backlog produit dérivé."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT kind, target AS intent, count(*) AS n, max(created_at) AS last_at
+            FROM usage_signals
+            WHERE signal = 'gap' AND created_at > NOW() - make_interval(days => %s)
+            GROUP BY kind, target ORDER BY n DESC, last_at DESC
+            """,
+            (int(days),),
+        ).fetchall()]
+
+
+def aggregate_tool_feedback(days: int = 30) -> list[dict]:
+    """Qualité d'outil agrégée : feedback par (outil, kind)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT target AS tool, kind, count(*) AS n, max(created_at) AS last_at
+            FROM usage_signals
+            WHERE signal = 'tool_feedback' AND created_at > NOW() - make_interval(days => %s)
+            GROUP BY target, kind ORDER BY n DESC, last_at DESC
+            """,
+            (int(days),),
+        ).fetchall()]
+
+
 def list_tool_calls(
     limit: int = 200,
     sub: Optional[str] = None,

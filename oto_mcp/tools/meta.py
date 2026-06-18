@@ -100,7 +100,7 @@ def register(mcp: FastMCP) -> None:
         `oto_enable_tool`.
 
         Args:
-            name: Exact tool name (e.g. `attio_create_deal`, `linkedin_search`).
+            name: Exact tool name (e.g. `attio_create_deal`, `unipile_search`).
         """
         sub = _require_sub()
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)

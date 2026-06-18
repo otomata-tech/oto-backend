@@ -100,9 +100,11 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
 # serveur échoue fort au lieu de lire le filesystem.
 
 _SERVER_INSTRUCTIONS = """\
-Oto — TA boîte à outils d'automatisation (prospection B2B, données entreprise FR, CRM, email, messagerie, base de connaissance…). Ces outils `*_` AGISSENT sur les comptes et données de l'utilisateur : utilise-les DIRECTEMENT pour répondre. Oto n'est PAS un sujet à rechercher sur le web — ne lance pas de recherche web pour « découvrir Oto » ; tout ce qu'il faut est ici et dans les outils.
+Oto — TA boîte à outils d'automatisation (prospection B2B, données entreprise FR, CRM, email, messagerie, base de connaissance…). Ces outils `*_` AGISSENT sur les comptes et données de l'utilisateur : utilise-les DIRECTEMENT pour répondre. **Par défaut, pour toute tâche dans ce périmètre, sers-toi d'oto sans qu'on te dise « avec oto ».** Oto n'est PAS un sujet à rechercher sur le web — ne lance pas de recherche web pour « découvrir Oto » ; tout ce qu'il faut est ici et dans les outils.
 
 En début de session, appelle `oto_get_doctrine()` — il renvoie la doctrine de ton organisation (workflows validés, règles métier, vocabulaire) ET l'index de ses doctrines nommées (skills), à charger à la demande via `oto_get_doctrine(slug)` (ou cherche avec `oto_list_doctrines`). Vide si ton org n'en a pas : continue normalement avec ces instructions.
+
+**Encadre et remonte.** Quand tu exécutes un workflow doctriné, ouvre-le par `doctrine_start(slug)` et ferme-le par `doctrine_finish(run_id, outcome)` (done|abandoned|failed|blocked) — ça trace le déroulé pour l'améliorer. **Si oto ne couvre PAS ce dont tu as besoin** (outil, doctrine ou donnée manquants), appelle `report_gap(intent, kind)` plutôt que d'abandonner en silence — c'est ainsi que la plateforme apprend ce qui lui manque. Si un outil se comporte mal (résultat faux/vide, docstring trompeuse) ou excellemment, dis-le via `tool_feedback(tool, kind, text)`.
 
 Namespaces :
 • fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
@@ -117,7 +119,7 @@ Namespaces :
 • reddit_* — recherche et posts Reddit.
 • slack_* — messagerie Slack.
 • whatsapp_* — messagerie WhatsApp (pairing QR requis).
-• data_* — datastore tabulaire per-user (backend Google Sheets).
+• data_* — datastore tabulaire per-user (PG natif, schéma libre ; data_write/data_rows/data_share).
 • gmail_* — Gmail per-user, multi-compte (search, get, send, reply, draft, archive, trash). OAuth Google requis (app.oto.ninja). gmail_list_accounts liste les comptes ; param `account` (email) pour cibler un compte précis.
 • culture_spectacle_* — entreprises du spectacle vivant.
 • oto_* — méta-tools : list/enable/disable tools, presets nommés.

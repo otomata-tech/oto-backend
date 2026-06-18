@@ -16,7 +16,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .. import db, org_store
-from ._authz import SUB_ONLY
+from ._authz import PLATFORM_ADMIN, SUB_ONLY
 from ._types import Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -71,6 +71,46 @@ def _gap(ctx: ResolvedCtx, inp: GapInput) -> dict:
     return {"ok": True, "id": sid}
 
 
+# --- Projections de lecture (barreau 4) — opérateur plateforme -------------
+
+class RunsInput(BaseModel):
+    limit: int = 100
+
+
+class RunInput(BaseModel):
+    run_id: str
+
+
+class DaysInput(BaseModel):
+    days: int = 30
+
+
+class SignalsInput(BaseModel):
+    signal: Optional[str] = None
+    target: Optional[str] = None
+    limit: int = 200
+
+
+def _runs(ctx: ResolvedCtx, inp: RunsInput) -> dict:
+    return {"runs": db.list_doctrine_runs(inp.limit)}
+
+
+def _run(ctx: ResolvedCtx, inp: RunInput) -> dict:
+    return {"run_id": inp.run_id, "calls": db.get_doctrine_run(inp.run_id)}
+
+
+def _gaps(ctx: ResolvedCtx, inp: DaysInput) -> dict:
+    return {"gaps": db.aggregate_gaps(inp.days)}
+
+
+def _tool_quality(ctx: ResolvedCtx, inp: DaysInput) -> dict:
+    return {"tools": db.aggregate_tool_feedback(inp.days)}
+
+
+def _signals(ctx: ResolvedCtx, inp: SignalsInput) -> dict:
+    return {"signals": db.list_usage_signals(inp.signal, inp.target, inp.limit)}
+
+
 CAPABILITIES += [
     Capability(
         key="usage.tool_feedback", handler=_tool_feedback, Input=FeedbackInput, authz=SUB_ONLY,
@@ -87,4 +127,15 @@ CAPABILITIES += [
                     "missing_data | other ; intent = what you were trying to accomplish.",
         mcp="report_gap", rest=RestBinding("POST", "/api/me/usage/gap"),
     ),
+    # --- projections de lecture (opérateur plateforme) ---------------------
+    Capability(key="usage.runs", handler=_runs, Input=RunsInput, authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/usage/runs")),
+    Capability(key="usage.run", handler=_run, Input=RunInput, authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/usage/runs/{run_id}")),
+    Capability(key="usage.gaps", handler=_gaps, Input=DaysInput, authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/usage/gaps")),
+    Capability(key="usage.tool_quality", handler=_tool_quality, Input=DaysInput, authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/usage/tool-quality")),
+    Capability(key="usage.signals", handler=_signals, Input=SignalsInput, authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/usage/signals")),
 ]

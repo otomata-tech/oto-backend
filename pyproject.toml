@@ -16,7 +16,7 @@ dependencies = [
     # déclare ici pour qu'il soit installé par le `pip install -e .` du deploy
     # (oto-mcp#17 : crash 'No module named markdown' en prod).
     "markdown>=3.5",
-    "otomata-calllog @ git+ssh://git@github.com/otomata-tech/otomata.git#subdirectory=otomata-calllog",
+    "otomata-calllog>=0.1.1",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
     "france-opendata[stock,sante]>=0.9.0",  # stock SIRENE + foncier (géocodage/cadastre/bâti/solaire) + santé (FINESS/HAS) — source unique partagée

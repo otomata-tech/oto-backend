@@ -647,7 +647,12 @@ git push origin main
 ssh -i ~/.ssh/alexis root@REDACTED_IP "journalctl -u oto-mcp -f"
 
 # DB inspect (PG managed) — depuis la box (env du process inclut DATABASE_URL via .env)
-ssh -i ~/.ssh/alexis root@REDACTED_IP 'set -a; . /opt/oto-mcp/.env; set +a; psql "$DATABASE_URL" -c "SELECT sub, email, role FROM users"'
+# ⚠️ `psql` n'est PAS installé sur la box dédiée → passer par le venv + psycopg :
+ssh -i ~/.ssh/alexis root@REDACTED_IP 'cd /opt/oto-mcp && set -a; . .env; set +a; ./.venv/bin/python -c "
+import os, psycopg
+with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
+    for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
+"'
 ```
 
 ## Infra

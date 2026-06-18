@@ -125,13 +125,13 @@ class Connector:
 
 # Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
 # seul secret_kind (slack est aussi personal_session, mais c'est une API).
-BROWSER_PROVIDERS = frozenset({"linkedin", "whatsapp", "crunchbase"})
+BROWSER_PROVIDERS = frozenset({"whatsapp", "crunchbase"})
 
 # Catégorie d'usage (domaine) par connecteur — CURÉE (pas dérivable), tunable.
 _CATEGORY_BY_CONNECTOR = {
     "serper": "Prospection", "hunter": "Prospection", "kaspr": "Prospection",
     "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
-    "folk": "Prospection", "crunchbase": "Prospection", "linkedin": "Prospection",
+    "folk": "Prospection", "crunchbase": "Prospection",
     "unipile": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
@@ -270,8 +270,8 @@ _REGISTRY_LIST = [
        href="https://planity-mcp.oto.zone"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
-    _c("linkedin", ["linkedin"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_preset=True, label="LinkedIn"),
+    # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur
+    # `unipile` (LinkedIn hébergé). Le browser LinkedIn local reste dans oto-cli.
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :

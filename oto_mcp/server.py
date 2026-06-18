@@ -106,7 +106,7 @@ En début de session, appelle `oto_get_doctrine()` — il renvoie la doctrine de
 
 Namespaces :
 • fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
-• linkedin_* — scraping LinkedIn via browser persistant. Cookie requis (oto.ninja/account).
+• unipile_* — LinkedIn hébergé (Unipile) : profil, entreprise, recherche, messagerie. Requiert un compte LinkedIn connecté par l'user (dashboard.oto.ninja).
 • attio_* — CRM Attio complet (companies, people, deals, notes, tasks, lists, entries, threads). Masqué par défaut (préférer le MCP Attio officiel) — réactivable via oto_enable_tool.
 • serper_* — recherche web (Serper API) : web, news, scrape.
 • hunter_* — emails : domain search, finder, vérification.

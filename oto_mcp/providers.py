@@ -278,10 +278,11 @@ _REGISTRY_LIST = [
     # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),
     # pas un connecteur Google — chargé explicitement dans register_all, non gaté
     # par l'activation (cf. middleware.py « tools plateforme … data … jamais gatés »).
-    _c("google", ["gmail", "tasks"], auth_modes={"byo_user"},
+    _c("google", ["gmail", "tasks", "calendar", "sheets", "drive", "chat"],
+       auth_modes={"byo_user"},
        personal_session=True, secret_kind="oauth", in_default_preset=True,
-       label="Google", help="Gmail + Tasks (OAuth)",
-       modules=("gmail", "tasks")),
+       label="Google", help="Gmail + Tasks + Calendar + Sheets + Drive + Chat (OAuth)",
+       modules=("gmail", "tasks", "calendar", "sheets", "drive", "chat")),
     _c("whatsapp", ["whatsapp"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="WhatsApp"),
 

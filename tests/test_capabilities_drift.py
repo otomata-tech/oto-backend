@@ -28,8 +28,9 @@ def test_mcp_caps_are_mounted():
 # deps optionnelles (pur registre, toujours exécuté).
 _EXPECTED_TOOL_MODULES = {
     "serper", "hunter", "fr", "attio", "lemlist", "kaspr", "pennylane", "slack",
-    "fullenrich", "folk", "silae", "gocardless", "linkedin", "crunchbase",
-    "gmail", "datastore", "tasks", "reddit", "culture", "sirene_stock",
+    "fullenrich", "folk", "silae", "gocardless", "crunchbase",
+    "gmail", "tasks", "calendar", "sheets", "drive", "chat",
+    "reddit", "culture", "sirene_stock",
     "foncier", "sante", "whatsapp", "unipile",
 }
 

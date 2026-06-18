@@ -13,7 +13,7 @@ charge depuis SQLite, refresh transparent si expiré, renvoie un
 `google.oauth2.credentials.Credentials` valide.
 
 Setup ops :
-- Env `GOOGLE_DATASTORE_CLIENT_ID` + `GOOGLE_DATASTORE_CLIENT_SECRET` —
+- Env `GOOGLE_WORKSPACE_CLIENT_ID` + `GOOGLE_WORKSPACE_CLIENT_SECRET` —
   OAuth client de type **Web application** dans Google Cloud Console,
   redirect URI `https://mcp.oto.ninja/api/google/oauth/callback`.
 - Env `OTO_MCP_PUBLIC_URL` (déjà utilisée pour Logto) — base pour le
@@ -37,7 +37,9 @@ from . import db
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.file",
+    # Drive COMPLET (restricted) — gérer TOUS les fichiers du user (pas seulement
+    # ceux créés par oto). Couvre aussi l'export datastore (#29). Supersede drive.file.
+    "https://www.googleapis.com/auth/drive",
     # Gmail surface complète (read/send/reply/draft/archive/trash). Scope
     # RESTRICTED chez Google → audit CASA requis si l'écran de consentement
     # passe en published/external (OK en mode testing).
@@ -45,6 +47,12 @@ SCOPES = [
     # Google Tasks (read/write). Scope SENSIBLE (pas restricted comme Gmail) →
     # vérification Google requise si l'app passe en published, pas d'audit CASA.
     "https://www.googleapis.com/auth/tasks",
+    # Google Calendar (read/write events). Scope SENSIBLE (pas restricted) →
+    # vérification de marque à la publication, pas d'audit CASA.
+    "https://www.googleapis.com/auth/calendar",
+    # Google Chat (RESTRICTED) — lire les espaces + lire/poster des messages.
+    "https://www.googleapis.com/auth/chat.spaces.readonly",
+    "https://www.googleapis.com/auth/chat.messages",
 ]
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -53,16 +61,16 @@ _STATE_TTL = 600  # 10 min
 
 
 def _client_id() -> str:
-    v = os.environ.get("GOOGLE_DATASTORE_CLIENT_ID")
+    v = os.environ.get("GOOGLE_WORKSPACE_CLIENT_ID")
     if not v:
-        raise RuntimeError("GOOGLE_DATASTORE_CLIENT_ID env var manquante")
+        raise RuntimeError("GOOGLE_WORKSPACE_CLIENT_ID env var manquante")
     return v
 
 
 def _client_secret() -> str:
-    v = os.environ.get("GOOGLE_DATASTORE_CLIENT_SECRET")
+    v = os.environ.get("GOOGLE_WORKSPACE_CLIENT_SECRET")
     if not v:
-        raise RuntimeError("GOOGLE_DATASTORE_CLIENT_SECRET env var manquante")
+        raise RuntimeError("GOOGLE_WORKSPACE_CLIENT_SECRET env var manquante")
     return v
 
 

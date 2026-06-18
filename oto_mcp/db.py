@@ -830,45 +830,6 @@ def set_avatar_url(sub: str, url: Optional[str]) -> None:
 
 # --- LinkedIn ---------------------------------------------------------------
 
-def set_linkedin_cookie(sub: str, cookie: str, user_agent: Optional[str] = None) -> None:
-    """Store/refresh le cookie li_at + UA d'un user. Le couple cookie + UA doit
-    matcher le browser d'origine pour réduire le risque de ban.
-
-    Coffre chiffré unique : secret = cookie, UA dans meta. UA effectif résolu
-    depuis le coffre si non fourni."""
-    upsert_user(sub)
-    from . import credentials_store
-    ua = user_agent
-    if ua is None:
-        cur = credentials_store.get_credential_with_meta("user", sub, "linkedin")
-        ua = cur["meta"].get("user_agent") if cur else None
-    credentials_store.set_credential(
-        "user", sub, "linkedin", cookie, set_by=sub, meta={"user_agent": ua})
-
-
-def clear_linkedin_cookie(sub: str) -> None:
-    from . import credentials_store
-    credentials_store.clear_credential("user", sub, "linkedin")
-
-
-def get_linkedin_session(sub: str) -> Optional[dict]:
-    """Cutover (folding) : lit le coffre (déchiffre), non plus les colonnes legacy."""
-    from . import credentials_store
-    cur = credentials_store.get_credential_with_meta("user", sub, "linkedin")
-    if not cur or not cur["secret"]:
-        return None
-    return {
-        "cookie": cur["secret"],
-        "user_agent": cur["meta"].get("user_agent"),
-        "set_at": cur["set_at"],
-    }
-
-
-def get_linkedin_cookie(sub: str) -> Optional[str]:
-    from . import credentials_store
-    return credentials_store.get_credential("user", sub, "linkedin")
-
-
 def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None,
                         org_id: Optional[int] = None) -> None:
     """Associe (upsert) le compte LinkedIn Unipile `account_id` à `sub` (B3).
@@ -1013,15 +974,6 @@ def resolve_unipile_pending(nonce: str) -> Optional[dict]:
             (nonce,),
         ).fetchone()
     return dict(row) if row else None
-
-
-def get_linkedin_status(sub: str) -> Optional[dict]:
-    """Statut SANS déchiffrer (pour /api/me) : {set_at, user_agent} ou None."""
-    from . import credentials_store
-    st = credentials_store.credential_status("user", sub, "linkedin")
-    if not st:
-        return None
-    return {"set_at": st["set_at"], "user_agent": st["meta"].get("user_agent")}
 
 
 # --- Crunchbase -------------------------------------------------------------

@@ -374,9 +374,11 @@ Consommé par le front `account/` (section admin « monitoring mcp »,
 
 ## Billing — credits d'appel par org (paiement Stripe)
 
-Monétisation à l'usage : **1 appel MCP = 1 credit**, débité du wallet de l'**org active**
-du caller. **Pas d'abonnement récurrent** — chaque org reçoit un **stock de base unique
-gratuit** (`OTO_MCP_FREE_CALLS`, défaut 1000), puis recharge par **packs Stripe**.
+Deux modèles **cumulables** : (a) **credits d'appel** (1 appel MCP = 1 credit, débité du
+wallet de l'**org active** ; stock de base gratuit `OTO_MCP_FREE_CALLS` déf. 1000 + recharge
+par **packs Stripe ponctuels** `mode=payment`) ; (b) **abonnements récurrents par option**
+(`mode=subscription`, ex. option LinkedIn — cf. dernière puce). Les credits paient les
+**appels**, l'abonnement paie l'**accès** à une option.
 
 - **Modèle** : portefeuille **par org** (`credits_store.py`, couche backend-core). `balance` =
   compteur entier d'appels restants, **peut passer négatif** — **soft enforcement, on ne bloque
@@ -408,6 +410,18 @@ gratuit** (`OTO_MCP_FREE_CALLS`, défaut 1000), puis recharge par **packs Stripe
 - **Gotcha** : un caller **sans org active** n'est **pas facturé** (no-op) — le metering exige
   l'appartenance org (cas limite : user tout neuf avant sa 1re org). Ne jamais déduire « a eu le
   stock de base » du solde (il peut être négatif) → lire `base_granted`.
+- **Abonnements récurrents** (`mode=subscription`) — l'**option LinkedIn (unipile)** = €15/mois/**siège**
+  (= compte LinkedIn connecté ; env `OTO_MCP_UNIPILE_SEAT_PRICE_CENTS=1500`). Miroir local
+  `org_subscriptions(org_id, product, stripe_*, status, quantity)` tenu par les webhooks (lu pour le
+  gate, sans appel Stripe par requête). `billing.create_unipile_subscription_checkout` /
+  `sync_unipile_seats` (quantité = nb comptes, Stripe prorate) / `has_active_unipile_subscription`.
+  `handle_event` **dispatche** : `checkout.session.completed` (packs **vs** subscription) +
+  `customer.subscription.*` + `invoice.payment_failed`. `connect` est **gaté** sur abonnement actif
+  (402 `unipile_subscription_required`) ; `POST /api/me/unipile/subscribe` → `{checkout_url}`.
+  ⚠️ **L'endpoint webhook Stripe doit être ABONNÉ aux event types côté Stripe** (dashboard/API), pas
+  seulement codé : `mcp.oto.ninja/api/billing/webhook` n'écoutait au départ que
+  `checkout.session.completed` → les events d'abonnement (annulation/échec) n'arrivaient pas. Ajoutés
+  via l'API Stripe à `enabled_events`.
 
 ## Visibility per-user
 

@@ -1,11 +1,8 @@
 """REST API consommée par le frontend oto.ninja (page de gestion de compte).
 
-Endpoints (ce fichier — gestion compte, LinkedIn, Crunchbase, providers,
+Endpoints (ce fichier — gestion compte, Crunchbase, providers,
 tools, admin, WhatsApp) :
 - `GET    /api/me`                            → infos user + rôle + statut keys
-- `GET    /api/settings/linkedin`             → renvoie cookie + UA + set_at (propriétaire only)
-- `POST   /api/settings/linkedin`             → enregistre cookie li_at + UA
-- `DELETE /api/settings/linkedin`             → efface
 - `GET    /api/settings/crunchbase`           → renvoie cookies + UA + set_at
 - `POST   /api/settings/crunchbase`           → cookies + UA
 - `DELETE /api/settings/crunchbase`
@@ -43,7 +40,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from datetime import date as _date, timedelta as _timedelta
 
-from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, linkedin_pairing, memento_oauth, org_store, pairing, tool_registry
+from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, pairing, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import (
@@ -216,7 +213,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         user = db.get_user(sub) or {}
         status = access.status_for(sub)
-        li = db.get_linkedin_status(sub)        # coffre (folding), sans déchiffrer
         cb = db.get_crunchbase_status(sub)
         active_org = org_store.get_active_org(sub)
         active_org_name = None
@@ -269,12 +265,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "invites_left": user.get("invite_quota", 0),
                 "invited_by": user.get("invited_by"),
             },
-            "linkedin": {
-                "configured": li is not None,
-                "set_at": li["set_at"] if li else None,
-                "user_agent": li["user_agent"] if li else None,
-                "browser_profile": linkedin_pairing.has_profile(sub),
-            },
             "crunchbase": {
                 "configured": cb is not None,
                 "set_at": cb["set_at"] if cb else None,
@@ -285,46 +275,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "memento": memento_oauth.status_for(sub),
             "providers": status["providers"],
             "billing": billing_block,
-        })
-
-    async def linkedin_save(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_error(request, 400, "invalid_json")
-        if not isinstance(body, dict):
-            return _json_error(request, 400, "invalid_body")
-        cookie = (body.get("cookie") or "").strip()
-        user_agent = (body.get("user_agent") or "").strip() or None
-        if not cookie:
-            return _json_error(request, 400, "empty_cookie")
-        db.set_linkedin_cookie(sub, cookie, user_agent=user_agent)
-        return _json(request, {"ok": True})
-
-    async def linkedin_clear(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        db.clear_linkedin_cookie(sub)
-        return _json(request, {"ok": True})
-
-    async def linkedin_get(request: Request) -> JSONResponse:
-        # Renvoie la valeur réelle du cookie LinkedIn au propriétaire authentifié.
-        # Permet au CLI (`oto ninja secrets get LINKEDIN_COOKIE`) de récupérer
-        # le secret stocké côté DB plutôt que de maintenir une copie SOPS.
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        sess = db.get_linkedin_session(sub)
-        if not sess:
-            return _json_error(request, 404, "not_configured")
-        return _json(request, {
-            "cookie": sess["cookie"],
-            "user_agent": sess.get("user_agent"),
-            "set_at": sess.get("set_at"),
         })
 
     async def crunchbase_save(request: Request) -> JSONResponse:
@@ -373,11 +323,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     # tout connecteur `byo_user` qui déclare un schéma de saisie (`secret_fields` :
     # api_key 1 champ, basic_auth 2 champs, silae 3 champs…). Le formulaire, la
     # validation et le packing dérivent du schéma — zéro branche par connecteur.
-    # cookie/oauth ont des flux dédiés (linkedin/google/memento) → `secret_fields`
+    # cookie/oauth ont des flux dédiés (crunchbase/google/memento) → `secret_fields`
     # vide → exclus ici.
     # --- Avatar user + logo d'org (Object Storage) -------------------------
     # Upload multipart → ne passe PAS par la couche capacité (ADR 0009 = corps
-    # JSON pydantic). Handlers plain calqués sur linkedin_save. URL publique
+    # JSON pydantic). Handlers plain calqués sur crunchbase_save. URL publique
     # persistée en clair (pas un secret).
 
     async def _read_upload(request: Request):
@@ -471,7 +421,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     # Saisie de credential per-user, GÉNÉRIQUE (dérivée du registre, pas une liste
     # hardcodée) : tout connecteur `byo_user` dont le secret est un "secret simple"
     # — `api_key` (la clé) ou `basic_auth` (base64("email:password"), ex. planity).
-    # cookie/oauth ont des flows dédiés (linkedin / google / memento) → exclus ici.
+    # cookie/oauth ont des flows dédiés (crunchbase / google / memento) → exclus ici.
     _SETTABLE_KINDS = {"api_key", "basic_auth"}
 
     def _credentialable(provider: str):
@@ -1214,70 +1164,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "slug": slug, "count": u["count"], "callers": u["callers"], "series": series,
         })
 
-    # ── LinkedIn browser-session pairing (VNC) ──────────────────────
-
-    async def linkedin_browser_status(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = linkedin_pairing.get_active_for_sub(sub)
-        return _json(request, {
-            "has_profile": linkedin_pairing.has_profile(sub),
-            "active_pairing": {
-                "session_id": active.session_id,
-                "status": active.status,
-            } if active else None,
-        })
-
-    async def linkedin_browser_start(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        loop = asyncio.get_running_loop()
-        session = linkedin_pairing.start(sub, loop)
-        return _json(request, {"session_id": session.session_id, "status": session.status})
-
-    async def linkedin_browser_cancel(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = linkedin_pairing.get_active_for_sub(sub)
-        if not active:
-            return _json_error(request, 404, "no_active_pairing")
-        active.cancel()
-        return _json(request, {"ok": True})
-
-    async def linkedin_browser_stream(request: Request) -> Response:
-        sub, err = await _authenticate(request, verifier, allow_query_token=True)
-        if err:
-            return err
-        session_id = request.query_params.get("session_id", "")
-        session = linkedin_pairing.get_session(session_id)
-        if not session or session.sub != sub:
-            return _json_error(request, 404, "unknown_session")
-
-        async def event_stream():
-            yield f": ok\ndata: {json.dumps({'type': 'connected', 'status': session.status})}\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(session.queue.get(), timeout=20)
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                **_cors_headers(request.headers.get("origin")),
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
     # ── WhatsApp pairing ──────────────────────────────────────────
 
     async def whatsapp_status(request: Request) -> JSONResponse:
@@ -1437,10 +1323,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
         Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/linkedin", linkedin_get, methods=["GET"]),
-        Route("/api/settings/linkedin", linkedin_save, methods=["POST"]),
-        Route("/api/settings/linkedin", linkedin_clear, methods=["DELETE"]),
-        Route("/api/settings/linkedin", options_handler, methods=["OPTIONS"]),
         Route("/api/settings/crunchbase", crunchbase_get, methods=["GET"]),
         Route("/api/settings/crunchbase", crunchbase_save, methods=["POST"]),
         Route("/api/settings/crunchbase", crunchbase_clear, methods=["DELETE"]),
@@ -1479,14 +1361,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/linkedin/browser/status", linkedin_browser_status, methods=["GET"]),
-        Route("/api/settings/linkedin/browser/status", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/linkedin/browser/start", linkedin_browser_start, methods=["POST"]),
-        Route("/api/settings/linkedin/browser/start", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/linkedin/browser/cancel", linkedin_browser_cancel, methods=["POST"]),
-        Route("/api/settings/linkedin/browser/cancel", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/linkedin/browser/stream", linkedin_browser_stream, methods=["GET"]),
-        Route("/api/settings/linkedin/browser/stream", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/status", whatsapp_status, methods=["GET"]),
         Route("/api/whatsapp/status", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/pair/start", whatsapp_pair_start, methods=["POST"]),

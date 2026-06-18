@@ -110,7 +110,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, created_at) WHERE run_id IS NOT NULL;
+-- idx_tool_calls_run (sur run_id) créé dans le bloc ALTER de init_db, APRÈS l'ADD
+-- COLUMN run_id : sur une table existante, CREATE TABLE IF NOT EXISTS est un no-op
+-- donc la colonne n'existe pas encore ici (sinon crash UndefinedColumn au boot).
 
 -- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
 -- org active), >0 = profil de cette org. Une identité par (sub, org_id).

@@ -1,8 +1,13 @@
-"""Intégration Stripe — achat de packs de credits d'appel (paiement ponctuel).
+"""Intégration Stripe — packs de credits d'appel (ponctuel) ET abonnement récurrent.
 
-Pas d'abonnement récurrent : un user d'une org achète un PACK de credits via
-Stripe Checkout (`mode=payment`), et le webhook `checkout.session.completed`
-crédite le wallet de l'org (`credits_store.credit`, idempotent sur l'event id).
+Deux modes coexistent :
+- **Packs de credits** (`mode=payment`) : achat ponctuel, le webhook
+  `checkout.session.completed` crédite le wallet de l'org (`credits_store.credit`).
+- **Abonnement « option LinkedIn »** (`mode=subscription`, €15/mois/siège) : activer
+  l'option = souscrire ; quantité = nb de comptes LinkedIn connectés. Le miroir local
+  `org_subscriptions` (status/quantity) est tenu par les webhooks `customer.subscription.*`
+  / `invoice.payment_failed` et gate l'activation de l'option. DISTINCT des credits :
+  l'abonnement paie l'ACCÈS à l'option, les credits paient les APPELS (les deux cumulés).
 
 La dégressivité du prix (1 ct → 0,1 ct par appel) est portée par la TAILLE du
 pack (remise volume), pas par un calcul de palier. Catalogue `PACKS` en code
@@ -73,6 +78,86 @@ def create_checkout_session(org_id: int, pack_id: str, sub: str) -> dict:
     return {"checkout_url": session.url}
 
 
+def _unipile_seat_cents() -> int:
+    """Prix mensuel EUR (centimes) d'UN siège (compte LinkedIn) de l'option Unipile.
+    Défaut €15.00 ; configurable (notre coût Unipile ~5 € + part du plancher + marge)."""
+    try:
+        return int(os.environ.get("OTO_MCP_UNIPILE_SEAT_PRICE_CENTS", "1500"))
+    except ValueError:
+        return 1500
+
+
+def create_unipile_subscription_checkout(org_id: int, sub: str, quantity: int = 1) -> dict:
+    """Crée un Stripe Checkout `mode=subscription` pour l'option LinkedIn de l'org
+    (€15/mois × sièges). `metadata` sur la session ET l'abonnement → les webhooks
+    `customer.subscription.*` portent `org_id`/`product`. Renvoie `{checkout_url}`."""
+    import stripe
+
+    stripe.api_key = require_env("STRIPE_SECRET_KEY")
+    dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
+    qty = max(1, int(quantity))
+    md = {"org_id": str(org_id), "product": "unipile"}
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[
+            {
+                "quantity": qty,
+                "price_data": {
+                    "currency": "eur",
+                    "unit_amount": _unipile_seat_cents(),
+                    "recurring": {"interval": "month"},
+                    "product_data": {"name": "Oto — option LinkedIn (Unipile)"},
+                },
+            }
+        ],
+        metadata={**md, "sub": sub},
+        subscription_data={"metadata": md},
+        success_url=f"{dash}/console/connections?unipile=subscribed",
+        cancel_url=f"{dash}/console/connections?unipile=cancel",
+    )
+    return {"checkout_url": session.url}
+
+
+def sync_unipile_seats(org_id: int) -> None:
+    """Aligne la quantité de l'abonnement Stripe sur le nb de comptes connectés de
+    l'org (Stripe prorate). No-op si pas d'abonnement actif. Best-effort (appelé
+    après connect/disconnect — ne doit pas faire échouer l'opération)."""
+    from . import db
+
+    s = db.get_org_subscription(org_id, "unipile")
+    if not s or not s.get("stripe_subscription_id"):
+        return
+    if s.get("status") not in ("active", "trialing", "past_due"):
+        return
+    qty = max(1, db.count_unipile_accounts_for_org(org_id))
+    if qty == s.get("quantity"):
+        return
+    try:
+        import stripe
+
+        stripe.api_key = require_env("STRIPE_SECRET_KEY")
+        sub_obj = stripe.Subscription.retrieve(s["stripe_subscription_id"])
+        item_id = sub_obj["items"]["data"][0]["id"]
+        stripe.Subscription.modify(
+            s["stripe_subscription_id"],
+            items=[{"id": item_id, "quantity": qty}],
+            proration_behavior="create_prorations",
+        )
+        db.upsert_org_subscription(org_id, "unipile", status=s["status"], quantity=qty)
+        logger.info("unipile seats synced org=%s qty=%s", org_id, qty)
+    except Exception:
+        logger.warning("unipile seat sync skipped org=%s", org_id, exc_info=True)
+
+
+def has_active_unipile_subscription(org_id: int) -> bool:
+    """L'org a-t-elle l'option LinkedIn payée et active (gate d'activation) ?
+    `past_due` reste toléré (grâce de paiement) ; `canceled`/`inactive` non."""
+    from . import db
+
+    s = db.get_org_subscription(org_id, "unipile")
+    return bool(s and s.get("status") in ("active", "trialing", "past_due"))
+
+
 def verify_and_parse(payload: bytes, sig_header: str):
     """Vérifie la signature Stripe et parse l'event. Lève si invalide.
 
@@ -86,24 +171,107 @@ def verify_and_parse(payload: bytes, sig_header: str):
 
 
 def handle_event(event) -> None:
-    """Applique un event Stripe vérifié. On n'agit que sur le paiement complété.
+    """Applique un event Stripe vérifié. Dispatch packs (credits) vs abonnement
+    (option LinkedIn). Idempotent par construction (credits: UNIQUE event_id ;
+    abonnement: upsert du miroir status/quantity)."""
+    etype = event["type"]
+    obj = event["data"]["object"]
+    if etype == "checkout.session.completed":
+        if obj.get("mode") == "subscription":
+            _on_subscription_checkout(obj)
+        else:
+            _on_pack_checkout(event, obj)
+    elif etype in ("customer.subscription.created", "customer.subscription.updated"):
+        _on_subscription_change(obj)
+    elif etype == "customer.subscription.deleted":
+        _on_subscription_status(obj, "canceled")
+    elif etype == "invoice.payment_failed":
+        _on_invoice_failed(obj)
 
-    Idempotent par construction : `credits_store.credit` rejette un rejeu via
-    l'`UNIQUE(stripe_event_id)`.
-    """
-    if event["type"] != "checkout.session.completed":
-        return
-    md = (event["data"]["object"].get("metadata") or {})
+
+def _on_pack_checkout(event, session) -> None:
+    md = session.get("metadata") or {}
     try:
         org_id = int(md["org_id"])
         calls = int(md["calls"])
     except (KeyError, ValueError):
-        logger.warning("stripe webhook sans metadata org_id/calls exploitable: %s", md)
+        logger.warning("stripe webhook pack sans metadata org_id/calls: %s", md)
         return
     from . import credits_store
 
     res = credits_store.credit(org_id, calls, reason="stripe", stripe_event_id=event["id"])
-    logger.info(
-        "stripe top-up org=%s +%s calls (applied=%s, balance=%s)",
-        org_id, calls, res.get("applied"), res.get("balance"),
+    logger.info("stripe top-up org=%s +%s calls (applied=%s, balance=%s)",
+                org_id, calls, res.get("applied"), res.get("balance"))
+
+
+def _sub_org_product(obj) -> tuple[int, str] | tuple[None, None]:
+    """(org_id, product) d'un objet abonnement/session via metadata, sinon lookup
+    par stripe_subscription_id."""
+    md = obj.get("metadata") or {}
+    if md.get("org_id") and md.get("product"):
+        try:
+            return int(md["org_id"]), md["product"]
+        except ValueError:
+            pass
+    from . import db
+
+    sub_id = obj.get("id") if obj.get("object") == "subscription" else obj.get("subscription")
+    row = db.get_org_by_subscription_id(sub_id) if sub_id else None
+    return (row["org_id"], row["product"]) if row else (None, None)
+
+
+def _on_subscription_checkout(session) -> None:
+    """Session subscription complétée → enregistre l'abonnement actif + ses ids."""
+    from . import db
+
+    md = session.get("metadata") or {}
+    try:
+        org_id, product = int(md["org_id"]), md["product"]
+    except (KeyError, ValueError):
+        logger.warning("stripe subscription checkout sans metadata: %s", md)
+        return
+    db.upsert_org_subscription(
+        org_id, product, status="active",
+        stripe_customer_id=session.get("customer"),
+        stripe_subscription_id=session.get("subscription"),
     )
+    logger.info("unipile subscription active org=%s product=%s", org_id, product)
+
+
+def _on_subscription_change(sub) -> None:
+    """customer.subscription.created/updated → miroir status + quantity."""
+    from . import db
+
+    org_id, product = _sub_org_product(sub)
+    if org_id is None:
+        return
+    items = (sub.get("items") or {}).get("data") or []
+    qty = items[0].get("quantity") if items else None
+    db.upsert_org_subscription(
+        org_id, product, status=sub.get("status", "active"),
+        stripe_customer_id=sub.get("customer"),
+        stripe_subscription_id=sub.get("id"),
+        quantity=qty,
+    )
+    logger.info("unipile subscription org=%s status=%s qty=%s", org_id, sub.get("status"), qty)
+
+
+def _on_subscription_status(sub, status) -> None:
+    from . import db
+
+    org_id, product = _sub_org_product(sub)
+    if org_id is None:
+        return
+    db.upsert_org_subscription(org_id, product, status=status,
+                               stripe_subscription_id=sub.get("id"))
+    logger.info("unipile subscription org=%s → %s", org_id, status)
+
+
+def _on_invoice_failed(invoice) -> None:
+    from . import db
+
+    org_id, product = _sub_org_product(invoice)
+    if org_id is None:
+        return
+    db.upsert_org_subscription(org_id, product, status="past_due")
+    logger.info("unipile invoice failed org=%s → past_due", org_id)

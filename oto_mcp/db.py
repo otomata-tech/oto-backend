@@ -449,6 +449,23 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_credit_tx_org ON credit_transactions(org_id, created_at DESC);
+
+-- Abonnements récurrents Stripe par org & par produit (ex. `unipile` = option
+-- LinkedIn à €15/mois/siège). DISTINCT des credits d'appel (one-off) : ici c'est
+-- du récurrent (mode=subscription). `status` reflète l'abonnement Stripe
+-- (active/past_due/canceled…) → gate l'activation de l'option. `quantity` = nb de
+-- sièges (comptes connectés). Source de vérité = Stripe, miroir local mis à jour
+-- par les webhooks (et lu pour le gate sans appel Stripe par requête).
+CREATE TABLE IF NOT EXISTS org_subscriptions (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    product TEXT NOT NULL,
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT,
+    status TEXT NOT NULL DEFAULT 'inactive',
+    quantity INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, product)
+);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -902,6 +919,52 @@ def set_org_unipile_limit(org_id: int, limit: Optional[int]) -> None:
         conn.execute(
             "UPDATE orgs SET unipile_account_limit = %s WHERE id = %s", (limit, org_id)
         )
+
+
+# --- abonnements récurrents Stripe par org (option LinkedIn €15/mois/siège) ----
+
+def get_org_subscription(org_id: int, product: str) -> Optional[dict]:
+    """Miroir local de l'abonnement Stripe `product` de l'org (status/quantity/ids)
+    ou None. Lu pour le gate d'activation (sans appel Stripe par requête)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT org_id, product, stripe_customer_id, stripe_subscription_id, "
+            "status, quantity, updated_at FROM org_subscriptions "
+            "WHERE org_id = %s AND product = %s", (org_id, product)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_org_subscription(org_id: int, product: str, *, status: str,
+                            stripe_customer_id: Optional[str] = None,
+                            stripe_subscription_id: Optional[str] = None,
+                            quantity: Optional[int] = None) -> None:
+    """Upsert le miroir d'abonnement (appelé par les webhooks Stripe). Les champs
+    ids/quantity laissés à None ne sont pas écrasés s'ils existent déjà."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO org_subscriptions "
+            "(org_id, product, status, stripe_customer_id, stripe_subscription_id, quantity, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, 0), NOW()) "
+            "ON CONFLICT (org_id, product) DO UPDATE SET "
+            "status = EXCLUDED.status, "
+            "stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, org_subscriptions.stripe_customer_id), "
+            "stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, org_subscriptions.stripe_subscription_id), "
+            "quantity = COALESCE(%s, org_subscriptions.quantity), updated_at = NOW()",
+            (org_id, product, status, stripe_customer_id, stripe_subscription_id,
+             quantity, quantity),
+        )
+
+
+def get_org_by_subscription_id(stripe_subscription_id: str) -> Optional[dict]:
+    """Retrouve `{org_id, product}` depuis l'id d'abonnement Stripe (webhooks dont
+    le metadata serait absent)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT org_id, product FROM org_subscriptions WHERE stripe_subscription_id = %s",
+            (stripe_subscription_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None) -> None:

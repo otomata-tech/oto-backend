@@ -153,12 +153,19 @@ def charge_unipile_monthly(period: str) -> dict:
 
     per = _unipile_monthly_credits()
     charged = 0
-    skipped = 0  # déjà facturé ce mois (idempotency)
+    skipped = 0   # déjà facturé ce mois (idempotency)
+    errors = 0    # org disparu / wallet impossible — n'abat pas le batch
     orgs: set[int] = set()
     for acc in db.list_unipile_accounts_by_org():
         org_id, account_id = acc["org_id"], acc["account_id"]
         key = f"unipile:{org_id}:{account_id}:{period}"
-        res = credit(org_id, -per, "unipile_monthly", stripe_event_id=key)
+        try:
+            res = credit(org_id, -per, "unipile_monthly", stripe_event_id=key)
+        except Exception:
+            logger.warning("unipile charge skipped org=%s account=%s", org_id, account_id,
+                           exc_info=True)
+            errors += 1
+            continue
         if res.get("applied"):
             charged += 1
             orgs.add(org_id)
@@ -167,7 +174,7 @@ def charge_unipile_monthly(period: str) -> dict:
     return {
         "period": period, "per_account_credits": per,
         "accounts_charged": charged, "accounts_skipped": skipped,
-        "orgs_charged": len(orgs),
+        "accounts_errored": errors, "orgs_charged": len(orgs),
     }
 
 

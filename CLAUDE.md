@@ -102,10 +102,23 @@ Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
 
 > ⚠️ Le **stockage** des credentials est le **coffre chiffré unique `connector_credentials`** (cf. `docs/connector-vault.md`). Les colonnes legacy `users.<provider>_api_key`/`org_secrets`/`user_google_oauth` ont été **purgées** (DROP, 2026-06-11) ; chiffrement **obligatoire** (plus de plaintext). La résolution ci-dessous reste valide dans sa cascade, lit le coffre via `credentials_store`.
 
-Le rôle (`users.role`) ne sert qu'à décider qui voit l'admin UI :
+Le rôle (`users.role`) décide de l'accès à l'admin UI, sur **3 paliers**
+(`ROLES = (member, admin, super_admin)`, cf. `access.py`/`roles.py`) :
 
-- **admin** : accès `/api/admin/*`. Bootstrap via env `OTO_MCP_ADMIN_SUB`.
-- **member** : défaut, pas d'effet sur l'accès aux tools (`guest` retiré 2026-06-15, migré → member ; `ROLES = (member, admin)`).
+- **super_admin** : le tout-puissant — escalade `org_admin` de TOUTE org +
+  `group_admin` de TOUT groupe (`roles.is_platform_admin` = super), gestion des
+  rôles plateforme, platform keys, émission de tokens, écriture + doctrine
+  d'orgs tierces, création d'org, bypass namespace grant-only. Bootstrap env
+  `OTO_MCP_ADMIN_SUB` → super_admin. Combinateur d'autz `SUPER_ADMIN`.
+- **admin** (palier OPÉRATIONNEL intermédiaire) : supervision plateforme —
+  monitoring, liste/fiche users, activation des connecteurs, refresh des mounts,
+  lectures d'orgs — **SANS** escalade en masse vers les orgs tierces.
+  Prédicat `access.is_platform_operator` (admin ∪ super) ; combinateur `PLATFORM_ADMIN`.
+- **member** : défaut, pas d'effet sur l'accès aux tools (`guest` retiré
+  2026-06-15, migré → member).
+
+> Les `admin` historiques (= tout-puissants) ont été migrés → `super_admin`
+> (`scripts/migrate_admin_to_super.py`). Un `admin` aujourd'hui = opérateur.
 
 L'accès aux clés API se décide par `user_grants` explicites (admin grante
 manuellement via `/api/admin/users/{sub}/grants/{key_id}`). Résolution par

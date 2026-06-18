@@ -18,5 +18,7 @@ from . import groups_secrets  # noqa: F401 — group.secret.{set,delete} + group
 from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,delete,versions,revert}
 # Palier billing — solde de credits par org, historique, packs, recharge Stripe.
 from . import billing  # noqa: F401 — billing.{balance,transactions,packs,checkout}
+# Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
+from . import usage  # noqa: F401 — usage.{tool_feedback,gap}
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

@@ -81,7 +81,7 @@ class UserDisabledToolsMiddleware(Middleware):
             enabled_override = set(db.list_user_enabled_tools(sub, prof_org))
             # Union grants per-user + entitlements de l'org active (source unique).
             granted = access.granted_namespaces_for(sub)
-            is_admin = access.get_user_role(sub) == access.ADMIN
+            is_admin = access.is_super_admin(sub)
             # Baseline de toolset (preset de visibilité). Cascade ADR 0015/0012 :
             # le GROUPE actif raffine l'ORG active. Le chef d'équipe a priorité ; à
             # défaut, la baseline curée par l'org_admin pour ses membres (le toolset

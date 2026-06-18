@@ -55,7 +55,7 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return None, err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             return None, json_error(request, 403, "forbidden")
         return sub, None
 

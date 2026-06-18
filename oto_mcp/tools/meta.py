@@ -56,7 +56,7 @@ def _user_access(sub: str) -> tuple[frozenset, bool]:
     `access.granted_namespaces_for` — même calcul que le middleware et les
     gardes REST, pour qu'aucune surface ne diverge)."""
     granted = access.granted_namespaces_for(sub)
-    is_admin = access.get_user_role(sub) == access.ADMIN
+    is_admin = access.is_super_admin(sub)
     return granted, is_admin
 
 
@@ -292,9 +292,9 @@ def register(mcp: FastMCP) -> None:
 
     def _require_admin() -> str:
         sub = _require_sub()
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             raise McpError(ErrorData(
-                code=INVALID_PARAMS, message="Réservé aux admins.",
+                code=INVALID_PARAMS, message="Réservé au super admin.",
             ))
         return sub
 

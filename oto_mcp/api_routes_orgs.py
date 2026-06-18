@@ -30,7 +30,9 @@ def make_routes(
 ) -> list[Route]:
 
     def _is_platform_admin(sub: str) -> bool:
-        return access.get_user_role(sub) == access.ADMIN
+        # Routes admin sur membres/secrets d'orgs tierces = escalade en masse →
+        # réservé au super_admin (pas à l'admin opérationnel).
+        return access.is_super_admin(sub)
 
     async def admin_namespace_grants_list(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)

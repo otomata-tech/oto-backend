@@ -48,12 +48,23 @@ def ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
 
 
 def PLATFORM_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
-    """Admin plateforme uniquement."""
+    """Admin opérationnel (admin ou super_admin) — supervision plateforme sans
+    l'escalade en masse vers les orgs tierces (réservée à SUPER_ADMIN)."""
     sub = _require_sub(raw)
-    role = access.get_user_role(sub)
-    if role != access.ADMIN:
-        raise AuthzDenied(403, "forbidden", "Réservé au platform admin.")
-    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub), role=role)
+    if not access.is_platform_operator(sub):
+        raise AuthzDenied(403, "forbidden", "Réservé à un admin plateforme.")
+    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub),
+                       role=access.get_user_role(sub))
+
+
+def SUPER_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+    """Super admin uniquement — le tout-puissant (rôles plateforme, keys, tokens,
+    écriture sur orgs tierces, création d'org, entitlements)."""
+    sub = _require_sub(raw)
+    if not access.is_super_admin(sub):
+        raise AuthzDenied(403, "forbidden", "Réservé au super admin.")
+    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub),
+                       role=access.get_user_role(sub))
 
 
 def NAMESPACE_GRANT(namespace: str):
@@ -62,7 +73,7 @@ def NAMESPACE_GRANT(namespace: str):
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         sub = _require_sub(raw)
         role = access.get_user_role(sub)
-        if role != access.ADMIN and namespace not in access.granted_namespaces_for(sub):
+        if not access.is_super_admin(sub) and namespace not in access.granted_namespaces_for(sub):
             raise AuthzDenied(403, "namespace_not_granted",
                               f"Accès au namespace `{namespace}` non accordé.")
         return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub), role=role)

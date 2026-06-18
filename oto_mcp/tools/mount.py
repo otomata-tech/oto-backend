@@ -241,7 +241,7 @@ def register(mcp: FastMCP) -> None:
     async def refresh_mount(connector: str) -> dict:
         import asyncio as _asyncio
         sub = current_user_sub_from_token()
-        if sub is None or access.get_user_role(sub) != access.ADMIN:
+        if sub is None or not access.is_platform_operator(sub):
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message="Réservé aux admins plateforme."))
         try:

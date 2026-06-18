@@ -38,7 +38,9 @@ def _require_sub() -> str:
 
 
 def _is_platform_admin(sub: str) -> bool:
-    return access.get_user_role(sub) == access.ADMIN
+    # Agir sur la doctrine d'une org tierce (org_id explicite) = escalade en masse
+    # → réservé au super_admin (pas à l'admin opérationnel).
+    return access.is_super_admin(sub)
 
 
 def _resolve_org_read(sub: str, org_id: int | None) -> int | None:

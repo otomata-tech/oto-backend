@@ -5,8 +5,10 @@
     platform_admin  >  org_admin  >  group_admin (chef d'équipe)  >  member
 
 Un rôle supérieur **subsume** les inférieurs (escalade descendante) :
-- `platform_admin` (`users.role='admin'`) agit comme org_admin de TOUTE org et
-  group_admin de TOUT groupe.
+- `platform_admin` (= **super_admin**, `users.role='super_admin'`) agit comme
+  org_admin de TOUTE org et group_admin de TOUT groupe. ⚠️ l'`admin`
+  opérationnel (palier intermédiaire) ne subsume PAS les orgs : seul le
+  super_admin escalade en masse (cf. `access.is_super_admin`).
 - `org_admin` d'une org agit comme group_admin de TOUS les groupes de cette org.
 
 Avant ADR 0012, l'escalade était recopiée à la main dans chaque combinateur
@@ -32,7 +34,10 @@ GROUP_MEMBER = "group_member"
 
 
 def is_platform_admin(sub: str) -> bool:
-    return access.get_user_role(sub) == access.ADMIN
+    """platform_admin = **super_admin** : seul le tout-puissant escalade en masse
+    (org_admin de toute org / group_admin de tout groupe). L'`admin` opérationnel
+    n'est PAS platform_admin au sens de cette hiérarchie."""
+    return access.is_super_admin(sub)
 
 
 # --- palier org -------------------------------------------------------------

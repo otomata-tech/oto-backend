@@ -1,12 +1,20 @@
 """Rôles + résolution de clé API + quotas par tool.
 
-Le rôle `users.role` ne sert plus qu'à décider qui voit l'admin UI :
+Le rôle `users.role` décide de l'accès à l'admin UI, sur **3 paliers** (du plus
+faible au plus fort) :
 
-- **admin** : peut gérer `platform_keys` + grants via `/api/admin/*`.
-  Bootstrap : env `OTO_MCP_ADMIN_SUB` force ce sub en admin quoi qu'il y
-  ait en DB.
 - **member** : rôle par défaut (non-admin), sans effet sur l'accès aux
   tools. L'accès se décide via les `user_grants` (cf. ci-dessous).
+- **admin** (palier OPÉRATIONNEL intermédiaire) : supervision plateforme —
+  liste des users, fiche user, monitoring des appels, activation des
+  connecteurs, maintenance (refresh des mounts), lecture/admin opérationnelle
+  des orgs. **PAS** d'escalade en masse vers les orgs tierces.
+- **super_admin** (le tout-puissant) : tout l'opérationnel + escalade
+  `org_admin` de TOUTES les orgs et `group_admin` de TOUS les groupes,
+  gestion des rôles plateforme, platform keys, émission de tokens, écriture
+  sur les orgs tierces (entitlements, doctrine d'une autre org), création d'org.
+  Bootstrap : env `OTO_MCP_ADMIN_SUB` force ce sub en **super_admin** quoi
+  qu'il y ait en DB.
 
 Résolution d'une clé API par appel (`resolve_api_key`) :
 
@@ -38,11 +46,14 @@ from . import connectors, credentials_store, db, group_store, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
-# Rôles : seul `admin` a un effet (voit l'admin UI). `member` = défaut non-admin.
+# Rôles plateforme, du plus faible au plus fort : `member` (défaut non-admin) <
+# `admin` (opérateur : supervision sans escalade en masse) < `super_admin`
+# (tout-puissant : escalade org/groupe, rôles, keys, tokens, orgs tierces).
 # `guest` retiré (2026-06-15) — c'était un alias sans effet, migré en `member`.
 MEMBER = "member"
 ADMIN = "admin"
-ROLES = (MEMBER, ADMIN)
+SUPER_ADMIN = "super_admin"
+ROLES = (MEMBER, ADMIN, SUPER_ADMIN)
 
 # DÉRIVÉS du registre source unique (connectors.py) :
 # - _QUOTA_DEFAULTS : quota daily par provider (fallback si pas d'env/grant).
@@ -56,13 +67,28 @@ _ACCOUNT_URL = "https://oto.ninja/account"
 
 
 def get_user_role(sub: str) -> str:
-    """Rôle effectif du user — env override > DB > défaut member."""
+    """Rôle effectif du user — env override > DB > défaut member.
+
+    Le bootstrap `OTO_MCP_ADMIN_SUB` force le **super_admin** (le tout-puissant)
+    — c'est le sub propriétaire de la plateforme."""
     admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
     if admin_sub and sub == admin_sub:
-        return ADMIN
+        return SUPER_ADMIN
     user = db.get_user(sub)
     role = (user or {}).get("role") or MEMBER
     return role if role in ROLES else MEMBER
+
+
+def is_super_admin(sub: str) -> bool:
+    """Tout-puissant : escalade org/groupe, rôles plateforme, keys, tokens,
+    écriture sur orgs tierces."""
+    return get_user_role(sub) == SUPER_ADMIN
+
+
+def is_platform_operator(sub: str) -> bool:
+    """Opérateur plateforme = `admin` (supervision) OU `super_admin`. Cran de
+    visibilité/supervision, SANS l'escalade en masse réservée au super_admin."""
+    return get_user_role(sub) in (ADMIN, SUPER_ADMIN)
 
 
 def granted_namespaces_for(sub: str) -> frozenset:
@@ -101,7 +127,7 @@ def require_namespace(namespace: str) -> None:
     sub = current_user_sub_from_token()
     if sub is None:
         return
-    if get_user_role(sub) == ADMIN:
+    if is_super_admin(sub):
         return
     if namespace not in granted_namespaces_for(sub):
         raise McpError(ErrorData(

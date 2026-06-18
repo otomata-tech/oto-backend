@@ -192,7 +192,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             exposed = connector_activation.exposed_connectors(org_store.get_active_org(sub))
             cat = [c for c in cat if c["name"] in exposed]
             granted = access.granted_namespaces_for(sub)
@@ -545,7 +545,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             return _json_error(request, 403, "forbidden")
         # Inclut les grants pour la matrice users × keys côté UI.
         users = db.list_users_with_grants()
@@ -561,7 +561,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             return _json_error(request, 403, "forbidden")
         target = request.path_params["sub"]
         u = db.get_user(target)
@@ -586,7 +586,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         # On ne renvoie JAMAIS l'api_key brute — masque + 4 derniers chars.
         keys = []
@@ -605,7 +605,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         try:
             body = await request.json()
@@ -630,7 +630,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         try:
             key_id = int(request.path_params["key_id"])
@@ -645,7 +645,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         try:
@@ -671,7 +671,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         try:
@@ -685,7 +685,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         if not db.get_user(target_sub):
@@ -696,7 +696,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         if not db.get_user(target_sub):
@@ -715,7 +715,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         try:
@@ -731,7 +731,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         target_sub = request.path_params["sub"]
         try:
@@ -752,7 +752,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             return _json_error(request, 403, "forbidden")
         try:
             days = int(request.query_params.get("days", "7"))
@@ -767,7 +767,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        if access.get_user_role(sub) != access.ADMIN:
+        if not access.is_platform_operator(sub):
             return _json_error(request, 403, "forbidden")
         qp = request.query_params
         try:
@@ -834,7 +834,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             tools = await mcp_instance.list_tools(run_middleware=False)
             all_names = {t.name for t in tools}
 
-        disabled = set(db.list_user_disabled_tools(sub, org_store.get_active_org(sub) or 0))
+        disabled = set(db.list_user_disabled_tools(sub))
         # Le middleware retire déjà les disabled de `list_tools` selon le sub
         # courant (celui de la requête REST = même token). On ré-ajoute donc
         # les disabled pour avoir la vue complète.
@@ -869,9 +869,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
-        db.add_user_disabled_tool(sub, name, org)
-        db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override positif
+        db.add_user_disabled_tool(sub, name)
+        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override positif
         return _json(request, {"ok": True, "name": name, "enabled": False})
 
     async def my_tools_enable(request: Request) -> JSONResponse:
@@ -916,7 +915,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        presets = db.list_user_presets(sub, org_store.get_active_org(sub) or 0)
+        presets = db.list_user_presets(sub)
         return _json(request, {
             "presets": [
                 {
@@ -934,7 +933,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name, org_store.get_active_org(sub) or 0)
+        preset = db.get_user_preset(sub, name)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {
@@ -952,7 +951,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
         all_names = await _list_all_tool_names()
 
         explicit: list[str] | None = None
@@ -973,10 +971,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 }, status_code=400)
             enabled = sorted(set(explicit))
         else:
-            disabled = set(db.list_user_disabled_tools(sub, org))
+            disabled = set(db.list_user_disabled_tools(sub))
             enabled = sorted(all_names - disabled)
 
-        db.save_user_preset(sub, name, enabled, org)
+        db.save_user_preset(sub, name, enabled)
         return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
 
     async def my_preset_apply(request: Request) -> JSONResponse:
@@ -1014,7 +1012,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        deleted = db.delete_user_preset(sub, name, org_store.get_active_org(sub) or 0)
+        deleted = db.delete_user_preset(sub, name)
         if not deleted:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})
@@ -1030,7 +1028,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if org_id is None:
             return None, None, False
         role = org_store.get_org_role(org_id, sub)
-        can_edit = role == "org_admin" or access.get_user_role(sub) == access.ADMIN
+        # Le bypass plateforme (éditer la doctrine de l'org active sans en être
+        # org_admin) = escalade org_admin → super-only (miroir de `_resolve_org_write`
+        # côté MCP). Un org_admin de l'org édite normalement.
+        can_edit = role == "org_admin" or access.is_super_admin(sub)
         return org_id, role, can_edit
 
     async def my_instructions_list(request: Request) -> JSONResponse:
@@ -1068,7 +1069,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         org_id, role, _ = _active_org_edit(sub)
         if org_id is None:
             return _json_error(request, 404, "no_active_org")
-        if role is None and access.get_user_role(sub) != access.ADMIN:
+        if role is None and not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         slug = request.path_params["slug"]
         version = request.query_params.get("version")
@@ -1155,7 +1156,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         org_id, role, _ = _active_org_edit(sub)
         if org_id is None:
             return _json_error(request, 404, "no_active_org")
-        if role is None and access.get_user_role(sub) != access.ADMIN:
+        if role is None and not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         slug = org_store.normalize_slug(request.path_params["slug"])
         return _json(request, {

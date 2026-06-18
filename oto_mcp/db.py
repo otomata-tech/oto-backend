@@ -1,7 +1,8 @@
 """PostgreSQL-backed user store (Scaleway managed `otomata-main`).
 
 One row per Logto user (`sub` = primary key). Holds per-user settings :
-- `role` — member (défaut) / admin (cf. `access.py` ; `guest` retiré, migré en member)
+- `role` — member (défaut) / admin (opérateur) / super_admin (tout-puissant)
+  (cf. `access.py` ; `guest` retiré, migré en member ; validé en code, pas par CHECK)
 - LinkedIn / Crunchbase session cookies + user-agent
 - API keys par provider (serper/hunter/sirene/attio/lemlist) — plaintext,
   isolation par ACL réseau + creds en SOPS.
@@ -61,7 +62,8 @@ CREATE TABLE IF NOT EXISTS users (
     sub TEXT PRIMARY KEY,
     email TEXT,
     name TEXT,
-    role TEXT NOT NULL DEFAULT 'member',
+    role TEXT NOT NULL DEFAULT 'member',  -- member | admin (opérateur) | super_admin
+
     -- Accès plateforme & invitation virale (ADR 0013). access_status = gate doux
     -- (pending = waitlist, active = alpha, blocked). invite_quota = budget referral
     -- restant. invited_by = sub du parrain (arbre viral). Non appliqué tant que le

@@ -1,10 +1,10 @@
-"""Capacités orgs platform-admin (ADR 0009, barreau 2c).
+"""Capacités orgs super-admin (ADR 0009, barreau 2c).
 
-Écritures réservées à la plateforme : créer une org, accorder/révoquer un
-entitlement de namespace gouverné. Pas de divergence d'autz (les deux faces
-étaient déjà `PLATFORM_ADMIN`) → migration mécanique sous `PLATFORM_ADMIN`.
-Les réponses sont des **supersets** des deux contrats historiques (mêmes clés
-qu'avant côté MCP ET côté REST) pour ne casser aucun consommateur.
+Écritures sur les orgs tierces : créer une org, accorder/révoquer un
+entitlement de namespace gouverné. Agir sur une org tierce = escalade en masse
+→ réservé au **SUPER_ADMIN** (pas à l'admin opérationnel). Les réponses sont des
+**supersets** des deux contrats historiques (mêmes clés qu'avant côté MCP ET
+côté REST) pour ne casser aucun consommateur.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .. import org_store
 from ..tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
-from ._authz import PLATFORM_ADMIN
+from ._authz import SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -55,22 +55,22 @@ def _revoke_entitlement(ctx: ResolvedCtx, inp: EntitlementInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="org.admin.create", handler=_create_org, Input=CreateOrgInput,
-        authz=PLATFORM_ADMIN,
-        description="[platform admin] Create an organization (perimeter). Returns its id.",
+        authz=SUPER_ADMIN,
+        description="[super admin] Create an organization (perimeter). Returns its id.",
         mcp="oto_admin_create_org",
         rest=RestBinding("POST", "/api/admin/orgs"),
     ),
     Capability(
         key="org.entitlement.grant", handler=_grant_entitlement, Input=EntitlementInput,
-        authz=PLATFORM_ADMIN,
-        description="[platform admin] Entitle an org to a controlled (grant-only) namespace.",
+        authz=SUPER_ADMIN,
+        description="[super admin] Entitle an org to a controlled (grant-only) namespace.",
         mcp="oto_admin_grant_org_entitlement",
         rest=RestBinding("POST", "/api/admin/orgs/{id}/entitlements/{namespace}", _ID),
     ),
     Capability(
         key="org.entitlement.revoke", handler=_revoke_entitlement, Input=EntitlementInput,
-        authz=PLATFORM_ADMIN,
-        description="[platform admin] Revoke an org's entitlement to a controlled namespace.",
+        authz=SUPER_ADMIN,
+        description="[super admin] Revoke an org's entitlement to a controlled namespace.",
         mcp="oto_admin_revoke_org_entitlement",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/entitlements/{namespace}", _ID),
     ),

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -27,9 +28,18 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import access, connector_activation, db, providers
+from . import access, connector_activation, credits_store, db, org_store, providers
 
 logger = logging.getLogger(__name__)
+
+
+def _unipile_default_limit() -> int:
+    """Plafond par défaut de comptes Unipile par org (anti-dérapage coût) si l'org
+    n'en définit pas un propre. 0 = pas de plafond."""
+    try:
+        return int(os.environ.get("OTO_MCP_UNIPILE_DEFAULT_LIMIT", "5"))
+    except ValueError:
+        return 5
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -139,12 +149,26 @@ def make_routes(
         api_key = access.unipile_api_key_for(sub)
         if not api_key:
             return json_error(request, 404, "unipile_not_configured")
+        # org « porteur » du compte = org actif, SAUF si l'user a sa propre clé (BYO)
+        # → c'est son abonnement, pas celui d'un org (pas de plafond org).
+        byo = db.get_user_api_key(sub, "unipile") is not None
+        org_id = None if byo else org_store.get_active_org(sub)
+        # Plafond anti-dérapage : chaque compte connecté coûte ~5 €/mois sur la
+        # facture Unipile de l'org. On bloque une NOUVELLE connexion au-delà du
+        # plafond (un user qui a déjà un compte peut reconnecter = remplacement).
+        if org_id is not None and db.get_unipile_account(sub) is None:
+            limit = db.get_org_unipile_limit(org_id)
+            if limit is None:
+                limit = _unipile_default_limit()
+            if limit and db.count_unipile_accounts_for_org(org_id) >= limit:
+                logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
+                return json_error(request, 429, "unipile_account_limit_reached")
         from oto.tools.unipile import UnipileClient
         client = UnipileClient(api_key=api_key)
         public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         nonce = secrets.token_urlsafe(24)
-        db.create_unipile_pending(nonce, sub)
+        db.create_unipile_pending(nonce, sub, org_id)
         try:
             url = await asyncio.to_thread(
                 client.hosted_auth_link,
@@ -181,10 +205,11 @@ def make_routes(
         name = body.get("name")
         account_id = body.get("account_id") or body.get("accountId") or body.get("id")
         if status == "CREATION_SUCCESS" and name and account_id:
-            sub = db.resolve_unipile_pending(name)
-            if sub:
-                db.set_unipile_account(sub, account_id)
-                logger.info("unipile webhook: bound sub=%s account_id=%s", sub, account_id)
+            pend = db.resolve_unipile_pending(name)
+            if pend:
+                db.set_unipile_account(pend["sub"], account_id, org_id=pend.get("org_id"))
+                logger.info("unipile webhook: bound sub=%s account_id=%s org=%s",
+                            pend["sub"], account_id, pend.get("org_id"))
             else:
                 logger.warning("unipile webhook: nonce inconnu/expiré name=%s", name)
         elif status and status != "CREATION_SUCCESS":
@@ -212,6 +237,23 @@ def make_routes(
         db.clear_unipile_account(sub)
         return json_response(request, {"ok": True})
 
+    async def unipile_charge(request: Request) -> JSONResponse:
+        """Facturation récurrente : débite chaque org de N credits par compte
+        LinkedIn connecté, pour un mois (`period` "YYYY-MM", défaut = mois courant).
+        Platform admin only. **Idempotent** par (org, compte, mois) → déclenchable
+        par un cron externe sans risque de double-débit."""
+        sub, err = await _admin(request)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        period = (body or {}).get("period") or datetime.now(timezone.utc).strftime("%Y-%m")
+        result = await asyncio.to_thread(credits_store.charge_unipile_monthly, period)
+        logger.info("unipile charge %s: %s", period, result)
+        return json_response(request, result)
+
     return [
         Route("/api/admin/connectors/activation", list_activation, methods=["GET"]),
         Route("/api/admin/connectors/activation", set_activation, methods=["POST"]),
@@ -223,4 +265,6 @@ def make_routes(
         Route("/api/me/unipile", unipile_status, methods=["GET"]),
         Route("/api/me/unipile", unipile_disconnect, methods=["DELETE"]),
         Route("/api/me/unipile", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/billing/charge-unipile", unipile_charge, methods=["POST"]),
+        Route("/api/admin/billing/charge-unipile", options_handler, methods=["OPTIONS"]),
     ]

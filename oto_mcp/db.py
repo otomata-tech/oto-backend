@@ -104,14 +104,11 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DE
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
 
--- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
--- org active), >0 = profil de cette org. Une identité par (sub, org_id).
 CREATE TABLE IF NOT EXISTS user_disabled_tools (
     sub TEXT NOT NULL,
-    org_id BIGINT NOT NULL DEFAULT 0,
     tool_name TEXT NOT NULL,
     disabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, org_id, tool_name)
+    PRIMARY KEY (sub, tool_name)
 );
 
 -- Ensemble positif explicite : tools que l'user a activé alors qu'ils sont
@@ -120,20 +117,18 @@ CREATE TABLE IF NOT EXISTS user_disabled_tools (
 -- n'a qu'un ensemble négatif).
 CREATE TABLE IF NOT EXISTS user_enabled_tools (
     sub TEXT NOT NULL,
-    org_id BIGINT NOT NULL DEFAULT 0,
     tool_name TEXT NOT NULL,
     enabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, org_id, tool_name)
+    PRIMARY KEY (sub, tool_name)
 );
 
 CREATE TABLE IF NOT EXISTS user_presets (
     sub TEXT NOT NULL,
-    org_id BIGINT NOT NULL DEFAULT 0,
     name TEXT NOT NULL,
     enabled_tools TEXT[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, org_id, name)
+    PRIMARY KEY (sub, name)
 );
 
 CREATE TABLE IF NOT EXISTS platform_keys (
@@ -198,29 +193,6 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
--- Unipile : mapping per-user du compte LinkedIn connecté sous l'abonnement
--- Unipile (B3). La CLÉ Unipile est partagée (org secret) ; chaque user connecte
--- SON LinkedIn par hosted-auth → un `account_id` distinct sous la même clé. Ce
--- n'est PAS un secret (handle opaque), d'où une table en clair (≠ coffre chiffré).
--- `resolve` : clé partagée + account_id per-user → chacun agit comme lui-même.
-CREATE TABLE IF NOT EXISTS unipile_accounts (
-    sub TEXT PRIMARY KEY REFERENCES users(sub) ON DELETE CASCADE,
-    account_id TEXT NOT NULL,
-    account_name TEXT,
-    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Corrélation hosted-auth (B3, voie webhook) : le `name` posé sur le lien Unipile
--- ne revient PAS dans /accounts → on pose un **nonce** aléatoire comme `name` et on
--- le mappe au sub. Au succès, Unipile POST {name=nonce, account_id} sur le webhook ;
--- on résout nonce→sub. Le nonce (non devinable, courte vie) sécurise un webhook
--- non authentifié. Consommé à la résolution, pruné après expiration.
-CREATE TABLE IF NOT EXISTS unipile_pending (
-    nonce TEXT PRIMARY KEY,
-    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- Palier organization (= périmètre / store serveur). Une org possède des
 -- credentials propres (coffre `connector_credentials`, entity_type='org'), un
 -- set de namespaces autorisés (org_entitlements), et des opérateurs
@@ -233,7 +205,6 @@ CREATE TABLE IF NOT EXISTS orgs (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     logo_url TEXT,
-    default_tools TEXT[],
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -292,7 +263,7 @@ CREATE INDEX IF NOT EXISTS idx_org_invitations_org ON org_invitations(org_id);
 
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
--- 'claude_md' = la doctrine de base servie d'office par oto_get_doctrine(), les
+-- 'claude_md' = la doctrine de base servie d'office par get_claude_md(), les
 -- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
 -- pas un credential → hors coffre chiffré). Même principe d'accès que les
 -- secrets d'org : résolu par l'org active du sub (get_active_org). `version` est
@@ -368,7 +339,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
     ON org_group_members(sub) WHERE is_active;
 
 -- Doctrine + skills d'un GROUPE (miroir d'org_instructions au grain groupe).
--- Servie en COMPLÉMENT de la doctrine d'org par oto_get_doctrine() quand l'user a
+-- Servie en COMPLÉMENT de la doctrine d'org par get_claude_md() quand l'user a
 -- un groupe actif. Même modèle versionné (slug réservé 'claude_md' = base ;
 -- autres = skills). En clair (prose, hors coffre chiffré).
 CREATE TABLE IF NOT EXISTS org_group_instructions (
@@ -530,40 +501,6 @@ def init_db() -> None:
         # Object Storage), pas un secret → colonne en clair, hors coffre.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS logo_url TEXT")
-        # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
-        # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
-        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")
-        # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
-        # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
-        # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =
-        # copie le profil perso de chacun vers son org active (on retrouve sa config
-        # là où on est aujourd'hui). Idempotent (ON CONFLICT) + joué une seule fois.
-        _has_vis_orgid = conn.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'user_disabled_tools' AND column_name = 'org_id'"
-        ).fetchone()
-        if not _has_vis_orgid:
-            for _t in ("user_disabled_tools", "user_enabled_tools", "user_presets"):
-                conn.execute(f"ALTER TABLE {_t} ADD COLUMN org_id BIGINT NOT NULL DEFAULT 0")
-                conn.execute(f"ALTER TABLE {_t} DROP CONSTRAINT IF EXISTS {_t}_pkey")
-            conn.execute("ALTER TABLE user_disabled_tools ADD PRIMARY KEY (sub, org_id, tool_name)")
-            conn.execute("ALTER TABLE user_enabled_tools ADD PRIMARY KEY (sub, org_id, tool_name)")
-            conn.execute("ALTER TABLE user_presets ADD PRIMARY KEY (sub, org_id, name)")
-            conn.execute(
-                "INSERT INTO user_disabled_tools (sub, org_id, tool_name, disabled_at) "
-                "SELECT d.sub, m.org_id, d.tool_name, d.disabled_at FROM user_disabled_tools d "
-                "JOIN org_members m ON m.sub = d.sub AND m.is_active WHERE d.org_id = 0 "
-                "ON CONFLICT DO NOTHING")
-            conn.execute(
-                "INSERT INTO user_enabled_tools (sub, org_id, tool_name, enabled_at) "
-                "SELECT e.sub, m.org_id, e.tool_name, e.enabled_at FROM user_enabled_tools e "
-                "JOIN org_members m ON m.sub = e.sub AND m.is_active WHERE e.org_id = 0 "
-                "ON CONFLICT DO NOTHING")
-            conn.execute(
-                "INSERT INTO user_presets (sub, org_id, name, enabled_tools, created_at, updated_at) "
-                "SELECT p.sub, m.org_id, p.name, p.enabled_tools, p.created_at, p.updated_at "
-                "FROM user_presets p JOIN org_members m ON m.sub = p.sub AND m.is_active "
-                "WHERE p.org_id = 0 ON CONFLICT DO NOTHING")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
@@ -652,16 +589,6 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
             (sub, email, name),
         ).fetchone()
     if row and row.get("inserted") and email:
-        # Réconciliation invitation↔signup (ADR 0013) : un invité qui s'inscrit
-        # (par n'importe quel chemin, pas seulement le lien /invite) voit son
-        # invitation en attente honorée par l'email vérifié → il saute la waitlist
-        # au lieu d'y rester coincé avec une invitation orpheline. Synchrone (une
-        # fois, au 1er insert) mais best-effort : un échec ne casse pas l'auth.
-        try:
-            from . import org_store
-            org_store.reconcile_signup_with_invitation(sub, email)
-        except Exception:
-            pass
         # Import paresseux : la fédération est optionnelle (no-op sans secret), et
         # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
         from . import memento_federation
@@ -816,69 +743,6 @@ def get_linkedin_session(sub: str) -> Optional[dict]:
 def get_linkedin_cookie(sub: str) -> Optional[str]:
     from . import credentials_store
     return credentials_store.get_credential("user", sub, "linkedin")
-
-
-def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None) -> None:
-    """Associe (upsert) le compte LinkedIn Unipile `account_id` à `sub` (B3).
-    Capté quand l'user finit le hosted-auth (endpoint sync)."""
-    upsert_user(sub)
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO unipile_accounts (sub, account_id, account_name) "
-            "VALUES (%s, %s, %s) ON CONFLICT (sub) DO UPDATE SET "
-            "account_id = EXCLUDED.account_id, account_name = EXCLUDED.account_name, "
-            "connected_at = NOW()",
-            (sub, account_id, account_name),
-        )
-
-
-def get_unipile_account_id(sub: str) -> Optional[str]:
-    """`account_id` LinkedIn du user, ou None (→ le client auto-résout le 1er compte
-    pour la rétro-compat mono-compte)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT account_id FROM unipile_accounts WHERE sub = %s", (sub,)
-        ).fetchone()
-    return row["account_id"] if row else None
-
-
-def get_unipile_account(sub: str) -> Optional[dict]:
-    """Statut de connexion Unipile (pour /api/me / dashboard) ou None."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT account_id, account_name, connected_at FROM unipile_accounts "
-            "WHERE sub = %s", (sub,)
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def clear_unipile_account(sub: str) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM unipile_accounts WHERE sub = %s", (sub,))
-
-
-def create_unipile_pending(nonce: str, sub: str) -> None:
-    """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au `sub`, pour
-    corréler au retour du webhook. Prune au passage les nonces expirés (> 1h)."""
-    upsert_user(sub)
-    with _connect() as conn:
-        conn.execute("DELETE FROM unipile_pending WHERE created_at < NOW() - INTERVAL '1 hour'")
-        conn.execute(
-            "INSERT INTO unipile_pending (nonce, sub) VALUES (%s, %s) "
-            "ON CONFLICT (nonce) DO NOTHING",
-            (nonce, sub),
-        )
-
-
-def resolve_unipile_pending(nonce: str) -> Optional[str]:
-    """Consomme un nonce → `sub` (et le supprime), ou None si inconnu/expiré (>1h)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "DELETE FROM unipile_pending WHERE nonce = %s "
-            "AND created_at >= NOW() - INTERVAL '1 hour' RETURNING sub",
-            (nonce,),
-        ).fetchone()
-    return row["sub"] if row else None
 
 
 def get_linkedin_status(sub: str) -> Optional[dict]:
@@ -1061,8 +925,8 @@ def instruction_usage(
     = log d'usage ») : combien de fois elle a été chargée par l'agent, par qui,
     et la distribution journalière sur `days` jours.
 
-    `tool` = `oto_get_doctrine` (slug=None pour la base, sinon filtré par
-    `args->>'slug'` pour une skill). Scopé aux `subs` (membres de
+    `tool` = `get_claude_md` pour la base (slug=None) ou `oto_get_instruction`
+    filtré par `args->>'slug'` pour une skill. Scopé aux `subs` (membres de
     l'org). Lecture pure ; renvoie {count, callers, daily{date:str -> n}}.
     """
     if not subs:
@@ -1178,111 +1042,109 @@ def prune_tool_calls(keep_days: int = 30) -> int:
         return cur.rowcount or 0
 
 
-# --- per-user disabled tools (scopés par org, ADR 0015 ; org_id=0 = perso) --
-# Profil = (sub, org_id). org_id=0 = identité perso/globale (aucune org active) ;
-# >0 = profil de cette org. Les méta-tools/REST/middleware passent l'org active.
+# --- per-user disabled tools ------------------------------------------------
 
-def list_user_disabled_tools(sub: str, org_id: int = 0) -> list[str]:
+def list_user_disabled_tools(sub: str) -> list[str]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT tool_name FROM user_disabled_tools WHERE sub = %s AND org_id = %s ORDER BY tool_name",
-            (sub, org_id),
+            "SELECT tool_name FROM user_disabled_tools WHERE sub = %s ORDER BY tool_name",
+            (sub,),
         ).fetchall()
         return [r["tool_name"] for r in rows]
 
 
-def is_tool_disabled_for(sub: str, tool_name: str, org_id: int = 0) -> bool:
+def is_tool_disabled_for(sub: str, tool_name: str) -> bool:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT 1 AS x FROM user_disabled_tools WHERE sub = %s AND org_id = %s AND tool_name = %s",
-            (sub, org_id, tool_name),
+            "SELECT 1 AS x FROM user_disabled_tools WHERE sub = %s AND tool_name = %s",
+            (sub, tool_name),
         ).fetchone()
         return row is not None
 
 
-def add_user_disabled_tool(sub: str, tool_name: str, org_id: int = 0) -> None:
+def add_user_disabled_tool(sub: str, tool_name: str) -> None:
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO user_disabled_tools (sub, org_id, tool_name) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-            (sub, org_id, tool_name),
+            "INSERT INTO user_disabled_tools (sub, tool_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (sub, tool_name),
         )
 
 
-def remove_user_disabled_tool(sub: str, tool_name: str, org_id: int = 0) -> None:
+def remove_user_disabled_tool(sub: str, tool_name: str) -> None:
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM user_disabled_tools WHERE sub = %s AND org_id = %s AND tool_name = %s",
-            (sub, org_id, tool_name),
+            "DELETE FROM user_disabled_tools WHERE sub = %s AND tool_name = %s",
+            (sub, tool_name),
         )
 
 
-def replace_user_disabled_tools(sub: str, tool_names: list[str], org_id: int = 0) -> None:
-    """Remplace l'ensemble des disabled_tools du profil (sub, org_id) par celui passé.
+def replace_user_disabled_tools(sub: str, tool_names: list[str]) -> None:
+    """Remplace l'ensemble des disabled_tools du user par celui passé.
 
     Utilisé par `apply_user_preset` pour basculer en un appel atomique.
     """
     upsert_user(sub)
     with _connect() as conn:
         with conn.transaction():
-            conn.execute("DELETE FROM user_disabled_tools WHERE sub = %s AND org_id = %s", (sub, org_id))
+            conn.execute("DELETE FROM user_disabled_tools WHERE sub = %s", (sub,))
             if tool_names:
                 conn.executemany(
-                    "INSERT INTO user_disabled_tools (sub, org_id, tool_name) VALUES (%s, %s, %s)",
-                    [(sub, org_id, t) for t in tool_names],
+                    "INSERT INTO user_disabled_tools (sub, tool_name) VALUES (%s, %s)",
+                    [(sub, t) for t in tool_names],
                 )
 
 
 # --- per-user enabled overrides (pour les tools masqués par défaut) ---------
 
 
-def list_user_enabled_tools(sub: str, org_id: int = 0) -> list[str]:
+def list_user_enabled_tools(sub: str) -> list[str]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT tool_name FROM user_enabled_tools WHERE sub = %s AND org_id = %s ORDER BY tool_name",
-            (sub, org_id),
+            "SELECT tool_name FROM user_enabled_tools WHERE sub = %s ORDER BY tool_name",
+            (sub,),
         ).fetchall()
         return [r["tool_name"] for r in rows]
 
 
-def add_user_enabled_tool(sub: str, tool_name: str, org_id: int = 0) -> None:
+def add_user_enabled_tool(sub: str, tool_name: str) -> None:
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO user_enabled_tools (sub, org_id, tool_name) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-            (sub, org_id, tool_name),
+            "INSERT INTO user_enabled_tools (sub, tool_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (sub, tool_name),
         )
 
 
-def remove_user_enabled_tool(sub: str, tool_name: str, org_id: int = 0) -> None:
+def remove_user_enabled_tool(sub: str, tool_name: str) -> None:
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM user_enabled_tools WHERE sub = %s AND org_id = %s AND tool_name = %s",
-            (sub, org_id, tool_name),
+            "DELETE FROM user_enabled_tools WHERE sub = %s AND tool_name = %s",
+            (sub, tool_name),
         )
 
 
-def replace_user_enabled_tools(sub: str, tool_names: list[str], org_id: int = 0) -> None:
-    """Remplace l'ensemble des enabled-overrides du profil (sub, org_id)."""
+def replace_user_enabled_tools(sub: str, tool_names: list[str]) -> None:
+    """Remplace l'ensemble des enabled-overrides du user (bascule preset)."""
     upsert_user(sub)
     with _connect() as conn:
         with conn.transaction():
-            conn.execute("DELETE FROM user_enabled_tools WHERE sub = %s AND org_id = %s", (sub, org_id))
+            conn.execute("DELETE FROM user_enabled_tools WHERE sub = %s", (sub,))
             if tool_names:
                 conn.executemany(
-                    "INSERT INTO user_enabled_tools (sub, org_id, tool_name) VALUES (%s, %s, %s)",
-                    [(sub, org_id, t) for t in tool_names],
+                    "INSERT INTO user_enabled_tools (sub, tool_name) VALUES (%s, %s)",
+                    [(sub, t) for t in tool_names],
                 )
 
 
-# --- per-user presets (scopés par org, ADR 0015) ---------------------------
+# --- per-user presets -------------------------------------------------------
 
-def list_user_presets(sub: str, org_id: int = 0) -> list[dict]:
+def list_user_presets(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT name, enabled_tools, updated_at FROM user_presets "
-            "WHERE sub = %s AND org_id = %s ORDER BY name",
-            (sub, org_id),
+            "WHERE sub = %s ORDER BY name",
+            (sub,),
         ).fetchall()
         return [
             {
@@ -1294,12 +1156,12 @@ def list_user_presets(sub: str, org_id: int = 0) -> list[dict]:
         ]
 
 
-def get_user_preset(sub: str, name: str, org_id: int = 0) -> dict | None:
+def get_user_preset(sub: str, name: str) -> dict | None:
     with _connect() as conn:
         row = conn.execute(
             "SELECT name, enabled_tools, updated_at FROM user_presets "
-            "WHERE sub = %s AND org_id = %s AND name = %s",
-            (sub, org_id, name),
+            "WHERE sub = %s AND name = %s",
+            (sub, name),
         ).fetchone()
         if not row:
             return None
@@ -1310,22 +1172,22 @@ def get_user_preset(sub: str, name: str, org_id: int = 0) -> dict | None:
         }
 
 
-def save_user_preset(sub: str, name: str, enabled_tools: list[str], org_id: int = 0) -> None:
+def save_user_preset(sub: str, name: str, enabled_tools: list[str]) -> None:
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO user_presets (sub, org_id, name, enabled_tools) VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (sub, org_id, name) DO UPDATE SET "
+            "INSERT INTO user_presets (sub, name, enabled_tools) VALUES (%s, %s, %s) "
+            "ON CONFLICT (sub, name) DO UPDATE SET "
             "enabled_tools = EXCLUDED.enabled_tools, updated_at = NOW()",
-            (sub, org_id, name, enabled_tools),
+            (sub, name, enabled_tools),
         )
 
 
-def delete_user_preset(sub: str, name: str, org_id: int = 0) -> bool:
+def delete_user_preset(sub: str, name: str) -> bool:
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM user_presets WHERE sub = %s AND org_id = %s AND name = %s",
-            (sub, org_id, name),
+            "DELETE FROM user_presets WHERE sub = %s AND name = %s",
+            (sub, name),
         )
         return (cur.rowcount or 0) > 0
 

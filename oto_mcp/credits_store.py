@@ -131,6 +131,46 @@ def credit(
             return {"org_id": org_id, "balance": int(row["balance"]), "applied": True}
 
 
+def _unipile_monthly_credits() -> int:
+    """Coût mensuel en credits d'UN compte LinkedIn connecté (refacturation du
+    ~5 €/compte/mois d'Unipile). Configurable ; défaut 500 credits."""
+    try:
+        return int(os.environ.get("OTO_MCP_UNIPILE_MONTHLY_CREDITS", "500"))
+    except ValueError:
+        return 500
+
+
+def charge_unipile_monthly(period: str) -> dict:
+    """Débite chaque org de `_unipile_monthly_credits()` par compte LinkedIn connecté
+    porté par son abonnement, pour le mois `period` ("YYYY-MM"). **Idempotent** par
+    (org, compte, mois) via la clé `stripe_event_id="unipile:{org}:{account}:{period}"`
+    (UNIQUE du ledger) → rejouable sans double-débit. Renvoie un récap.
+
+    Soft : le débit passe par `credit()` (delta négatif, ligne ledger auditable), le
+    solde peut devenir négatif — on ne bloque rien, on facture.
+    """
+    from . import db
+
+    per = _unipile_monthly_credits()
+    charged = 0
+    skipped = 0  # déjà facturé ce mois (idempotency)
+    orgs: set[int] = set()
+    for acc in db.list_unipile_accounts_by_org():
+        org_id, account_id = acc["org_id"], acc["account_id"]
+        key = f"unipile:{org_id}:{account_id}:{period}"
+        res = credit(org_id, -per, "unipile_monthly", stripe_event_id=key)
+        if res.get("applied"):
+            charged += 1
+            orgs.add(org_id)
+        else:
+            skipped += 1
+    return {
+        "period": period, "per_account_credits": per,
+        "accounts_charged": charged, "accounts_skipped": skipped,
+        "orgs_charged": len(orgs),
+    }
+
+
 def list_transactions(org_id: int, limit: int = 50) -> list[dict]:
     limit = max(1, min(int(limit), 500))
     with _connect() as conn:

@@ -29,6 +29,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import scout
     scout.register(mcp)
 
+    # Datastore (ADR 0016) — spine plateforme `data_*` sur substrat PG natif, plus
+    # un connecteur Google. Chargé explicitement (comme meta/orgs/scout), donc hors
+    # gate d'activation. Pas de dépendance externe.
+    from . import datastore
+    datastore.register(mcp)
+
     # Connecteurs remote (bridges, ADR 0003) — middleware générique, zéro code
     # client : forward HTTP vers le bridge résolu depuis le credential d'org.
     from . import remote

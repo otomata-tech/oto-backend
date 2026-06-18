@@ -275,12 +275,13 @@ _REGISTRY_LIST = [
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
-    # gmail_* / data_* (datastore.py) / tasks_*. PAS "datastore" (fantôme, aucun
-    # tool) ni l'absent "tasks" — sinon fail-open du gate d'activation (#24).
-    _c("google", ["gmail", "data", "tasks"], auth_modes={"byo_user"},
+    # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),
+    # pas un connecteur Google — chargé explicitement dans register_all, non gaté
+    # par l'activation (cf. middleware.py « tools plateforme … data … jamais gatés »).
+    _c("google", ["gmail", "tasks"], auth_modes={"byo_user"},
        personal_session=True, secret_kind="oauth", in_default_preset=True,
-       label="Google", help="Gmail + Sheets/Drive + Tasks (OAuth)",
-       modules=("gmail", "datastore", "tasks")),
+       label="Google", help="Gmail + Tasks (OAuth)",
+       modules=("gmail", "tasks")),
     _c("whatsapp", ["whatsapp"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="WhatsApp"),
 

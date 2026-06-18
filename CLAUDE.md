@@ -145,8 +145,8 @@ reste en env de process (`/opt/oto-mcp/.env`).
 
 Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,
 `attio_*`, `pennylane_*`, `slack_*`…) appellent `resolve_api_key(provider)`.
-LinkedIn, WhatsApp et Datastore ne sont pas concernés (cookie/session/oauth
-per-user).
+LinkedIn et WhatsApp ne sont pas concernés (cookie/session per-user) ; le
+datastore non plus (spine PG, aucun credential — ADR 0016).
 
 ## REST API (consommée par oto.ninja /account)
 
@@ -212,25 +212,43 @@ Stock complet (~35M établissements, parquet ~2GB) accessible via DuckDB :
 - 5 REST endpoints `/api/sirene/{siege,etablissements,siret,search,info}`
 - Consommé par `oto-cli` (`SireneStock` HTTP client) — voir [ADR 0001](../docs/adr/0001-sirene-stock-served-via-mcp.md) dans le meta-repo `otomata`
 
-## Datastore (Google Sheets per-user)
+## Datastore (spine natif PG, ADR 0016)
 
-Stockage structuré léger par user. Backend = un Google Sheet par "namespace"
-(timetrack, todos, courses…) dans le Drive du user. Schéma libre : les
-colonnes apparaissent quand de nouveaux champs sont écrits. Les 3 premières
-colonnes sont auto-managées (`_id` UUID v7-like, `_created_at`, `_updated_at`).
+Stockage structuré léger par user, **substrat PostgreSQL natif** (plus Google
+Sheets — ADR 0016). Un namespace = une ligne `user_datastores` ; les rows vivent
+dans `datastore_rows` (un dict **JSONB** par row, types préservés nativement,
+fin de la sentinelle `__j:`). Schéma libre. Trois champs auto-managés exposés à
+plat : `_id` (uuid7-like), `_created_at`, `_updated_at`.
+
+**Datastore = spine plateforme** (`provider=None`, ADR 0011), PAS un connecteur
+Google : chargé explicitement dans `register_all` (à côté de meta/orgs/scout),
+donc **hors gate d'activation** et **sans dépendance externe** — marche sans
+connecter Google (plus de `412 google_not_connected`). Le partage est **DB-only**
+(`datastore_shares` ; le destinataire lit via son propre `sub`, plus de
+permission Drive). `data_url` renvoie un **deep-link dashboard** (`/console/data`),
+pas une URL de Sheet. Code : `datastore.py` (`DatastorePg`) + `tools/datastore.py`
++ `api_routes_datastore.py` + fonctions `db.datastore_*`.
+
+> **Export/sync vers un provider tiers** (Sheets/Docs/Notion — édition humaine,
+> garantie de sortie) = projection optionnelle, **déférée à otomata#29**. C'est
+> la raison d'être de l'unbundle, construite après.
+
+> **Backfill** (Sheets → PG) : `scripts/migrate_datastore_to_pg.py` (idempotent,
+> auto-suffisant pour la lecture Sheets). À lancer sur la box **après** le restart
+> du code PG (brève fenêtre datastore-vide).
 
 Surfaces :
-- MCP tools `data_*` (`data_create_namespace`, `data_append`, `data_list`,
-  `data_get`, `data_update`, `data_delete_row`, `data_url`, etc.) — pour
-  Claude.ai / Claude Code.
-- REST `/api/datastore/*` — pour le CLI `oto data` + future UI.
+- MCP tools `data_*` (`data_create_namespace`, `data_write`, `data_rows`,
+  `data_delete_row`, `data_url`, `data_share`, etc.) — pour Claude.ai / Claude Code.
+- REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard.
 
 Auth :
 - MCP tools : Logto JWT comme les autres tools.
 - REST `/api/datastore/*` : Logto JWT **ou** API token long-lived (préfixe
   `oto_`, vérifié contre `user_api_tokens`).
 
-OAuth Google per-user (flow unifié Sheets+Drive+Gmail, **multi-compte**) :
+OAuth Google per-user (Gmail + Tasks ; scopes Sheets/Drive latents pour l'export
+#29 — **plus requis par le datastore**, ADR 0016 ; **multi-compte**) :
 - `GET /api/google/oauth/start` (Logto auth) → renvoie `{auth_url}` à
   ouvrir dans le browser. `prompt=consent select_account` → l'user choisit
   quel compte Google connecter (rejouer le flow ajoute un 2e compte).
@@ -242,7 +260,7 @@ OAuth Google per-user (flow unifié Sheets+Drive+Gmail, **multi-compte**) :
 - `DELETE /api/google/oauth[?account=<email>]` → révoque un compte (ou tous).
 - Scopes : `spreadsheets` + `drive.file` + `gmail.modify` + `tasks`.
 - Multi-compte : dans le coffre `connector_credentials` (connector='google',
-  `account=email`, `is_default` dans meta). Le datastore et les tools `gmail_*`
+  `account=email`, `is_default` dans meta). Les tools `gmail_*`/`tasks_*`
   sans param `account` utilisent le compte par défaut (cf. `db.set_google_oauth`,
   `docs/connector-vault.md`).
 - Refresh token **chiffré** (`secret_enc`) dans le coffre. access_token reste en

@@ -16,7 +16,7 @@ Endpoints exposés :
 - `GET    /api/datastore/namespaces`            → liste les namespaces user
 - `POST   /api/datastore/namespaces`            → crée une namespace
 - `DELETE /api/datastore/namespaces/{ns}`       → supprime
-- `GET    /api/datastore/namespaces/{ns}/url`   → URL du Google Sheet
+- `GET    /api/datastore/namespaces/{ns}/url`   → deep-link dashboard du namespace
 - `GET    /api/datastore/namespaces/{ns}/rows`  → liste les rows (filter=k:v, limit=N)
 - `POST   /api/datastore/namespaces/{ns}/rows`  → append row
 - `GET    /api/datastore/namespaces/{ns}/rows/{row_id}`    → fetch row
@@ -38,9 +38,9 @@ from starlette.routing import Route
 
 from . import db, google_oauth
 from .datastore import (
-    GoogleNotConnected,
     NamespaceExists,
     NamespaceNotFound,
+    NamespaceReadOnly,
     RowNotFound,
     make_store,
 )
@@ -178,31 +178,13 @@ def make_routes(
             return json_error(request, 404, "unknown_token")
         return json_response(request, {"ok": True})
 
-    # --- Datastore -------------------------------------------------------
-
-    def _store(request: Request, sub: str):
-        """Renvoie (store, err_response). Err = 412 si pas de grant Google.
-
-        Important : on passe `request` pour récupérer l'origine CORS, sinon
-        l'erreur 412 est silencieusement bloquée par le browser.
-        """
-        try:
-            return make_store(sub), None
-        except GoogleNotConnected as e:
-            return None, JSONResponse(
-                {"error": "google_not_connected", "detail": str(e)},
-                status_code=412,
-                headers=cors_headers(request.headers.get("origin")),
-            )
+    # --- Datastore (PG natif, ADR 0016) ----------------------------------
 
     async def ds_list_ns(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        store, err = _store(request, sub)
-        if err:
-            return err
-        return json_response(request, {"namespaces": store.list_namespaces()})
+        return json_response(request, {"namespaces": make_store(sub).list_namespaces()})
 
     async def ds_create_ns(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -215,11 +197,8 @@ def make_routes(
         namespace = (body or {}).get("namespace", "").strip()
         if not namespace:
             return json_error(request, 400, "missing_namespace")
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            return json_response(request, store.create_namespace(namespace), status=201)
+            return json_response(request, make_store(sub).create_namespace(namespace), status=201)
         except NamespaceExists:
             return json_error(request, 409, "namespace_exists")
 
@@ -228,11 +207,8 @@ def make_routes(
         if err:
             return err
         namespace = request.path_params["namespace"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            store.delete_namespace(namespace)
+            make_store(sub).delete_namespace(namespace)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
         return json_response(request, {"ok": True, "namespace": namespace})
@@ -248,13 +224,12 @@ def make_routes(
         if not isinstance(body, dict):
             return json_error(request, 400, "invalid_body")
         namespace = request.path_params["namespace"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            return json_response(request, store.append_row(namespace, body), status=201)
+            return json_response(request, make_store(sub).append_row(namespace, body), status=201)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
+        except NamespaceReadOnly:
+            return json_error(request, 403, "namespace_read_only")
 
     async def ds_list_rows(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -270,11 +245,8 @@ def make_routes(
             if ":" in f:
                 k, v = f.split(":", 1)
                 filter_dict[k.strip()] = v.strip()
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            rows = store.list_rows(namespace, filter=filter_dict or None, limit=limit)
+            rows = make_store(sub).list_rows(namespace, filter=filter_dict or None, limit=limit)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
         return json_response(request, {"rows": rows, "count": len(rows)})
@@ -285,11 +257,8 @@ def make_routes(
             return err
         namespace = request.path_params["namespace"]
         row_id = request.path_params["row_id"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            return json_response(request, store.get_row(namespace, row_id))
+            return json_response(request, make_store(sub).get_row(namespace, row_id))
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
         except RowNotFound:
@@ -307,13 +276,12 @@ def make_routes(
             return json_error(request, 400, "invalid_body")
         namespace = request.path_params["namespace"]
         row_id = request.path_params["row_id"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            return json_response(request, store.update_row(namespace, row_id, body))
+            return json_response(request, make_store(sub).update_row(namespace, row_id, body))
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
+        except NamespaceReadOnly:
+            return json_error(request, 403, "namespace_read_only")
         except RowNotFound:
             return json_error(request, 404, "row_not_found")
 
@@ -323,13 +291,12 @@ def make_routes(
             return err
         namespace = request.path_params["namespace"]
         row_id = request.path_params["row_id"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            store.delete_row(namespace, row_id)
+            make_store(sub).delete_row(namespace, row_id)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
+        except NamespaceReadOnly:
+            return json_error(request, 403, "namespace_read_only")
         except RowNotFound:
             return json_error(request, 404, "row_not_found")
         return json_response(request, {"ok": True, "id": row_id})
@@ -339,11 +306,8 @@ def make_routes(
         if err:
             return err
         namespace = request.path_params["namespace"]
-        store, err = _store(request, sub)
-        if err:
-            return err
         try:
-            return json_response(request, {"url": store.get_url(namespace)})
+            return json_response(request, {"url": make_store(sub).get_url(namespace)})
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
 
@@ -365,30 +329,16 @@ def make_routes(
         recipient = db.get_user_by_email(email)
         if not recipient:
             return json_error(request, 404, f"no oto user with email {email}")
-        ns = db.get_datastore_namespace(sub, namespace)
-        if not ns:
+        if not db.get_datastore_namespace(sub, namespace):
             return json_error(request, 404, "namespace_not_found")
         try:
             db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
         except ValueError as e:
             return json_error(request, 400, str(e))
-        drive_role = "writer" if permission == "write" else "reader"
-        drive_warning = None
-        try:
-            creds = google_oauth.credentials_for(sub)
-            from googleapiclient.discovery import build
-            drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-            drive.permissions().create(
-                fileId=ns["spreadsheet_id"],
-                body={"type": "user", "role": drive_role, "emailAddress": email},
-                sendNotificationEmail=False,
-            ).execute()
-        except Exception as e:
-            drive_warning = str(e)
-        result = {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
-        if drive_warning:
-            result["drive_warning"] = drive_warning
-        return json_response(request, result)
+        return json_response(
+            request,
+            {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission},
+        )
 
     async def ds_unshare(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -408,23 +358,6 @@ def make_routes(
         removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
         if not removed:
             return json_error(request, 404, f"no active share for {email} on {namespace}")
-        ns = db.get_datastore_namespace(sub, namespace)
-        if ns:
-            try:
-                creds = google_oauth.credentials_for(sub)
-                from googleapiclient.discovery import build
-                drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-                perms = drive.permissions().list(
-                    fileId=ns["spreadsheet_id"], fields="permissions(id,emailAddress)",
-                ).execute().get("permissions", [])
-                for p in perms:
-                    if (p.get("emailAddress") or "").lower() == email.lower():
-                        drive.permissions().delete(
-                            fileId=ns["spreadsheet_id"], permissionId=p["id"],
-                        ).execute()
-                        break
-            except Exception:
-                pass
         return json_response(request, {"ok": True, "namespace": namespace, "removed": email})
 
     return [

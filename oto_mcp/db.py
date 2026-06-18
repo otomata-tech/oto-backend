@@ -165,21 +165,37 @@ CREATE TABLE IF NOT EXISTS user_namespace_grants (
     PRIMARY KEY (sub, namespace)
 );
 
+-- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
+-- namespaces ; les rows vivent dans `datastore_rows` (JSONB). `spreadsheet_id`/
+-- `owner_email` sont des reliques Sheets (nullable, plus utilisées — DROP différé
+-- post-backfill).
 CREATE TABLE IF NOT EXISTS user_datastores (
     id BIGSERIAL PRIMARY KEY,
     sub TEXT NOT NULL,
     namespace TEXT NOT NULL,
-    spreadsheet_id TEXT NOT NULL,
+    spreadsheet_id TEXT,
     owner_email TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(sub, namespace)
+);
+
+-- Rows du datastore : un dict JSONB par row (types préservés nativement, fin de
+-- la sentinelle `__j:`). `_id`/`_created_at`/`_updated_at` = colonnes, le reste
+-- des champs user dans `data`. CASCADE sur la suppression du namespace.
+CREATE TABLE IF NOT EXISTS datastore_rows (
+    ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
+    row_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (ns_id, row_id)
 );
 
 CREATE TABLE IF NOT EXISTS datastore_shares (
     id BIGSERIAL PRIMARY KEY,
     owner_sub TEXT NOT NULL,
     namespace TEXT NOT NULL,
-    spreadsheet_id TEXT NOT NULL,
+    spreadsheet_id TEXT,
     shared_with_sub TEXT NOT NULL,
     permission TEXT NOT NULL DEFAULT 'write',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -553,6 +569,12 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
+        # Datastore = spine natif PG (ADR 0016) : `spreadsheet_id` devient une
+        # relique Sheets (nullable, plus écrite). DROP des colonnes Sheets différé
+        # post-backfill — ici on lève juste le NOT NULL pour que les créations PG
+        # natives passent. Idempotent.
+        conn.execute("ALTER TABLE user_datastores ALTER COLUMN spreadsheet_id DROP NOT NULL")
+        conn.execute("ALTER TABLE datastore_shares ALTER COLUMN spreadsheet_id DROP NOT NULL")
         # Avatar utilisateur + logo d'org (2026-06-16) : URL publique (Scaleway
         # Object Storage), pas un secret → colonne en clair, hors coffre.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
@@ -1845,35 +1867,24 @@ def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
 
 # --- Datastore namespaces ---------------------------------------------------
 
-def create_datastore_namespace(sub: str, namespace: str, spreadsheet_id: str,
-                               owner_email: Optional[str] = None) -> int:
+def create_datastore_namespace(sub: str, namespace: str) -> int:
     upsert_user(sub)
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO user_datastores (sub, namespace, spreadsheet_id, owner_email) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (sub, namespace, spreadsheet_id, owner_email),
+                "INSERT INTO user_datastores (sub, namespace) VALUES (%s, %s) RETURNING id",
+                (sub, namespace),
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"namespace `{namespace}` existe déjà") from e
         return int(row["id"])
 
 
-def set_datastore_owner(sub: str, namespace: str, owner_email: str) -> bool:
-    """Fige le compte Google propriétaire d'un namespace (back-fill lazy, #9)."""
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE user_datastores SET owner_email = %s WHERE sub = %s AND namespace = %s",
-            (owner_email, sub, namespace),
-        )
-        return cur.rowcount > 0
-
-
 def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM user_datastores WHERE sub = %s AND namespace = %s",
+            "SELECT id, sub, namespace, created_at FROM user_datastores "
+            "WHERE sub = %s AND namespace = %s",
             (sub, namespace),
         ).fetchone()
         return dict(row) if row else None
@@ -1882,7 +1893,7 @@ def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
 def list_datastore_namespaces(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT namespace, spreadsheet_id, created_at FROM user_datastores WHERE sub = %s ORDER BY namespace",
+            "SELECT id, namespace, created_at FROM user_datastores WHERE sub = %s ORDER BY namespace",
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1908,15 +1919,15 @@ def share_datastore_namespace(
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO datastore_shares (owner_sub, namespace, spreadsheet_id, shared_with_sub, permission) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (owner_sub, namespace, ns["spreadsheet_id"], shared_with_sub, permission),
+                "INSERT INTO datastore_shares (owner_sub, namespace, shared_with_sub, permission) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (owner_sub, namespace, shared_with_sub, permission),
             ).fetchone()
         except psycopg.errors.UniqueViolation:
             conn.execute(
-                "UPDATE datastore_shares SET permission = %s, spreadsheet_id = %s "
+                "UPDATE datastore_shares SET permission = %s "
                 "WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
-                (permission, ns["spreadsheet_id"], owner_sub, namespace, shared_with_sub),
+                (permission, owner_sub, namespace, shared_with_sub),
             )
             return 0
         return int(row["id"])
@@ -1932,9 +1943,13 @@ def unshare_datastore_namespace(owner_sub: str, namespace: str, shared_with_sub:
 
 
 def get_shared_namespace(sub: str, namespace: str) -> Optional[dict]:
+    """Le partage reçu par `sub` pour `namespace` (owner_sub + permission). La
+    résolution du `ns_id` réel (pour lire les rows) se fait côté store via
+    `get_datastore_namespace(owner_sub, namespace)`."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM datastore_shares WHERE shared_with_sub = %s AND namespace = %s LIMIT 1",
+            "SELECT owner_sub, namespace, permission, created_at FROM datastore_shares "
+            "WHERE shared_with_sub = %s AND namespace = %s LIMIT 1",
             (sub, namespace),
         ).fetchone()
         return dict(row) if row else None
@@ -1943,11 +1958,71 @@ def get_shared_namespace(sub: str, namespace: str) -> Optional[dict]:
 def list_shared_namespaces(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT namespace, spreadsheet_id, owner_sub, permission, created_at "
+            "SELECT namespace, owner_sub, permission, created_at "
             "FROM datastore_shares WHERE shared_with_sub = %s ORDER BY namespace",
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Datastore rows (substrat PG natif, ADR 0016) ---------------------------
+
+def datastore_insert_row(ns_id: int, row_id: str, data: dict,
+                         created_at: Optional[str] = None,
+                         updated_at: Optional[str] = None) -> dict:
+    """Insère une row. `created_at`/`updated_at` optionnels (override pour le
+    backfill ; sinon NOW())."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO datastore_rows (ns_id, row_id, data, created_at, updated_at) "
+            "VALUES (%s, %s, %s::jsonb, COALESCE(%s::timestamptz, NOW()), COALESCE(%s::timestamptz, NOW())) "
+            "RETURNING row_id, created_at, updated_at, data",
+            (ns_id, row_id, json.dumps(data), created_at, updated_at),
+        ).fetchone()
+        return dict(row)
+
+
+def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
+            "WHERE ns_id = %s AND row_id = %s",
+            (ns_id, row_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def datastore_list_rows(ns_id: int) -> list[dict]:
+    """Toutes les rows d'un namespace, plus ancienne d'abord. Le filtre/limit
+    s'applique côté store (égalité exacte, comme l'historique Sheets)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
+            "WHERE ns_id = %s ORDER BY created_at, row_id",
+            (ns_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def datastore_update_row(ns_id: int, row_id: str, data: dict, updated_at: str) -> Optional[dict]:
+    """Remplace `data` (le store a déjà fusionné le patch) + `updated_at`."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE datastore_rows SET data = %s::jsonb, updated_at = %s::timestamptz "
+            "WHERE ns_id = %s AND row_id = %s "
+            "RETURNING row_id, created_at, updated_at, data",
+            (json.dumps(data), updated_at, ns_id, row_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def datastore_delete_row(ns_id: int, row_id: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM datastore_rows WHERE ns_id = %s AND row_id = %s",
+            (ns_id, row_id),
+        )
+        return (cur.rowcount or 0) > 0
 
 
 # --- API tokens (CLI auth) --------------------------------------------------

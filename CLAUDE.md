@@ -359,25 +359,28 @@ ssh -i ~/.ssh/alexis root@REDACTED_IP \
 # → imprime un `oto_…` à stocker dans SOPS comme OTO_API_KEY
 ```
 
-## WhatsApp
+## WhatsApp / Telegram / Instagram (messagerie via Unipile)
 
-Tools `whatsapp_*` wrappent `oto.tools.whatsapp.WhatsAppClient` (Baileys via
-subprocess Node.js). Session per-user dans `<OTO_MCP_DATA_DIR>/whatsapp/<sub>/`
-— on override `client.auth_dir` après instantiation, pas besoin de patcher
-oto-cli. `asyncio.to_thread()` pour ne pas bloquer le event loop.
+Tools `whatsapp_*` / `telegram_*` / `instagram_*` (`list_chats`/`read_chat`/
+`send_message`) = messagerie **hébergée Unipile**, sous le connecteur `unipile`
+(`modules`/namespaces = `unipile, whatsapp, telegram, instagram`). Générés par la
+factory `tools/unipile.register_messaging_tools(mcp, channel)` — l'API `/chats`
+d'Unipile est channel-agnostic ; chaque tool résout l'`account_id` du canal pour le
+user (no-fallback, `tools/unipile.unipile_client(provider)`).
 
-**Pairing QR via l'extension Chrome** (`pair/pair.html`). Endpoints :
-- `GET /api/whatsapp/status` → `{paired, active_pairing}`
-- `POST /api/whatsapp/pair/start` → `{session_id, status}`
-- `GET /api/whatsapp/pair/stream?session_id=` → SSE `{type: qr|paired|failed}`
-- `POST /api/whatsapp/pair/cancel`
+Connexion = hosted-auth Unipile (dashboard, `?channel=whatsapp|telegram|instagram`),
+`account_id` per-user dans `unipile_accounts` (PK `(sub, provider)`). Même gate
+d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 
-`oto_mcp/pairing.py` gère les sessions in-memory (1 par sub). Bridge thread
-parse le NDJSON émis par `whatsapp.mjs --json-events` et pousse dans une
-asyncio.Queue.
+> **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
+> (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`
+> supprimés). L'engine Baileys survit dans **oto-core** (`oto/tools/whatsapp/` + Node)
+> + la **CLI `oto whatsapp`** (fallback).
 
-Tools accessibles à tout user **dont l'auth_dir contient `creds.json`** (pas
-de gating role). Le pairing crée ce fichier.
+> **Mode plateforme unipile** (revente) : `auth_modes` inclut `platform` → la clé
+> Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
+> `access.unipile_api_key_for` a le fallback platform-grant. Le gate abonnement reste
+> par org (un grant donne la clé, ne bypasse pas le paiement).
 
 ## Monitoring des appels MCP
 
@@ -661,8 +664,9 @@ Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remo
   sur l'host — PAS le Chromium bundlé Patchright (empreinte TLS ≠ Chrome de bureau
   → bloqué par LinkedIn). `_require_chrome_channel` (`tools/linkedin.py`) force
   `channel="chrome"` et lève une erreur si absent.
-- WhatsApp nécessite Node.js installé + `node_modules` dans
-  `oto-cli/oto/tools/whatsapp/node/` (auto-installé au premier `WhatsAppClient()`).
+- WhatsApp/Telegram/Instagram = messagerie **Unipile** (cf. §WhatsApp) — aucune dép
+  Node côté backend. Le Baileys Node (`oto-core/.../whatsapp/node/`) ne sert plus
+  qu'à la CLI `oto whatsapp` (fallback archivé).
 - Attio (`tools/attio.py`) expose CRUD complet : records (companies/people/deals),
   notes (sauf update body, limite API), tasks, lists, entries, workspace_members,
   comments, threads, meetings, call_recordings + meta (objects, attributes). Pas

@@ -165,3 +165,28 @@ def register(mcp: FastMCP) -> None:
             recipient_id: provider id du destinataire (nouveau fil).
         """
         return unipile_client().send_message(text, chat_id=chat_id, attendee_id=recipient_id)
+
+    @mcp.tool()
+    async def unipile_relations(cursor: Optional[str] = None,
+                                limit: Optional[int] = None) -> dict:
+        """Liste tes relations LinkedIn de 1er degré (N1) via Unipile — pour
+        cibler/exporter ton réseau direct. Paginé (`cursor`)."""
+        return unipile_client().list_relations(cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_invitations(direction: str = "received") -> dict:
+        """Liste les invitations de connexion LinkedIn. `direction`='received'
+        (reçues, à accepter) ou 'sent' (envoyées, en attente)."""
+        return unipile_client().list_invitations(direction)
+
+    @mcp.tool()
+    async def unipile_send_invitation(provider_id: str,
+                                      message: Optional[str] = None) -> dict:
+        """Envoie une demande de connexion LinkedIn (outreach 2e/3e degré).
+
+        Args:
+            provider_id: provider id LinkedIn du destinataire (champ `provider_id`
+                d'un résultat unipile_search / unipile_profile).
+            message: note d'accompagnement optionnelle (≤300 caractères).
+        """
+        return unipile_client().send_invitation(provider_id, message=message)

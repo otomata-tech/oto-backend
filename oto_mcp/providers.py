@@ -21,6 +21,7 @@ explicites de ce registre, qui piloteront leurs migrations.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 
@@ -60,9 +61,9 @@ class Connector:
     # Éditeur du connecteur (affiché au catalogue). Vide → dérivé de
     # `_PUBLISHER_BY_CONNECTOR` (cf. `publisher_name`), défaut "Otomata".
     publisher: str = ""
-    # URL publique du logo de l'éditeur. None → dérivée par convention de la clé
-    # S3 `connector-logos/<name>.png` sur `oto-media` (cf. `logo_url_for`). Le
-    # champ explicite reste le seam d'un futur upload admin (overrides la conv.).
+    # URL publique du logo de l'éditeur. None → dérivée du CDN logo.dev à partir
+    # du domaine de marque curé `_LOGO_DOMAIN_BY_CONNECTOR` (cf. `logo_url_for`).
+    # Le champ explicite reste un override (logo custom hébergé ailleurs).
     logo_url: str | None = None
     # "tools" = module in-process (tools/<name>.py) ; "remote" = bridge distant
     # (ADR 0003) servi par le module générique tools/remote.py — le credential
@@ -122,16 +123,19 @@ class Connector:
         return _PUBLISHER_BY_CONNECTOR.get(self.name, "Otomata")
 
     def logo_url_for(self) -> str | None:
-        """URL publique du logo — override champ si présent, sinon URL
-        conventionnelle sur `oto-media`. Import lazy de media_store pour ne
-        jamais casser le boot si S3 est absent (renvoie None)."""
+        """URL publique du logo de l'éditeur. Override `logo_url` si présent,
+        sinon dérivée du CDN **logo.dev** : domaine de marque curé
+        (`_LOGO_DOMAIN_BY_CONNECTOR`) + token publishable `LOGODEV_TOKEN` (env).
+        None si pas de domaine connu (open-data/maison → monogramme côté UI) ou
+        token absent. Le token est *publishable* (conçu pour vivre dans l'URL)."""
         if self.logo_url:
             return self.logo_url
-        try:
-            from . import media_store
-            return media_store.connector_logo_url(self.name)
-        except Exception:
+        domain = _LOGO_DOMAIN_BY_CONNECTOR.get(self.name)
+        token = os.environ.get("LOGODEV_TOKEN")
+        if not domain or not token:
             return None
+        return (f"https://img.logo.dev/{domain}"
+                f"?token={token}&size=256&format=png&retina=true")
 
     @property
     def secret_fields(self) -> tuple[CredentialField, ...]:
@@ -180,6 +184,20 @@ _PUBLISHER_BY_CONNECTOR = {
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
+}
+
+# Domaine de marque curé par connecteur → le CDN logo.dev en dérive l'URL du logo
+# (cf. `logo_url_for`). Domaine RACINE (pas les `app.*` ni sous-domaines MCP). Les
+# connecteurs absents (open-data/État `fr_open`/`foncier`/`sante`) n'ont pas de
+# marque produit → pas de logo → monogramme côté UI.
+_LOGO_DOMAIN_BY_CONNECTOR = {
+    "serper": "serper.dev", "hunter": "hunter.io", "kaspr": "kaspr.io",
+    "fullenrich": "fullenrich.com", "lemlist": "lemlist.com", "folk": "folk.app",
+    "unipile": "unipile.com", "pennylane": "pennylane.com", "gocardless": "gocardless.com",
+    "silae": "silae.fr", "attio": "attio.com", "crunchbase": "crunchbase.com",
+    "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
+    "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
+    "sirene": "insee.fr", "sirene_stock": "insee.fr",
 }
 
 

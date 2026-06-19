@@ -64,139 +64,21 @@ Pour les opérations exposées sur **deux faces** (MCP + REST), arrêter de câb
 
 ## Auth — Logto
 
-Le backend valide les bearer JWT émis par `auth.oto.zone/oidc`. Sur 401, le
-header `WWW-Authenticate` pointe vers `/.well-known/oauth-protected-resource/mcp`
-(RFC 9728) ce qui amorce le discovery OAuth côté client MCP.
-
-**Gotcha** : Logto self-hosted signe en `ES384` (P-384 ECDSA). Le default de
-`JWTVerifier` est RS256 → tous les tokens rejetés. Vérifié sur
-`GET /oidc/jwks`.
-
-Logto self-hosted n'expose pas DCR. La **façade DCR** (`oauth_facade.py`) le
-supplée : métadonnée AS augmentée (`registration_endpoint` à nous) + à chaque
-`POST /oauth/register` elle **enregistre dynamiquement le `redirect_uri` du client
-dans l'app Logto partagée** (Management API via M2M dédié `OTO_MCP_LOGTO_M2M_*`)
-puis renvoie le `client_id` partagé (`OTO_MCP_CLAUDE_APP_ID`). → les clients MCP
-qui exigent DCR (Claude, **ChatGPT**, **Mistral**) s'installent **sans coller de
-client_id ni intervention manuelle**, même quand le redirect varie par connecteur
-(ChatGPT : `chatgpt.com/connector/oauth/<id>`). Garde-fou `_redirect_ok` : n'autorise
-QUE des hosts connus (claude.ai/.com, chatgpt.com préfixe `/connector/oauth/`,
-callback.mistral.ai, localhost) — pas un registrar ouvert. **Nouveau client qui
-échoue** : son redirect est loggé (`DCR refusé — redirect_uris=…` en journalctl) →
-ajouter son host à `_redirect_ok`. Fail-open : Management API en panne → `client_id`
-renvoyé quand même (Claude, redirect pré-enregistré, jamais cassé).
-
-**Onboarding actuel = self-serve ouvert.** Le tenant a sign-up activé par
-email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire,
-mais c'est sans risque pour les clés serveur car les platform keys ne sont
-accessibles qu'avec un grant explicite (cf. `access.py`).
-
-Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
-`OTO_MCP_ADMIN_SUB` (sub Logto admin = **otomata `eufbvubidpyp`**, canonique, pas
-le gmail dual-sub), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_*`
-(M2M dédié pour la façade DCR). Stripe (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`)
-et S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`) pour billing + avatars/logos.
-Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
+JWT Logto **ES384** (défaut RS256 = tout rejeté), discovery RFC 9728 sur 401,
+façade DCR self-service (`oauth_facade.py`) pour les clients sans DCR (Claude/ChatGPT/
+Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 
 ## Rôles + résolution de clé API
 
-> ⚠️ Le **stockage** des credentials est le **coffre chiffré unique `connector_credentials`** (cf. `docs/connector-vault.md`). Les colonnes legacy `users.<provider>_api_key`/`org_secrets`/`user_google_oauth` ont été **purgées** (DROP, 2026-06-11) ; chiffrement **obligatoire** (plus de plaintext). La résolution ci-dessous reste valide dans sa cascade, lit le coffre via `credentials_store`.
+3 paliers `member < admin < super_admin` (accès admin UI). Résolution de clé par
+appel : `user_key > group_secret > org_secret > platform_grant` (chemin platform
+gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
+grants/quota, platform keys, providers byo-only).
 
-Le rôle (`users.role`) décide de l'accès à l'admin UI, sur **3 paliers**
-(`ROLES = (member, admin, super_admin)`, cf. `access.py`/`roles.py`) :
+## REST API (consommée par le dashboard / oto.ninja)
 
-- **super_admin** : le tout-puissant — escalade `org_admin` de TOUTE org +
-  `group_admin` de TOUT groupe (`roles.is_platform_admin` = super), gestion des
-  rôles plateforme, platform keys, émission de tokens, écriture + doctrine
-  d'orgs tierces, création d'org, bypass namespace grant-only. Bootstrap env
-  `OTO_MCP_ADMIN_SUB` → super_admin. Combinateur d'autz `SUPER_ADMIN`.
-- **admin** (palier OPÉRATIONNEL intermédiaire) : supervision plateforme —
-  monitoring, liste/fiche users, activation des connecteurs, refresh des mounts,
-  lectures d'orgs — **SANS** escalade en masse vers les orgs tierces.
-  Prédicat `access.is_platform_operator` (admin ∪ super) ; combinateur `PLATFORM_ADMIN`.
-- **member** : défaut, pas d'effet sur l'accès aux tools (`guest` retiré
-  2026-06-15, migré → member).
-
-> Les `admin` historiques (= tout-puissants) ont été migrés → `super_admin`
-> (`scripts/migrate_admin_to_super.py`). Un `admin` aujourd'hui = opérateur.
-
-L'accès aux clés API se décide par `user_grants` explicites (admin grante
-manuellement via `/api/admin/users/{sub}/grants/{key_id}`). Résolution par
-appel (`resolve_api_key`) :
-
-1. User key posée sur `/account` → prise directement, sans quota.
-2. Grant explicite dans `user_grants` → platform key avec quota.
-3. Ni l'un ni l'autre → McpError actionnable pointant vers `/account`.
-
-Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
-au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
-ou `_QUOTA_DEFAULTS` dans `access.py`. User key bypass quota.
-
-**Les platform keys vivent en DB uniquement** (coffre `platform_keys` — plus de
-bootstrap SOPS/env au boot, oto-mcp#12). Poser/roter une clé = surface admin :
-REST `POST /api/admin/platform-keys` ou meta-tool `oto_admin_set_platform_key`
-(rotation = re-poser même provider+label ; label historique servi par
-`resolve_api_key` = `env`). Poser ≠ granter : l'admin accorde l'accès au cas
-par cas. Modèle : user key (prio, no quota) OU platform key + grant + quota OU
-erreur. **Seuls les providers `platform`-éligibles au registre (`auth_modes`
-inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
-plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur
-`auth_modes` (audit 2026-06-11). Les comptes **privés / byo-only**
-(`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
-les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de
-l'**équipe Otomata** (attio/lemlist) vit en **credentials de l'org Otomata
-(byo_org, org id 2)** — accès par appartenance, pas par grant plateforme.
-**Slack** : pas de `SLACK_API_KEY`, le provider porte le **user token**
-(`xoxp`) per-user — `slack_*` postent en `as_user` (mode bot viendra avec
-l'OAuth install, issue #4).
-
-**Débranchement SOPS (oto-mcp#12)** : l'unit pose `OTO_CONFIG_DISABLE_SOPS=1`
-→ côté serveur, `oto.config.get_secret` ne résout QUE l'env du process (ni
-SOPS ni `~/.otomata/secrets.env`), et tout `require_secret` résiduel échoue
-fort. L'infra bootstrap (DATABASE_URL, Logto, OAuth Google, state secret)
-reste en env de process (`/opt/oto-mcp/.env`).
-
-Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,
-`attio_*`, `pennylane_*`, `slack_*`…) appellent `resolve_api_key(provider)`.
-LinkedIn et WhatsApp ne sont pas concernés (cookie/session per-user) ; le
-datastore non plus (spine PG, aucun credential — ADR 0016).
-
-## REST API (consommée par oto.ninja /account)
-
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
-- `POST|DELETE /api/me/avatar` — upload (multipart `file`, png/jpeg/webp ≤ 2 Mo) / efface l'avatar user → Scaleway Object Storage, URL publique en DB
-- `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo d'org (org_admin, multipart `file`)
-- `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
-- `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
-- `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
-- `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
-- `GET /api/me/instructions` (doctrine de base meta + index) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — doctrine & instructions de l'**org active** (cf. §Doctrines). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par la SPA `account/` (section « doctrine »).
-- `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
-- `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
-- `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)
-- `GET /api/admin/monitoring/summary?days=` + `GET /api/admin/monitoring/calls?limit=&sub=&tool=&errors=&days=` — journal des appels MCP, agrégats + brut (admin only, cf. §Monitoring)
-- **Palier org** (`api_routes_orgs.py`, projection 1:1 des meta-tools `oto_admin_*org*` / `oto_list_orgs`) :
-  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
-  - **invitations** (onboarding SaaS) : `POST|GET /api/orgs/{id}/invitations` + `DELETE …/{inv}` (org_admin) ; `POST /api/me/invitations/accept` (`SUB_ONLY`, match email vérifié + expiry). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
-  - **fiche admin user** : `GET /api/admin/users/{sub}` = identité + accès effectif par provider (`status_for`) + grants + namespaces + orgs (membership).
-  - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{namespace}`, `GET /api/admin/namespace-grants`, `POST|DELETE /api/admin/users/{sub}/namespace-grants/{namespace}`
-  - secrets : jamais la clé en réponse (provider/base_url/set_at/set_by) ; providers per-user (slack/linkedin/google/whatsapp) refusés en `400` ; listing lu du coffre canonique `credentials_store` (legacy `org_secrets` plus dual-written sous chiffrement). Gating org_admin/membre via `org_store.get_org_role` (platform admin toujours autorisé). Révocation lazy sur sessions MCP ouvertes. Contrat front : `oto-app/docs/ORG_API_CONTRACT.md`.
-- **Bibliothèque publique de doctrines** (marketplace de skills, table `doctrine_library`) :
-  capacités `library.*` (`capabilities/doctrine_library.py`, montage auto MCP+REST) —
-  `library.list/get` (`SUB_ONLY`, MCP `oto_list_library`/`oto_get_library_doctrine` + REST
-  `GET /api/me/doctrines/library[/{slug}]`), `library.publish`/`library.fork` (`ORG_MEMBER` +
-  gate org_admin en handler, MCP `oto_publish_doctrine`/`oto_fork_doctrine` + REST
-  `POST /api/me/doctrines/{publish,fork}`), `library.unpublish` (auteur/PLATFORM_ADMIN, `DELETE
-  /api/me/doctrines/library/{id}`). **Auteur** = `otomata` si publieur platform-operator, sinon
-  l'`org`. **Fork** réutilise `org_store.set_instruction` → skill d'org versionné. Surface
-  ANONYME pour la vitrine : routes écrites à la main `GET /api/doctrines/library[/{slug}]`
-  (deny-by-default `visibility='public'`, l'adaptateur capacité authentifie toujours).
-  **`visibility`** : `public` (dans le catalogue) vs `unlisted` = **lien non listé** (style
-  YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
-  listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
-  un secret d'org : une doctrine sensible ne se publie pas (reste un skill d'org privé).
-- CORS : `oto.ninja`, `app.oto.ninja`, `dashboard.oto.ninja` (+ localhosts dev) — défaut dans `_allowed_origins`, override `OTO_MCP_CORS_ORIGINS`. `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
-- Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
+Endpoints `/api/*` (compte, settings, orgs, admin, billing, datastore…), même
+`JWTVerifier` que `/mcp`. **Inventaire : `docs/rest-api.md`**.
 
 ## Browser automation — délégué à o-browser-full (issue oto-app#11)
 
@@ -271,97 +153,21 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 
 ## Monitoring des appels MCP
 
-`CallMonitoringMiddleware` (`middleware.py`) journalise **chaque** appel de tool
-via le hook `on_call_tool` (point d'interception unique) dans la table
-`tool_call_log(id, sub, tool_name, called_at, duration_ms, ok, error)` : `sub`
-JWT courant (nullable — stdio local non authentifié = NULL), durée, statut
-succès/échec + message tronqué. Best-effort : une erreur d'écriture du journal
-ne fait jamais échouer l'appel ni n'avale l'exception métier. Couvre les deux
-formes d'échec fastmcp (exception propagée OU résultat `isError`).
+`CallMonitoringMiddleware` journalise chaque appel dans `tool_call_log` (best-effort,
+prune au boot) ; surface admin `/api/admin/monitoring/{summary,calls}`. **Détail :
+`docs/monitoring.md`**.
 
-Volumétrie bornée par un prune au boot (`prune_tool_call_log` dans `init_db`,
-rétention `OTO_MCP_CALL_LOG_RETENTION_DAYS`, défaut 30j) — les restarts deploy
-fréquents suffisent à garder la table petite.
+## Boucle d'usage (ADR 0017)
 
-Surface admin : `GET /api/admin/monitoring/summary?days=` (agrégats total /
-échecs / users actifs + ventilation par tool / par user / par jour) et
-`GET /api/admin/monitoring/calls` (journal brut, filtres `limit/sub/tool/errors/days`).
-Consommé par le front `account/` (section admin « monitoring mcp »,
-`AdminMcpMonitoring.vue` + store `admin.loadMonitoring`).
-
-## Boucle d'usage (ADR 0017 — déroulés + feedback volontaire)
-
-Un **flux d'événements de session** unifie le calllog (involontaire) + le feedback
-volontaire d'agent + les déroulés de doctrine. Détail : ADR 0017 (repo public
-`otomata-tech/oto`). Surfaces livrées (B1–B6) :
-
-- **Corrélation** : `tool_calls` gagne 2 colonnes **OTO-LOCALES** (hors contrat canonique
-  otomata-calllog) `session_id` (session mcp transport) + `run_id` (déroulé). Stampées
-  par `server._calllog_sink` qui lit `get_context().session_id` + le run actif. ⚠️ piège
-  rattrapé : l'index sur `run_id` va dans le bloc **ALTER** d'`init_db` (après l'ADD COLUMN),
-  **jamais** dans `_SCHEMA` (no-op sur table existante → `UndefinedColumn` au boot).
-- **Déroulés** : tools spine `doctrine_start`/`doctrine_finish` (`tools/doctrine_run.py`) ;
-  le `run_id` vit dans une **pile en état de session FastMCP** (`doctrine_run.py`, runs
-  imbriqués OK), stampé sur chaque appel côté serveur — l'agent ne thread rien.
-- **Signaux volontaires** : capacités MCP+REST (`capabilities/usage.py`) `tool_feedback`
-  + `report_gap` → table **durable** `usage_signals` (hors prune 30j). `gap` = cas d'usage
-  non couvert (l'agent capte la demande non satisfaite).
-- **Projections** (opérateur) : `/api/admin/usage/{runs,runs/{id},gaps,tool-quality,signals}`
-  (`capabilities/usage.py`, PLATFORM_ADMIN) → vue dashboard `UsageView.vue` (« usage & déroulés »).
-- **Harnais impératif** : `_SERVER_INSTRUCTIONS` pousse l'agent à réflexer oto, encadrer
-  par `doctrine_start/finish` et émettre `report_gap`/`tool_feedback`.
-- Déféré (otomata#32) : promotion des signaux en facts factgraph (0008) ; `why`-par-appel.
+Flux d'événements de session unifié : calllog (involontaire) + feedback volontaire
+d'agent + déroulés de doctrine (`doctrine_start/finish`, `tool_feedback`, `report_gap`).
+**Détail : `docs/usage-loop.md`**.
 
 ## Billing — credits d'appel par org (paiement Stripe)
 
-Deux modèles **cumulables** : (a) **credits d'appel** (1 appel MCP = 1 credit, débité du
-wallet de l'**org active** ; stock de base gratuit `OTO_MCP_FREE_CALLS` déf. 1000 + recharge
-par **packs Stripe ponctuels** `mode=payment`) ; (b) **abonnements récurrents par option**
-(`mode=subscription`, ex. option LinkedIn — cf. dernière puce). Les credits paient les
-**appels**, l'abonnement paie l'**accès** à une option.
-
-- **Modèle** : portefeuille **par org** (`credits_store.py`, couche backend-core). `balance` =
-  compteur entier d'appels restants, **peut passer négatif** — **soft enforcement, on ne bloque
-  JAMAIS un appel**. Drapeau `low` (alerte UI) seulement. Don de base posé **paresseusement**
-  (`ensure_wallet`, au 1er débit OU 1re lecture), idempotent (`base_granted`).
-- **Débit** : greffé sur `server._calllog_sink` (le hook calllog, **point d'interception unique**)
-  → `credits_store.debit_for_call(sub)`. S'exécute **après** l'exécution du tool (non-bloquant par
-  construction), best-effort (avale tout), no-op sans sub / sans org active. **Tous les appels
-  comptent** (méta-tools + échecs inclus). Le débit n'écrit QUE `org_credits.balance` (pas de ligne
-  ledger — volumétrie ; le détail par appel vit dans `tool_calls`).
-- **Tables** (`db._SCHEMA`) : `org_credits(org_id PK, balance, base_granted, …)` + ledger
-  `credit_transactions(id, org_id, delta, reason, stripe_event_id UNIQUE, …)` — le ledger ne porte
-  que les mouvements **monétaires** (`stripe`/`base_grant`/`admin_adjust`).
-- **Stripe** (`billing.py`, SDK **lazy-import** — absent = seuls les endpoints billing cassent, pas
-  le boot) : catalogue `PACKS` en code (prix ad-hoc `price_data`, remise volume = la dégressivité
-  1ct→0,1ct). `create_checkout_session(org_id, pack_id, sub)` (`metadata={org_id,calls,…}`) →
-  `{checkout_url}`. Webhook `POST /api/billing/webhook` (**route brute** dans `make_routes`, NON
-  authentifié mais **signature-vérifié** sur le **corps brut**, pas de capability/CORS) → sur
-  `checkout.session.completed`, `credits_store.credit(...)`. **Idempotent** sur `event["id"]`
-  (`UNIQUE` + `ON CONFLICT`) ; renvoie 500 sur erreur interne → Stripe rejoue sans double-crédit.
-- **Surfaces** (capacités `capabilities/billing.py`, montage auto MCP+REST) : `billing.balance`
-  (`ORG_MEMBER`, MCP `billing_balance` + `GET /api/me/billing`), `billing.transactions`
-  (`GET /api/me/billing/transactions`), `billing.packs` (`SUB_ONLY`, `GET /api/billing/packs`),
-  `billing.checkout` (`ORG_MEMBER`, `POST /api/me/billing/checkout`). **Qui paie = tout membre**
-  de l'org (recharge le wallet partagé, bénin). `/api/me` expose un bloc `billing` (`{balance, low,
-  base_granted}`, `null` si pas d'org active). Front : dashboard `/console/billing`.
-- **Env** (`/opt/oto-mcp/.env`, cf. DEPLOY.md) : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
-  `OTO_MCP_FREE_CALLS` (déf. 1000), `OTO_DASHBOARD_URL`, `OTO_MCP_LOW_BALANCE_THRESHOLD` (déf. 50).
-- **Gotcha** : un caller **sans org active** n'est **pas facturé** (no-op) — le metering exige
-  l'appartenance org (cas limite : user tout neuf avant sa 1re org). Ne jamais déduire « a eu le
-  stock de base » du solde (il peut être négatif) → lire `base_granted`.
-- **Abonnements récurrents** (`mode=subscription`) — l'**option LinkedIn (unipile)** = €15/mois/**siège**
-  (= compte LinkedIn connecté ; env `OTO_MCP_UNIPILE_SEAT_PRICE_CENTS=1500`). Miroir local
-  `org_subscriptions(org_id, product, stripe_*, status, quantity)` tenu par les webhooks (lu pour le
-  gate, sans appel Stripe par requête). `billing.create_unipile_subscription_checkout` /
-  `sync_unipile_seats` (quantité = nb comptes, Stripe prorate) / `has_active_unipile_subscription`.
-  `handle_event` **dispatche** : `checkout.session.completed` (packs **vs** subscription) +
-  `customer.subscription.*` + `invoice.payment_failed`. `connect` est **gaté** sur abonnement actif
-  (402 `unipile_subscription_required`) ; `POST /api/me/unipile/subscribe` → `{checkout_url}`.
-  ⚠️ **L'endpoint webhook Stripe doit être ABONNÉ aux event types côté Stripe** (dashboard/API), pas
-  seulement codé : `mcp.oto.ninja/api/billing/webhook` n'écoutait au départ que
-  `checkout.session.completed` → les events d'abonnement (annulation/échec) n'arrivaient pas. Ajoutés
-  via l'API Stripe à `enabled_events`.
+Deux modèles **cumulables** : credits d'appel (1 appel = 1 credit, packs Stripe
+one-off) + **abonnements récurrents par option** (`mode=subscription`, ex. messagerie
+unipile, prix Stripe gradué). **Détail : `docs/billing.md`**.
 
 ## Visibility per-user
 
@@ -379,49 +185,8 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 
 ## Doctrines & instructions d'org
 
-Prose opératoire métier (workflows validés, règles, vocabulaire) pour les users qui pilotent
-oto **sans produit applicatif dédié** (ex. Celeste, mission Movinmotion — process avoir
-GoCardless → Pennylane → back-office, piloté directement depuis Claude sur un sous-ensemble
-de tools). oto est la maison naturelle de cette prose faute de produit. Aligné
-[ADR 0006](../docs/adr/0006-harnais-vs-substrat.md) (harnais-vs-substrat) : une org oto + sa
-doctrine = un **harnais sans état** (étage zéro) ; le jour où un workflow doit persister un
-pipeline/des statuts, il graduate en harnais à part (chemin blitz → scout).
-
-**Modèle = skills, à la Claude Code.** Une org possède des **instructions markdown**
-identifiées par `slug`, chacune versionnée :
-- La **doctrine de base** (slug réservé **interne** `BASE_SLUG`, jamais vu de l'user) est servie
-  d'office — accédée via `oto_get_doctrine()` **sans slug**.
-- Les autres slugs = des **skills** chargés à la demande (progressive disclosure) : la
-  doctrine de base ne porte que l'**index** (slug + titre + quand-l'utiliser), le détail
-  se charge au besoin.
-
-**Surface = 4 tools** (refacto 2026-06-18, ex-11 ; « moins d'outils, plus d'args »). Un `org_id`
-optionnel **fond membre↔platform-admin** : absent = ton **org active** ; présent = une **autre org**
-par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
-(`_resolve_org_read`/`_resolve_org_write`).
-- **Lecture** : `oto_get_doctrine([slug, org_id, scope, version, with_history])` — sans `slug` =
-  `{doctrine, group_doctrine, doctrines[]}` (base org + base groupe + index), le call de **DÉBUT DE
-  SESSION** ; avec `slug` = le markdown d'une doctrine nommée. `oto_list_doctrines([query, org_id,
-  scope])` = catalogue/recherche. Scopés à l'**org active** (+ groupe actif) — servis aux seuls
-  membres. **Vide sans erreur** si pas d'org active (`_SERVER_INSTRUCTIONS` invite à `oto_get_doctrine()`).
-- **Écriture** : `oto_set_doctrine([body_md, slug, org_id, title, desc, from_version])` (base = slug
-  omis ; nommée sinon ; `from_version` = revert) + `oto_delete_doctrine(slug[, org_id])`. Autz :
-  `org_id` absent → org active, **org_admin** requis (self-service MCP, NOUVEAU) ; présent → autre
-  org, **platform_admin** requis (l'opérateur provisionne n'importe quelle org). La SPA dashboard
-  édite aussi via REST `/api/me/instructions*` (org_admin de l'org active).
-- **Versioning** : chaque écriture incrémente `version` (sur le courant) et archive un snapshot
-  append-only. Revert = re-poser le corps d'une version → nouvelle version (jamais d'effacement
-  d'historique sauf `delete`).
-- **Store** : `org_instructions(org_id, slug PK partiel, title, description, body_md, version,
-  set_by, created_at, updated_at)` + `org_instruction_revisions(org_id, slug, version PK, …)`
-  (`db._SCHEMA`, palier org) ; accès dans `org_store.py` (`get/list/search/set/delete_instruction`,
-  `list_instruction_versions`, `normalize_slug`, `BASE_SLUG`). **En clair** (prose, pas un
-  credential → hors coffre chiffré). **Pas de cache** : lecture DB à l'appel. Écriture sérialisée
-  par `(org, slug)` via verrou advisory (mirroir `add_org_member`).
-- **Pas d'instruction par namespace d'outil** : un gotcha d'outil est vrai pour tout le monde et
-  évolue avec le code du connecteur → sa place reste le repo (docstring, `_SERVER_INSTRUCTIONS`),
-  versionné avec l'outil. La doctrine de prospection de scout ne passe pas par ce mécanisme —
-  elle vit chez scout (son propre mécanisme de doctrine, distinct).
+Prose opératoire métier par org (skills à la Claude Code, slug + versionnée),
+servie au début de session par `oto_get_doctrine()`. **Détail : `docs/doctrines.md`**.
 
 ## Groupes (départements) & hiérarchie de droits (ADR 0012)
 
@@ -462,31 +227,9 @@ valoir `group`. **Détails : `docs/groups-and-roles.md`.**
 
 ## Fédération MCP & comptes (otomata#16)
 
-Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remote.py`) :
-- **mount** (`kind="mount"`) — monte les outils NATIFS d'un MCP distant (vrais schémas,
-  `<ns>_<tool>`), credential **per-user** (token OAuth) injecté par requête. Pilote = **memento**.
-- **remote** (ADR 0003, data-driven) — tunnel `<ns>_describe`/`<ns>_call` vers un bridge, credential
-  d'**org** (token M2M + `meta.base_url`). Pilote = movinmotion.
-
-**Fédération memento = systématique** (tranché 2026-06-17) :
-- **Compte oto créé ⇒ compte memento créé.** `db.upsert_user` détecte le **vrai INSERT**
-  (`RETURNING (xmax = 0)`) et appelle `memento_federation.provision_async(sub, email)` :
-  POST best-effort (thread daemon, jamais bloquant) vers `MEMENTO_PROVISION_URL`
-  (défaut `https://me.mento.cc/api/federation/provision`) avec le secret partagé
-  `MEMENTO_PROVISION_BEARER`. memento provisionne le compte par **email** (oto=Logto,
-  memento=Supabase → jointure email) via son `ensureAccount` (idempotent). **No-op** si
-  `MEMENTO_PROVISION_BEARER` absent (fédération désactivée par défaut).
-- **Mount memento monté d'office.** `OTO_MCP_MOUNTS_ENABLED` **non défini** → défaut
-  `{memento}` (`_DEFAULT_ENABLED_MOUNTS`) ; `*` = tous, CSV = liste, `""` = kill-switch.
-- **Connecteur visible de tous.** memento est passé `self_serve` (plus `platform_granted`/
-  grant-only) → il apparaît dans le catalogue de chaque user → la carte « federated mcp »
-  du dashboard invite à connecter son compte (**auto-prompt**). Un appel d'outil sans compte
-  connecté lève une McpError actionnable (`resolve_mount_token`) pointant vers le dashboard.
-- `/api/me` renvoie `memento: {connected, set_at}` (alimente l'auto-prompt). Le flow OAuth
-  per-user reste `api_routes_memento.py` + `memento_oauth.py` (inchangé).
-- Env requis pour activer la création de compte : `MEMENTO_PROVISION_BEARER` (+ côté memento,
-  même secret en `MEMENTO_PROVISION_BEARER`). Limite : le catalogue mount est figé au boot
-  (≥1 user connecté requis pour le charger ; refresh à chaud via `oto_admin_refresh_mount`).
+Deux mécanismes : **mount** (MCP distant fédéré, token OAuth per-user, pilote
+memento — systématique) vs **remote** (bridge data-driven ADR 0003, token M2M d'org,
+pilote movinmotion). **Détail : `docs/federation.md`**.
 
 ## Conventions
 
@@ -508,9 +251,9 @@ Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remo
   prend effet à la session suivante **sans restart**, override par org OK. Filtre
   aussi `/api/connectors` (catalogue) ; overlays catalogue `family` (dérivée) +
   `category` (curée) + `publisher` (curé, `_PUBLISHER_BY_CONNECTOR`) + `logo_url`
-  (conventionnel `oto-media/connector-logos/<name>.png`, dérivé par
-  `Connector.logo_url_for`/`media_store.connector_logo_url` ; seed one-shot
-  `scripts/seed_connector_logos.py`, assets dans `assets/connector-logos/`).
+  (dérivé du **CDN logo.dev** par `Connector.logo_url_for` : domaine de marque curé
+  `_LOGO_DOMAIN_BY_CONNECTOR` + token publishable `LOGODEV_TOKEN` en env ; pas de S3,
+  pas de seed. open-data/maison sans domaine → pas de logo, monogramme côté UI).
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : connecteur **remote** défini
@@ -601,8 +344,15 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 ## Docs
 
 - `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffré unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM **obligatoire** (pas de plaintext), résolution + palier org. À lire avant de toucher credentials/registre/résolution.
+- `docs/roles-and-resolution.md` — rôles (3 paliers) + cascade de résolution de clé / grants / platform keys.
+- `docs/billing.md` — credits d'appel (packs) + abonnements récurrents par option (Stripe).
+- `docs/doctrines.md` — doctrine & skills d'org (oto_get_doctrine, versionnée).
+- `docs/auth-logto.md` — auth Logto ES384, discovery RFC 9728, façade DCR.
+- `docs/rest-api.md` — inventaire des endpoints REST `/api/*`.
+- `docs/federation.md` — fédération MCP : mount (per-user) vs remote/bridge (org).
+- `docs/usage-loop.md` — boucle d'usage ADR 0017 (calllog + feedback + déroulés).
+- `docs/monitoring.md` — monitoring des appels MCP (tool_call_log + surface admin).
 - `docs/datastore.md` — datastore spine PG (`data_*`) + OAuth Google per-user (setup GCP, scopes).
 - `docs/groups-and-roles.md` — groupes/départements & hiérarchie de droits (ADR 0012).
-- `README.md` — quickstart + tools catalog
 - `deploy/DEPLOY.md` — procédure complète déploiement
 - `docs/backlog.md` — initiatives à venir (issues GitHub pour le détail)

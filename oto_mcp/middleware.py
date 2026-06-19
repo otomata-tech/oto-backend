@@ -7,7 +7,7 @@ import os
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.transforms.visibility import disable_components
 
-from . import access, connector_activation, connectors, db, group_store, org_store
+from . import access, connector_activation, connector_selection, connectors, db, group_store, org_store
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
@@ -134,6 +134,24 @@ class UserDisabledToolsMiddleware(Middleware):
             }
         except Exception as e:
             logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
+        # Sélection marketplace (ADR 0019, B5) : masque les tools d'un connecteur que
+        # le membre a mis en PAUSE (state='paused'). `not_selected` reste visible à ce
+        # barreau (rétro-compatible ; le flip du défaut « non-sélectionné = masqué » =
+        # B6). Derrière flag `OTO_CONNECTOR_SELECTION_ENABLED`, fail-OPEN (gouvernance
+        # d'exposition ; grant-only/PROTECTED jamais touchés — ils n'ont pas de
+        # connecteur au registre, donc connector_for_namespace renvoie None).
+        if os.environ.get("OTO_CONNECTOR_SELECTION_ENABLED"):
+            try:
+                _sel = connector_selection.list_selection(sub, prof_org)
+                _paused = {nm for nm, st in _sel.items() if st == connector_selection.PAUSED}
+                if _paused:
+                    to_hide |= {
+                        n for n in all_names
+                        if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                        and c.name in _paused
+                    }
+            except Exception as e:
+                logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
         # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.
         # Inutiles à un user normal (l'autz les refuse à l'appel) → ils ne font
         # qu'alourdir le contexte de TOUT LE MONDE. Visibilité seulement ; l'autz

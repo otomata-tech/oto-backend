@@ -78,6 +78,7 @@ def register(mcp: FastMCP) -> None:
         category: str = "people",
         company: Optional[list[str]] = None,
         location: Optional[list[str]] = None,
+        network_distance: Optional[list[int]] = None,
         cursor: Optional[str] = None,
     ) -> dict:
         """Recherche LinkedIn (classic) via Unipile.
@@ -92,11 +93,15 @@ def register(mcp: FastMCP) -> None:
             category: "people" ou "companies".
             company: Employeur(s) — noms ou ids de facette.
             location: Localisation(s) — noms ou ids de facette.
+            network_distance: filtre par degré de relation — `[1]`=1er degré (tes
+                relations N1), `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`). Permet de
+                cibler « mes N1 sur [ville] » (sinon les résultats reviennent en N2+).
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
         return unipile_client().search(
             keywords=keywords, category=category,
-            company=company, location=location, cursor=cursor,
+            company=company, location=location,
+            network_distance=network_distance, cursor=cursor,
         )
 
     @mcp.tool()

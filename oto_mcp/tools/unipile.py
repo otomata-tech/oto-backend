@@ -190,3 +190,40 @@ def register(mcp: FastMCP) -> None:
             message: note d'accompagnement optionnelle (≤300 caractères).
         """
         return unipile_client().send_invitation(provider_id, message=message)
+
+    @mcp.tool()
+    async def unipile_member_posts(identifier: str, cursor: Optional[str] = None,
+                                   limit: Optional[int] = None) -> dict:
+        """Posts publiés par un membre LinkedIn — `identifier` = provider id ou slug.
+        Pour repérer un post à commenter/liker (social-selling)."""
+        return unipile_client().list_member_posts(identifier, cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_get_post(post_id: str) -> dict:
+        """Récupère un post LinkedIn — `post_id` = social_id (`urn:li:…`) d'un résultat
+        unipile_member_posts."""
+        return unipile_client().get_post(post_id)
+
+    @mcp.tool()
+    async def unipile_post_engagement(post_id: str, kind: str = "comments",
+                                      cursor: Optional[str] = None) -> dict:
+        """Liste l'engagement d'un post LinkedIn — `kind`='comments' ou 'reactions'."""
+        c = unipile_client()
+        return c.list_reactions(post_id, cursor=cursor) if kind == "reactions" \
+            else c.list_comments(post_id, cursor=cursor)
+
+    @mcp.tool()
+    async def unipile_comment(post_id: str, text: str) -> dict:
+        """Commente un post LinkedIn (social-selling). `post_id` = social_id du post."""
+        return unipile_client().comment_post(post_id, text)
+
+    @mcp.tool()
+    async def unipile_react(post_id: str, value: str = "LIKE") -> dict:
+        """Réagit à un post LinkedIn. `value`: LIKE | PRAISE | EMPATHY | INTEREST |
+        APPRECIATION | ENTERTAINMENT."""
+        return unipile_client().react_post(post_id, value=value)
+
+    @mcp.tool()
+    async def unipile_create_post(text: str) -> dict:
+        """Publie un post LinkedIn depuis le compte connecté."""
+        return unipile_client().create_post(text)

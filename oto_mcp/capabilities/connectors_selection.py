@@ -20,9 +20,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from .. import access, connector_activation, connector_selection, org_store, providers
-from ._authz import SUB_ONLY
+from ._authz import ORG_ADMIN_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
+
+# Mapping placeholder de route {id} → champ Input `org_id` (routes réelles en {id}).
+_ID = {"id": "org_id"}
 
 
 class NoInput(BaseModel):
@@ -32,6 +35,11 @@ class NoInput(BaseModel):
 
 class ConnectorActionInput(BaseModel):
     name: str                            # nom de connecteur (registre providers.py)
+
+
+class RecommendInput(BaseModel):
+    org_id: int                          # injecté du placeholder {id} (ORG_ADMIN_OF)
+    connectors: list[str] = []           # baseline proposée ; [] = aucune recommandation
 
 
 def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
@@ -92,6 +100,15 @@ def _unselect(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     return {"connector": inp.name, "state": "not_selected", "removed": removed}
 
 
+def _recommend(ctx: ResolvedCtx, inp: RecommendInput) -> dict:
+    """« Org propose » : l'org_admin pose la baseline de connecteurs recommandés.
+    Consultatif — n'impose rien aux membres (cf. ADR 0019)."""
+    ok = org_store.set_org_default_connectors(inp.org_id, inp.connectors)
+    if not ok:
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    return {"org_id": inp.org_id, "recommended": inp.connectors}
+
+
 CAPABILITIES += [
     Capability(
         key="connectors.me", handler=_me, Input=NoInput, authz=SUB_ONLY,
@@ -118,5 +135,14 @@ CAPABILITIES += [
         description="Remove a connector from your workspace (back to the library). Does not touch "
                     "credentials, only your selection.",
         mcp="oto_unselect_connector", rest=RestBinding("DELETE", "/api/me/connectors/{name}"),
+    ),
+    Capability(
+        key="connectors.recommend", handler=_recommend, Input=RecommendInput,
+        authz=ORG_ADMIN_OF("org_id"),
+        description="[org admin] Set your org's baseline of recommended connectors (the ones "
+                    "proposed to members in the library). Advisory — members stay free to "
+                    "select/deselect. connectors = list of connector names ([] clears).",
+        mcp="oto_set_org_connectors",
+        rest=RestBinding("PUT", "/api/orgs/{id}/default-connectors", _ID),
     ),
 ]

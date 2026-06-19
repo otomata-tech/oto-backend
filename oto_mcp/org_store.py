@@ -120,6 +120,31 @@ def set_org_default_tools(org_id: int, tools: Optional[list[str]]) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def get_org_default_connectors(org_id: int) -> Optional[list[str]]:
+    """Baseline de connecteurs *proposés* par l'org (« org propose », ADR 0019) :
+    liste de noms de connecteurs recommandés à ses membres, ou None si l'org n'en
+    impose pas. Consultatif — le membre reste libre de (dé)sélectionner. Miroir de
+    `default_tools` au grain connecteur."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT default_connectors FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+    if not row:
+        return None
+    dc = row["default_connectors"]
+    return list(dc) if dc is not None else None
+
+
+def set_org_default_connectors(org_id: int, connectors: Optional[list[str]]) -> bool:
+    """Pose (ou efface si None) la baseline de connecteurs proposés de l'org. False si absente."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE orgs SET default_connectors = %s WHERE id = %s",
+            (list(connectors) if connectors is not None else None, org_id),
+        )
+        return (cur.rowcount or 0) > 0
+
+
 def set_org_logo(org_id: int, url: Optional[str]) -> None:
     """Pose (ou efface si url=None) l'URL publique du logo de l'org.
 

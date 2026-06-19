@@ -658,6 +658,10 @@ def init_db() -> None:
         # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
         # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")
+        # Baseline de connecteurs proposés par l'org (ADR 0019, B2) : miroir de
+        # default_tools au grain connecteur (« org propose »). NULL = pas de baseline.
+        # Inerte tant que la capacité B7 ne la lit pas.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_connectors TEXT[]")
         # Redaction de champs par org (FieldFilter) : politique par connecteur,
         # gouvernée par l'org_admin. Forme JSONB :
         #   { "<service>": { "salt": str?, "rules": [ {fields, action, ...} ] } }
@@ -714,6 +718,12 @@ def init_db() -> None:
         from . import connector_activation as _conn_act
         _conn_act.init_schema(conn)
         _conn_act.seed_initial(conn)
+        # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
+        # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
+        # (capacité connectors.me/select/pause) et le masquage pause au middleware
+        # suivent en B3/B4/B5.
+        from . import connector_selection as _conn_sel
+        _conn_sel.init_schema(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))

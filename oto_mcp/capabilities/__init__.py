@@ -23,5 +23,7 @@ from . import billing  # noqa: F401 — billing.{balance,transactions,packs,chec
 from . import usage  # noqa: F401 — usage.{tool_feedback,gap}
 # Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.
 from . import doctrine_library  # noqa: F401 — library.{list,get,publish,fork,unpublish}
+# Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
+from . import connectors_selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

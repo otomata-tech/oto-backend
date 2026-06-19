@@ -98,7 +98,7 @@ def _unipile_price_id() -> str:
     import stripe
 
     stripe.api_key = require_env("STRIPE_SECRET_KEY")
-    found = stripe.Price.list(lookup_keys=[_UNIPILE_PRICE_LOOKUP_KEY], limit=1).get("data")
+    found = stripe.Price.list(lookup_keys=[_UNIPILE_PRICE_LOOKUP_KEY], limit=1)["data"]
     if found:
         return found[0]["id"]
     price = stripe.Price.create(

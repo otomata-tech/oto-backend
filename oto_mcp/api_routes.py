@@ -42,8 +42,7 @@ from datetime import date as _date, timedelta as _timedelta
 from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
-from .tool_visibility import (
-    PROTECTED_TOOLS, is_default_hidden, is_entitled, is_grant_only, namespace_of)
+from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
 
 logger = logging.getLogger(__name__)
 
@@ -834,24 +833,23 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         name = request.path_params["name"]
         granted = access.granted_namespaces_for(sub)
-        is_admin = access.get_user_role(sub) == access.ADMIN
+        is_admin = access.is_super_admin(sub)
         if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
             return _json(request, {
                 "error": "forbidden",
                 "name": name,
                 "detail": f"namespace `{namespace_of(name)}` non accordé",
             }, status_code=403)
-        org = org_store.get_active_org(sub) or 0
-        db.remove_user_disabled_tool(sub, name, org)
+        db.remove_user_disabled_tool(sub, name)
         # Override positif requis pour rendre visible un masqué-par-défaut, ou un
         # grant-only côté admin — même logique que le meta-tool oto_enable_tool.
         if is_default_hidden(name) or (is_grant_only(name) and is_admin):
-            db.add_user_enabled_tool(sub, name, org)
+            db.add_user_enabled_tool(sub, name)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
     # --- presets ------------------------------------------------------------
 
-    _PROTECTED_TOOLS = PROTECTED_TOOLS  # source unique (tool_visibility, anti-lockout)
+    _PROTECTED_TOOLS = {"oto_enable_tool", "oto_list_my_tools", "oto_apply_preset"}
 
     async def _list_all_tool_names() -> set[str]:
         if mcp_instance is None:
@@ -935,19 +933,18 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
-        preset = db.get_user_preset(sub, name, org)
+        preset = db.get_user_preset(sub, name)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         all_names = await _list_all_tool_names()
         granted = access.granted_namespaces_for(sub)
-        is_admin = access.get_user_role(sub) == access.ADMIN
+        is_admin = access.is_super_admin(sub)
         requested = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
         # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade,
         # miroir de oto_apply_preset côté MCP).
         enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
         disabled = sorted(all_names - enabled)
-        db.replace_user_disabled_tools(sub, disabled, org)
+        db.replace_user_disabled_tools(sub, disabled)
         return _json(request, {
             "ok": True,
             "applied": name,
@@ -1062,7 +1059,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         body_md = (body.get("body_md") or "").strip()
         if not body_md:
             return _json_error(request, 400, "body_md_required")
-        # Injecté dans oto_get_doctrine() à chaque session MCP → caper pour ne pas
+        # Injecté dans get_claude_md() à chaque session MCP → caper pour ne pas
         # saturer le contexte du modèle.
         if len(body_md.encode()) > 64 * 1024:
             return _json_error(request, 400, "body_too_large")
@@ -1149,13 +1146,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         org_id, role, _ = _active_org_edit(sub)
         if org_id is None:
             return _json_error(request, 404, "no_active_org")
-        if role is None and access.get_user_role(sub) != access.ADMIN:
+        if role is None and not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         slug = org_store.normalize_slug(request.path_params["slug"])
         subs = [m["sub"] for m in org_store.list_org_members(org_id)]
-        # Base ET skills se chargent via `oto_get_doctrine` ; slug=None = la base.
-        tool = "oto_get_doctrine"
-        slug_filter = None if slug == org_store.BASE_SLUG else slug
+        # La base se charge via get_claude_md (bundle, pas de slug) ; une skill
+        # via oto_get_instruction(slug=…).
+        if slug == org_store.BASE_SLUG:
+            tool, slug_filter = "get_claude_md", None
+        else:
+            tool, slug_filter = "oto_get_instruction", slug
         u = db.instruction_usage(subs, tool, slug_filter, days=30)
         today = _date.today()
         series = [u["daily"].get(str(today - _timedelta(days=29 - i)), 0) for i in range(30)]

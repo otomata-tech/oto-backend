@@ -275,8 +275,10 @@ def resolve_field_filter(service: str):
 
 
 def unipile_api_key_for(sub: str) -> Optional[str]:
-    """Clé API Unipile pour `sub`, en cascade (sans lever) : clé de l'user (BYO)
-    puis secret de son org active (abonnement Otomata). None si aucune.
+    """Clé API Unipile pour `sub`, en cascade (sans lever) : clé de l'user (BYO),
+    secret de son org active (abonnement Otomata), puis **clé plateforme** si l'user
+    a un grant (mode revente — partage de la clé sans la copier dans chaque org).
+    None si aucune.
 
     Pris pour `sub` EXPLICITE → utilisable hors contexte MCP (route REST connect).
     Les tools MCP, eux, passent par `resolve_api_key("unipile")` (idiome keyed)."""
@@ -285,7 +287,16 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
         return key
     active_org = org_store.get_active_org(sub)
     if active_org is not None:
-        return org_store.get_org_secret(active_org, "unipile")
+        org_key = org_store.get_org_secret(active_org, "unipile")
+        if org_key:
+            return org_key
+    # Mode plateforme : grant explicite sur la clé plateforme unipile. Gate sur
+    # l'éligibilité `platform` du registre (défense en profondeur, comme resolve_api_key).
+    con = connectors.connector_for_provider("unipile")
+    if con and "platform" in con.auth_modes:
+        grant = db.get_active_grant(sub, "unipile")
+        if grant:
+            return grant["api_key"]
     return None
 
 

@@ -90,6 +90,20 @@ def public_url(key: str) -> str:
     return f"{parts.scheme}://{_bucket()}.{parts.netloc}/{key}"
 
 
+def connector_logo_url(name: str) -> str | None:
+    """URL conventionnelle du logo d'un connecteur — objet seedé sous
+    `connector-logos/<name>.png` (cf. scripts/seed_connector_logos.py).
+
+    PURE : aucune I/O S3 (ne vérifie pas l'existence de l'objet — garantie par le
+    seed). Renvoie None si le stockage n'est pas configuré, pour ne jamais casser
+    le catalogue ni `/api/connectors`.
+    """
+    try:
+        return public_url(f"connector-logos/{name}.png")
+    except Exception:
+        return None
+
+
 def upload_image(prefix: str, owner_id: str, data: bytes, content_type: str) -> str:
     """Valide une image et l'uploade en public-read. Retourne son URL publique.
 

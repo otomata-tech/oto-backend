@@ -380,6 +380,37 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     PRIMARY KEY (org_id, slug, version)
 );
 
+-- Bibliothèque PUBLIQUE de doctrines (marketplace de skills/templates). Chaque
+-- entrée = une doctrine publiée, avec un AUTEUR : 'otomata' (la plateforme) ou
+-- 'org' (un créateur privé = une org). Preview + fork dans son org (copie vers
+-- org_instructions sous un nouveau slug). En CLAIR (prose publiable, hors coffre).
+-- Table NEUVE → ses index vivent ici (créés atomiquement) ; toute évolution
+-- ULTÉRIEURE de colonne/index ira dans le bloc ALTER d'init_db (gotcha ADR 0017).
+CREATE TABLE IF NOT EXISTS doctrine_library (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL,
+    author_kind TEXT NOT NULL,                -- 'otomata' | 'org' (validé en code)
+    author_org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL,
+    author_display TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    visibility TEXT NOT NULL DEFAULT 'public',-- 'public' | 'unlisted' (validé en code)
+    source_org_id BIGINT,                     -- org dont la doctrine a été publiée
+    source_slug TEXT,
+    forked_from BIGINT REFERENCES doctrine_library(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,        -- ré-publication = incrément
+    published_by TEXT,                         -- sub du publieur
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (slug)
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_library_visibility ON doctrine_library(visibility);
+CREATE INDEX IF NOT EXISTS idx_doctrine_library_author ON doctrine_library(author_kind, author_org_id);
+CREATE INDEX IF NOT EXISTS idx_doctrine_library_category ON doctrine_library(category);
+
 -- Sous-palier GROUPE (= départements / équipes au sein d'une org, ADR 0012).
 -- Une org se subdivise en groupes plats (pas de sous-groupes en v1) ; chaque
 -- groupe a un chef d'équipe (group_role='group_admin'). Modèle de droits

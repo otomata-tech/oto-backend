@@ -9,12 +9,18 @@ Dépend du core (sens unique ADR 0004) ; le core n'importe pas cet adaptateur.
 """
 from __future__ import annotations
 
+import logging
+
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_context
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from ..auth_hooks import current_user_sub_from_token
+from ..session_visibility import apply_session_visibility
 from ._types import AuthzDenied, Capability, RawCtx, apply_flat_signature
+
+logger = logging.getLogger(__name__)
 
 
 def _make_tool(cap: Capability):
@@ -23,9 +29,20 @@ def _make_tool(cap: Capability):
         try:
             inp = cap.Input(**kwargs)                 # validation (seule source : Input)
             ctx = cap.authz(raw, inp)                 # autz (peut lire inp pour ORG_ADMIN_OF)
-            return cap.handler(ctx, inp)              # handler core
+            result = cap.handler(ctx, inp)            # handler core
         except AuthzDenied as d:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code))
+        if cap.refresh_visibility and raw.sub:
+            # Bascule de profil (org/groupe actif déjà commitée par le handler) →
+            # re-pousse la denylist de la NOUVELLE org sur la session MCP courante,
+            # émettant tools/list_changed. Best-effort : un échec de refresh ne doit
+            # pas faire échouer la bascule (la prochaine session corrigera).
+            try:
+                await apply_session_visibility(get_context(), raw.sub, reset=True)
+            except Exception:
+                logger.warning("refresh_visibility post-hook failed for %s/%s",
+                               cap.key, raw.sub, exc_info=True)
+        return result
     _tool.__name__ = cap.mcp
     _tool.__doc__ = cap.description or cap.key
     return apply_flat_signature(_tool, cap.Input)

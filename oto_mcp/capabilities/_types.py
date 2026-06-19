@@ -70,6 +70,11 @@ class Capability:
     # un OU plusieurs bindings REST (ex. routes self-service + admin sur le même
     # métier+autz), ou None (opt-out explicite).
     rest: "Optional[RestBinding | tuple[RestBinding, ...]]" = None
+    # Cette capacité change le PROFIL de visibilité (org/groupe actif) : après le
+    # handler, l'adaptateur MCP re-pousse la denylist de la nouvelle org sur la
+    # session courante → `tools/list_changed` live (B2/B3). No-op côté REST (le
+    # dashboard n'est pas une session MCP).
+    refresh_visibility: bool = False
 
     def __post_init__(self):
         if self.mcp is None and not self.rest:

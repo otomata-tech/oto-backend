@@ -175,12 +175,14 @@ CAPABILITIES += [
                      "toolset preset and shared secrets apply to your session."),
         mcp="oto_use_group",
         rest=RestBinding("PUT", "/api/me/active-group"),
+        refresh_visibility=True,  # le groupe actif raffine la baseline de toolset (ADR 0012)
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
         description="Deselect your active group (operate at the org level again).",
         mcp="oto_clear_group",
         rest=RestBinding("DELETE", "/api/me/active-group"),
+        refresh_visibility=True,  # retour au niveau org → baseline de l'org
     ),
     Capability(
         key="group.get", handler=_group_detail, Input=GroupIdInput,

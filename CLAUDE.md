@@ -163,7 +163,8 @@ datastore non plus (spine PG, aucun credential — ADR 0016).
 
 ## REST API (consommée par oto.ninja /account)
 
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
+- `GET /api/me` — profil + role + statut LinkedIn + statut WhatsApp (`whatsapp.paired`) + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
+- `DELETE /api/whatsapp` — déconnecte la session WhatsApp per-user (cf. §WhatsApp)
 - `POST|DELETE /api/me/avatar` — upload (multipart `file`, png/jpeg/webp ≤ 2 Mo) / efface l'avatar user → Scaleway Object Storage, URL publique en DB
 - `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo d'org (org_admin, multipart `file`)
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
@@ -352,11 +353,18 @@ subprocess Node.js). Session per-user dans `<OTO_MCP_DATA_DIR>/whatsapp/<sub>/`
 — on override `client.auth_dir` après instantiation, pas besoin de patcher
 oto-cli. `asyncio.to_thread()` pour ne pas bloquer le event loop.
 
-**Pairing QR via l'extension Chrome** (`pair/pair.html`). Endpoints :
+**Pairing QR via l'extension Chrome** (`pair/pair.html`) **et le dashboard**
+(`dashboard.oto.ninja` → carte « sessions », `WhatsappPairDialog.vue` rend le QR
+via le SSE). Endpoints :
 - `GET /api/whatsapp/status` → `{paired, active_pairing}`
 - `POST /api/whatsapp/pair/start` → `{session_id, status}`
 - `GET /api/whatsapp/pair/stream?session_id=` → SSE `{type: qr|paired|failed}`
 - `POST /api/whatsapp/pair/cancel`
+- `DELETE /api/whatsapp` → `{ok, removed}` — déconnecte (logout) : annule le pairing
+  en cours + supprime l'auth_dir Baileys (`pairing.unpair`).
+
+`/api/me` expose aussi `whatsapp: {paired, active_pairing}` (même forme que
+`/status`) → le dashboard rend l'état sans round-trip dédié.
 
 `oto_mcp/pairing.py` gère les sessions in-memory (1 par sub). Bridge thread
 parse le NDJSON émis par `whatsapp.mjs --json-events` et pousse dans une

@@ -42,6 +42,25 @@ def is_paired(sub: str) -> bool:
     return (d / "creds.json").exists()
 
 
+def unpair(sub: str) -> bool:
+    """Déconnecte la session WhatsApp d'un user (logout).
+
+    Annule un pairing en cours s'il y en a un, puis supprime l'état d'auth
+    Baileys sur disque (`creds.json` + multi-file state). Retourne True si une
+    session existait. Idempotent — appeler sans session connectée est un no-op.
+    """
+    active = get_active_for_sub(sub)
+    if active:
+        active.cancel()
+        _drop(active)
+    d = auth_dir_for(sub)
+    existed = (d / "creds.json").exists()
+    if d.exists():
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+    return existed
+
+
 @dataclass
 class PairingSession:
     sub: str

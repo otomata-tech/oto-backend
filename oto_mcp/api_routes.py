@@ -247,6 +247,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 }
             except Exception:
                 billing_block = None
+        wa_active = pairing.get_active_for_sub(sub)
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
@@ -269,6 +270,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "configured": cb is not None,
                 "set_at": cb["set_at"] if cb else None,
                 "user_agent": cb["user_agent"] if cb else None,
+            },
+            # Session WhatsApp per-user (QR pairing) : `paired` = creds.json présent ;
+            # `active_pairing` = pairing en cours (alimente la carte du dashboard).
+            "whatsapp": {
+                "paired": pairing.is_paired(sub),
+                "active_pairing": {
+                    "session_id": wa_active.session_id,
+                    "status": wa_active.status,
+                } if wa_active else None,
             },
             # Fédération MCP (otomata#16) : statut du compte memento fédéré du user
             # — alimente l'auto-prompt « connecter memento » du dashboard.
@@ -1179,6 +1189,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             } if active else None,
         })
 
+    async def whatsapp_disconnect(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        removed = pairing.unpair(sub)
+        return _json(request, {"ok": True, "removed": removed})
+
     async def whatsapp_pair_start(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -1363,6 +1380,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/status", whatsapp_status, methods=["GET"]),
         Route("/api/whatsapp/status", options_handler, methods=["OPTIONS"]),
+        Route("/api/whatsapp", whatsapp_disconnect, methods=["DELETE"]),
+        Route("/api/whatsapp", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/pair/start", whatsapp_pair_start, methods=["POST"]),
         Route("/api/whatsapp/pair/start", options_handler, methods=["OPTIONS"]),
         Route("/api/whatsapp/pair/cancel", whatsapp_pair_cancel, methods=["POST"]),

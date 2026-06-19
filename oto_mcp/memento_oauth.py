@@ -221,6 +221,30 @@ def access_token_for(sub: str) -> Optional[str]:
     return access_token
 
 
+async def list_workspaces(sub: str) -> Optional[dict]:
+    """Topologie read-only des KB memento du user (orientation dashboard).
+
+    Appelle l'outil `mem_workspaces` du MCP memento distant avec le token
+    per-user (même endpoint que la fédération `tools/mount.py`), renvoie la carte
+    brute {default, orgs[], shared[], pinned[]}. None si le user n'a pas connecté
+    memento. La curation reste sur me.mento.cc — on ne fait que lister.
+    """
+    token = access_token_for(sub)
+    if not token:
+        return None
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    client = Client(StreamableHttpTransport(
+        _MCP_RESOURCE, headers={"Authorization": f"Bearer {token}"}))
+    async with client:
+        result = await client.call_tool("mem_workspaces", {})
+    data = getattr(result, "data", None)
+    if not isinstance(data, dict):
+        data = json.loads(result.content[0].text)
+    return data
+
+
 def status_for(sub: str) -> dict:
     cred = credentials_store.get_credential_with_meta("user", sub, _CONNECTOR)
     return {"connected": bool(cred and cred.get("secret")),

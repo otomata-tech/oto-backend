@@ -68,6 +68,16 @@ def make_routes(
             return err
         return json_response(request, {"ok": True, "disconnected": memento_oauth.disconnect(sub)})
 
+    async def workspaces(request: Request) -> JSONResponse:
+        # Carte read-only des KB (orientation) ; la curation reste sur me.mento.cc.
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        data = await memento_oauth.list_workspaces(sub)
+        if data is None:
+            return json_response(request, {"connected": False, "orgs": [], "shared": [], "pinned": []})
+        return json_response(request, {"connected": True, **data})
+
     return [
         Route("/api/memento/oauth/start", start, methods=["GET"]),
         Route("/api/memento/oauth/start", options_handler, methods=["OPTIONS"]),
@@ -76,4 +86,6 @@ def make_routes(
         Route("/api/memento/oauth/status", options_handler, methods=["OPTIONS"]),
         Route("/api/memento/oauth", disconnect, methods=["DELETE"]),
         Route("/api/memento/oauth", options_handler, methods=["OPTIONS"]),
+        Route("/api/memento/workspaces", workspaces, methods=["GET"]),
+        Route("/api/memento/workspaces", options_handler, methods=["OPTIONS"]),
     ]

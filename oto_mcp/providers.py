@@ -132,7 +132,7 @@ _CATEGORY_BY_CONNECTOR = {
     "serper": "Prospection", "hunter": "Prospection", "kaspr": "Prospection",
     "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
     "folk": "Prospection", "crunchbase": "Prospection",
-    "unipile": "Prospection",
+    "unipile": "Prospection", "topograph": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
@@ -217,6 +217,15 @@ _REGISTRY_LIST = [
        help="LinkedIn + WhatsApp + Telegram + Instagram hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
        modules=("unipile", "whatsapp", "telegram", "instagram")),
+    # topograph : KYB — données + documents normalisés de 100+ registres publics
+    # européens via une seule API REST. byo-only (pay-per-request, chacun connecte
+    # son compte ; clé d'org partageable), keyed api_key (en-tête x-api-key résolu
+    # côté client). Pas de clé plateforme. Hors bundle par défaut : opt-in.
+    _c("topograph", ["topograph"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", env_secret_name="TOPOGRAPH_API_KEY",
+       in_default_bundle=False, label="Topograph",
+       help="KYB — données & documents entreprise (registres européens)",
+       href="https://www.topograph.co"),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets

@@ -3,15 +3,17 @@
 Deux modes coexistent :
 - **Packs de credits** (`mode=payment`) : achat ponctuel, le webhook
   `checkout.session.completed` crédite le wallet de l'org (`credits_store.credit`).
-- **Abonnement « option LinkedIn »** (`mode=subscription`, €15/mois/siège) : activer
-  l'option = souscrire ; quantité = nb de comptes LinkedIn connectés. Le miroir local
-  `org_subscriptions` (status/quantity) est tenu par les webhooks `customer.subscription.*`
-  / `invoice.payment_failed` et gate l'activation de l'option. DISTINCT des credits :
-  l'abonnement paie l'ACCÈS à l'option, les credits paient les APPELS (les deux cumulés).
+- **Abonnement « option messagerie » (LinkedIn/WhatsApp)** (`mode=subscription`) : activer
+  l'option = souscrire ; quantité = nb de comptes connectés (tous canaux), tarif **dégressif
+  par paliers gradués** (15/10/7 €/mois). Le miroir local `org_subscriptions` (status/quantity)
+  est tenu par les webhooks `customer.subscription.*` / `invoice.payment_failed` et gate
+  l'activation. DISTINCT des credits : l'abonnement paie l'ACCÈS à l'option, les credits
+  paient les APPELS (les deux cumulés).
 
-La dégressivité du prix (1 ct → 0,1 ct par appel) est portée par la TAILLE du
-pack (remise volume), pas par un calcul de palier. Catalogue `PACKS` en code
-(prix ad-hoc via `price_data` — aucun Stripe Product/Price à pré-créer).
+La dégressivité des PACKS (1 ct → 0,1 ct par appel) est portée par la TAILLE du pack
+(remise volume) via `price_data` inline. L'abonnement messagerie, lui, utilise un vrai
+Stripe Price à **paliers gradués** (les tiers ne sont PAS exprimables en `price_data`
+inline) — créé idempotemment via lookup_key (`_unipile_price_id`).
 
 Le SDK `stripe` est importé paresseusement (dépendance optionnelle au boot) : un
 SDK absent ne casse que les endpoints billing, jamais le démarrage du serveur.
@@ -78,13 +80,37 @@ def create_checkout_session(org_id: int, pack_id: str, sub: str) -> dict:
     return {"checkout_url": session.url}
 
 
-def _unipile_seat_cents() -> int:
-    """Prix mensuel EUR (centimes) d'UN siège (compte LinkedIn) de l'option Unipile.
-    Défaut €15.00 ; configurable (notre coût Unipile ~5 € + part du plancher + marge)."""
-    try:
-        return int(os.environ.get("OTO_MCP_UNIPILE_SEAT_PRICE_CENTS", "1500"))
-    except ValueError:
-        return 1500
+# Tarif dégressif par compte connecté (siège), paliers GRADUÉS par org : 1er compte
+# 15 €, 2e 10 €, 3e+ 7 €/mois. Stripe calcule 15 + 10 + 7×(n−2) sur la quantité.
+# Aligne notre marge sur le coût Unipile (~5 €/compte, plancher 49 €).
+_UNIPILE_TIERS = [
+    {"up_to": 1, "unit_amount": 1500},
+    {"up_to": 2, "unit_amount": 1000},
+    {"up_to": "inf", "unit_amount": 700},
+]
+_UNIPILE_PRICE_LOOKUP_KEY = "oto_unipile_seat_graduated_v1"
+
+
+def _unipile_price_id() -> str:
+    """Id du Stripe Price à paliers gradués pour les sièges Unipile. Idempotent via
+    lookup_key : cherché, sinon créé au 1er besoin (pas de Price à pré-provisionner).
+    `price_data` inline ne supporte PAS les tiers → un vrai Price object est requis."""
+    import stripe
+
+    stripe.api_key = require_env("STRIPE_SECRET_KEY")
+    found = stripe.Price.list(lookup_keys=[_UNIPILE_PRICE_LOOKUP_KEY], limit=1)["data"]
+    if found:
+        return found[0]["id"]
+    price = stripe.Price.create(
+        lookup_key=_UNIPILE_PRICE_LOOKUP_KEY,
+        currency="eur",
+        recurring={"interval": "month"},
+        billing_scheme="tiered",
+        tiers_mode="graduated",
+        tiers=_UNIPILE_TIERS,
+        product_data={"name": "Oto — option messagerie hébergée (LinkedIn/WhatsApp)"},
+    )
+    return price["id"]
 
 
 def create_unipile_subscription_checkout(org_id: int, sub: str, quantity: int = 1) -> dict:
@@ -99,17 +125,7 @@ def create_unipile_subscription_checkout(org_id: int, sub: str, quantity: int = 
     md = {"org_id": str(org_id), "product": "unipile"}
     session = stripe.checkout.Session.create(
         mode="subscription",
-        line_items=[
-            {
-                "quantity": qty,
-                "price_data": {
-                    "currency": "eur",
-                    "unit_amount": _unipile_seat_cents(),
-                    "recurring": {"interval": "month"},
-                    "product_data": {"name": "Oto — option LinkedIn (Unipile)"},
-                },
-            }
-        ],
+        line_items=[{"price": _unipile_price_id(), "quantity": qty}],
         metadata={**md, "sub": sub},
         subscription_data={"metadata": md},
         success_url=f"{dash}/console/connections?unipile=subscribed",

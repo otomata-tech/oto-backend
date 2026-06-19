@@ -11,7 +11,6 @@ tools, admin, WhatsApp) :
 - `DELETE /api/settings/api-keys/{provider}`  → efface
 - `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
 - `GET    /api/admin/*`                       → admin (users, platform-keys, grants, tokens)
-- `GET    /api/whatsapp/*`                    → WhatsApp pairing
 
 Endpoints datastore / Google OAuth / API tokens : voir `api_routes_datastore.py`.
 Endpoints SIRENE stock : voir `api_routes_sirene.py`.
@@ -40,7 +39,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from datetime import date as _date, timedelta as _timedelta
 
-from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, pairing, tool_registry
+from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import (
@@ -784,7 +783,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             tools = await mcp_instance.list_tools(run_middleware=False)
             all_names = {t.name for t in tools}
 
-        disabled = set(db.list_user_disabled_tools(sub))
+        disabled = set(db.list_user_disabled_tools(sub, org_store.get_active_org(sub) or 0))
         # Le middleware retire déjà les disabled de `list_tools` selon le sub
         # courant (celui de la requête REST = même token). On ré-ajoute donc
         # les disabled pour avoir la vue complète.
@@ -819,8 +818,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        db.add_user_disabled_tool(sub, name)
-        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override positif
+        org = org_store.get_active_org(sub) or 0
+        db.add_user_disabled_tool(sub, name, org)
+        db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override positif
         return _json(request, {"ok": True, "name": name, "enabled": False})
 
     async def my_tools_enable(request: Request) -> JSONResponse:
@@ -835,7 +835,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         name = request.path_params["name"]
         granted = access.granted_namespaces_for(sub)
-        is_admin = access.get_user_role(sub) == access.ADMIN
+        is_admin = access.is_super_admin(sub)
         if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
             return _json(request, {
                 "error": "forbidden",
@@ -865,7 +865,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        presets = db.list_user_presets(sub)
+        presets = db.list_user_presets(sub, org_store.get_active_org(sub) or 0)
         return _json(request, {
             "presets": [
                 {
@@ -883,7 +883,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name)
+        preset = db.get_user_preset(sub, name, org_store.get_active_org(sub) or 0)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {
@@ -901,6 +901,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
+        org = org_store.get_active_org(sub) or 0
         all_names = await _list_all_tool_names()
 
         explicit: list[str] | None = None
@@ -921,10 +922,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 }, status_code=400)
             enabled = sorted(set(explicit))
         else:
-            disabled = set(db.list_user_disabled_tools(sub))
+            disabled = set(db.list_user_disabled_tools(sub, org))
             enabled = sorted(all_names - disabled)
 
-        db.save_user_preset(sub, name, enabled)
+        db.save_user_preset(sub, name, enabled, org)
         return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
 
     async def my_preset_apply(request: Request) -> JSONResponse:
@@ -942,7 +943,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         all_names = await _list_all_tool_names()
         granted = access.granted_namespaces_for(sub)
-        is_admin = access.get_user_role(sub) == access.ADMIN
+        is_admin = access.is_super_admin(sub)
         requested = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
         # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade,
         # miroir de oto_apply_preset côté MCP).
@@ -962,7 +963,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        deleted = db.delete_user_preset(sub, name)
+        deleted = db.delete_user_preset(sub, name, org_store.get_active_org(sub) or 0)
         if not deleted:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})
@@ -1063,7 +1064,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         body_md = (body.get("body_md") or "").strip()
         if not body_md:
             return _json_error(request, 400, "body_md_required")
-        # Injecté dans oto_get_doctrine() à chaque session MCP → caper pour ne pas
+        # Injecté dans get_claude_md() à chaque session MCP → caper pour ne pas
         # saturer le contexte du modèle.
         if len(body_md.encode()) > 64 * 1024:
             return _json_error(request, 400, "body_too_large")
@@ -1150,85 +1151,22 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         org_id, role, _ = _active_org_edit(sub)
         if org_id is None:
             return _json_error(request, 404, "no_active_org")
-        if role is None and access.get_user_role(sub) != access.ADMIN:
+        if role is None and not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
         slug = org_store.normalize_slug(request.path_params["slug"])
         subs = [m["sub"] for m in org_store.list_org_members(org_id)]
-        # Base ET skills se chargent via `oto_get_doctrine` ; slug=None = la base.
-        tool = "oto_get_doctrine"
-        slug_filter = None if slug == org_store.BASE_SLUG else slug
+        # La base se charge via get_claude_md (bundle, pas de slug) ; une skill
+        # via oto_get_instruction(slug=…).
+        if slug == org_store.BASE_SLUG:
+            tool, slug_filter = "get_claude_md", None
+        else:
+            tool, slug_filter = "oto_get_instruction", slug
         u = db.instruction_usage(subs, tool, slug_filter, days=30)
         today = _date.today()
         series = [u["daily"].get(str(today - _timedelta(days=29 - i)), 0) for i in range(30)]
         return _json(request, {
             "slug": slug, "count": u["count"], "callers": u["callers"], "series": series,
         })
-
-    # ── WhatsApp pairing ──────────────────────────────────────────
-
-    async def whatsapp_status(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = pairing.get_active_for_sub(sub)
-        return _json(request, {
-            "paired": pairing.is_paired(sub),
-            "active_pairing": {
-                "session_id": active.session_id,
-                "status": active.status,
-            } if active else None,
-        })
-
-    async def whatsapp_pair_start(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        loop = asyncio.get_running_loop()
-        session = pairing.start(sub, loop)
-        return _json(request, {"session_id": session.session_id, "status": session.status})
-
-    async def whatsapp_pair_cancel(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = pairing.get_active_for_sub(sub)
-        if not active:
-            return _json_error(request, 404, "no_active_pairing")
-        active.cancel()
-        return _json(request, {"ok": True})
-
-    async def whatsapp_pair_stream(request: Request) -> Response:
-        sub, err = await _authenticate(request, verifier, allow_query_token=True)
-        if err:
-            return err
-        session_id = request.query_params.get("session_id", "")
-        session = pairing.get_session(session_id)
-        if not session or session.sub != sub:
-            return _json_error(request, 404, "unknown_session")
-
-        async def event_stream():
-            # Initial hello so the client knows the stream is live.
-            yield f": ok\ndata: {json.dumps({'type': 'connected', 'status': session.status})}\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(session.queue.get(), timeout=20)
-                except asyncio.TimeoutError:
-                    # Keepalive comment.
-                    yield ": keepalive\n\n"
-                    continue
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                **_cors_headers(request.headers.get("origin")),
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
 
     datastore_routes = api_routes_datastore.make_routes(
         verifier=verifier,
@@ -1361,14 +1299,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/status", whatsapp_status, methods=["GET"]),
-        Route("/api/whatsapp/status", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/start", whatsapp_pair_start, methods=["POST"]),
-        Route("/api/whatsapp/pair/start", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/cancel", whatsapp_pair_cancel, methods=["POST"]),
-        Route("/api/whatsapp/pair/cancel", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/stream", whatsapp_pair_stream, methods=["GET"]),
-        Route("/api/whatsapp/pair/stream", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users", admin_users, methods=["GET"]),
         Route("/api/admin/users", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}", admin_user_detail, methods=["GET"]),

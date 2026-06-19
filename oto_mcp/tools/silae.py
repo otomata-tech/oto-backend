@@ -9,9 +9,9 @@ credentials; its payroll is visible only to it.
 Read-only surface (dossiers, employees, payslips, variables awaiting entry).
 The write operations (adding a bonus/hours, confirming staged entries) stay out
 of the agent for now — entering payroll is a sensitive act. Bank details
-(IBAN/BIC/RIB) are masked before the response reaches the agent (the
-`~/.otomata/config.yaml` policy is absent server-side, so we set an explicit
-default `FieldFilter`).
+(IBAN/BIC/RIB) are masked before the response reaches the agent : the redaction
+is resolved per-org via `access.resolve_field_filter("silae")` (server default
+in `field_filter_defaults.SERVER_DEFAULTS`, overridable by the org_admin).
 """
 from __future__ import annotations
 
@@ -24,21 +24,16 @@ from .. import access
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.silae import SilaeClient
-    from oto.tools.common import FieldFilter
-
-    # Default redaction: mask bank account numbers (rarely needed by an analysis
-    # agent), keep names/amounts (the payroll data the entitled user wants).
-    _REDACT = FieldFilter(rules=[
-        {"fields": ["iban", "bic", "rib"], "action": "mask", "keep_last": 4},
-    ])
 
     def _client() -> SilaeClient:
         creds = access.resolve_credential_fields("silae")
+        # Redaction résolue par org (défaut serveur = masque IBAN/BIC/RIB, cf.
+        # field_filter_defaults ; l'org_admin la règle via le dashboard).
         return SilaeClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             subscription_key=creds.get("subscription_key"),
-            field_filter=_REDACT,
+            field_filter=access.resolve_field_filter("silae"),
         )
 
     # --- Dossiers (payroll files) ---

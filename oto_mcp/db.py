@@ -250,13 +250,17 @@ CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 -- n'est PAS un secret (handle opaque), d'où une table en clair (≠ coffre chiffré).
 -- `resolve` : clé partagée + account_id per-user → chacun agit comme lui-même.
 CREATE TABLE IF NOT EXISTS unipile_accounts (
-    sub TEXT PRIMARY KEY REFERENCES users(sub) ON DELETE CASCADE,
+    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    -- canal Unipile (LINKEDIN/WHATSAPP/TELEGRAM/INSTAGRAM/…) : un user a un
+    -- account_id DISTINCT par canal, sous la même clé partagée.
+    provider TEXT NOT NULL DEFAULT 'LINKEDIN',
     account_id TEXT NOT NULL,
     account_name TEXT,
     -- org dont l'abonnement Unipile (la clé) porte ce compte = org actif au connect.
     -- Source de vérité pour COMPTER et FACTURER par org (revendeur/passthrough).
     org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL,
-    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id);
 
@@ -269,6 +273,7 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
     nonce TEXT PRIMARY KEY,
     sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
     org_id BIGINT,                       -- org actif au connect (porté au compte)
+    provider TEXT NOT NULL DEFAULT 'LINKEDIN',  -- canal demandé (B1, multi-canal)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -567,6 +572,12 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id)")
         conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS org_id BIGINT")
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS unipile_account_limit INTEGER")
+        # Multi-canal Unipile : un account_id par (sub, provider). Migration de la
+        # PK sub → (sub, provider) ; les lignes existantes prennent 'LINKEDIN' (DEFAULT).
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
+        conn.execute("ALTER TABLE unipile_accounts DROP CONSTRAINT IF EXISTS unipile_accounts_pkey")
+        conn.execute("ALTER TABLE unipile_accounts ADD PRIMARY KEY (sub, provider)")
+        conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
         # Retrait du rôle `guest` (2026-06-15) : défaut → member + migration des
         # lignes existantes (guest était un alias sans effet, cf. access.py).
         conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
@@ -616,6 +627,11 @@ def init_db() -> None:
         # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
         # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")
+        # Redaction de champs par org (FieldFilter) : politique par connecteur,
+        # gouvernée par l'org_admin. Forme JSONB :
+        #   { "<service>": { "salt": str?, "rules": [ {fields, action, ...} ] } }
+        # {} = aucune config → repli sur le défaut serveur (field_filter_defaults).
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS field_filters JSONB NOT NULL DEFAULT '{}'::jsonb")
         # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
         # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
         # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =
@@ -863,43 +879,55 @@ def set_avatar_url(sub: str, url: Optional[str]) -> None:
 # --- LinkedIn ---------------------------------------------------------------
 
 def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None,
-                        org_id: Optional[int] = None) -> None:
-    """Associe (upsert) le compte LinkedIn Unipile `account_id` à `sub` (B3).
-    `org_id` = org dont l'abonnement porte ce compte (compté + facturé)."""
+                        org_id: Optional[int] = None, provider: str = "LINKEDIN") -> None:
+    """Associe (upsert) le compte Unipile `account_id` à `(sub, provider)` (B3,
+    multi-canal). `org_id` = org dont l'abonnement porte ce compte (compté + facturé)."""
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO unipile_accounts (sub, account_id, account_name, org_id) "
-            "VALUES (%s, %s, %s, %s) ON CONFLICT (sub) DO UPDATE SET "
+            "INSERT INTO unipile_accounts (sub, provider, account_id, account_name, org_id) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (sub, provider) DO UPDATE SET "
             "account_id = EXCLUDED.account_id, account_name = EXCLUDED.account_name, "
             "org_id = EXCLUDED.org_id, connected_at = NOW()",
-            (sub, account_id, account_name, org_id),
+            (sub, provider, account_id, account_name, org_id),
         )
 
 
-def get_unipile_account_id(sub: str) -> Optional[str]:
-    """`account_id` LinkedIn du user, ou None (→ le client auto-résout le 1er compte
-    pour la rétro-compat mono-compte)."""
+def get_unipile_account_id(sub: str, provider: str = "LINKEDIN") -> Optional[str]:
+    """`account_id` Unipile du user pour ce canal, ou None."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT account_id FROM unipile_accounts WHERE sub = %s", (sub,)
+            "SELECT account_id FROM unipile_accounts WHERE sub = %s AND provider = %s",
+            (sub, provider),
         ).fetchone()
     return row["account_id"] if row else None
 
 
-def get_unipile_account(sub: str) -> Optional[dict]:
-    """Statut de connexion Unipile (pour /api/me / dashboard) ou None."""
+def get_unipile_account(sub: str, provider: str = "LINKEDIN") -> Optional[dict]:
+    """Statut de connexion Unipile d'un canal (pour /api/me / dashboard) ou None."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT account_id, account_name, connected_at FROM unipile_accounts "
-            "WHERE sub = %s", (sub,)
+            "SELECT provider, account_id, account_name, connected_at FROM unipile_accounts "
+            "WHERE sub = %s AND provider = %s", (sub, provider)
         ).fetchone()
     return dict(row) if row else None
 
 
-def clear_unipile_account(sub: str) -> None:
+def list_unipile_accounts(sub: str) -> list[dict]:
+    """Tous les comptes Unipile connectés du user, tous canaux confondus
+    (`[{provider, account_id, account_name, connected_at}]`) — pour le dashboard."""
     with _connect() as conn:
-        conn.execute("DELETE FROM unipile_accounts WHERE sub = %s", (sub,))
+        rows = conn.execute(
+            "SELECT provider, account_id, account_name, connected_at FROM unipile_accounts "
+            "WHERE sub = %s ORDER BY provider", (sub,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_unipile_account(sub: str, provider: str = "LINKEDIN") -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM unipile_accounts WHERE sub = %s AND provider = %s",
+                     (sub, provider))
 
 
 def count_unipile_accounts_for_org(org_id: int) -> int:
@@ -912,11 +940,11 @@ def count_unipile_accounts_for_org(org_id: int) -> int:
 
 
 def list_unipile_accounts_by_org() -> list[dict]:
-    """`[{org_id, account_id, sub}]` de tous les comptes rattachés à un org
+    """`[{org_id, provider, account_id, sub}]` de tous les comptes rattachés à un org
     (org_id non NULL) — itéré par la facturation récurrente."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT org_id, account_id, sub FROM unipile_accounts WHERE org_id IS NOT NULL"
+            "SELECT org_id, provider, account_id, sub FROM unipile_accounts WHERE org_id IS NOT NULL"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -984,25 +1012,26 @@ def get_org_by_subscription_id(stripe_subscription_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None) -> None:
-    """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au `sub` (+ org
-    actif), pour corréler au retour du webhook. Prune les nonces expirés (> 1h)."""
+def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None,
+                           provider: str = "LINKEDIN") -> None:
+    """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au `(sub, provider)`
+    (+ org actif), pour corréler au retour du webhook. Prune les nonces expirés (> 1h)."""
     upsert_user(sub)
     with _connect() as conn:
         conn.execute("DELETE FROM unipile_pending WHERE created_at < NOW() - INTERVAL '1 hour'")
         conn.execute(
-            "INSERT INTO unipile_pending (nonce, sub, org_id) VALUES (%s, %s, %s) "
+            "INSERT INTO unipile_pending (nonce, sub, org_id, provider) VALUES (%s, %s, %s, %s) "
             "ON CONFLICT (nonce) DO NOTHING",
-            (nonce, sub, org_id),
+            (nonce, sub, org_id, provider),
         )
 
 
 def resolve_unipile_pending(nonce: str) -> Optional[dict]:
-    """Consomme un nonce → `{sub, org_id}` (et le supprime), ou None si inconnu/expiré."""
+    """Consomme un nonce → `{sub, org_id, provider}` (et le supprime), ou None si inconnu/expiré."""
     with _connect() as conn:
         row = conn.execute(
             "DELETE FROM unipile_pending WHERE nonce = %s "
-            "AND created_at >= NOW() - INTERVAL '1 hour' RETURNING sub, org_id",
+            "AND created_at >= NOW() - INTERVAL '1 hour' RETURNING sub, org_id, provider",
             (nonce,),
         ).fetchone()
     return dict(row) if row else None

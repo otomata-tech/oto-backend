@@ -23,6 +23,23 @@ logger = logging.getLogger(__name__)
 USER = "user"
 ORG = "org"
 
+# `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
+# l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
+# refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /
+# listing » (credential_status, list_accounts, list_credentials) sont consommées
+# par /api/me, le listing d'org/groupe, etc. → elles ne doivent JAMAIS sérialiser
+# un bearer vers le front. On le retire À LA SOURCE (defense-in-depth, un seul
+# point) : les accesseurs qui ont VRAIMENT besoin du token (get_credential_with_meta,
+# access_token_for) gardent `meta` entier ; les surfaces de statut servent le
+# `meta` public.
+_SECRET_META_KEYS = ("access_token", "refresh_token", "id_token")
+
+
+def _public_meta(meta: Optional[dict]) -> dict:
+    """`meta` débarrassé des satellites secrets (bearers OAuth) — pour les surfaces
+    de statut/listing qui le sérialisent vers le front."""
+    return {k: v for k, v in (meta or {}).items() if k not in _SECRET_META_KEYS}
+
 
 def _secret_kind(connector: str) -> str:
     c = connectors.REGISTRY.get(connector)
@@ -156,22 +173,24 @@ def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
 
 
 def list_accounts(entity_type: str, entity_id: str, connector: str) -> list[dict]:
-    """Lignes (account, meta, set_at) d'un connecteur multi-compte SANS secret —
-    pour la sélection du défaut / le listing (google)."""
+    """Lignes (account, meta, set_at) d'un connecteur multi-compte SANS secret
+    (ni le secret chiffré, ni les bearers de `meta` — cf. `_public_meta`) — pour
+    la sélection du défaut / le listing (google)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT account, meta, set_at FROM connector_credentials "
             "WHERE entity_type=%s AND entity_id=%s AND connector=%s ORDER BY account",
             (entity_type, entity_id, connector),
         ).fetchall()
-    return [{"account": r["account"], "meta": r["meta"] or {}, "set_at": r["set_at"]} for r in rows]
+    return [{"account": r["account"], "meta": _public_meta(r["meta"]), "set_at": r["set_at"]} for r in rows]
 
 
 def credential_status(entity_type: str, entity_id: str, connector: str,
                       account: str = "") -> Optional[dict]:
-    """Présence + satellites NON-secrets (`meta`, `set_at`) SANS déchiffrer — pour
-    /api/me et autres surfaces de statut (mêmes garanties que has_credential :
-    jamais la valeur du secret). None si aucun credential."""
+    """Présence + satellites NON-secrets (`meta` filtré par `_public_meta`, `set_at`)
+    SANS déchiffrer — pour /api/me et autres surfaces de statut (mêmes garanties que
+    has_credential : jamais le secret chiffré NI un bearer de `meta`). None si aucun
+    credential."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT meta, set_at, (secret_enc IS NOT NULL) AS configured "
@@ -181,7 +200,7 @@ def credential_status(entity_type: str, entity_id: str, connector: str,
         ).fetchone()
     if not row or not row["configured"]:
         return None
-    return {"set_at": row["set_at"], "meta": row["meta"] or {}}
+    return {"set_at": row["set_at"], "meta": _public_meta(row["meta"])}
 
 
 def has_credential(entity_type: str, entity_id: str, connector: str, account: Optional[str] = None) -> bool:
@@ -272,16 +291,17 @@ def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None
 
 
 def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
-    """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé), mais
-    AVEC `meta` (satellites non-secrets : base_url d'un bridge remote, scopes…).
-    Une ligne par (connector, account) : le multi-compte apparaît en N lignes."""
+    """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé) ni les
+    bearers de `meta` (filtré par `_public_meta`), mais AVEC les satellites non-secrets
+    (base_url d'un bridge remote, scopes…). Une ligne par (connector, account) : le
+    multi-compte apparaît en N lignes."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT connector, account, secret_kind, set_by, set_at, meta FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id = %s ORDER BY connector, account",
             (entity_type, entity_id),
         ).fetchall()
-        return [{**dict(r), "meta": r["meta"] or {}} for r in rows]
+        return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
 def list_remote_namespaces() -> set[str]:

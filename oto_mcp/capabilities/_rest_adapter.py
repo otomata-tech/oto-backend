@@ -29,6 +29,11 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         if err:
             return err
         data: dict = {}
+        # Query string (filtres des GET/DELETE sans body : `?query=…&limit=…`).
+        # Valeurs str → pydantic coerce vers le type du champ Input. Priorité la
+        # plus basse (body puis path params écrasent).
+        if request.query_params:
+            data.update(dict(request.query_params))
         if request.method in ("POST", "PUT", "PATCH"):
             try:
                 body = await request.json()

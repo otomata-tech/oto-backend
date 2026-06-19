@@ -78,13 +78,17 @@ def register(mcp: FastMCP) -> None:
         category: str = "people",
         company: Optional[list[str]] = None,
         location: Optional[list[str]] = None,
+        industry: Optional[dict] = None,
         network_distance: Optional[list[int]] = None,
+        advanced_keywords: Optional[dict] = None,
+        url: Optional[str] = None,
+        api: str = "classic",
         cursor: Optional[str] = None,
     ) -> dict:
-        """Recherche LinkedIn (classic) via Unipile.
+        """Recherche LinkedIn via Unipile.
 
-        `company`/`location` acceptent des NOMS (résolus automatiquement en
-        facettes LinkedIn) ou des ids de facette numériques. ⚠️ La page company
+        `company`/`location`/`industry` acceptent des NOMS (résolus automatiquement
+        en facettes LinkedIn) ou des ids de facette numériques. ⚠️ La page company
         LinkedIn n'est PAS un id de facette employeur valide pour la recherche
         people — passer le nom et laisser le client résoudre.
 
@@ -93,15 +97,21 @@ def register(mcp: FastMCP) -> None:
             category: "people" ou "companies".
             company: Employeur(s) — noms ou ids de facette.
             location: Localisation(s) — noms ou ids de facette.
-            network_distance: filtre par degré de relation — `[1]`=1er degré (tes
-                relations N1), `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`). Permet de
-                cibler « mes N1 sur [ville] » (sinon les résultats reviennent en N2+).
+            industry: filtre secteur — dict `{include?: [...], exclude?: [...]}` (noms ou ids).
+            network_distance: degré de relation — `[1]`=1er degré (tes relations N1),
+                `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
+            advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
+                company?, school?}`.
+            url: URL de recherche LinkedIn/Sales Nav collée du navigateur (si fournie,
+                les autres filtres structurés sont ignorés).
+            api: "classic" | "sales_navigator" | "recruiter" (filtres avancés selon
+                l'abonnement LinkedIn du compte connecté).
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
         return unipile_client().search(
-            keywords=keywords, category=category,
-            company=company, location=location,
-            network_distance=network_distance, cursor=cursor,
+            keywords=keywords, category=category, company=company, location=location,
+            industry=industry, network_distance=network_distance,
+            advanced_keywords=advanced_keywords, url=url, api=api, cursor=cursor,
         )
 
     @mcp.tool()
@@ -127,6 +137,16 @@ def register(mcp: FastMCP) -> None:
     async def unipile_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
         """Liste les conversations LinkedIn (messagerie) via Unipile."""
         return unipile_client().list_chats(limit=limit, cursor=cursor)
+
+    @mcp.tool()
+    async def unipile_read_chat(chat_id: str, limit: int = 30) -> dict:
+        """Lit les messages d'une conversation LinkedIn via Unipile.
+
+        Args:
+            chat_id: Id du fil (renvoyé par unipile_chats).
+            limit: Nombre de messages à récupérer.
+        """
+        return unipile_client().list_messages(chat_id, limit=limit)
 
     @mcp.tool()
     async def unipile_send_message(

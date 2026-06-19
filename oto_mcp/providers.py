@@ -211,7 +211,7 @@ _REGISTRY_LIST = [
     # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram"],
-       auth_modes={"byo_user", "byo_org"}, keyed=True,
+       auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", env_secret_name="UNIPILE_API_KEY",
        in_default_bundle=False, label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram hébergés (recherche/scrape/messagerie)",

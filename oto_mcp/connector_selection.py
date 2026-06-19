@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS user_selected_connectors (
     selected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (sub, org_id, connector)
 );
+-- Marque de transition (B6) : un (sub, org) « seedé » a reçu sa sélection initiale
+-- (= l'exposé courant en active) au passage au régime strict « non-sélectionné =
+-- masqué ». Évite de re-seeder un membre qui a légitimement tout désélectionné.
+CREATE TABLE IF NOT EXISTS connector_selection_seeded (
+    sub       TEXT   NOT NULL,
+    org_id    BIGINT NOT NULL DEFAULT 0,
+    seeded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, org_id)
+);
 """
 
 
@@ -108,3 +117,38 @@ def unselect(sub: str, connector: str, org_id: int = 0) -> bool:
             (sub, org_id, connector),
         )
         return (cur.rowcount or 0) > 0
+
+
+# --- transition vers le régime strict « non-sélectionné = masqué » (B6) -------
+
+def is_seeded(sub: str, org_id: int = 0) -> bool:
+    """True si ce (sub, org) a déjà reçu sa sélection initiale (cf. `seed_active`)."""
+    from . import db
+
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM connector_selection_seeded WHERE sub = %s AND org_id = %s",
+            (sub, org_id),
+        ).fetchone()
+    return row is not None
+
+
+def seed_active(sub: str, exposed: set[str], org_id: int = 0) -> None:
+    """Seed de transition (one-shot par (sub, org)) : marque `active` tout connecteur
+    actuellement EXPOSÉ pour ce membre, puis pose la marque `seeded`. No-behavior-change
+    au flip (le membre garde l'exposé courant) ; seuls les connecteurs exposés APRÈS le
+    seed restent non-sélectionnés (→ à installer depuis la library). Idempotent."""
+    from . import db
+
+    with db._connect() as conn:
+        for name in exposed:
+            conn.execute(
+                "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
+                "VALUES (%s, %s, %s, 'active') ON CONFLICT (sub, org_id, connector) DO NOTHING",
+                (sub, org_id, name),
+            )
+        conn.execute(
+            "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, %s) "
+            "ON CONFLICT (sub, org_id) DO NOTHING",
+            (sub, org_id),
+        )

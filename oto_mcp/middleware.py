@@ -142,14 +142,23 @@ class UserDisabledToolsMiddleware(Middleware):
         # connecteur au registre, donc connector_for_namespace renvoie None).
         if os.environ.get("OTO_CONNECTOR_SELECTION_ENABLED"):
             try:
+                _strict = bool(os.environ.get("OTO_CONNECTOR_SELECTION_STRICT"))
+                # B6 : seed lazy à la 1re session sous le régime strict — pré-remplit la
+                # sélection avec l'exposé courant (le membre garde tout ; seuls les
+                # connecteurs exposés APRÈS le seed restent à installer depuis la library).
+                # One-shot par (sub, org), gardé par connector_selection_seeded.
+                if _strict and not connector_selection.is_seeded(sub, prof_org):
+                    connector_selection.seed_active(
+                        sub, connector_activation.exposed_connectors(active_org), prof_org)
                 _sel = connector_selection.list_selection(sub, prof_org)
-                _paused = {nm for nm, st in _sel.items() if st == connector_selection.PAUSED}
-                if _paused:
-                    to_hide |= {
-                        n for n in all_names
-                        if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
-                        and c.name in _paused
-                    }
+                # B5 : un connecteur en PAUSE masque ses outils. B6 (strict) : un
+                # connecteur NON-sélectionné les masque aussi (`_st is None`).
+                to_hide |= {
+                    n for n in all_names
+                    if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                    and ((_st := _sel.get(c.name)) == connector_selection.PAUSED
+                         or (_strict and _st is None))
+                }
             except Exception as e:
                 logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
         # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.

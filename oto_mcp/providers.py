@@ -125,7 +125,7 @@ class Connector:
 
 # Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
 # seul secret_kind (slack est aussi personal_session, mais c'est une API).
-BROWSER_PROVIDERS = frozenset({"whatsapp", "crunchbase"})
+BROWSER_PROVIDERS = frozenset({"crunchbase"})
 
 # Catégorie d'usage (domaine) par connecteur — CURÉE (pas dérivable), tunable.
 _CATEGORY_BY_CONNECTOR = {
@@ -136,7 +136,7 @@ _CATEGORY_BY_CONNECTOR = {
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
-    "slack": "Comms", "whatsapp": "Comms", "google": "Comms",
+    "slack": "Comms", "google": "Comms",
     "memento": "Knowledge", "planity": "Métier",
 }
 
@@ -210,11 +210,11 @@ _REGISTRY_LIST = [
     # tant qu'un BYO sur un autre sous-domaine n'existe pas (déféré ; single-field
     # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
-    _c("unipile", ["unipile"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+    _c("unipile", ["unipile", "whatsapp"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", env_secret_name="UNIPILE_API_KEY",
-       in_default_bundle=False, label="Unipile",
-       help="LinkedIn hébergé (recherche/scrape/messagerie)",
-       href="https://www.unipile.com"),
+       in_default_bundle=False, label="LinkedIn & WhatsApp (Unipile)",
+       help="LinkedIn + WhatsApp hébergés (recherche/scrape/messagerie)",
+       href="https://www.unipile.com", modules=("unipile", "whatsapp")),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets
@@ -283,8 +283,6 @@ _REGISTRY_LIST = [
        personal_session=True, secret_kind="oauth", in_default_preset=True,
        label="Google", help="Gmail + Tasks + Calendar + Sheets + Drive + Chat (OAuth)",
        modules=("gmail", "tasks", "calendar", "sheets", "drive", "chat")),
-    _c("whatsapp", ["whatsapp"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, label="WhatsApp"),
 
     # --- open-data / sans credential ----------------------------------------
     # namespace = préfixe réel : culture_spectacle_* → `culture` (namespace_of =

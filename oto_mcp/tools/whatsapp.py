@@ -1,80 +1,52 @@
-"""WhatsApp — Baileys via subprocess Node.js (oto.tools.whatsapp).
+"""WhatsApp — messagerie hébergée via Unipile (compte WhatsApp connecté par l'user).
 
-WhatsApp est par-utilisateur (pas de "platform session" possible). Chaque
-user a sa propre session paired vivant dans `<DATA_DIR>/whatsapp/<sub>/`.
-
-Le pairing QR est exposé via l'extension Chrome `extension/pair.html`
-(endpoints `/api/whatsapp/pair/*`). Une fois pairé, le user (member ou
-admin) peut utiliser les tools `whatsapp_*`.
+Ex-Baileys (self-hosted, subprocess Node.js) → remplacé par Unipile : le compte
+WhatsApp vit chez Unipile (linked-device), connecté par l'user via le hosted-auth
+(dashboard, `?channel=whatsapp`). On résout son `account_id` WHATSAPP per-user
+(no-fallback, cf. `tools/unipile.unipile_client`). L'engine Baileys reste archivé
+dans oto-core (`oto.tools.whatsapp`) + la CLI `oto whatsapp`.
 """
 from __future__ import annotations
 
-import asyncio
-import os
-from pathlib import Path
+from typing import Optional
 
 from fastmcp import FastMCP
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
-
-
-def _data_dir() -> Path:
-    return Path(os.environ.get("OTO_MCP_DATA_DIR", "/opt/oto-mcp/data"))
-
-
-def _client_for_user():
-    sub = access.current_user_sub_or_raise()
-    auth_dir = _data_dir() / "whatsapp" / sub
-    if not auth_dir.exists() or not (auth_dir / "creds.json").exists():
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "Session WhatsApp non pairée. Ouvre l'extension Chrome oto, "
-                "section WhatsApp → 'Pair WhatsApp' pour scanner le QR."
-            ),
-        ))
-
-    from oto.tools.whatsapp import WhatsAppClient
-    client = WhatsAppClient()
-    client.auth_dir = str(auth_dir)
-    return client
+from .unipile import unipile_client
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    async def whatsapp_list_chats(limit: int = 20) -> dict:
-        """List the user's recent WhatsApp chats (most recent first).
-
-        Returns {jid, name, last_message_preview, last_message_at}. Pour
-        prospection : voir avec qui tu as déjà discuté avant de relancer.
-        """
-        client = _client_for_user()
-        return await asyncio.to_thread(client.list_chats, limit=limit)
 
     @mcp.tool()
-    async def whatsapp_read_chat(chat: str, limit: int = 20) -> dict:
-        """Read messages from a specific WhatsApp chat (most recent first).
+    async def whatsapp_list_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
+        """Liste les conversations WhatsApp (messagerie) via Unipile."""
+        return unipile_client("WHATSAPP").list_chats(limit=limit, cursor=cursor)
+
+    @mcp.tool()
+    async def whatsapp_read_chat(chat_id: str, limit: int = 30) -> dict:
+        """Lit les messages d'une conversation WhatsApp via Unipile.
 
         Args:
-            chat: JID complet (ex `33612345678@s.whatsapp.net`) ou numéro
-                international (ex `+33612345678`).
-            limit: Max messages.
+            chat_id: Id du fil (renvoyé par whatsapp_list_chats).
+            limit: Nombre de messages à récupérer.
         """
-        client = _client_for_user()
-        return await asyncio.to_thread(client.read, chat=chat, limit=limit)
+        return unipile_client("WHATSAPP").list_messages(chat_id, limit=limit)
 
     @mcp.tool()
-    async def whatsapp_send_message(to: str, message: str) -> dict:
-        """Send a WhatsApp message FROM the user's account.
+    async def whatsapp_send_message(
+        text: str,
+        chat_id: Optional[str] = None,
+        recipient_id: Optional[str] = None,
+    ) -> dict:
+        """Envoie un message WhatsApp via Unipile.
 
-        ⚠️ Action sensible : envoie en ton nom. Confirme l'intention avant
-        d'appeler ce tool dans un workflow agent.
+        `chat_id` → répond dans un fil existant ; sinon `recipient_id` (provider id
+        du destinataire, ex. numéro au format Unipile) → ouvre un nouveau fil.
 
         Args:
-            to: JID complet ou numéro international (`+33...`).
-            message: Texte du message.
+            text: Contenu du message.
+            chat_id: Id du fil pour répondre.
+            recipient_id: provider id du destinataire (nouveau fil).
         """
-        client = _client_for_user()
-        return await asyncio.to_thread(client.send, to=to, message=message)
+        return unipile_client("WHATSAPP").send_message(
+            text, chat_id=chat_id, attendee_id=recipient_id)

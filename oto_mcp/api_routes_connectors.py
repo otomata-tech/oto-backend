@@ -145,6 +145,13 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        provider = str(body.get("channel") or "linkedin").upper()
+        if provider not in ("LINKEDIN", "WHATSAPP"):
+            return json_error(request, 400, "invalid_channel")
         api_key = access.unipile_api_key_for(sub)
         if not api_key:
             return json_error(request, 404, "unipile_not_configured")
@@ -160,7 +167,7 @@ def make_routes(
         # Plafond anti-dérapage : chaque compte connecté coûte ~5 €/mois sur la
         # facture Unipile de l'org. On bloque une NOUVELLE connexion au-delà du
         # plafond (un user qui a déjà un compte peut reconnecter = remplacement).
-        if org_id is not None and db.get_unipile_account(sub) is None:
+        if org_id is not None and db.get_unipile_account(sub, provider) is None:
             limit = db.get_org_unipile_limit(org_id)
             if limit is None:
                 limit = _unipile_default_limit()
@@ -172,14 +179,16 @@ def make_routes(
         public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         nonce = secrets.token_urlsafe(24)
-        db.create_unipile_pending(nonce, sub, org_id)
+        db.create_unipile_pending(nonce, sub, org_id, provider)
+        ch = provider.lower()
         try:
             url = await asyncio.to_thread(
                 client.hosted_auth_link,
                 name=nonce,
+                providers=[provider],
                 notify_url=f"{public}/api/unipile/webhook",
-                success_redirect_url=f"{dash}/console/connections?unipile=connected",
-                failure_redirect_url=f"{dash}/console/connections?unipile=failed",
+                success_redirect_url=f"{dash}/console/connections?unipile=connected&channel={ch}",
+                failure_redirect_url=f"{dash}/console/connections?unipile=failed&channel={ch}",
             )
         except Exception as e:
             return json_error(request, 502, f"unipile_link_failed: {e}")
@@ -211,7 +220,8 @@ def make_routes(
         if status == "CREATION_SUCCESS" and name and account_id:
             pend = db.resolve_unipile_pending(name)
             if pend:
-                db.set_unipile_account(pend["sub"], account_id, org_id=pend.get("org_id"))
+                db.set_unipile_account(pend["sub"], account_id, org_id=pend.get("org_id"),
+                                       provider=pend.get("provider", "LINKEDIN"))
                 logger.info("unipile webhook: bound sub=%s account_id=%s org=%s",
                             pend["sub"], account_id, pend.get("org_id"))
                 # Aligne la quantité de l'abonnement Stripe sur le nb de sièges.
@@ -228,17 +238,23 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        acc = db.get_unipile_account(sub)
+        accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
         # État de l'abonnement de l'org active (gate l'étape « connecter »). BYO
         # (clé perso) → considéré subscribed (l'user paie Unipile en direct).
         org_id = org_store.get_active_org(sub)
         byo = db.get_user_api_key(sub, "unipile") is not None
         subscribed = byo or (org_id is not None and billing.has_active_unipile_subscription(org_id))
+
+        def _ch(p: str) -> dict:
+            a = accts.get(p)
+            return {
+                "connected": a is not None,
+                "account_id": a["account_id"] if a else None,
+                "connected_at": str(a["connected_at"]) if a else None,
+            }
         return json_response(request, {
-            "connected": acc is not None,
-            "account_id": acc["account_id"] if acc else None,
-            "connected_at": str(acc["connected_at"]) if acc else None,
             "subscribed": subscribed,
+            "channels": {"linkedin": _ch("LINKEDIN"), "whatsapp": _ch("WHATSAPP")},
         })
 
     async def unipile_subscribe(request: Request) -> JSONResponse:
@@ -265,10 +281,12 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        acc = db.get_unipile_account(sub)
-        db.clear_unipile_account(sub)
-        if acc and acc.get("org_id"):
-            await asyncio.to_thread(billing.sync_unipile_seats, acc["org_id"])
+        provider = str(request.query_params.get("channel") or "linkedin").upper()
+        had = db.get_unipile_account(sub, provider) is not None
+        db.clear_unipile_account(sub, provider)
+        org_id = org_store.get_active_org(sub)
+        if had and org_id is not None:
+            await asyncio.to_thread(billing.sync_unipile_seats, org_id)
         return json_response(request, {"ok": True})
 
     return [

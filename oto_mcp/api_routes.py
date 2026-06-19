@@ -11,7 +11,6 @@ tools, admin, WhatsApp) :
 - `DELETE /api/settings/api-keys/{provider}`  → efface
 - `GET    /api/me/tools` + `POST/DELETE /api/me/tools/{name}` → toggle tools per-user
 - `GET    /api/admin/*`                       → admin (users, platform-keys, grants, tokens)
-- `GET    /api/whatsapp/*`                    → WhatsApp pairing
 
 Endpoints datastore / Google OAuth / API tokens : voir `api_routes_datastore.py`.
 Endpoints SIRENE stock : voir `api_routes_sirene.py`.
@@ -40,7 +39,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from datetime import date as _date, timedelta as _timedelta
 
-from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, pairing, tool_registry
+from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import (
@@ -1164,72 +1163,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "slug": slug, "count": u["count"], "callers": u["callers"], "series": series,
         })
 
-    # ── WhatsApp pairing ──────────────────────────────────────────
-
-    async def whatsapp_status(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = pairing.get_active_for_sub(sub)
-        return _json(request, {
-            "paired": pairing.is_paired(sub),
-            "active_pairing": {
-                "session_id": active.session_id,
-                "status": active.status,
-            } if active else None,
-        })
-
-    async def whatsapp_pair_start(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        loop = asyncio.get_running_loop()
-        session = pairing.start(sub, loop)
-        return _json(request, {"session_id": session.session_id, "status": session.status})
-
-    async def whatsapp_pair_cancel(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        active = pairing.get_active_for_sub(sub)
-        if not active:
-            return _json_error(request, 404, "no_active_pairing")
-        active.cancel()
-        return _json(request, {"ok": True})
-
-    async def whatsapp_pair_stream(request: Request) -> Response:
-        sub, err = await _authenticate(request, verifier, allow_query_token=True)
-        if err:
-            return err
-        session_id = request.query_params.get("session_id", "")
-        session = pairing.get_session(session_id)
-        if not session or session.sub != sub:
-            return _json_error(request, 404, "unknown_session")
-
-        async def event_stream():
-            # Initial hello so the client knows the stream is live.
-            yield f": ok\ndata: {json.dumps({'type': 'connected', 'status': session.status})}\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(session.queue.get(), timeout=20)
-                except asyncio.TimeoutError:
-                    # Keepalive comment.
-                    yield ": keepalive\n\n"
-                    continue
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                **_cors_headers(request.headers.get("origin")),
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
     datastore_routes = api_routes_datastore.make_routes(
         verifier=verifier,
         authenticate=_authenticate,
@@ -1361,14 +1294,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/status", whatsapp_status, methods=["GET"]),
-        Route("/api/whatsapp/status", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/start", whatsapp_pair_start, methods=["POST"]),
-        Route("/api/whatsapp/pair/start", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/cancel", whatsapp_pair_cancel, methods=["POST"]),
-        Route("/api/whatsapp/pair/cancel", options_handler, methods=["OPTIONS"]),
-        Route("/api/whatsapp/pair/stream", whatsapp_pair_stream, methods=["GET"]),
-        Route("/api/whatsapp/pair/stream", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users", admin_users, methods=["GET"]),
         Route("/api/admin/users", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}", admin_user_detail, methods=["GET"]),

@@ -49,7 +49,7 @@ L'extension Chrome (Oto Companion) vit dans `oto-app/extension/` (repo
 
 ## Couches (ADR 0004 — topologie réversible)
 
-oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à sens unique** ([ADR 0004](../docs/adr/0004-layered-reversible-topology.md)) :
+oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à sens unique** (ADR 0004) :
 
 - **backend-core** (le centre) : `db`, `credentials_store`, `org_store`, `access`, `crypto`, `connectors`, `auth_hooks`. Identité (`sub`), coffre, orgs, grants/quotas, résolution.
 - **adaptateur MCP** : `server`, `tools/*`, `middleware`, `tool_visibility`.
@@ -58,7 +58,7 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 
 **Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_remote_credential` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
 
-### Couche capacité (`oto_mcp/capabilities/`, [ADR 0009](../docs/adr/0009-couche-capacite.md))
+### Couche capacité (`oto_mcp/capabilities/`, ADR 0009)
 
 Pour les opérations exposées sur **deux faces** (MCP + REST), arrêter de câbler les adaptateurs 2× à la main (drift de surface + autz divergente — ex. `oto_use_org` jadis absent en REST, IDOR cross-org scout). Une **capacité** = un descripteur co-déclaré : `handler` core + `Input` pydantic (seule validation) + règle `authz` **obligatoire** + bindings `mcp`/`rest` (multi-binding possible). Les adaptateurs `_mcp_adapter`/`_rest_adapter` **bouclent** sur `registry.CAPABILITIES` et appliquent **validation → autz → handler** ; le refus est un `AuthzDenied` neutre traduit par chaque face (`McpError` / `json_error`+CORS). `authz` = 6 combinateurs fermés (`SUB_ONLY`, `ORG_MEMBER`, `ORG_MEMBER_OF`, `PLATFORM_ADMIN`, `NAMESPACE_GRANT`, `ORG_ADMIN_OF`). Schéma MCP **plat** via `apply_flat_signature` (gotcha pydantic single-param, cf. memory). Montés dans `server._build_mcp` + `api_routes.make_routes` (no-op si registre vide). **Domaine orgs 100% migré** (use_org, membres, secrets, create, entitlements, lectures) → `api_routes_orgs` réduit aux namespace-grants per-user ; reste : doctrine/instructions + autres domaines. Forme de référence : `factgraph/` (scout, ADR 0008).
 
@@ -119,7 +119,7 @@ Stock complet (~35M établissements, parquet ~2GB) accessible via DuckDB :
 - Query layer : `france_opendata.sirene_stock` (lib partagée PyPI `france-opendata[stock]`, ex-`oto_mcp/sirene_duckdb.py` — déplacé pour être consommé aussi par les apps co-localisées, ex. tuls)
 - 4 MCP tools `sirene_stock_*` (siege, etablissements, siret, search)
 - 5 REST endpoints `/api/sirene/{siege,etablissements,siret,search,info}`
-- Consommé par `oto-cli` (`SireneStock` HTTP client) — voir [ADR 0001](../docs/adr/0001-sirene-stock-served-via-mcp.md) dans le meta-repo `otomata`
+- Consommé par `oto-cli` (`SireneStock` HTTP client) — voir ADR 0001 dans le meta-repo `otomata`
 
 ## Datastore (spine natif PG, ADR 0016)
 
@@ -354,5 +354,4 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 - `docs/monitoring.md` — monitoring des appels MCP (tool_call_log + surface admin).
 - `docs/datastore.md` — datastore spine PG (`data_*`) + OAuth Google per-user (setup GCP, scopes).
 - `docs/groups-and-roles.md` — groupes/départements & hiérarchie de droits (ADR 0012).
-- `deploy/DEPLOY.md` — procédure complète déploiement
 - `docs/backlog.md` — initiatives à venir (issues GitHub pour le détail)

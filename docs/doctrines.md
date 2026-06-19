@@ -4,7 +4,7 @@ Prose opératoire métier (workflows validés, règles, vocabulaire) pour les us
 oto **sans produit applicatif dédié** (ex. Celeste, mission Movinmotion — process avoir
 GoCardless → Pennylane → back-office, piloté directement depuis Claude sur un sous-ensemble
 de tools). oto est la maison naturelle de cette prose faute de produit. Aligné
-[ADR 0006](../docs/adr/0006-harnais-vs-substrat.md) (harnais-vs-substrat) : une org oto + sa
+**ADR 0006** (harnais-vs-substrat, repo public `otomata-tech/oto`) : une org oto + sa
 doctrine = un **harnais sans état** (étage zéro) ; le jour où un workflow doit persister un
 pipeline/des statuts, il graduate en harnais à part (chemin blitz → scout).
 

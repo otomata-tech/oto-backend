@@ -42,6 +42,34 @@ def unipile_client(provider: str = "LINKEDIN"):
     return UnipileClient(api_key=key, account_id=account_id)
 
 
+def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
+    """Enregistre les 3 outils de messagerie Unipile d'un canal :
+    `{c}_list_chats` / `{c}_read_chat` / `{c}_send_message` (résolus sur le compte
+    <channel> de l'user, no-fallback). La messagerie Unipile (`/chats`) est
+    channel-agnostic → un seul code pour WhatsApp/Telegram/Instagram. Appelé par
+    tools/whatsapp.py, tools/telegram.py, tools/instagram.py."""
+    cl = channel.lower()
+    prov = channel.upper()
+
+    @mcp.tool(name=f"{cl}_list_chats",
+              description=f"Liste les conversations {channel} (messagerie) via Unipile.")
+    async def _list_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
+        return unipile_client(prov).list_chats(limit=limit, cursor=cursor)
+
+    @mcp.tool(name=f"{cl}_read_chat",
+              description=f"Lit les messages d'une conversation {channel} via Unipile "
+                          f"(chat_id renvoyé par {cl}_list_chats).")
+    async def _read_chat(chat_id: str, limit: int = 30) -> dict:
+        return unipile_client(prov).list_messages(chat_id, limit=limit)
+
+    @mcp.tool(name=f"{cl}_send_message",
+              description=f"Envoie un message {channel} via Unipile. chat_id = répondre "
+                          f"dans un fil existant ; sinon recipient_id = nouveau fil.")
+    async def _send_message(text: str, chat_id: Optional[str] = None,
+                            recipient_id: Optional[str] = None) -> dict:
+        return unipile_client(prov).send_message(text, chat_id=chat_id, attendee_id=recipient_id)
+
+
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()

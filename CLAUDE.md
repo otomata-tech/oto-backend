@@ -191,6 +191,10 @@ datastore non plus (spine PG, aucun credential — ADR 0016).
   l'`org`. **Fork** réutilise `org_store.set_instruction` → skill d'org versionné. Surface
   ANONYME pour la vitrine : routes écrites à la main `GET /api/doctrines/library[/{slug}]`
   (deny-by-default `visibility='public'`, l'adaptateur capacité authentifie toujours).
+  **`visibility`** : `public` (dans le catalogue) vs `unlisted` = **lien non listé** (style
+  YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
+  listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
+  un secret d'org : une doctrine sensible ne se publie pas (reste un skill d'org privé).
 - CORS : `oto.ninja`, `app.oto.ninja`, `dashboard.oto.ninja` (+ localhosts dev) — défaut dans `_allowed_origins`, override `OTO_MCP_CORS_ORIGINS`. `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 

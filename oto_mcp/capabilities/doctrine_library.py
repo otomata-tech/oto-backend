@@ -80,6 +80,12 @@ def _list(ctx: ResolvedCtx, inp: LibraryListInput) -> dict:
 
 
 def _get(ctx: ResolvedCtx, inp: LibraryGetInput) -> dict:
+    # Sémantique `unlisted` = **lien non listé** (style YouTube), choix assumé :
+    # une entrée `unlisted` est servie par SLUG EXACT à tout user authentifié
+    # (`include_unlisted=True`), mais n'apparaît JAMAIS dans le catalogue
+    # (`_list` force `include_unlisted=False`) ni sur la surface anonyme. C'est un
+    # partage par lien — pas un secret d'org. Une doctrine vraiment sensible ne se
+    # publie pas (reste un skill d'org privé). Cf. CLAUDE.md §Bibliothèque.
     entry = org_store.get_library_entry(slug=inp.slug, include_unlisted=True)
     if not entry:
         raise AuthzDenied(404, "unknown_entry", f"Doctrine publique `{inp.slug}` inconnue.")
@@ -139,7 +145,9 @@ CAPABILITIES += [
     Capability(
         key="library.get", handler=_get, Input=LibraryGetInput, authz=SUB_ONLY,
         description="Read one public-library doctrine in full (markdown body) by its public "
-                    "slug — preview before forking it into your org with oto_fork_doctrine.",
+                    "slug — preview before forking it into your org with oto_fork_doctrine. "
+                    "Also serves `unlisted` entries by exact slug (unlisted = shared by link, "
+                    "never in the catalog), not a private-org secret.",
         mcp="oto_get_library_doctrine",
         rest=RestBinding("GET", "/api/me/doctrines/library/{slug}"),
     ),

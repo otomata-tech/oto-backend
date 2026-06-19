@@ -98,6 +98,15 @@ def main() -> None:
     assert org_store.get_library_entry(slug="secret-skill", include_unlisted=True) is not None
     print("  ✓ deny-by-default sur la surface anonyme")
 
+    print("→ get authentifié (bob, non-auteur) sur l'unlisted par slug exact → OK (lien non listé)")
+    got_unlisted = run("library.get", "bob", slug="secret-skill")
+    assert got_unlisted["body_md"].startswith("# Secret"), got_unlisted
+    print("  ✓ unlisted = partage par lien (servi par slug à tout authentifié, hors catalogue)")
+
+    print("→ get sur un slug inexistant → 404")
+    denied(lambda: run("library.get", "bob", slug="nope-nope"), 404)
+    print("  ✓")
+
     print("\n✓ Bibliothèque publique de doctrines validée.")
 
 

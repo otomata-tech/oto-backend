@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> FolkClient:
         key, _ = access.resolve_api_key("folk", "FOLK_API_KEY")
-        return FolkClient(api_key=key)
+        return FolkClient(api_key=key, field_filter=access.resolve_field_filter("folk"))
 
     # --- groups -------------------------------------------------------------
 

@@ -12,6 +12,7 @@ Consommé par : `access.resolve_api_key`/`status_for` (reads org credential) et
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -125,6 +126,45 @@ def set_org_logo(org_id: int, url: Optional[str]) -> None:
     URL publique (Object Storage), pas un secret → colonne en clair."""
     with _connect() as conn:
         conn.execute("UPDATE orgs SET logo_url = %s WHERE id = %s", (url, org_id))
+
+
+# --- redaction de champs par connecteur (FieldFilter, ADR 0015) -------------
+
+def get_org_field_filters(org_id: int) -> dict:
+    """Politique de redaction de champs de l'org (par connecteur).
+
+    Forme : `{ "<service>": { "salt"?, "rules": [...] } }`. `{}` si rien posé."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT field_filters FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+        if not row:
+            return {}
+        return dict(row["field_filters"] or {})
+
+
+def set_org_field_filters(org_id: int, service: str, block: Optional[dict]) -> bool:
+    """Pose (ou efface si block=None) la politique de redaction d'un connecteur.
+
+    Écriture par service (merge dans le JSONB existant) pour ne pas écraser les
+    autres connecteurs. Prose de config, pas un secret → colonne en clair."""
+    with _connect() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT field_filters FROM orgs WHERE id = %s FOR UPDATE", (org_id,)
+            ).fetchone()
+            if not row:
+                return False
+            current = dict(row["field_filters"] or {})
+            if block is None:
+                current.pop(service, None)
+            else:
+                current[service] = block
+            conn.execute(
+                "UPDATE orgs SET field_filters = %s::jsonb WHERE id = %s",
+                (json.dumps(current), org_id),
+            )
+            return True
 
 
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:

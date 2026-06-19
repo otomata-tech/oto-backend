@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> PennylaneClient:
         key, _is_platform = access.resolve_api_key("pennylane", "PENNYLANE_API_KEY")
-        return PennylaneClient(api_key=key)
+        return PennylaneClient(api_key=key, field_filter=access.resolve_field_filter("pennylane"))
 
     @mcp.tool()
     async def pennylane_company() -> dict:

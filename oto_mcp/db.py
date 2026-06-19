@@ -616,6 +616,11 @@ def init_db() -> None:
         # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
         # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")
+        # Redaction de champs par org (FieldFilter) : politique par connecteur,
+        # gouvernée par l'org_admin. Forme JSONB :
+        #   { "<service>": { "salt": str?, "rules": [ {fields, action, ...} ] } }
+        # {} = aucune config → repli sur le défaut serveur (field_filter_defaults).
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS field_filters JSONB NOT NULL DEFAULT '{}'::jsonb")
         # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
         # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
         # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =

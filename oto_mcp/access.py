@@ -242,6 +242,38 @@ def resolve_credential_fields(provider: str) -> dict:
     return credentials_store.unpack_secret(provider, secret)
 
 
+def resolve_field_filter(service: str):
+    """Construit le `FieldFilter` à appliquer aux réponses d'un connecteur pour
+    le sub courant, selon la politique de redaction de son **org active**.
+
+    Cascade (décision « contrôle total org ») :
+      1. l'org active a une politique pour ce service → elle est **autoritaire**
+         (peut lever le masquage baseline, ou ne rien masquer) ;
+      2. sinon → repli sur le **défaut serveur** (`field_filter_defaults`, plancher
+         PII explicite, ex. IBAN Silae) ;
+      3. sinon → filtre vide (no-op, aucune redaction).
+
+    Best-effort : sans org active ou sur erreur DB, on retombe sur le défaut
+    serveur (jamais moins protecteur que l'état pré-UI)."""
+    from oto.tools.common import FieldFilter
+
+    from . import field_filter_defaults
+
+    block: Optional[dict] = None
+    sub = current_user_sub_from_token()
+    if sub:
+        active_org = org_store.get_active_org(sub)
+        if active_org is not None:
+            configured = org_store.get_org_field_filters(active_org)
+            if service in configured:
+                block = configured[service]
+    if block is None:
+        block = field_filter_defaults.SERVER_DEFAULTS.get(service)
+    if not block:
+        return FieldFilter()
+    return FieldFilter(rules=block.get("rules", []), salt=block.get("salt"))
+
+
 def unipile_api_key_for(sub: str) -> Optional[str]:
     """Clé API Unipile pour `sub`, en cascade (sans lever) : clé de l'user (BYO)
     puis secret de son org active (abonnement Otomata). None si aucune.

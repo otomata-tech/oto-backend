@@ -57,6 +57,13 @@ class Connector:
     label: str = ""
     help: str = ""
     href: str | None = None
+    # Éditeur du connecteur (affiché au catalogue). Vide → dérivé de
+    # `_PUBLISHER_BY_CONNECTOR` (cf. `publisher_name`), défaut "Otomata".
+    publisher: str = ""
+    # URL publique du logo de l'éditeur. None → dérivée par convention de la clé
+    # S3 `connector-logos/<name>.png` sur `oto-media` (cf. `logo_url_for`). Le
+    # champ explicite reste le seam d'un futur upload admin (overrides la conv.).
+    logo_url: str | None = None
     # "tools" = module in-process (tools/<name>.py) ; "remote" = bridge distant
     # (ADR 0003) servi par le module générique tools/remote.py — le credential
     # d'org est alors {secret=token M2M, meta.base_url=endpoint du bridge} ;
@@ -107,6 +114,26 @@ class Connector:
         return _CATEGORY_BY_CONNECTOR.get(self.name, "Autres")
 
     @property
+    def publisher_name(self) -> str:
+        """Éditeur affiché au catalogue — override champ si renseigné, sinon la
+        map curée `_PUBLISHER_BY_CONNECTOR`, sinon "Otomata" (connecteur maison)."""
+        if self.publisher:
+            return self.publisher
+        return _PUBLISHER_BY_CONNECTOR.get(self.name, "Otomata")
+
+    def logo_url_for(self) -> str | None:
+        """URL publique du logo — override champ si présent, sinon URL
+        conventionnelle sur `oto-media`. Import lazy de media_store pour ne
+        jamais casser le boot si S3 est absent (renvoie None)."""
+        if self.logo_url:
+            return self.logo_url
+        try:
+            from . import media_store
+            return media_store.connector_logo_url(self.name)
+        except Exception:
+            return None
+
+    @property
     def secret_fields(self) -> tuple[CredentialField, ...]:
         """Schéma de saisie du credential — SOURCE UNIQUE pour l'UI, l'endpoint REST,
         `status_for` et le packing. Déclaré explicitement (`credential_fields`),
@@ -140,19 +167,36 @@ _CATEGORY_BY_CONNECTOR = {
     "memento": "Knowledge", "planity": "Métier",
 }
 
+# Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
+# open-data agrégés par nous) ; sinon l'éditeur tiers de l'API sous-jacente. Keyé
+# sur `Connector.name`, comme `_CATEGORY_BY_CONNECTOR`.
+_PUBLISHER_BY_CONNECTOR = {
+    "serper": "Serper", "hunter": "Hunter.io", "kaspr": "Kaspr",
+    "fullenrich": "FullEnrich", "lemlist": "lemlist", "folk": "Folk",
+    "unipile": "Unipile", "pennylane": "Pennylane", "gocardless": "GoCardless",
+    "silae": "Silae", "attio": "Attio", "crunchbase": "Crunchbase",
+    "slack": "Slack", "whatsapp": "WhatsApp", "google": "Google",
+    "memento": "Memento", "planity": "Planity",
+    # open-data FR → éditeur = la source publique
+    "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
+    "foncier": "État (open data)", "sante": "HAS / FINESS",
+}
+
 
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none", env_secret_name=None,
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, label="", help="", href=None, kind="tools",
-       mount_url=None, credential_fields=(), modules=()) -> Connector:
+       default_hidden=False, label="", help="", href=None, publisher="",
+       logo_url=None, kind="tools", mount_url=None, credential_fields=(),
+       modules=()) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
         secret_kind=secret_kind, env_secret_name=env_secret_name, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
-        label=label or name.capitalize(), help=help, href=href, kind=kind,
+        label=label or name.capitalize(), help=help, href=href,
+        publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
         modules=tuple(modules),
     )
@@ -413,6 +457,8 @@ def public_catalog() -> list[dict]:
             "label": c.label,
             "help": c.help,
             "href": c.href,
+            "publisher": c.publisher_name,   # éditeur (curé) — catalogue
+            "logo_url": c.logo_url_for(),     # logo éditeur (oto-media), None si absent
             "availability": c.availability,
             "auth_modes": sorted(c.auth_modes),
             "personal_session": c.personal_session,

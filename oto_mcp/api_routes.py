@@ -42,7 +42,8 @@ from datetime import date as _date, timedelta as _timedelta
 from . import access, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_memento, api_routes_orgs, api_routes_scout, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
-from .tool_visibility import is_default_hidden, is_entitled, is_grant_only, namespace_of
+from .tool_visibility import (
+    PROTECTED_TOOLS, is_default_hidden, is_entitled, is_grant_only, namespace_of)
 
 logger = logging.getLogger(__name__)
 
@@ -782,7 +783,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             tools = await mcp_instance.list_tools(run_middleware=False)
             all_names = {t.name for t in tools}
 
-        disabled = set(db.list_user_disabled_tools(sub))
+        disabled = set(db.list_user_disabled_tools(sub, org_store.get_active_org(sub) or 0))
         # Le middleware retire déjà les disabled de `list_tools` selon le sub
         # courant (celui de la requête REST = même token). On ré-ajoute donc
         # les disabled pour avoir la vue complète.
@@ -817,8 +818,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        db.add_user_disabled_tool(sub, name)
-        db.remove_user_enabled_tool(sub, name)  # lève un éventuel override positif
+        org = org_store.get_active_org(sub) or 0
+        db.add_user_disabled_tool(sub, name, org)
+        db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override positif
         return _json(request, {"ok": True, "name": name, "enabled": False})
 
     async def my_tools_enable(request: Request) -> JSONResponse:
@@ -840,16 +842,17 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "name": name,
                 "detail": f"namespace `{namespace_of(name)}` non accordé",
             }, status_code=403)
-        db.remove_user_disabled_tool(sub, name)
+        org = org_store.get_active_org(sub) or 0
+        db.remove_user_disabled_tool(sub, name, org)
         # Override positif requis pour rendre visible un masqué-par-défaut, ou un
         # grant-only côté admin — même logique que le meta-tool oto_enable_tool.
         if is_default_hidden(name) or (is_grant_only(name) and is_admin):
-            db.add_user_enabled_tool(sub, name)
+            db.add_user_enabled_tool(sub, name, org)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
     # --- presets ------------------------------------------------------------
 
-    _PROTECTED_TOOLS = {"oto_enable_tool", "oto_list_my_tools", "oto_apply_preset"}
+    _PROTECTED_TOOLS = PROTECTED_TOOLS  # source unique (tool_visibility, anti-lockout)
 
     async def _list_all_tool_names() -> set[str]:
         if mcp_instance is None:
@@ -862,7 +865,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        presets = db.list_user_presets(sub)
+        presets = db.list_user_presets(sub, org_store.get_active_org(sub) or 0)
         return _json(request, {
             "presets": [
                 {
@@ -880,7 +883,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name)
+        preset = db.get_user_preset(sub, name, org_store.get_active_org(sub) or 0)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {
@@ -898,6 +901,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
+        org = org_store.get_active_org(sub) or 0
         all_names = await _list_all_tool_names()
 
         explicit: list[str] | None = None
@@ -918,10 +922,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 }, status_code=400)
             enabled = sorted(set(explicit))
         else:
-            disabled = set(db.list_user_disabled_tools(sub))
+            disabled = set(db.list_user_disabled_tools(sub, org))
             enabled = sorted(all_names - disabled)
 
-        db.save_user_preset(sub, name, enabled)
+        db.save_user_preset(sub, name, enabled, org)
         return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
 
     async def my_preset_apply(request: Request) -> JSONResponse:
@@ -933,7 +937,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name)
+        org = org_store.get_active_org(sub) or 0
+        preset = db.get_user_preset(sub, name, org)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         all_names = await _list_all_tool_names()
@@ -944,7 +949,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # miroir de oto_apply_preset côté MCP).
         enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
         disabled = sorted(all_names - enabled)
-        db.replace_user_disabled_tools(sub, disabled)
+        db.replace_user_disabled_tools(sub, disabled, org)
         return _json(request, {
             "ok": True,
             "applied": name,
@@ -958,7 +963,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        deleted = db.delete_user_preset(sub, name)
+        deleted = db.delete_user_preset(sub, name, org_store.get_active_org(sub) or 0)
         if not deleted:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})

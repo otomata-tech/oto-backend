@@ -150,7 +150,7 @@ def make_routes(
         except Exception:
             body = {}
         provider = str(body.get("channel") or "linkedin").upper()
-        if provider not in ("LINKEDIN", "WHATSAPP"):
+        if provider not in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM"):
             return json_error(request, 400, "invalid_channel")
         api_key = access.unipile_api_key_for(sub)
         if not api_key:
@@ -254,7 +254,10 @@ def make_routes(
             }
         return json_response(request, {
             "subscribed": subscribed,
-            "channels": {"linkedin": _ch("LINKEDIN"), "whatsapp": _ch("WHATSAPP")},
+            "channels": {
+                "linkedin": _ch("LINKEDIN"), "whatsapp": _ch("WHATSAPP"),
+                "telegram": _ch("TELEGRAM"), "instagram": _ch("INSTAGRAM"),
+            },
         })
 
     async def unipile_subscribe(request: Request) -> JSONResponse:

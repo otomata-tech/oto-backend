@@ -210,11 +210,13 @@ _REGISTRY_LIST = [
     # tant qu'un BYO sur un autre sous-domaine n'existe pas (déféré ; single-field
     # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
-    _c("unipile", ["unipile", "whatsapp"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+    _c("unipile", ["unipile", "whatsapp", "telegram", "instagram"],
+       auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", env_secret_name="UNIPILE_API_KEY",
-       in_default_bundle=False, label="LinkedIn & WhatsApp (Unipile)",
-       help="LinkedIn + WhatsApp hébergés (recherche/scrape/messagerie)",
-       href="https://www.unipile.com", modules=("unipile", "whatsapp")),
+       in_default_bundle=False, label="Messagerie hébergée (Unipile)",
+       help="LinkedIn + WhatsApp + Telegram + Instagram hébergés (recherche/scrape/messagerie)",
+       href="https://www.unipile.com",
+       modules=("unipile", "whatsapp", "telegram", "instagram")),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets

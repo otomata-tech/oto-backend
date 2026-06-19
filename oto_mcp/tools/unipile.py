@@ -1,4 +1,4 @@
-"""Unipile — LinkedIn hébergé (recherche / scrape / messagerie).
+"""Unipile — LinkedIn & WhatsApp hébergés (recherche / scrape / messagerie).
 
 Clé résolue par appel via `access.resolve_api_key("unipile")` (keyed, cascade
 user > org). Le dsn (`api<NN>.unipile.com:port`) et l'account_id LinkedIn sont
@@ -20,25 +20,29 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, db
 
 
-def register(mcp: FastMCP) -> None:
-    # Import au register pour fail-fast si oto-core n'est pas installé.
-    from oto.tools.unipile import UnipileClient
+def unipile_client(provider: str = "LINKEDIN"):
+    """Client Unipile du user pour un canal (LINKEDIN, WHATSAPP, …).
 
-    def _client() -> UnipileClient:
-        # Clé partagée (org) + account_id LinkedIn per-user : chacun agit comme
-        # LUI-MÊME sous l'abonnement Unipile commun. PAS de fallback : sans
-        # account_id connecté, le client oto-core retomberait sur le 1er compte de
-        # l'abonnement → **usurpation cross-user** (audit sécu 2026-06-18). On exige
-        # donc le credential per-user, sinon McpError actionnable.
-        key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
-        sub = access.current_user_sub_or_raise()
-        account_id = db.get_unipile_account_id(sub)
-        if not account_id:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message="Connecte ton compte LinkedIn sur https://oto.ninja/account "
-                        "avant d'utiliser les outils Unipile."))
-        return UnipileClient(api_key=key, account_id=account_id)
+    Clé partagée (org) + account_id per-user PAR CANAL : chacun agit comme
+    LUI-MÊME sous l'abonnement Unipile commun. PAS de fallback : sans account_id
+    connecté pour ce canal, le client oto-core retomberait sur le 1er compte de
+    l'abonnement → **usurpation cross-user** (audit sécu 2026-06-18). On exige le
+    credential per-user, sinon McpError actionnable. Réutilisé par tools/whatsapp.py.
+    """
+    from oto.tools.unipile import UnipileClient
+    key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
+    sub = access.current_user_sub_or_raise()
+    account_id = db.get_unipile_account_id(sub, provider)
+    if not account_id:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Connecte ton compte {provider.title()} sur "
+                    "https://dashboard.oto.ninja/console/connections "
+                    "avant d'utiliser ces outils."))
+    return UnipileClient(api_key=key, account_id=account_id)
+
+
+def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def unipile_search(
@@ -62,7 +66,7 @@ def register(mcp: FastMCP) -> None:
             location: Localisation(s) — noms ou ids de facette.
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
-        return _client().search(
+        return unipile_client().search(
             keywords=keywords, category=category,
             company=company, location=location, cursor=cursor,
         )
@@ -75,7 +79,7 @@ def register(mcp: FastMCP) -> None:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
         """
-        return _client().get_profile(identifier, sections=sections)
+        return unipile_client().get_profile(identifier, sections=sections)
 
     @mcp.tool()
     async def unipile_company(identifier: str) -> dict:
@@ -84,12 +88,12 @@ def register(mcp: FastMCP) -> None:
         Args:
             identifier: slug ou id de la page société.
         """
-        return _client().get_company(identifier)
+        return unipile_client().get_company(identifier)
 
     @mcp.tool()
     async def unipile_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
         """Liste les conversations LinkedIn (messagerie) via Unipile."""
-        return _client().list_chats(limit=limit, cursor=cursor)
+        return unipile_client().list_chats(limit=limit, cursor=cursor)
 
     @mcp.tool()
     async def unipile_send_message(
@@ -107,4 +111,4 @@ def register(mcp: FastMCP) -> None:
             chat_id: Id du fil pour répondre.
             recipient_id: provider id du destinataire (nouveau fil).
         """
-        return _client().send_message(text, chat_id=chat_id, attendee_id=recipient_id)
+        return unipile_client().send_message(text, chat_id=chat_id, attendee_id=recipient_id)

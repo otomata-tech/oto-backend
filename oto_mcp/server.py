@@ -118,7 +118,7 @@ Namespaces :
 • crunchbase_* — données startups, levées de fonds.
 • reddit_* — recherche et posts Reddit.
 • slack_* — messagerie Slack.
-• whatsapp_* — messagerie WhatsApp (pairing QR requis).
+• whatsapp_* — messagerie WhatsApp hébergée (Unipile). Requiert un compte WhatsApp connecté par l'user (dashboard.oto.ninja, option messagerie).
 • data_* — datastore tabulaire per-user (PG natif, schéma libre ; data_write/data_rows/data_share).
 • gmail_* — Gmail per-user, multi-compte (search, get, send, reply, draft, archive, trash). OAuth Google requis (app.oto.ninja). gmail_list_accounts liste les comptes ; param `account` (email) pour cibler un compte précis.
 • culture_spectacle_* — entreprises du spectacle vivant.

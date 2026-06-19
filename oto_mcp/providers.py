@@ -167,8 +167,11 @@ _CATEGORY_BY_CONNECTOR = {
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
     "foncier": "Data FR", "sante": "Data FR",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
-    "slack": "Comms", "google": "Comms",
-    "memento": "Knowledge", "planity": "Métier",
+    "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
+    "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
+    "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
+    "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
+    "figma": "Design", "supabase": "Dev",
 }
 
 # Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
@@ -181,6 +184,10 @@ _PUBLISHER_BY_CONNECTOR = {
     "silae": "Silae", "attio": "Attio", "crunchbase": "Crunchbase",
     "slack": "Slack", "whatsapp": "WhatsApp", "google": "Google",
     "memento": "Memento", "planity": "Planity",
+    "hubspot": "HubSpot", "apollo": "Apollo", "zerobounce": "ZeroBounce",
+    "hithorizons": "HitHorizons", "phantombuster": "Phantombuster",
+    "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
+    "zoho": "Zoho", "zohodesk": "Zoho",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
@@ -373,6 +380,61 @@ _REGISTRY_LIST = [
        label="Foncier", help="géocodage, cadastre, bâti, risques/ICPE, solaire, immobilier (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
+
+    # --- connecteurs API tiers (clients oto-core déjà écrits, câblés 2026-06-19) ---
+    # byo keyed api_key, hors bundle (opt-in, activables par org/admin), pas de
+    # clé plateforme (chacun pose la sienne). Inertes tant que non activés en DB
+    # (connector_activation, deny-by-default), comme foncier/sante.
+    _c("hubspot", ["hubspot"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="HubSpot",
+       help="CRM (contacts, companies, deals, tickets, notes)",
+       href="https://app.hubspot.com"),
+    _c("apollo", ["apollo"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Apollo.io",
+       help="prospection B2B (organizations, people, job postings)",
+       href="https://app.apollo.io"),
+    _c("zerobounce", ["zerobounce"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="ZeroBounce",
+       help="vérification de délivrabilité email", href="https://www.zerobounce.net"),
+    _c("hithorizons", ["hithorizons"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="HitHorizons",
+       help="données entreprise européennes (recherche + détails)",
+       href="https://www.hithorizons.com"),
+    _c("phantombuster", ["phantombuster"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Phantombuster",
+       help="agents d'automatisation (launch + résultats)",
+       href="https://phantombuster.com"),
+    _c("notion", ["notion"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Notion",
+       help="pages, bases de données, blocs (lecture + écriture)",
+       href="https://www.notion.so"),
+    _c("figma", ["figma"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Figma",
+       help="fichiers, export d'images, commentaires, FigJam",
+       href="https://www.figma.com"),
+    _c("supabase", ["supabase"], auth_modes={"byo_user"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Supabase",
+       help="Management API (projets, config auth, logs)",
+       href="https://supabase.com"),
+    # zoho / zohodesk : OAuth2 self-client → credential multi-champs (ADR 0011,
+    # comme silae), résolu via resolve_credential_fields. byo_user (pas de quota).
+    _c("zoho", ["zoho"], auth_modes={"byo_user"}, secret_kind="fields",
+       in_default_bundle=False, label="Zoho CRM",
+       help="CRM Zoho (CRUD modules, notes)", href="https://crm.zoho.com",
+       credential_fields=(
+           CredentialField("client_id", "Client ID", secret=True),
+           CredentialField("client_secret", "Client Secret", secret=True),
+           CredentialField("refresh_token", "Refresh Token", secret=True),
+       )),
+    _c("zohodesk", ["zohodesk"], auth_modes={"byo_user"}, secret_kind="fields",
+       in_default_bundle=False, label="Zoho Desk",
+       help="support Zoho Desk (tickets, threads, contacts)",
+       href="https://desk.zoho.com", credential_fields=(
+           CredentialField("client_id", "Client ID", secret=True),
+           CredentialField("client_secret", "Client Secret", secret=True),
+           CredentialField("refresh_token", "Refresh Token", secret=True),
+           CredentialField("org_id", "Org ID", secret=False),
+       )),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

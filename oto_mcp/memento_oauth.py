@@ -180,6 +180,10 @@ def persist_token(sub: str, token_response: dict) -> None:
     )
 
 
+class MementoReauthRequired(Exception):
+    """Le refresh token memento est mort (invalid_grant) → l'user doit reconnecter."""
+
+
 def _refresh(refresh_token: str) -> dict:
     import requests
     r = requests.post(
@@ -189,6 +193,11 @@ def _refresh(refresh_token: str) -> dict:
                  "Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
     )
+    # Refresh token révoqué/expiré → 400 invalid_grant : pas une erreur serveur,
+    # c'est une réauth à faire. On le distingue d'un vrai incident (5xx, réseau).
+    if r.status_code in (400, 401):
+        body = (r.text or "")[:300]
+        raise MementoReauthRequired(body)
     r.raise_for_status()
     return r.json()
 
@@ -211,7 +220,13 @@ def access_token_for(sub: str) -> Optional[str]:
         except Exception:
             needs_refresh = True
     if needs_refresh:
-        resp = _refresh(cred["secret"])
+        try:
+            resp = _refresh(cred["secret"])
+        except MementoReauthRequired:
+            # Grant mort : on purge le credential pour que status_for/list_workspaces
+            # repassent en « non connecté » et que l'UI propose de reconnecter.
+            credentials_store.clear_credential("user", sub, _CONNECTOR)
+            return None
         access_token = resp["access_token"]
         new_refresh = resp.get("refresh_token", cred["secret"])  # Supabase rotate parfois
         credentials_store.set_credential(

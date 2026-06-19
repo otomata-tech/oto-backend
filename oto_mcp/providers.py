@@ -279,13 +279,13 @@ _REGISTRY_LIST = [
     # tant qu'un BYO sur un autre sous-domaine n'existe pas (déféré ; single-field
     # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
-    _c("unipile", ["unipile", "whatsapp", "telegram", "instagram"],
+    _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", env_secret_name="UNIPILE_API_KEY",
        in_default_bundle=False, label="Messagerie hébergée (Unipile)",
-       help="LinkedIn + WhatsApp + Telegram + Instagram hébergés (recherche/scrape/messagerie)",
+       help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
-       modules=("unipile", "whatsapp", "telegram", "instagram")),
+       modules=("unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter")),
     # topograph : KYB — données + documents normalisés de 100+ registres publics
     # européens via une seule API REST. byo-only (pay-per-request, chacun connecte
     # son compte ; clé d'org partageable), keyed api_key (en-tête x-api-key résolu

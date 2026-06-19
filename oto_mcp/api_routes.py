@@ -197,6 +197,34 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                    or any(ns in granted for ns in c["namespaces"])]
         return _json(request, {"connectors": cat})
 
+    async def doctrines_library_public(request: Request) -> JSONResponse:
+        """Catalogue PUBLIC des doctrines (bibliothèque/marketplace) — pas d'auth.
+
+        Alimente le site vitrine oto.ninja. Deny-by-default : `visibility='public'`
+        UNIQUEMENT (jamais 'unlisted' ni les brouillons d'org). Filtres gros grain
+        en query params (`q`/`category`/`author`) ; le filtrage fin reste client.
+        Route écrite à la main car l'adaptateur REST des capacités authentifie
+        toujours (l'anonyme ne peut pas y passer).
+        """
+        q = request.query_params
+        try:
+            limit = min(int(q.get("limit", "100")), 200)
+        except ValueError:
+            limit = 100
+        items = org_store.list_library(
+            query=q.get("q"), category=q.get("category"),
+            author_kind=q.get("author"), include_unlisted=False, limit=limit)
+        return _json(request, {"doctrines": items})
+
+    async def doctrines_library_public_get(request: Request) -> JSONResponse:
+        """Une doctrine PUBLIQUE complète (markdown) par slug — vitrine, pas d'auth.
+        Public-only : une entrée 'unlisted' n'est jamais servie ici."""
+        entry = org_store.get_library_entry(
+            slug=request.path_params["slug"], include_unlisted=False)
+        if not entry:
+            return _json_error(request, 404, "unknown_entry")
+        return _json(request, entry)
+
     async def invite_preview(request: Request) -> JSONResponse:
         """Aperçu PUBLIC d'une invitation (pas d'auth — le token est le secret).
         Alimente la page d'accueil « vous êtes invité·e » avant la création de
@@ -1251,6 +1279,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/connectors", connectors_catalog, methods=["GET"]),
         Route("/api/connectors", options_handler, methods=["OPTIONS"]),
+        Route("/api/doctrines/library", doctrines_library_public, methods=["GET"]),
+        Route("/api/doctrines/library", options_handler, methods=["OPTIONS"]),
+        Route("/api/doctrines/library/{slug}", doctrines_library_public_get, methods=["GET"]),
+        Route("/api/doctrines/library/{slug}", options_handler, methods=["OPTIONS"]),
         Route("/api/invitations/{token}", invite_preview, methods=["GET"]),
         Route("/api/invitations/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),

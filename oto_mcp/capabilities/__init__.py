@@ -21,5 +21,7 @@ from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,
 from . import billing  # noqa: F401 — billing.{balance,transactions,packs,checkout}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
 from . import usage  # noqa: F401 — usage.{tool_feedback,gap}
+# Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.
+from . import doctrine_library  # noqa: F401 — library.{list,get,publish,fork,unpublish}
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

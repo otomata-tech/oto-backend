@@ -181,6 +181,20 @@ datastore non plus (spine PG, aucun credential — ADR 0016).
   - **fiche admin user** : `GET /api/admin/users/{sub}` = identité + accès effectif par provider (`status_for`) + grants + namespaces + orgs (membership).
   - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{namespace}`, `GET /api/admin/namespace-grants`, `POST|DELETE /api/admin/users/{sub}/namespace-grants/{namespace}`
   - secrets : jamais la clé en réponse (provider/base_url/set_at/set_by) ; providers per-user (slack/linkedin/google/whatsapp) refusés en `400` ; listing lu du coffre canonique `credentials_store` (legacy `org_secrets` plus dual-written sous chiffrement). Gating org_admin/membre via `org_store.get_org_role` (platform admin toujours autorisé). Révocation lazy sur sessions MCP ouvertes. Contrat front : `oto-app/docs/ORG_API_CONTRACT.md`.
+- **Bibliothèque publique de doctrines** (marketplace de skills, table `doctrine_library`) :
+  capacités `library.*` (`capabilities/doctrine_library.py`, montage auto MCP+REST) —
+  `library.list/get` (`SUB_ONLY`, MCP `oto_list_library`/`oto_get_library_doctrine` + REST
+  `GET /api/me/doctrines/library[/{slug}]`), `library.publish`/`library.fork` (`ORG_MEMBER` +
+  gate org_admin en handler, MCP `oto_publish_doctrine`/`oto_fork_doctrine` + REST
+  `POST /api/me/doctrines/{publish,fork}`), `library.unpublish` (auteur/PLATFORM_ADMIN, `DELETE
+  /api/me/doctrines/library/{id}`). **Auteur** = `otomata` si publieur platform-operator, sinon
+  l'`org`. **Fork** réutilise `org_store.set_instruction` → skill d'org versionné. Surface
+  ANONYME pour la vitrine : routes écrites à la main `GET /api/doctrines/library[/{slug}]`
+  (deny-by-default `visibility='public'`, l'adaptateur capacité authentifie toujours).
+  **`visibility`** : `public` (dans le catalogue) vs `unlisted` = **lien non listé** (style
+  YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
+  listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
+  un secret d'org : une doctrine sensible ne se publie pas (reste un skill d'org privé).
 - CORS : `oto.ninja`, `app.oto.ninja`, `dashboard.oto.ninja` (+ localhosts dev) — défaut dans `_allowed_origins`, override `OTO_MCP_CORS_ORIGINS`. `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 
@@ -603,7 +617,11 @@ Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remo
   middleware masque les tools d'un connecteur non activé pour l'org → (dés)activer
   prend effet à la session suivante **sans restart**, override par org OK. Filtre
   aussi `/api/connectors` (catalogue) ; overlays catalogue `family` (dérivée) +
-  `category` (curée). Surface admin `/api/admin/connectors/activation`
+  `category` (curée) + `publisher` (curé, `_PUBLISHER_BY_CONNECTOR`) + `logo_url`
+  (conventionnel `oto-media/connector-logos/<name>.png`, dérivé par
+  `Connector.logo_url_for`/`media_store.connector_logo_url` ; seed one-shot
+  `scripts/seed_connector_logos.py`, assets dans `assets/connector-logos/`).
+  Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : connecteur **remote** défini
   par la DONNÉE (ADR 0003/0011) — un credential d'org avec `meta.base_url` (endpoint

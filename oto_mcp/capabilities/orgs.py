@@ -72,6 +72,7 @@ CAPABILITIES += [
         ),
         mcp="oto_create_org",
         rest=RestBinding("POST", "/api/me/orgs"),
+        refresh_visibility=True,  # bascule l'org active → toolbox de la nouvelle org
     ),
     Capability(
         key="org.use_org",
@@ -85,6 +86,7 @@ CAPABILITIES += [
         ),
         mcp="oto_use_org",
         rest=RestBinding("PUT", "/api/me/active-org"),
+        refresh_visibility=True,  # recharge la toolbox de l'org cible (live in-session)
     ),
     Capability(
         key="org.clear",
@@ -97,5 +99,6 @@ CAPABILITIES += [
         ),
         mcp="oto_clear_org",
         rest=RestBinding("DELETE", "/api/me/active-org"),
+        refresh_visibility=True,  # retour profil perso/global → toolbox perso
     ),
 ]

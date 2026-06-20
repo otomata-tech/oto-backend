@@ -174,7 +174,7 @@ _CATEGORY_BY_CONNECTOR = {
     "figma": "Design", "supabase": "Dev",
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
-    "recruitee": "Recrutement", "teamtailor": "Recrutement",
+    "recruitee": "Recrutement", "teamtailor": "Recrutement", "serpapi": "Recrutement",
 }
 
 # Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
@@ -192,7 +192,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
     "zoho": "Zoho", "zohodesk": "Zoho",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
-    "recruitee": "Recruitee", "teamtailor": "Teamtailor",
+    "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
@@ -212,6 +212,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "sirene": "insee.fr", "sirene_stock": "insee.fr",
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
+    "serpapi": "serpapi.com",
 }
 
 
@@ -472,6 +473,13 @@ _REGISTRY_LIST = [
            CredentialField("api_token", "API token", secret=True),
            CredentialField("company_id", "Company ID", secret=False),
        )),
+    # serpapi : recherche d'offres d'emploi via Google Jobs (moteur dédié
+    # `google_jobs` — Serper n'a PAS de vertical jobs). byo keyed api_key. Sert le
+    # sourcing « par poste » (offres ouvertes d'une cible) en complément des ATS.
+    _c("serpapi", ["serpapi"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="SerpApi (Google Jobs)",
+       help="recherche d'offres d'emploi (Google Jobs) + détail d'une offre",
+       href="https://serpapi.com"),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

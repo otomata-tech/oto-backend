@@ -253,6 +253,27 @@ Deux mécanismes : **mount** (MCP distant fédéré, token OAuth per-user, pilot
 memento — systématique) vs **remote** (bridge data-driven ADR 0003, token M2M d'org,
 pilote movinmotion). **Détail : `docs/federation.md`**.
 
+## MCP Apps — UI rendue (SEP-1865)
+
+Certains tools renvoient une **interface rendue** (carte/table dans un iframe
+sandbox côté host : claude.ai, VS Code…) au lieu de JSON brut, via l'extension
+MCP Apps (SEP-1865, stable). Implémenté avec **`prefab_ui`** (extra
+`fastmcp[apps]`, déclaré dans `pyproject.toml` → installé par le `pip install -e .`
+du deploy) : un tool `@mcp.tool(app=True)` renvoie un composant `prefab_ui`
+(`Card`/`Column`/`Heading`/`Text`/`DataTable`) que le host peint ; dégradation
+gracieuse en texte pour les clients sans support.
+
+**Convention** : variantes **flagship `*_app`** (≠ remplacer les tools JSON), où
+un visuel aide vraiment l'utilisateur. Les tools JSON équivalents restent la voie
+par défaut/agent (« si le rendu échoue, utiliser le tool JSON équivalent »).
+L'import de `prefab_ui` est **optionnel et guardé** dans le module (si l'extra
+manque, les `*_app` ne s'enregistrent pas, les tools JSON restent). Premier jeu :
+`tools/foncier.py` → `foncier_site_app` (fiche site : géocodage + parcelle +
+bâti), `foncier_comparables_app` (ventes comparables DVF autour d'une adresse),
+`foncier_prix_m2_app` (stats €/m² d'une commune). Mêmes clients open-data que les
+tools JSON ; rendu **défensif** (colonnes dérivées des clés réelles) pour ne pas
+dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
+
 ## Conventions
 
 - Nouveau connecteur = (1) un fichier `tools/<service>.py` exposant `register(mcp)`,

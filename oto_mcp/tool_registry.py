@@ -17,6 +17,18 @@ from .tool_visibility import is_grant_only, namespace_of
 
 _MARKER = re.compile(r"<tool:([a-z0-9_]+)>")
 
+# Instance FastMCP du serveur, liée au boot (`server._build_mcp` → `bind`). Les
+# handlers de la couche capacité ne reçoivent que `(ctx, inp)` — pas l'instance —
+# et la face REST n'a pas de contexte MCP : ce singleton leur sert de défaut pour
+# résoudre le registre d'outils (manifeste « referenced_tools », ADR 0014).
+_INSTANCE = None
+
+
+def bind(instance) -> None:
+    """Mémorise l'instance FastMCP servie (appelée une fois au boot)."""
+    global _INSTANCE
+    _INSTANCE = instance
+
 
 def ref_names(text: str) -> list[str]:
     """Noms d'outils cités via `<tool:slug>`, dédupliqués, dans l'ordre."""
@@ -45,8 +57,10 @@ def _entry(tool) -> dict:
     return e
 
 
-async def build_registry(mcp_instance) -> dict[str, dict]:
-    """Map nom → entrée pour tous les tools exposés (hors grant-only)."""
+async def build_registry(mcp_instance=None) -> dict[str, dict]:
+    """Map nom → entrée pour tous les tools exposés (hors grant-only).
+    `mcp_instance` omise = l'instance liée au boot (`bind`)."""
+    mcp_instance = mcp_instance or _INSTANCE
     if mcp_instance is None:
         return {}
     tools = await mcp_instance.list_tools(run_middleware=False)
@@ -63,10 +77,11 @@ def resolve_refs(names: list[str], registry: dict[str, dict]) -> list[dict]:
     return out
 
 
-async def manifest_for(mcp_instance, *texts: str) -> list[dict]:
+async def manifest_for(*texts: str, mcp_instance=None) -> list[dict]:
     """Manifeste « outils référencés » des corps `texts` (base + groupe, ou un
     skill). **Court-circuit zéro-coût** : aucune liste de tools n'est construite
-    si les corps ne citent aucun outil (cas des doctrines legacy en backticks)."""
+    si les corps ne citent aucun outil (cas des doctrines legacy en backticks).
+    `mcp_instance` omise = l'instance liée au boot (`bind`)."""
     names: list[str] = []
     seen: set[str] = set()
     for t in texts:
@@ -80,12 +95,12 @@ async def manifest_for(mcp_instance, *texts: str) -> list[dict]:
     return resolve_refs(names, registry)
 
 
-async def write_check(mcp_instance, body_md: str) -> dict:
+async def write_check(body_md: str, mcp_instance=None) -> dict:
     """Validation à l'écriture (ADR 0014) : résout les `<tool:slug>` du corps et
     renvoie le manifeste + les références non résolues. **Non bloquant** —
     l'écriture a lieu, mais l'auteur (IA ou UI) reçoit le signal de drift avant
-    que l'agent n'échoue sur l'appel."""
-    manifest = await manifest_for(mcp_instance, body_md)
+    que l'agent n'échoue sur l'appel. `mcp_instance` omise = instance liée au boot."""
+    manifest = await manifest_for(body_md, mcp_instance=mcp_instance)
     return {
         "referenced_tools": manifest,
         "unresolved_tools": [t["name"] for t in manifest if t.get("status") == "missing"],

@@ -157,6 +157,26 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 prune au boot) ; surface admin `/api/admin/monitoring/{summary,calls}`. **Détail :
 `docs/monitoring.md`**.
 
+## Onboarding (accueil au démarrage d'un compte)
+
+`tools/onboarding.py` (spine, chargé explicitement dans `register_all`, hors gate
+d'activation, **toujours visible** via `PROTECTED_TOOLS`) expose 2 méta-tools :
+- `oto_onboarding()` (lecture) — sert l'explication d'Oto, l'**état découvert** du
+  compte (`status_for` providers + memento + org + doctrine, best-effort), la fiche
+  « situation avec oto » déjà remplie (`profile`) + les champs restants (`missing`),
+  et un **script de self-onboarding** (`doctrine`) que l'agent déroule.
+- `oto_onboarding_update(fields=…, onboarded=…)` — persiste les réponses (shallow-
+  merge JSONB) et valide le booléan d'accueil.
+
+État en DB : table `user_account_profile(sub PK, onboarded bool, profile jsonb,
+onboarded_at)` (`db.get_account_profile` / `db.update_account_profile`). Le booléan
+gouverne « reprendre l'accueil à la session suivante ». Exposé sur `/api/me`
+(`onboarding: {onboarded, updated_at}`, best-effort). Le serveur invite l'agent à
+appeler `oto_onboarding()` en début de session tant que `onboarded` est faux
+(`_SERVER_INSTRUCTIONS`). **Pas réservé aux comptes neufs** : un compte actif peut
+le rappeler à tout moment (ré-explication, paramétrage), et rouvrir l'accueil via
+`oto_onboarding_update(onboarded=False)`.
+
 ## Boucle d'usage (ADR 0017)
 
 Flux d'événements de session unifié : calllog (involontaire) + feedback volontaire

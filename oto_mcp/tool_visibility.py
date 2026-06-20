@@ -35,11 +35,12 @@ DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset()
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
-# plus se déverrouiller (lister/activer/appliquer un preset). Une baseline (org
-# ADR 0015 ou groupe ADR 0012) ne doit JAMAIS les masquer. SOURCE UNIQUE : meta.py
-# et api_routes en dérivent (plus de set dupliqué).
+# plus se déverrouiller (lister/activer/appliquer un preset) — plus l'accueil
+# `oto_onboarding`, qui doit rester atteignable au démarrage d'un compte même sous
+# un preset/baseline restrictif. Une baseline (org ADR 0015 ou groupe ADR 0012) ne
+# doit JAMAIS les masquer. SOURCE UNIQUE : meta.py et api_routes en dérivent.
 PROTECTED_TOOLS: frozenset[str] = frozenset(
-    {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset"})
+    {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset", "oto_onboarding"})
 
 
 def namespace_of(name: str) -> str:

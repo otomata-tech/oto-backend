@@ -131,6 +131,16 @@ def _json(request: Request, payload: dict, status: int = 200) -> JSONResponse:
     )
 
 
+def _onboarding_block(sub: str) -> dict:
+    """Snapshot d'onboarding pour /api/me : {onboarded, updated_at}. Best-effort —
+    ne jamais faire échouer le chemin critique /api/me sur un hoquet DB."""
+    try:
+        st = db.get_account_profile(sub)
+        return {"onboarded": st["onboarded"], "updated_at": st["updated_at"]}
+    except Exception:
+        return {"onboarded": False, "updated_at": None}
+
+
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     from starlette.routing import Route
 
@@ -302,6 +312,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "memento": memento_oauth.status_for(sub),
             "providers": status["providers"],
             "billing": billing_block,
+            # Onboarding (fiche « situation avec oto ») — alimente l'auto-prompt
+            # d'accueil. Best-effort : ne jamais 500 /api/me sur un hoquet DB.
+            "onboarding": _onboarding_block(sub),
         })
 
     async def crunchbase_save(request: Request) -> JSONResponse:

@@ -166,6 +166,19 @@ CREATE TABLE IF NOT EXISTS user_presets (
     PRIMARY KEY (sub, org_id, name)
 );
 
+-- Onboarding par utilisateur (fiche « situation avec oto »). `profile` = data
+-- model libre nourri au fil du self-onboarding (qui est l'user, son métier, ses
+-- objectifs, connecteurs voulus…) ; `onboarded` = booléan validé quand l'accueil
+-- est terminé. Une ligne par sub, créée à la 1re lecture.
+CREATE TABLE IF NOT EXISTS user_account_profile (
+    sub TEXT PRIMARY KEY,
+    onboarded BOOLEAN NOT NULL DEFAULT FALSE,
+    profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    onboarded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS platform_keys (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
@@ -1128,6 +1141,70 @@ def get_crunchbase_status(sub: str) -> Optional[dict]:
     if not st:
         return None
     return {"set_at": st["set_at"], "user_agent": st["meta"].get("user_agent")}
+
+
+# --- onboarding / account profile -------------------------------------------
+
+def get_account_profile(sub: str) -> dict:
+    """Fiche d'onboarding de l'user : {onboarded, profile, onboarded_at, updated_at}.
+
+    Jamais None — un sub sans ligne renvoie l'état par défaut (non onboardé,
+    profile vide). Lecture seule (ne crée pas la ligne)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT onboarded, profile, onboarded_at, updated_at "
+            "FROM user_account_profile WHERE sub = %s",
+            (sub,),
+        ).fetchone()
+    if not row:
+        return {"onboarded": False, "profile": {}, "onboarded_at": None, "updated_at": None}
+    profile = row["profile"]
+    if isinstance(profile, str):  # selon le driver, JSONB peut revenir en texte
+        try:
+            profile = json.loads(profile)
+        except Exception:
+            profile = {}
+    return {
+        "onboarded": bool(row["onboarded"]),
+        "profile": profile or {},
+        "onboarded_at": row["onboarded_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def update_account_profile(
+    sub: str, fields: Optional[dict] = None, onboarded: Optional[bool] = None,
+) -> dict:
+    """Met à jour la fiche d'onboarding (upsert). `fields` est **shallow-mergé**
+    dans le JSONB `profile` (clés existantes écrasées, les autres conservées).
+    `onboarded` (si fourni) bascule le booléan + stampe `onboarded_at` au passage
+    à vrai. Renvoie l'état résultant (comme `get_account_profile`)."""
+    upsert_user(sub)
+    patch = json.dumps(fields or {})
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_account_profile (sub, profile, onboarded, onboarded_at, updated_at)
+            VALUES (
+                %s,
+                %s::jsonb,
+                COALESCE(%s, FALSE),
+                CASE WHEN %s IS TRUE THEN NOW() ELSE NULL END,
+                NOW()
+            )
+            ON CONFLICT (sub) DO UPDATE SET
+                profile = user_account_profile.profile || EXCLUDED.profile,
+                onboarded = COALESCE(%s, user_account_profile.onboarded),
+                onboarded_at = CASE
+                    WHEN %s IS TRUE AND user_account_profile.onboarded_at IS NULL THEN NOW()
+                    WHEN %s IS FALSE THEN NULL
+                    ELSE user_account_profile.onboarded_at
+                END,
+                updated_at = NOW()
+            """,
+            (sub, patch, onboarded, onboarded, onboarded, onboarded, onboarded),
+        )
+    return get_account_profile(sub)
 
 
 # --- user API keys ----------------------------------------------------------

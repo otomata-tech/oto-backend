@@ -19,6 +19,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import meta
     meta.register(mcp)
 
+    # Onboarding — outil d'accueil servi au démarrage d'un compte (explication Oto +
+    # état de configuration découvert + prochaines étapes). Spine, hors gate
+    # d'activation, toujours visible (PROTECTED_TOOLS). Pas de dépendance externe.
+    from . import onboarding
+    onboarding.register(mcp)
+
     # Meta-tools du palier organization (gestion orgs/membres/secrets +
     # switcher d'org active). Pas de dépendance externe non plus.
     from . import orgs

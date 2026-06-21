@@ -165,7 +165,7 @@ _CATEGORY_BY_CONNECTOR = {
     "folk": "Prospection", "crunchbase": "Prospection",
     "unipile": "Prospection", "topograph": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR", "sirene_stock": "Data FR",
-    "foncier": "Data FR", "sante": "Data FR",
+    "foncier": "Data FR", "sante": "Data FR", "gr": "Data GR",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
     "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
@@ -202,6 +202,8 @@ _PUBLISHER_BY_CONNECTOR = {
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
+    # open-data GR → éditeur = la source publique
+    "gr": "GEMI / VIES",
 }
 
 # Domaine de marque curé par connecteur → le CDN logo.dev en dérive l'URL du logo
@@ -388,6 +390,10 @@ _REGISTRY_LIST = [
        modules=("culture", "reddit")),
     _c("sirene_stock", ["sirene_stock"], secret_kind="none", in_default_preset=True,
        label="SIRENE stock", help="établissements INSEE (DuckDB)"),
+    # Grèce : lookup entité via registre GEMI (autocomplete) + VIES. Open data,
+    # sans clé. Inerte tant que non activé en DB (deny-by-default), comme foncier/sante.
+    _c("gr", ["gr"], secret_kind="none", in_default_bundle=False,
+       label="Data GR", help="entreprises Grèce — registre GEMI + VIES (open data)"),
     # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant
     # que non activés en DB (connector_activation) — register_all gate dessus,
     # donc absents du seed initial → OFF par défaut (deny-by-default).

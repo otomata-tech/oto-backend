@@ -25,6 +25,13 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             ./.venv/bin/pip install -e . --quiet
+            # Sync oto-core (lib connecteurs, repo séparé) — le deploy ne resette QUE
+            # /opt/oto-mcp, donc la box gardait un clone oto-core périmé : tout
+            # changement de client (serper/serpapi/cloro/brightdata…) ne parvenait
+            # jamais en prod → erreurs de signature désynchronisée (ex. search_jobs).
+            # Réinstalle oto-core@main à chaque deploy (repo public, pas d'auth).
+            ./.venv/bin/pip install --upgrade --force-reinstall --no-deps \
+              "oto-core @ git+https://github.com/otomata-tech/oto-core.git@main" --quiet
             systemctl restart oto-mcp
             sleep 3
             systemctl is-active --quiet oto-mcp || (journalctl -u oto-mcp -n 50 --no-pager; exit 1)

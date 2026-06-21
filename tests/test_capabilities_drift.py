@@ -32,6 +32,10 @@ _EXPECTED_TOOL_MODULES = {
     "gmail", "tasks", "calendar", "sheets", "drive", "chat",
     "reddit", "culture", "sirene_stock",
     "foncier", "sante", "whatsapp", "unipile",
+    "telegram", "instagram", "messenger", "twitter",
+    "apollo", "phantombuster", "hithorizons", "topograph", "zerobounce",
+    "hubspot", "zoho", "zohodesk", "notion", "supabase", "figma",
+    "ashby", "greenhouse", "lever", "recruitee", "teamtailor", "serpapi",
 }
 
 

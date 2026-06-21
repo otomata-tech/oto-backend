@@ -47,6 +47,21 @@ def ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
 
 
+def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+    """Org-admin de l'org ACTIVE — écriture self-service scopée à l'org active
+    (miroir écriture d'`ORG_MEMBER`). `org_id` injecté depuis l'état serveur, jamais
+    d'un param client. Escalade super_admin via `roles.is_org_admin` (parité exacte
+    avec le legacy `_resolve_org_write`/`_active_org_edit` : seul le super escalade)."""
+    sub = _require_sub(raw)
+    org_id = org_store.get_active_org(sub)
+    if org_id is None:
+        raise AuthzDenied(400, "no_active_org",
+                          "Aucune org active — choisis-en une avec oto_use_org.")
+    if not roles.is_org_admin(sub, org_id):
+        raise AuthzDenied(403, "forbidden", "Réservé à un org_admin de ton org active.")
+    return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
+
+
 def PLATFORM_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Admin opérationnel (admin ou super_admin) — supervision plateforme sans
     l'escalade en masse vers les orgs tierces (réservée à SUPER_ADMIN)."""

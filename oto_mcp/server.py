@@ -142,6 +142,10 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     if transport in ("http", "streamable_http") and verifier is not None:
         kwargs["auth"] = _build_auth(verifier)
     instance = FastMCP("oto", instructions=_SERVER_INSTRUCTIONS, **kwargs)
+    # Lier l'instance pour que les handlers de capacité (doctrine) résolvent le
+    # manifeste « referenced_tools » sans se faire passer l'instance.
+    from . import tool_registry
+    tool_registry.bind(instance)
     register_all(instance)
 
     # Couche capacité (ADR 0009) : monte un tool par capacité déclarée

@@ -853,6 +853,18 @@ def grant_platform_access(sub: str, *, invited_by: Optional[str] = None,
         conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE sub = %s", tuple(params))
 
 
+def block_platform_access(sub: str) -> None:
+    """Passe le compte en 'blocked' (rejet d'un cold signup indésirable). Le compte
+    sort de la waitlist (qui ne liste que 'pending') et `session_visibility` le
+    traite comme non-'active' (allowlist onboarding only). Réversible : un
+    `grant_platform_access` ultérieur le repasse 'active'. Ne touche pas au quota."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET access_status = 'blocked', updated_at = NOW() WHERE sub = %s",
+            (sub,),
+        )
+
+
 def consume_invite_quota(sub: str) -> bool:
     """Décrémente atomiquement le quota referral si > 0. True si consommé, False
     si épuisé (WHERE invite_quota > 0 → pas de course)."""

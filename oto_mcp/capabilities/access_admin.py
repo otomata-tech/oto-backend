@@ -1,7 +1,8 @@
 """Capacités d'administration de l'accès plateforme (ADR 0013).
 
 Gate doux : les cold signups atterrissent en `pending` (waitlist) ; un platform
-admin approuve (→ `active` + quota referral) ou ajuste le quota. La file d'attente
+admin approuve (→ `active` + quota referral), rejette (→ `blocked`, sort de la
+file ; réversible par un grant ultérieur) ou ajuste le quota. La file d'attente
 est une vue dérivée (`db.list_waitlist`), jamais une table. `grant_access` envoie
 l'email « accès ouvert » (best-effort, mailer otomata).
 """
@@ -36,6 +37,10 @@ class GrantAccessInput(BaseModel):
     quota: int | None = None
 
 
+class RejectAccessInput(BaseModel):
+    sub: str
+
+
 class SetQuotaInput(BaseModel):
     sub: str
     quota: int
@@ -61,6 +66,13 @@ def _grant_access(ctx: ResolvedCtx, inp: GrantAccessInput) -> dict:
             "invite_quota": quota, "emailed": emailed}
 
 
+def _reject_access(ctx: ResolvedCtx, inp: RejectAccessInput) -> dict:
+    if not db.get_user(inp.sub):
+        raise AuthzDenied(404, "unknown_user", f"Compte {inp.sub!r} inconnu.")
+    db.block_platform_access(inp.sub)
+    return {"ok": True, "sub": inp.sub, "access_status": "blocked"}
+
+
 def _set_quota(ctx: ResolvedCtx, inp: SetQuotaInput) -> dict:
     if not db.get_user(inp.sub):
         raise AuthzDenied(404, "unknown_user", f"Compte {inp.sub!r} inconnu.")
@@ -83,6 +95,14 @@ CAPABILITIES += [
                     "emails them). quota defaults to OTO_ALPHA_INVITE_QUOTA.",
         mcp="oto_admin_grant_access",
         rest=RestBinding("POST", "/api/admin/users/{sub}/access", _SUB),
+    ),
+    Capability(
+        key="platform.access.reject", handler=_reject_access, Input=RejectAccessInput,
+        authz=PLATFORM_ADMIN,
+        description="[platform admin] Reject an account's access request (sets blocked; "
+                    "drops it from the waitlist). Reversible via grant.",
+        mcp="oto_admin_reject_access",
+        rest=RestBinding("POST", "/api/admin/users/{sub}/block", _SUB),
     ),
     Capability(
         key="platform.access.set_quota", handler=_set_quota, Input=SetQuotaInput,

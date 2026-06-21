@@ -25,6 +25,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import onboarding
     onboarding.register(mcp)
 
+    # Whoami — identité MCP courante (compte × org active × groupe actif) servie à
+    # l'agent pour savoir pour qui/dans quel contexte il agit. Spine, hors gate
+    # d'activation, toujours visible (PROTECTED_TOOLS). Pas de dépendance externe.
+    from . import whoami
+    whoami.register(mcp)
+
     # Le palier organization (orgs/membres/secrets/switch + doctrine/instructions)
     # est 100% migré en capacités (ADR 0009) — monté par `_mcp_adapter`/`_rest_adapter`
     # depuis `capabilities.registry`, plus aucun `tools/orgs.py`.

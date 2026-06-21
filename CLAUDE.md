@@ -286,6 +286,10 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (spine) + `remote`/`mount` (génériques) restent chargés explicitement. ⚠️ Le
   namespace déclaré doit matcher `namespace_of(tool)` (1er token avant `_`) — pas de
   namespace multi-mot (`culture_spectacle`→`culture`), sinon fail-open du gate.
+  (3) **resync `_EXPECTED_TOOL_MODULES`** dans `tests/test_capabilities_drift.py`
+  (garde-fou figé du set de modules dérivé) — oublié, le test casse. ⚠️ **Aucune CI
+  de test sur les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main)
+  → un test rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_
@@ -353,6 +357,11 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 # Transport stdio RETIRÉ (2026-06-13) : oto-mcp ne se sert qu'en streamable_http
 # (toujours authentifié Logto). Usage local = CLI `oto`. Pour un serveur local,
 # lancer en http avec les LOGTO_* et taper avec un bearer.
+
+# Tests — le venv .venv N'A PAS pytest (extra `dev` non installé) et `uv run pytest`
+# crée un env éphémère SANS les deps projet (piège, ModuleNotFoundError). Recette :
+uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
+.venv/bin/python -m pytest -q
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
 # 151.115.148.128 : git reset --hard origin/main + pip install -e . + systemctl

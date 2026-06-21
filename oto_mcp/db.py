@@ -301,6 +301,7 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
 CREATE TABLE IF NOT EXISTS orgs (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     logo_url TEXT,
     default_tools TEXT[],
     created_by TEXT,
@@ -668,6 +669,8 @@ def init_db() -> None:
         # Object Storage), pas un secret → colonne en clair, hors coffre.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS logo_url TEXT")
+        # Description libre de l'org (self-service org_admin) — prose, pas un secret.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''")
         # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
         # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")

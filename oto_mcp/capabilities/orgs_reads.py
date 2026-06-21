@@ -67,6 +67,7 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     my_role = org_store.get_org_role(inp.org_id, ctx.sub)
     brief = {"id": org["id"], "name": org["name"], "logo_url": org.get("logo_url"),
+             "description": org.get("description") or "",
              "member_count": len(org_store.list_org_members(org["id"]))}
     if my_role is not None:
         brief["my_role"] = my_role

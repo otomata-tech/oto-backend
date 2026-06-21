@@ -13,7 +13,7 @@ sera donc un opérateur au sens nouveau, pas un tout-puissant.
 À lancer **sur la box, APRÈS déploiement du code** (sinon un sub `admin` resterait
 sans le nouveau palier le temps du déploiement) :
 
-    ssh -i ~/.ssh/alexis root@REDACTED_IP \
+    ssh -i ~/.ssh/alexis root@<box> \
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.migrate_admin_to_super"
 
 Idempotent : ne touche que les lignes `role='admin'` ; relancé, il n'en trouve plus

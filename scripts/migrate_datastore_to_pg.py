@@ -8,7 +8,7 @@ One-shot : copie les rows de chaque Google Sheet (substrat legacy) dans la table
 À lancer **sur la box**, après déploiement du code PG (la table existe via
 init_db) — la fenêtre datastore-vide entre le restart et ce run est brève :
 
-    ssh -i ~/.ssh/alexis root@REDACTED_IP \
+    ssh -i ~/.ssh/alexis root@<box> \
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.migrate_datastore_to_pg"
 
 Le code de lecture Sheets vit ICI (auto-suffisant) : `oto_mcp/datastore.py` ne

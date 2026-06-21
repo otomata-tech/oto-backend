@@ -2,8 +2,8 @@
 
 MCP server (Streamable HTTP) qui expose les connecteurs **oto-core** (`oto.tools`,
 importés directement — **plus aucune dép à la CLI**) comme tools, branchable dans
-claude.ai et Claude Code. Public : `https://mcp.oto.ninja/mcp` (box dédiée
-`oto-platform` REDACTED_IP, port 9103 — cf. §Infra).
+claude.ai et Claude Code. Public : `https://mcp.oto.ninja/mcp` (box Scaleway
+dédiée — cf. §Infra).
 
 **Positionnement : oto-mcp = le produit central, déployable** (SaaS hébergé OU
 on-premise pour un client — image `Dockerfile`, config 100% par env). oto-cli =
@@ -376,7 +376,7 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
-# REDACTED_IP : git reset --hard origin/main + pip install -e . + **reinstall
+# <box> : git reset --hard origin/main + pip install -e . + **reinstall
 # oto-core@main** (force-reinstall depuis git, sinon la box garde un clone oto-core
 # périmé → erreurs de signature désync, ex. search_jobs) + systemctl restart
 # oto-mcp). Idem côté oto-cli (workflow restart oto-mcp). Le restart
@@ -385,11 +385,11 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 git push origin main
 
 # Logs
-ssh -i ~/.ssh/alexis root@REDACTED_IP "journalctl -u oto-mcp -f"
+ssh -i ~/.ssh/alexis root@<box> "journalctl -u oto-mcp -f"
 
 # DB inspect (PG managed) — depuis la box (env du process inclut DATABASE_URL via .env)
 # ⚠️ `psql` n'est PAS installé sur la box dédiée → passer par le venv + psycopg :
-ssh -i ~/.ssh/alexis root@REDACTED_IP 'cd /opt/oto-mcp && set -a; . .env; set +a; ./.venv/bin/python -c "
+ssh -i ~/.ssh/alexis root@<box> 'cd /opt/oto-mcp && set -a; . .env; set +a; ./.venv/bin/python -c "
 import os, psycopg
 with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
@@ -398,14 +398,9 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 
 ## Infra
 
-⚠️ **Migré sur box dédiée (2026-06-11, ADR 0002)** — oto-mcp **ne tourne plus sur tuls.me**.
-- Server: **`oto-platform`** (Scaleway DEV1-S, fr-par-2, **`REDACTED_IP`**), `/opt/oto-mcp/`, port 9103, User=root. tuls.me oto-mcp **décommissionné** (stop+disable, code gardé pour rollback). SSH `root@REDACTED_IP` (clé `alexis`).
-- **Chiffrement coffre ACTIF** : master key en Secret Manager (secret `REDACTED_SM_ID`), fetchée au boot par le wrapper `ExecStart=/opt/oto-mcp/start-encrypted.sh` (clé IAM scopée `/etc/oto-mcp/scw.env` → curl SM → env du process, **jamais sur disque**). Drop-in `/etc/systemd/system/oto-mcp.service.d/encryption.conf`. **0 plaintext** en base.
-- DNS: `mcp.oto.ninja` A proxied → `REDACTED_IP` (zone CF `474add…`, zone hors tokens SOPS standard → minter un token éphémère via `CLOUDFLARE_ADMIN_TOKEN` sur `/user/tokens`). Rollback noté otomata#18.
-- Caddy sur la box (standard, user `caddy` → cert key en `chgrp caddy chmod 640`) : `mcp.oto.ninja` → :9103, Origin Cert `oto-ninja.{pem,key}` copié de tuls.me.
-- DB : PostgreSQL managed Scaleway `otomata-main` (instance `REDACTED_DB_INSTANCE…`, endpoint `REDACTED_IP:27996`, DB `oto_mcp`). ACL whiteliste tuls.me **et** la box (`REDACTED_IP/32`). DATABASE_URL en SOPS + `/opt/oto-mcp/.env`. Backup quotidien Scaleway 7j.
-- **Object Storage (avatars user / logos d'org)** : Scaleway Object Storage S3-compatible (`media_store.py`, boto3). Bucket `oto-media` (fr-par) avec **policy public-read anonyme** sur `oto-media/*` (sinon l'ACL `public-read` par objet n'est pas servie). Env de process (`/opt/oto-mcp/.env`) : `OTO_MCP_S3_ENDPOINT` (`https://s3.fr-par.scw.cloud`), `OTO_MCP_S3_REGION` (`fr-par`), `OTO_MCP_S3_BUCKET`, `OTO_MCP_S3_ACCESS_KEY`/`OTO_MCP_S3_SECRET_KEY` (clé API Scaleway scoped Object Storage), optionnels `OTO_MCP_S3_PUBLIC_BASE_URL` + `OTO_MCP_S3_MAX_IMAGE_BYTES`. Seule l'URL publique est persistée (`users.avatar_url`/`orgs.logo_url`, en clair — pas un secret, hors coffre). Client lazy → un stockage non configuré ne casse ni le boot ni `/api/me` (l'erreur ne tombe qu'à l'upload).
-- **Restes ADR 0002** (non bloquants) : KMS-wrap master key (SM-direct pour l'instant), Terraform control-plane, deploy par registry. Cf. otomata#18.
+Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-backend isolé + Caddy + chiffrement du coffre actif, sert `mcp.oto.ninja`. **DB** = PostgreSQL managé partagé (`otomata-main`, DB `oto_mcp`). Le coffre `connector_credentials` est chiffré au repos (AES-256-GCM, master key en Secret Manager fetchée au boot, 0 plaintext). Object Storage S3 pour avatars/logos (`media_store.py`).
+
+> **Détails machine = repo privé `otomata-tech/infra`** (IPs, IDs de secrets/zone/instance, systemd, runbook deploy, env de process) — pas ici (ce repo est public). Voir `infra/docs/oto-platform-state.md` + docs ciblés (`scaleway-managed-db.md`, `caddy.md`, `cloudflare.md`, `deploy-keys.md`). Toute intervention prod = skill `prod-init`.
 
 ## Docs
 
@@ -420,4 +415,3 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 - `docs/monitoring.md` — monitoring des appels MCP (tool_call_log + surface admin).
 - `docs/datastore.md` — datastore spine PG (`data_*`) + OAuth Google per-user (setup GCP, scopes).
 - `docs/groups-and-roles.md` — groupes/départements & hiérarchie de droits (ADR 0012).
-- `docs/backlog.md` — initiatives à venir (issues GitHub pour le détail)

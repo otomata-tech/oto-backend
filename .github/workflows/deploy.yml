@@ -16,7 +16,7 @@ jobs:
       - name: Deploy to oto-platform box
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: REDACTED_IP
+          host: ${{ secrets.DEPLOY_HOST }}
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |

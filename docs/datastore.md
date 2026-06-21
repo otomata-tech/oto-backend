@@ -113,7 +113,7 @@ Google pour le datastore se voit aussi demander l'accès Gmail. Choix assumé
 
 Bootstrap d'un token CLI (pour Alexis) :
 ```bash
-ssh -i ~/.ssh/alexis root@REDACTED_IP \
+ssh -i ~/.ssh/alexis root@<box> \
   "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.issue_token <SUB> cli"
 # → imprime un `oto_…` à stocker dans SOPS comme OTO_API_KEY
 ```

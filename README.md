@@ -1,73 +1,83 @@
 # oto-mcp
 
-MCP server exposing the **oto-core** connectors (`oto.tools`) to Claude over Streamable HTTP. The central, deployable product (SaaS / on-premise) — see `Dockerfile`. Imports oto-core directly; no CLI dependency.
+The **central, deployable Oto product** (SaaS or on-premise): an MCP server, over
+Streamable HTTP, that exposes the [oto-core](https://github.com/otomata-tech/oto-core)
+connectors (`oto.tools.*`) as tools to Claude — plus a REST API for the
+[dashboard](https://github.com/otomata-tech/oto-dashboard). Imports oto-core directly;
+no CLI dependency.
 
-First batch of tools wraps the data.gouv.fr "API Recherche Entreprises"
-(no upstream API key needed):
+- **Public endpoint**: `https://mcp.oto.ninja/mcp` (plug into claude.ai or Claude Code).
+- **Auth**: OAuth via [Logto](https://logto.io) self-hosted (`auth.oto.zone`), JWT
+  verified against the Logto JWKS (ES384), audience `https://mcp.oto.ninja/mcp`.
+- **Self-hostable**: image `Dockerfile`, configured entirely through environment variables.
 
-| Tool | What it returns |
-| --- | --- |
-| `recherche_entreprises_search` | Filtered list of French companies (full-text + NAF / dept / postal / commune / employees / CA + **IDCC convention collective** filters) |
-| `recherche_entreprises_get` | Single enriched company by SIREN |
-| `recherche_entreprises_directors` | `dirigeants` for a SIREN |
-| `recherche_entreprises_finances` | `finances` block for a SIREN |
+## What it does
+
+Each user connects once, then Claude can act on their accounts and data through a
+catalogue of connectors: French company data (SIRENE/INPI/BODACC, `fr_*`), web search
+(Serper), email finding (Hunter), CRM (Attio, Folk), outreach (Lemlist, Kaspr,
+Fullenrich), LinkedIn (`unipile_*`), messaging (WhatsApp/Telegram/Instagram via Unipile),
+Google Workspace, Slack, accounting (Pennylane), payroll (Silae), a native datastore
+(`data_*`), and more. The full surface is driven by the connector registry, not a
+hand-maintained list.
+
+Around the connectors, oto-mcp provides the platform plumbing:
+
+- **Credential vault** — encrypted (AES-256-GCM), single `connector_credentials` table;
+  per-user keys, per-org/group shared secrets, and platform keys with quotas.
+- **Orgs, groups & roles** — `member < admin < super_admin`, org/department hierarchy,
+  cascading key resolution (`user_key > group > org > platform_grant`).
+- **Per-user tool visibility**, presets, billing (Stripe call credits + subscriptions),
+  call monitoring, org doctrines/skills, and MCP federation (mount / remote bridge).
 
 ## Architecture
 
 ```
 oto_mcp/
-├── server.py        # FastMCP entrypoint (stdio + streamable_http)
-├── tools.py         # @mcp.tool wrappers around oto.tools.* clients
-└── config.py        # require_env helper
+├── server.py          # FastMCP + uvicorn entrypoint, server instructions, route wiring
+├── tools/             # one module per connector, each exposing register(mcp)
+├── connectors.py      # the connector registry — single source of truth
+├── capabilities/      # capabilities shared across MCP + REST faces (ADR 0009)
+├── api_routes*.py     # REST /api/* (account, settings, orgs, admin, billing, datastore…)
+├── access.py          # roles, resolve_api_key, quotas, key-resolution cascade
+├── credentials_store.py / crypto.py  # the encrypted vault
+├── db.py              # PostgreSQL (psycopg pool) — per-user state
+├── auth_hooks.py      # Logto JWT → current user sub for the tool context
+└── config.py          # require_env
+
+deploy/
+├── oto-mcp.service    # systemd unit (port 9103)
+├── Caddyfile.snippet  # mcp.oto.ninja → :9103
+└── DEPLOY.md          # DNS + Caddy + systemd procedure
 ```
 
-Each new oto connector exposed = one extra block in `tools.py` that imports
-the relevant `oto.tools.<service>` client.
+Adding a connector is two steps: a `tools/<service>.py` exposing `register(mcp)`, and an
+entry in the `connectors.py` registry — `register_all` derives loading from the registry.
+See [`CLAUDE.md`](CLAUDE.md) for the full conventions.
 
-## Local dev (stdio)
+## Local dev
+
+The server only runs over Streamable HTTP and is always Logto-authenticated (the stdio
+transport was removed — for a local CLI use [`oto-cli`](https://github.com/otomata-tech/oto-cli)).
 
 ```bash
 python -m venv .venv
 .venv/bin/pip install -e .
-.venv/bin/oto-mcp     # MCP_TRANSPORT defaults to stdio
+# set the LOGTO_* and DATABASE_URL env vars, then launch the HTTP server and
+# call it with a bearer token. See deploy/DEPLOY.md.
 ```
 
-Hook it into Claude Code via `~/.claude/mcp.json`:
+## Deploy
 
-```json
-{
-  "mcpServers": {
-    "oto": {
-      "command": "/data/oto/mcp/.venv/bin/oto-mcp"
-    }
-  }
-}
-```
+Pushing to `main` triggers `.github/workflows/deploy.yml`, which SSHes the dedicated box,
+resets to `origin/main`, reinstalls (`pip install -e .`), and restarts the `oto-mcp`
+systemd service. Full procedure in [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
-## Remote (HTTP, OAuth) — see `deploy/DEPLOY.md`
+## Docs
 
-Auth via Logto (`auth.oto.zone`) : le backend valide les access tokens en JWT
-contre les JWKS Logto, audience = `https://mcp.oto.ninja/mcp`. Tout user avec
-un compte Logto sur le tenant peut se connecter ; révocation par compte côté
-admin Logto.
+In-depth docs live under [`docs/`](docs/): `connector-vault.md` (the central
+architecture), `roles-and-resolution.md`, `auth-logto.md`, `rest-api.md`, `billing.md`,
+`datastore.md`, `groups-and-roles.md`, `federation.md`, `doctrines.md`, `monitoring.md`,
+`usage-loop.md`.
 
-Public URL : `https://mcp.oto.ninja/mcp`
-
-## Adding a new tool
-
-1. Make sure the underlying oto connector exists in `oto.tools.<service>`.
-2. In `oto_mcp/tools.py`, add a new `@mcp.tool()` async function with a
-   precise docstring (the LLM picks tools from docstrings).
-3. Restart the server.
-
-Example skeleton:
-
-```python
-from oto.tools.<service> import <Client>
-client = <Client>()
-
-@mcp.tool()
-async def <verb>_<noun>(arg: str) -> dict:
-    """One-sentence purpose. List relevant args."""
-    return client.<method>(arg)
-```
+Open source.

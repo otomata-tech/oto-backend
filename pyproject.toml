@@ -5,7 +5,12 @@ description = "MCP server exposing selected oto-cli connectors as tools (Streama
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp[apps]>=3.4.2",  # plancher = dernier (3.4.2) — schéma plat des tools validé dessus (ADR 0009). Extra `apps` = prefab_ui (MCP Apps SEP-1865, UI rendue en iframe) consommé par les tools *_app (cf. tools/foncier.py)
-    "oto-core[browser]",  # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13)
+    # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
+    # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
+    # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
+    # on tague oto-core et on bump CE pin par PR. Bump = éditer le tag ici ; rollback
+    # = revert ce commit (ramène aussi le bon oto-core). Cf. ADR 0020 (deploy/canari).
+    "oto-core[browser] @ git+https://github.com/otomata-tech/oto-core.git@v1.6.1",
     "starlette>=0.37",
     "uvicorn>=0.30",
     "pydantic>=2.0",

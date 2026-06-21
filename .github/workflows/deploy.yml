@@ -24,14 +24,12 @@ jobs:
             cd /opt/oto-mcp
             git fetch origin main
             git reset --hard origin/main
+            # oto-core est PINNÉ sur un tag git dans pyproject.toml (ref URL directe) :
+            # `pip install -e .` l'installe depuis ce tag (réinstall auto au bump du
+            # tag via direct_url, idempotent sinon). Fini le force-reinstall @main
+            # flottant — une version déployée = une coordonnée reproductible. Bump =
+            # PR qui édite le tag dans pyproject. Cf. ADR 0020 (deploy/canari).
             ./.venv/bin/pip install -e . --quiet
-            # Sync oto-core (lib connecteurs, repo séparé) — le deploy ne resette QUE
-            # /opt/oto-mcp, donc la box gardait un clone oto-core périmé : tout
-            # changement de client (serper/serpapi/cloro/brightdata…) ne parvenait
-            # jamais en prod → erreurs de signature désynchronisée (ex. search_jobs).
-            # Réinstalle oto-core@main à chaque deploy (repo public, pas d'auth).
-            ./.venv/bin/pip install --upgrade --force-reinstall --no-deps \
-              "oto-core @ git+https://github.com/otomata-tech/oto-core.git@main" --quiet
             systemctl restart oto-mcp
             sleep 3
             systemctl is-active --quiet oto-mcp || (journalctl -u oto-mcp -n 50 --no-pager; exit 1)

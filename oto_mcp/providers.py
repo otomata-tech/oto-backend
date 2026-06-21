@@ -175,6 +175,8 @@ _CATEGORY_BY_CONNECTOR = {
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
     "recruitee": "Recrutement", "teamtailor": "Recrutement", "serpapi": "Recrutement",
+    # automatisation no-code (workflows)
+    "n8n": "Automatisation", "make": "Automatisation", "zapier": "Automatisation",
 }
 
 # Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
@@ -193,6 +195,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "zoho": "Zoho", "zohodesk": "Zoho",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
+    "n8n": "n8n", "make": "Make", "zapier": "Zapier",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
@@ -213,6 +216,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com",
+    "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
 }
 
 
@@ -480,6 +484,35 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, label="SerpApi (Google Jobs)",
        help="recherche d'offres d'emploi (Google Jobs) + détail d'une offre",
        href="https://serpapi.com"),
+
+    # --- automatisation de workflows (no-code) — câblés 2026-06-21 -----------
+    # Connecteurs vers les plateformes d'automatisation tierces. byo, hors bundle
+    # (opt-in, activables par org/admin), pas de clé plateforme (chacun pose la
+    # sienne). Inertes tant que non activés en DB (deny-by-default, comme hubspot).
+    # n8n / make : credential à 2 champs (clé + base URL de l'instance/zone —
+    # self-hosting & régionalisation imposent une URL propre) → secret_kind="fields",
+    # résolu via resolve_credential_fields. zapier : clé simple (AI Actions API),
+    # keyed → resolve_api_key.
+    _c("n8n", ["n8n"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
+       in_default_bundle=False, label="n8n",
+       help="automatisation de workflows — workflows + exécutions (API publique)",
+       href="https://n8n.io", credential_fields=(
+           CredentialField("api_key", "API key", secret=True),
+           CredentialField("base_url", "Instance URL", secret=False,
+                           help="ex. https://acme.app.n8n.cloud"),
+       )),
+    _c("make", ["make"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
+       in_default_bundle=False, label="Make",
+       help="automatisation de workflows — scénarios, exécution, logs (API v2)",
+       href="https://www.make.com", credential_fields=(
+           CredentialField("api_token", "API token", secret=True),
+           CredentialField("base_url", "Zone URL", secret=False,
+                           help="ex. https://eu1.make.com ou https://us1.make.com"),
+       )),
+    _c("zapier", ["zapier"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Zapier",
+       help="automatisation — actions exposées (AI Actions) + exécution",
+       href="https://actions.zapier.com"),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

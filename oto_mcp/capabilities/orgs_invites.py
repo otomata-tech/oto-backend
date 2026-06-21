@@ -170,10 +170,12 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     inv = org_store.get_invitation_by_token(inp.token)
     if not inv:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide, expirée ou déjà utilisée.")
-    my_email = ((db.get_user(ctx.sub) or {}).get("email") or "").strip().lower()
-    if my_email != inv["email"].strip().lower():
-        raise AuthzDenied(403, "email_mismatch",
-                          "Cette invitation vise une autre adresse email.")
+    # Modèle bearer (épic sécurité otomata#35) : la possession du jeton (256 bits,
+    # usage unique, TTL) vaut autorisation — on n'EXIGE plus que l'email du compte
+    # == email invité (sinon impossible d'accepter avec Google ou une autre adresse).
+    # L'acceptation lie l'invitation au `sub` connecté, quel que soit l'email. Le
+    # front fait un soft-confirm si les emails diffèrent. Le hard-match redeviendra
+    # activable par org sensible (épic G, policy par org).
     res = org_store.accept_invitation(inp.token, ctx.sub)
     if not res:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide ou déjà utilisée.")

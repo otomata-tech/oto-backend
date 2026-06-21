@@ -247,3 +247,173 @@ def register(mcp: FastMCP) -> None:
                 page suivante. None = première page.
         """
         return unipile_client().get_feed(count=count, cursor=cursor)
+
+    # ---- réseau : invitations (accepter / annuler) ----------------------
+
+    @mcp.tool()
+    async def unipile_handle_invitation(invitation_id: str, shared_secret: str,
+                                        action: str = "accept") -> dict:
+        """Accepte ou refuse une invitation LinkedIn REÇUE.
+
+        `invitation_id` ET `shared_secret` proviennent d'un item de
+        `unipile_invitations(direction='received')`.
+
+        Args:
+            invitation_id: id de l'invitation reçue.
+            shared_secret: token LinkedIn du même item (obligatoire).
+            action: 'accept' ou 'decline'.
+        """
+        return unipile_client().handle_invitation(invitation_id, shared_secret, action)
+
+    @mcp.tool()
+    async def unipile_cancel_invitation(invitation_id: str) -> dict:
+        """Annule une invitation LinkedIn ENVOYÉE (en attente). `invitation_id` =
+        id d'un item `unipile_invitations(direction='sent')`."""
+        return unipile_client().cancel_invitation(invitation_id)
+
+    # ---- réseau : moi / followers / activité d'un membre ----------------
+
+    @mcp.tool()
+    async def unipile_me() -> dict:
+        """Profil du compte LinkedIn connecté lui-même (le « moi » sous lequel les
+        autres tools unipile_* agissent)."""
+        return unipile_client().get_own_profile()
+
+    @mcp.tool()
+    async def unipile_followers(user_id: Optional[str] = None,
+                                cursor: Optional[str] = None,
+                                limit: Optional[int] = None) -> dict:
+        """Followers du compte connecté (ou d'un membre via `user_id`). Paginé."""
+        return unipile_client().list_followers(user_id=user_id, cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_following(user_id: Optional[str] = None,
+                                cursor: Optional[str] = None,
+                                limit: Optional[int] = None) -> dict:
+        """Comptes suivis par le compte connecté (ou par un membre via `user_id`). Paginé."""
+        return unipile_client().list_following(user_id=user_id, cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_member_comments(identifier: str, cursor: Optional[str] = None,
+                                      limit: Optional[int] = None) -> dict:
+        """Commentaires laissés par un membre LinkedIn (`identifier` = provider id).
+        Pour repérer ce qu'un prospect engage → accroche social-selling."""
+        return unipile_client().list_member_comments(identifier, cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_member_reactions(identifier: str, cursor: Optional[str] = None,
+                                       limit: Optional[int] = None) -> dict:
+        """Réactions d'un membre LinkedIn (`identifier` = provider id) — posts qu'il
+        a likés/aimés."""
+        return unipile_client().list_member_reactions(identifier, cursor=cursor, limit=limit)
+
+    # ---- messagerie : participants / contacts / état du fil -------------
+
+    @mcp.tool()
+    async def unipile_chat_attendees(chat_id: str) -> dict:
+        """Participants d'un fil de messagerie LinkedIn (`chat_id` d'un unipile_chats)."""
+        return unipile_client().list_chat_attendees(chat_id)
+
+    @mcp.tool()
+    async def unipile_attendees(cursor: Optional[str] = None,
+                                limit: Optional[int] = None) -> dict:
+        """Carnet de contacts de messagerie LinkedIn (interlocuteurs). Paginé."""
+        return unipile_client().list_attendees(cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_chat_update(chat_id: str, action: str,
+                                  value: Optional[bool | str] = None) -> dict:
+        """Modifie l'état d'un fil LinkedIn. `action` ∈ setReadStatus | setMuteStatus
+        | setArchiveStatus | setPinnedStatus | setLabel | getInviteLink. `value` =
+        booléen pour les statuts (ex. setReadStatus + true), string pour setLabel,
+        omis pour getInviteLink."""
+        return unipile_client().patch_chat(chat_id, action, value=value)
+
+    @mcp.tool()
+    async def unipile_message_react(message_id: str, reaction: str) -> dict:
+        """Réagit à un message LinkedIn (DM) avec un emoji natif (ex. '👍').
+        `message_id` = id d'un message de unipile_read_chat."""
+        return unipile_client().react_message(message_id, reaction)
+
+    # ---- LinkedIn recruiter / sales navigator ---------------------------
+    # Nécessitent un abonnement Recruiter / Sales Navigator sur le compte connecté.
+
+    @mcp.tool()
+    async def unipile_contracts() -> dict:
+        """Contrats LinkedIn premium (Recruiter / Sales Navigator) disponibles sur le
+        compte — id à passer à unipile_select_contract pour activer la bonne ardoise."""
+        return unipile_client().list_contracts()
+
+    @mcp.tool()
+    async def unipile_select_contract(contract_id: str) -> dict:
+        """Active un contrat Recruiter / Sales Navigator (`contract_id` de
+        unipile_contracts) pour les appels premium qui suivent."""
+        return unipile_client().select_contract(contract_id)
+
+    @mcp.tool()
+    async def unipile_inmail_balance() -> dict:
+        """Solde de crédits InMail (messages premium) du compte LinkedIn connecté."""
+        return unipile_client().inmail_balance()
+
+    @mcp.tool()
+    async def unipile_endorse(profile_id: str, skill_endorsement_id: int) -> dict:
+        """Recommande une compétence d'un membre LinkedIn.
+
+        Args:
+            profile_id: provider id du membre (commence par ACo/ADo).
+            skill_endorsement_id: `endorsement_id` d'une compétence, renvoyé dans
+                unipile_profile.
+        """
+        return unipile_client().endorse_profile(profile_id, skill_endorsement_id)
+
+    @mcp.tool()
+    async def unipile_member_action(user_id: str, api: str, action: str,
+                                    hiring_project_id: Optional[str] = None,
+                                    stage: Optional[str] = None,
+                                    list_id: Optional[str] = None) -> dict:
+        """Action premium sur un membre LinkedIn (sauvegarde lead / pipeline recruteur).
+
+        Args:
+            user_id: provider id du membre.
+            api: 'sales_navigator' ou 'recruiter'.
+            action: sales_navigator → 'saveLead' ; recruiter → 'addCandidateToPipeline'
+                | 'addApplicantToPipeline' | 'changeCandidatePipeline' | 'rejectApplicant'.
+            hiring_project_id: requis pour les actions pipeline recruiter.
+            stage: pipeline recruiter — 'UNCONTACTED' | 'CONTACTED' | 'REPLIED'.
+            list_id: liste Sales Navigator cible (optionnel pour saveLead).
+        """
+        return unipile_client().member_action(
+            user_id, api, action, hiring_project_id=hiring_project_id,
+            stage=stage, list_id=list_id,
+        )
+
+    # ---- LinkedIn recruiter : offres d'emploi & candidats (lectures) ----
+
+    @mcp.tool()
+    async def unipile_job_postings(cursor: Optional[str] = None,
+                                   limit: Optional[int] = None) -> dict:
+        """Offres d'emploi (job postings) du compte recruteur LinkedIn. Paginé."""
+        return unipile_client().list_job_postings(cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_job_posting(job_id: str) -> dict:
+        """Détail d'une offre d'emploi LinkedIn (`job_id` de unipile_job_postings)."""
+        return unipile_client().get_job_posting(job_id)
+
+    @mcp.tool()
+    async def unipile_job_applicants(job_id: str, cursor: Optional[str] = None,
+                                     limit: Optional[int] = None) -> dict:
+        """Candidats d'une offre d'emploi LinkedIn. Paginé."""
+        return unipile_client().list_job_applicants(job_id, cursor=cursor, limit=limit)
+
+    @mcp.tool()
+    async def unipile_job_applicant(job_id: str, applicant_id: str) -> dict:
+        """Détail d'un candidat (`applicant_id` de unipile_job_applicants)."""
+        return unipile_client().get_job_applicant(job_id, applicant_id)
+
+    @mcp.tool()
+    async def unipile_hiring_projects(cursor: Optional[str] = None,
+                                      limit: Optional[int] = None) -> dict:
+        """Projets de recrutement (hiring projects) du compte Recruiter LinkedIn.
+        Le `hiring_project_id` alimente unipile_member_action (pipeline). Paginé."""
+        return unipile_client().list_hiring_projects(cursor=cursor, limit=limit)

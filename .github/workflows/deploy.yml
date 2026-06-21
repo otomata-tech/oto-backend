@@ -1,19 +1,40 @@
-name: Deploy
+name: CI/CD
 
+# test → deploy : le deploy DÉPEND d'un CI vert (`needs: test`). Avant, Deploy et CI
+# tournaient en parallèle sur push main → un commit rouge déployait quand même.
+# Désormais un test rouge bloque le deploy. Le job `test` tourne aussi sur PR (= le
+# required check de branch protection). Cf. otomata-private#39 (revue CI/CD).
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch: {}
 
-concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to oto-platform box
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (deps + dev)
+        # Tire oto-core depuis le tag git pinné du pyproject (repo public, pas d'auth).
+        run: pip install -e ".[dev]"
+      - name: Tests
+        run: pytest -q
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to box
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}

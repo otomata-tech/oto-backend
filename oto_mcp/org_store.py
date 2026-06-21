@@ -81,9 +81,36 @@ def create_org(name: str, created_by: Optional[str] = None) -> int:
 def get_org(org_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, name, created_by, created_at, logo_url FROM orgs WHERE id = %s", (org_id,)
+            "SELECT id, name, description, created_by, created_at, logo_url FROM orgs WHERE id = %s",
+            (org_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def update_org(org_id: int, name: Optional[str] = None,
+               description: Optional[str] = None) -> bool:
+    """Renomme / re-décrit une org. None = conserver le champ. False si absente.
+
+    Miroir de `group_store.update_group` au grain org. Métadonnées en clair
+    (nom/prose), hors coffre."""
+    sets, params = [], []
+    if name is not None:
+        n = name.strip()
+        if not n:
+            raise ValueError("nom d'org vide")
+        sets.append("name = %s")
+        params.append(n)
+    if description is not None:
+        sets.append("description = %s")
+        params.append(description.strip())
+    if not sets:
+        return get_org(org_id) is not None
+    params.append(org_id)
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE orgs SET {', '.join(sets)} WHERE id = %s", tuple(params)
+        )
+        return (cur.rowcount or 0) > 0
 
 
 def list_all_orgs() -> list[dict]:

@@ -227,3 +227,23 @@ def register(mcp: FastMCP) -> None:
     async def unipile_create_post(text: str) -> dict:
         """Publie un post LinkedIn depuis le compte connecté."""
         return unipile_client().create_post(text)
+
+    @mcp.tool()
+    async def unipile_feed(count: int = 20, cursor: Optional[str] = None) -> dict:
+        """Feed d'accueil LinkedIn (flux chronologique de ta page d'accueil) via Unipile.
+
+        ⚠️ Passthrough Voyager via la Magic Route raw data d'Unipile (LinkedIn
+        n'expose AUCUN endpoint feed) : route NON contractuelle, peut nécessiter une
+        maintenance quand LinkedIn change son API interne. Parsing défensif — un item
+        non mappé revient en `{_unmapped, _raw}` plutôt que de tout faire échouer.
+
+        Retourne `{items, cursor, count}` où chaque item normalisé porte :
+        `urn, author_name, author_headline, text, posted_at, posted_relative,
+        reactions_count, comments_count, post_url`.
+
+        Args:
+            count: nombre d'items voulus sur la page (défaut 20).
+            cursor: curseur renvoyé par un appel précédent (champ `cursor`) pour la
+                page suivante. None = première page.
+        """
+        return unipile_client().get_feed(count=count, cursor=cursor)

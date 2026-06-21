@@ -21,7 +21,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.teamtailor.client import TeamtailorClient
 
     def _client() -> TeamtailorClient:
-        key, _ = access.resolve_api_key("teamtailor", "TEAMTAILOR_API_KEY")
+        key, _ = access.resolve_api_key("teamtailor")
         return TeamtailorClient(api_key=key)
 
     @mcp.tool()

@@ -28,7 +28,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.pennylane import PennylaneClient
 
     def _client() -> PennylaneClient:
-        key, _is_platform = access.resolve_api_key("pennylane", "PENNYLANE_API_KEY")
+        key, _is_platform = access.resolve_api_key("pennylane")
         return PennylaneClient(api_key=key, field_filter=access.resolve_field_filter("pennylane"))
 
     @mcp.tool()

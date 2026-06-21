@@ -18,7 +18,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.topograph.client import TopographClient
 
     def _client() -> TopographClient:
-        key, _ = access.resolve_api_key("topograph", "TOPOGRAPH_API_KEY")
+        key, _ = access.resolve_api_key("topograph")
         return TopographClient(api_key=key)
 
     @mcp.tool()

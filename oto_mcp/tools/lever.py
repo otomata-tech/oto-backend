@@ -21,7 +21,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.lever.client import LeverClient
 
     def _client() -> LeverClient:
-        key, _ = access.resolve_api_key("lever", "LEVER_API_KEY")
+        key, _ = access.resolve_api_key("lever")
         return LeverClient(api_key=key)
 
     @mcp.tool()

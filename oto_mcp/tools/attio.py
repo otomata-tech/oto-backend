@@ -23,7 +23,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.attio.client import AttioClient
 
     def _client() -> tuple[AttioClient, bool]:
-        key, is_platform = access.resolve_api_key("attio", "ATTIO_API_KEY")
+        key, is_platform = access.resolve_api_key("attio")
         return AttioClient(api_key=key), is_platform
 
     def _record_if_platform(is_platform: bool) -> None:

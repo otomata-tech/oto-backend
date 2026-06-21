@@ -22,7 +22,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.lemlist import LemlistClient
 
     def _client() -> tuple[LemlistClient, bool]:
-        key, is_platform = access.resolve_api_key("lemlist", "LEMLIST_API_KEY")
+        key, is_platform = access.resolve_api_key("lemlist")
         return LemlistClient(api_key=key), is_platform
 
     def _record_if_platform(is_platform: bool) -> None:

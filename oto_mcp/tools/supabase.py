@@ -17,7 +17,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.supabase import client as sb
 
     def _token() -> str:
-        key, _ = access.resolve_api_key("supabase", "SUPABASE_ACCESS_TOKEN")
+        key, _ = access.resolve_api_key("supabase")
         return key
 
     @mcp.tool()

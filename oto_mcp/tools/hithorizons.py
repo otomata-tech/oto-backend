@@ -17,7 +17,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.hithorizons.client import HitHorizonsClient
 
     def _client(country: str = "FR") -> HitHorizonsClient:
-        key, _ = access.resolve_api_key("hithorizons", "HITHORIZONS_API_KEY")
+        key, _ = access.resolve_api_key("hithorizons")
         return HitHorizonsClient(api_key=key, country=country)
 
     @mcp.tool()

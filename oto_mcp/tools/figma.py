@@ -18,7 +18,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.figma.client import FigmaClient
 
     def _client() -> FigmaClient:
-        key, _ = access.resolve_api_key("figma", "FIGMA_API_KEY")
+        key, _ = access.resolve_api_key("figma")
         return FigmaClient(token=key, cache_enabled=False)
 
     @mcp.tool()

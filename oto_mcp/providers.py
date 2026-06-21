@@ -3,7 +3,7 @@
 Module pur (aucun import oto_mcp, comme tool_visibility.py). Remplace les 4
 listes en dur qui dérivaient (`db.KEY_PROVIDERS`, `access.ORG_SHAREABLE_PROVIDERS`,
 `tool_visibility.ADMIN_GRANT_ONLY_NAMESPACES`, le `PROVIDERS` du frontend) plus
-`_QUOTA_DEFAULTS` et l'override `env_secret_names` du bootstrap. Tout en dérive.
+`_QUOTA_DEFAULTS`. Tout en dérive.
 
 Chaque connecteur porte les 3 axes du modèle plateforme :
 - **A. Disponibilité** : `availability` (self_serve | platform_granted). platform_granted
@@ -48,7 +48,6 @@ class Connector:
     keyed: bool                        # résolu via resolve_api_key (→ KEY_PROVIDERS)
     personal_session: bool             # per-user only, jamais org
     secret_kind: str                   # api_key|refresh_token|oauth|cookie|none
-    env_secret_name: str | None        # var SOPS de la clé plateforme (None = aucune)
     default_quota: int                 # 0 = illimité
     in_default_bundle: bool            # axe A : accordé d'office (bundle par défaut)
     in_default_preset: bool            # axe B : affiché+activé par le preset de base
@@ -226,7 +225,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
 
 
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
-       personal_session=False, secret_kind="none", env_secret_name=None,
+       personal_session=False, secret_kind="none",
        default_quota=0, in_default_bundle=True, in_default_preset=False,
        default_hidden=False, label="", help="", href=None, publisher="",
        logo_url=None, kind="tools", mount_url=None, credential_fields=(),
@@ -234,7 +233,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
-        secret_kind=secret_kind, env_secret_name=env_secret_name, default_quota=default_quota,
+        secret_kind=secret_kind, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
         label=label or name.capitalize(), help=help, href=href,
@@ -249,41 +248,41 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
 _REGISTRY_LIST = [
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     _c("serper", ["serper"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="SERPER_API_KEY", default_quota=50,
+       secret_kind="api_key", default_quota=50,
        in_default_preset=True, label="Serper", help="recherche web", href="https://serper.dev"),
     _c("hunter", ["hunter"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="HUNTER_API_KEY", default_quota=10,
+       secret_kind="api_key", default_quota=10,
        in_default_preset=True, label="Hunter.io", help="emails", href="https://hunter.io"),
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="SIRENE_API_KEY", default_quota=200,
+       secret_kind="api_key", default_quota=200,
        in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr",)),
     # attio : masqué par défaut (2026-06-11) — le MCP Attio officiel est meilleur
     # pour l'instant. Code conservé (tools/attio.py) pour d'éventuelles implems
     # custom ; self-activable via oto_enable_tool.
     _c("attio", ["attio"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="ATTIO_API_KEY", default_quota=200,
+       secret_kind="api_key", default_quota=200,
        default_hidden=True, label="Attio", help="CRM", href="https://app.attio.com"),
     _c("lemlist", ["lemlist"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="LEMLIST_API_KEY",
+       secret_kind="api_key",
        label="Lemlist", help="cold outreach", href="https://app.lemlist.com"),
     _c("kaspr", ["kaspr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="KASPR_API_KEY", default_quota=5,
+       secret_kind="api_key", default_quota=5,
        label="Kaspr", help="enrichissement", href="https://app.kaspr.io"),
     _c("pennylane", ["pennylane"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="PENNYLANE_API_KEY",
+       secret_kind="api_key",
        label="Pennylane", help="compta", href="https://app.pennylane.com"),
     _c("slack", ["slack"], auth_modes={"byo_user"}, keyed=True, personal_session=True,
-       secret_kind="refresh_token", env_secret_name="SLACK_USER_TOKEN",
+       secret_kind="refresh_token",
        label="Slack", help="messagerie (user token)"),
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="FULLENRICH_API_KEY", default_quota=25,
+       secret_kind="api_key", default_quota=25,
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
     # folk : né APRÈS le coffre — pas de colonne legacy users.folk_api_key,
     # le coffre connector_credentials est canonique. byo-only (pas de clé
     # plateforme) ; compte partagé équipe = credential de l'org Otomata.
     _c("folk", ["folk"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="FOLK_API_KEY",
+       secret_kind="api_key",
        label="Folk", help="CRM", href="https://app.folk.app"),
     # unipile : LinkedIn hébergé (recherche/scrape/messagerie) via l'API Unipile.
     # La session LinkedIn vit chez Unipile (vrai Chrome + proxy résidentiel) →
@@ -298,7 +297,7 @@ _REGISTRY_LIST = [
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="UNIPILE_API_KEY",
+       secret_kind="api_key",
        in_default_bundle=False, label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
@@ -308,7 +307,7 @@ _REGISTRY_LIST = [
     # son compte ; clé d'org partageable), keyed api_key (en-tête x-api-key résolu
     # côté client). Pas de clé plateforme. Hors bundle par défaut : opt-in.
     _c("topograph", ["topograph"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", env_secret_name="TOPOGRAPH_API_KEY",
+       secret_kind="api_key",
        in_default_bundle=False, label="Topograph",
        help="KYB — données & documents entreprise (registres européens)",
        href="https://www.topograph.co"),
@@ -334,8 +333,7 @@ _REGISTRY_LIST = [
     # hors bundle par défaut (in_default_bundle=False) → opt-in, pas imposé. L'org MM
     # y pose le token de son compte de service pour le POC avoirs (doctrine org 35).
     _c("gocardless", ["gocardless"], availability="self_serve",
-       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
-       env_secret_name="GOCARDLESS_API_KEY", in_default_bundle=False,
+       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
     # (Aucune entrée remote au registre : un connecteur REMOTE (ADR 0003/0011) est
     # défini par la DONNÉE — un credential d'org avec `meta.base_url` (l'endpoint du
@@ -490,7 +488,7 @@ _REGISTRY_LIST = [
     # + Bing/YouTube/Walmart/Amazon/eBay/… + Google Jobs). keyed api_key, platform-
     # eligible (clé plateforme + quota daily, comme serper).
     _c("serpapi", ["serpapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="SERPAPI_API_KEY", default_quota=50,
+       secret_kind="api_key", default_quota=50,
        in_default_bundle=False, label="SerpApi",
        help="recherche multi-moteurs (Google verticals, Bing, YouTube, Walmart, Amazon, jobs…)",
        href="https://serpapi.com"),
@@ -498,14 +496,14 @@ _REGISTRY_LIST = [
     # connecteur câblé (clé platform + quota) mais produits (SERP/Unlocker/Datasets)
     # pas encore implémentés (tools/brightdata.py n'expose aucun tool pour l'instant).
     _c("brightdata", ["brightdata"], auth_modes={"byo_user", "byo_org", "platform"},
-       keyed=True, secret_kind="api_key", env_secret_name="BRIGHTDATA_API_KEY",
+       keyed=True, secret_kind="api_key",
        default_quota=50, in_default_bundle=False, label="Bright Data",
        help="scraping & SERP via proxy (coquille vide — à implémenter)",
        href="https://brightdata.com"),
     # cloro : veille AI-search (ChatGPT/Gemini/Perplexity/Copilot/Grok/AI Mode) +
     # SERP Google en JSON. keyed api_key, platform-eligible (clé + quota daily).
     _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", env_secret_name="CLORO_API_KEY", default_quota=50,
+       secret_kind="api_key", default_quota=50,
        in_default_bundle=False, label="Cloro",
        help="veille AI-search (ChatGPT, Gemini, Perplexity…) + SERP Google JSON",
        href="https://cloro.dev"),
@@ -558,7 +556,6 @@ ADMIN_GRANT_ONLY_NAMESPACES: frozenset = frozenset(
     ns for c in _REGISTRY_LIST if c.grant_only for ns in c.namespaces
 )
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
-ENV_SECRET_NAMES: dict = {c.name: c.env_secret_name for c in _REGISTRY_LIST if c.env_secret_name}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)
 DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_preset)
 DEFAULT_HIDDEN_NAMESPACES: frozenset = frozenset(

@@ -16,7 +16,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.hunter.client import HunterClient
 
     def _client() -> tuple[HunterClient, bool]:
-        key, is_platform = access.resolve_api_key("hunter", "HUNTER_API_KEY")
+        key, is_platform = access.resolve_api_key("hunter")
         return HunterClient(api_key=key), is_platform
 
     @mcp.tool()

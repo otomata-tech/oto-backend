@@ -22,7 +22,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.brightdata.client import BrightDataClient  # noqa: F401
 
     def _client() -> tuple[BrightDataClient, bool]:
-        key, is_platform = access.resolve_api_key("brightdata", "BRIGHTDATA_API_KEY")
+        key, is_platform = access.resolve_api_key("brightdata")
         return BrightDataClient(api_key=key), is_platform
 
     def _run(method: str, **kwargs) -> dict:

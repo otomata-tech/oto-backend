@@ -159,7 +159,7 @@ def quota_for(provider: str) -> int:
     return _QUOTA_DEFAULTS.get(provider, 0)
 
 
-def resolve_api_key(provider: str, env_secret_name: Optional[str] = None) -> tuple[str, bool]:
+def resolve_api_key(provider: str) -> tuple[str, bool]:
     """Renvoie `(api_key, is_platform)` ou lève McpError actionnable."""
     sub = current_user_sub_or_raise()
 

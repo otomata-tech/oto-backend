@@ -18,7 +18,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.notion.lib.notion_client import NotionClient
 
     def _client() -> NotionClient:
-        key, _ = access.resolve_api_key("notion", "NOTION_API_KEY")
+        key, _ = access.resolve_api_key("notion")
         return NotionClient(token=key, cache_enabled=False)
 
     @mcp.tool()

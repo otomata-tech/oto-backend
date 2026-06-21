@@ -16,7 +16,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.zerobounce.client import ZeroBounceClient
 
     def _client() -> ZeroBounceClient:
-        key, _ = access.resolve_api_key("zerobounce", "ZEROBOUNCE_API_KEY")
+        key, _ = access.resolve_api_key("zerobounce")
         return ZeroBounceClient(api_key=key)
 
     @mcp.tool()

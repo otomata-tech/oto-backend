@@ -23,7 +23,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.kaspr.client import KasprClient
 
     def _client() -> tuple[KasprClient, bool]:
-        key, is_platform = access.resolve_api_key("kaspr", "KASPR_API_KEY")
+        key, is_platform = access.resolve_api_key("kaspr")
         return KasprClient(api_key=key), is_platform
 
     @mcp.tool()

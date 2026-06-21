@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.hubspot.client import HubSpotClient
 
     def _client() -> HubSpotClient:
-        key, _ = access.resolve_api_key("hubspot", "HUBSPOT_API_KEY")
+        key, _ = access.resolve_api_key("hubspot")
         return HubSpotClient(api_key=key)
 
     @mcp.tool()

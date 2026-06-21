@@ -35,7 +35,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.cloro.client import CloroClient
 
     def _client() -> tuple[CloroClient, bool]:
-        key, is_platform = access.resolve_api_key("cloro", "CLORO_API_KEY")
+        key, is_platform = access.resolve_api_key("cloro")
         return CloroClient(api_key=key), is_platform
 
     def _run(method: str, **kwargs) -> dict:

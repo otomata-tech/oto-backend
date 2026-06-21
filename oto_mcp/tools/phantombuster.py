@@ -19,7 +19,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.phantombuster.client import PhantombusterClient
 
     def _client() -> PhantombusterClient:
-        key, _ = access.resolve_api_key("phantombuster", "PHANTOMBUSTER_API_KEY")
+        key, _ = access.resolve_api_key("phantombuster")
         return PhantombusterClient(api_key=key)
 
     @mcp.tool()

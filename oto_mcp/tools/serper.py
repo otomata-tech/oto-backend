@@ -19,7 +19,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.serper import SerperClient
 
     def _client() -> tuple[SerperClient, bool]:
-        key, is_platform = access.resolve_api_key("serper", "SERPER_API_KEY")
+        key, is_platform = access.resolve_api_key("serper")
         return SerperClient(api_key=key), is_platform
 
     def _run(method: str, **kwargs) -> dict:

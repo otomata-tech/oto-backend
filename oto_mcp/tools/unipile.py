@@ -30,7 +30,7 @@ def unipile_client(provider: str = "LINKEDIN"):
     credential per-user, sinon McpError actionnable. Réutilisé par tools/whatsapp.py.
     """
     from oto.tools.unipile import UnipileClient
-    key, _is_platform = access.resolve_api_key("unipile", "UNIPILE_API_KEY")
+    key, _is_platform = access.resolve_api_key("unipile")
     sub = access.current_user_sub_or_raise()
     account_id = db.get_unipile_account_id(sub, provider)
     if not account_id:

@@ -28,7 +28,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.folk.client import FolkClient
 
     def _client() -> FolkClient:
-        key, _ = access.resolve_api_key("folk", "FOLK_API_KEY")
+        key, _ = access.resolve_api_key("folk")
         return FolkClient(api_key=key, field_filter=access.resolve_field_filter("folk"))
 
     # --- groups -------------------------------------------------------------

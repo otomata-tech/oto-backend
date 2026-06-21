@@ -26,7 +26,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.serpapi.client import SerpAPIClient
 
     def _client() -> tuple[SerpAPIClient, bool]:
-        key, is_platform = access.resolve_api_key("serpapi", "SERPAPI_API_KEY")
+        key, is_platform = access.resolve_api_key("serpapi")
         return SerpAPIClient(api_key=key), is_platform
 
     def _run(method: str, **kwargs) -> dict:

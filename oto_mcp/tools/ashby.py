@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.ashby.client import AshbyClient
 
     def _client() -> AshbyClient:
-        key, _ = access.resolve_api_key("ashby", "ASHBY_API_KEY")
+        key, _ = access.resolve_api_key("ashby")
         return AshbyClient(api_key=key)
 
     @mcp.tool()

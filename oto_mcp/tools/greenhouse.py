@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.greenhouse.client import GreenhouseClient
 
     def _client() -> GreenhouseClient:
-        key, _ = access.resolve_api_key("greenhouse", "GREENHOUSE_API_KEY")
+        key, _ = access.resolve_api_key("greenhouse")
         return GreenhouseClient(api_key=key)
 
     @mcp.tool()

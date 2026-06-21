@@ -181,7 +181,7 @@ def register(mcp: FastMCP) -> None:
     # --- INSEE SIRENE (clé payante) ---
 
     def _sirene_client() -> tuple[SireneClient, bool]:
-        key, is_platform = access.resolve_api_key("sirene", "SIRENE_API_KEY")
+        key, is_platform = access.resolve_api_key("sirene")
         return SireneClient(api_key=key), is_platform
 
     @mcp.tool()

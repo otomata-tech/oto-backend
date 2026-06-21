@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
         # Miroir de mm (remote.py) / memento (mount.py). require_namespace lit
         # granted_namespaces_for (grants user ∪ entitlements org) + bypass admin.
         access.require_namespace("gocardless")
-        key, _is_platform = access.resolve_api_key("gocardless", "GOCARDLESS_API_KEY")
+        key, _is_platform = access.resolve_api_key("gocardless")
         return GoCardlessClient(api_key=key)
 
     @mcp.tool()

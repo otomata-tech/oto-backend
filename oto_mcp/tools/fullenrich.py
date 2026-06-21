@@ -16,7 +16,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.fullenrich.client import FullenrichClient
 
     def _client() -> tuple[FullenrichClient, bool]:
-        key, is_platform = access.resolve_api_key("fullenrich", "FULLENRICH_API_KEY")
+        key, is_platform = access.resolve_api_key("fullenrich")
         return FullenrichClient(api_key=key), is_platform
 
     @mcp.tool()

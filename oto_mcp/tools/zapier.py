@@ -23,7 +23,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.zapier import ZapierClient
 
     def _client() -> ZapierClient:
-        key, _ = access.resolve_api_key("zapier", "ZAPIER_API_KEY")
+        key, _ = access.resolve_api_key("zapier")
         return ZapierClient(api_key=key)
 
     @mcp.tool()

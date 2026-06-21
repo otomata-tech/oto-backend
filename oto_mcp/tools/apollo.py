@@ -17,7 +17,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.apollo.client import ApolloClient
 
     def _client() -> ApolloClient:
-        key, _ = access.resolve_api_key("apollo", "APOLLO_API_KEY")
+        key, _ = access.resolve_api_key("apollo")
         return ApolloClient(api_key=key)
 
     @mcp.tool()

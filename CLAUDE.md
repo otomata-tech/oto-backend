@@ -188,8 +188,8 @@ le rappeler à tout moment (ré-explication, paramétrage), et rouvrir l'accueil
 ## Boucle d'usage (ADR 0017)
 
 Flux d'événements de session unifié : calllog (involontaire) + feedback volontaire
-d'agent + déroulés de doctrine (`doctrine_start/finish`, `tool_feedback`, `report_gap`).
-**Détail : `docs/usage-loop.md`**.
+d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/finish`,
+`doctrine` optionnel → doctrine nommée ou run one-shot). **Détail : `docs/usage-loop.md`**.
 
 ## Billing — credits d'appel par org (paiement Stripe)
 

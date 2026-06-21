@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     duration_ms INTEGER,
     -- Corrélation (ADR 0017, extension OTO-LOCALE — PAS dans le contrat canonique
     -- otomata-calllog) : session_id = session mcp transport (grossier) ; run_id =
-    -- déroulé de doctrine (fin, posé par doctrine_start, stampé ici). NULL hors run.
+    -- déroulé/run (fin, posé par run_start, stampé ici). NULL hors run.
     session_id TEXT,
     run_id TEXT
 );
@@ -1325,19 +1325,22 @@ def list_usage_signals(
         return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
 
 
-# --- Projections « déroulés / usage » (ADR 0017, barreau 4) ------------------
+# --- Projections « runs / usage » (ADR 0017, barreau 4) ----------------------
 # Lecture seule, dérivées de tool_calls (run_id stampé) + usage_signals. Le
-# `slug`/`outcome` d'un run viennent des appels doctrine_start/doctrine_finish.
+# `label`/`doctrine`/`outcome` d'un run viennent des appels run_start/run_finish.
 
-def list_doctrine_runs(limit: int = 100) -> list[dict]:
-    """Runs récents (un par run_id ouvert via doctrine_start) avec slug, acteur,
-    bornes, outcome (si fermé) et nb d'appels du déroulé."""
+def list_runs(limit: int = 100) -> list[dict]:
+    """Runs récents (un par run_id ouvert via run_start) avec label/doctrine,
+    acteur, bornes, outcome (si fermé) et nb d'appels du déroulé. `slug` (alias =
+    doctrine sinon label) conservé pour compat dashboard."""
     limit = max(1, min(int(limit), 500))
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             """
             SELECT s.run_id,
-                   s.args->>'slug'   AS slug,
+                   COALESCE(s.args->>'doctrine', s.args->>'label') AS slug,
+                   s.args->>'label'    AS label,
+                   s.args->>'doctrine' AS doctrine,
                    s.sub,
                    s.created_at      AS started_at,
                    f.created_at      AS finished_at,
@@ -1346,21 +1349,21 @@ def list_doctrine_runs(limit: int = 100) -> list[dict]:
             FROM tool_calls s
             LEFT JOIN LATERAL (
                 SELECT created_at, args FROM tool_calls
-                WHERE tool = 'doctrine_finish' AND args->>'run_id' = s.run_id
+                WHERE tool = 'run_finish' AND args->>'run_id' = s.run_id
                 ORDER BY created_at DESC LIMIT 1
             ) f ON TRUE
             LEFT JOIN (
                 SELECT run_id, count(*) AS n_calls FROM tool_calls
                 WHERE run_id IS NOT NULL GROUP BY run_id
             ) c ON c.run_id = s.run_id
-            WHERE s.tool = 'doctrine_start' AND s.run_id IS NOT NULL
+            WHERE s.tool = 'run_start' AND s.run_id IS NOT NULL
             ORDER BY s.created_at DESC LIMIT %s
             """,
             (limit,),
         ).fetchall()]
 
 
-def get_doctrine_run(run_id: str) -> list[dict]:
+def get_run(run_id: str) -> list[dict]:
     """Timeline d'un déroulé : tous les appels du run, dans l'ordre."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(

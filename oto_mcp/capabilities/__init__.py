@@ -21,7 +21,7 @@ from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,
 # Palier billing — solde de credits par org, historique, packs, recharge Stripe.
 from . import billing  # noqa: F401 — billing.{balance,transactions,packs,checkout}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
-from . import usage  # noqa: F401 — usage.{tool_feedback,gap}
+from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) + projections
 # Doctrine & instructions d'org (ADR 0009) — CRUD doctrine + usage, membre + admin.
 from . import orgs_instructions  # noqa: F401 — org.{doctrine.*, instruction.*}
 # Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.

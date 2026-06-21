@@ -1,17 +1,18 @@
-"""Capacités « signaux d'usage » (ADR 0017, barreau 3) : feedback volontaire sur un
-outil + remontée des cas d'usage non couverts (gap).
+"""Capacités « signaux d'usage » (ADR 0017, barreau 3) : un seul signal volontaire
+`feedback` — retour sur un outil (`signal='tool_feedback'`) OU remontée d'un cas
+d'usage non couvert (`signal='gap'`). Même substrat, axe explicite.
 
-Co-déclarées MCP + REST (ADR 0009) → émises par les **agents** (tools `tool_feedback`
-/ `report_gap`, auto-journalisés dans tool_calls + corrélés run_id) ET par des
-**humains** (dashboard, POST REST). Le contenu durable atterrit dans `usage_signals`
-(hors prune). Le `gap` fait de l'agent un capteur de demande non satisfaite.
+Co-déclaré MCP + REST (ADR 0009) → émis par les **agents** (tool `feedback`,
+auto-journalisé dans tool_calls + corrélé run_id) ET par des **humains** (dashboard,
+POST REST). Le contenu durable atterrit dans `usage_signals` (hors prune). Le `gap`
+fait de l'agent un capteur de demande non satisfaite.
 
-Handlers SYNC (les adaptateurs n'awaitent pas) : on capte `session_id` (propriété
+Handler SYNC (les adaptateurs n'awaitent pas) : on capte `session_id` (propriété
 sync du contexte) ; le `run_id` du face-agent vit déjà dans la row tool_calls jumelle.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -22,14 +23,11 @@ from .registry import CAPABILITIES
 
 
 class FeedbackInput(BaseModel):
-    tool: str
-    kind: str = "other"   # bug | misleading_doc | wrong_result | praise | other
-    text: str
-
-
-class GapInput(BaseModel):
-    intent: str           # ce que tu essayais de faire
-    kind: str = "missing_tool"   # missing_tool | missing_doctrine | missing_data | other
+    signal: Literal["tool_feedback", "gap"]
+    # tool_feedback: bug | misleading_doc | wrong_result | praise | other
+    # gap:           missing_tool | missing_doctrine | missing_data | other
+    kind: str
+    target: str           # tool_feedback: nom de l'outil ; gap: ce que tu voulais faire
     text: Optional[str] = None
 
 
@@ -51,21 +49,11 @@ def _active_org(sub: str) -> Optional[int]:
         return None
 
 
-def _tool_feedback(ctx: ResolvedCtx, inp: FeedbackInput) -> dict:
+def _feedback(ctx: ResolvedCtx, inp: FeedbackInput) -> dict:
     source, session_id = _correlation()
     sid = db.insert_usage_signal(
         sub=ctx.sub, org_id=ctx.org_id or _active_org(ctx.sub),
-        signal="tool_feedback", kind=inp.kind, target=inp.tool, body=inp.text,
-        session_id=session_id, source=source,
-    )
-    return {"ok": True, "id": sid}
-
-
-def _gap(ctx: ResolvedCtx, inp: GapInput) -> dict:
-    source, session_id = _correlation()
-    sid = db.insert_usage_signal(
-        sub=ctx.sub, org_id=ctx.org_id or _active_org(ctx.sub),
-        signal="gap", kind=inp.kind, target=inp.intent, body=inp.text,
+        signal=inp.signal, kind=inp.kind, target=inp.target, body=inp.text,
         session_id=session_id, source=source,
     )
     return {"ok": True, "id": sid}
@@ -92,11 +80,11 @@ class SignalsInput(BaseModel):
 
 
 def _runs(ctx: ResolvedCtx, inp: RunsInput) -> dict:
-    return {"runs": db.list_doctrine_runs(inp.limit)}
+    return {"runs": db.list_runs(inp.limit)}
 
 
 def _run(ctx: ResolvedCtx, inp: RunInput) -> dict:
-    return {"run_id": inp.run_id, "calls": db.get_doctrine_run(inp.run_id)}
+    return {"run_id": inp.run_id, "calls": db.get_run(inp.run_id)}
 
 
 def _gaps(ctx: ResolvedCtx, inp: DaysInput) -> dict:
@@ -113,19 +101,14 @@ def _signals(ctx: ResolvedCtx, inp: SignalsInput) -> dict:
 
 CAPABILITIES += [
     Capability(
-        key="usage.tool_feedback", handler=_tool_feedback, Input=FeedbackInput, authz=SUB_ONLY,
-        description="Report feedback about a specific oto tool you just used — a bug, a "
-                    "misleading docstring, a wrong/empty result, or praise. Helps improve "
-                    "the tools. kind: bug | misleading_doc | wrong_result | praise | other.",
-        mcp="tool_feedback", rest=RestBinding("POST", "/api/me/usage/tool-feedback"),
-    ),
-    Capability(
-        key="usage.gap", handler=_gap, Input=GapInput, authz=SUB_ONLY,
-        description="Report a use case oto could NOT do for you — a missing tool, a missing "
-                    "doctrine/skill, or missing data. Call this whenever you wanted to act but "
-                    "no oto capability covered it. kind: missing_tool | missing_doctrine | "
-                    "missing_data | other ; intent = what you were trying to accomplish.",
-        mcp="report_gap", rest=RestBinding("POST", "/api/me/usage/gap"),
+        key="usage.feedback", handler=_feedback, Input=FeedbackInput, authz=SUB_ONLY,
+        description="Report a usage signal about oto. signal='tool_feedback' = feedback on a "
+                    "tool you just used (target = the tool name ; kind = bug | misleading_doc | "
+                    "wrong_result | praise | other). signal='gap' = a use case oto could NOT do, "
+                    "call it whenever you wanted to act but no oto capability covered it "
+                    "(target = what you were trying to accomplish ; kind = missing_tool | "
+                    "missing_doctrine | missing_data | other). text = optional detail.",
+        mcp="feedback", rest=RestBinding("POST", "/api/me/usage/feedback"),
     ),
     # --- projections de lecture (opérateur plateforme) ---------------------
     Capability(key="usage.runs", handler=_runs, Input=RunsInput, authz=PLATFORM_ADMIN,

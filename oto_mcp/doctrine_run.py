@@ -1,13 +1,14 @@
-"""Déroulés de doctrine — pile de runs en état de session (ADR 0017, barreau 1-2).
+"""Runs — pile de runs en état de session (ADR 0017, barreau 1-2).
 
-Un **run** = une exécution bornée d'une doctrine (`doctrine_start` → `doctrine_finish`).
+Un **run** = un déroulé borné (`run_start` → `run_finish`) : soit l'exécution d'une
+doctrine nommée (champ `doctrine`), soit un run one-shot/ad-hoc (sans `doctrine`).
 Le `run_id` actif vit dans l'**état de session FastMCP** (session-scopé, TTL natif),
-sous forme de **pile** (runs imbriqués : une doctrine peut en démarrer une autre).
+sous forme de **pile** (runs imbriqués : un run peut en démarrer un autre).
 
-- `doctrine_start` (tools/doctrine_run.py) **pousse** un run.
+- `run_start` (tools/doctrine_run.py) **pousse** un run.
 - Le sink calllog (`server._calllog_sink`) lit le run **actif** (sommet de pile) et
   **stampe** chaque `tool_call` avec — corrélation côté serveur, l'agent ne thread rien.
-- `doctrine_finish` **dépile** (par run_id, robuste à l'imbrication).
+- `run_finish` **dépile** (par run_id, robuste à l'imbrication).
 
 State-only : aucune table. La trace durable se dérive de `tool_calls` (run_id) et,
 plus tard, des facts promus (barreau 4).
@@ -33,9 +34,9 @@ async def _read_stack(ctx: Any) -> list[dict]:
     return list(stack) if isinstance(stack, list) else []
 
 
-async def push_run(ctx: Any, run_id: str, slug: str) -> None:
+async def push_run(ctx: Any, run_id: str, label: str, doctrine: Optional[str] = None) -> None:
     stack = await _read_stack(ctx)
-    stack.append({"run_id": run_id, "slug": slug})
+    stack.append({"run_id": run_id, "label": label, "doctrine": doctrine})
     await ctx.set_state(_STACK_KEY, stack)
 
 

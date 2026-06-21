@@ -141,6 +141,44 @@ def _mgmt_token() -> str:
     return _mgmt_tok["value"]
 
 
+# ── Magic link : one-time-token Logto (onboarding sans saisie de code) ────────
+# Le backend mint un OTT pour l'email de l'invité (Management API) ; le lien le
+# porte → la custom UI Logto le consomme (signIn extraParams) → auth silencieuse,
+# compte créé/loggé avec l'email EXACT (pas de mismatch). Best-effort : si le mint
+# échoue (M2M absent, Logto down), l'invitation reste valide via le flow code email.
+def mint_one_time_token(email: str, *, expires_in: int = 7 * 24 * 3600) -> str | None:
+    """Mint un one-time-token Logto (magic link) pour `email`. Renvoie le token,
+    ou None si le mint échoue (l'appelant dégrade vers le lien sans magic-link)."""
+    import requests
+    try:
+        base, tok = _logto_base(), _mgmt_token()
+        r = requests.post(
+            f"{base}/api/one-time-tokens",
+            json={"email": email, "expiresIn": int(expires_in)},
+            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA,
+                     "Content-Type": "application/json"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()["token"]
+    except Exception as e:  # M2M non configuré, Logto indispo, expiry rejeté…
+        _log.warning("OTT mint échoué pour %s : %s", email, e)
+        return None
+
+
+def magic_url(base_url: str, email: str, *, expires_in: int = 7 * 24 * 3600) -> str:
+    """Augmente `base_url` d'un magic-link Logto pour `email` (params `otl` +
+    `login_hint`). Le front fait `signIn({extraParams:{one_time_token: otl},
+    loginHint})`. Si le mint échoue, renvoie `base_url` inchangé (dégradation
+    gracieuse vers le flow code email)."""
+    from urllib.parse import quote
+    ott = mint_one_time_token(email, expires_in=expires_in)
+    if not ott:
+        return base_url
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}otl={quote(ott, safe='')}&login_hint={quote(email, safe='')}"
+
+
 def _register_redirects(app_id: str, redirect_uris: list) -> None:
     """Ajoute les `redirect_uris` (déjà validés) à l'app Logto partagée (dédup) +
     l'origine CORS https correspondante. Idempotent ; no-op si tout est déjà là.

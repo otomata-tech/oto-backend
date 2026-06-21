@@ -11,7 +11,7 @@ import os
 
 from pydantic import BaseModel
 
-from .. import db, email
+from .. import db, email, oauth_facade
 from ._authz import PLATFORM_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -54,7 +54,9 @@ def _grant_access(ctx: ResolvedCtx, inp: GrantAccessInput) -> dict:
     db.grant_platform_access(inp.sub, quota=quota)
     emailed = False
     if user.get("email"):
-        emailed = email.send_access_granted_email(user["email"], _app_url())
+        # Magic-link : l'approbation logge l'user en un clic (pas de re-saisie de code).
+        app_url = oauth_facade.magic_url(_app_url(), user["email"])
+        emailed = email.send_access_granted_email(user["email"], app_url)
     return {"ok": True, "sub": inp.sub, "access_status": "active",
             "invite_quota": quota, "emailed": emailed}
 

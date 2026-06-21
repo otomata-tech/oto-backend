@@ -11,7 +11,7 @@ import os
 
 from pydantic import BaseModel, Field
 
-from .. import db, email, org_store
+from .. import db, email, oauth_facade, org_store
 from ._authz import ORG_ADMIN_OF, PLATFORM_ADMIN, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -22,6 +22,13 @@ _INVITE_TTL_DAYS = int(os.environ.get("OTO_MCP_INVITE_TTL_DAYS", "7"))
 
 def _app_url() -> str:
     return os.environ.get("OTO_APP_URL", "https://dashboard.oto.ninja").rstrip("/")
+
+
+def _invite_link(token: str, email_addr: str) -> str:
+    """Lien d'invitation augmenté d'un magic-link Logto (one-time-token) pour
+    l'email invité → connexion sans saisie de code. Dégrade vers le lien simple
+    si le mint échoue (flow code email)."""
+    return oauth_facade.magic_url(f"{_app_url()}/invite?token={token}", email_addr.strip())
 
 
 class InviteCreateInput(BaseModel):
@@ -73,7 +80,7 @@ def _invite_create(ctx: ResolvedCtx, inp: InviteCreateInput) -> dict:
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     _, token = org_store.create_invitation(
         inp.org_id, inp.email, inp.role, invited_by=ctx.sub, ttl_days=_INVITE_TTL_DAYS)
-    invite_url = f"{_app_url()}/invite?token={token}"
+    invite_url = _invite_link(token, inp.email)
     inviter = (db.get_user(ctx.sub) or {}).get("email")
     emailed = email.send_invite_email(inp.email.strip(), org["name"], invite_url, inviter)
     return {"ok": True, "email": inp.email.strip().lower(), "role": inp.role,
@@ -108,7 +115,7 @@ def _alpha_invite_create(ctx: ResolvedCtx, inp: AlphaInviteInput) -> dict:
     except Exception:
         db.refund_invite_quota(ctx.sub)
         raise
-    invite_url = f"{_app_url()}/invite?token={token}"
+    invite_url = _invite_link(token, inp.email)
     inviter = me.get("name") or me.get("email")
     emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url, inviter)
     remaining = (db.get_user(ctx.sub) or {}).get("invite_quota", 0)
@@ -126,7 +133,7 @@ def _alpha_invite_admin_create(ctx: ResolvedCtx, inp: AlphaInviteAdminInput) -> 
     _, token = org_store.create_invitation(
         None, inp.email, "org_member", invited_by=ctx.sub,
         ttl_days=_INVITE_TTL_DAYS, source="admin")
-    invite_url = f"{_app_url()}/invite?token={token}"
+    invite_url = _invite_link(token, inp.email)
     emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url)
     return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
             "invite_url": invite_url}
@@ -153,7 +160,7 @@ def _alpha_invite_resend(ctx: ResolvedCtx, inp: AlphaInviteResendInput) -> dict:
     _, token = org_store.create_invitation(
         None, inp.email, "org_member", invited_by=ctx.sub,
         ttl_days=_INVITE_TTL_DAYS, source="admin")
-    invite_url = f"{_app_url()}/invite?token={token}"
+    invite_url = _invite_link(token, inp.email)
     emailed = email.send_alpha_invite_email(inp.email.strip(), invite_url)
     return {"ok": True, "email": inp.email.strip().lower(), "emailed": emailed,
             "invite_url": invite_url}

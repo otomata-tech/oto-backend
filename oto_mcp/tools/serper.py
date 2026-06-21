@@ -39,6 +39,8 @@ def register(mcp: FastMCP) -> None:
         language: Optional[str] = "fr",
         site_filter: Optional[str] = None,
         tbs: Optional[str] = None,
+        location: Optional[str] = None,
+        autocorrect: Optional[bool] = None,
     ) -> dict:
         """Google web search via Serper.
 
@@ -50,10 +52,13 @@ def register(mcp: FastMCP) -> None:
             language: Language code (default "fr").
             site_filter: Restrict to a domain (e.g. "linkedin.com/in").
             tbs: Google time filter (e.g. "qdr:d" past day, "qdr:w" past week).
+            location: Geographic location bias (e.g. "Paris, France").
+            autocorrect: Toggle Google spelling autocorrection (default Serper-side).
         """
         return _run(
             "search", query=query, num=num, page=page, country=country,
             language=language, site_filter=site_filter, tbs=tbs,
+            location=location, autocorrect=autocorrect,
         )
 
     @mcp.tool()

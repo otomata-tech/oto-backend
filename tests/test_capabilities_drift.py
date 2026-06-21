@@ -36,7 +36,7 @@ _EXPECTED_TOOL_MODULES = {
     "apollo", "phantombuster", "hithorizons", "topograph", "zerobounce",
     "hubspot", "zoho", "zohodesk", "notion", "supabase", "figma",
     "ashby", "greenhouse", "lever", "recruitee", "teamtailor", "serpapi",
-    "n8n", "make", "zapier",
+    "n8n", "make", "zapier", "brightdata", "cloro",
 }
 
 

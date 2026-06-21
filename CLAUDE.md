@@ -364,8 +364,10 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
-# 151.115.148.128 : git reset --hard origin/main + pip install -e . + systemctl
-# restart oto-mcp). Idem côté oto-cli (workflow restart oto-mcp). Le restart
+# 151.115.148.128 : git reset --hard origin/main + pip install -e . + **reinstall
+# oto-core@main** (force-reinstall depuis git, sinon la box garde un clone oto-core
+# périmé → erreurs de signature désync, ex. search_jobs) + systemctl restart
+# oto-mcp). Idem côté oto-cli (workflow restart oto-mcp). Le restart
 # relance le wrapper start-encrypted (la master key est refetchée). ⚠️ start-
 # encrypted.sh est untracked → survit au git reset.
 git push origin main

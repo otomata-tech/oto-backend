@@ -294,10 +294,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (spine) + `remote`/`mount` (génériques) restent chargés explicitement. ⚠️ Le
   namespace déclaré doit matcher `namespace_of(tool)` (1er token avant `_`) — pas de
   namespace multi-mot (`culture_spectacle`→`culture`), sinon fail-open du gate.
-  (3) **resync `_EXPECTED_TOOL_MODULES`** dans `tests/test_capabilities_drift.py`
-  (garde-fou figé du set de modules dérivé) — oublié, le test casse. ⚠️ **Aucune CI
-  de test sur les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main)
-  → un test rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
+  Le garde-fou `test_tools_module_derivation_matches_filesystem` (`tests/test_capabilities_drift.py`)
+  est **auto-maintenu** (croise `tools/*.py` au registre) — ajouter un connecteur
+  (fichier + entrée registre) le garde vert SANS rien y toucher ; il casse seulement
+  sur un **fichier orphelin** (connecteur posé mais pas déclaré → dort invisible) ou un
+  **module fantôme** (faute dans `modules=`/nom). Seul un **module spine** chargé
+  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. ⚠️ **Aucune CI de test sur
+  les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main) → un test
+  rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_

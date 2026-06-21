@@ -25,10 +25,9 @@ def register_all(mcp: FastMCP) -> None:
     from . import onboarding
     onboarding.register(mcp)
 
-    # Meta-tools du palier organization (gestion orgs/membres/secrets +
-    # switcher d'org active). Pas de dépendance externe non plus.
-    from . import orgs
-    orgs.register(mcp)
+    # Le palier organization (orgs/membres/secrets/switch + doctrine/instructions)
+    # est 100% migré en capacités (ADR 0009) — monté par `_mcp_adapter`/`_rest_adapter`
+    # depuis `capabilities.registry`, plus aucun `tools/orgs.py`.
 
     # Harnais prospection « scout » (ADR 0008) — tools scout_* sur le substrat
     # factgraph, scopés à l'org active. Pas de dépendance externe.

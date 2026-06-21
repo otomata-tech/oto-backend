@@ -10,6 +10,7 @@ Dépend du core (sens unique ADR 0004).
 """
 from __future__ import annotations
 
+import inspect
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -52,6 +53,8 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         try:
             ctx = cap.authz(RawCtx(sub=sub), inp)
             result = cap.handler(ctx, inp)
+            if inspect.isawaitable(result):           # handler async (ex. doctrine + manifeste)
+                result = await result
         except AuthzDenied as d:
             return json_error(request, d.status, d.code)
         return json_response(request, result)

@@ -173,7 +173,7 @@ _CATEGORY_BY_CONNECTOR = {
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
-    "serpapi": "Prospection", "brightdata": "Prospection",
+    "serpapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
     "recruitee": "Recrutement", "teamtailor": "Recrutement",
@@ -197,7 +197,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "zoho": "Zoho", "zohodesk": "Zoho",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
-    "brightdata": "Bright Data",
+    "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "sirene_stock": "INSEE", "fr_open": "Open data FR",
@@ -218,7 +218,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "sirene": "insee.fr", "sirene_stock": "insee.fr",
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
-    "serpapi": "serpapi.com", "brightdata": "brightdata.com",
+    "serpapi": "serpapi.com", "brightdata": "brightdata.com", "cloro": "cloro.dev",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
 }
 
@@ -496,6 +496,13 @@ _REGISTRY_LIST = [
        default_quota=50, in_default_bundle=False, label="Bright Data",
        help="scraping & SERP via proxy (coquille vide — à implémenter)",
        href="https://brightdata.com"),
+    # cloro : veille AI-search (ChatGPT/Gemini/Perplexity/Copilot/Grok/AI Mode) +
+    # SERP Google en JSON. keyed api_key, platform-eligible (clé + quota daily).
+    _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
+       secret_kind="api_key", env_secret_name="CLORO_API_KEY", default_quota=50,
+       in_default_bundle=False, label="Cloro",
+       help="veille AI-search (ChatGPT, Gemini, Perplexity…) + SERP Google JSON",
+       href="https://cloro.dev"),
 
     # --- automatisation de workflows (no-code) — câblés 2026-06-21 -----------
     # Connecteurs vers les plateformes d'automatisation tierces. byo, hors bundle

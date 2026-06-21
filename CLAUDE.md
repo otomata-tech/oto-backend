@@ -168,6 +168,14 @@ d'activation, **toujours visible** via `PROTECTED_TOOLS`) expose 2 méta-tools :
 - `oto_onboarding_update(fields=…, onboarded=…)` — persiste les réponses (shallow-
   merge JSONB) et valide le booléan d'accueil.
 
+`tools/whoami.py` (spine, chargé explicitement dans `register_all`, hors gate
+d'activation, **toujours visible** via `PROTECTED_TOOLS`) expose `oto_whoami()`
+(lecture) — l'**identité MCP courante** sous laquelle Claude agit : compte (`sub` +
+email + rôle plateforme) × **org active** (id/name/rôle) × **groupe actif**, plus un
+résumé des connecteurs configurés, l'état Memento et `onboarded`. C'est le pendant
+agent du badge « identité MCP » du dashboard ; à appeler pour confirmer le contexte
+avant une action sensible. Pour basculer : `oto_use_org`.
+
 État en DB : table `user_account_profile(sub PK, onboarded bool, profile jsonb,
 onboarded_at)` (`db.get_account_profile` / `db.update_account_profile`). Le booléan
 gouverne « reprendre l'accueil à la session suivante ». Exposé sur `/api/me`

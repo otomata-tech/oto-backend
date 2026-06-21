@@ -4,11 +4,25 @@ Garantissent que ce qui est déclaré au registre est réellement monté, et qu'
 nom de tool n'est pas enregistré deux fois (legacy + capacité).
 """
 import asyncio
+import pathlib
 
 import pytest
 from fastmcp import FastMCP
 
 from oto_mcp.capabilities import _mcp_adapter, _rest_adapter, registry
+
+# Modules `tools/<m>.py` chargés EXPLICITEMENT par register_all (spine + génériques),
+# hors dérivation du registre (cf. oto_mcp/tools/__init__.py). Le reste des fichiers
+# tools/ DOIT être dérivé du registre `kind="tools"`. Cette liste-ci change rarement
+# (≠ un nouveau connecteur, qui n'a RIEN à ajouter ici).
+_EXPLICIT_TOOL_MODULES = {
+    "meta", "onboarding", "whoami", "scout", "datastore", "doctrine_run", "remote", "mount",
+}
+
+
+def _tools_module_files() -> set[str]:
+    d = pathlib.Path(__file__).resolve().parent.parent / "oto_mcp" / "tools"
+    return {p.stem for p in d.glob("*.py") if p.stem != "__init__"}
 
 
 def test_mcp_caps_are_mounted():
@@ -22,33 +36,30 @@ def test_mcp_caps_are_mounted():
     asyncio.run(go())
 
 
-# Modules `tools/<m>.py` que la dérivation register_all doit charger (#24). Set
-# FIGÉ : un provider kind="tools" ajouté sans module (ou avec une faute dans
-# `modules`) casse ce test — il garde la dérivation honnête sans dépendre des
-# deps optionnelles (pur registre, toujours exécuté).
-_EXPECTED_TOOL_MODULES = {
-    "serper", "hunter", "fr", "attio", "lemlist", "kaspr", "pennylane", "slack",
-    "fullenrich", "folk", "silae", "gocardless", "crunchbase",
-    "gmail", "tasks", "calendar", "sheets", "drive", "chat",
-    "reddit", "culture", "sirene_stock",
-    "foncier", "sante", "whatsapp", "unipile",
-    "telegram", "instagram", "messenger", "twitter",
-    "apollo", "phantombuster", "hithorizons", "topograph", "zerobounce",
-    "hubspot", "zoho", "zohodesk", "notion", "supabase", "figma",
-    "ashby", "greenhouse", "lever", "recruitee", "teamtailor", "serpapi",
-    "n8n", "make", "zapier", "brightdata", "cloro",
-}
+def test_tools_module_derivation_matches_filesystem():
+    """register_all dérive le chargement du registre (`Connector.modules` ou le nom,
+    #24). Garde-fou AUTO-MAINTENU (≠ liste figée à resync à chaque connecteur) :
+    le filesystem `tools/*.py` EST la source de vérité, croisée avec le registre.
 
-
-def test_tools_module_derivation_is_frozen():
-    """register_all dérive le chargement du registre (`Connector.modules` ou le
-    nom). Le set de modules à importer = exactement les modules connus."""
+    1. Aucun module fantôme : tout module dérivé du registre a son fichier (sinon
+       faute dans `modules=`/nom du provider → ImportError silencieux au boot).
+    2. Aucun fichier orphelin : tout `tools/<m>.py` est soit dérivé du registre,
+       soit chargé explicitement (spine/générique) — sinon un connecteur posé mais
+       jamais déclaré au registre dort, invisible. Pur registre+FS, dep-indépendant."""
     from oto_mcp import providers
-    mods: set[str] = set()
+    derived: set[str] = set()
     for c in providers.REGISTRY.values():
         if c.kind == "tools":
-            mods |= set(c.modules or (c.name,))
-    assert mods == _EXPECTED_TOOL_MODULES
+            derived |= set(c.modules or (c.name,))
+    files = _tools_module_files()
+
+    phantom = derived - files
+    assert not phantom, f"providers référencent des modules sans fichier tools/: {sorted(phantom)}"
+
+    orphan = files - derived - _EXPLICIT_TOOL_MODULES
+    assert not orphan, (
+        f"tools/<m>.py ni dérivés du registre ni chargés explicitement: {sorted(orphan)} "
+        "— déclarer le connecteur dans providers.py, ou l'ajouter à _EXPLICIT_TOOL_MODULES si c'est un module spine")
 
 
 def test_tools_namespaces_are_matchable():

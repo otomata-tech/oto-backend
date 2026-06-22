@@ -437,10 +437,11 @@ def status_for(sub: str) -> dict:
               | `forbidden` (ni user key ni grant)
     """
     role = get_user_role(sub)
-    # Org active résolue une fois (perf : sinon 1 lookup/provider). None pour
-    # tout user sans org → la branche org_secret ci-dessous est inerte et
-    # status_for reste identique à avant.
-    active_org = org_store.get_active_org(sub)
+    # Org effective résolue une fois (perf : sinon 1 lookup/provider). None pour
+    # tout user sans org → la branche org_secret ci-dessous est inerte. Via le seam
+    # `current_org` → reflète l'override de session (MCP) ou la consultation (REST
+    # view-as) le cas échéant, sinon la maison (ADR 0023).
+    active_org = current_org(sub)
     active_group = group_store.get_active_group(sub)
     out: dict = {"role": role, "active_org": active_org,
                  "active_group": active_group, "providers": {}}

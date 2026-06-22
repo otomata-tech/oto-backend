@@ -11,7 +11,7 @@ Dépend du core (sens unique ADR 0004).
 from __future__ import annotations
 
 import inspect
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import ValidationError
@@ -19,27 +19,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from .. import roles, session_org
 from ._types import AuthzDenied, Capability, RawCtx
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
-
-
-def _parse_view_org(request: Request) -> Optional[int]:
-    """Org de consultation demandée (header `X-Oto-Org`, view-as dashboard, ADR 0023).
-    None = pas de header ; 0 = profil perso ; >0 = id d'org. Header invalide → None
-    (repli silencieux sur l'org maison, jamais d'erreur dure sur un en-tête mal formé)."""
-    raw = request.headers.get("x-oto-org")
-    if raw is None:
-        return None
-    v = raw.strip().lower()
-    if v in ("", "0", "perso", "personal"):
-        return 0
-    try:
-        n = int(v)
-        return n if n > 0 else 0
-    except ValueError:
-        return None
 
 
 def _make_handler(cap: Capability, binding, verifier, authenticate, json_response, json_error):
@@ -68,14 +50,6 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             inp = cap.Input(**data)
         except ValidationError:
             return json_error(request, 400, "invalid_input")
-        # View-as (ADR 0023) : consulter une AUTRE org sans muter l'identité — header
-        # `X-Oto-Org`. Validé par APPARTENANCE ici (anti-IDOR : ne jamais faire
-        # confiance à l'en-tête), posé en contextvar lu par `access.current_org`, puis
-        # reset. Une org=0 (perso) ne nécessite pas de check (profil global du user).
-        view = _parse_view_org(request)
-        if view and not roles.is_org_member(sub, view):
-            return json_error(request, 403, "forbidden")
-        token = session_org.set_view_org(view) if view is not None else None
         try:
             ctx = cap.authz(RawCtx(sub=sub), inp)
             result = cap.handler(ctx, inp)
@@ -83,9 +57,6 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
                 result = await result
         except AuthzDenied as d:
             return json_error(request, d.status, d.code)
-        finally:
-            if token is not None:
-                session_org.reset_view_org(token)
         return json_response(request, result)
     return _handler
 

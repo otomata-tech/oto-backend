@@ -72,7 +72,7 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Oto-Org",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
         }
@@ -144,6 +144,60 @@ def _onboarding_block(sub: str) -> dict:
         return {"onboarded": st["onboarded"], "updated_at": st["updated_at"]}
     except Exception:
         return {"onboarded": False, "updated_at": None}
+
+
+# ── View-as (ADR 0023) : consultation d'une org dans le dashboard ───────────
+def _parse_view_org(request: Request) -> int | None:
+    """Org de consultation (header `X-Oto-Org`). None = pas de header ; 0 = perso ;
+    >0 = id d'org. Header mal formé → None (repli maison, jamais d'erreur dure)."""
+    raw = request.headers.get("x-oto-org")
+    if raw is None:
+        return None
+    v = raw.strip().lower()
+    if v in ("", "0", "perso", "personal"):
+        return 0
+    try:
+        n = int(v)
+        return n if n > 0 else 0
+    except ValueError:
+        return None
+
+
+class ViewAsMiddleware:
+    """Middleware ASGI **brut** (pas BaseHTTPMiddleware, qui bufferiserait le
+    streaming `/mcp`) : n'intervient QUE sur `/api/*` portant `X-Oto-Org`, sinon
+    pass-through total. Pose l'org de consultation (contextvar `session_org`) lue
+    par le seam `access.current_org` → toute la résolution REST (autz + handlers +
+    visibilité) scope la consultation, **sans** persister ni muter l'identité.
+
+    Anti-IDOR : l'appartenance est validée ici (org>0) ; on ne fait JAMAIS confiance
+    à l'en-tête. Sans header, ou non authentifié → la route suit son cours normal."""
+
+    def __init__(self, app, verifier: JWTVerifier):
+        self.app = app
+        self._verifier = verifier
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not scope.get("path", "").startswith("/api/"):
+            return await self.app(scope, receive, send)
+        request = Request(scope, receive)  # headers/query seulement → ne consomme pas le body
+        view = _parse_view_org(request)
+        if view is None:
+            return await self.app(scope, receive, send)
+        sub, err = await _authenticate(request, self._verifier)
+        if err:  # non authentifié → la route rendra son 401 ; pas de view-as
+            return await self.app(scope, receive, send)
+        if view:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
+            from . import roles
+            if not roles.is_org_member(sub, view):
+                resp = _json_error(request, 403, "forbidden")
+                return await resp(scope, receive, send)
+        from . import session_org
+        token = session_org.set_view_org(view)
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            session_org.reset_view_org(token)
 
 
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
@@ -270,7 +324,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         user = db.get_user(sub) or {}
         status = access.status_for(sub)
         cb = db.get_crunchbase_status(sub)
-        active_org = org_store.get_active_org(sub)
+        # `active_org` = org EFFECTIVE (ADR 0023) : via `current_org` elle reflète
+        # la consultation view-as (header X-Oto-Org) si posée, sinon la maison. Le
+        # front scope ses vues là-dessus. `home_org` (ci-dessous) = le défaut brut.
+        active_org = access.current_org(sub)
         active_org_name = None
         active_org_logo_url = None
         org_role = None
@@ -279,6 +336,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             active_org_name = o["name"] if o else None
             active_org_logo_url = o.get("logo_url") if o else None
             org_role = org_store.get_org_role(active_org, sub)
+        # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
+        # le front affiche « ton défaut » et l'action « définir comme maison ».
+        home_org = org_store.get_active_org(sub)
+        home_org_name = None
+        if home_org is not None and home_org != active_org:
+            ho = org_store.get_org(home_org)
+            home_org_name = ho["name"] if ho else None
+        elif home_org is not None:
+            home_org_name = active_org_name
         # Sous-palier groupe (ADR 0012) : groupe actif + rôle effectif (escalade).
         active_group = group_store.get_active_group(sub)
         active_group_name = None
@@ -313,6 +379,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_name": active_org_name,
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
+            "home_org": home_org,
+            "home_org_name": home_org_name,
             "active_group": active_group,
             "active_group_name": active_group_name,
             "group_role": group_role,

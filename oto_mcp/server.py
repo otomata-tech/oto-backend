@@ -275,6 +275,10 @@ def main():
                 app.router.routes.insert(0, route)
             logger.info("DCR facade active (claude app %s)", claude_app_id)
 
+        # View-as (ADR 0023) : middleware ASGI brut, n'intervient que sur /api/* avec
+        # le header X-Oto-Org (pass-through total sinon → n'altère pas le streaming /mcp).
+        app.add_middleware(api_routes.ViewAsMiddleware, verifier=verifier)
+
         import uvicorn
         logger.info("HTTP MCP server on %s:%d", host, port)
         uvicorn.run(

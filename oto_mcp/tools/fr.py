@@ -33,6 +33,7 @@ def register(mcp: FastMCP) -> None:
         code_postal: Optional[str] = None,
         commune: Optional[str] = None,
         employees: Optional[str] = None,
+        categorie_entreprise: Optional[str] = None,
         ca_min: Optional[int] = None,
         ca_max: Optional[int] = None,
         idcc: Optional[str] = None,
@@ -42,13 +43,19 @@ def register(mcp: FastMCP) -> None:
         """Search French companies — returns identity, HQ, NAF, employees,
         directors, finances, matched establishments. At least one filter required.
 
+        ⚠️ Geographic filters (departement, code_postal, commune) match ANY
+        establishment, NOT only the head office (siège). To target companies whose
+        SIÈGE is in a département, use `sirene_stock_search(departement=…,
+        sieges_only=True)`.
+
         Args:
             query: Full-text search (company name, SIREN, brand…).
             naf: NAF activity codes, comma-separated (e.g. "62.01Z,62.02A").
             departement: Department code (e.g. "75").
             code_postal: Postal code (e.g. "75001").
             commune: City name.
-            employees: Employee-range codes (INSEE TEFEN), comma-separated.
+            employees: Employee-range codes (INSEE TEFEN) of the unité légale, comma-separated.
+            categorie_entreprise: INSEE size category — "PME", "ETI" or "GE".
             ca_min: Minimum turnover in euros.
             ca_max: Maximum turnover in euros.
             idcc: IDCC codes (conventions collectives), comma-separated.
@@ -62,6 +69,7 @@ def register(mcp: FastMCP) -> None:
             code_postal=code_postal,
             commune=commune,
             employees=[s.strip() for s in employees.split(",")] if employees else None,
+            categorie_entreprise=categorie_entreprise,
             ca_min=ca_min, ca_max=ca_max,
             idcc=[s.strip() for s in idcc.split(",")] if idcc else None,
             page=page, per_page=per_page,

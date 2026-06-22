@@ -261,9 +261,13 @@ async def list_workspaces(sub: str) -> Optional[dict]:
 
 
 def status_for(sub: str) -> dict:
-    cred = credentials_store.get_credential_with_meta("user", sub, _CONNECTOR)
-    return {"connected": bool(cred and cred.get("secret")),
-            "set_at": cred.get("set_at") if cred else None}
+    # Présence seule (jamais le secret) : un statut de connexion n'a pas à
+    # déchiffrer le refresh_token. credential_status lit `set_at` sans toucher
+    # `secret_enc` → /api/me ne 500 plus sur une enveloppe illisible, et la
+    # surface d'attaque est réduite (cf. credentials_store.credential_status).
+    st = credentials_store.credential_status("user", sub, _CONNECTOR)
+    return {"connected": st is not None,
+            "set_at": st["set_at"] if st else None}
 
 
 def disconnect(sub: str) -> bool:

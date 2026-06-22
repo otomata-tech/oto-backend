@@ -952,8 +952,10 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
              "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )
-        # 2. user_account_profile (PK sub) : garder l'ancien → retirer le frais du new.
+        # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
+        #    l'ancien (garde l'historique d'onboarding). DELETE d'abord → pas de conflit PK.
         conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
+        conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s", (new_sub, old_sub))
         # 3. repointer toutes les colonnes sub.
         for table, col in _SUB_COLUMNS:
             conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))

@@ -178,11 +178,27 @@ def register(mcp: FastMCP) -> None:
 
         exercises = f_bilans.result()
         latest_bilan = None
-        if exercises:
+        finances_note = None
+        latest_confidentiality = None
+        if exercises:  # liste non vide = au moins un dépôt exploitable (BdF)
+            latest_ex = exercises[0]
+            latest_confidentiality = latest_ex.get("confidentiality")
             full = _safe("latest_bilan", inpi.get_bilan, siren,
-                         exercises[0]["date_cloture_exercice"])
+                         latest_ex["date_cloture_exercice"])
             if full:
                 latest_bilan = {k: full.get(k) for k in _LATEST_BILAN_KEYS}
+            if latest_confidentiality and latest_confidentiality != "Public":
+                finances_note = (
+                    f"comptes « {latest_confidentiality.lower()} » (art. L.232-25) — "
+                    "certains ratios sont absents par déclaration de confidentialité"
+                )
+        elif exercises == []:  # succès mais 0 dépôt exploitable au dataset BdF
+            finances_note = (
+                "aucun compte exploitable au dataset Banque de France : jamais déposé "
+                "OU déposé en confidentialité totale (les micro/petites entreprises "
+                "peuvent rendre leurs comptes confidentiels). Vérifier l'existence d'un "
+                "dépôt confidentiel via les actes RNE sur data.inpi.fr."
+            )
 
         events_data = f_events.result() or {}
 
@@ -190,11 +206,14 @@ def register(mcp: FastMCP) -> None:
             "siren": siren,
             "identity": _compact_identity(identity),
             "latest_bilan": latest_bilan,
+            "latest_bilan_confidentiality": latest_confidentiality,
             "recent_events": [
                 _pick(e, _EVENT_KEEP) for e in events_data.get("results", [])
             ],
             "events_total": events_data.get("total_count", 0),
         }
+        if finances_note:
+            out["finances_note"] = finances_note
         if partial_errors:
             out["partial_errors"] = partial_errors
         return out

@@ -21,6 +21,14 @@ def current_user_sub_from_token() -> Optional[str]:
         if token and getattr(token, "claims", None):
             sub = token.claims.get("sub")
             if sub:
+                # Bascule de tenant (B1, otomata#35) : pendant la fenêtre, canonicaliser
+                # le sub (vieux token en drain → compte migré) et déclencher la migration
+                # pour les users MCP-only. Gaté env → no-op (et aucun coût) hors bascule.
+                if os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS"):
+                    from . import db
+                    sub = db.resolve_sub(sub)
+                    db.upsert_user(sub, email=token.claims.get("email"),
+                                   name=token.claims.get("name"), iss=token.claims.get("iss"))
                 return sub
     except Exception:
         pass

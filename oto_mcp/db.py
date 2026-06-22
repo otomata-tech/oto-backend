@@ -562,6 +562,16 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, product)
 );
+
+-- Bascule de tenant Logto (B1, otomata#35) : alias ancien_sub → nouveau_sub. Posé
+-- par migrate_sub au 1er login d'un compte sur le nouveau tenant (merge par email).
+-- Sert à canonicaliser les tokens encore émis par l'ancien tenant pendant le drain
+-- (sinon un vieux token re-créerait le compte supprimé). Vide hors fenêtre de bascule.
+CREATE TABLE IF NOT EXISTS sub_aliases (
+    old_sub TEXT PRIMARY KEY,
+    new_sub TEXT NOT NULL,
+    migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -786,7 +796,8 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS user_google_oauth")
 
 
-def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> None:
+def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None,
+                iss: Optional[str] = None) -> None:
     """Create the user row if missing, refresh email/name if known.
 
     Fédération de compte (otomata#16) : à la **première** création (vrai INSERT),
@@ -822,12 +833,123 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
         from . import memento_federation
         memento_federation.provision_async(sub, email)
+    # Bascule de tenant (B1, otomata#35) : sur un login du NOUVEAU tenant, fusionner
+    # l'ancien compte (même email) → ce sub. Gaté par env `OTO_MCP_TENANT_MIGRATION_ISS`
+    # (dormant hors fenêtre de bascule). Idempotent, best-effort, à chaque login
+    # new-tenant (pas que au 1er insert → couvre les retries / l'ordre des logins).
+    if email and iss:
+        _mig = os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS", "").strip().rstrip("/")
+        if _mig and iss.rstrip("/") == _mig:
+            try:
+                reconcile_tenant_migration(sub, email)
+            except Exception:
+                pass
 
 
 def get_user(sub: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE sub = %s", (sub,)).fetchone()
         return dict(row) if row else None
+
+
+# --- Bascule de tenant Logto (B1, otomata#35) -------------------------------
+# Inventaire des colonnes keyed-by-sub à repointer (issue oto-backend#56). Plain
+# UPDATE : le nouveau sub est frais → aucun conflit de PK, SAUF user_account_profile
+# (PK sub) et connector_credentials (coffre user), traités à part.
+_SUB_COLUMNS = [
+    # données de l'user
+    ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
+    ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"), ("user_presets", "sub"),
+    ("user_grants", "sub"), ("user_namespace_grants", "sub"), ("user_datastores", "sub"),
+    ("datastore_shares", "owner_sub"), ("datastore_shares", "shared_with_sub"),
+    ("org_members", "sub"), ("org_group_members", "sub"),
+    ("user_api_tokens", "sub"), ("unipile_accounts", "sub"), ("unipile_pending", "sub"),
+    # attribution (soft)
+    ("users", "invited_by"), ("user_grants", "granted_by"), ("user_namespace_grants", "granted_by"),
+    ("orgs", "created_by"), ("org_entitlements", "granted_by"),
+    ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
+    ("org_groups", "created_by"), ("org_instructions", "set_by"),
+    ("org_instruction_revisions", "set_by"), ("org_group_instructions", "set_by"),
+    ("org_group_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
+]
+
+
+def resolve_sub(sub: str) -> str:
+    """Canonicalise un sub via sub_aliases (vieux token d'un tenant en drain →
+    compte migré). Renvoie le sub inchangé si pas d'alias (cas normal)."""
+    if not sub:
+        return sub
+    try:
+        with _connect() as conn:
+            row = conn.execute("SELECT new_sub FROM sub_aliases WHERE old_sub=%s", (sub,)).fetchone()
+        return row["new_sub"] if row else sub
+    except Exception:
+        return sub
+
+
+def migrate_sub(old_sub: str, new_sub: str) -> bool:
+    """MERGE transactionnel ancien→nouveau compte (bascule de tenant, issue #56).
+    Hérite les champs d'accès de l'ancien, repointe TOUTES les tables keyed-by-sub
+    (les 3 FK `ON DELETE CASCADE` incluses, AVANT de supprimer l'ancien → pas de
+    cascade destructrice), supprime l'ancienne ligne users, pose l'alias. Idempotent
+    (no-op si l'ancien sub n'existe plus). True si une migration a eu lieu."""
+    if not old_sub or not new_sub or old_sub == new_sub:
+        return False
+    with _connect() as conn:
+        old = conn.execute("SELECT * FROM users WHERE sub=%s", (old_sub,)).fetchone()
+        if not old:
+            return False  # déjà migré / inexistant
+        # 1. hériter les champs de l'ancien (le compte réel, avec son historique)
+        #    sur la ligne neuve (fraîche, pending par défaut).
+        conn.execute(
+            """UPDATE users SET
+                 role = %(role)s, access_status = %(st)s, invite_quota = %(q)s,
+                 invited_by = COALESCE(users.invited_by, %(ib)s),
+                 access_granted_at = COALESCE(users.access_granted_at, %(ag)s),
+                 avatar_url = COALESCE(users.avatar_url, %(av)s), updated_at = NOW()
+               WHERE sub = %(new)s""",
+            {"role": old["role"], "st": old["access_status"], "q": old["invite_quota"],
+             "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
+             "av": old.get("avatar_url"), "new": new_sub},
+        )
+        # 2. user_account_profile (PK sub) : garder l'ancien → retirer le frais du new.
+        conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
+        # 3. repointer toutes les colonnes sub.
+        for table, col in _SUB_COLUMNS:
+            conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
+        # coffre user (connector_credentials) : entité + auteur.
+        conn.execute("UPDATE connector_credentials SET entity_id=%s WHERE entity_type='user' AND entity_id=%s", (new_sub, old_sub))
+        conn.execute("UPDATE connector_credentials SET set_by=%s WHERE set_by=%s", (new_sub, old_sub))
+        # 4. supprimer l'ancienne ligne users (enfants FK déjà repointés).
+        conn.execute("DELETE FROM users WHERE sub=%s", (old_sub,))
+        # 5. alias (drain des vieux tokens → compte canonique).
+        conn.execute(
+            "INSERT INTO sub_aliases (old_sub, new_sub) VALUES (%s,%s) "
+            "ON CONFLICT (old_sub) DO UPDATE SET new_sub=EXCLUDED.new_sub, migrated_at=NOW()",
+            (old_sub, new_sub),
+        )
+    logger.info("tenant migration: merged %s → %s (par email)", old_sub, new_sub)
+    return True
+
+
+def reconcile_tenant_migration(new_sub: str, email: str) -> bool:
+    """Au login sur le nouveau tenant : si EXACTEMENT un autre compte partage cet
+    email (l'ancien sub), le migrer vers new_sub. No-op si 0 (rien à migrer) ou >1
+    (ambigu — on ne touche pas). Idempotent (l'ancien disparaît après migration)."""
+    if not new_sub or not email:
+        return False
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT sub FROM users WHERE lower(email)=lower(%s) AND sub<>%s",
+                (email, new_sub),
+            ).fetchall()
+        if len(rows) != 1:
+            return False
+        return migrate_sub(rows[0]["sub"], new_sub)
+    except Exception:
+        logger.warning("reconcile_tenant_migration échoué pour %s", email, exc_info=True)
+        return False
 
 
 # --- accès plateforme & quota d'invitation (ADR 0013) -----------------------

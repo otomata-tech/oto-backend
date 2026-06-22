@@ -111,7 +111,13 @@ async def _authenticate(
     sub = access_token.claims.get("sub")
     if not sub:
         return None, _json_error(request, 401, "missing_sub")
-    db.upsert_user(sub, email=access_token.claims.get("email"), name=access_token.claims.get("name"))
+    # Bascule de tenant (B1) : pendant la fenêtre, canonicaliser le sub AVANT l'upsert
+    # (un vieux token de l'ancien tenant en drain → compte migré, sinon il re-créerait
+    # le compte supprimé). Gaté env → no-op hors bascule.
+    if os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS"):
+        sub = db.resolve_sub(sub)
+    db.upsert_user(sub, email=access_token.claims.get("email"),
+                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"))
     return sub, None
 
 

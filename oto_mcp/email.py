@@ -86,12 +86,12 @@ def send_alpha_invite_email(to: str, invite_url: str,
                             inviter: str | None = None) -> bool:
     """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon.
 
-    Copy alignée sur le positionnement oto.ninja (web/src/i18n.ts) : tutoiement +
-    minuscules (voix de marque « manuscrit chaud »)."""
-    subject = "tu es invité·e à l'alpha de oto"
+    Copy alignée sur le positionnement oto.ninja : voix funnel = vouvoiement +
+    minuscules (décision 2026-06-22, voix de marque « manuscrit chaud »)."""
+    subject = "vous êtes invité·e à l'alpha de oto"
     sub_line = (
         f'<div style="font-size:15px;color:#7a6c50;padding-bottom:24px">'
-        f'{_esc(inviter)} t\'ouvre l\'accès.</div>'
+        f'{_esc(inviter)} vous ouvre l\'accès.</div>'
         if inviter else '<div style="height:24px"></div>'
     )
     url = _esc(invite_url)
@@ -114,19 +114,19 @@ def send_alpha_invite_email(to: str, invite_url: str,
         # Titre = le hero oto.ninja
         '<tr><td style="font-size:32px;line-height:1.18;font-weight:700;'
         'padding-bottom:14px">claude connaît le monde.<br>'
-        'oto lui ouvre <span style="color:#d63d0a">tes outils</span>.</td></tr>'
+        'oto lui ouvre <span style="color:#d63d0a">vos outils</span>.</td></tr>'
         f'<tr><td>{sub_line}</td></tr>'
 
         # Corps = hero_sub oto.ninja, VERBATIM (web/src/i18n.ts)
         '<tr><td style="font-size:16px;line-height:1.6;color:#2c2112;padding-bottom:18px">'
-        'crm, emails, linkedin, données entreprise france — tes agents '
-        '(claude.ai, claude code) s\'en servent avec tes clés, gardées dans un '
+        'crm, emails, linkedin, données entreprise france — vos agents '
+        '(claude.ai, claude code) s\'en servent avec vos clés, gardées dans un '
         'coffre côté serveur. jamais collées dans un prompt.</td></tr>'
 
         # 2e ligne = acc_lead oto.ninja, VERBATIM
         '<tr><td style="font-size:16px;line-height:1.6;color:#7a6c50">'
         'le même compte, le même coffre, le même catalogue — depuis claude code, '
-        'claude.ai ou ton terminal.</td></tr>'
+        'claude.ai ou votre terminal.</td></tr>'
 
         # CTA
         '<tr><td style="padding:32px 0 8px">'
@@ -142,7 +142,7 @@ def send_alpha_invite_email(to: str, invite_url: str,
         '<tr><td style="border-top:1px solid #ece4d0;padding-top:20px;'
         'font-size:12px;line-height:1.5;color:#9a8a6a">'
         'oto, par otomata · oto.ninja<br>'
-        'tu reçois cet email car tu as été invité·e à l\'alpha.</td></tr>'
+        'vous recevez cet email car vous avez été invité·e à l\'alpha.</td></tr>'
 
         '</table></div>'
     )

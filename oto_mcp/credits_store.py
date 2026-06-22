@@ -154,9 +154,9 @@ def debit_for_call(sub: Optional[str]) -> None:
     if not sub:
         return
     try:
-        from . import org_store
+        from . import access
 
-        org_id = org_store.get_active_org(sub)
+        org_id = access.current_org(sub)
         if org_id is None:
             return
         if debit(org_id, 1, "call") is None:

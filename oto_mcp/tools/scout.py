@@ -15,7 +15,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, org_store
+from .. import access
 from ..factgraph import prospection
 from ..factgraph.schemas import SchemaError
 
@@ -30,7 +30,7 @@ def _require_org() -> tuple[str, int]:
     sub = access.current_user_sub_from_token()
     if not sub:
         raise _err("Auth requise — transport HTTP authentifié uniquement.")
-    org_id = org_store.get_active_org(sub)
+    org_id = access.current_org(sub)
     if org_id is None:
         raise _err("Aucune org active. Choisis-en une avec `oto_use_org`.")
     return sub, org_id

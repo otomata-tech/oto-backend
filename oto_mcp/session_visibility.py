@@ -59,7 +59,7 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     nouvelle org. `ctx` = `Context` fastmcp (pour `ctx.fastmcp.list_tools`)."""
     try:
         # Les toggles/presets sont scopés par org → on lit ceux de l'org active.
-        active_org = org_store.get_active_org(sub)
+        active_org = access.current_org(sub)
         prof_org = active_org or 0
         disabled = set(db.list_user_disabled_tools(sub, prof_org))
         enabled_override = set(db.list_user_enabled_tools(sub, prof_org))

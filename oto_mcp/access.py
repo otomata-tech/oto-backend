@@ -91,6 +91,23 @@ def is_platform_operator(sub: str) -> bool:
     return get_user_role(sub) in (ADMIN, SUPER_ADMIN)
 
 
+def current_org(sub: str | None) -> Optional[int]:
+    """Org sous laquelle Claude AGIT pour le `sub` courant — **seam unique** de
+    résolution d'org (ADR 0023, amende 0015).
+
+    Point de passage de TOUT ce qui scope une action sur l'org (credentials,
+    visibilité, entitlements, redaction, billing). Aujourd'hui (barreau R0) =
+    l'org persistée (`org_store.get_active_org`, qui devient l'« org maison »).
+
+    Cible (R1) : `org_de_session ?? org_maison` — l'org de session est un override
+    éphémère posé par `oto_use_org` dans l'état de session FastMCP, lu ici via le
+    contexte ambiant ; absent (REST, ou hors session) → repli sur la maison. Garder
+    ce seam étroit : c'est le candidat broker de credentials (ADR 0004)."""
+    if sub is None:
+        return None
+    return org_store.get_active_org(sub)
+
+
 def granted_namespaces_for(sub: str) -> frozenset:
     """Namespaces auxquels le `sub` a droit = grants per-user UNION entitlements
     de son org active.
@@ -101,7 +118,7 @@ def granted_namespaces_for(sub: str) -> frozenset:
     contournable côté /account). Cf. project_oto_mcp_org_tier.
     """
     ns = set(db.list_user_granted_namespaces(sub))
-    active_org = org_store.get_active_org(sub)
+    active_org = current_org(sub)
     if active_org is not None:
         ns |= set(org_store.list_org_entitled_namespaces(active_org))
         # Remote data-driven (ADR 0003/0011) : posséder le credential d'org (avec
@@ -179,7 +196,7 @@ def resolve_api_key(provider: str) -> tuple[str, bool]:
             grp_key = group_store.get_group_secret(active_group, provider)
             if grp_key:
                 return grp_key, False
-        active_org = org_store.get_active_org(sub)
+        active_org = current_org(sub)
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
             if org_key:
@@ -262,7 +279,7 @@ def resolve_field_filter(service: str):
     block: Optional[dict] = None
     sub = current_user_sub_from_token()
     if sub:
-        active_org = org_store.get_active_org(sub)
+        active_org = current_org(sub)
         if active_org is not None:
             configured = org_store.get_org_field_filters(active_org)
             if service in configured:
@@ -285,7 +302,7 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
     key = db.get_user_api_key(sub, "unipile")
     if key:
         return key
-    active_org = org_store.get_active_org(sub)
+    active_org = current_org(sub)
     if active_org is not None:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
@@ -312,7 +329,7 @@ def resolve_remote_credential(provider: str) -> tuple[str, str]:
     `resolve_org_credential` (l'injection in-process de l'ex-tools/mm.py).
     """
     sub = current_user_sub_or_raise()
-    active_org = org_store.get_active_org(sub)
+    active_org = current_org(sub)
     if active_org is not None:
         cred = credentials_store.get_credential_with_meta("org", str(active_org), provider)
         if cred and cred["secret"]:

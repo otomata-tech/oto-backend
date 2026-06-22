@@ -224,6 +224,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity)
     )
 
+    # Rédaction des champs sensibles du RÉSULTAT des tools (ADR 0009/0015) selon la
+    # politique de l'org active. EN DERNIER : l'exécution est en ordre inverse, donc
+    # ce middleware enveloppe les autres et retouche le résultat final en sortie.
+    from .middleware import FieldRedactionMiddleware
+    instance.add_middleware(FieldRedactionMiddleware())
+
     return instance
 
 

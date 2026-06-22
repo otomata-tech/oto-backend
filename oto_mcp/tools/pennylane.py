@@ -29,7 +29,9 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> PennylaneClient:
         key, _is_platform = access.resolve_api_key("pennylane")
-        return PennylaneClient(api_key=key, field_filter=access.resolve_field_filter("pennylane"))
+        # Rédaction appliquée à la frontière des tools par `FieldRedactionMiddleware`
+        # (policy de l'org active), plus au niveau client.
+        return PennylaneClient(api_key=key)
 
     @mcp.tool()
     async def pennylane_company() -> dict:

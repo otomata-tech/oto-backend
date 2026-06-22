@@ -14,10 +14,25 @@ redacter. Schéma incomplet/absent = acceptable : l'UI garde une saisie de champ
 Forme par champ :
     {"name": <clé feuille>, "label": <libellé UI>, "type": <hint>, "sensitive": <bool>}
 
-Démarre sur les connecteurs déjà câblés `field_filter` (silae, pennylane, folk —
-cf. `access.resolve_field_filter`). À étendre quand un nouveau client accepte `field_filter`.
+La rédaction est appliquée à la frontière des tools (`middleware.FieldRedactionMiddleware`)
+pour TOUS les connecteurs ; ce registre n'a donc plus à suivre un câblage client. À
+étendre quand un connecteur émet des champs notables à proposer au dashboard.
 """
 from __future__ import annotations
+
+# Champs candidat (use-case recrutement) — partagés par unipile + les ATS. Les noms
+# couvrent les variantes de casse/format ; `FieldFilter` matche la clé feuille.
+_CANDIDATE_FIELDS: list[dict] = [
+    {"name": "first_name", "label": "prénom", "type": "string", "sensitive": True},
+    {"name": "last_name", "label": "nom", "type": "string", "sensitive": True},
+    {"name": "name", "label": "nom complet", "type": "string", "sensitive": True},
+    {"name": "email", "label": "email", "type": "string", "sensitive": True},
+    {"name": "phone", "label": "téléphone", "type": "string", "sensitive": True},
+    {"name": "photo_url", "label": "photo", "type": "string", "sensitive": True},
+    {"name": "public_profile_url", "label": "URL profil public", "type": "string", "sensitive": True},
+    {"name": "headline", "label": "titre/accroche", "type": "string", "sensitive": False},
+    {"name": "location", "label": "localisation", "type": "string", "sensitive": False},
+]
 
 CONNECTOR_FIELD_SCHEMA: dict[str, list[dict]] = {
     # Silae (paie FR). Plancher PII = coordonnées bancaires (cf. field_filter_defaults).
@@ -49,6 +64,13 @@ CONNECTOR_FIELD_SCHEMA: dict[str, list[dict]] = {
         {"name": "city", "label": "ville", "type": "string", "sensitive": False},
         {"name": "postal_code", "label": "code postal", "type": "string", "sensitive": False},
     ],
+    # Recrutement — profils/candidats (anonymisation par défaut, cf. field_filter_defaults).
+    "unipile": _CANDIDATE_FIELDS,
+    "ashby": _CANDIDATE_FIELDS,
+    "greenhouse": _CANDIDATE_FIELDS,
+    "lever": _CANDIDATE_FIELDS,
+    "recruitee": _CANDIDATE_FIELDS,
+    "teamtailor": _CANDIDATE_FIELDS,
 }
 
 

@@ -10,8 +10,8 @@ Read-only surface (dossiers, employees, payslips, variables awaiting entry).
 The write operations (adding a bonus/hours, confirming staged entries) stay out
 of the agent for now — entering payroll is a sensitive act. Bank details
 (IBAN/BIC/RIB) are masked before the response reaches the agent : the redaction
-is resolved per-org via `access.resolve_field_filter("silae")` (server default
-in `field_filter_defaults.SERVER_DEFAULTS`, overridable by the org_admin).
+is applied at the tool boundary by `FieldRedactionMiddleware` (server default in
+`field_filter_defaults.SERVER_DEFAULTS`, overridable by the org_admin), not here.
 """
 from __future__ import annotations
 
@@ -27,13 +27,12 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> SilaeClient:
         creds = access.resolve_credential_fields("silae")
-        # Redaction résolue par org (défaut serveur = masque IBAN/BIC/RIB, cf.
-        # field_filter_defaults ; l'org_admin la règle via le dashboard).
+        # Rédaction (masque IBAN/BIC/RIB par défaut) appliquée à la frontière des
+        # tools par `FieldRedactionMiddleware`, plus au niveau client.
         return SilaeClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             subscription_key=creds.get("subscription_key"),
-            field_filter=access.resolve_field_filter("silae"),
         )
 
     # --- Dossiers (payroll files) ---

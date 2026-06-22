@@ -68,18 +68,15 @@ def test_tools_namespaces_are_matchable():
     fail-open en silence. Un namespace multi-mot (`culture_spectacle`) ne matche
     JAMAIS → bug (#24). Pur registre, dep-indépendant.
 
-    Whitelist : `sirene_stock` (namespace_of→`sirene`) reste un fail-open connu,
-    limite structurelle de namespace_of, TODO #24-bis."""
+    (L'ex-namespace `sirene_stock` qui forçait une whitelist a été fusionné dans
+    le connecteur `sirene` sous le namespace `fr` — tools `fr_stock_*`, 2026-06-22.)"""
     from oto_mcp import providers
     from oto_mcp.tool_visibility import namespace_of
 
-    WHITELIST = {"sirene_stock"}
     for c in providers.REGISTRY.values():
         if c.kind != "tools":
             continue
         for ns in c.namespaces:
-            if ns in WHITELIST:
-                continue
             assert namespace_of(f"{ns}_x") == ns, (
                 f"namespace non matchable {c.name}:{ns} (multi-mot → fail-open du gate)")
 

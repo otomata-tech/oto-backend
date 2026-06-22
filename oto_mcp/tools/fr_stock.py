@@ -1,18 +1,21 @@
 """SIRENE stock — accès au parquet INSEE complet via DuckDB.
 
-Le parquet (~2GB compressé, ~35M lignes établissements + sièges + secondaires +
-actifs/fermés) vit sur le serveur (`/opt/oto-mcp/data/sirene/StockEtablissement.parquet`).
-Refresh mensuel manuel/cron côté serveur.
+Volet « stock » du connecteur entreprises FR (`sirene`) : namespace `fr_stock_*`,
+pendant des `fr_*` live (qui frappent les APIs SIRENE/Recherche Entreprises). Le
+parquet (~2GB compressé, ~35M lignes : sièges + secondaires, actifs/fermés) est lu
+depuis l'Object Storage en httpfs (`SIRENE_STOCK_PARQUET_PATH=s3://…`, ADR 0002),
+refresh mensuel par `deploy/refresh_sirene_stock_s3.sh`.
 
-Tools complémentaires aux endpoints `fr_*` (qui frappent les APIs live) :
-- `sirene_stock_enrich(sirens=[...])` — sièges d'une LISTE en UN scan (bulk)
-- `sirene_stock_siege(siren)` — siège d'un SIREN
-- `sirene_stock_etablissements(siren)` — tous les établissements d'une boîte
-- `sirene_stock_search(...)` — recherche multi-critères (NAF, commune, enseigne…)
+Tools (source parquet — sans clé, exhaustif/bulk, millésime mensuel) :
+- `fr_stock_enrich(sirens=[...])` — sièges d'une LISTE en UN scan (bulk)
+- `fr_stock_siege(siren)` — siège d'un SIREN
+- `fr_stock_etablissements(siren)` — tous les établissements d'une boîte
+- `fr_stock_siret(siret)` — un établissement par SIRET
+- `fr_stock_search(...)` — recherche multi-critères (NAF, commune, enseigne…)
 
 Cas d'usage typique : enrichissement batch de plusieurs milliers de SIRENs où
 l'API SIRENE (rate-limited) ou Recherche Entreprises (~10 req/s) sont trop
-lentes. Le parquet via DuckDB tourne à 10-50ms/lookup à chaud.
+lentes, et l'énumération exhaustive (>10k) qu'une API indexée ne permet pas.
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from france_opendata import sirene_stock as sirene_duckdb
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def sirene_stock_siege(siren: str) -> Optional[dict]:
+    async def fr_stock_siege(siren: str) -> Optional[dict]:
         """Headquarters (siège) of a French company from the local SIRENE
         stock parquet (INSEE, monthly snapshot).
 
@@ -39,7 +42,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.lookup_siege(siren)
 
     @mcp.tool()
-    async def sirene_stock_etablissements(siren: str, active_only: bool = True) -> list[dict]:
+    async def fr_stock_etablissements(siren: str, active_only: bool = True) -> list[dict]:
         """All establishments (siège + secondaires) of a French company from
         the local SIRENE stock parquet.
 
@@ -53,10 +56,10 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.list_establishments(siren, active_only=active_only)
 
     @mcp.tool()
-    async def sirene_stock_enrich(sirens: list[str]) -> dict:
+    async def fr_stock_enrich(sirens: list[str]) -> dict:
         """Batch headquarters enrichment: pass a LIST of SIRENs, get each one's
         head-office address in a SINGLE scan. This is the bulk strength of the
-        stock parquet — far faster than N calls to fr_get/sirene_stock_siege
+        stock parquet — far faster than N calls to fr_get/fr_stock_siege
         (one scan vs one network round-trip per SIREN).
 
         Use it to enrich a list of prospects (from fr_search, a Folk export,
@@ -72,7 +75,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.headquarters_addresses(clean)
 
     @mcp.tool()
-    async def sirene_stock_siret(siret: str) -> Optional[dict]:
+    async def fr_stock_siret(siret: str) -> Optional[dict]:
         """Fetch a specific establishment by SIRET (14 digits) from the stock parquet.
 
         Args:
@@ -81,7 +84,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.lookup_siret(siret)
 
     @mcp.tool()
-    async def sirene_stock_search(
+    async def fr_stock_search(
         naf: Optional[str] = None,
         code_commune: Optional[str] = None,
         code_postal: Optional[str] = None,

@@ -123,8 +123,8 @@ Stock complet (~43M établissements, parquet ~2GB) interrogé via DuckDB :
   résout l'URL via l'API data.gouv puis push S3, à lancer sur otomata-0 ; **cron non installé** —
   le parquet bouge lentement, refresh manuel quand ça compte).
 - Query layer : `france_opendata.sirene_stock` (lib PyPI `france-opendata[stock]`, **>=0.11** = support s3:///httpfs).
-- MCP tools `sirene_stock_*` : **`enrich(sirens=[...])`** (bulk — sièges d'une LISTE en UN scan), `siege`, `etablissements`, `siret`, `search` (`sieges_only=True` = siège strict).
-- REST `/api/sirene/{headquarters(POST,batch),siege,etablissements,siret,search,info}`.
+- MCP tools `fr_stock_*` (ex-`sirene_stock_*`, fusionnés dans le connecteur `sirene` le 2026-06-22 — même domaine entreprises FR, namespace `fr`) : **`fr_stock_enrich(sirens=[...])`** (bulk — sièges d'une LISTE en UN scan), `fr_stock_siege`, `fr_stock_etablissements`, `fr_stock_siret`, `fr_stock_search` (`sieges_only=True` = siège strict). Pendant parquet des `fr_*` live.
+- REST `/api/sirene/{headquarters(POST,batch),siege,etablissements,siret,search,info}` (noms de routes **inchangés** — `oto-cli`/`oto-core` en dépendent ; orthogonaux aux noms MCP).
 - Consommé par `oto-cli` (`SireneStock` HTTP client, oto-core >=1.8 — `get_headquarters_addresses` = 1 POST batch, plus N appels) — voir ADR 0001 + 0002 dans le privé `otomata-private`.
 
 ## Datastore (spine natif PG, ADR 0016)

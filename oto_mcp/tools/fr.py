@@ -45,7 +45,7 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ Geographic filters (departement, code_postal, commune) match ANY
         establishment, NOT only the head office (siège). To target companies whose
-        SIÈGE is in a département, use `sirene_stock_search(departement=…,
+        SIÈGE is in a département, use `fr_stock_search(departement=…,
         sieges_only=True)`.
 
         Args:

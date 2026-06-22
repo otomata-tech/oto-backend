@@ -31,7 +31,10 @@ from . import connectors
 ADMIN_GRANT_ONLY_NAMESPACES = connectors.ADMIN_GRANT_ONLY_NAMESPACES
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
-DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset()
+# `email_send` : outil d'envoi sous l'identité de marque, gaté super_admin dans son
+# handler — masqué ici pour ne pas encombrer la toolbox des comptes normaux (la
+# vraie barrière reste le check de rôle, pas ce masquage cosmétique).
+DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send"})
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut

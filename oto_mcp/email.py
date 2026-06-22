@@ -165,6 +165,61 @@ def send_alpha_invite_email(to: str, invite_url: str,
     return _send(to, subject, html)
 
 
+def render_composed_email(
+    body: str,
+    *,
+    cta_text: str | None = None,
+    cta_url: str | None = None,
+    footer: bool = True,
+) -> str:
+    """Rend le HTML à la charte « manuscrit chaud » d'un email dont le **contenu
+    est fourni par l'agent** (prose brute + CTA optionnel).
+
+    `body` = texte brut : les lignes vides séparent des paragraphes, les sauts de
+    ligne simples deviennent des `<br>`. Échappé (jamais de HTML injecté par
+    l'agent). `footer` ajoute la signature de marque + l'opt-out par réponse."""
+    paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
+    body_html = "".join(
+        f'<p style="font-size:16px;line-height:1.6;margin:0 0 16px">'
+        f'{_esc(p).replace(chr(10), "<br>")}</p>'
+        for p in paras
+    )
+    cta_html = ""
+    if cta_text and cta_url:
+        cta_html = (
+            f'<p style="padding:8px 0"><a href="{_esc(cta_url)}" style="{_BTN}">'
+            f'{_esc(cta_text)}</a></p>'
+        )
+    footer_html = ""
+    if footer:
+        footer_html = (
+            '<hr style="border:none;border-top:1px solid #ece4d0;margin:24px 0 16px">'
+            f'<p style="{_FAINT}">oto, par otomata · oto.ninja<br>'
+            'vous recevez ce message car vous avez un compte oto — '
+            'répondez à cet email pour nous parler, ou pour ne plus en recevoir.</p>'
+        )
+    return f'<div style="{_WRAP}">{body_html}{cta_html}{footer_html}</div>'
+
+
+def send_composed_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    cta_text: str | None = None,
+    cta_url: str | None = None,
+    reply_to: str | None = None,
+    footer: bool = True,
+) -> bool:
+    """Envoie un email à contenu libre (fourni par l'agent), rendu à la charte.
+
+    `reply_to` défaut = la boîte du studio (`OTO_CONTACT_TO`) pour qu'une réponse
+    arrive sur un humain. True si envoyé, False sinon (best-effort, cf. `_send`)."""
+    html = render_composed_email(body, cta_text=cta_text, cta_url=cta_url, footer=footer)
+    rt = reply_to or os.environ.get("OTO_CONTACT_TO", "alexis@otomata.tech")
+    return _send(to, subject, html, reply_to=rt)
+
+
 def send_contact_email(name: str, email: str, message: str) -> bool:
     """Message du formulaire de contact d'otomata.tech → boîte du studio.
 

@@ -117,8 +117,7 @@ async def _authenticate(
     if os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS"):
         sub = db.resolve_sub(sub)
     db.upsert_user(sub, email=access_token.claims.get("email"),
-                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"),
-                   email_verified=access_token.claims.get("email_verified") is True)
+                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"))
     return sub, None
 
 

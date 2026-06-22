@@ -836,7 +836,7 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None,
-                iss: Optional[str] = None, email_verified: bool = False) -> None:
+                iss: Optional[str] = None) -> None:
     """Create the user row if missing, refresh email/name if known.
 
     Fédération de compte (otomata#16) : à la **première** création (vrai INSERT),
@@ -876,15 +876,17 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     # l'ancien compte (même email) → ce sub. Gaté par env `OTO_MCP_TENANT_MIGRATION_ISS`
     # (dormant hors fenêtre de bascule). Idempotent, best-effort, à chaque login
     # new-tenant (pas que au 1er insert → couvre les retries / l'ordre des logins).
-    # ⚠️ SÉCU (account takeover) : ne fusionner QUE sur un email VÉRIFIÉ. Sinon un
-    # token new-tenant avec un email non vérifié (ex. futur password sign-up) pourrait
-    # absorber le compte d'autrui (rôle, coffre). Les comptes auth.oto.zone existants
-    # sont tous nés d'un signup passwordless email+code → vérifiés.
-    if email and iss and email_verified:
+    # ⚠️ SÉCU (account takeover) : la décision de merge se prend sur l'email
+    # AUTORITATIF lu de Logto (Management API), JAMAIS sur le claim email/email_verified
+    # du token — un token forgé pourrait revendiquer l'email d'autrui pour absorber son
+    # compte (rôle, coffre). reconcile_tenant_migration récupère lui-même cet email ;
+    # le claim `email` n'est passé que comme PRÉ-FILTRE cheap (éviter un appel Logto à
+    # chaque requête quand rien ne matche).
+    if iss:
         _mig = os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS", "").strip().rstrip("/")
         if _mig and iss.rstrip("/") == _mig:
             try:
-                reconcile_tenant_migration(sub, email)
+                reconcile_tenant_migration(sub, email_hint=email)
             except Exception:
                 pass
 
@@ -977,13 +979,34 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
     return True
 
 
-def reconcile_tenant_migration(new_sub: str, email: str) -> bool:
-    """Au login sur le nouveau tenant : si EXACTEMENT un autre compte partage cet
-    email (l'ancien sub), le migrer vers new_sub. No-op si 0 (rien à migrer) ou >1
-    (ambigu — on ne touche pas). Idempotent (l'ancien disparaît après migration)."""
-    if not new_sub or not email:
+def reconcile_tenant_migration(new_sub: str, email_hint: Optional[str] = None) -> bool:
+    """Au login sur le nouveau tenant : récupère l'email AUTORITATIF du compte depuis
+    Logto (Management API — le `primaryEmail` n'existe qu'après vérification, donc
+    fiable même si le token ment) puis, si EXACTEMENT un autre compte partage cet email
+    (l'ancien sub), le migre vers new_sub. No-op si email introuvable, 0 (rien à migrer)
+    ou >1 (ambigu — on ne touche pas). Idempotent (l'ancien disparaît après migration).
+
+    `email_hint` (claim email du token) n'est qu'un PRÉ-FILTRE pour éviter un appel
+    Logto à chaque requête : si aucun autre compte ne porte cet email, rien à migrer →
+    on ne sollicite pas Logto. Il n'entre JAMAIS dans la décision de merge (sécurité)."""
+    if not new_sub:
         return False
     try:
+        # Pré-filtre cheap sur le claim (non fiable) : court-circuite le cas courant
+        # (déjà migré / rien à fusionner) sans round-trip Logto.
+        if email_hint:
+            with _connect() as conn:
+                pre = conn.execute(
+                    "SELECT 1 FROM users WHERE lower(email)=lower(%s) AND sub<>%s LIMIT 1",
+                    (email_hint, new_sub),
+                ).fetchone()
+            if not pre:
+                return False
+        # Email AUTORITATIF (source de vérité) — la décision de merge se prend ici.
+        from .oauth_facade import logto_user_primary_email
+        email = logto_user_primary_email(new_sub)
+        if not email:
+            return False
         with _connect() as conn:
             rows = conn.execute(
                 "SELECT sub FROM users WHERE lower(email)=lower(%s) AND sub<>%s",
@@ -993,7 +1016,7 @@ def reconcile_tenant_migration(new_sub: str, email: str) -> bool:
             return False
         return migrate_sub(rows[0]["sub"], new_sub)
     except Exception:
-        logger.warning("reconcile_tenant_migration échoué pour %s", email, exc_info=True)
+        logger.warning("reconcile_tenant_migration échoué pour %s", new_sub, exc_info=True)
         return False
 
 

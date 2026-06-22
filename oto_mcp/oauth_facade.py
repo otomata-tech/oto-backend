@@ -141,6 +141,28 @@ def _mgmt_token() -> str:
     return _mgmt_tok["value"]
 
 
+def logto_user_primary_email(sub: str) -> str | None:
+    """Email primaire AUTORITATIF d'un user Logto (Management API). Dans Logto, le
+    `primaryEmail` n'est posé qu'après vérification de l'adresse → sa présence vaut
+    « email vérifié », et c'est la SOURCE DE VÉRITÉ (un claim de token, lui, peut
+    mentir). Utilisé par la bascule de tenant pour décider d'un merge de comptes sans
+    faire confiance au token. Renvoie None si user inconnu / Logto indispo (l'appelant
+    ne migre alors PAS — fail-safe)."""
+    import requests
+    try:
+        base, tok = _logto_base(), _mgmt_token()
+        r = requests.get(
+            f"{base}/api/users/{sub}",
+            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json().get("primaryEmail") or None
+    except Exception as e:
+        _log.warning("lookup primaryEmail Logto échoué pour %s : %s", sub, e)
+        return None
+
+
 # ── Magic link : one-time-token Logto (onboarding sans saisie de code) ────────
 # Le backend mint un OTT pour l'email de l'invité (Management API) ; le lien le
 # porte → la custom UI Logto le consomme (signIn extraParams) → auth silencieuse,

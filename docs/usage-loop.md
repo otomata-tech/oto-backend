@@ -19,6 +19,10 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
   (hors prune 30j). `gap` = cas d'usage non couvert (l'agent capte la demande non satisfaite).
 - **Projections** (opérateur) : `/api/admin/usage/{runs,runs/{id},gaps,tool-quality,signals}`
   (`capabilities/usage.py`, PLATFORM_ADMIN) → vue dashboard `UsageView.vue` (« usage & déroulés »).
+  `signals` filtrable par `status` (`open|resolved`) ; faces MCP `oto_admin_list_signals`.
+- **Résolution** : un signal se marque traité via `POST /api/admin/usage/signals/{id}/resolve`
+  (MCP `oto_admin_resolve_signal`, PLATFORM_ADMIN) — colonnes `resolved_at/resolved_by/resolution`
+  (NULL = ouvert) ; `resolved=false` ré-ouvre. Le backlog vivant = `signals?status=open`.
 - **Harnais impératif** : `_SERVER_INSTRUCTIONS` pousse l'agent à réflexer oto, encadrer
   par `run_start/finish` et émettre `feedback`.
 - Déféré (otomata#32) : promotion des signaux en facts factgraph (0008) ; `why`-par-appel.

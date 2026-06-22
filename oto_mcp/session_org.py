@@ -17,11 +17,35 @@ distinguer « override = perso » (posé par `oto_clear_org`) de « pas d'overri
 """
 from __future__ import annotations
 
+import contextvars
 from typing import Optional
 
 # session_id -> org_id (0 = perso/global). Insertion-ordered → éviction du plus ancien.
 _OVERRIDES: dict[str, int] = {}
 _CAP = 100_000
+
+# ── Org de consultation (view-as, face REST) ────────────────────────────────
+# Notion DISTINCTE de l'override de session (MCP) : sur le dashboard on consulte
+# une org sans rien persister ni muter l'identité d'action (ADR 0023). Porté par
+# un contextvar PER-REQUÊTE (isolé par tâche Starlette), posé par l'adaptateur
+# REST APRÈS validation d'appartenance, lu par le seam `access.current_org`.
+# 0 = consulter le profil perso ; None = pas de consultation (→ repli maison).
+_VIEW_ORG: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_view_org", default=None)
+
+
+def set_view_org(org_id: Optional[int]) -> contextvars.Token:
+    """Pose l'org de consultation pour la requête courante (renvoie le token à reset)."""
+    return _VIEW_ORG.set(org_id)
+
+
+def reset_view_org(token: contextvars.Token) -> None:
+    _VIEW_ORG.reset(token)
+
+
+def current_view_org() -> Optional[int]:
+    """Org de consultation de la requête courante (None = aucune)."""
+    return _VIEW_ORG.get()
 
 
 def current_session_id() -> Optional[str]:

@@ -99,16 +99,23 @@ def current_org(sub: str | None) -> Optional[int]:
     visibilité, entitlements, redaction, billing). Aujourd'hui (barreau R0) =
     l'org persistée (`org_store.get_active_org`, qui devient l'« org maison »).
 
-    Résout `org_de_session ?? org_maison` : l'org de session est l'override
-    éphémère posé par `oto_use_org` (`session_org`, keyé par la session MCP
-    courante) ; absent (REST, ou hors session) → repli sur la **maison**
-    persistante (`org_store.get_active_org`). Garder ce seam étroit : c'est le
-    candidat broker de credentials (ADR 0004)."""
+    Résout `org_de_session ?? org_de_consultation ?? org_maison` (ADR 0023) :
+    - **org de session** (MCP) — override éphémère posé par `oto_use_org`, keyé par
+      la session MCP courante ;
+    - **org de consultation** (REST) — view-as du dashboard, contextvar per-requête
+      posé APRÈS validation d'appartenance par l'adaptateur REST ;
+    - sinon → repli sur la **maison** persistante (`org_store.get_active_org`).
+
+    Les deux premières ne coexistent jamais (session = MCP only, consultation =
+    REST only). Garder ce seam étroit : candidat broker de credentials (ADR 0004)."""
     if sub is None:
         return None
     present, org = session_org.current_override()
     if present:
         return org
+    view = session_org.current_view_org()
+    if view is not None:
+        return None if view == 0 else view
     return org_store.get_active_org(sub)
 
 

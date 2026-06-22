@@ -54,14 +54,16 @@ _FAINT = 'color:#7a6c50;font-size:13px'
 
 def send_invite_email(to: str, org_name: str, invite_url: str,
                       inviter: str | None = None) -> bool:
-    """Email d'invitation à rejoindre une org. True si envoyé, False sinon."""
-    who = f"{_esc(inviter)} " if inviter else ""
-    subject = f"You're invited to {org_name} on Oto"
+    """Email d'invitation à rejoindre une org. True si envoyé, False sinon.
+
+    Voix funnel : FR, vouvoiement + minuscules (alignée sur le dashboard)."""
+    lead = f"{_esc(inviter)} vous invite" if inviter else "vous êtes invité·e"
+    subject = f"invitation à rejoindre {org_name} sur oto"
     html = (
         f'<div style="{_WRAP}">'
-        f'<p>{who}invited you to join <strong>{_esc(org_name)}</strong> on Oto.</p>'
-        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">Accept invitation</a></p>'
-        f'<p style="{_FAINT}">Or paste this link: {_esc(invite_url)}</p>'
+        f'<p>{lead} à rejoindre <strong>{_esc(org_name)}</strong> sur oto.</p>'
+        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">rejoindre l\'équipe</a></p>'
+        f'<p style="{_FAINT}">ou collez ce lien : {_esc(invite_url)}</p>'
         f'</div>'
     )
     return _send(to, subject, html)
@@ -69,11 +71,11 @@ def send_invite_email(to: str, org_name: str, invite_url: str,
 
 def send_access_granted_email(to: str, app_url: str) -> bool:
     """Email à un compte waitlisté dont l'accès alpha vient d'être ouvert."""
-    subject = "Votre accès à l'alpha de Oto est ouvert"
+    subject = "votre accès à l'alpha de oto est ouvert"
     html = (
         f'<div style="{_WRAP}">'
-        f'<p>Bonne nouvelle — votre accès à l\'<strong>alpha de Oto</strong> est ouvert.</p>'
-        f'<p><a href="{_esc(app_url)}" style="{_BTN}">Ouvrir Oto</a></p>'
+        f'<p>bonne nouvelle — votre accès à l\'<strong>alpha de oto</strong> est ouvert.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">ouvrir oto</a></p>'
         f'<p style="{_FAINT}">{_esc(app_url)}</p>'
         f'</div>'
     )

@@ -28,5 +28,7 @@ from . import orgs_instructions  # noqa: F401 — org.{doctrine.*, instruction.*
 from . import doctrine_library  # noqa: F401 — library.{list,get,publish,fork,unpublish}
 # Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
 from . import connectors_selection  # noqa: F401 — connectors.{me,select,pause,unselect}
+# Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
+from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

@@ -16,11 +16,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
 
 - Python 3.10 (target `>=3.10` — c'est ce que tuls.me a)
 - `fastmcp>=3.4.2` (plancher = dernier ; prod aligné au deploy via `pip install -e .`) + `mcp` SDK
-- `oto-cli[browser]` — déclaré comme dépendance PyPI dans `pyproject.toml`, mais en
-  prod le venv est overridden par `pip install -e /opt/oto-cli/` (clone du repo
-  `otomata-tech/oto-cli` sur le serveur). Permet de propager les nouveaux connecteurs
-  sans release PyPI — un `git pull` côté serveur suffit. La dépendance PyPI reste
-  pour les déploiements fresh (premier install du venv).
+- **`oto-core[browser]` PINNÉ sur un tag git** (`@ git+…@vX.Y.Z` dans `pyproject.toml`, plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy **force-réinstalle** oto-core depuis le tag lu du `pyproject` (`pip install --force-reinstall …@$tag`). Bump connecteurs = tag oto-core + édit du pin + deploy (PAS de `git pull` box). Cf. ADR 0020. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.)
 - `psycopg[binary]` + `psycopg-pool` (PostgreSQL managed Scaleway `otomata-main`, DB `oto_mcp`) pour le state par utilisateur — migré depuis SQLite le 2026-05-20. Row factory custom dans `db.py` (`_str_dict_row`) qui normalise `datetime`/`date` → strings "YYYY-MM-DD HH:MM:SS" : sinon `JSONResponse` crash sur `/api/me` car le code historique attend des strings comme avec SQLite.
 - Auth = JWT Logto (`RemoteAuthProvider + JWTVerifier(jwks_uri=…, algorithm="ES384")`)
 
@@ -375,13 +371,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
 
-# Deploy — push main déclenche `.github/workflows/deploy.yml` (SSH la box dédiée
-# <box> : git reset --hard origin/main + pip install -e . + **reinstall
-# oto-core@main** (force-reinstall depuis git, sinon la box garde un clone oto-core
-# périmé → erreurs de signature désync, ex. search_jobs) + systemctl restart
-# oto-mcp). Idem côté oto-cli (workflow restart oto-mcp). Le restart
-# relance le wrapper start-encrypted (la master key est refetchée). ⚠️ start-
-# encrypted.sh est untracked → survit au git reset.
+# Deploy — push main déclenche `.github/workflows/deploy.yml` : workflow unique
+# CI/CD (job `test` pytest → job `deploy` `needs: test`). Deploy = SSH box dédiée :
+# git reset --hard origin/main + pip install -e . + **force-reinstall oto-core
+# depuis le tag pinné** (lu du pyproject ; pip saute sinon une dép VCS déjà
+# présente) + restart + **smoke HTTP** (GET 200 /.well-known/oauth-authorization-server)
+# + **rollback auto** vers le commit précédent si install/restart/smoke échoue. Le
+# restart relance start-encrypted (refetch master key). ⚠️ start-encrypted.sh
+# untracked → survit au git reset.
 git push origin main
 
 # Logs

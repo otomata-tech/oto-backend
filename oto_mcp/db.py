@@ -372,7 +372,9 @@ CREATE TABLE IF NOT EXISTS org_invitations (
     accepted_sub TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_org_invitations_org ON org_invitations(org_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_org_invitations_code ON org_invitations(code) WHERE code IS NOT NULL;
+-- idx_org_invitations_code NON déclaré ici : `code` est ajouté par ALTER (DB
+-- existantes) APRÈS ce _SCHEMA → l'index sur `code` vit dans le bloc migration,
+-- après l'ADD COLUMN (sinon UndefinedColumn au boot sur une table préexistante).
 
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé

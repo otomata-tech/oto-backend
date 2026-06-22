@@ -56,12 +56,14 @@ def test_usage_tool_name_is_a_mounted_tool():
 def test_org_admin_active_combinator(monkeypatch):
     monkeypatch.setattr(_authz.access, "get_user_role", lambda sub: "member")
 
-    monkeypatch.setattr(_authz.org_store, "get_active_org", lambda sub: None)
+    # L'org active est résolue via le seam access.current_org (ADR 0023 : org de
+    # session ?? maison) — c'est lui qu'on simule, plus org_store directement.
+    monkeypatch.setattr(_authz.access, "current_org", lambda sub: None)
     with pytest.raises(AuthzDenied) as e:
         _authz.ORG_ADMIN(RawCtx(sub="u1"))
     assert e.value.status == 400 and e.value.code == "no_active_org"
 
-    monkeypatch.setattr(_authz.org_store, "get_active_org", lambda sub: 7)
+    monkeypatch.setattr(_authz.access, "current_org", lambda sub: 7)
     monkeypatch.setattr(_authz.roles, "is_org_admin", lambda sub, oid: False)
     with pytest.raises(AuthzDenied) as e:
         _authz.ORG_ADMIN(RawCtx(sub="u1"))

@@ -17,7 +17,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, memento_oauth, org_store
+from .. import access, db, memento_oauth, org_store, session_org
 from ..auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,21 @@ def register(mcp: FastMCP) -> None:
         except Exception:
             role = None
 
-        # Org active (scope des credentials + données). 0/None = espace perso.
+        # Org EFFECTIVE sous laquelle tu agis (ADR 0023) = org de session ?? maison.
+        # `scope`='session' = override éphémère posé par oto_use_org (cette conversation) ;
+        # 'home' = ton org maison (défaut). 0/None = espace perso.
         org_block = None
         active_org = None
         try:
-            active_org = org_store.get_active_org(sub)
+            active_org = access.current_org(sub)
+            has_override, _ = session_org.current_override()
             if active_org is not None:
                 o = org_store.get_org(active_org)
                 org_block = {
                     "id": active_org,
                     "name": o["name"] if o else None,
                     "role": org_store.get_org_role(active_org, sub),
+                    "scope": "session" if has_override else "home",
                 }
         except Exception as e:
             logger.warning("whoami: org lookup failed: %s", e)
@@ -126,12 +130,15 @@ def register(mcp: FastMCP) -> None:
             logger.warning("whoami: account profile failed: %s", e)
 
         who = user.get("name") or user.get("email") or sub
+        has_override, _ = session_org.current_override()
         if org_block:
             scope = f"org « {org_block['name']} » (rôle {org_block['role']})"
             if group_block:
                 scope += f", groupe « {group_block['name']} »"
         else:
             scope = "espace perso (aucune org active)"
+        if has_override:
+            scope += " — override de session (cette conversation ; oto_use_org)"
         summary = f"Tu agis pour {who} dans {scope}."
 
         return {

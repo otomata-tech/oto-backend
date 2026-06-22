@@ -19,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import access, group_store, org_store, roles
+from .. import access, group_store, roles
 from ._types import AuthzDenied, RawCtx, ResolvedCtx
 
 
@@ -32,7 +32,7 @@ def _require_sub(raw: RawCtx) -> str:
 def SUB_ONLY(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Tout user authentifié (datastore, méta user-tools, oto_use_org)."""
     sub = _require_sub(raw)
-    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub),
+    return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
 
 
@@ -40,7 +40,7 @@ def ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Membre d'une org active — injecte `org_id` depuis l'état serveur (jamais
     d'un param client). Verrouille l'IDOR cross-org par construction."""
     sub = _require_sub(raw)
-    org_id = org_store.get_active_org(sub)
+    org_id = access.current_org(sub)
     if org_id is None:
         raise AuthzDenied(400, "no_active_org",
                           "Aucune org active — choisis-en une avec oto_use_org.")
@@ -53,7 +53,7 @@ def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     d'un param client. Escalade super_admin via `roles.is_org_admin` (parité exacte
     avec le legacy `_resolve_org_write`/`_active_org_edit` : seul le super escalade)."""
     sub = _require_sub(raw)
-    org_id = org_store.get_active_org(sub)
+    org_id = access.current_org(sub)
     if org_id is None:
         raise AuthzDenied(400, "no_active_org",
                           "Aucune org active — choisis-en une avec oto_use_org.")
@@ -68,7 +68,7 @@ def PLATFORM_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     sub = _require_sub(raw)
     if not access.is_platform_operator(sub):
         raise AuthzDenied(403, "forbidden", "Réservé à un admin plateforme.")
-    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub),
+    return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
 
 
@@ -78,7 +78,7 @@ def SUPER_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     sub = _require_sub(raw)
     if not access.is_super_admin(sub):
         raise AuthzDenied(403, "forbidden", "Réservé au super admin.")
-    return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub),
+    return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
 
 
@@ -91,7 +91,7 @@ def NAMESPACE_GRANT(namespace: str):
         if not access.is_super_admin(sub) and namespace not in access.granted_namespaces_for(sub):
             raise AuthzDenied(403, "namespace_not_granted",
                               f"Accès au namespace `{namespace}` non accordé.")
-        return ResolvedCtx(sub=sub, org_id=org_store.get_active_org(sub), role=role)
+        return ResolvedCtx(sub=sub, org_id=access.current_org(sub), role=role)
     return rule
 
 

@@ -42,7 +42,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import connectors, credentials_store, db, group_store, org_store
+from . import connectors, credentials_store, db, group_store, org_store, session_org
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
@@ -99,12 +99,16 @@ def current_org(sub: str | None) -> Optional[int]:
     visibilité, entitlements, redaction, billing). Aujourd'hui (barreau R0) =
     l'org persistée (`org_store.get_active_org`, qui devient l'« org maison »).
 
-    Cible (R1) : `org_de_session ?? org_maison` — l'org de session est un override
-    éphémère posé par `oto_use_org` dans l'état de session FastMCP, lu ici via le
-    contexte ambiant ; absent (REST, ou hors session) → repli sur la maison. Garder
-    ce seam étroit : c'est le candidat broker de credentials (ADR 0004)."""
+    Résout `org_de_session ?? org_maison` : l'org de session est l'override
+    éphémère posé par `oto_use_org` (`session_org`, keyé par la session MCP
+    courante) ; absent (REST, ou hors session) → repli sur la **maison**
+    persistante (`org_store.get_active_org`). Garder ce seam étroit : c'est le
+    candidat broker de credentials (ADR 0004)."""
     if sub is None:
         return None
+    present, org = session_org.current_override()
+    if present:
+        return org
     return org_store.get_active_org(sub)
 
 

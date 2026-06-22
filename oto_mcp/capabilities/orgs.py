@@ -10,7 +10,7 @@ import os
 
 from pydantic import BaseModel, Field
 
-from .. import org_store
+from .. import org_store, session_org
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -36,7 +36,10 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
         raise AuthzDenied(400, "invalid_name", "Nom d'espace requis.")
     org_id = org_store.create_org(name, created_by=ctx.sub)
     org_store.add_org_member(org_id, ctx.sub, "org_admin")
-    org_store.set_active_org(ctx.sub, org_id)
+    org_store.set_active_org(ctx.sub, org_id)  # nouvelle org = ton org maison (défaut)
+    sid = session_org.current_session_id()
+    if sid is not None:
+        session_org.set_override(sid, org_id)  # + active dans la conversation courante
     return {"org_id": org_id, "name": name, "active_org": org_id, "org_role": "org_admin"}
 
 
@@ -45,18 +48,30 @@ class UseOrgInput(BaseModel):
 
 
 def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
+    """Bascule l'org active (ADR 0023). Sur la face MCP (session présente) =
+    **override de session éphémère** (cette conversation seulement) ; sur la face
+    REST (dashboard) = pose l'**org maison** persistante (défaut). `org` = id/nom."""
     try:
-        org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)
+        org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)  # garantit l'appartenance
     except ValueError as e:
         raise AuthzDenied(404, "unknown_org", str(e))
-    org_store.set_active_org(ctx.sub, org_id)  # membre garanti par resolve_org_for_user
+    sid = session_org.current_session_id()
+    if sid is not None:
+        session_org.set_override(sid, org_id)        # MCP : org de session
+    else:
+        org_store.set_active_org(ctx.sub, org_id)    # REST : org maison
     o = org_store.get_org(org_id)
     return {"active_org": org_id, "name": o["name"] if o else None}
 
 
 def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    """Désélectionne l'org active → identité perso/globale (ADR 0015)."""
-    org_store.clear_active_org(ctx.sub)
+    """Retour au profil perso/global (ADR 0015/0023). MCP = perso pour CETTE
+    conversation (override de session) ; REST = efface l'org maison."""
+    sid = session_org.current_session_id()
+    if sid is not None:
+        session_org.set_override(sid, None)          # MCP : perso pour la session
+    else:
+        org_store.clear_active_org(ctx.sub)          # REST : efface la maison
     return {"active_org": None}
 
 
@@ -80,13 +95,15 @@ CAPABILITIES += [
         Input=UseOrgInput,
         authz=SUB_ONLY,
         description=(
-            "Switch your active organization (by id or name). The active org "
-            "decides which shared secrets resolve for your tool calls. Global to "
-            "your account (not per-session)."
+            "Switch the organization you act under, FOR THIS CONVERSATION ONLY "
+            "(by id or name). The active org decides which shared secrets, tools "
+            "and data scope your calls. Ephemeral: it does NOT change your home "
+            "org or any other conversation, and a new conversation starts back "
+            "on your home org. Set the org once per conversation when needed."
         ),
         mcp="oto_use_org",
         rest=RestBinding("PUT", "/api/me/active-org"),
-        refresh_visibility=True,  # recharge la toolbox de l'org cible (live in-session)
+        refresh_visibility=True,  # recharge la toolbox de l'org de session (live in-session)
     ),
     Capability(
         key="org.clear",
@@ -94,8 +111,9 @@ CAPABILITIES += [
         Input=NoInput,
         authz=SUB_ONLY,
         description=(
-            "Deselect your active organization — switch to your personal/global "
-            "profile (no org). Your personal toolset and settings apply."
+            "Act under your personal/global profile (no org) FOR THIS "
+            "CONVERSATION — your personal toolset and settings apply. Ephemeral: "
+            "a new conversation reverts to your home org."
         ),
         mcp="oto_clear_org",
         rest=RestBinding("DELETE", "/api/me/active-org"),

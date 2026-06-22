@@ -11,6 +11,9 @@ l'isolation de session du browser local (issue #5) — au prix d'un SaaS payant.
 """
 from __future__ import annotations
 
+import logging
+import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -18,6 +21,65 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db
+
+logger = logging.getLogger(__name__)
+
+# Miroir autogéré du feed (home LinkedIn) dans le datastore spine (ADR 0016).
+_FEED_NS = "linkedin-feed"          # namespace datastore per-user
+_FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
+_FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
+_FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
+
+
+def _feed_ttl_seconds() -> int:
+    try:
+        return int(os.environ.get("OTO_UNIPILE_FEED_TTL_SECONDS", "600"))
+    except ValueError:
+        return 600
+
+
+def _feed_is_stale(sub: str, provider: str = "LINKEDIN") -> bool:
+    """True si le cache du feed mérite un refresh (jamais sync, ou plus vieux que
+    le TTL). Tolérant au format d'horodatage (string row-factory)."""
+    ts = db.get_unipile_feed_synced_at(sub, provider)
+    if not ts:
+        return True
+    try:
+        dt = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).total_seconds() >= _feed_ttl_seconds()
+
+
+def _sync_feed(client, store, sub: str, provider: str = "LINKEDIN") -> int:
+    """Pagine le feed live et upsert chaque post dans le datastore (dédup par
+    `urn`). S'arrête dès qu'une page entière n'apporte AUCUN urn nouveau (condition
+    robuste à l'ordre de tri) ou au cap de pages. Renvoie le nombre de posts neufs.
+    Marque le sync à la fin. Best-effort : un item sans urn est ignoré."""
+    new_count = 0
+    cursor = None
+    for _ in range(_FEED_SYNC_CAP_PAGES):
+        page = client.get_feed(count=_FEED_PAGE_COUNT, cursor=cursor,
+                               sort_order=_FEED_SORT_ORDER)
+        items = page.get("items") or []
+        if not items:
+            break
+        page_new = 0
+        for item in items:
+            urn = item.get("urn")
+            if not urn:
+                continue
+            _row, inserted = store.upsert_row(_FEED_NS, urn, item)
+            if inserted:
+                page_new += 1
+        new_count += page_new
+        cursor = page.get("cursor")
+        if page_new == 0 or not cursor:
+            break  # rattrapé (page déjà connue) ou fin de flux
+    db.touch_unipile_feed_synced(sub, provider)
+    return new_count
 
 
 def unipile_client(provider: str = "LINKEDIN"):
@@ -229,24 +291,54 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().create_post(text)
 
     @mcp.tool()
-    async def unipile_feed(count: int = 20, cursor: Optional[str] = None) -> dict:
-        """Feed d'accueil LinkedIn (flux chronologique de ta page d'accueil) via Unipile.
+    async def unipile_feed(limit: int = 20, page: int = 0, refresh: bool = False) -> dict:
+        """Miroir autogéré de ta home LinkedIn. Tu n'as RIEN à gérer (ni curseur, ni
+        sync) : l'outil persiste les posts de ta page d'accueil dans ta base
+        (datastore `linkedin-feed`, dédupliqués par leur identifiant), rafraîchit
+        tout seul quand le cache est périmé, et te sert le miroir le plus récent en
+        tête. Les encarts sponsorisés/promo sont exclus.
 
-        ⚠️ Passthrough Voyager via la Magic Route raw data d'Unipile (LinkedIn
-        n'expose AUCUN endpoint feed) : route NON contractuelle, peut nécessiter une
-        maintenance quand LinkedIn change son API interne. Parsing défensif — un item
-        non mappé revient en `{_unmapped, _raw}` plutôt que de tout faire échouer.
+        Sous le capot : à `page=0`, refresh si le cache a dépassé son TTL — on
+        pagine le feed live et on n'ajoute que les posts neufs (arrêt dès qu'une page
+        est déjà connue). Les pages suivantes (`page>0`) lisent le miroir stocké sans
+        retaper LinkedIn. Le tri suit ton réglage de home LinkedIn (« Plus récents »
+        pour un miroir chronologique) ; quoi qu'il arrive le miroir est re-trié par
+        date de publication.
 
-        Retourne `{items, cursor, count}` où chaque item normalisé porte :
-        `urn, author_name, author_headline, text, posted_at, posted_relative,
-        reactions_count, comments_count, post_url`.
+        Le miroir complet reste requêtable via `data_rows('linkedin-feed')` (filtrage
+        par date côté nous, impossible sur le feed Voyager brut).
 
         Args:
-            count: nombre d'items voulus sur la page (défaut 20).
-            cursor: curseur renvoyé par un appel précédent (champ `cursor`) pour la
-                page suivante. None = première page.
+            limit: nombre de posts à renvoyer pour cette page (défaut 20).
+            page: page du miroir (0 = la plus récente). >0 ne déclenche pas de refresh.
+            refresh: force un rafraîchissement live même si le cache est encore frais.
+
+        Retourne `{items, total, page, limit, synced}` — `items` = posts (récent en
+        tête, mêmes champs qu'avant : urn, author_name, author_headline, text,
+        posted_at, reactions_count, comments_count, post_url), `total` = taille du
+        miroir, `synced` = True si un refresh live a eu lieu.
         """
-        return unipile_client().get_feed(count=count, cursor=cursor)
+        from ..datastore import make_store, NamespaceNotFound
+
+        sub = access.current_user_sub_or_raise()
+        client = unipile_client()
+        store = make_store(sub)
+
+        synced = False
+        if page <= 0 and (refresh or _feed_is_stale(sub)):
+            _sync_feed(client, store, sub)
+            synced = True
+
+        try:
+            rows = store.list_rows(_FEED_NS, limit=10_000)
+        except NamespaceNotFound:
+            rows = []
+        rows.sort(key=lambda r: r.get("posted_at") or "", reverse=True)
+
+        offset = max(0, page) * limit
+        window = rows[offset:offset + limit]
+        return {"items": window, "total": len(rows), "page": page,
+                "limit": limit, "synced": synced}
 
     # ---- réseau : invitations (accepter / annuler) ----------------------
 

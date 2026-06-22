@@ -653,6 +653,9 @@ def init_db() -> None:
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
         conn.execute("ALTER TABLE unipile_accounts DROP CONSTRAINT IF EXISTS unipile_accounts_pkey")
         conn.execute("ALTER TABLE unipile_accounts ADD PRIMARY KEY (sub, provider)")
+        # Horodatage du dernier sync du feed (miroir home, datastore linkedin-feed) :
+        # gouverne la fraîcheur du cache (TTL) côté unipile_feed. NULL = jamais sync.
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS feed_synced_at TIMESTAMPTZ")
         conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
         # Retrait du rôle `guest` (2026-06-15) : défaut → member + migration des
         # lignes existantes (guest était un alias sans effet, cf. access.py).
@@ -1134,6 +1137,26 @@ def get_unipile_account_id(sub: str, provider: str = "LINKEDIN") -> Optional[str
             (sub, provider),
         ).fetchone()
     return row["account_id"] if row else None
+
+
+def get_unipile_feed_synced_at(sub: str, provider: str = "LINKEDIN") -> Optional[str]:
+    """Horodatage (string ISO via row factory) du dernier sync du feed, ou None
+    si jamais synchronisé / compte absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT feed_synced_at FROM unipile_accounts WHERE sub = %s AND provider = %s",
+            (sub, provider),
+        ).fetchone()
+    return row["feed_synced_at"] if row else None
+
+
+def touch_unipile_feed_synced(sub: str, provider: str = "LINKEDIN") -> None:
+    """Marque le feed comme synchronisé maintenant (pose `feed_synced_at = NOW()`)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE unipile_accounts SET feed_synced_at = NOW() WHERE sub = %s AND provider = %s",
+            (sub, provider),
+        )
 
 
 def get_unipile_account(sub: str, provider: str = "LINKEDIN") -> Optional[dict]:
@@ -2452,6 +2475,23 @@ def datastore_insert_row(ns_id: int, row_id: str, data: dict,
             (ns_id, row_id, json.dumps(data), created_at, updated_at),
         ).fetchone()
         return dict(row)
+
+
+def datastore_upsert_row(ns_id: int, row_id: str, data: dict) -> tuple[dict, bool]:
+    """Insère OU met à jour une row par sa clé `(ns_id, row_id)`. Idempotent :
+    re-poser le même `row_id` remplace `data` au lieu de dupliquer (sert la
+    dédup par clé stable, ex. urn LinkedIn). Renvoie `(row, inserted)` où
+    `inserted` est True si la row n'existait pas (ON CONFLICT non déclenché)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO datastore_rows (ns_id, row_id, data, created_at, updated_at) "
+            "VALUES (%s, %s, %s::jsonb, NOW(), NOW()) "
+            "ON CONFLICT (ns_id, row_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW() "
+            "RETURNING row_id, created_at, updated_at, data, (xmax = 0) AS inserted",
+            (ns_id, row_id, json.dumps(data)),
+        ).fetchone()
+        inserted = bool(row.pop("inserted"))
+        return dict(row), inserted
 
 
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:

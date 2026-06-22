@@ -150,6 +150,20 @@ class DatastorePg:
         row = db.datastore_insert_row(ns_id, _new_id(), user_data)
         return self._row_to_dict(row)
 
+    def upsert_row(self, namespace: str, row_id: str, data: dict) -> tuple[dict, bool]:
+        """Écrit une row à une clé `row_id` EXPLICITE (≠ append_row qui génère un
+        id), en remplaçant si elle existe. Crée le namespace au besoin. Sert le
+        stockage dédupliqué par clé stable (ex. urn LinkedIn). Renvoie
+        `(row, inserted)` — `inserted` False = la row existait déjà."""
+        try:
+            ns_id = self._resolve(namespace, write=True)
+        except NamespaceNotFound:
+            db.create_datastore_namespace(self.sub, namespace)
+            ns_id = self._resolve(namespace, write=True)
+        user_data = {k: v for k, v in data.items() if k not in _META_COLS}
+        row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)
+        return self._row_to_dict(row), inserted
+
     def get_row(self, namespace: str, row_id: str) -> dict:
         ns_id = self._resolve(namespace)
         row = db.datastore_get_row(ns_id, row_id)

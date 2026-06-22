@@ -4,8 +4,9 @@ Le parquet (~2GB compressé, ~35M lignes établissements + sièges + secondaires
 actifs/fermés) vit sur le serveur (`/opt/oto-mcp/data/sirene/StockEtablissement.parquet`).
 Refresh mensuel manuel/cron côté serveur.
 
-3 tools complémentaires aux endpoints `fr_*` (qui frappent les APIs live) :
-- `sirene_stock_siege(siren)` — siège pour batch fast
+Tools complémentaires aux endpoints `fr_*` (qui frappent les APIs live) :
+- `sirene_stock_enrich(sirens=[...])` — sièges d'une LISTE en UN scan (bulk)
+- `sirene_stock_siege(siren)` — siège d'un SIREN
 - `sirene_stock_etablissements(siren)` — tous les établissements d'une boîte
 - `sirene_stock_search(...)` — recherche multi-critères (NAF, commune, enseigne…)
 
@@ -50,6 +51,25 @@ def register(mcp: FastMCP) -> None:
             active_only: filter etatAdministratif='A' (default True).
         """
         return sirene_duckdb.list_establishments(siren, active_only=active_only)
+
+    @mcp.tool()
+    async def sirene_stock_enrich(sirens: list[str]) -> dict:
+        """Batch headquarters enrichment: pass a LIST of SIRENs, get each one's
+        head-office address in a SINGLE scan. This is the bulk strength of the
+        stock parquet — far faster than N calls to fr_get/sirene_stock_siege
+        (one scan vs one network round-trip per SIREN).
+
+        Use it to enrich a list of prospects (from fr_search, a Folk export,
+        Unipile contacts…) with siège address/NAF before pushing to a CRM.
+
+        Returns {siren: {street, postal_code, city, code_commune, naf,
+        denomination, status, ...}} ; SIRENs without a known siège are omitted.
+
+        Args:
+            sirens: list of SIREN numbers (9 digits), up to 10000.
+        """
+        clean = [str(s).strip() for s in sirens]
+        return sirene_duckdb.headquarters_addresses(clean)
 
     @mcp.tool()
     async def sirene_stock_siret(siret: str) -> Optional[dict]:

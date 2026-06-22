@@ -3,6 +3,7 @@ scripts qui veulent du batch enrichment sans gérer un parquet local.
 
 Backend = `sirene_duckdb` (DuckDB sur le parquet INSEE).
 
+- `POST /api/sirene/headquarters` {sirens:[...]}  → sièges en batch (1 scan)
 - `GET /api/sirene/siege?siren=`                 → siège (1 dict ou null)
 - `GET /api/sirene/etablissements?siren=`        → tous établissements (list)
 - `GET /api/sirene/siret?siret=`                 → 1 établissement
@@ -106,6 +107,28 @@ def make_routes(
             "offset": _qp_int(request, "offset", 0),
         })
 
+    async def headquarters(request: Request) -> JSONResponse:
+        # Batch enrichment : une LISTE de SIREN → siège de chacun en UN scan
+        # (vs N appels /siege). Indispensable sur parquet distant (httpfs) où
+        # chaque appel coûte une requête réseau. Body JSON {"sirens": [...]}.
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        sirens = body.get("sirens") if isinstance(body, dict) else None
+        if not isinstance(sirens, list) or not sirens:
+            return json_error(request, 400, "sirens_required")
+        if len(sirens) > 10000:
+            return json_error(request, 400, "too_many_sirens")
+        clean = [str(s).strip() for s in sirens]
+        if not all(s.isdigit() and len(s) == 9 for s in clean):
+            return json_error(request, 400, "invalid_siren")
+        addresses = sirene_duckdb.headquarters_addresses(clean)
+        return json_response(request, {"headquarters": addresses, "count": len(addresses)})
+
     async def info(request: Request) -> JSONResponse:
         # Public-ish — utile pour healthcheck depuis n'importe quel client.
         # Auth quand même pour éviter de divulguer la taille.
@@ -115,6 +138,8 @@ def make_routes(
         return json_response(request, sirene_duckdb.parquet_info())
 
     return [
+        Route("/api/sirene/headquarters", headquarters, methods=["POST"]),
+        Route("/api/sirene/headquarters", options_handler, methods=["OPTIONS"]),
         Route("/api/sirene/siege", siege, methods=["GET"]),
         Route("/api/sirene/siege", options_handler, methods=["OPTIONS"]),
         Route("/api/sirene/etablissements", etablissements, methods=["GET"]),

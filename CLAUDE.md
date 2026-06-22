@@ -431,6 +431,20 @@ import os, psycopg
 with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
 "'
+
+# ⚠️ Déchiffrer un credential ad-hoc (crypto.decrypt / _reveal / credential_status) :
+# `OTO_MCP_MASTER_KEY` n'est PAS dans .env — start-encrypted.sh la fetch au boot
+# depuis Scaleway Secret Manager. Un script qui ne source que .env voit
+# `encryption_enabled()=False` → tous les déchiffrements lèvent RuntimeError (FAUX
+# négatif, ≠ InvalidTag). Pour reproduire le runtime, répliquer le fetch :
+#   set -a; . .env; . /etc/oto-mcp/scw.env; set +a
+#   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
+#     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")
+#   export OTO_MCP_MASTER_KEY=$(echo "$RESP" | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["data"]).decode())')
+# Vécu 2026-06-22 (triage Sentry InvalidTag : 1 ligne memento corrompue, écrite
+# avec une clé ≠ courante — les autres lignes déchiffraient → pas un souci de clé ;
+# fix = purge → re-OAuth). `status_for` doit utiliser `credential_status` (présence
+# sans déchiffrer), jamais `get_credential_with_meta`, pour ne pas 500 /api/me.
 ```
 
 ## Infra

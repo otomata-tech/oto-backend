@@ -81,6 +81,9 @@ def _catalog_token(connector: connectors.Connector, sub: str) -> str | None:
     if connector.name == "memento":
         from .. import memento_oauth
         return memento_oauth.access_token_for(sub)
+    if connector.name == "atlassian":
+        from .. import atlassian_oauth
+        return atlassian_oauth.access_token_for(sub)
     return credentials_store.get_credential("user", sub, connector.name)
 
 

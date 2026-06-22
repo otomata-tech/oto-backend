@@ -168,6 +168,7 @@ _CATEGORY_BY_CONNECTOR = {
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
     "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
+    "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
     "figma": "Design", "supabase": "Dev",
@@ -189,7 +190,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "unipile": "Unipile", "pennylane": "Pennylane", "gocardless": "GoCardless",
     "silae": "Silae", "attio": "Attio", "crunchbase": "Crunchbase",
     "slack": "Slack", "whatsapp": "WhatsApp", "google": "Google",
-    "memento": "Memento", "planity": "Planity",
+    "memento": "Memento", "planity": "Planity", "atlassian": "Atlassian",
     "hubspot": "HubSpot", "apollo": "Apollo", "zerobounce": "ZeroBounce",
     "hithorizons": "HitHorizons", "phantombuster": "Phantombuster",
     "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
@@ -216,6 +217,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "silae": "silae.fr", "attio": "attio.com", "crunchbase": "crunchbase.com",
     "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
+    "atlassian": "atlassian.com",
     "sirene": "insee.fr", "sirene_stock": "insee.fr",
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
@@ -353,6 +355,17 @@ _REGISTRY_LIST = [
        auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Memento",
        help="base de connaissance structurée (MCP fédéré)", href="https://mento.cc"),
+    # atlassian : MCP fédéré (kind=mount, #40). Le Rovo Remote MCP d'Atlassian
+    # (mcp.atlassian.com/v1/mcp, Jira+Confluence) a son propre AS OAuth 2.1 + DCR +
+    # PKCE ; client PUBLIC (token_endpoint_auth_method=none, pas de secret), flow web
+    # per-user dans atlassian_oauth.py. Le cloudid/site est résolu par l'AS Atlassian.
+    # Inerte tant que `atlassian` n'est pas dans OTO_MCP_MOUNTS_ENABLED (défaut =
+    # memento seul) ET que ATLASSIAN_OAUTH_CLIENT_ID n'est pas posé.
+    _c("atlassian", ["atlassian"], kind="mount",
+       mount_url="https://mcp.atlassian.com/v1/mcp",
+       auth_modes={"byo_user"}, secret_kind="oauth",
+       in_default_bundle=False, default_hidden=True, label="Atlassian",
+       help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com"),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
     # (planity-mcp.oto.zone) monté via proxy FastMCP ; credential per-user =
     # base64("email:password") du compte Planity de l'user, injecté par requête

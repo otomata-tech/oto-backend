@@ -41,17 +41,29 @@ jobs:
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -e
-            cd /opt/oto-mcp
-            git fetch origin main
-            git reset --hard origin/main
-            # oto-core est PINNÉ sur un tag git dans pyproject.toml (ref URL directe) :
-            # `pip install -e .` l'installe depuis ce tag (réinstall auto au bump du
-            # tag via direct_url, idempotent sinon). Fini le force-reinstall @main
-            # flottant — une version déployée = une coordonnée reproductible. Bump =
-            # PR qui édite le tag dans pyproject. Cf. ADR 0020 (deploy/canari).
-            ./.venv/bin/pip install -e . --quiet
-            systemctl restart oto-mcp
-            sleep 3
-            systemctl is-active --quiet oto-mcp || (journalctl -u oto-mcp -n 50 --no-pager; exit 1)
-            journalctl -u oto-mcp -n 10 --no-pager
+            cd /opt/oto-mcp || exit 1
+            HEALTH="https://mcp.oto.ninja/.well-known/oauth-authorization-server"
+            PREV=$(git rev-parse HEAD)            # commit courant, pour rollback
+
+            # reset → reinstall → restart, chaînés : non-zéro si une étape échoue.
+            # oto-core est PINNÉ sur un tag git dans pyproject (ref URL directe) →
+            # `pip install -e .` l'installe depuis ce tag. Cf. ADR 0020.
+            deploy() { git reset --hard "$1" && ./.venv/bin/pip install -e . --quiet && systemctl restart oto-mcp; }
+            # service actif ET endpoint public répond 200 (retry ~25s pour le boot).
+            healthy() {
+              for i in 1 2 3 4 5 6 7 8; do
+                systemctl is-active --quiet oto-mcp && curl -fsS --max-time 10 "$HEALTH" -o /dev/null 2>/dev/null && return 0
+                sleep 3
+              done
+              return 1
+            }
+
+            git fetch origin main || exit 1
+            if deploy origin/main && healthy; then
+              echo "deploy OK"; journalctl -u oto-mcp -n 10 --no-pager
+            else
+              echo "DÉPLOIEMENT KO (install/restart/healthcheck) → rollback vers $PREV"
+              journalctl -u oto-mcp -n 50 --no-pager
+              deploy "$PREV" && healthy && echo "rollback OK (restauré $PREV)" || echo "⚠️ ROLLBACK EN ÉCHEC — intervention manuelle requise"
+              exit 1
+            fi

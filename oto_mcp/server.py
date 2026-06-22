@@ -39,12 +39,21 @@ class _IatGatedVerifier(JWTVerifier):
     reçoivent un 401 + WWW-Authenticate et re-lancent l'OAuth dance.
     """
 
-    def __init__(self, *args, min_iat: int = 0, **kwargs) -> None:
+    def __init__(self, *args, min_iat: int = 0, fallback: "JWTVerifier | None" = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._min_iat = min_iat
+        # Fenêtre de bascule tenant (A2/B1) : accepte aussi les tokens d'un 2e
+        # issuer (auth.oto.ninja) le temps que tout le monde migre. Non posé =
+        # mono-issuer, comportement inchangé.
+        self._fallback = fallback
 
     async def verify_token(self, token):
         result = await super().verify_token(token)
+        if not result and self._fallback is not None:
+            try:
+                result = await self._fallback.verify_token(token)
+            except Exception:
+                result = None
         if result and getattr(result, "claims", None) and self._min_iat > 0:
             iat = result.claims.get("iat") or 0
             if iat < self._min_iat:
@@ -59,13 +68,24 @@ def _build_verifier() -> JWTVerifier:
     audience = require_env("MCP_AUDIENCE")
     issuer = f"{logto_endpoint}/oidc"
     min_iat = int(os.environ.get("MIN_TOKEN_IAT", "0") or "0")
+    # Bascule tenant (A2) : `LOGTO_ENDPOINT_ALT` posé → 2e issuer accepté pendant la
+    # fenêtre de migration (même audience/indicator sur les 2 tenants). Drain puis on
+    # retire l'env. Logto self-hosted signe en ES384 (vérifié sur /oidc/jwks).
+    fallback = None
+    alt = os.environ.get("LOGTO_ENDPOINT_ALT", "").strip().rstrip("/")
+    if alt:
+        alt_issuer = f"{alt}/oidc"
+        fallback = JWTVerifier(
+            jwks_uri=f"{alt_issuer}/jwks", issuer=alt_issuer,
+            audience=audience, algorithm="ES384",
+        )
     return _IatGatedVerifier(
         jwks_uri=f"{issuer}/jwks",
         issuer=issuer,
         audience=audience,
-        # Logto self-hosted signs avec ES384 par défaut (vérifié sur /oidc/jwks).
         algorithm="ES384",
         min_iat=min_iat,
+        fallback=fallback,
     )
 
 

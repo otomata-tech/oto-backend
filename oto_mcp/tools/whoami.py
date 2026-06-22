@@ -55,7 +55,9 @@ def register(mcp: FastMCP) -> None:
         configurés), `onboarded`, et un `summary` lisible. Lecture seule.
 
         Pour basculer d'org dans la conversation en cours : `oto_use_org <org>`
-        (recharge aussi la toolbox et les credentials).
+        (override de session éphémère — recharge toolbox + credentials, n'affecte
+        ni ton org maison ni les autres conversations). Pour changer ton org par
+        défaut (maison, appliquée aux prochaines conversations) : `oto_set_home_org`.
         """
         sub = _require_sub()
 

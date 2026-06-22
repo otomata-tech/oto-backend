@@ -64,6 +64,19 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
     return {"active_org": org_id, "name": o["name"] if o else None}
 
 
+def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
+    """Pose l'**org maison** persistante (le défaut des nouvelles conversations),
+    depuis n'importe quelle face — ≠ `oto_use_org` qui n'agit que sur la session
+    courante (ADR 0023). `org` = id/nom d'une org dont tu es membre."""
+    try:
+        org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)
+    except ValueError as e:
+        raise AuthzDenied(404, "unknown_org", str(e))
+    org_store.set_active_org(ctx.sub, org_id)  # colonne = org maison
+    o = org_store.get_org(org_id)
+    return {"home_org": org_id, "name": o["name"] if o else None}
+
+
 def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
     """Retour au profil perso/global (ADR 0015/0023). MCP = perso pour CETTE
     conversation (override de session) ; REST = efface l'org maison."""
@@ -104,6 +117,19 @@ CAPABILITIES += [
         mcp="oto_use_org",
         rest=RestBinding("PUT", "/api/me/active-org"),
         refresh_visibility=True,  # recharge la toolbox de l'org de session (live in-session)
+    ),
+    Capability(
+        key="org.set_home",
+        handler=_set_home_org,
+        Input=UseOrgInput,
+        authz=SUB_ONLY,
+        description=(
+            "Set your HOME organization (by id or name) — the default every NEW "
+            "conversation starts under. Persistent, unlike oto_use_org (which only "
+            "switches the current conversation). Use this to change your default org."
+        ),
+        mcp="oto_set_home_org",
+        refresh_visibility=True,  # si pas d'override de session, l'org effective change → recompute
     ),
     Capability(
         key="org.clear",

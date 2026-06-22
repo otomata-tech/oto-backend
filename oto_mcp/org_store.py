@@ -116,9 +116,48 @@ def update_org(org_id: int, name: Optional[str] = None,
 def list_all_orgs() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, name, created_by, created_at, logo_url FROM orgs ORDER BY created_at"
+            "SELECT id, name, created_by, created_at, logo_url FROM orgs "
+            "WHERE archived_at IS NULL ORDER BY created_at"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def archive_org(org_id: int) -> bool:
+    """Archive (soft-delete) une org : masquée de tous les listings, réversible
+    (DB : `UPDATE orgs SET archived_at = NULL`). Aucune FK touchée (membres,
+    credentials, usage, billing restent). Les membres qui l'avaient pour org
+    active basculent sur leur plus ancienne org NON archivée restante (miroir
+    `remove_org_member`) ; sans org restante → plus d'org active (= perso).
+    False si l'org est inconnue ou déjà archivée."""
+    with _connect() as conn:
+        with conn.transaction():
+            cur = conn.execute(
+                "UPDATE orgs SET archived_at = now() WHERE id = %s AND archived_at IS NULL",
+                (org_id,),
+            )
+            if (cur.rowcount or 0) == 0:
+                return False
+            stranded = conn.execute(
+                "SELECT sub FROM org_members WHERE org_id = %s AND is_active", (org_id,)
+            ).fetchall()
+            for r in stranded:
+                sub = r["sub"]
+                conn.execute(
+                    "UPDATE org_members SET is_active = FALSE WHERE sub = %s AND org_id = %s",
+                    (sub, org_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE org_members SET is_active = TRUE
+                     WHERE sub = %s AND org_id = (
+                         SELECT m.org_id FROM org_members m JOIN orgs o ON o.id = m.org_id
+                          WHERE m.sub = %s AND m.org_id <> %s AND o.archived_at IS NULL
+                          ORDER BY m.joined_at ASC LIMIT 1
+                     )
+                    """,
+                    (sub, sub, org_id),
+                )
+            return True
 
 
 # --- baseline de toolset de l'org (preset de visibilité, ADR 0015) ----------
@@ -340,7 +379,7 @@ def list_orgs_for_user(sub: str) -> list[dict]:
             """
             SELECT m.org_id, o.name, o.logo_url, m.org_role, m.is_active, m.joined_at
               FROM org_members m JOIN orgs o ON o.id = m.org_id
-             WHERE m.sub = %s ORDER BY m.joined_at ASC
+             WHERE m.sub = %s AND o.archived_at IS NULL ORDER BY m.joined_at ASC
             """,
             (sub,),
         ).fetchall()

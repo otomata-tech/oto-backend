@@ -28,6 +28,10 @@ class EntitlementInput(BaseModel):
     namespace: str
 
 
+class OrgIdInput(BaseModel):
+    org_id: int
+
+
 def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     name = (inp.name or "").strip()
     if not name:
@@ -52,6 +56,13 @@ def _revoke_entitlement(ctx: ResolvedCtx, inp: EntitlementInput) -> dict:
             "revoked": existed, "existed": existed}
 
 
+def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+    if not org_store.get_org(inp.org_id):
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    archived = org_store.archive_org(inp.org_id)
+    return {"ok": True, "org_id": inp.org_id, "archived": archived}
+
+
 CAPABILITIES += [
     Capability(
         key="org.admin.create", handler=_create_org, Input=CreateOrgInput,
@@ -73,5 +84,13 @@ CAPABILITIES += [
         description="[super admin] Revoke an org's entitlement to a controlled namespace.",
         mcp="oto_admin_revoke_org_entitlement",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/entitlements/{namespace}", _ID),
+    ),
+    Capability(
+        key="org.admin.archive", handler=_archive_org, Input=OrgIdInput,
+        authz=SUPER_ADMIN,
+        description="[super admin] Archive (soft-delete) an org: hidden from all "
+                    "listings, reversible in DB. Members fall back to their other orgs.",
+        mcp="oto_admin_archive_org",
+        rest=RestBinding("DELETE", "/api/admin/orgs/{id}", _ID),
     ),
 ]

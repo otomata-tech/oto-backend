@@ -725,6 +725,10 @@ def init_db() -> None:
         #   { "<service>": { "salt": str?, "rules": [ {fields, action, ...} ] } }
         # {} = aucune config → repli sur le défaut serveur (field_filter_defaults).
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS field_filters JSONB NOT NULL DEFAULT '{}'::jsonb")
+        # Archivage (soft-delete) d'une org : masquée de tous les listings, réversible
+        # (NULL = active). Pas de hard-delete — les FK (membres, credentials, usage,
+        # billing, invitations, groupes) restent intactes pour audit/restauration.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
         # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
         # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
         # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =

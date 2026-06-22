@@ -51,6 +51,12 @@ _BTN = ('display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:n
 _WRAP = 'font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112'
 _FAINT = 'color:#7a6c50;font-size:13px'
 
+# RDV d'installation avec Alexis (proposé dans les mails d'invitation / accès ouvert).
+_CAL_URL = os.environ.get(
+    "OTO_INSTALL_CAL_URL",
+    "https://cal.com/alexis-laporte/30min?overlayCalendar=true",
+)
+
 
 def send_invite_email(to: str, org_name: str, invite_url: str,
                       inviter: str | None = None) -> bool:
@@ -77,6 +83,9 @@ def send_access_granted_email(to: str, app_url: str) -> bool:
         f'<p>bonne nouvelle — votre accès à l\'<strong>alpha de oto</strong> est ouvert.</p>'
         f'<p><a href="{_esc(app_url)}" style="{_BTN}">ouvrir oto</a></p>'
         f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'<p style="{_FAINT}">un coup de main pour démarrer ? '
+        f'<a href="{_esc(_CAL_URL)}" style="color:#d63d0a;text-decoration:none">'
+        f'réservez 30 min avec alexis →</a></p>'
         f'</div>'
     )
     return _send(to, subject, html)
@@ -135,8 +144,15 @@ def send_alpha_invite_email(to: str, invite_url: str,
         f'<a href="{url}" style="display:inline-block;padding:15px 34px;color:#fefcf5;'
         'text-decoration:none;font-weight:600;font-size:16px">activer mon accès →</a>'
         '</td></tr></table></td></tr>'
-        f'<tr><td style="font-size:13px;color:#7a6c50;padding-bottom:32px">'
+        f'<tr><td style="font-size:13px;color:#7a6c50;padding-bottom:24px">'
         f'ou colle ce lien : {url}</td></tr>'
+
+        # RDV d'installation avec Alexis
+        '<tr><td style="font-size:15px;line-height:1.6;color:#2c2112;'
+        'padding:20px 0 32px">'
+        'envie d\'un coup de main pour brancher vos outils ? '
+        f'<a href="{_esc(_CAL_URL)}" style="color:#d63d0a;text-decoration:none;'
+        'font-weight:600">réservez 30 min avec alexis →</a></td></tr>'
 
         # Footer
         '<tr><td style="border-top:1px solid #ece4d0;padding-top:20px;'

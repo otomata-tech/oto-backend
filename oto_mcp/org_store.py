@@ -25,8 +25,62 @@ from .db import _connect, _hash_token, upsert_user
 
 
 def _alpha_invite_quota() -> int:
-    """Quota referral crédité à un invité alpha qui accepte (ADR 0013)."""
-    return int(os.environ.get("OTO_ALPHA_INVITE_QUOTA", "3"))
+    """Budget d'invitations crédité à un invité alpha qui accepte (ADR 0013).
+    Même plafond pour les invitations nominatives directes ET le lien referral
+    (décision 2026-06-22). Défaut 5, modifiable par l'admin (set_invite_quota)."""
+    return int(os.environ.get("OTO_ALPHA_INVITE_QUOTA", "5"))
+
+
+# Codes courts lisibles (referral_code porteur + code d'invitation). Alphabet
+# Crockford sans caractères ambigus (pas de I/L/O/U, 0/1 retirés) → dictable à
+# l'oral, sans collision visuelle. 7 chars = ~34 bits ; single-use + TTL +
+# rate-limit côté capacité couvrent le brute-force pour un gate alpha.
+_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _gen_code(n: int = 7) -> str:
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(n))
+
+
+def get_or_create_referral_code(sub: str) -> Optional[str]:
+    """Code referral stable du user (lazy). Le génère à la 1re demande, en
+    réessayant sur collision d'unicité. None si le user n'existe pas."""
+    with _connect() as conn:
+        row = conn.execute("SELECT referral_code FROM users WHERE sub = %s", (sub,)).fetchone()
+        if not row:
+            return None
+        if row["referral_code"]:
+            return row["referral_code"]
+        for _ in range(8):
+            code = _gen_code()
+            cur = conn.execute(
+                "UPDATE users SET referral_code = %s, updated_at = NOW() "
+                "WHERE sub = %s AND referral_code IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM users WHERE referral_code = %s)",
+                (code, sub, code),
+            )
+            if (cur.rowcount or 0) > 0:
+                return code
+            # Soit une course a posé un code (relire), soit collision (retry).
+            again = conn.execute(
+                "SELECT referral_code FROM users WHERE sub = %s", (sub,)).fetchone()
+            if again and again["referral_code"]:
+                return again["referral_code"]
+        raise RuntimeError("impossible de générer un code referral unique")
+
+
+def get_user_by_referral_code(code: str) -> Optional[dict]:
+    """Le user porteur d'un referral_code (carrier du lien /invitation/<code>)."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT sub, email, name, referral_code FROM users WHERE referral_code = %s",
+            (code,),
+        ).fetchone()
+        return dict(row) if row else None
+
 
 ORG_ROLES = ("org_admin", "org_member")
 
@@ -517,28 +571,38 @@ def count_orgs_created_by(sub: str) -> int:
         ).fetchone()["n"]
 
 
-def create_invitation(org_id: Optional[int], email: str, org_role: str, invited_by: str,
-                      ttl_days: int = 7, source: Optional[str] = None) -> tuple[int, str]:
-    """Crée une invitation (ADR 0013, table unifiée). `org_id` renseigné = rejoindre
-    cette org ; `org_id=None` = referral alpha (l'invité crée sa propre org).
-    `org_role` n'a de sens que pour la saveur org. Renvoie (id, token plaintext —
-    exposé une seule fois, seul son hash est persisté)."""
-    email = (email or "").strip().lower()
-    if "@" not in email:
+def create_invitation(org_id: Optional[int], email: Optional[str], org_role: str, invited_by: str,
+                      ttl_days: int = 7, source: Optional[str] = None) -> tuple[int, str, str]:
+    """Crée une invitation nominative (ADR 0013, table unifiée). `org_id` renseigné
+    = rejoindre cette org ; `org_id=None` = referral alpha (l'invité crée sa propre
+    org). `org_role` n'a de sens que pour la saveur org. `email` est OPTIONNEL : sans
+    email, l'émetteur partage le code lui-même (pas d'envoi mail). Renvoie
+    (id, token plaintext, code court) — token pour le lien mail legacy (seul son hash
+    est persisté), code pour le lien /invitation/<carrier>/<code> partageable."""
+    email = (email or "").strip().lower() or None
+    if email is not None and "@" not in email:
         raise ValueError("email invalide")
     if org_role not in ORG_ROLES:
         raise ValueError(f"org_role invalide {org_role!r}")
     token = "inv_" + secrets.token_urlsafe(32)
     with _connect() as conn:
-        row = conn.execute(
-            """
-            INSERT INTO org_invitations (org_id, email, org_role, token_hash, invited_by, source, expires_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
-            RETURNING id
-            """,
-            (org_id, email, org_role, _hash_token(token), invited_by, source, str(int(ttl_days))),
-        ).fetchone()
-        return int(row["id"]), token
+        for _ in range(8):
+            code = _gen_code()
+            if conn.execute(
+                "SELECT 1 FROM org_invitations WHERE code = %s", (code,)).fetchone():
+                continue
+            row = conn.execute(
+                """
+                INSERT INTO org_invitations
+                    (org_id, email, org_role, token_hash, code, invited_by, source, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+                RETURNING id
+                """,
+                (org_id, email, org_role, _hash_token(token), code, invited_by, source,
+                 str(int(ttl_days))),
+            ).fetchone()
+            return int(row["id"]), token, code
+        raise RuntimeError("impossible de générer un code d'invitation unique")
 
 
 def list_invitations(org_id: int) -> list[dict]:
@@ -546,7 +610,7 @@ def list_invitations(org_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, email, org_role, invited_by, created_at, expires_at
+            SELECT id, email, code, org_role, invited_by, created_at, expires_at
               FROM org_invitations
              WHERE org_id = %s AND accepted_at IS NULL AND expires_at > NOW()
              ORDER BY created_at DESC
@@ -571,7 +635,7 @@ def list_alpha_invitations() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, email, invited_by, source, created_at, expires_at
+            SELECT id, email, code, invited_by, source, created_at, expires_at
               FROM org_invitations
              WHERE org_id IS NULL AND accepted_at IS NULL AND expires_at > NOW()
              ORDER BY created_at DESC
@@ -625,45 +689,90 @@ def find_pending_alpha_invite_by_email(email: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+class InviteQuotaExhausted(Exception):
+    """Le parrain n'a plus d'invitations disponibles au moment de l'acceptation
+    (débit à l'accept, décision 2026-06-22)."""
+
+
+def _preview_from_row(r: dict) -> dict:
+    return {"email": r.get("email"), "referral": r["org_id"] is None,
+            "inviter": r.get("inviter"), "org_name": r.get("org_name")}
+
+
+_PREVIEW_SELECT = """
+    SELECT i.email, i.org_id,
+           COALESCE(u.name, u.email) AS inviter,
+           o.name AS org_name
+      FROM org_invitations i
+      LEFT JOIN users u ON u.sub = i.invited_by
+      LEFT JOIN orgs  o ON o.id  = i.org_id
+     WHERE {pred} AND i.accepted_at IS NULL AND i.expires_at > NOW()
+"""
+
+
 def preview_invitation(token: str) -> Optional[dict]:
-    """Aperçu PUBLIC d'une invitation valide (pour la page d'accueil d'invitation,
-    avant authentification) : email visé, saveur referral/org, nom de l'inviteur et
-    nom de l'org. Le token EST le secret — rien de sensible au-delà. None si
-    invalide/expirée/déjà acceptée."""
+    """Aperçu PUBLIC d'une invitation nominative valide (page d'accueil d'invitation,
+    avant authentification), par token mail. None si invalide/expirée/déjà acceptée."""
     if not token:
         return None
     with _connect() as conn:
         row = conn.execute(
-            """
-            SELECT i.email, i.org_id,
-                   COALESCE(u.name, u.email) AS inviter,
-                   o.name AS org_name
-              FROM org_invitations i
-              LEFT JOIN users u ON u.sub = i.invited_by
-              LEFT JOIN orgs  o ON o.id  = i.org_id
-             WHERE i.token_hash = %s AND i.accepted_at IS NULL AND i.expires_at > NOW()
-            """,
-            (_hash_token(token),),
+            _PREVIEW_SELECT.format(pred="i.token_hash = %s"), (_hash_token(token),)
         ).fetchone()
-        if not row:
-            return None
-        r = dict(row)
-        return {"email": r["email"], "referral": r["org_id"] is None,
-                "inviter": r.get("inviter"), "org_name": r.get("org_name")}
+        return _preview_from_row(dict(row)) if row else None
+
+
+def preview_invitation_by_code(code: str) -> Optional[dict]:
+    """Aperçu PUBLIC par code court (lien /invitation/<carrier>/<code>)."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            _PREVIEW_SELECT.format(pred="i.code = %s"), (code,)
+        ).fetchone()
+        return _preview_from_row(dict(row)) if row else None
+
+
+def preview_referral(carrier: str) -> Optional[dict]:
+    """Aperçu PUBLIC d'un lien referral réutilisable (/invitation/<carrier>) : nom
+    du porteur, saveur referral. None si le code porteur est inconnu. `exhausted` =
+    le porteur n'a plus de budget (l'accept échouera)."""
+    u = get_user_by_referral_code(carrier)
+    if not u:
+        return None
+    with _connect() as conn:
+        row = conn.execute("SELECT invite_quota FROM users WHERE sub = %s",
+                           (u["sub"],)).fetchone()
+    return {"email": None, "referral": True, "org_name": None,
+            "inviter": u.get("name") or u.get("email"),
+            "exhausted": int((row or {}).get("invite_quota") or 0) <= 0}
 
 
 def get_invitation_by_token(token: str) -> Optional[dict]:
     """Invitation valide (non acceptée, non expirée) pour ce token, sinon None."""
     if not token:
         return None
+    return _get_invitation("token_hash = %s", _hash_token(token))
+
+
+def get_invitation_by_code(code: str) -> Optional[dict]:
+    """Invitation valide (non acceptée, non expirée) pour ce code court, sinon None."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    return _get_invitation("code = %s", code)
+
+
+def _get_invitation(pred: str, val) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT id, org_id, email, org_role, invited_by, source, expires_at
               FROM org_invitations
-             WHERE token_hash = %s AND accepted_at IS NULL AND expires_at > NOW()
+             WHERE {pred} AND accepted_at IS NULL AND expires_at > NOW()
             """,
-            (_hash_token(token),),
+            (val,),
         ).fetchone()
         return dict(row) if row else None
 
@@ -677,28 +786,75 @@ def _mark_invitation_accepted(inv_id: int, sub: str) -> None:
         )
 
 
-def accept_invitation(token: str, sub: str) -> Optional[dict]:
-    """Accepte une invitation (ADR 0013, table unifiée). Les DEUX saveurs accordent
-    l'accès plateforme. Renvoie {org_id, org_role, referral} ou None si token
-    invalide. Le contrôle d'email (matche le compte) est fait par la capacité
-    appelante.
+def _is_active(sub: str) -> bool:
+    u = db.get_user(sub)
+    return bool(u and u.get("access_status") == "active")
 
-    - referral (`org_id=None`) : accorde l'accès + crédite le quota referral + pose
-      le parrain ; PAS de rattachement d'org (l'invité crée la sienne via org.create).
-    - org (`org_id` renseigné) : ajoute le membre, bascule l'org active, et accorde
-      aussi l'accès plateforme (un membre invité est de fait dans Oto)."""
+
+def _grant_referral_access(invitee_sub: str, inviter_sub: Optional[str], source: Optional[str]) -> bool:
+    """Accorde l'accès plateforme à un invité via une saveur referral (lien ou code
+    nominatif). Débite le budget du PARRAIN à l'acceptation (décision 2026-06-22),
+    sauf émission admin (hors quota). Idempotent : si l'invité est déjà actif, no-op
+    (pas de re-débit sur double-clic). Lève InviteQuotaExhausted si le parrain est à
+    sec. Renvoie True si un accès vient d'être accordé, False si déjà actif."""
+    if _is_active(invitee_sub):
+        return False
+    if inviter_sub and source != "admin":
+        if not db.consume_invite_quota(inviter_sub):
+            raise InviteQuotaExhausted()
+    db.grant_platform_access(invitee_sub, invited_by=inviter_sub, quota=_alpha_invite_quota())
+    return True
+
+
+def accept_invitation(token: str, sub: str) -> Optional[dict]:
+    """Accepte une invitation nominative par token mail. None si token invalide."""
     inv = get_invitation_by_token(token)
-    if not inv:
+    return _accept_invitation_row(inv, sub) if inv else None
+
+
+def accept_invitation_by_code(code: str, sub: str) -> Optional[dict]:
+    """Accepte une invitation nominative par code court. None si code invalide."""
+    inv = get_invitation_by_code(code)
+    return _accept_invitation_row(inv, sub) if inv else None
+
+
+def accept_referral(carrier: str, sub: str) -> Optional[dict]:
+    """Accepte un lien referral réutilisable (/invitation/<carrier>). Le porteur ne
+    peut pas s'auto-parrainer. Débite le porteur, journalise l'entrée (arbre viral),
+    accorde l'accès. None si le code porteur est inconnu. Lève InviteQuotaExhausted
+    si le porteur est à sec."""
+    u = get_user_by_referral_code(carrier)
+    if not u:
         return None
-    return _accept_invitation_row(inv, sub)
+    if u["sub"] == sub:
+        return {"org_id": None, "org_role": None, "referral": True, "self": True}
+    granted = _grant_referral_access(sub, u["sub"], "referral_link")
+    if granted:
+        # Journalise l'entrée pour l'arbre viral (pas de pré-création ; token bidon
+        # pour honorer la contrainte NOT NULL UNIQUE de token_hash).
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO org_invitations
+                    (org_id, email, token_hash, invited_by, source, expires_at,
+                     accepted_at, accepted_sub)
+                VALUES (NULL, NULL, %s, %s, 'referral_link', NOW(), NOW(), %s)
+                """,
+                ("ref_" + secrets.token_urlsafe(24), u["sub"], sub),
+            )
+    return {"org_id": None, "org_role": None, "referral": True}
 
 
 def _accept_invitation_row(inv: dict, sub: str) -> dict:
     """Cœur de l'acceptation à partir d'une ligne d'invitation déjà résolue (par
-    token OU par email lors d'une réconciliation de signup). Cf. accept_invitation."""
+    token, code OU email lors d'une réconciliation de signup).
+
+    - referral (`org_id=None`) : débite le parrain + accorde l'accès + crédite le
+      budget de l'invité ; pas de rattachement d'org (l'invité crée la sienne).
+    - org (`org_id` renseigné) : ajoute le membre, bascule l'org active, accorde
+      l'accès plateforme (hors budget referral — ajout d'équipe)."""
     if inv["org_id"] is None:
-        db.grant_platform_access(sub, invited_by=inv.get("invited_by"),
-                                 quota=_alpha_invite_quota())
+        _grant_referral_access(sub, inv.get("invited_by"), inv.get("source"))
         _mark_invitation_accepted(inv["id"], sub)
         return {"org_id": None, "org_role": None, "referral": True}
     add_org_member(inv["org_id"], sub, inv["org_role"])
@@ -720,7 +876,7 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, org_id, org_role, invited_by
+            SELECT id, org_id, org_role, invited_by, source
               FROM org_invitations
              WHERE accepted_at IS NULL AND expires_at > NOW() AND lower(email) = %s
              ORDER BY created_at DESC

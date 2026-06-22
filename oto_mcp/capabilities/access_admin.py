@@ -25,7 +25,7 @@ def _app_url() -> str:
 
 
 def _default_quota() -> int:
-    return int(os.environ.get("OTO_ALPHA_INVITE_QUOTA", "3"))
+    return int(os.environ.get("OTO_ALPHA_INVITE_QUOTA", "5"))
 
 
 class WaitlistInput(BaseModel):

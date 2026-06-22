@@ -11,7 +11,7 @@ via les adaptateurs. Pattern de référence : `orgs_secrets.py`.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -62,6 +62,24 @@ class SetFieldFilterInput(BaseModel):
     salt: Optional[str] = None
 
 
+class PreviewFieldFilterInput(BaseModel):
+    org_id: int
+    service: str
+    payload: Any                            # un échantillon de réponse réel (dict ou list)
+    rules: Optional[list[dict]] = None      # règles à tester ; None = politique effective du service
+    salt: Optional[str] = None
+
+
+def _validate_rules(rules: list[dict]) -> None:
+    for rule in rules:
+        if not rule.get("fields"):
+            raise AuthzDenied(400, "rule_without_fields", "Chaque règle doit lister des `fields`.")
+        action = rule.get("action", "mask")
+        if action not in _ACTIONS:
+            raise AuthzDenied(400, "unknown_action",
+                              f"Action inconnue : {action!r} (attendu {sorted(_ACTIONS)}).")
+
+
 def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
@@ -90,14 +108,7 @@ def _set_field_filter(ctx: ResolvedCtx, inp: SetFieldFilterInput) -> dict:
     if inp.rules is None:
         block = None     # efface la politique de ce connecteur
     else:
-        for rule in inp.rules:
-            if not rule.get("fields"):
-                raise AuthzDenied(400, "rule_without_fields",
-                                  "Chaque règle doit lister des `fields`.")
-            action = rule.get("action", "mask")
-            if action not in _ACTIONS:
-                raise AuthzDenied(400, "unknown_action",
-                                  f"Action inconnue : {action!r} (attendu {sorted(_ACTIONS)}).")
+        _validate_rules(inp.rules)
         block = {"rules": inp.rules}
         if inp.salt:
             block["salt"] = inp.salt
@@ -105,6 +116,30 @@ def _set_field_filter(ctx: ResolvedCtx, inp: SetFieldFilterInput) -> dict:
     org_store.set_org_field_filters(inp.org_id, service, block)
     return {"ok": True, "org_id": inp.org_id, "service": service,
             "cleared": block is None, "rules": 0 if block is None else len(inp.rules or [])}
+
+
+def _preview_field_filter(ctx: ResolvedCtx, inp: PreviewFieldFilterInput) -> dict:
+    """Dry-run : passe un échantillon de réponse réel à travers le filtre et renvoie
+    la version redactée — pour voir EXACTEMENT ce qui est masqué (clés imbriquées
+    incluses), sans deviner. `rules` fournis = on teste ce brouillon ; sinon on applique
+    la politique effective du service (org → défaut serveur)."""
+    if not org_store.get_org(inp.org_id):
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    if not isinstance(inp.payload, (dict, list)):
+        raise AuthzDenied(400, "bad_payload", "`payload` doit être un objet ou une liste JSON.")
+    service = (inp.service or "").strip()
+
+    from oto.tools.common import FieldFilter
+
+    if inp.rules is not None:
+        _validate_rules(inp.rules)
+        block: Optional[dict] = {"rules": inp.rules, "salt": inp.salt} if inp.salt else {"rules": inp.rules}
+    else:
+        configured = org_store.get_org_field_filters(inp.org_id)
+        block = configured.get(service) or field_filter_defaults.SERVER_DEFAULTS.get(service)
+
+    ff = FieldFilter(rules=(block or {}).get("rules", []), salt=(block or {}).get("salt"))
+    return {"org_id": inp.org_id, "service": service, "redacted": ff.apply(inp.payload)}
 
 
 CAPABILITIES += [
@@ -127,5 +162,15 @@ CAPABILITIES += [
                      "(falls back to the server default). The org policy is authoritative."),
         mcp="oto_set_org_field_filters",
         rest=RestBinding("PUT", "/api/orgs/{id}/field-filters/{service}", _ID),
+    ),
+    Capability(
+        key="org.field_filters.preview", handler=_preview_field_filter, Input=PreviewFieldFilterInput,
+        authz=ORG_MEMBER_OF("org_id"),
+        description=("Dry-run a connector's field-redaction on a real sample response: "
+                     "returns the redacted payload so you can SEE exactly which fields "
+                     "(incl. nested keys) get masked. Pass `rules` to test a draft, or omit "
+                     "to apply the service's effective policy (org → server default)."),
+        mcp="oto_preview_org_field_filter",
+        rest=RestBinding("POST", "/api/orgs/{id}/field-filters/{service}/preview", _ID),
     ),
 ]

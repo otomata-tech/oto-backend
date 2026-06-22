@@ -19,24 +19,35 @@ from __future__ import annotations
 # Anonymisation d'un profil/candidat (use-case recrutement) : on masque l'identité
 # avant que l'agent voie le profil — pseudonyme cohérent pour les noms (analyse
 # possible sans ré-identification), masque format-préservant pour les coordonnées,
-# suppression des ré-identifiants directs (photo, URL publique). La localisation est
-# **gardée** (un profil LinkedIn est déjà au niveau ville/région, utile au scoring).
+# suppression des ré-identifiants directs (photo, URL/ids publics), drop de la date de
+# naissance. La localisation/headline sont **gardés** (utiles au scoring).
+#
+# ⚠️ Calé sur la FORME RÉELLE observée (`unipile_profile` : `contact_info.emails`/
+# `phones`, `profile_picture_url` + `_large`, `provider_id`, `birthdate`…). On NE
+# pseudonymise PAS la clé générique `name` : le moteur matche par clé feuille à toute
+# profondeur, et `name` désigne aussi `skills[].name`/`languages[].name` → ça les
+# corromprait. Le nom de la personne passe par `first_name`/`last_name` (et `full_name`/
+# `display_name`, sans ambiguïté). Un connecteur dont la personne vit sous `name` se
+# règle via le dry-run (schéma réel), pas par un défaut aveugle.
 _CANDIDATE_PII: list[dict] = [
     {"fields": ["first_name", "firstName", "first-name", "prenom", "given_name", "givenName"],
      "action": "pseudonym", "kind": "first_name"},
     {"fields": ["last_name", "lastName", "last-name", "nom", "family_name", "familyName", "surname"],
      "action": "pseudonym", "kind": "last_name"},
-    {"fields": ["name", "full_name", "fullName", "full-name", "display_name", "displayName"],
+    {"fields": ["full_name", "fullName", "full-name", "display_name", "displayName"],
      "action": "pseudonym", "kind": "name"},
     {"fields": ["email", "emails", "email_address", "emailAddress"],
      "action": "mask", "preserve": "email"},
     {"fields": ["phone", "phones", "phone_number", "phoneNumber", "mobile", "telephone"],
      "action": "mask", "preserve": "phone"},
-    {"fields": ["photo_url", "photoUrl", "picture", "picture_url", "pictureUrl",
-                "profile_picture_url", "profilePicture", "avatar_url", "avatarUrl", "image_url"],
+    {"fields": ["photo_url", "photoUrl", "picture_url", "pictureUrl", "profile_picture_url",
+                "profile_picture_url_large", "profilePicture", "avatar_url", "avatarUrl", "image_url"],
      "action": "drop"},
     {"fields": ["public_profile_url", "publicProfileUrl", "profile_url", "profileUrl",
-                "public_identifier", "publicIdentifier", "permalink", "profile_link"],
+                "public_identifier", "publicIdentifier", "permalink", "profile_link",
+                "provider_id", "member_urn"],
+     "action": "drop"},
+    {"fields": ["birthdate", "birth_date", "date_of_birth", "dob", "dateNaissance"],
      "action": "drop"},
 ]
 

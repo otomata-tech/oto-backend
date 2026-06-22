@@ -76,6 +76,12 @@ class FieldRedactionMiddleware(Middleware):
             return result
         name = getattr(context.message, "name", "") or ""
         service = namespace_of(name)
+        payload = self._extract(result)   # dict | list | None (forme brute renvoyée)
+
+        # Capture passive du schéma observé (squelette clés+types, JAMAIS de valeurs) :
+        # source de vérité du schéma de rédaction. Hors spine/méta. Best-effort.
+        if payload is not None and service not in _SPINE_SERVICES:
+            _observe_schema(service, payload)
 
         try:
             ff = _resolve_field_filter(service)
@@ -88,28 +94,38 @@ class FieldRedactionMiddleware(Middleware):
                 return _withheld(name)
             return result
 
-        if ff.is_empty:
+        if ff.is_empty or payload is None:
             return result
 
         # Une politique de rédaction EXISTE pour ce service → fail-closed à partir d'ici.
         try:
+            red = ff.apply(payload)
             sc = getattr(result, "structured_content", None)
-            if isinstance(sc, dict):
-                red = ff.apply(sc)
-                return self._rebuild(result, structured=red, payload=red)
-            content = getattr(result, "content", None) or []
-            block = content[0] if content else None
-            text = getattr(block, "text", None)
-            if isinstance(text, str):
-                data = json.loads(text)
-                if isinstance(data, (dict, list)):
-                    red = ff.apply(data)
-                    return self._rebuild(result, structured=sc, payload=red)
-            # Rien de structuré à redacter (texte libre, binaire…) → inchangé.
-            return result
+            # structured_content reçoit la version redactée s'il portait le dict ;
+            # sinon on le laisse (None / non-dict) — le canal texte porte le redacté.
+            return self._rebuild(result, structured=red if isinstance(sc, dict) else sc, payload=red)
         except Exception:
             logger.exception("rédaction de %s en échec — sortie retenue", name)
             return _withheld(name)
+
+    @staticmethod
+    def _extract(result):
+        """Forme brute renvoyée par le tool : `structured_content` si dict, sinon le
+        JSON du 1er bloc `content`. None si rien de structuré (texte libre/binaire)."""
+        sc = getattr(result, "structured_content", None)
+        if isinstance(sc, dict):
+            return sc
+        content = getattr(result, "content", None) or []
+        block = content[0] if content else None
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            try:
+                data = json.loads(text)
+            except (ValueError, TypeError):
+                return None
+            if isinstance(data, (dict, list)):
+                return data
+        return None
 
     @staticmethod
     def _rebuild(result, *, structured, payload) -> ToolResult:
@@ -122,6 +138,16 @@ class FieldRedactionMiddleware(Middleware):
             meta=getattr(result, "meta", None),
             is_error=False,
         )
+
+
+# Spine / méta : pas de capture de schéma (pas des connecteurs ; `data`/`scout` =
+# données arbitraires de l'user → bruit). La rédaction, elle, reste possible partout.
+_SPINE_SERVICES = {"oto", "run", "feedback", "data", "scout"}
+
+
+def _observe_schema(service: str, payload) -> None:
+    from . import connector_schema_store
+    connector_schema_store.observe(service, payload)
 
 
 def _resolve_field_filter(service: str):

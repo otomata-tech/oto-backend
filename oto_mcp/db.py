@@ -588,6 +588,17 @@ CREATE TABLE IF NOT EXISTS sub_aliases (
     new_sub TEXT NOT NULL,
     migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Schéma OBSERVÉ des connecteurs (rédaction de champs) : squelette clés+types dérivé
+-- des VRAIES réponses des tools (JAMAIS de valeurs/PII). Source de vérité du schéma
+-- affiché dans l'UI de rédaction — les sorties connecteurs sont des passthrough d'API
+-- tierces qu'on ne possède pas, donc le schéma juste = ce qui transite. Alimenté par
+-- `FieldRedactionMiddleware` (squelette par service, fusion incrémentale).
+CREATE TABLE IF NOT EXISTS connector_schemas (
+    service TEXT PRIMARY KEY,
+    schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -2745,3 +2756,30 @@ def delete_api_token(sub: str, token_id: int) -> bool:
             (sub, token_id),
         )
         return cur.rowcount > 0
+
+
+# ── Schéma observé des connecteurs (rédaction de champs) ──────────────────────
+def get_connector_schema(service: str) -> dict:
+    """Squelette observé d'un connecteur (`{name: {type, paths:[...]}}`), {} si aucun."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT schema FROM connector_schemas WHERE service = %s", (service,)
+        ).fetchone()
+    return (row or {}).get("schema") or {}
+
+
+def get_all_connector_schemas() -> dict:
+    """Tous les schémas observés, `{service: {name: {type, paths}}}`."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT service, schema FROM connector_schemas").fetchall()
+    return {r["service"]: (r["schema"] or {}) for r in rows}
+
+
+def upsert_connector_schema(service: str, schema: dict) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO connector_schemas (service, schema, updated_at) "
+            "VALUES (%s, %s::jsonb, NOW()) "
+            "ON CONFLICT (service) DO UPDATE SET schema = EXCLUDED.schema, updated_at = NOW()",
+            (service, json.dumps(schema)),
+        )

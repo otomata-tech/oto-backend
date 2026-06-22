@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from .. import connector_field_schema, field_filter_defaults, org_store
+from .. import connector_field_schema, connector_schema_store, db, field_filter_defaults, org_store
 from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 
@@ -84,17 +84,26 @@ def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     filters = org_store.get_org_field_filters(inp.org_id)
-    # Schéma de sortie déclaré par connecteur (pilote l'onglet transformations) — union
-    # des services connus du registre + ceux déjà configurés/par-défaut, pour ne rien cacher.
-    services = set(connector_field_schema.CONNECTOR_FIELD_SCHEMA) \
-        | set(filters) | set(field_filter_defaults.SERVER_DEFAULTS)
+    # Schéma par connecteur = OBSERVÉ (squelette des vraies réponses, source de vérité)
+    # fusionné avec le curé (libellés/sensibilité). Union de tous les services connus
+    # (observés + déjà configurés + curés) pour ne rien cacher.
+    observed = db.get_all_connector_schemas()   # {service: {name: {type, paths}}}
+    services = set(connector_field_schema.CONNECTOR_FIELD_SCHEMA) | set(filters) | set(observed)
+
+    def _merged_schema(svc: str) -> list[dict]:
+        curated = connector_field_schema.schema_for(svc)
+        seen = {f["name"].lower() for f in curated}
+        extra = [f for f in connector_schema_store.as_fields(observed.get(svc, {}))
+                 if f["name"].lower() not in seen]
+        return curated + extra
+
     return {
         "org_id": inp.org_id,
         "filters": filters,
         "defaults": field_filter_defaults.SERVER_DEFAULTS,   # vide : rien par défaut
         "templates": field_filter_defaults.TEMPLATES,         # jeux applicables en 1 clic
         "schema": _ACTION_SCHEMA,
-        "schemas": {svc: connector_field_schema.schema_for(svc) for svc in sorted(services)},
+        "schemas": {svc: _merged_schema(svc) for svc in sorted(services)},
     }
 
 

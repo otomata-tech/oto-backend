@@ -2453,11 +2453,94 @@ def get_shared_namespace(sub: str, namespace: str) -> Optional[dict]:
 def list_shared_namespaces(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT namespace, owner_sub, permission, created_at "
-            "FROM datastore_shares WHERE shared_with_sub = %s ORDER BY namespace",
+            "SELECT s.namespace, s.owner_sub, s.permission, s.created_at, d.id "
+            "FROM datastore_shares s "
+            "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
+            "WHERE s.shared_with_sub = %s ORDER BY s.namespace",
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_namespace_shares(owner_sub: str, namespace: str) -> list[dict]:
+    """Bénéficiaires d'un namespace possédé (email + permission), pour l'UI de
+    gestion du partage. Email résolu par join sur `users` (None si user effacé)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT s.shared_with_sub, s.permission, s.created_at, u.email "
+            "FROM datastore_shares s LEFT JOIN users u ON u.sub = s.shared_with_sub "
+            "WHERE s.owner_sub = %s AND s.namespace = %s ORDER BY s.created_at",
+            (owner_sub, namespace),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def rename_datastore_namespace(sub: str, old: str, new: str) -> bool:
+    """Renomme un namespace possédé (l'`id` BIGSERIAL est conservé → URL/deeplink
+    stables) et propage le nouveau nom aux partages (`datastore_shares` est keyé par
+    nom). Lève si `new` existe déjà ou si `old` est introuvable."""
+    new = (new or "").strip()
+    if not new:
+        raise ValueError("nouveau nom de namespace requis")
+    if new == old:
+        return True
+    with _connect() as conn:
+        with conn.transaction():
+            if conn.execute(
+                "SELECT 1 FROM user_datastores WHERE sub = %s AND namespace = %s",
+                (sub, new),
+            ).fetchone():
+                raise ValueError(f"un namespace `{new}` existe déjà")
+            cur = conn.execute(
+                "UPDATE user_datastores SET namespace = %s WHERE sub = %s AND namespace = %s",
+                (new, sub, old),
+            )
+            if (cur.rowcount or 0) == 0:
+                raise ValueError(f"namespace `{old}` introuvable")
+            conn.execute(
+                "UPDATE datastore_shares SET namespace = %s WHERE owner_sub = %s AND namespace = %s",
+                (new, sub, old),
+            )
+    return True
+
+
+def transfer_datastore_namespace(owner_sub: str, namespace: str, new_owner_sub: str) -> bool:
+    """Transfère la propriété d'un namespace à `new_owner_sub` (l'`id` est conservé)
+    et **repasse l'ancien propriétaire en partage `write`** (« tu passes en partagé »).
+    Lève si le destinataire possède déjà un namespace de ce nom, ou si introuvable."""
+    if new_owner_sub == owner_sub:
+        return True
+    with _connect() as conn:
+        with conn.transaction():
+            if conn.execute(
+                "SELECT 1 FROM user_datastores WHERE sub = %s AND namespace = %s",
+                (new_owner_sub, namespace),
+            ).fetchone():
+                raise ValueError(f"le destinataire possède déjà un namespace `{namespace}`")
+            cur = conn.execute(
+                "UPDATE user_datastores SET sub = %s WHERE sub = %s AND namespace = %s",
+                (new_owner_sub, owner_sub, namespace),
+            )
+            if (cur.rowcount or 0) == 0:
+                raise ValueError(f"namespace `{namespace}` introuvable")
+            # Repointer les partages existants vers le nouveau propriétaire.
+            conn.execute(
+                "UPDATE datastore_shares SET owner_sub = %s WHERE owner_sub = %s AND namespace = %s",
+                (new_owner_sub, owner_sub, namespace),
+            )
+            # Le nouveau propriétaire ne peut pas être bénéficiaire de son propre ns.
+            conn.execute(
+                "DELETE FROM datastore_shares WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
+                (new_owner_sub, namespace, new_owner_sub),
+            )
+            # L'ancien propriétaire devient bénéficiaire en write.
+            conn.execute(
+                "INSERT INTO datastore_shares (owner_sub, namespace, shared_with_sub, permission) "
+                "VALUES (%s, %s, %s, 'write') "
+                "ON CONFLICT (owner_sub, namespace, shared_with_sub) DO UPDATE SET permission = 'write'",
+                (new_owner_sub, namespace, owner_sub),
+            )
+    return True
 
 
 # --- Datastore rows (substrat PG natif, ADR 0016) ---------------------------
@@ -2504,16 +2587,54 @@ def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def datastore_list_rows(ns_id: int) -> list[dict]:
-    """Toutes les rows d'un namespace, plus ancienne d'abord. Le filtre/limit
-    s'applique côté store (égalité exacte, comme l'historique Sheets)."""
+def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = None,
+                        order_by: Optional[str] = None, order_dir: str = "desc",
+                        q: Optional[str] = None) -> list[dict]:
+    """Page de rows d'un namespace. `order_by` : `_created_at`/`_updated_at`/`_id`
+    (colonnes méta) ou un nom de champ user → `data->>field`. `q` : recherche
+    plein-texte sur tout le JSON (`data::text ILIKE`). Tri/pagination/recherche
+    côté SQL (server-side, ADR 0016). `limit=None` = toutes les rows (compat
+    `store.list_rows` / MCP `data_rows` qui filtrent ensuite en Python)."""
+    direction = "ASC" if str(order_dir).lower() == "asc" else "DESC"
+    where = "WHERE ns_id = %s"
+    params: list = [ns_id]
+    if q:
+        where += " AND data::text ILIKE %s"
+        params.append(f"%{q}%")
+    if order_by in (None, "", "_created_at"):
+        order_sql = f"created_at {direction}, row_id {direction}"
+    elif order_by == "_updated_at":
+        order_sql = f"updated_at {direction}, row_id {direction}"
+    elif order_by == "_id":
+        order_sql = f"row_id {direction}"
+    else:
+        order_sql = f"data ->> %s {direction}, row_id {direction}"
+        params.append(order_by)  # valeur paramétrée → pas d'injection
+    tail = ""
+    if limit is not None:
+        tail = " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
     with _connect() as conn:
         rows = conn.execute(
             "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            "WHERE ns_id = %s ORDER BY created_at, row_id",
-            (ns_id,),
+            f"{where} ORDER BY {order_sql}{tail}",
+            tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def datastore_count_rows(ns_id: int, q: Optional[str] = None) -> int:
+    """Nombre total de rows d'un namespace (pour la pagination), filtré par `q`."""
+    where = "WHERE ns_id = %s"
+    params: list = [ns_id]
+    if q:
+        where += " AND data::text ILIKE %s"
+        params.append(f"%{q}%")
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM datastore_rows {where}", tuple(params)
+        ).fetchone()
+        return int(row["n"]) if row else 0
 
 
 def datastore_update_row(ns_id: int, row_id: str, data: dict, updated_at: str) -> Optional[dict]:

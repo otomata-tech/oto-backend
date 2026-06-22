@@ -117,10 +117,10 @@ class DatastorePg:
 
     def list_namespaces(self) -> list[dict]:
         own = db.list_datastore_namespaces(self.sub)
-        out = [{"namespace": n["namespace"], "created_at": n.get("created_at"),
+        out = [{"id": n["id"], "namespace": n["namespace"], "created_at": n.get("created_at"),
                 "url": _ns_url(n["namespace"]), "shared": False} for n in own]
         for n in db.list_shared_namespaces(self.sub):
-            out.append({"namespace": n["namespace"], "created_at": n.get("created_at"),
+            out.append({"id": n["id"], "namespace": n["namespace"], "created_at": n.get("created_at"),
                         "url": _ns_url(n["namespace"]), "shared": True,
                         "owner_sub": n.get("owner_sub"), "permission": n.get("permission")})
         return out
@@ -177,9 +177,11 @@ class DatastorePg:
         filter: Optional[dict] = None,
         limit: int = 100,
     ) -> list[dict]:
+        """Filtre exact k:v en Python (chemin MCP `data_rows`). Ordre stable plus
+        ancien d'abord (compat historique)."""
         ns_id = self._resolve(namespace)
         out: list[dict] = []
-        for row in db.datastore_list_rows(ns_id):
+        for row in db.datastore_list_rows(ns_id, order_by="_created_at", order_dir="asc"):
             record = self._row_to_dict(row)
             if filter and not all(str(record.get(k)) == str(v) for k, v in filter.items()):
                 continue
@@ -187,6 +189,27 @@ class DatastorePg:
             if len(out) >= limit:
                 break
         return out
+
+    def page_rows(
+        self,
+        namespace: str,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        order_by: Optional[str] = None,
+        order_dir: str = "desc",
+        q: Optional[str] = None,
+    ) -> dict:
+        """Page server-side (tri/recherche SQL) + total — pour le dashboard.
+        Renvoie `{rows, total, offset, limit}`."""
+        ns_id = self._resolve(namespace)
+        rows = db.datastore_list_rows(
+            ns_id, offset=offset, limit=limit, order_by=order_by, order_dir=order_dir, q=q)
+        return {
+            "rows": [self._row_to_dict(r) for r in rows],
+            "total": db.datastore_count_rows(ns_id, q=q),
+            "offset": offset, "limit": limit,
+        }
 
     def update_row(self, namespace: str, row_id: str, patch: dict) -> dict:
         ns_id = self._resolve(namespace, write=True)

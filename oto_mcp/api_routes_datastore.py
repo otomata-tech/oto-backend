@@ -236,20 +236,26 @@ def make_routes(
         if err:
             return err
         namespace = request.path_params["namespace"]
+        qp = request.query_params
+
+        def _int(name: str, default: int) -> int:
+            try:
+                return int(qp.get(name, default))
+            except (TypeError, ValueError):
+                return default
+
+        offset = max(0, _int("offset", 0))
+        limit = min(500, max(1, _int("limit", 50)))
+        order_by = qp.get("order_by") or None
+        order_dir = qp.get("order_dir", "desc")
+        q = qp.get("q") or None
         try:
-            limit = int(request.query_params.get("limit", "100"))
-        except ValueError:
-            limit = 100
-        filter_dict: dict[str, str] = {}
-        for f in request.query_params.getlist("filter"):
-            if ":" in f:
-                k, v = f.split(":", 1)
-                filter_dict[k.strip()] = v.strip()
-        try:
-            rows = make_store(sub).list_rows(namespace, filter=filter_dict or None, limit=limit)
+            page = make_store(sub).page_rows(
+                namespace, offset=offset, limit=limit,
+                order_by=order_by, order_dir=order_dir, q=q)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
-        return json_response(request, {"rows": rows, "count": len(rows)})
+        return json_response(request, page)
 
     async def ds_get_row(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -360,6 +366,63 @@ def make_routes(
             return json_error(request, 404, f"no active share for {email} on {namespace}")
         return json_response(request, {"ok": True, "namespace": namespace, "removed": email})
 
+    async def ds_list_shares(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        if not db.get_datastore_namespace(sub, namespace):
+            return json_error(request, 404, "namespace_not_found")
+        shares = [
+            {"email": s.get("email"), "permission": s.get("permission"),
+             "created_at": s.get("created_at")}
+            for s in db.list_namespace_shares(sub, namespace)
+        ]
+        return json_response(request, {"shares": shares})
+
+    async def ds_rename(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        new = ((body or {}).get("name") or "").strip()
+        if not new:
+            return json_error(request, 400, "name_required")
+        if not db.get_datastore_namespace(sub, namespace):
+            return json_error(request, 404, "namespace_not_found")
+        try:
+            db.rename_datastore_namespace(sub, namespace, new)
+        except ValueError as e:
+            return json_error(request, 409, str(e))
+        return json_response(request, {"ok": True, "namespace": new})
+
+    async def ds_transfer(request: Request) -> JSONResponse:
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        email = ((body or {}).get("email") or "").strip()
+        if not email:
+            return json_error(request, 400, "email_required")
+        recipient = db.get_user_by_email(email)
+        if not recipient:
+            return json_error(request, 404, f"no oto user with email {email}")
+        if not db.get_datastore_namespace(sub, namespace):
+            return json_error(request, 404, "namespace_not_found")
+        try:
+            db.transfer_datastore_namespace(sub, namespace, recipient["sub"])
+        except ValueError as e:
+            return json_error(request, 409, str(e))
+        return json_response(request, {"ok": True, "namespace": namespace, "new_owner": email})
+
     return [
         # Google OAuth
         Route("/api/google/oauth/start", google_oauth_start, methods=["GET"]),
@@ -392,7 +455,11 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_update_row, methods=["PATCH"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_delete_row, methods=["DELETE"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}", ds_rename, methods=["PATCH"]),
+        Route("/api/datastore/namespaces/{namespace}/share", ds_list_shares, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/share", ds_share, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/share", ds_unshare, methods=["DELETE"]),
         Route("/api/datastore/namespaces/{namespace}/share", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/transfer", ds_transfer, methods=["POST"]),
+        Route("/api/datastore/namespaces/{namespace}/transfer", options_handler, methods=["OPTIONS"]),
     ]

@@ -136,30 +136,49 @@ def register(mcp: FastMCP) -> None:
         EBE, marge EBE, autonomie financière, taux d'endettement, liquidité).
         For the full ratio set, call `fr_bilan(siren, date_cloture)`.
 
+        Resilient to per-source failures: a timeout or error on INPI (bilan) or
+        BODACC (events) degrades gracefully — the available blocks are returned
+        and the failing sources are listed under `partial_errors`. Only an
+        identity failure (the keystone source) fails the whole call.
+
         Args:
             siren: SIREN number (9 digits).
         """
         from concurrent.futures import ThreadPoolExecutor
 
+        partial_errors: dict[str, str] = {}
+
+        def _safe(label, fn, *fn_args):
+            try:
+                return fn(*fn_args)
+            except Exception as exc:  # dégradation gracieuse par sous-source
+                partial_errors[label] = f"{type(exc).__name__}: {exc}"
+                return None
+
         with ThreadPoolExecutor(max_workers=3) as pool:
-            f_identity = pool.submit(entreprises.get_by_siren, siren)
-            f_bilans = pool.submit(inpi.list_exercises, siren)
-            f_events = pool.submit(bodacc.search_by_siren, siren, None, 10)
+            f_identity = pool.submit(_safe, "identity", entreprises.get_by_siren, siren)
+            f_bilans = pool.submit(_safe, "latest_bilan", inpi.list_exercises, siren)
+            f_events = pool.submit(_safe, "recent_events", bodacc.search_by_siren, siren, None, 10)
 
         identity = f_identity.result()
         if not identity:
+            # L'identité est la pièce maîtresse : sans elle, pas de fiche.
+            if "identity" in partial_errors:
+                return {"error": "identity_unavailable", "siren": siren,
+                        "partial_errors": partial_errors}
             return {"error": "not_found", "siren": siren}
 
         exercises = f_bilans.result()
         latest_bilan = None
         if exercises:
-            full = inpi.get_bilan(siren, exercises[0]["date_cloture_exercice"])
+            full = _safe("latest_bilan", inpi.get_bilan, siren,
+                         exercises[0]["date_cloture_exercice"])
             if full:
                 latest_bilan = {k: full.get(k) for k in _LATEST_BILAN_KEYS}
 
-        events_data = f_events.result()
+        events_data = f_events.result() or {}
 
-        return {
+        out = {
             "siren": siren,
             "identity": _compact_identity(identity),
             "latest_bilan": latest_bilan,
@@ -168,6 +187,9 @@ def register(mcp: FastMCP) -> None:
             ],
             "events_total": events_data.get("total_count", 0),
         }
+        if partial_errors:
+            out["partial_errors"] = partial_errors
+        return out
 
     @mcp.tool()
     async def fr_directors(siren: str) -> list[dict]:

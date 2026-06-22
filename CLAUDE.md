@@ -107,15 +107,25 @@ MV3) qui capture le couple `(li_at, user_agent)` et le push automatiquement
 via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
 `chrome.cookies.onChanged` quand LinkedIn rotate la session.
 
-## SIRENE stock (DuckDB sur parquet INSEE)
+## SIRENE stock (DuckDB sur parquet INSEE — lu depuis S3/httpfs)
 
-Stock complet (~35M établissements, parquet ~2GB) accessible via DuckDB :
-- Path canonique : `/opt/oto-mcp/data/sirene/StockEtablissement.parquet` (env `SIRENE_STOCK_PARQUET_PATH`)
-- Refresh mensuel via `deploy/refresh_sirene_stock.sh` (cron sur tuls.me)
-- Query layer : `france_opendata.sirene_stock` (lib partagée PyPI `france-opendata[stock]`, ex-`oto_mcp/sirene_duckdb.py` — déplacé pour être consommé aussi par les apps co-localisées, ex. tuls)
-- 4 MCP tools `sirene_stock_*` (siege, etablissements, siret, search)
-- 5 REST endpoints `/api/sirene/{siege,etablissements,siret,search,info}`
-- Consommé par `oto-cli` (`SireneStock` HTTP client) — voir ADR 0001 dans le meta-repo `otomata`
+Stock complet (~43M établissements, parquet ~2GB) interrogé via DuckDB :
+- **Source = Object Storage** (ADR 0002 résolu 2026-06-22) : la box dédiée n'est PAS
+  co-localisée avec le parquet → `SIRENE_STOCK_PARQUET_PATH=s3://oto-media/sirene/StockEtablissement.parquet`,
+  lu en **httpfs** (range reads, pruning de row groups). Creds DuckDB via env
+  `SIRENE_STOCK_S3_{ENDPOINT,REGION,KEY_ID,SECRET,URL_STYLE}` (url_style=`path` pour
+  Scaleway — `vhost` 3× plus lent). Le module accepte aussi un chemin local ou une URL
+  `https://` publique. **Perfs box (2 vCPU)** : lookup point ~2s, scan filtré ~20-30s.
+  ⚠️ Pour CHERCHER des boîtes (secteur/zone/taille), préférer **`fr_search`**
+  (API recherche-entreprises indexée, <1s, filtre `categorie_entreprise` PME/ETI/GE) ;
+  le parquet = lookups ponctuels + **bulk** (cf. ci-dessous) + énumération exhaustive >10k.
+- Refresh : data.gouv republie mensuellement (URL datée → `deploy/refresh_sirene_stock_s3.sh`
+  résout l'URL via l'API data.gouv puis push S3, à lancer sur otomata-0 ; **cron non installé** —
+  le parquet bouge lentement, refresh manuel quand ça compte).
+- Query layer : `france_opendata.sirene_stock` (lib PyPI `france-opendata[stock]`, **>=0.11** = support s3:///httpfs).
+- MCP tools `sirene_stock_*` : **`enrich(sirens=[...])`** (bulk — sièges d'une LISTE en UN scan), `siege`, `etablissements`, `siret`, `search` (`sieges_only=True` = siège strict).
+- REST `/api/sirene/{headquarters(POST,batch),siege,etablissements,siret,search,info}`.
+- Consommé par `oto-cli` (`SireneStock` HTTP client, oto-core >=1.8 — `get_headquarters_addresses` = 1 POST batch, plus N appels) — voir ADR 0001 + 0002 dans le privé `otomata-private`.
 
 ## Datastore (spine natif PG, ADR 0016)
 

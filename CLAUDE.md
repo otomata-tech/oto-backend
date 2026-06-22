@@ -159,9 +159,29 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 
 ## Monitoring des appels MCP
 
-`CallMonitoringMiddleware` journalise chaque appel dans `tool_call_log` (best-effort,
-prune au boot) ; surface admin `/api/admin/monitoring/{summary,calls}`. **Détail :
-`docs/monitoring.md`**.
+`ToolCallLogger` (lib otomata-calllog) journalise chaque appel dans `tool_calls`
+(`db.insert_tool_call`, best-effort, identité = `sub` du JWT via
+`current_user_sub_from_token`) ; surface admin `/api/admin/monitoring/{summary,calls}`.
+**Détail : `docs/monitoring.md`**. ⚠️ **Ne trace QUE les invocations d'outils MCP** —
+pas la connexion du connecteur, pas le `tools/list`, pas les appels REST/dashboard.
+Donc **compte actif ≠ usage** : un user qui a un compte (table `users`) mais 0 ligne
+`tool_calls` n'a jamais déclenché d'outil (connecté-mais-idle, OU handshake OAuth du
+connecteur jamais réussi → diagnostiquer via `journalctl` 401). Vécu 2026-06-22 (JB,
+Julien : comptes actifs, 0 appel ; le monitoring marchait, eux n'avaient rien invoqué).
+
+## Error tracking (Sentry)
+
+Exceptions backend → **Sentry SaaS** (gaté `OTO_SENTRY_DSN`, no-op si absent →
+le serveur boote sans). Deux captures : **500 des routes REST `/api/*`** via
+l'intégration Starlette (auto) ; **exceptions des tools MCP** via
+`SentryToolErrorMiddleware` (`sentry_setup.py`) — une erreur de tool est une erreur
+JSON-RPC en **HTTP 200**, invisible à l'intégration Starlette, donc capturée là où
+l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
+`send_default_pii=False`, **jamais** les args d'appel dans l'event. `before_send`
+**droppe les 4xx amont** (`HTTP 4xx` d'une API tierce = input rejeté, pas un bug
+backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
+`de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = doctrine oto
+`surveillance-erreurs` (token API en SOPS `sentry_api_token`).
 
 ## Onboarding (accueil au démarrage d'un compte)
 

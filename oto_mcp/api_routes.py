@@ -117,7 +117,8 @@ async def _authenticate(
     if os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS"):
         sub = db.resolve_sub(sub)
     db.upsert_user(sub, email=access_token.claims.get("email"),
-                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"))
+                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"),
+                   email_verified=access_token.claims.get("email_verified") is True)
     return sub, None
 
 
@@ -244,6 +245,20 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Alimente la page d'accueil « vous êtes invité·e » avant la création de
         compte : email visé + inviteur, pour accompagner l'onboarding."""
         p = org_store.preview_invitation(request.path_params.get("token", ""))
+        if not p:
+            return _json_error(request, 404, "invalid_or_expired")
+        return _json(request, p)
+
+    async def invite_preview_by_code(request: Request) -> JSONResponse:
+        """Aperçu PUBLIC d'une invitation par code court (/invitation/<c>/<code>)."""
+        p = org_store.preview_invitation_by_code(request.path_params.get("code", ""))
+        if not p:
+            return _json_error(request, 404, "invalid_or_expired")
+        return _json(request, p)
+
+    async def referral_preview(request: Request) -> JSONResponse:
+        """Aperçu PUBLIC d'un lien referral réutilisable (/invitation/<carrier>)."""
+        p = org_store.preview_referral(request.path_params.get("carrier", ""))
         if not p:
             return _json_error(request, 404, "invalid_or_expired")
         return _json(request, p)
@@ -1100,6 +1115,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/doctrines/library", options_handler, methods=["OPTIONS"]),
         Route("/api/doctrines/library/{slug}", doctrines_library_public_get, methods=["GET"]),
         Route("/api/doctrines/library/{slug}", options_handler, methods=["OPTIONS"]),
+        Route("/api/invitations/code/{code}", invite_preview_by_code, methods=["GET"]),
+        Route("/api/invitations/code/{code}", options_handler, methods=["OPTIONS"]),
+        Route("/api/invitations/referral/{carrier}", referral_preview, methods=["GET"]),
+        Route("/api/invitations/referral/{carrier}", options_handler, methods=["OPTIONS"]),
         Route("/api/invitations/{token}", invite_preview, methods=["GET"]),
         Route("/api/invitations/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),

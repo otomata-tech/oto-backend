@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS users (
     invite_quota INTEGER NOT NULL DEFAULT 0,
     invited_by TEXT,
     access_granted_at TIMESTAMPTZ,
+    -- Code referral stable, partageable au réseau (lien /invitation/<code>).
+    -- Non secret (destiné à être diffusé), lazy-généré à la 1re demande.
+    referral_code TEXT,
     avatar_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -129,7 +132,10 @@ CREATE TABLE IF NOT EXISTS usage_signals (
     target TEXT,                 -- feedback: nom de l'outil ; gap: l'intention (ce qu'on voulait faire)
     body TEXT,                   -- description libre
     session_id TEXT,             -- corrélation session (face-agent) ; NULL côté humain
-    source TEXT NOT NULL DEFAULT 'agent'   -- 'agent' (MCP) | 'human' (REST dashboard)
+    source TEXT NOT NULL DEFAULT 'agent',  -- 'agent' (MCP) | 'human' (REST dashboard)
+    resolved_at TIMESTAMPTZ,     -- NULL = ouvert ; date = signal traité
+    resolved_by TEXT,            -- sub de l'opérateur ayant résolu
+    resolution TEXT              -- note libre : ce qui a été fait
 );
 CREATE INDEX IF NOT EXISTS idx_usage_signals_signal ON usage_signals(signal, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_signals_target ON usage_signals(signal, target, created_at DESC);
@@ -345,12 +351,19 @@ CREATE TABLE IF NOT EXISTS org_entitlements (
 -- org (org-invite) ; NULL = referral alpha (l'invité crée sa propre org). Les
 -- deux saveurs accordent l'accès plateforme à l'acceptation. `source` =
 -- provenance (user_quota | admin_seed | org_admin).
+-- `email` NULLABLE : une invitation nominative cible un email, mais une émission
+-- « code à partager soi-même » (sans envoi mail) peut être anonyme. `code` = code
+-- court lisible (lien /invitation/<carrier>/<code>), saisi/partagé à la main ;
+-- c'est le secret d'accès single-use (≠ token_hash legacy du lien mail). Les
+-- entrées par lien referral réutilisable sont journalisées ici (source
+-- 'referral_link', accepted_*) pour l'arbre viral, sans pré-création.
 CREATE TABLE IF NOT EXISTS org_invitations (
     id BIGSERIAL PRIMARY KEY,
     org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
-    email TEXT NOT NULL,
+    email TEXT,
     org_role TEXT NOT NULL DEFAULT 'org_member',
     token_hash TEXT NOT NULL UNIQUE,
+    code TEXT,
     invited_by TEXT,
     source TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -359,6 +372,7 @@ CREATE TABLE IF NOT EXISTS org_invitations (
     accepted_sub TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_org_invitations_org ON org_invitations(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_invitations_code ON org_invitations(code) WHERE code IS NOT NULL;
 
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
@@ -622,6 +636,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, created_at) WHERE run_id IS NOT NULL")
+        # Résolution des signaux d'usage (ADR 0017) : marquer un feedback/gap traité.
+        # NULL = ouvert. resolution = note libre de l'opérateur (ce qui a été fait).
+        conn.execute("ALTER TABLE usage_signals ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
+        conn.execute("ALTER TABLE usage_signals ADD COLUMN IF NOT EXISTS resolved_by TEXT")
+        conn.execute("ALTER TABLE usage_signals ADD COLUMN IF NOT EXISTS resolution TEXT")
         # Unipile revendeur (org_id porté au compte + plafond par org).
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id)")
@@ -667,6 +686,17 @@ def init_db() -> None:
         # les DB créées avant). NULL = referral alpha, l'invité crée sa propre org.
         conn.execute("ALTER TABLE org_invitations ALTER COLUMN org_id DROP NOT NULL")
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
+        # Lien referral réutilisable + invitation par code court partageable à la
+        # main (2026-06-22). referral_code = code stable par user (diffusable) ;
+        # org_invitations.code = code single-use d'une invitation nominative ;
+        # email nullable (émission sans envoi mail = code à partager soi-même).
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code "
+                     "ON users(referral_code) WHERE referral_code IS NOT NULL")
+        conn.execute("ALTER TABLE org_invitations ALTER COLUMN email DROP NOT NULL")
+        conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS code TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_invitations_code "
+                     "ON org_invitations(code) WHERE code IS NOT NULL")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Datastore = spine natif PG (ADR 0016) : `spreadsheet_id` devient une
@@ -797,7 +827,7 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None,
-                iss: Optional[str] = None) -> None:
+                iss: Optional[str] = None, email_verified: bool = False) -> None:
     """Create the user row if missing, refresh email/name if known.
 
     Fédération de compte (otomata#16) : à la **première** création (vrai INSERT),
@@ -837,7 +867,11 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     # l'ancien compte (même email) → ce sub. Gaté par env `OTO_MCP_TENANT_MIGRATION_ISS`
     # (dormant hors fenêtre de bascule). Idempotent, best-effort, à chaque login
     # new-tenant (pas que au 1er insert → couvre les retries / l'ordre des logins).
-    if email and iss:
+    # ⚠️ SÉCU (account takeover) : ne fusionner QUE sur un email VÉRIFIÉ. Sinon un
+    # token new-tenant avec un email non vérifié (ex. futur password sign-up) pourrait
+    # absorber le compte d'autrui (rôle, coffre). Les comptes auth.oto.zone existants
+    # sont tous nés d'un signup passwordless email+code → vérifiés.
+    if email and iss and email_verified:
         _mig = os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS", "").strip().rstrip("/")
         if _mig and iss.rstrip("/") == _mig:
             try:
@@ -1440,23 +1474,61 @@ def insert_usage_signal(
 
 def list_usage_signals(
     signal: Optional[str] = None, target: Optional[str] = None, limit: int = 200,
+    status: Optional[str] = None,
 ) -> list[dict]:
-    """Signaux récents (récent d'abord), filtrables par type / cible — base des
-    projections (qualité d'outil, manques) du barreau 4."""
+    """Signaux récents (récent d'abord), filtrables par type / cible / statut —
+    base des projections (qualité d'outil, manques) du barreau 4.
+
+    status: 'open' (resolved_at IS NULL) | 'resolved' (NOT NULL) | None (tous)."""
     limit = max(1, min(int(limit), 1000))
     sql = ("SELECT id, created_at, sub, org_id, signal, kind, target, body, "
-           "session_id, source FROM usage_signals")
+           "session_id, source, resolved_at, resolved_by, resolution "
+           "FROM usage_signals")
     clauses, params = [], []
     if signal:
         clauses.append("signal = %s"); params.append(signal)
     if target:
         clauses.append("target = %s"); params.append(target)
+    if status == "open":
+        clauses.append("resolved_at IS NULL")
+    elif status == "resolved":
+        clauses.append("resolved_at IS NOT NULL")
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY created_at DESC LIMIT %s"
     params.append(limit)
     with _connect() as conn:
         return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
+def resolve_usage_signal(
+    signal_id: int, *, resolved_by: Optional[str], note: Optional[str] = None,
+    resolved: bool = True,
+) -> Optional[dict]:
+    """Marque un signal traité (ou le ré-ouvre si resolved=False). Renvoie la row
+    mise à jour, ou None si l'id n'existe pas."""
+    with _connect() as conn:
+        if resolved:
+            row = conn.execute(
+                """
+                UPDATE usage_signals
+                   SET resolved_at = NOW(), resolved_by = %s, resolution = %s
+                 WHERE id = %s
+                RETURNING id, signal, kind, target, resolved_at, resolved_by, resolution
+                """,
+                (resolved_by, note, signal_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                UPDATE usage_signals
+                   SET resolved_at = NULL, resolved_by = NULL, resolution = NULL
+                 WHERE id = %s
+                RETURNING id, signal, kind, target, resolved_at, resolved_by, resolution
+                """,
+                (signal_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
 
 # --- Projections « runs / usage » (ADR 0017, barreau 4) ----------------------

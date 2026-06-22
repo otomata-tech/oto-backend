@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Actions GitHub (deploy.yml) — peu de bruit, corrige les dépréciations runner.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  # Dépendances Python (pyproject.toml). oto-core est une dép git pinnée sur tag
+  # (ADR 0020) → Dependabot ne la touche pas (géré à la main). Groupé = 1 PR/semaine.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-deps:
+        patterns: ["*"]

@@ -165,6 +165,7 @@ _CATEGORY_BY_CONNECTOR = {
     "unipile": "Prospection", "topograph": "Prospection",
     "sirene": "Data FR", "fr_open": "Data FR",
     "foncier": "Data FR", "sante": "Data FR", "gr": "Data GR",
+    "infosec": "Infosec",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
     "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
@@ -202,6 +203,7 @@ _PUBLISHER_BY_CONNECTOR = {
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "fr_open": "Open data FR",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
+    "infosec": "Otomata (OSINT)",
     # open-data GR → éditeur = la source publique
     "gr": "GEMI / VIES",
 }
@@ -415,6 +417,10 @@ _REGISTRY_LIST = [
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
+    # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).
+    # Complète fr_* (identité légale) par l'empreinte numérique. Pas de scan intrusif.
+    _c("infosec", ["infosec"], secret_kind="none", in_default_bundle=False,
+       label="Infosec", help="empreinte numérique d'un domaine : whois/RDAP, DNS, posture e-mail (SPF/DMARC), sous-domaines (CT), TLS, headers de sécurité (recon passif)"),
 
     # --- connecteurs API tiers (clients oto-core déjà écrits, câblés 2026-06-19) ---
     # byo keyed api_key, hors bundle (opt-in, activables par org/admin), pas de

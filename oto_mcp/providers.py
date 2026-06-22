@@ -397,6 +397,8 @@ _REGISTRY_LIST = [
     # donc absents du seed initial → OFF par défaut (deny-by-default).
     _c("foncier", ["foncier"], secret_kind="none", in_default_bundle=False,
        label="Foncier", help="géocodage, cadastre, bâti, risques/ICPE, solaire, immobilier (open data)"),
+    _c("urba", ["urba"], secret_kind="none", in_default_bundle=False,
+       label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
 

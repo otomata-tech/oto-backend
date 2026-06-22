@@ -15,7 +15,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import field_filter_defaults, org_store
+from .. import connector_field_schema, field_filter_defaults, org_store
 from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 
@@ -65,11 +65,17 @@ class SetFieldFilterInput(BaseModel):
 def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    filters = org_store.get_org_field_filters(inp.org_id)
+    # Schéma de sortie déclaré par connecteur (pilote l'onglet transformations) — union
+    # des services connus du registre + ceux déjà configurés/par-défaut, pour ne rien cacher.
+    services = set(connector_field_schema.CONNECTOR_FIELD_SCHEMA) \
+        | set(filters) | set(field_filter_defaults.SERVER_DEFAULTS)
     return {
         "org_id": inp.org_id,
-        "filters": org_store.get_org_field_filters(inp.org_id),
+        "filters": filters,
         "defaults": field_filter_defaults.SERVER_DEFAULTS,
         "schema": _ACTION_SCHEMA,
+        "schemas": {svc: connector_field_schema.schema_for(svc) for svc in sorted(services)},
     }
 
 

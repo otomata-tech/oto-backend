@@ -24,7 +24,7 @@ dependencies = [
     "otomata-calllog>=0.1.1",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
-    "france-opendata[stock,sante]>=0.10.0",  # stock SIRENE + foncier (géocodage/cadastre/bâti/solaire) + santé (FINESS/HAS) — source unique partagée ; >=0.10 = filtre categorie_entreprise sur fr_search
+    "france-opendata[stock,sante]>=0.11.0",  # stock SIRENE + foncier (géocodage/cadastre/bâti/solaire) + santé (FINESS/HAS) — source unique partagée ; >=0.10 categorie_entreprise sur fr_search ; >=0.11 parquet SIRENE distant via httpfs (s3://)
     "cryptography>=42",
     "stripe>=9.0",  # billing : Checkout + webhook (achat de packs de credits d'appel)
     "boto3>=1.34",  # upload avatars/logos → Scaleway Object Storage (S3-compatible)

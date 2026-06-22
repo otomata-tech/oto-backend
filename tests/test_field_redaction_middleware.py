@@ -125,15 +125,11 @@ def test_fail_closed_when_apply_raises():
     assert "Fleury" not in out.content[0].text  # aucun brut ne fuit
 
 
-def test_resolve_failure_withholds_sensitive_service():
-    # service à défaut serveur (unipile) → fail-closed si la résolution plante
-    out = _run("unipile_profile", _result(dict(_PROFILE)), raises=True)
-    assert out.is_error
-    assert "Fleury" not in out.content[0].text
-
-
-def test_resolve_failure_passthrough_non_sensitive():
-    # service sans défaut serveur (fr) → ne pas casser le tool sur un aléa DB
+def test_resolve_failure_passthrough():
+    # Rien par défaut (SERVER_DEFAULTS vide) → aucun service n'est « sensible connu » :
+    # sur un échec de résolution (aléa DB) on passe le résultat tel quel plutôt que de
+    # casser le tool. (Le fail-closed reste sur l'échec d'APPLICATION, cf. test ci-dessus.)
     res = _result({"q": "x"})
-    out = _run("fr_search", res, raises=True)
-    assert out is res
+    assert _run("fr_search", res, raises=True) is res
+    res2 = _result(dict(_PROFILE))
+    assert _run("unipile_profile", res2, raises=True) is res2

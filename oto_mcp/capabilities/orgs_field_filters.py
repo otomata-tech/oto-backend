@@ -91,7 +91,8 @@ def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
     return {
         "org_id": inp.org_id,
         "filters": filters,
-        "defaults": field_filter_defaults.SERVER_DEFAULTS,
+        "defaults": field_filter_defaults.SERVER_DEFAULTS,   # vide : rien par défaut
+        "templates": field_filter_defaults.TEMPLATES,         # jeux applicables en 1 clic
         "schema": _ACTION_SCHEMA,
         "schemas": {svc: connector_field_schema.schema_for(svc) for svc in sorted(services)},
     }

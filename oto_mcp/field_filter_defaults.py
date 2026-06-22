@@ -1,18 +1,19 @@
-"""Politiques de redaction de champs par défaut, côté serveur.
+"""Rédaction de champs : **rien par défaut** + templates applicables en 1 clic.
 
-`~/.otomata/config.yaml` (la source de `FieldFilter.from_config`) est absente du
-serveur ; on pose donc ici un **plancher PII explicite** par connecteur. Ce défaut
-ne s'applique que tant que l'org n'a **rien** configuré pour le service : dès que
-l'org_admin pose une politique (via le dashboard / `oto_set_org_field_filters`),
-elle devient autoritaire (décision « contrôle total org »). Appliqué à la frontière
-des tools par `middleware.FieldRedactionMiddleware`.
+Décision (2026-06-22) : on ne redacte **AUCUN** connecteur par défaut. La rédaction
+est *disponible* partout (le middleware `FieldRedactionMiddleware` l'applique dès qu'une
+org pose une politique pour un service), mais elle ne s'active que sur décision explicite
+de l'org. Raison : la PII n'est pas toujours un risque — sur un CRM/inbox/annuaire
+légal, c'est le but. Et le matching par clé est aveugle au contexte (faux positifs).
 
-Forme = celle d'un bloc `field_filters.<service>` :
-    { "salt": str?, "rules": [ {fields, action, ...} ] }
+`SERVER_DEFAULTS` reste donc **vide**. Pour ne pas re-saisir des règles utiles, on
+expose des **TEMPLATES** nommés (jeux de règles prêts) que l'UI applique en un clic —
+ex. « anonymisation candidat » pour le recrutement. Appliquer un template = poser une
+politique d'org normale (rien de magique).
 
+Forme d'un bloc / template = `{ "salt": str?, "rules": [ {fields, action, ...} ] }`.
 `FieldFilter` (oto-core) matche par **nom de clé feuille**, récursivement et insensible
-à la casse → un même jeu de règles couvre les variantes de nommage (snake/camel/kebab)
-qu'émettent des connecteurs différents.
+à la casse → un même jeu couvre les variantes de nommage (snake/camel/kebab).
 """
 from __future__ import annotations
 
@@ -51,21 +52,20 @@ _CANDIDATE_PII: list[dict] = [
      "action": "drop"},
 ]
 
-SERVER_DEFAULTS: dict[str, dict] = {
-    # Silae (paie FR) : masque les coordonnées bancaires (rarement utiles à un agent
-    # d'analyse), garde noms/montants. Hérité du `_REDACT` jadis hardcodé dans
-    # tools/silae.py.
-    "silae": {
-        "rules": [
-            {"fields": ["iban", "bic", "rib"], "action": "mask", "keep_last": 4},
-        ],
+# Rien par défaut : aucune rédaction tant que l'org n'en pose pas (cf. docstring).
+SERVER_DEFAULTS: dict[str, dict] = {}
+
+# Templates appliquables en 1 clic depuis le dashboard (≠ défaut : pas auto-appliqués).
+TEMPLATES: dict[str, dict] = {
+    "candidate": {
+        "label": "anonymisation candidat",
+        "hint": "masque l'identité d'un profil/CV (nom→pseudonyme, contact masqué, "
+                "photo/URL/ids retirés) — pour analyser un candidat sans le ré-identifier.",
+        "rules": _CANDIDATE_PII,
     },
-    # Connecteurs « recrutement » : anonymisation candidat par défaut (overridable par
-    # l'org, champ par champ, depuis le dashboard — « voir en clair »).
-    "unipile": {"rules": _CANDIDATE_PII},
-    "ashby": {"rules": _CANDIDATE_PII},
-    "greenhouse": {"rules": _CANDIDATE_PII},
-    "lever": {"rules": _CANDIDATE_PII},
-    "recruitee": {"rules": _CANDIDATE_PII},
-    "teamtailor": {"rules": _CANDIDATE_PII},
+    "bank_details": {
+        "label": "coordonnées bancaires",
+        "hint": "masque IBAN/BIC/RIB (garde les 4 derniers).",
+        "rules": [{"fields": ["iban", "bic", "rib"], "action": "mask", "keep_last": 4}],
+    },
 }

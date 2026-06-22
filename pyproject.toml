@@ -10,7 +10,7 @@ dependencies = [
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
     # on tague oto-core et on bump CE pin par PR. Bump = éditer le tag ici ; rollback
     # = revert ce commit (ramène aussi le bon oto-core). Cf. ADR 0020 (deploy/canari).
-    "oto-core[browser,anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.10.0",
+    "oto-core[browser,anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.10.1",
     "starlette>=0.37",
     "uvicorn>=0.30",
     "pydantic>=2.0",

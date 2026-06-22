@@ -53,19 +53,38 @@ _REGISTERED: dict[str, set[str]] = {}
 _DEFAULT_ENABLED_MOUNTS = frozenset({"memento"})
 
 
+def _db_activated_mounts() -> set[str]:
+    """Mounts dont l'exposition est activée en DB (`connector_activation`) — master
+    global OU n'importe quel override d'org ON. Best-effort (DB indispo au boot →
+    set vide, le reste d'oto intact). C'est le cran « la DB gouverne l'exposition »
+    (ADR 0010/0011) appliqué au montage : activer un connecteur fédéré au catalogue
+    le **monte** aussi, sans toucher à `OTO_MCP_MOUNTS_ENABLED`."""
+    try:
+        from .. import connector_activation
+        on = {r["connector"] for r in connector_activation.list_activations() if r.get("enabled")}
+        return {c.name for c in connectors.MOUNT_CONNECTORS if c.name in on}
+    except Exception as e:
+        log.warning("mount : lecture connector_activation échouée (%s) → 0 mount DB", e)
+        return set()
+
+
 def _enabled_mounts() -> set[str]:
-    """Mounts actifs. `OTO_MCP_MOUNTS_ENABLED` :
+    """Mounts actifs = base (env) ∪ mounts activés en DB. `OTO_MCP_MOUNTS_ENABLED` :
     - **non défini** → défaut systématique (`_DEFAULT_ENABLED_MOUNTS`, càd memento) ;
-    - `*`           → tous les mounts déclarés ;
-    - CSV           → exactement ceux listés ;
-    - `""` (vide)   → kill-switch (aucun)."""
+    - `*`           → tous les mounts déclarés (DB ignorée — c'est déjà tout) ;
+    - `""` (vide)   → kill-switch ABSOLU (aucun, DB ignorée) ;
+    - CSV           → ceux listés, PLUS les activés en DB.
+    Le `∪ DB` fait qu'(dés)activer un fédéré au catalogue suffit à le monter — zéro env."""
     raw = os.environ.get("OTO_MCP_MOUNTS_ENABLED")
-    if raw is None:
-        return {c.name for c in connectors.MOUNT_CONNECTORS if c.name in _DEFAULT_ENABLED_MOUNTS}
-    raw = raw.strip()
-    if raw == "*":
+    if raw is not None and raw.strip() == "":
+        return set()  # kill-switch absolu
+    if raw is not None and raw.strip() == "*":
         return {c.name for c in connectors.MOUNT_CONNECTORS}
-    return {n.strip() for n in raw.split(",") if n.strip()}
+    if raw is None:
+        base = {c.name for c in connectors.MOUNT_CONNECTORS if c.name in _DEFAULT_ENABLED_MOUNTS}
+    else:
+        base = {n.strip() for n in raw.split(",") if n.strip()}
+    return base | _db_activated_mounts()
 
 
 def _run_sync(coro):

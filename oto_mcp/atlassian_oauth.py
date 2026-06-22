@@ -30,26 +30,60 @@ from . import credentials_store, oauth2_pkce
 
 _AUTH_URL = "https://mcp.atlassian.com/v1/authorize"
 _TOKEN_URL = "https://cf.mcp.atlassian.com/v1/token"
+_REGISTER_URL = "https://cf.mcp.atlassian.com/v1/register"
 _MCP_RESOURCE = "https://mcp.atlassian.com/v1/mcp"
 _CONNECTOR = "atlassian"
+# Entité « plateforme » du coffre où l'on cache le client_id DCR (public, pas un
+# secret) — auto-enregistré une fois, partagé par tous les users.
+_CLIENT_ENTITY = ("platform", "")
 _STATE_TTL = 600  # 10 min
 # offline_access = condition du refresh_token. Les scopes d'outils (jira/confluence)
 # sont consentis via l'AS Atlassian ; surchargeable une fois le flow validé en live.
 _DEFAULT_SCOPE = "offline_access"
 
 
-def _client_id() -> str:
-    v = os.environ.get("ATLASSIAN_OAUTH_CLIENT_ID")
-    if not v:
-        raise RuntimeError(
-            "ATLASSIAN_OAUTH_CLIENT_ID env var manquante (enregistre un client DCR "
-            "sur https://cf.mcp.atlassian.com/v1/register avec le redirect_uri oto)."
-        )
-    return v
-
-
 def _scope() -> str:
     return os.environ.get("ATLASSIAN_OAUTH_SCOPE", _DEFAULT_SCOPE)
+
+
+def _register_client() -> str:
+    """DCR d'un client PUBLIC sur l'AS Atlassian (token_endpoint_auth_method=none,
+    pas de secret) → renvoie le client_id. Le redirect_uri DOIT matcher au callback."""
+    import requests
+    r = requests.post(_REGISTER_URL, json={
+        "client_name": "Oto",
+        "redirect_uris": [_redirect_uri()],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "scope": _scope(),
+    }, timeout=15)
+    r.raise_for_status()
+    cid = r.json().get("client_id")
+    if not cid:
+        raise RuntimeError("DCR Atlassian sans client_id")
+    return cid
+
+
+def _client_id() -> str:
+    """client_id OAuth — ZÉRO env requise. Override `ATLASSIAN_OAUTH_CLIENT_ID` si
+    posée ; sinon cache coffre (entité plateforme) ; sinon **auto-DCR** (client
+    public) puis cache. La DB gouverne — pas de provisioning manuel."""
+    env = os.environ.get("ATLASSIAN_OAUTH_CLIENT_ID")
+    if env:
+        return env
+    cached = credentials_store.get_credential(*_CLIENT_ENTITY, _CONNECTOR)
+    if cached:
+        return cached
+    cid = _register_client()
+    credentials_store.set_credential(*_CLIENT_ENTITY, _CONNECTOR, secret=cid, set_by="system")
+    return cid
+
+
+def reset_client_id() -> None:
+    """Purge le client_id caché → re-DCR au prochain `_client_id()`. À appeler si
+    l'AS rejette le client (`invalid_client` : registration purgée côté Atlassian)."""
+    credentials_store.clear_credential(*_CLIENT_ENTITY, _CONNECTOR)
 
 
 def _state_secret() -> bytes:

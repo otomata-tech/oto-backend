@@ -175,6 +175,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .capabilities import registry as _cap_registry
     _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
 
+    # Capture des exceptions de tools vers Sentry (vrai traceback ; no-op si
+    # OTO_SENTRY_DSN absent). Les erreurs de tool sont des erreurs JSON-RPC en
+    # HTTP 200 → invisibles à l'intégration Starlette ; ce middleware les voit.
+    from .sentry_setup import SentryToolErrorMiddleware
+    instance.add_middleware(SentryToolErrorMiddleware())
+
     # Filtrage per-user des tools (toggle individuel sur /account).
     from .middleware import UserDisabledToolsMiddleware
     instance.add_middleware(UserDisabledToolsMiddleware())
@@ -231,6 +237,11 @@ def main():
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Error tracking Sentry — AVANT tout build d'app : l'intégration Starlette
+    # patche au moment de l'init. No-op si OTO_SENTRY_DSN absent.
+    from .sentry_setup import init_sentry
+    init_sentry()
 
     # stdio retiré (2026-06-13) : oto-mcp ne se sert plus qu'en streamable_http
     # (toujours authentifié Logto). Conséquence voulue — plus de chemin local

@@ -29,6 +29,7 @@ dependencies = [
     "stripe>=9.0",  # billing : Checkout + webhook (achat de packs de credits d'appel)
     "boto3>=1.34",  # upload avatars/logos → Scaleway Object Storage (S3-compatible)
     "python-multipart>=0.0.9",  # parsing multipart des uploads (Starlette request.form())
+    "sentry-sdk[starlette]>=2.0",  # error tracking SaaS (gaté OTO_SENTRY_DSN) : 500 REST via intégration Starlette + exceptions tools MCP via middleware (sentry_setup.py)
 ]
 
 [project.optional-dependencies]

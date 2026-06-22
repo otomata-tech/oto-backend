@@ -119,6 +119,26 @@ def current_org(sub: str | None) -> Optional[int]:
     return org_store.get_active_org(sub)
 
 
+def current_group(sub: str | None) -> Optional[int]:
+    """Équipe (groupe) EFFECTIVE — mirror de `current_org` pour l'axe groupe
+    (ADR 0023 étendu). Résout `session ?? consultation ?? maison` en TENANT
+    l'invariant « groupe ⊂ org » : un override/consultation d'ORG **sans** groupe
+    explicite ⇒ niveau org (None), jamais le home_group d'une autre org."""
+    if sub is None:
+        return None
+    has_g, g = session_org.current_group_override()
+    if has_g:
+        return g
+    if session_org.current_override()[0]:
+        return None  # org de session sans groupe → niveau org
+    vg = session_org.current_view_group()
+    if vg is not None:
+        return None if vg == 0 else vg
+    if session_org.current_view_org() is not None:
+        return None  # consultation d'org sans groupe → niveau org
+    return group_store.get_active_group(sub)  # maison
+
+
 def granted_namespaces_for(sub: str) -> frozenset:
     """Namespaces auxquels le `sub` a droit = grants per-user UNION entitlements
     de son org active.
@@ -202,7 +222,7 @@ def resolve_api_key(provider: str) -> tuple[str, bool]:
     # métré sur un quota plateforme. Override perso (ci-dessus) prime toujours.
     # Cascade : user_key > group_secret > org_secret > platform_grant.
     if provider in ORG_SHAREABLE_PROVIDERS:
-        active_group = group_store.get_active_group(sub)
+        active_group = current_group(sub)
         if active_group is not None:
             grp_key = group_store.get_group_secret(active_group, provider)
             if grp_key:
@@ -442,7 +462,7 @@ def status_for(sub: str) -> dict:
     # `current_org` → reflète l'override de session (MCP) ou la consultation (REST
     # view-as) le cas échéant, sinon la maison (ADR 0023).
     active_org = current_org(sub)
-    active_group = group_store.get_active_group(sub)
+    active_group = current_group(sub)
     out: dict = {"role": role, "active_org": active_org,
                  "active_group": active_group, "providers": {}}
     for provider in db.KEY_PROVIDERS:

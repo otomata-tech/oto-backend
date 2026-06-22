@@ -94,7 +94,7 @@ def register(mcp: FastMCP) -> None:
         group_block = None
         try:
             from .. import group_store, roles
-            active_group = group_store.get_active_group(sub)
+            active_group = access.current_group(sub)
             if active_group is not None:
                 g = group_store.get_group(active_group)
                 group_block = {

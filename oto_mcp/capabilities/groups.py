@@ -13,7 +13,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from .. import group_store, org_store
+from .. import access, group_store, org_store, session_org
 from ._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF, ORG_MEMBER_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -86,10 +86,10 @@ class NoInput(BaseModel):
 
 def _list_my_groups(ctx: ResolvedCtx, inp: NoInput) -> dict:
     """Groupes de l'org active du sub + son rôle + le groupe actif."""
-    org_id = org_store.get_active_org(ctx.sub)
+    org_id = access.current_org(ctx.sub)
     if org_id is None:
         return {"org_id": None, "active_group": None, "groups": []}
-    active_group = group_store.get_active_group(ctx.sub)
+    active_group = access.current_group(ctx.sub)
     mine = {g["group_id"]: g["group_role"] for g in
             group_store.list_groups_for_user(ctx.sub, org_id)}
     groups = []
@@ -105,18 +105,46 @@ def _list_my_groups(ctx: ResolvedCtx, inp: NoInput) -> dict:
 
 
 def _use_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
+    """Bascule l'équipe active (ADR 0023 étendu). MCP (session présente) = override
+    de session éphémère (équipe + org parente, cette conversation) ; REST = pose
+    l'équipe MAISON persistante (et son org parente)."""
     g = group_store.get_group(inp.group_id)
     if not g:
         raise AuthzDenied(404, "unknown_group", f"Groupe #{inp.group_id} inconnu.")
-    if not group_store.set_active_group(ctx.sub, inp.group_id):
+    sid = session_org.current_session_id()
+    if sid is not None:  # MCP : override de session (équipe + org parente, invariant)
+        if not group_store.is_group_member(ctx.sub, inp.group_id):
+            raise AuthzDenied(403, "not_a_member",
+                              "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+        session_org.set_override(sid, g["org_id"])
+        session_org.set_group_override(sid, inp.group_id)
+    elif not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison (persiste)
         raise AuthzDenied(403, "not_a_member",
                           "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
     return {"active_group": inp.group_id, "name": g["name"], "active_org": g["org_id"]}
 
 
 def _clear_group(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    group_store.clear_active_group(ctx.sub)
+    """Retour au niveau org (ADR 0023 étendu). MCP = retire l'override d'équipe de
+    session (l'org de session reste) ; REST = efface l'équipe maison."""
+    sid = session_org.current_session_id()
+    if sid is not None:
+        session_org.clear_group_override(sid)
+    else:
+        group_store.clear_active_group(ctx.sub)
     return {"active_group": None}
+
+
+def _set_home_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
+    """Pose l'équipe MAISON persistante (défaut des nouvelles conversations) + son
+    org parente — depuis n'importe quelle face, ≠ oto_use_group (session)."""
+    g = group_store.get_group(inp.group_id)
+    if not g:
+        raise AuthzDenied(404, "unknown_group", f"Groupe #{inp.group_id} inconnu.")
+    if not group_store.set_active_group(ctx.sub, inp.group_id):
+        raise AuthzDenied(403, "not_a_member",
+                          "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+    return {"home_group": inp.group_id, "name": g["name"], "home_org": g["org_id"]}
 
 
 def _group_detail(ctx: ResolvedCtx, inp: GroupIdInput) -> dict:
@@ -170,19 +198,30 @@ CAPABILITIES += [
     ),
     Capability(
         key="group.use", handler=_use_group, Input=UseGroupInput, authz=SUB_ONLY,
-        description=("Switch your active group (department) by id. Sets your active org "
-                     "to its parent. The active group decides which group doctrine, "
-                     "toolset preset and shared secrets apply to your session."),
+        description=("Switch your active group (department) by id, FOR THIS CONVERSATION "
+                     "ONLY. Also sets your active org to its parent. Ephemeral: it does "
+                     "not change your home group or other conversations, and a new "
+                     "conversation reverts to your home. The active group decides which "
+                     "group doctrine, toolset preset and shared secrets apply."),
         mcp="oto_use_group",
         rest=RestBinding("PUT", "/api/me/active-group"),
         refresh_visibility=True,  # le groupe actif raffine la baseline de toolset (ADR 0012)
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
-        description="Deselect your active group (operate at the org level again).",
+        description=("Operate at the org level again (no group) FOR THIS CONVERSATION. "
+                     "Ephemeral: a new conversation reverts to your home."),
         mcp="oto_clear_group",
         rest=RestBinding("DELETE", "/api/me/active-group"),
         refresh_visibility=True,  # retour au niveau org → baseline de l'org
+    ),
+    Capability(
+        key="group.set_home", handler=_set_home_group, Input=UseGroupInput, authz=SUB_ONLY,
+        description=("Set your HOME group (department) by id — the default every NEW "
+                     "conversation starts under (also sets its parent org as home). "
+                     "Persistent, unlike oto_use_group (this conversation only)."),
+        mcp="oto_set_home_group",
+        refresh_visibility=True,
     ),
     Capability(
         key="group.get", handler=_group_detail, Input=GroupIdInput,

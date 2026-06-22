@@ -48,6 +48,50 @@ def current_view_org() -> Optional[int]:
     return _VIEW_ORG.get()
 
 
+# ── Axe ÉQUIPE (groupe) — même mécanique que l'org (ADR 0023 étendu) ─────────
+# Le store ne garde QUE des group_id réels ; « pas de groupe » (niveau org) se
+# DÉRIVE = override d'org présent SANS override de groupe ⇒ niveau org. Ça tient
+# l'invariant « groupe actif ⊂ org active » sans jamais faire fuiter le home_group.
+_GROUP_OVERRIDES: dict[str, int] = {}
+_VIEW_GROUP: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_view_group", default=None)
+
+
+def set_group_override(session_id: str, group_id: int) -> None:
+    """Pose l'override d'équipe de session (un group_id réel)."""
+    _GROUP_OVERRIDES.pop(session_id, None)
+    _GROUP_OVERRIDES[session_id] = group_id
+    while len(_GROUP_OVERRIDES) > _CAP:
+        del _GROUP_OVERRIDES[next(iter(_GROUP_OVERRIDES))]
+
+
+def clear_group_override(session_id: str) -> None:
+    """Retire l'override d'équipe (retour niveau org pour la session)."""
+    _GROUP_OVERRIDES.pop(session_id, None)
+
+
+def get_group_override(session_id: Optional[str]) -> tuple[bool, Optional[int]]:
+    if session_id is None or session_id not in _GROUP_OVERRIDES:
+        return (False, None)
+    return (True, _GROUP_OVERRIDES[session_id])
+
+
+def current_group_override() -> tuple[bool, Optional[int]]:
+    return get_group_override(current_session_id())
+
+
+def set_view_group(group_id: Optional[int]) -> contextvars.Token:
+    return _VIEW_GROUP.set(group_id)
+
+
+def reset_view_group(token: contextvars.Token) -> None:
+    _VIEW_GROUP.reset(token)
+
+
+def current_view_group() -> Optional[int]:
+    return _VIEW_GROUP.get()
+
+
 def current_session_id() -> Optional[str]:
     """`session_id` de la session MCP courante, ou None hors contexte MCP (REST,
     code hors requête). Sert de clé de l'override ET de discriminant MCP/REST."""

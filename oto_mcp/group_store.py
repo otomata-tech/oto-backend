@@ -179,6 +179,16 @@ def list_groups_for_user(sub: str, org_id: Optional[int] = None) -> list[dict]:
         return [dict(r) for r in conn.execute(q, params).fetchall()]
 
 
+def is_group_member(sub: str, group_id: int) -> bool:
+    """`sub` est-il membre du groupe `group_id` ? (appartenance réelle, sans escalade
+    — miroir du check de `set_active_group`, pour valider un override de session)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM org_group_members WHERE group_id = %s AND sub = %s",
+            (group_id, sub),
+        ).fetchone() is not None
+
+
 def set_active_group(sub: str, group_id: int) -> bool:
     """Bascule le groupe actif du sub. Pose AUSSI l'org active sur l'org du groupe
     (invariant ADR 0012 : groupe actif ⊂ org active), atomiquement. False si le

@@ -24,7 +24,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import db, group_store, org_store, roles, tool_registry
+from .. import access, db, group_store, org_store, roles, tool_registry
 from ._authz import ORG_ADMIN, ORG_ADMIN_OF, ORG_MEMBER, ORG_MEMBER_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -127,7 +127,7 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
         index = [{"slug": i["slug"], "title": i["title"],
                   "description": i["description"], "scope": "org"}
                  for i in org_store.list_instructions(org_id)]
-        group_id = group_store.get_active_group(ctx.sub) if member_mode else None
+        group_id = access.current_group(ctx.sub) if member_mode else None
         group_name, group_doctrine = None, ""
         if group_id is not None:
             g = group_store.get_group(group_id)
@@ -147,7 +147,7 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
 
     # Une doctrine nommée précise.
     if scope == "group" and member_mode:
-        group_id = group_store.get_active_group(ctx.sub)
+        group_id = access.current_group(ctx.sub)
         if group_id is None:
             raise AuthzDenied(400, "no_active_group", "Pas de département actif — vois `oto_use_group`.")
         instr = group_store.get_group_instruction(group_id, slug, version)
@@ -185,7 +185,7 @@ def _list_doctrines(ctx: ResolvedCtx, inp) -> dict:
         rows = (org_store.search_instructions(org_id, query, include_base=include_base) if query
                 else org_store.list_instructions(org_id, include_base=include_base))
         out += [{**r, "scope": "org"} for r in rows]
-    group_id = group_store.get_active_group(ctx.sub) if (member_mode and scope in (None, "group")) else None
+    group_id = access.current_group(ctx.sub) if (member_mode and scope in (None, "group")) else None
     if group_id is not None:
         rows = (group_store.search_group_instructions(group_id, query) if query
                 else group_store.list_group_instructions(group_id))

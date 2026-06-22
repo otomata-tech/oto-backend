@@ -71,7 +71,7 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         # défaut, la baseline curée par l'org_admin pour ses membres. None = pas
         # de baseline (visibilité par défaut, ex. profil perso sans org active).
         group_baseline = None
-        active_group = group_store.get_active_group(sub)
+        active_group = access.current_group(sub)
         if active_group is not None:
             gt = group_store.get_group_default_tools(active_group)
             if gt is not None:

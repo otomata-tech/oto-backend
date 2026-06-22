@@ -72,7 +72,7 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Oto-Org",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Oto-Org, X-Oto-Group",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
         }
@@ -163,6 +163,19 @@ def _parse_view_org(request: Request) -> int | None:
         return None
 
 
+def _parse_view_group(request: Request) -> int | None:
+    """Équipe de consultation (header `X-Oto-Group`). None = pas de header / niveau
+    org ; >0 = id de groupe. Pas de sentinelle perso (l'absence = niveau org)."""
+    raw = request.headers.get("x-oto-group")
+    if raw is None:
+        return None
+    try:
+        n = int(raw.strip())
+        return n if n > 0 else None
+    except ValueError:
+        return None
+
+
 class ViewAsMiddleware:
     """Middleware ASGI **brut** (pas BaseHTTPMiddleware, qui bufferiserait le
     streaming `/mcp`) : n'intervient QUE sur `/api/*` portant `X-Oto-Org`, sinon
@@ -181,23 +194,31 @@ class ViewAsMiddleware:
         if scope.get("type") != "http" or not scope.get("path", "").startswith("/api/"):
             return await self.app(scope, receive, send)
         request = Request(scope, receive)  # headers/query seulement → ne consomme pas le body
-        view = _parse_view_org(request)
-        if view is None:
+        view_org = _parse_view_org(request)
+        view_group = _parse_view_group(request)
+        if view_org is None and view_group is None:
             return await self.app(scope, receive, send)
         sub, err = await _authenticate(request, self._verifier)
         if err:  # non authentifié → la route rendra son 401 ; pas de view-as
             return await self.app(scope, receive, send)
-        if view:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
-            from . import roles
-            if not roles.is_org_member(sub, view):
-                resp = _json_error(request, 403, "forbidden")
-                return await resp(scope, receive, send)
-        from . import session_org
-        token = session_org.set_view_org(view)
+        from . import group_store, roles, session_org
+        if view_group:  # équipe consultée → valide la lecture + DÉRIVE son org parente (invariant)
+            g = group_store.get_group(view_group)
+            if g is None or not roles.can_read_group(sub, view_group):
+                return await _json_error(request, 403, "forbidden")(scope, receive, send)
+            view_org = g["org_id"]
+        elif view_org:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
+            if not roles.is_org_member(sub, view_org):
+                return await _json_error(request, 403, "forbidden")(scope, receive, send)
+        org_token = session_org.set_view_org(view_org) if view_org is not None else None
+        grp_token = session_org.set_view_group(view_group) if view_group is not None else None
         try:
             return await self.app(scope, receive, send)
         finally:
-            session_org.reset_view_org(token)
+            if grp_token is not None:
+                session_org.reset_view_group(grp_token)
+            if org_token is not None:
+                session_org.reset_view_org(org_token)
 
 
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
@@ -345,8 +366,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             home_org_name = ho["name"] if ho else None
         elif home_org is not None:
             home_org_name = active_org_name
-        # Sous-palier groupe (ADR 0012) : groupe actif + rôle effectif (escalade).
-        active_group = group_store.get_active_group(sub)
+        # Sous-palier groupe (ADR 0012) : équipe EFFECTIVE (consultation ?? maison,
+        # ADR 0023) + rôle effectif (escalade). `home_group` = défaut persistant.
+        active_group = access.current_group(sub)
         active_group_name = None
         group_role = None
         if active_group is not None:
@@ -354,6 +376,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             g = group_store.get_group(active_group)
             active_group_name = g["name"] if g else None
             group_role = roles.effective_group_role(sub, active_group)
+        home_group = group_store.get_active_group(sub)
+        home_group_name = None
+        if home_group is not None and home_group != active_group:
+            hg = group_store.get_group(home_group)
+            home_group_name = hg["name"] if hg else None
+        elif home_group is not None:
+            home_group_name = active_group_name
         # Billing (palier credits par org) : solde du wallet de l'org active.
         # Best-effort — ne jamais 500 /api/me (chemin critique du front) sur un
         # hoquet DB. None si pas d'org active (caller non facturé).
@@ -384,6 +413,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_group": active_group,
             "active_group_name": active_group_name,
             "group_role": group_role,
+            "home_group": home_group,
+            "home_group_name": home_group_name,
             "access": {
                 "status": user.get("access_status"),
                 "invites_left": user.get("invite_quota", 0),

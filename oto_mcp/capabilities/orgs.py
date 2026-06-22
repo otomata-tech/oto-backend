@@ -39,7 +39,8 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     org_store.set_active_org(ctx.sub, org_id)  # nouvelle org = ton org maison (défaut)
     sid = session_org.current_session_id()
     if sid is not None:
-        session_org.set_override(sid, org_id)  # + active dans la conversation courante
+        session_org.set_override(sid, org_id)       # + active dans la conversation courante
+        session_org.clear_group_override(sid)       # nouvelle org → pas d'équipe (invariant)
     return {"org_id": org_id, "name": name, "active_org": org_id, "org_role": "org_admin"}
 
 
@@ -58,6 +59,7 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
     sid = session_org.current_session_id()
     if sid is not None:
         session_org.set_override(sid, org_id)        # MCP : org de session
+        session_org.clear_group_override(sid)        # bascule d'org → drop l'équipe (invariant)
     else:
         org_store.set_active_org(ctx.sub, org_id)    # REST : org maison
     o = org_store.get_org(org_id)
@@ -83,6 +85,7 @@ def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
     sid = session_org.current_session_id()
     if sid is not None:
         session_org.set_override(sid, None)          # MCP : perso pour la session
+        session_org.clear_group_override(sid)        # perso → pas d'équipe (invariant)
     else:
         org_store.clear_active_org(ctx.sub)          # REST : efface la maison
     return {"active_org": None}

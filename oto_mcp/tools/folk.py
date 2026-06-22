@@ -35,7 +35,12 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def folk_list_groups() -> dict:
-        """List all groups in the Folk workspace (a group = a folder of people/companies/deals)."""
+        """List all groups in the Folk workspace (a group = a folder of people/companies/deals).
+
+        Note: the Folk API is read-only on groups — there is no endpoint to
+        create one. A new group must be created by the user in the Folk app,
+        then referenced here by its ID.
+        """
         return {"groups": _client().list_groups()}
 
     @mcp.tool()
@@ -130,6 +135,8 @@ def register(mcp: FastMCP) -> None:
         company_name: Optional[str] = None,
         company_id: Optional[str] = None,
         group_ids: Optional[list[str]] = None,
+        urls: Optional[list[str]] = None,
+        description: Optional[str] = None,
     ) -> dict:
         """Create a person in Folk.
 
@@ -137,12 +144,17 @@ def register(mcp: FastMCP) -> None:
             first_name: Required.
             company_id: Link to an existing company (takes precedence over company_name).
             company_name: Create/match a company by name.
-            group_ids: Groups to add the person to.
+            group_ids: Groups to add the person to (see folk_list_groups — groups
+                are not creatable via API, only in the Folk app).
+            urls: Associated URLs (the first is the primary). Put the LinkedIn
+                profile URL here for a contact sourced via Unipile.
+            description: Free-text description on the person record. For a richer
+                or status note, use folk_create_note after creation.
         """
         return _client().create_person(
             first_name=first_name, last_name=last_name, emails=emails, phones=phones,
             job_title=job_title, company_name=company_name, company_id=company_id,
-            group_ids=group_ids,
+            group_ids=group_ids, urls=urls, description=description,
         )
 
     @mcp.tool()

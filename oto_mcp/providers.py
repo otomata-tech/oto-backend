@@ -57,6 +57,9 @@ class Connector:
     label: str = ""
     help: str = ""
     href: str | None = None
+    # Note de PRÉ-REQUIS affichée à la connexion (user-facing, ex. une autorisation
+    # à poser côté fournisseur avant l'OAuth). Vide = rien à afficher.
+    setup_note: str = ""
     # Éditeur du connecteur (affiché au catalogue). Vide → dérivé de
     # `_PUBLISHER_BY_CONNECTOR` (cf. `publisher_name`), défaut "Otomata".
     publisher: str = ""
@@ -231,16 +234,16 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none",
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, label="", help="", href=None, publisher="",
-       logo_url=None, kind="tools", mount_url=None, credential_fields=(),
-       modules=()) -> Connector:
+       default_hidden=False, label="", help="", href=None, setup_note="",
+       publisher="", logo_url=None, kind="tools", mount_url=None,
+       credential_fields=(), modules=()) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
         secret_kind=secret_kind, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
-        label=label or name.capitalize(), help=help, href=href,
+        label=label or name.capitalize(), help=help, href=href, setup_note=setup_note,
         publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
         modules=tuple(modules),
@@ -369,8 +372,12 @@ _REGISTRY_LIST = [
     _c("atlassian", ["atlassian"], kind="mount",
        mount_url="https://mcp.atlassian.com/v1/mcp",
        auth_modes={"byo_user"}, secret_kind="oauth",
-       in_default_bundle=False, default_hidden=True, label="Atlassian",
-       help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com"),
+       in_default_bundle=False, label="Atlassian",
+       help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com",
+       setup_note=("Pré-requis : un admin de ton org Atlassian doit autoriser l'URL "
+                   "https://mcp.oto.ninja/api/atlassian/oauth/callback dans les réglages "
+                   "« Rovo MCP Server » (admin.atlassian.com → Security → Rovo MCP), sinon "
+                   "le consentement échoue. Doc : https://support.atlassian.com/security-and-access-policies/docs/control-atlassian-rovo-mcp-server-settings/")),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
     # (planity-mcp.oto.zone) monté via proxy FastMCP ; credential per-user =
     # base64("email:password") du compte Planity de l'user, injecté par requête
@@ -667,6 +674,7 @@ def public_catalog() -> list[dict]:
             "name": c.name,
             "label": c.label,
             "help": c.help,
+            "setup_note": c.setup_note,       # pré-requis user-facing (à la connexion)
             "href": c.href,
             "publisher": c.publisher_name,   # éditeur (curé) — catalogue
             "logo_url": c.logo_url_for(),     # logo éditeur (oto-media), None si absent

@@ -592,6 +592,19 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     PRIMARY KEY (org_id, product)
 );
 
+-- Comps d'options admin (gratuit) — contrepartie NON-Stripe d'`org_subscriptions` :
+-- une option payante (ex. `unipile`) offerte à une entité user|org par un admin, sans
+-- passer par l'abonnement Stripe. `access.has_option` débloque l'option si comp OU
+-- abonnement Stripe (cf. docs/connector-model.md, couche 3). Entity-keyé (user|org).
+CREATE TABLE IF NOT EXISTS option_comps (
+    entity_type TEXT NOT NULL,        -- 'user' | 'org'
+    entity_id   TEXT NOT NULL,        -- sub (user) ou org_id en texte (org)
+    option      TEXT NOT NULL,        -- 'unipile', …
+    granted_by  TEXT,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (entity_type, entity_id, option)
+);
+
 -- Bascule de tenant Logto (B1, otomata#35) : alias ancien_sub → nouveau_sub. Posé
 -- par migrate_sub au 1er login d'un compte sur le nouveau tenant (merge par email).
 -- Sert à canonicaliser les tokens encore émis par l'ancien tenant pendant le drain
@@ -1370,6 +1383,48 @@ def get_org_by_subscription_id(stripe_subscription_id: str) -> Optional[dict]:
             (stripe_subscription_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+# Comps d'options (gratuit, posé par un admin) — contrepartie de `org_subscriptions`,
+# lues par `access.has_option` (seam unique, couche 3 du modèle de connecteur).
+
+def set_option_comp(entity_type: str, entity_id: str, option: str,
+                    *, granted_by: Optional[str] = None) -> None:
+    """Offre (comp gratuit) une option payante à une entité user|org. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO option_comps (entity_type, entity_id, option, granted_by) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (entity_type, entity_id, option) "
+            "DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()",
+            (entity_type, str(entity_id), option, granted_by),
+        )
+
+
+def clear_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
+    """Retire un comp d'option. True si une ligne a été supprimée."""
+    with _connect() as conn:
+        n = conn.execute(
+            "DELETE FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
+            (entity_type, str(entity_id), option),
+        ).rowcount
+    return n > 0
+
+
+def has_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
+            (entity_type, str(entity_id), option),
+        ).fetchone() is not None
+
+
+def list_option_comps(entity_type: str, entity_id: str) -> list[str]:
+    """Options offertes (comp) à cette entité — pour l'affichage admin."""
+    with _connect() as conn:
+        return [r["option"] for r in conn.execute(
+            "SELECT option FROM option_comps WHERE entity_type=%s AND entity_id=%s",
+            (entity_type, str(entity_id)),
+        )]
 
 
 def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None,

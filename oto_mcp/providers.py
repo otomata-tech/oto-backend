@@ -40,6 +40,19 @@ class CredentialField:
 
 
 @dataclass(frozen=True)
+class DocSection:
+    """Une section de documentation « how-to » d'un connecteur (user-facing).
+
+    Modèle générique rendu PARTOUT où le connecteur s'affiche (carte de connexion,
+    connector-library, vitrine). `kind` = type curé pour l'ordre + l'icône
+    (`prerequisite` | `setup` | `usage` | `note`) ; `body_md` = markdown (liens,
+    gras, code, listes). SOURCE UNIQUE : déclaré au registre, sérialisé au catalogue."""
+    kind: str            # prerequisite | setup | usage | note
+    title: str
+    body_md: str
+
+
+@dataclass(frozen=True)
 class Connector:
     name: str                          # identité = clé de credential
     namespaces: tuple[str, ...]        # préfixes de tools possédés
@@ -57,9 +70,9 @@ class Connector:
     label: str = ""
     help: str = ""
     href: str | None = None
-    # Note de PRÉ-REQUIS affichée à la connexion (user-facing, ex. une autorisation
-    # à poser côté fournisseur avant l'OAuth). Vide = rien à afficher.
-    setup_note: str = ""
+    # Doc « how-to » user-facing (prérequis / setup / usage) en sections markdown,
+    # rendue partout où le connecteur s'affiche. Vide = rien à afficher.
+    doc_sections: tuple["DocSection", ...] = ()
     # Éditeur du connecteur (affiché au catalogue). Vide → dérivé de
     # `_PUBLISHER_BY_CONNECTOR` (cf. `publisher_name`), défaut "Otomata".
     publisher: str = ""
@@ -234,7 +247,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none",
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, label="", help="", href=None, setup_note="",
+       default_hidden=False, label="", help="", href=None, doc_sections=(),
        publisher="", logo_url=None, kind="tools", mount_url=None,
        credential_fields=(), modules=()) -> Connector:
     return Connector(
@@ -243,7 +256,8 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         secret_kind=secret_kind, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
         default_hidden=default_hidden,
-        label=label or name.capitalize(), help=help, href=href, setup_note=setup_note,
+        label=label or name.capitalize(), help=help, href=href,
+        doc_sections=tuple(doc_sections),
         publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
         modules=tuple(modules),
@@ -374,10 +388,30 @@ _REGISTRY_LIST = [
        auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Atlassian",
        help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com",
-       setup_note=("Pré-requis : un admin de ton org Atlassian doit autoriser l'URL "
-                   "https://mcp.oto.ninja/api/atlassian/oauth/callback dans les réglages "
-                   "« Rovo MCP Server » (admin.atlassian.com → Security → Rovo MCP), sinon "
-                   "le consentement échoue. Doc : https://support.atlassian.com/security-and-access-policies/docs/control-atlassian-rovo-mcp-server-settings/")),
+       doc_sections=(
+           DocSection(
+               kind="prerequisite",
+               title="autoriser le callback côté Atlassian",
+               body_md=(
+                   "avant de connecter, un **admin** de ton org Atlassian doit "
+                   "autoriser l'URL de callback d'oto dans les réglages Rovo MCP Server "
+                   "(sinon le consentement OAuth échoue).\n"
+                   "- url à autoriser : `https://mcp.oto.ninja/api/atlassian/oauth/callback`\n"
+                   "- où : [admin.atlassian.com → Security → Rovo MCP](https://admin.atlassian.com)\n"
+                   "- [doc Atlassian](https://support.atlassian.com/security-and-access-policies/docs/control-atlassian-rovo-mcp-server-settings/)"
+               ),
+           ),
+           DocSection(
+               kind="usage",
+               title="ce que tu peux faire",
+               body_md=(
+                   "pilote **Jira** et **Confluence** en langage naturel. par exemple :\n"
+                   "- crée un ticket Jira dans un projet\n"
+                   "- recherche des issues en JQL\n"
+                   "- lis ou crée une page Confluence"
+               ),
+           ),
+       )),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
     # (planity-mcp.oto.zone) monté via proxy FastMCP ; credential per-user =
     # base64("email:password") du compte Planity de l'user, injecté par requête
@@ -674,7 +708,11 @@ def public_catalog() -> list[dict]:
             "name": c.name,
             "label": c.label,
             "help": c.help,
-            "setup_note": c.setup_note,       # pré-requis user-facing (à la connexion)
+            # Doc « how-to » user-facing (prérequis/setup/usage), markdown par section.
+            "doc_sections": [
+                {"kind": s.kind, "title": s.title, "body_md": s.body_md}
+                for s in c.doc_sections
+            ],
             "href": c.href,
             "publisher": c.publisher_name,   # éditeur (curé) — catalogue
             "logo_url": c.logo_url_for(),     # logo éditeur (oto-media), None si absent

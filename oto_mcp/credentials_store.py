@@ -91,6 +91,37 @@ def unpack_secret(connector: str, secret: str) -> dict:
         return {}
 
 
+def secret_from_input(
+    connector: str, api_key: Optional[str] = None, fields: Optional[dict] = None,
+) -> str:
+    """String secret à stocker pour un set-path PARTAGÉ (org/groupe), selon la forme
+    du connecteur — SOURCE UNIQUE des capacités org.secret.set / group.secret.set
+    (miroir du set-path user `api_routes.api_key_save`).
+
+    - mono-champ (≤1 `secret_field`, api_key) → la valeur brute ;
+    - multi-champs (≥2, ex. zoho/silae) → tous les champs déclarés requis non vides,
+      packés via `pack_secret`.
+
+    Lève `ValueError(code)` actionnable : `empty_api_key` (mono vide) ou
+    `missing_credentials` (multi : champ déclaré absent/vide)."""
+    c = connectors.REGISTRY.get(connector)
+    sfields = c.secret_fields if c is not None else ()
+    if len(sfields) >= 2:
+        provided = fields or {}
+        packed: dict[str, str] = {}
+        for f in sfields:
+            raw = provided.get(f.name)
+            val = raw.strip() if isinstance(raw, str) else raw
+            if not val:
+                raise ValueError("missing_credentials")
+            packed[f.name] = val
+        return pack_secret(connector, packed)
+    key = (api_key or "").strip()
+    if not key:
+        raise ValueError("empty_api_key")
+    return key
+
+
 def _aad(entity_type: str, entity_id: str, connector: str, account: str = "") -> str:
     """AAD liant le ciphertext à SA ligne (anti-transplant). Le segment `account`
     n'est ajouté que s'il est non vide → AAD INCHANGÉE pour le mono-compte

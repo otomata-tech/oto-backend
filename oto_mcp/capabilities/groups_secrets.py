@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import connectors, group_store
+from .. import connectors, credentials_store, group_store
 from ._authz import GROUP_ADMIN_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -22,7 +22,8 @@ _GID = {"id": "group_id"}
 class SetGroupSecretInput(BaseModel):
     group_id: int
     provider: str
-    api_key: str
+    api_key: str = ""                  # connecteurs mono-champ (clé simple)
+    fields: Optional[dict[str, str]] = None   # connecteurs multi-champs (zoho/silae…)
     base_url: Optional[str] = None
 
 
@@ -37,13 +38,16 @@ class SetPresetInput(BaseModel):
 
 
 def _set_secret(ctx: ResolvedCtx, inp: SetGroupSecretInput) -> dict:
-    if not (inp.api_key or "").strip():
-        raise AuthzDenied(400, "empty_api_key", "api_key vide.")
     base_url = (inp.base_url or "").strip() or None
     meta, code = connectors.org_secret_meta(inp.provider, base_url)
     if code:
         raise AuthzDenied(400, code, f"Provider/base_url invalide : {code}.")
-    group_store.set_group_secret(inp.group_id, inp.provider, inp.api_key, set_by=ctx.sub, meta=meta)
+    # Mono-champ (api_key) ou multi-champs (fields packés) — source unique.
+    try:
+        secret = credentials_store.secret_from_input(inp.provider, inp.api_key, inp.fields)
+    except ValueError as e:
+        raise AuthzDenied(400, str(e), "Credential incomplet ou vide.")
+    group_store.set_group_secret(inp.group_id, inp.provider, secret, set_by=ctx.sub, meta=meta)
     return {"ok": True, "group_id": inp.group_id, "provider": inp.provider}
 
 
@@ -63,8 +67,9 @@ CAPABILITIES += [
         key="group.secret.set", handler=_set_secret, Input=SetGroupSecretInput,
         authz=GROUP_ADMIN_OF("group_id"),
         description=("Set/rotate a group's shared account credential for a provider "
-                     "(org-shareable only ; base_url required for remote connectors). "
-                     "Resolves BEFORE the org secret for the group's members."),
+                     "(org-shareable only). Single-key connectors: pass `api_key`. "
+                     "Multi-field connectors (zoho/silae…): pass `fields` (all declared "
+                     "credential fields). Resolves BEFORE the org secret for members."),
         mcp="oto_set_group_secret",
         rest=RestBinding("PUT", "/api/groups/{id}/secrets/{provider}", _GID),
     ),

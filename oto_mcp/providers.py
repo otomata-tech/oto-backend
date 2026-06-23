@@ -511,14 +511,18 @@ _REGISTRY_LIST = [
        help="Management API (projets, config auth, logs)",
        href="https://supabase.com"),
     # zoho / zohodesk : OAuth2 self-client → credential multi-champs (ADR 0011,
-    # comme silae), résolu via resolve_credential_fields. byo_user (pas de quota).
-    _c("zoho", ["zoho"], auth_modes={"byo_user"}, secret_kind="fields",
+    # comme silae), résolu via resolve_credential_fields. byo_user OU byo_org
+    # (zoho : clé d'org/groupe partageable — équipe sales partage un self-client).
+    # `data_center` (non-secret) sélectionne la région Zoho (com/eu/in…).
+    _c("zoho", ["zoho"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
        in_default_bundle=False, label="Zoho CRM",
        help="CRM Zoho (CRUD modules, notes)", href="https://crm.zoho.com",
        credential_fields=(
            CredentialField("client_id", "Client ID", secret=True),
            CredentialField("client_secret", "Client Secret", secret=True),
            CredentialField("refresh_token", "Refresh Token", secret=True),
+           CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
+                           secret=False, reveal=True),
        )),
     _c("zohodesk", ["zohodesk"], auth_modes={"byo_user"}, secret_kind="fields",
        in_default_bundle=False, label="Zoho Desk",

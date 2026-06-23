@@ -12,7 +12,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import connectors, org_store
+from .. import connectors, credentials_store, org_store
 from ._authz import ORG_ADMIN_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 
@@ -24,7 +24,8 @@ _ID = {"id": "org_id"}
 class SetSecretInput(BaseModel):
     org_id: int
     provider: str
-    api_key: str
+    api_key: str = ""                  # connecteurs mono-champ (clé simple)
+    fields: Optional[dict[str, str]] = None   # connecteurs multi-champs (zoho/silae…)
     base_url: Optional[str] = None     # connecteurs remote uniquement (endpoint du bridge)
 
 
@@ -41,13 +42,16 @@ class SetOrgPresetInput(BaseModel):
 def _set_secret(ctx: ResolvedCtx, inp: SetSecretInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    if not (inp.api_key or "").strip():
-        raise AuthzDenied(400, "empty_api_key", "api_key vide.")
     base_url = (inp.base_url or "").strip() or None
     meta, code = connectors.org_secret_meta(inp.provider, base_url)
     if code:
         raise AuthzDenied(400, code, f"Provider/base_url invalide : {code}.")
-    org_store.set_org_secret(inp.org_id, inp.provider, inp.api_key, set_by=ctx.sub, meta=meta)
+    # Mono-champ (api_key) ou multi-champs (fields packés) — source unique.
+    try:
+        secret = credentials_store.secret_from_input(inp.provider, inp.api_key, inp.fields)
+    except ValueError as e:
+        raise AuthzDenied(400, str(e), "Credential incomplet ou vide.")
+    org_store.set_org_secret(inp.org_id, inp.provider, secret, set_by=ctx.sub, meta=meta)
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider}
 
 
@@ -69,7 +73,9 @@ CAPABILITIES += [
         key="org.secret.set", handler=_set_secret, Input=SetSecretInput,
         authz=ORG_ADMIN_OF("org_id"),
         description=("Set/rotate an org's shared account credential for a provider "
-                     "(org-shareable only ; base_url required for remote connectors)."),
+                     "(org-shareable only). Single-key connectors: pass `api_key`. "
+                     "Multi-field connectors (zoho/silae…): pass `fields` "
+                     "(all declared credential fields). base_url for remote bridges."),
         mcp="oto_admin_set_org_secret",
         rest=(RestBinding("PUT", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("PUT", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),

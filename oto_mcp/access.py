@@ -306,15 +306,33 @@ def resolve_credential_fields(provider: str) -> dict:
     resolve_api_key / resolve_mount_token), candidat broker (ADR 0004)."""
     sub = current_user_sub_or_raise()
     secret = credentials_store.get_credential("user", sub, provider)
-    if not secret:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
-                f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
-            ),
-        ))
-    return credentials_store.unpack_secret(provider, secret)
+    if secret:
+        return credentials_store.unpack_secret(provider, secret)
+
+    # Paliers partagés (ADR 0012/0015) — miroir de resolve_api_key : secret
+    # multi-champs du GROUPE actif (le plus spécifique) puis de l'ORG active.
+    # Gaté sur byo_org (org_shareable) ; l'override perso ci-dessus prime
+    # toujours. Le secret stocké est packé → on l'unpacke comme le scope user.
+    con = connectors.connector_for_provider(provider)
+    if con is not None and con.org_shareable:
+        active_group = current_group(sub)
+        if active_group is not None:
+            grp = group_store.get_group_secret(active_group, provider)
+            if grp:
+                return credentials_store.unpack_secret(provider, grp)
+        active_org = current_org(sub)
+        if active_org is not None:
+            org = org_store.get_org_secret(active_org, provider)
+            if org:
+                return credentials_store.unpack_secret(provider, org)
+
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(
+            f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
+            f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+        ),
+    ))
 
 
 def resolve_field_filter(service: str):

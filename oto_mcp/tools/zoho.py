@@ -18,12 +18,29 @@ from .. import access
 def register(mcp: FastMCP) -> None:
     from oto.tools.zoho.client import ZohoClient
 
+    # Zoho héberge par data center régional ; le refresh token est lié à sa
+    # région d'émission (un token .eu est rejeté par accounts.zoho.com). Le champ
+    # `data_center` du credential (défaut "com" en back-compat) sélectionne les
+    # domaines API/OAuth passés au client.
+    _DC_DOMAINS = {
+        "com": ("https://www.zohoapis.com", "https://accounts.zoho.com"),
+        "eu": ("https://www.zohoapis.eu", "https://accounts.zoho.eu"),
+        "in": ("https://www.zohoapis.in", "https://accounts.zoho.in"),
+        "au": ("https://www.zohoapis.com.au", "https://accounts.zoho.com.au"),
+        "jp": ("https://www.zohoapis.jp", "https://accounts.zoho.jp"),
+        "ca": ("https://www.zohoapis.ca", "https://accounts.zohocloud.ca"),
+    }
+
     def _client() -> ZohoClient:
         creds = access.resolve_credential_fields("zoho")
+        dc = (creds.get("data_center") or "com").strip().lower()
+        api_domain, accounts_url = _DC_DOMAINS.get(dc, _DC_DOMAINS["com"])
         return ZohoClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             refresh_token=creds.get("refresh_token"),
+            api_domain=api_domain,
+            accounts_url=accounts_url,
         )
 
     @mcp.tool()

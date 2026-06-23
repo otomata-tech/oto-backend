@@ -96,7 +96,10 @@ def make_routes(
             google_oauth.persist_token(sub, tokens)
         except Exception as e:
             return json_error(request, 502, f"oauth_exchange_failed: {e}")
-        return RedirectResponse(url=f"{_app_url()}/?datastore=connected", status_code=302)
+        # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
+        # `datastore` n'est plus Google Sheets (ADR 0016, PG natif) → ex-signal
+        # `?datastore=connected` retiré.
+        return RedirectResponse(url=f"{_app_url()}/console/connectors?google=connected", status_code=302)
 
     async def google_oauth_status(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)

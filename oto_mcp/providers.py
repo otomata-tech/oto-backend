@@ -209,8 +209,9 @@ _CATEGORY_BY_CONNECTOR = {
     "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
     "folk": "Prospection", "crunchbase": "Prospection",
     "unipile": "Prospection", "topograph": "Prospection",
-    "sirene": "Data FR", "fr_open": "Data FR",
+    "sirene": "Data FR", "culture": "Data FR",
     "foncier": "Data FR", "sante": "Data FR", "gr": "Data GR",
+    "reddit": "Web",
     "infosec": "Infosec",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
@@ -247,7 +248,8 @@ _PUBLISHER_BY_CONNECTOR = {
     "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
     # open-data FR → éditeur = la source publique
-    "sirene": "INSEE", "fr_open": "Open data FR",
+    "sirene": "INSEE", "culture": "Ministère de la Culture",
+    "reddit": "Reddit",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
     "infosec": "Otomata (OSINT)",
     # open-data GR → éditeur = la source publique
@@ -256,7 +258,7 @@ _PUBLISHER_BY_CONNECTOR = {
 
 # Domaine de marque curé par connecteur → le CDN logo.dev en dérive l'URL du logo
 # (cf. `logo_url_for`). Domaine RACINE (pas les `app.*` ni sous-domaines MCP). Les
-# connecteurs absents (open-data/État `fr_open`/`foncier`/`sante`) n'ont pas de
+# connecteurs absents (open-data/État `culture`/`foncier`/`sante`) n'ont pas de
 # marque produit → pas de logo → monogramme côté UI.
 _LOGO_DOMAIN_BY_CONNECTOR = {
     "serper": "serper.dev", "hunter": "hunter.io", "kaspr": "kaspr.io",
@@ -271,6 +273,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com", "brightdata": "brightdata.com", "cloro": "cloro.dev",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
+    "reddit": "reddit.com",
 }
 
 
@@ -444,12 +447,16 @@ _REGISTRY_LIST = [
        modules=("gmail", "tasks", "calendar", "sheets", "drive", "chat")),
 
     # --- open-data / sans credential ----------------------------------------
-    # namespace = préfixe réel : culture_spectacle_* → `culture` (namespace_of =
-    # 1er token), reddit_* → `reddit`. Déclarer "culture", pas "culture_spectacle"
-    # (jamais matché → fail-open du gate, #24).
-    _c("fr_open", ["culture", "reddit"], secret_kind="none",
-       in_default_preset=True, label="Open data", help="culture / reddit",
-       modules=("culture", "reddit")),
+    # Deux sources publiques SANS RAPPORT → deux connecteurs distincts (ex-`fr_open`
+    # qui les fusionnait : un sac « open data » incohérent, activer l'un activait
+    # l'autre). namespace = préfixe réel : culture_spectacle_* → `culture`
+    # (namespace_of = 1er token), reddit_* → `reddit`. Déclarer "culture", PAS
+    # "culture_spectacle" (jamais matché → fail-open du gate, #24).
+    _c("culture", ["culture"], secret_kind="none", in_default_preset=True,
+       label="Culture (open data)",
+       help="entreprises du spectacle vivant — open data Ministère de la Culture"),
+    _c("reddit", ["reddit"], secret_kind="none", in_default_preset=True,
+       label="Reddit", help="recherche & lecture de posts/subreddits (API publique)"),
     # Grèce : lookup entité via registre GEMI (autocomplete) + VIES. Open data,
     # sans clé. Inerte tant que non activé en DB (deny-by-default), comme foncier/sante.
     _c("gr", ["gr"], secret_kind="none", in_default_bundle=False,

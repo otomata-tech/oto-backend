@@ -450,13 +450,19 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `infosec_tls(domain)` / `infosec_headers(domain)` — certificat tls et en-têtes http de sécurité"
         )),
     ),
-    "fr_open": (
-        DocSection(kind="usage", title="agenda culturel + reddit", body_md=(
-            "deux sources publiques agrégées, sans clé.\n"
-            "- `culture_spectacle_search` / `culture_spectacle_get` — recherche d'événements et de spectacles (open data culture)\n"
-            "- `culture_spectacle_stats` — agrégats sur les événements (volumes par zone, période…)\n"
+    "culture": (
+        DocSection(kind="usage", title="spectacle vivant (open data culture)", body_md=(
+            "source publique du Ministère de la Culture, sans clé.\n"
+            "- `culture_spectacle_search` / `culture_spectacle_get` — recherche d'entreprises et de licences du spectacle vivant\n"
+            "- `culture_spectacle_stats` — agrégats (volumes par zone, période…)"
+        )),
+    ),
+    "reddit": (
+        DocSection(kind="usage", title="recherche & lecture reddit", body_md=(
+            "api publique reddit, sans clé.\n"
             "- `reddit_search` / `reddit_subreddit` — recherche de posts et lecture d'un subreddit\n"
-            "- `reddit_search_subreddits` — trouve les subreddits pertinents pour un sujet"
+            "- `reddit_search_subreddits` — trouve les subreddits pertinents pour un sujet\n"
+            "- `reddit_post` — lit un post et son arbre de commentaires"
         )),
     ),
     # ── recrutement (ATS) ───────────────────────────────────────────────────

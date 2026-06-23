@@ -25,6 +25,12 @@ _SCALAR_TYPE = {bool: "boolean", int: "number", float: "number", str: "string", 
 _cache: dict[str, dict[str, dict]] = {}
 _lock = threading.Lock()
 
+# Garde-fous anti-empilement. Le schéma converge normalement (clés nommées, tableaux
+# collapsés en `[]`), mais une réponse à CLÉS DYNAMIQUES (map keyée par id) le ferait
+# exploser : au-delà du cap on n'ajoute plus de nouvelle clé / nouveau chemin.
+_MAX_KEYS = 1000
+_MAX_PATHS_PER_KEY = 50
+
 
 def _type_of(v: Any) -> str:
     return _SCALAR_TYPE.get(type(v), "string")
@@ -92,11 +98,18 @@ def _merge(cur: dict[str, dict], found: dict[str, dict]) -> bool:
     for name, info in found.items():
         e = cur.get(name)
         if e is None:
-            cur[name] = {"type": info["type"], "paths": set(info["paths"])}
+            if len(cur) >= _MAX_KEYS:
+                continue  # cap : on n'ajoute plus de nouvelle clé (réponse à clés dynamiques)
+            cur[name] = {"type": info["type"], "paths": set(list(info["paths"])[:_MAX_PATHS_PER_KEY])}
             changed = True
         else:
+            if len(e["paths"]) >= _MAX_PATHS_PER_KEY:
+                continue
             n = len(e["paths"])
-            e["paths"] |= info["paths"]
+            for p in info["paths"]:
+                if len(e["paths"]) >= _MAX_PATHS_PER_KEY:
+                    break
+                e["paths"].add(p)
             if len(e["paths"]) != n:
                 changed = True
     return changed

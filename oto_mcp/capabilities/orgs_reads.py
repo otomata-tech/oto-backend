@@ -79,6 +79,8 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
                          for e in org_store.list_org_entitlements(inp.org_id)],
         # Options payantes offertes (comp admin) au niveau ORG (couche abonnement).
         "option_comps": db.list_option_comps("org", str(inp.org_id)),
+        # Clés plateforme partagées à l'org (couche 2, grant org-level).
+        "platform_grants": db.list_org_grants(inp.org_id),
     }
 
 

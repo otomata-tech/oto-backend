@@ -263,6 +263,12 @@ def resolve_api_key(provider: str) -> tuple[str, bool]:
     con = connectors.connector_for_provider(provider)
     platform_eligible = con is not None and "platform" in con.auth_modes
     grant = db.get_active_grant(sub, provider) if platform_eligible else None
+    # Fallback : clé plateforme partagée à l'ORG active (couche 2, grant org-level).
+    # Après le grant per-user (plus spécifique). Quota métré per-membre comme le user-grant.
+    if not grant and platform_eligible:
+        org = current_org(sub)
+        if org is not None:
+            grant = db.get_active_org_grant(org, provider)
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

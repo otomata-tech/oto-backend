@@ -825,6 +825,47 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.revoke_platform_key(target_sub, key_id)
         return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
 
+    async def admin_org_grant(request: Request) -> JSONResponse:
+        """Partage une clé plateforme à TOUTE une org (couche 2, grant org-level).
+        super_admin only. Miroir org de admin_grant. Body optionnel {daily_quota}."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_super_admin(sub):
+            return _json_error(request, 403, "forbidden")
+        try:
+            org_id = int(request.path_params["id"])
+            key_id = int(request.path_params["key_id"])
+        except ValueError:
+            return _json_error(request, 400, "invalid_id")
+        if not org_store.get_org(org_id):
+            return _json_error(request, 404, "unknown_org")
+        if not db.get_platform_key(key_id):
+            return _json_error(request, 404, "unknown_key")
+        daily_quota: int | None = None
+        try:
+            raw = (await request.json()).get("daily_quota")
+            if raw is not None:
+                daily_quota = max(1, int(raw))
+        except Exception:
+            pass
+        db.grant_org_platform_key(org_id, key_id, granted_by=sub, daily_quota=daily_quota)
+        return _json(request, {"ok": True, "org_id": org_id, "platform_key_id": key_id, "daily_quota": daily_quota})
+
+    async def admin_org_revoke(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_super_admin(sub):
+            return _json_error(request, 403, "forbidden")
+        try:
+            org_id = int(request.path_params["id"])
+            key_id = int(request.path_params["key_id"])
+        except ValueError:
+            return _json_error(request, 400, "invalid_id")
+        db.revoke_org_platform_key(org_id, key_id)
+        return _json(request, {"ok": True, "org_id": org_id, "platform_key_id": key_id})
+
     async def admin_tokens_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -1316,6 +1357,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/option-comps", admin_option_comp, methods=["POST"]),
         Route("/api/admin/option-comps", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/orgs/{id}/grants/{key_id}", admin_org_grant, methods=["POST"]),
+        Route("/api/admin/orgs/{id}/grants/{key_id}", admin_org_revoke, methods=["DELETE"]),
+        Route("/api/admin/orgs/{id}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),

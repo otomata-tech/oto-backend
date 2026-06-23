@@ -203,6 +203,19 @@ CREATE TABLE IF NOT EXISTS user_grants (
     FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
 );
 
+-- Grant de clé plateforme au niveau ORG (couche 2 du modèle de connecteur) : partager
+-- la clé plateforme à TOUS les membres d'une org, sans grant per-user. Miroir de
+-- user_grants au grain org ; résolu par access.resolve_api_key (cran org platform-grant,
+-- après le grant user). quota = per-membre (réutilise get_usage_today(sub)).
+CREATE TABLE IF NOT EXISTS org_grants (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    platform_key_id BIGINT NOT NULL REFERENCES platform_keys(id) ON DELETE CASCADE,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    granted_by TEXT,
+    daily_quota INTEGER,
+    PRIMARY KEY (org_id, platform_key_id)
+);
+
 -- Grants de namespace sensible (deny-by-default). Un user non-admin ne voit/
 -- n'appelle un tool d'un ADMIN_GRANT_ONLY_NAMESPACE que s'il a une ligne ici,
 -- posée par un admin. Distinct de user_grants (qui porte une platform_key/quota).
@@ -577,19 +590,6 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     quantity INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, product)
-);
-
--- Comp admin d'une option payante (gratuit), entity-keyé user|org — distinct du
--- Stripe payant (org_subscriptions). Couche 3 du modèle de connecteur : un super_admin
--- « offre l'option ». Lu par access.has_option (cf. docs/connector-model.md). Pas de
--- stripe_id → les webhooks Stripe ne l'écrasent jamais.
-CREATE TABLE IF NOT EXISTS option_comps (
-    entity_type TEXT NOT NULL,        -- 'user' | 'org'
-    entity_id   TEXT NOT NULL,        -- sub (user) ou org_id en texte (org)
-    option      TEXT NOT NULL,        -- 'unipile', …
-    granted_by  TEXT,
-    granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (entity_type, entity_id, option)
 );
 
 -- Bascule de tenant Logto (B1, otomata#35) : alias ancien_sub → nouveau_sub. Posé
@@ -1010,17 +1010,10 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
              "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )
-        # 2. tables à PK composite incluant sub où le NEW (fraîchement seedé au 1er
-        #    login) entrerait en conflit avec l'ancien → retirer le frais du new PUIS
-        #    repointer l'ancien (les vraies données vivent sur l'ancien). Sinon le
-        #    `UPDATE … WHERE sub=old` du barreau 3 violerait la PK.
-        #    - user_account_profile (PK sub) : historique d'onboarding.
-        #    - user_selected_connectors / connector_selection_seeded (ADR 0019) : l'état
-        #      installé/actif des connecteurs. ⚠️ Oubliés au cutover → sélections
-        #      orphelinées = « presque aucun connecteur » après migration (vécu 2026-06-23).
-        for tbl in ("user_account_profile", "user_selected_connectors", "connector_selection_seeded"):
-            conn.execute(f"DELETE FROM {tbl} WHERE sub=%s", (new_sub,))
-            conn.execute(f"UPDATE {tbl} SET sub=%s WHERE sub=%s", (new_sub, old_sub))
+        # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
+        #    l'ancien (garde l'historique d'onboarding). DELETE d'abord → pas de conflit PK.
+        conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
+        conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s", (new_sub, old_sub))
         # 3. repointer toutes les colonnes sub.
         for table, col in _SUB_COLUMNS:
             conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
@@ -1306,45 +1299,6 @@ def set_org_unipile_limit(org_id: int, limit: Optional[int]) -> None:
 
 
 # --- abonnements récurrents Stripe par org (option LinkedIn €15/mois/siège) ----
-
-def set_option_comp(entity_type: str, entity_id: str, option: str,
-                    *, granted_by: Optional[str] = None) -> None:
-    """Offre (comp gratuit) une option payante à une entité user|org. Idempotent."""
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO option_comps (entity_type, entity_id, option, granted_by) "
-            "VALUES (%s,%s,%s,%s) ON CONFLICT (entity_type, entity_id, option) "
-            "DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()",
-            (entity_type, str(entity_id), option, granted_by),
-        )
-
-
-def clear_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
-    """Retire un comp d'option. True si une ligne a été supprimée."""
-    with _connect() as conn:
-        n = conn.execute(
-            "DELETE FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
-            (entity_type, str(entity_id), option),
-        ).rowcount
-    return n > 0
-
-
-def has_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
-            (entity_type, str(entity_id), option),
-        ).fetchone() is not None
-
-
-def list_option_comps(entity_type: str, entity_id: str) -> list[str]:
-    """Options offertes (comp) à cette entité — pour l'affichage admin."""
-    with _connect() as conn:
-        return [r["option"] for r in conn.execute(
-            "SELECT option FROM option_comps WHERE entity_type=%s AND entity_id=%s",
-            (entity_type, str(entity_id)),
-        )]
-
 
 def get_org_subscription(org_id: int, product: str) -> Optional[dict]:
     """Miroir local de l'abonnement Stripe `product` de l'org (status/quantity/ids)
@@ -2267,6 +2221,65 @@ def get_active_grant(sub: str, provider: str) -> Optional[dict]:
         return None
     d = dict(row)
     d["api_key"] = _pk_reveal(d, provider)   # déchiffre JIT (resolve_api_key)
+    d.pop("api_key_enc", None)
+    return d
+
+
+def grant_org_platform_key(org_id: int, platform_key_id: int,
+                           granted_by: Optional[str] = None,
+                           daily_quota: Optional[int] = None) -> None:
+    """Partage une clé plateforme à TOUTE l'org (couche 2). Miroir org de grant_platform_key."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO org_grants (org_id, platform_key_id, granted_at, granted_by, daily_quota)
+            VALUES (%s, %s, NOW(), %s, %s)
+            ON CONFLICT(org_id, platform_key_id) DO UPDATE SET
+                granted_at = NOW(), granted_by = EXCLUDED.granted_by,
+                daily_quota = EXCLUDED.daily_quota
+            """,
+            (org_id, platform_key_id, granted_by, daily_quota),
+        )
+
+
+def revoke_org_platform_key(org_id: int, platform_key_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM org_grants WHERE org_id = %s AND platform_key_id = %s",
+                     (org_id, platform_key_id))
+
+
+def list_org_grants(org_id: int) -> list[dict]:
+    """Grants de clé plateforme d'une org (joint platform_keys, sans api_key brut)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
+                   og.granted_at, og.granted_by, og.daily_quota
+              FROM org_grants og JOIN platform_keys pk ON pk.id = og.platform_key_id
+             WHERE og.org_id = %s ORDER BY pk.provider, og.granted_at DESC
+            """,
+            (org_id,),
+        )]
+
+
+def get_active_org_grant(org_id: int, provider: str) -> Optional[dict]:
+    """Grant de clé plateforme de l'org pour `provider` (le plus récent), ou None.
+    Miroir org de get_active_grant — résout la clé plateforme partagée à l'org."""
+    _check_provider(provider)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT pk.id AS platform_key_id, pk.label, pk.api_key_enc, og.daily_quota
+              FROM org_grants og JOIN platform_keys pk ON pk.id = og.platform_key_id
+             WHERE og.org_id = %s AND pk.provider = %s
+             ORDER BY og.granted_at DESC LIMIT 1
+            """,
+            (org_id, provider),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["api_key"] = _pk_reveal(d, provider)
     d.pop("api_key_enc", None)
     return d
 

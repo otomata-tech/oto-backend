@@ -997,10 +997,17 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
              "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )
-        # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
-        #    l'ancien (garde l'historique d'onboarding). DELETE d'abord → pas de conflit PK.
-        conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
-        conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s", (new_sub, old_sub))
+        # 2. tables à PK composite incluant sub où le NEW (fraîchement seedé au 1er
+        #    login) entrerait en conflit avec l'ancien → retirer le frais du new PUIS
+        #    repointer l'ancien (les vraies données vivent sur l'ancien). Sinon le
+        #    `UPDATE … WHERE sub=old` du barreau 3 violerait la PK.
+        #    - user_account_profile (PK sub) : historique d'onboarding.
+        #    - user_selected_connectors / connector_selection_seeded (ADR 0019) : l'état
+        #      installé/actif des connecteurs. ⚠️ Oubliés au cutover → sélections
+        #      orphelinées = « presque aucun connecteur » après migration (vécu 2026-06-23).
+        for tbl in ("user_account_profile", "user_selected_connectors", "connector_selection_seeded"):
+            conn.execute(f"DELETE FROM {tbl} WHERE sub=%s", (new_sub,))
+            conn.execute(f"UPDATE {tbl} SET sub=%s WHERE sub=%s", (new_sub, old_sub))
         # 3. repointer toutes les colonnes sub.
         for table, col in _SUB_COLUMNS:
             conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))

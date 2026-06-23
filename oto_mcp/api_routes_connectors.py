@@ -159,10 +159,11 @@ def make_routes(
         # → c'est son abonnement, pas celui d'un org (pas de plafond org).
         byo = db.get_user_api_key(sub, "unipile") is not None
         org_id = None if byo else org_store.get_active_org(sub)
-        # Gate ABONNEMENT (option LinkedIn payée €15/mois/siège) : on n'autorise la
-        # connexion que si l'org a un abonnement actif. BYO (clé perso) = l'user paie
-        # Unipile en direct → pas de gate. Le dashboard, sur ce 402, lance le checkout.
-        if org_id is not None and not billing.has_active_unipile_subscription(org_id):
+        # Gate ABONNEMENT (couche 3, docs/connector-model.md) : seam unique
+        # `access.has_option` = abonnement Stripe de l'org OU comp admin (user|org).
+        # BYO (clé perso) = l'user paie Unipile en direct → pas de gate. Sur ce 402,
+        # le dashboard lance le checkout Stripe.
+        if not byo and not access.has_option(sub, "unipile"):
             return json_error(request, 402, "unipile_subscription_required")
         # Plafond anti-dérapage : chaque compte connecté coûte ~5 €/mois sur la
         # facture Unipile de l'org. On bloque une NOUVELLE connexion au-delà du
@@ -243,7 +244,7 @@ def make_routes(
         # (clé perso) → considéré subscribed (l'user paie Unipile en direct).
         org_id = org_store.get_active_org(sub)
         byo = db.get_user_api_key(sub, "unipile") is not None
-        subscribed = byo or (org_id is not None and billing.has_active_unipile_subscription(org_id))
+        subscribed = byo or access.has_option(sub, "unipile")
 
         def _ch(p: str) -> dict:
             a = accts.get(p)

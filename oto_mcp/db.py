@@ -579,6 +579,19 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     PRIMARY KEY (org_id, product)
 );
 
+-- Comp admin d'une option payante (gratuit), entity-keyé user|org — distinct du
+-- Stripe payant (org_subscriptions). Couche 3 du modèle de connecteur : un super_admin
+-- « offre l'option ». Lu par access.has_option (cf. docs/connector-model.md). Pas de
+-- stripe_id → les webhooks Stripe ne l'écrasent jamais.
+CREATE TABLE IF NOT EXISTS option_comps (
+    entity_type TEXT NOT NULL,        -- 'user' | 'org'
+    entity_id   TEXT NOT NULL,        -- sub (user) ou org_id en texte (org)
+    option      TEXT NOT NULL,        -- 'unipile', …
+    granted_by  TEXT,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (entity_type, entity_id, option)
+);
+
 -- Bascule de tenant Logto (B1, otomata#35) : alias ancien_sub → nouveau_sub. Posé
 -- par migrate_sub au 1er login d'un compte sur le nouveau tenant (merge par email).
 -- Sert à canonicaliser les tokens encore émis par l'ancien tenant pendant le drain
@@ -1293,6 +1306,45 @@ def set_org_unipile_limit(org_id: int, limit: Optional[int]) -> None:
 
 
 # --- abonnements récurrents Stripe par org (option LinkedIn €15/mois/siège) ----
+
+def set_option_comp(entity_type: str, entity_id: str, option: str,
+                    *, granted_by: Optional[str] = None) -> None:
+    """Offre (comp gratuit) une option payante à une entité user|org. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO option_comps (entity_type, entity_id, option, granted_by) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (entity_type, entity_id, option) "
+            "DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()",
+            (entity_type, str(entity_id), option, granted_by),
+        )
+
+
+def clear_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
+    """Retire un comp d'option. True si une ligne a été supprimée."""
+    with _connect() as conn:
+        n = conn.execute(
+            "DELETE FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
+            (entity_type, str(entity_id), option),
+        ).rowcount
+    return n > 0
+
+
+def has_option_comp(entity_type: str, entity_id: str, option: str) -> bool:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM option_comps WHERE entity_type=%s AND entity_id=%s AND option=%s",
+            (entity_type, str(entity_id), option),
+        ).fetchone() is not None
+
+
+def list_option_comps(entity_type: str, entity_id: str) -> list[str]:
+    """Options offertes (comp) à cette entité — pour l'affichage admin."""
+    with _connect() as conn:
+        return [r["option"] for r in conn.execute(
+            "SELECT option FROM option_comps WHERE entity_type=%s AND entity_id=%s",
+            (entity_type, str(entity_id)),
+        )]
+
 
 def get_org_subscription(org_id: int, product: str) -> Optional[dict]:
     """Miroir local de l'abonnement Stripe `product` de l'org (status/quantity/ids)

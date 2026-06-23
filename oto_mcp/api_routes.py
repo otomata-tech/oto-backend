@@ -687,6 +687,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "providers": status["providers"],
             "grants": db.list_grants_for_user(target),
             "namespace_grants": ns,
+            # Options payantes offertes (comp) au niveau USER (couche 3).
+            "option_comps": db.list_option_comps("user", target),
         })
 
     async def admin_platform_keys_list(request: Request) -> JSONResponse:
@@ -773,6 +775,41 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             pass
         db.grant_platform_key(target_sub, key_id, granted_by=sub, daily_quota=daily_quota)
         return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id, "daily_quota": daily_quota})
+
+    async def admin_option_comp(request: Request) -> JSONResponse:
+        """Offrir / retirer une option payante (comp GRATUIT, couche 3 du modèle de
+        connecteur) à une entité `user` ou `org`. super_admin only. Distinct du Stripe
+        payant — pose/retire une ligne `option_comps` lue par `access.has_option`.
+        Body : {entity_type:'user'|'org', entity_id, option, on:bool}."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_super_admin(sub):
+            return _json_error(request, 403, "forbidden")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        et = body.get("entity_type")
+        eid = body.get("entity_id")
+        option = body.get("option")
+        on = bool(body.get("on"))
+        if et not in ("user", "org") or not eid or not option:
+            return _json_error(request, 400, "invalid_body")
+        eid = str(eid)
+        if et == "user" and not db.get_user(eid):
+            return _json_error(request, 404, "unknown_user")
+        if et == "org":
+            try:
+                if not org_store.get_org(int(eid)):
+                    return _json_error(request, 404, "unknown_org")
+            except (ValueError, TypeError):
+                return _json_error(request, 400, "invalid_body")
+        if on:
+            db.set_option_comp(et, eid, option, granted_by=sub)
+        else:
+            db.clear_option_comp(et, eid, option)
+        return _json(request, {"ok": True, "entity_type": et, "entity_id": eid, "option": option, "on": on})
 
     async def admin_revoke(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1277,6 +1314,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_grant, methods=["POST"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", admin_revoke, methods=["DELETE"]),
         Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/option-comps", admin_option_comp, methods=["POST"]),
+        Route("/api/admin/option-comps", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),

@@ -119,6 +119,27 @@ def current_org(sub: str | None) -> Optional[int]:
     return org_store.get_active_org(sub)
 
 
+_SUBSCRIBED_STATUSES = ("active", "trialing", "past_due")
+
+
+def has_option(sub: str, option: str) -> bool:
+    """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option
+    payante `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
+    débloquée si l'UNE des trois : comp admin sur l'USER, comp admin sur l'ORG active,
+    ou abonnement Stripe de l'ORG active. Ne JAMAIS lire les sources en direct ailleurs
+    (un nouveau chemin passe par ici)."""
+    if db.has_option_comp("user", sub, option):
+        return True
+    org = current_org(sub)
+    if org is not None:
+        if db.has_option_comp("org", str(org), option):
+            return True
+        s = db.get_org_subscription(org, option)
+        if s and s.get("status") in _SUBSCRIBED_STATUSES:
+            return True
+    return False
+
+
 def current_group(sub: str | None) -> Optional[int]:
     """Équipe (groupe) EFFECTIVE — mirror de `current_org` pour l'axe groupe
     (ADR 0023 étendu). Résout `session ?? consultation ?? maison` en TENANT

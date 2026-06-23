@@ -312,6 +312,80 @@ def set_org_field_filters(org_id: int, service: str, block: Optional[dict]) -> b
             return True
 
 
+# --- adresses expéditrices d'email de l'org (envoi per-org) ------------------
+
+_EMAIL_TRANSPORTS = ("mailer", "resend")
+
+
+def get_org_email_settings(org_id: int) -> dict:
+    """Réglages d'envoi d'email de l'org. Forme : `{ "senders": [...] }`.
+
+    Chaque sender = `{email, name?, reply_to?, transport: "mailer"|"resend"}`.
+    `{"senders": []}` si rien posé."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT email_settings FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+        if not row:
+            return {"senders": []}
+        settings = dict(row["email_settings"] or {})
+        settings.setdefault("senders", [])
+        return settings
+
+
+def set_org_email_settings(org_id: int, *, senders: Optional[list[dict]] = None,
+                           quiet_hours: Optional[dict] = None) -> bool:
+    """Met à jour les réglages d'email de l'org (merge dans le JSONB : seules les
+    clés fournies changent). False si org absente.
+
+    Prose de config (adresses + transport + fenêtre d'envoi), pas un secret →
+    colonne en clair. La clé Resend, elle, vit dans le coffre
+    (`set_org_secret(org_id, "resend", ...)`)."""
+    with _connect() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT email_settings FROM orgs WHERE id = %s FOR UPDATE", (org_id,)
+            ).fetchone()
+            if not row:
+                return False
+            current = dict(row["email_settings"] or {})
+            if senders is not None:
+                current["senders"] = senders
+            if quiet_hours is not None:
+                current["quiet_hours"] = quiet_hours
+            conn.execute(
+                "UPDATE orgs SET email_settings = %s::jsonb WHERE id = %s",
+                (json.dumps(current), org_id),
+            )
+            return True
+
+
+def list_scheduled_emails(org_id: int, status: str = "pending") -> list[dict]:
+    """Emails programmés de l'org (délégation au journal db)."""
+    return db.list_scheduled_emails(org_id, status=status)
+
+
+def cancel_scheduled_email(org_id: int, email_id: int) -> bool:
+    """Annule un email encore en attente de l'org (délégation au journal db)."""
+    return db.cancel_scheduled_email(org_id, email_id)
+
+
+def resolve_sender(org_id: int, from_email: Optional[str] = None) -> Optional[dict]:
+    """Sender de l'org à utiliser. `from_email` fourni = doit matcher un sender
+    déclaré (sinon None) ; absent = le 1er sender (défaut). None si l'org n'a
+    aucune adresse configurée."""
+    senders = get_org_email_settings(org_id).get("senders") or []
+    if not senders:
+        return None
+    if from_email is None:
+        return senders[0]
+    want = from_email.strip().lower()
+    for s in senders:
+        if (s.get("email") or "").strip().lower() == want:
+            return s
+    return None
+
+
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
     """Ajoute (ou met à jour le rôle d') un membre. Auto-promeut l'org en active
     si c'est la 1ère adhésion du sub.
@@ -946,6 +1020,17 @@ def list_instructions(org_id: int, include_base: bool = False) -> list[dict]:
             f"SELECT slug, title, description, version, updated_at "
             f"FROM org_instructions WHERE {where} ORDER BY slug",
             params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_instruction_bodies(org_id: int) -> list[dict]:
+    """Slug + body_md des instructions d'une org (hors doctrine de base) — pour
+    dériver les références d'outils `<tool:slug>` (compteur « doctrine-only », ADR 0024)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT slug, body_md FROM org_instructions WHERE org_id = %s AND slug <> %s",
+            (org_id, BASE_SLUG),
         ).fetchall()
         return [dict(r) for r in rows]
 

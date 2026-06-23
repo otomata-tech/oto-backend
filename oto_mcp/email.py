@@ -22,13 +22,17 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _send(to: str, subject: str, html: str, reply_to: str | None = None) -> bool:
+def _send(to: str, subject: str, html: str, reply_to: str | None = None,
+          from_email: str | None = None) -> bool:
+    """Envoi via mailer.oto.zone (Scaleway TEM). `from_email` = adresse expéditrice
+    (défaut marque `_MAIL_FROM`) — le service refuse (403) un domaine hors allowlist
+    `MAILER_FROM_DOMAINS`. Best-effort (False si pas de bearer ou échec)."""
     bearer = os.environ.get("OTO_MAILER_SEND_BEARER")
     if not bearer:
         return False
     try:
         import httpx
-        payload = {"from": _MAIL_FROM, "to": to, "subject": subject, "html": html}
+        payload = {"from": from_email or _MAIL_FROM, "to": to, "subject": subject, "html": html}
         if reply_to:
             payload["reply_to"] = reply_to
         r = httpx.post(
@@ -43,6 +47,34 @@ def _send(to: str, subject: str, html: str, reply_to: str | None = None) -> bool
         return False
     except Exception as e:  # réseau, import, etc. → best-effort
         log.warning("email to %s not sent (%s)", to, e)
+        return False
+
+
+def send_via_resend(to: str, subject: str, html: str, *, api_key: str,
+                    from_email: str, reply_to: str | None = None) -> bool:
+    """Envoi direct via l'API Resend, avec la clé BYOK de l'org. `from_email` =
+    adresse sur un domaine vérifié côté Resend par l'org. Best-effort (False si
+    échec), même contrat que `_send`. PAS d'usage du client oto-core (interdiction
+    de résolution de secret côté serveur)."""
+    if not api_key or not from_email:
+        return False
+    try:
+        import httpx
+        payload = {"from": from_email, "to": [to], "subject": subject, "html": html}
+        if reply_to:
+            payload["reply_to"] = reply_to
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=10.0,
+        )
+        if r.status_code in (200, 201):
+            return True
+        log.warning("resend → %s %s", r.status_code, r.text[:200])
+        return False
+    except Exception as e:  # réseau, import, etc. → best-effort
+        log.warning("resend email to %s not sent (%s)", to, e)
         return False
 
 
@@ -201,6 +233,14 @@ def render_composed_email(
     return f'<div style="{_WRAP}">{body_html}{cta_html}{footer_html}</div>'
 
 
+def format_from(from_email: str | None, from_name: str | None = None) -> str | None:
+    """En-tête `from` au format « Name <addr> » (ou l'adresse seule). None si pas
+    d'adresse → l'appelant retombe sur la marque par défaut."""
+    if not from_email:
+        return None
+    return f"{from_name} <{from_email}>" if from_name else from_email
+
+
 def send_composed_email(
     to: str,
     subject: str,
@@ -210,14 +250,18 @@ def send_composed_email(
     cta_url: str | None = None,
     reply_to: str | None = None,
     footer: bool = True,
+    from_email: str | None = None,
+    from_name: str | None = None,
 ) -> bool:
-    """Envoie un email à contenu libre (fourni par l'agent), rendu à la charte.
+    """Envoie un email à contenu libre (fourni par l'agent), rendu à la charte, via
+    le mailer Otomata (Scaleway TEM).
 
-    `reply_to` défaut = la boîte du studio (`OTO_CONTACT_TO`) pour qu'une réponse
-    arrive sur un humain. True si envoyé, False sinon (best-effort, cf. `_send`)."""
+    `from_email`/`from_name` = adresse expéditrice (défaut = marque `_MAIL_FROM`) ;
+    le domaine doit être dans l'allowlist du service. `reply_to` défaut = la boîte
+    du studio (`OTO_CONTACT_TO`). True si envoyé, False sinon (best-effort)."""
     html = render_composed_email(body, cta_text=cta_text, cta_url=cta_url, footer=footer)
     rt = reply_to or os.environ.get("OTO_CONTACT_TO", "alexis@otomata.tech")
-    return _send(to, subject, html, reply_to=rt)
+    return _send(to, subject, html, reply_to=rt, from_email=format_from(from_email, from_name))
 
 
 def send_contact_email(name: str, email: str, message: str) -> bool:

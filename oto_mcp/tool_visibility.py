@@ -31,9 +31,10 @@ from . import connectors
 ADMIN_GRANT_ONLY_NAMESPACES = connectors.ADMIN_GRANT_ONLY_NAMESPACES
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
-# `email_send` : outil d'envoi sous l'identité de marque, gaté super_admin dans son
-# handler — masqué ici pour ne pas encombrer la toolbox des comptes normaux (la
-# vraie barrière reste le check de rôle, pas ce masquage cosmétique).
+# `email_send` : envoi d'email per-org. Autz DYNAMIQUE dans le handler (membre de
+# l'org pour une adresse déclarée de l'org ; super_admin pour le repli marque
+# oto@otomata.tech) — masqué ici pour ne pas encombrer la toolbox des orgs sans
+# adresse configurée. La vraie barrière reste le check de rôle, pas ce masquage.
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send"})
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 

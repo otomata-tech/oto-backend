@@ -16,6 +16,7 @@ gestion de compte) partage le même JWTVerifier que `/mcp`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -284,6 +285,27 @@ def main():
         # View-as (ADR 0023) : middleware ASGI brut, n'intervient que sur /api/* avec
         # le header X-Oto-Org (pass-through total sinon → n'altère pas le streaming /mcp).
         app.add_middleware(api_routes.ViewAsMiddleware, verifier=verifier)
+
+        # Scheduler d'email différé : boucle de fond démarrée au boot en composant le
+        # lifespan FastMCP existant (mono-process → une seule boucle). Opt-out local
+        # via OTO_SCHEDULER_ENABLED=0. Isolée en thread côté scheduler (ne bloque pas).
+        if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
+            import contextlib
+            from . import scheduler
+            _prev_lifespan = app.router.lifespan_context
+
+            @contextlib.asynccontextmanager
+            async def _lifespan(app_):
+                task = asyncio.create_task(scheduler.run_scheduler_loop())
+                try:
+                    async with _prev_lifespan(app_):
+                        yield
+                finally:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+            app.router.lifespan_context = _lifespan
 
         import uvicorn
         logger.info("HTTP MCP server on %s:%d", host, port)

@@ -367,6 +367,16 @@ _REGISTRY_LIST = [
        in_default_bundle=False, label="Topograph",
        help="KYB — données & documents entreprise (registres européens)",
        href="https://www.topograph.co"),
+    # resend : credential-only (PAS de tools propres). La clé Resend de l'org est
+    # consommée par `email_send` (transport=resend) via resolve_api_key, cascade
+    # user > org. Domaine d'envoi vérifié côté Resend par l'org ; l'adresse `from`
+    # vit dans orgs.email_settings, pas dans le credential. default_hidden + hors
+    # bundle (pas un tool à exposer). tools/resend.py = register() no-op pour
+    # satisfaire l'invariant « un fichier tools/ par provider kind=tools ».
+    _c("resend", ["resend"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, default_hidden=True,
+       label="Resend", help="envoi d'email transactionnel (clé de l'org)",
+       publisher="Resend", href="https://resend.com"),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets

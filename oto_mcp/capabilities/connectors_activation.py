@@ -17,12 +17,30 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import connector_activation, org_store, providers
+from .. import connector_activation, db, org_store, providers
 from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _ID = {"id": "org_id"}     # placeholder {id} → champ Input org_id
+
+# Couche 3 (abonnement, ADR 0024) : connecteur → option payante (add-on Stripe).
+# Aujourd'hui seul unipile (option « messagerie hébergée »). Map curée — pas de
+# champ générique au registre tant qu'il n'y a qu'un add-on.
+_PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
+_SUBSCRIBED_STATUSES = ("active", "trialing", "past_due")
+
+
+def _org_subscribed(org_id: int, option: str) -> bool:
+    """L'org a-t-elle l'add-on payant `option` ? comp admin OU abonnement Stripe
+    actif. Best-effort (ne fait jamais échouer la lecture de la liste)."""
+    try:
+        if db.has_option_comp("org", str(org_id), option):
+            return True
+        s = db.get_org_subscription(org_id, option)
+        return bool(s and s.get("status") in _SUBSCRIBED_STATUSES)
+    except Exception:
+        return False
 
 
 class OrgActivationListInput(BaseModel):
@@ -58,11 +76,14 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         master = glob.get(name)          # None = jamais posé = OFF
         org_ov = override.get(name)      # None = pas d'override
         effective = org_ov if org_ov is not None else bool(master)
+        option = _PAID_OPTION_BY_CONNECTOR.get(name)   # add-on payant (couche 3) ou None
         out.append({
             "connector": name, "label": c.label, "help": c.help,
             "namespaces": list(c.namespaces),
             "master_enabled": master, "org_enabled": org_ov, "effective": effective,
             "recommended": name in recommended,
+            "paid_option": option,
+            "subscribed": _org_subscribed(inp.org_id, option) if option else False,
         })
     return {"org_id": inp.org_id, "connectors": out}
 

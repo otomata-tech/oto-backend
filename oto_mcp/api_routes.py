@@ -72,11 +72,23 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Oto-Org, X-Oto-Group",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Oto-Org, X-Oto-Group, X-Oto-View-As",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
         }
     return {}
+
+
+def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
+    """Applique le « voir en tant que » (axe user, REST lecture seule) : si un sub
+    de consultation est posé pour la requête (par ViewAsMiddleware, qui a DÉJÀ validé
+    opérateur + cible + GET), renvoie ce sub cible ; sinon le sub réel. `apply_view_as`
+    False = chemin du middleware lui-même (qui doit voir le sub RÉEL pour gater)."""
+    if not apply_view_as:
+        return real_sub
+    from . import session_org
+    target = session_org.current_view_user()
+    return target if (target and target != real_sub) else real_sub
 
 
 async def _authenticate(
@@ -84,6 +96,7 @@ async def _authenticate(
     verifier: JWTVerifier,
     *,
     allow_query_token: bool = False,
+    apply_view_as: bool = True,
 ) -> tuple[str | None, JSONResponse | None]:
     auth = request.headers.get("authorization", "")
     token: str | None = None
@@ -102,7 +115,7 @@ async def _authenticate(
         sub = db.verify_api_token(token)
         if not sub:
             return None, _json_error(request, 401, "invalid_api_token")
-        return sub, None
+        return _maybe_view_as(sub, apply_view_as), None
 
     # Sinon, JWT Logto.
     access_token = await verifier.verify_token(token)
@@ -118,7 +131,7 @@ async def _authenticate(
         sub = db.resolve_sub(sub)
     db.upsert_user(sub, email=access_token.claims.get("email"),
                    name=access_token.claims.get("name"), iss=access_token.claims.get("iss"))
-    return sub, None
+    return _maybe_view_as(sub, apply_view_as), None
 
 
 def _json_error(request: Request, status: int, code: str) -> JSONResponse:
@@ -175,6 +188,15 @@ def _parse_view_group(request: Request) -> int | None:
         return None
 
 
+def _parse_view_user(request: Request) -> str | None:
+    """User de consultation (« voir en tant que », header `X-Oto-View-As` = sub cible).
+    None = pas de header. Validé (opérateur + cible existe + GET) dans le middleware."""
+    raw = request.headers.get("x-oto-view-as")
+    if raw is None:
+        return None
+    return raw.strip() or None
+
+
 class ViewAsMiddleware:
     """Middleware ASGI **brut** (pas BaseHTTPMiddleware, qui bufferiserait le
     streaming `/mcp`) : n'intervient QUE sur `/api/*` portant `X-Oto-Org`, sinon
@@ -195,12 +217,21 @@ class ViewAsMiddleware:
         request = Request(scope, receive)  # headers/query seulement → ne consomme pas le body
         view_org = _parse_view_org(request)
         view_group = _parse_view_group(request)
-        if view_org is None and view_group is None:
+        view_user = _parse_view_user(request)
+        if view_org is None and view_group is None and view_user is None:
             return await self.app(scope, receive, send)
-        sub, err = await _authenticate(request, self._verifier)
+        # sub RÉEL (apply_view_as=False) : sert à gater, jamais à appliquer la consultation.
+        sub, err = await _authenticate(request, self._verifier, apply_view_as=False)
         if err:  # non authentifié → la route rendra son 401 ; pas de view-as
             return await self.app(scope, receive, send)
-        from . import group_store, roles, session_org
+        from . import access, db, group_store, roles, session_org
+        if view_user:  # « voir en tant que » : opérateur plateforme + cible existe + LECTURE SEULE
+            if not access.is_platform_operator(sub):
+                return await _json_error(request, 403, "forbidden")(scope, receive, send)
+            if request.method != "GET":  # consultation = lecture seule, jamais d'écriture en son nom
+                return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
+            if view_user == sub or db.get_user(view_user) is None:
+                view_user = None  # cible = soi ou inconnue → pas de consultation (no-op)
         if view_group:  # équipe consultée → valide la lecture + DÉRIVE son org parente (invariant)
             g = group_store.get_group(view_group)
             if g is None or not roles.can_read_group(sub, view_group):
@@ -209,6 +240,7 @@ class ViewAsMiddleware:
         elif view_org:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
             if not roles.is_org_member(sub, view_org):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
+        usr_token = session_org.set_view_user(view_user) if view_user is not None else None
         org_token = session_org.set_view_org(view_org) if view_org is not None else None
         grp_token = session_org.set_view_group(view_group) if view_group is not None else None
         try:
@@ -218,6 +250,8 @@ class ViewAsMiddleware:
                 session_org.reset_view_group(grp_token)
             if org_token is not None:
                 session_org.reset_view_org(org_token)
+            if usr_token is not None:
+                session_org.reset_view_user(usr_token)
 
 
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:

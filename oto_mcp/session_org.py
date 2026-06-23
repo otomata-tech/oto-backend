@@ -48,6 +48,31 @@ def current_view_org() -> Optional[int]:
     return _VIEW_ORG.get()
 
 
+# ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
+# Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
+# tant que » un autre user dans le dashboard. Contextvar per-requête posé par
+# ViewAsMiddleware APRÈS validation (opérateur + cible existe + méthode GET), lu
+# par `_authenticate` qui renvoie alors le **sub cible** → tout `/api/me/*` rend
+# la vue de la cible. REST-ONLY et lecture seule : le MCP ne lit JAMAIS ce
+# contextvar (zéro impersonation dans Claude), les mutations sont rejetées en amont.
+_VIEW_USER: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_view_user", default=None)
+
+
+def set_view_user(sub: Optional[str]) -> contextvars.Token:
+    """Pose le user de consultation pour la requête courante (renvoie le token à reset)."""
+    return _VIEW_USER.set(sub)
+
+
+def reset_view_user(token: contextvars.Token) -> None:
+    _VIEW_USER.reset(token)
+
+
+def current_view_user() -> Optional[str]:
+    """Sub consulté pour la requête courante (None = aucun → sub réel)."""
+    return _VIEW_USER.get()
+
+
 # ── Axe ÉQUIPE (groupe) — même mécanique que l'org (ADR 0023 étendu) ─────────
 # Le store ne garde QUE des group_id réels ; « pas de groupe » (niveau org) se
 # DÉRIVE = override d'org présent SANS override de groupe ⇒ niveau org. Ça tient

@@ -144,6 +144,40 @@ class Connector:
                 f"?token={token}&size=256&format=png&retina=true")
 
     @property
+    def auth_method(self) -> str:
+        """Mécanisme d'obtention du credential (ADR 0024) — DÉRIVÉ. Pilote le
+        widget rendu par la `ConnectorCard` (un flux, une carte). Priorité :
+        `remote` (bridge ADR 0003, posé par grant d'org) > `oauth`/`cookie`/`none`
+        (flux dédiés / pas de credential) > `secret` (champ(s) à coller : api_key,
+        basic_auth, fields, refresh_token). NB : un MCP fédéré (kind=mount) hérite
+        de son `secret_kind` (planity=basic_auth→secret, memento=oauth→oauth)."""
+        if self.kind == "remote":
+            return "remote"
+        if self.secret_kind in ("oauth", "cookie", "none"):
+            return self.secret_kind
+        return "secret"
+
+    @property
+    def auth_multi_account(self) -> bool:
+        """Le credential est-il multi-compte — N grants pour une même entité
+        (ADR 0024) ? Aujourd'hui seul Google (N comptes OAuth liés)."""
+        return self.name in MULTI_ACCOUNT_PROVIDERS
+
+    @property
+    def auth(self) -> dict:
+        """Descripteur d'auth unifié (ADR 0024) — source unique du rendu de la
+        face credential, quel que soit le mécanisme. `fields` = schéma de saisie
+        (vide hors `method=secret`, où les flux sont dédiés)."""
+        return {
+            "method": self.auth_method,
+            "cardinality": "multi_account" if self.auth_multi_account else "single",
+            "fields": [
+                {"name": f.name, "label": f.label, "secret": f.secret}
+                for f in self.secret_fields
+            ],
+        }
+
+    @property
     def secret_fields(self) -> tuple[CredentialField, ...]:
         """Schéma de saisie du credential — SOURCE UNIQUE pour l'UI, l'endpoint REST,
         `status_for` et le packing. Déclaré explicitement (`credential_fields`),
@@ -163,6 +197,11 @@ class Connector:
 # Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
 # seul secret_kind (slack est aussi personal_session, mais c'est une API).
 BROWSER_PROVIDERS = frozenset({"crunchbase"})
+
+# Connecteurs dont le credential est MULTI-COMPTE — N grants liés à une même
+# entité (ADR 0024). Aujourd'hui seul Google (N comptes OAuth) ; les autres
+# sessions/oauth (crunchbase, memento…) restent mono-compte par entité.
+MULTI_ACCOUNT_PROVIDERS = frozenset({"google"})
 
 # Catégorie d'usage (domaine) par connecteur — CURÉE (pas dérivable), tunable.
 _CATEGORY_BY_CONNECTOR = {
@@ -686,6 +725,10 @@ def public_catalog() -> list[dict]:
             "auth_modes": sorted(c.auth_modes),
             "personal_session": c.personal_session,
             "secret_kind": c.secret_kind,
+            # Descripteur d'auth unifié (ADR 0024) — method/cardinality/fields.
+            # Source du widget credential de la carte ; `secret_kind` reste exposé
+            # le temps de la transition (dérivable l'un de l'autre).
+            "auth": c.auth,
             "namespaces": list(c.namespaces),
             "family": c.family,        # axe builder (dérivé) — ADR 0011
             "category": c.category,    # axe utilisateur (curé) — ADR 0011

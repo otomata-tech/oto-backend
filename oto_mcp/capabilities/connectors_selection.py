@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import access, connector_activation, connector_selection, org_store, providers
+from .. import access, connector_activation, connector_selection, org_store, providers, tool_registry
 from ._authz import ORG_ADMIN_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -62,16 +62,39 @@ def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
     return out
 
 
+def _doctrine_refs_by_ns(org_id: int | None) -> dict[str, set]:
+    """namespace → ensemble des doctrines de l'org qui le référencent (`<tool:slug>`).
+    Vide si pas d'org. Dérivation pure depuis les bodies de doctrine (posture
+    « doctrine-only », ADR 0024) — best-effort, ne fait jamais échouer la lecture."""
+    if not org_id:
+        return {}
+    try:
+        refs: dict[str, set[str]] = {}
+        for d in org_store.list_instruction_bodies(org_id):
+            slug = d.get("slug") or ""
+            for ns in tool_registry.namespaces_in(d.get("body_md") or ""):
+                refs.setdefault(ns, set()).add(slug)
+        return refs
+    except Exception:
+        return {}
+
+
 def _me(ctx: ResolvedCtx, inp: NoInput) -> dict:
     org_id = ctx.org_id or 0
     selection = connector_selection.list_selection(ctx.sub, org_id)
     recommended = set(org_store.get_org_default_connectors(ctx.org_id) or []) if ctx.org_id else set()
-    connectors = [
-        {**c,
-         "state": selection.get(c["name"], "not_selected"),
-         "recommended": c["name"] in recommended}
-        for c in _visible_catalog(ctx)
-    ]
+    doc_refs = _doctrine_refs_by_ns(ctx.org_id)
+    connectors = []
+    for c in _visible_catalog(ctx):
+        refset: set = set()
+        for ns in c.get("namespaces") or []:
+            refset |= doc_refs.get(ns, set())
+        connectors.append({
+            **c,
+            "state": selection.get(c["name"], "not_selected"),
+            "recommended": c["name"] in recommended,
+            "doctrine_ref_count": len(refset),
+        })
     return {"connectors": connectors}
 
 

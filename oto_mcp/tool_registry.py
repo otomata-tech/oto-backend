@@ -42,6 +42,13 @@ def ref_names(text: str) -> list[str]:
     return out
 
 
+def namespaces_in(text: str) -> set[str]:
+    """Namespaces (1er token avant `_`) des outils référencés `<tool:slug>` dans
+    `text`. Sert le compteur « référencé par N doctrines » (posture doctrine-only,
+    ADR 0024) — dérivation pure, sans toucher au registre live."""
+    return {n.split("_", 1)[0] for n in ref_names(text)}
+
+
 def _entry(tool) -> dict:
     """Entrée registre d'un tool MCP : nom + description (1ʳᵉ ligne de la docstring
     = champ `description`, ce que le modèle voit déjà) + source native/federated."""

@@ -943,6 +943,26 @@ def resolve_sub(sub: str) -> str:
         return sub
 
 
+_ROLE_RANK = {"member": 0, "admin": 1, "super_admin": 2}
+
+
+def _stronger_role(a: Optional[str], b: Optional[str]) -> str:
+    """Le plus haut des deux rôles (une fusion n'enlève pas un privilège)."""
+    ra, rb = _ROLE_RANK.get(a or "member", 0), _ROLE_RANK.get(b or "member", 0)
+    return (a if ra >= rb else b) or "member"
+
+
+def _merge_access_status(a: Optional[str], b: Optional[str]) -> str:
+    """Statut d'accès fusionné, sans rétrograder : `blocked` (deny explicite) prime,
+    sinon `active` prime sur `pending`."""
+    s = {a, b}
+    if "blocked" in s:
+        return "blocked"
+    if "active" in s:
+        return "active"
+    return "pending"
+
+
 def migrate_sub(old_sub: str, new_sub: str) -> bool:
     """MERGE transactionnel ancien→nouveau compte (bascule de tenant, issue #56).
     Hérite les champs d'accès de l'ancien, repointe TOUTES les tables keyed-by-sub
@@ -955,8 +975,15 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
         old = conn.execute("SELECT * FROM users WHERE sub=%s", (old_sub,)).fetchone()
         if not old:
             return False  # déjà migré / inexistant
-        # 1. hériter les champs de l'ancien (le compte réel, avec son historique)
-        #    sur la ligne neuve (fraîche, pending par défaut).
+        # 1. fusionner les champs d'accès SANS JAMAIS RÉTROGRADER. Une fusion ne doit
+        #    pas réduire l'accès : on prend le rôle le plus fort, le statut le plus
+        #    permissif (active > pending ; blocked reste un deny explicite), le quota
+        #    max. ⚠️ Le naïf « hérite de l'ancien » downgrade le nouveau si l'ancien est
+        #    un stub frais (member/pending) re-fusionné par-dessus un compte établi
+        #    (vécu 2026-06-23 : alexis super_admin/active repassé member/pending).
+        new = conn.execute(
+            "SELECT role, access_status, invite_quota FROM users WHERE sub=%s", (new_sub,)
+        ).fetchone() or {}
         conn.execute(
             """UPDATE users SET
                  role = %(role)s, access_status = %(st)s, invite_quota = %(q)s,
@@ -964,7 +991,9 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
                  access_granted_at = COALESCE(users.access_granted_at, %(ag)s),
                  avatar_url = COALESCE(users.avatar_url, %(av)s), updated_at = NOW()
                WHERE sub = %(new)s""",
-            {"role": old["role"], "st": old["access_status"], "q": old["invite_quota"],
+            {"role": _stronger_role(old["role"], new.get("role")),
+             "st": _merge_access_status(old["access_status"], new.get("access_status")),
+             "q": max(old["invite_quota"] or 0, new.get("invite_quota") or 0),
              "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )

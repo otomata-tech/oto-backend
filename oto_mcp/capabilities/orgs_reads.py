@@ -77,6 +77,8 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         "secrets": org_store.list_org_secrets(inp.org_id),
         "entitlements": [{"namespace": e["namespace"], "granted_at": e["granted_at"]}
                          for e in org_store.list_org_entitlements(inp.org_id)],
+        # Options payantes offertes (comp admin) au niveau ORG (couche abonnement).
+        "option_comps": db.list_option_comps("org", str(inp.org_id)),
     }
 
 

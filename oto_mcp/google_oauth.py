@@ -290,7 +290,13 @@ def revoke(sub: str, account: Optional[str] = None) -> None:
         targets = [account]
 
     for email in targets:
-        row = db.get_google_oauth(sub, account=email)
+        # Révoquer côté Google est best-effort : un credential indéchiffrable
+        # (ligne chiffrée avec une master key périmée → InvalidTag) ne doit PAS
+        # empêcher la suppression. Le contrat de revoke = supprimer en DB.
+        try:
+            row = db.get_google_oauth(sub, account=email)
+        except Exception:
+            row = None
         if row and row.get("refresh_token"):
             try:
                 requests.post(

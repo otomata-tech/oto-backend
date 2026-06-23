@@ -29,6 +29,7 @@ import os
 import string
 from typing import Optional
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 _KEY_REF = b"\x01"  # version de master key (réservé rotation future)
@@ -74,4 +75,15 @@ def decrypt(envelope: str, aad: str) -> str:
     blob = base64.b64decode(envelope)
     # blob[:1] = key_ref (réservé au versioning/rotation) ; [1:13] = nonce.
     nonce, ct = blob[1:13], blob[13:]
-    return AESGCM(key).decrypt(nonce, ct, aad.encode()).decode()
+    try:
+        return AESGCM(key).decrypt(nonce, ct, aad.encode()).decode()
+    except InvalidTag as e:
+        # InvalidTag a un str() VIDE : sans cette traduction, l'erreur remonte
+        # illisible jusqu'à l'agent (« Error calling tool X: » sans message) et
+        # jusqu'à Sentry (issue « InvalidTag » nue). Cause = enveloppe chiffrée
+        # avec une master key ≠ courante (clé périmée) ou AAD ≠ identité de ligne.
+        # Message actionnable : reconnecter le connecteur le re-chiffre avec la clé courante.
+        raise RuntimeError(
+            "credential indéchiffrable (chiffré avec une clé périmée ou enveloppe "
+            "corrompue) — reconnecte ce connecteur depuis le dashboard"
+        ) from e

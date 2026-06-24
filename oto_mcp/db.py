@@ -1322,6 +1322,21 @@ def list_unipile_accounts_by_org() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def unipile_account_owners() -> list[dict]:
+    """TOUS les comptes unipile mappés → propriétaire (sub/email) + org. Pour la vue
+    admin « sièges de la clé plateforme » : réconcilier les comptes présents sur
+    l'instance partagée avec leurs propriétaires oto (account_id NON mappé = orphelin)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ua.account_id, ua.provider, ua.account_name, ua.sub, u.email, "
+            "ua.org_id, o.name AS org_name, ua.connected_at "
+            "FROM unipile_accounts ua "
+            "LEFT JOIN users u ON u.sub = ua.sub "
+            "LEFT JOIN orgs o ON o.id = ua.org_id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_org_unipile_limit(org_id: int) -> Optional[int]:
     """Plafond de comptes Unipile de l'org (NULL = pas de plafond propre → défaut env)."""
     with _connect() as conn:

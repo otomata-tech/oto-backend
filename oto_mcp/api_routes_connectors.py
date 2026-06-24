@@ -308,7 +308,53 @@ def make_routes(
             await asyncio.to_thread(billing.sync_unipile_seats, org_id)
         return json_response(request, {"ok": True})
 
+    async def unipile_platform_seats(request: Request) -> JSONResponse:
+        """[super_admin] Sièges de la **clé plateforme** unipile : tous les comptes
+        présents sur l'instance partagée (Otomata, api25), réconciliés avec leur
+        propriétaire oto via `unipile_accounts`. Un compte sur l'instance NON mappé =
+        **orphelin** (créé puis user churné → coûte ~5 €/mois pour rien). Révèle
+        l'ownership cross-user → super_admin only. Ne renvoie aucun secret."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_super_admin(sub):
+            return json_error(request, 403, "forbidden")
+        pks = db.list_platform_keys("unipile")
+        if not pks:
+            return json_response(request, {"configured": False, "seats": [],
+                                           "instance_dsn": None, "orphan_count": 0})
+        from oto.tools.unipile import UnipileClient
+        client = UnipileClient(api_key=pks[0]["api_key"])  # dsn=None → env/api25 (instance plateforme)
+        try:
+            instance = await asyncio.to_thread(client.list_accounts)
+        except Exception as e:
+            return json_error(request, 502, f"unipile_list_failed: {e}")
+        owners = {r["account_id"]: r for r in db.unipile_account_owners()}
+        seats = []
+        for a in instance:
+            o = owners.get(a.get("id"))
+            srcs = a.get("sources") or []
+            seats.append({
+                "account_id": a.get("id"),
+                "name": a.get("name"),
+                "type": a.get("type"),
+                "status": (srcs[0].get("status") if srcs else None) or "ok",
+                "owner_sub": o["sub"] if o else None,
+                "owner_email": o["email"] if o else None,
+                "org_id": o["org_id"] if o else None,
+                "org_name": o["org_name"] if o else None,
+                "orphan": o is None,
+            })
+        return json_response(request, {
+            "configured": True,
+            "instance_dsn": client.dsn,
+            "seats": seats,
+            "orphan_count": sum(1 for s in seats if s["orphan"]),
+        })
+
     return [
+        Route("/api/admin/unipile/seats", unipile_platform_seats, methods=["GET"]),
+        Route("/api/admin/unipile/seats", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/connectors/activation", list_activation, methods=["GET"]),
         Route("/api/admin/connectors/activation", set_activation, methods=["POST"]),
         Route("/api/admin/connectors/activation", clear_override, methods=["DELETE"]),

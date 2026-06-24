@@ -40,6 +40,13 @@ from ..auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
 
+# Couple (API privée, page d'origine) propre à Brevo — passé au substrat générique
+# `browserbase.run_fetch`. Le `fetch` est same-origin avec l'app (app.brevo.com)
+# pour porter le cookie de session ; l'API workflow-apis.* est un sous-domaine de
+# brevo.com joignable avec ce cookie.
+_API = "https://workflow-apis.brevo.com/v1"
+_APP = "https://app.brevo.com/"
+
 
 def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
     return McpError(ErrorData(code=code, message=msg))
@@ -74,7 +81,7 @@ async def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
                    "(BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID).", code=INTERNAL_ERROR)
     ctx_id = _context_id()
     try:
-        res = await browserbase.run_fetch(ctx_id, method, path, body)
+        res = await browserbase.run_fetch(ctx_id, method, path, body, base=_API, app=_APP)
     except browserbase.BrowserbaseError as e:
         raise _err(f"Exécution Browserbase échouée : {e}", code=INTERNAL_ERROR)
     st = res.get("status")

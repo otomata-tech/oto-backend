@@ -25,8 +25,6 @@ import urllib.request
 from typing import Any, Optional
 
 _BASE = "https://api.browserbase.com/v1"
-_BREVO_API = "https://workflow-apis.brevo.com/v1"
-_BREVO_APP = "https://app.brevo.com/"
 
 
 class BrowserbaseError(RuntimeError):
@@ -112,10 +110,19 @@ def release_session(session_id: str) -> None:
 
 # --- exécution --------------------------------------------------------------
 async def run_fetch(context_id: str, method: str, api_path: str,
-                    body: Optional[dict] = None, *, base: str = _BREVO_API) -> dict:
-    """Exécute UN `fetch(base+api_path)` depuis une page Brevo chargée dans une
-    session éphémère du Context (la session vivante porte les cookies). Renvoie
+                    body: Optional[dict] = None, *, base: str, app: str) -> dict:
+    """Exécute UN `fetch(base+api_path)` depuis une page chargée dans une session
+    éphémère du Context (la session vivante porte les cookies). Renvoie
     `{status, data}`. Lève BrowserbaseError si la session ne s'ouvre pas.
+
+    `base` = racine de l'API privée (ex. `https://workflow-apis.brevo.com/v1`),
+    `app`  = page à charger pour porter l'origine/les cookies (ex.
+    `https://app.brevo.com/`). Les DEUX sont propres au connecteur — le substrat
+    n'en hardcode aucun (un connecteur = un couple base/app).
+
+    ⚠️ Le `fetch` doit être **same-origin** avec `base` pour porter les cookies de
+    session : charger une `app` du MÊME host que `base` (sinon `credentials:
+    "include"` est cross-origin et la session ne suit pas).
 
     Note coût : 1 session browser par appel. L'optimisation (réutiliser une
     session pour N appels d'un même run) est différée — corrige plus tard si le
@@ -130,7 +137,7 @@ async def run_fetch(context_id: str, method: str, api_path: str,
             b = await p.chromium.connect_over_cdp(sess["connectUrl"])
             ctx = b.contexts[0] if b.contexts else await b.new_context()
             pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await pg.goto(_BREVO_APP, wait_until="domcontentloaded", timeout=40000)
+            await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
             result = await pg.evaluate(
                 """async ({base, path, method, body}) => {
                     const r = await fetch(base + path, {

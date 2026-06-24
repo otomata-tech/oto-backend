@@ -1502,56 +1502,9 @@ def resolve_unipile_pending(nonce: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-# --- Crunchbase -------------------------------------------------------------
-
-def set_crunchbase_session(
-    sub: str,
-    cookies_json: str,
-    user_agent: Optional[str] = None,
-) -> None:
-    """Store cookies (JSON-encoded list) + UA. Coffre chiffré unique : secret =
-    cookies_json, UA dans meta."""
-    upsert_user(sub)
-    from . import credentials_store
-    ua = user_agent
-    if ua is None:
-        cur = credentials_store.get_credential_with_meta("user", sub, "crunchbase")
-        ua = cur["meta"].get("user_agent") if cur else None
-    credentials_store.set_credential(
-        "user", sub, "crunchbase", cookies_json, set_by=sub, meta={"user_agent": ua})
-
-
-def clear_crunchbase_session(sub: str) -> None:
-    from . import credentials_store
-    credentials_store.clear_credential("user", sub, "crunchbase")
-
-
-def get_crunchbase_session(sub: str) -> Optional[dict]:
-    """Renvoie `{cookies: list[dict], user_agent, set_at}` ou None. Cutover :
-    lit le coffre (déchiffre)."""
-    import json as _json
-    from . import credentials_store
-    cur = credentials_store.get_credential_with_meta("user", sub, "crunchbase")
-    if not cur or not cur["secret"]:
-        return None
-    try:
-        cookies = _json.loads(cur["secret"])
-    except Exception:
-        return None
-    return {
-        "cookies": cookies,
-        "user_agent": cur["meta"].get("user_agent"),
-        "set_at": cur["set_at"],
-    }
-
-
-def get_crunchbase_status(sub: str) -> Optional[dict]:
-    """Statut SANS déchiffrer (pour /api/me) : {set_at, user_agent} ou None."""
-    from . import credentials_store
-    st = credentials_store.credential_status("user", sub, "crunchbase")
-    if not st:
-        return None
-    return {"set_at": st["set_at"], "user_agent": st["meta"].get("user_agent")}
+# Crunchbase = connecteur `personal_session` standard (coffre `crunchbase` via
+# set_user_api_key / resolve_credential), le Context Browserbase tenant lieu de
+# credential (ADR 0026). Plus de fonctions de session cookies+UA dédiées.
 
 
 # --- onboarding / account profile -------------------------------------------

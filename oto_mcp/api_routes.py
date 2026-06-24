@@ -1,11 +1,8 @@
 """REST API consommée par le frontend oto.ninja (page de gestion de compte).
 
-Endpoints (ce fichier — gestion compte, Crunchbase, providers,
+Endpoints (ce fichier — gestion compte, providers,
 tools, admin, WhatsApp) :
 - `GET    /api/me`                            → infos user + rôle + statut keys
-- `GET    /api/settings/crunchbase`           → renvoie cookies + UA + set_at
-- `POST   /api/settings/crunchbase`           → cookies + UA
-- `DELETE /api/settings/crunchbase`
 - `GET    /api/settings/api-keys/{provider}`  → état/clé (tout connecteur byo_user à secret simple)
 - `POST   /api/settings/api-keys/{provider}`  → pose le credential : `api_key`→`{key}` ; `basic_auth`→`{email,password}`
 - `DELETE /api/settings/api-keys/{provider}`  → efface
@@ -377,7 +374,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         user = db.get_user(sub) or {}
         status = access.status_for(sub)
-        cb = db.get_crunchbase_status(sub)
         # `active_org` = org EFFECTIVE (ADR 0023) : via `current_org` elle reflète
         # la consultation view-as (header X-Oto-Org) si posée, sinon la maison. Le
         # front scope ses vues là-dessus. `home_org` (ci-dessous) = le défaut brut.
@@ -453,11 +449,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "invites_left": user.get("invite_quota", 0),
                 "invited_by": user.get("invited_by"),
             },
-            "crunchbase": {
-                "configured": cb is not None,
-                "set_at": cb["set_at"] if cb else None,
-                "user_agent": cb["user_agent"] if cb else None,
-            },
+            # crunchbase = connecteur `personal_session` standard → exposé dans
+            # `providers` (comme brevo), plus de bloc dédié (ADR 0026).
             # Fédération MCP (otomata#16) : statut du compte memento fédéré du user
             # — alimente l'auto-prompt « connecter memento » du dashboard.
             "memento": memento_oauth.status_for(sub),
@@ -468,58 +461,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "onboarding": _onboarding_block(sub),
         })
 
-    async def crunchbase_save(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_error(request, 400, "invalid_json")
-        if not isinstance(body, dict):
-            return _json_error(request, 400, "invalid_body")
-        cookies = body.get("cookies")
-        if not isinstance(cookies, list) or not cookies:
-            return _json_error(request, 400, "cookies_must_be_non_empty_list")
-        # Sérialise tel quel — la lib browser attend une liste de dicts
-        # avec a minima `name`, `value`, `domain`.
-        for c in cookies:
-            if not isinstance(c, dict) or not c.get("name") or "value" not in c:
-                return _json_error(request, 400, "cookie_missing_name_or_value")
-        user_agent = (body.get("user_agent") or "").strip() or None
-        db.set_crunchbase_session(sub, json.dumps(cookies), user_agent=user_agent)
-        return _json(request, {"ok": True, "count": len(cookies)})
-
-    async def crunchbase_clear(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        db.clear_crunchbase_session(sub)
-        return _json(request, {"ok": True})
-
-    async def crunchbase_get(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        sess = db.get_crunchbase_session(sub)
-        if not sess:
-            return _json_error(request, 404, "not_configured")
-        return _json(request, {
-            "cookies": sess["cookies"],
-            "user_agent": sess.get("user_agent"),
-            "set_at": sess.get("set_at"),
-        })
-
     # Saisie de credential per-user, GÉNÉRIQUE (modèle multi-champs, ADR 0011) :
     # tout connecteur `byo_user` qui déclare un schéma de saisie (`secret_fields` :
     # api_key 1 champ, basic_auth 2 champs, silae 3 champs…). Le formulaire, la
     # validation et le packing dérivent du schéma — zéro branche par connecteur.
-    # cookie/oauth ont des flux dédiés (crunchbase/google/memento) → `secret_fields`
-    # vide → exclus ici.
+    # cookie/oauth ont des flux dédiés (crunchbase/brevo via Live View Browserbase,
+    # google/memento via OAuth) → `secret_fields` vide → exclus ici.
     # --- Avatar user + logo d'org (Object Storage) -------------------------
     # Upload multipart → ne passe PAS par la couche capacité (ADR 0009 = corps
-    # JSON pydantic). Handlers plain calqués sur crunchbase_save. URL publique
-    # persistée en clair (pas un secret).
+    # JSON pydantic). URL publique persistée en clair (pas un secret).
 
     async def _read_upload(request: Request):
         """Parse un multipart, renvoie (data: bytes, err: JSONResponse|None)."""
@@ -1169,10 +1119,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
         Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
-        Route("/api/settings/crunchbase", crunchbase_get, methods=["GET"]),
-        Route("/api/settings/crunchbase", crunchbase_save, methods=["POST"]),
-        Route("/api/settings/crunchbase", crunchbase_clear, methods=["DELETE"]),
-        Route("/api/settings/crunchbase", options_handler, methods=["OPTIONS"]),
         Route("/api/me/calls", my_calls, methods=["GET"]),
         Route("/api/me/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools", my_tools_list, methods=["GET"]),

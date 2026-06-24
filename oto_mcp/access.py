@@ -605,30 +605,6 @@ def resolve_mount_token(provider: str) -> str:
     ))
 
 
-def resolve_crunchbase_session() -> dict:
-    """Résout la session Crunchbase per-user du sub courant pour **injection**
-    dans le client (cookies + user_agent), ou lève une McpError actionnable.
-
-    Fait partie du seam de résolution `access` (avec `resolve_api_key` /
-    `resolve_remote_credential`) — source unique vers laquelle convergent les
-    adaptateurs/runtime, pour qu'elle puisse devenir un broker en service
-    (ADR 0004) sans réécriture. Les tools ne tapent plus `db` directement.
-    """
-    sub = current_user_sub_or_raise()
-    sess = db.get_crunchbase_session(sub)
-    if not sess:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                "Aucune session Crunchbase configurée pour cet utilisateur. "
-                "Va sur https://app.oto.ninja/account (section Crunchbase) "
-                "pour coller tes cookies de session (export JSON depuis "
-                "DevTools ou une extension Cookie Editor)."
-            ),
-        ))
-    return sess
-
-
 def record_platform_usage(provider: str) -> None:
     """À appeler APRÈS un appel réussi avec la platform key. No-op si pas authentifié."""
     sub = current_user_sub_from_token()

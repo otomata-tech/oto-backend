@@ -202,9 +202,13 @@ class Connector:
         return tuple(f for f in self.secret_fields if not f.secret)
 
 
-# Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
-# seul secret_kind (slack est aussi personal_session, mais c'est une API).
-BROWSER_PROVIDERS = frozenset({"crunchbase"})
+# Connecteurs passant par un browser IN-PROCESS (o-browser local) — non dérivable
+# du seul secret_kind. Vide depuis la migration de crunchbase sur le substrat
+# HÉBERGÉ Browserbase (ADR 0026) : crunchbase appelle désormais l'API privée
+# `/v4/data` via une session navigateur distante (family dérivée → "api", comme
+# brevo). LinkedIn était déjà parti vers Unipile. Mécanisme conservé pour un
+# éventuel futur connecteur browser local.
+BROWSER_PROVIDERS = frozenset()
 
 # Connecteurs dont le credential est MULTI-COMPTE — N grants liés à une même
 # entité (ADR 0024). Aujourd'hui seul Google (N comptes OAuth) ; les autres
@@ -467,8 +471,15 @@ _REGISTRY_LIST = [
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur
     # `unipile` (LinkedIn hébergé). Le browser LinkedIn local reste dans oto-cli.
+    # crunchbase : fiches société/personne via l'API PRIVÉE du frontend
+    # (`www.crunchbase.com/v4/data`, schéma v4 sans user_key). Exécution =
+    # **Browserbase** (Chrome distant hébergé, ADR 0026) : l'user se logue 1× via
+    # Live View (`crunchbase_connect_start`), sa session persiste dans un Context =
+    # le credential per-user (coffre `crunchbase`). Plus de scraping DOM in-process.
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, label="Crunchbase"),
+       secret_kind="cookie", in_default_bundle=False, label="Crunchbase",
+       help="fiches société/personne (session Browserbase)", publisher="Crunchbase",
+       href="https://www.crunchbase.com/"),
     # brevo : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
     # (`workflow-apis.brevo.com/v1`). À distinguer de l'API publique v3
     # (transactionnel/contacts/campagnes, clé api-key) — pas exposée ici.

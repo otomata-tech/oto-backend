@@ -26,6 +26,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
+from mcp.shared.exceptions import McpError
 
 from . import access, billing, connector_activation, db, org_store, providers
 
@@ -155,9 +156,11 @@ def make_routes(
         api_key = access.unipile_api_key_for(sub)
         if not api_key:
             return json_error(request, 404, "unipile_not_configured")
-        # org « porteur » du compte = org actif, SAUF si l'user a sa propre clé (BYO)
-        # → c'est son abonnement, pas celui d'un org (pas de plafond org).
-        byo = db.get_user_api_key(sub, "unipile") is not None
+        # BYO = clé propre (user/groupe/ORG), pas la clé plateforme — via le seam
+        # de résolution (mode), PAS un check user-only qui ratait une clé d'org.
+        byo = access.credential_mode_for(sub, "unipile") in access.BYO_MODES
+        # org « porteur » du compte = org actif, SAUF en BYO (abonnement propre, pas
+        # de plafond org).
         org_id = None if byo else org_store.get_active_org(sub)
         # Gate ABONNEMENT (couche 3, docs/connector-model.md) : seam unique
         # `access.has_option` = abonnement Stripe de l'org OU comp admin (user|org).
@@ -176,7 +179,15 @@ def make_routes(
                 logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
                 return json_error(request, 429, "unipile_account_limit_reached")
         from oto.tools.unipile import UnipileClient
-        client = UnipileClient(api_key=api_key)
+        # DSN apparié à la clé BYO (chaque clé Unipile = son sous-domaine) ; clé
+        # plateforme → DSN env/défaut (instance Otomata).
+        dsn = None
+        if byo:
+            try:
+                dsn = access.resolve_credential("unipile", want="byo", sub=sub).config.get("dsn")
+            except McpError:
+                dsn = None
+        client = UnipileClient(api_key=api_key, dsn=dsn)
         public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         nonce = secrets.token_urlsafe(24)
@@ -240,10 +251,11 @@ def make_routes(
         if err:
             return err
         accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
-        # État de l'abonnement de l'org active (gate l'étape « connecter »). BYO
-        # (clé perso) → considéré subscribed (l'user paie Unipile en direct).
-        org_id = org_store.get_active_org(sub)
-        byo = db.get_user_api_key(sub, "unipile") is not None
+        # Origine de la clé (mode) via le seam — BYO = clé propre (user/groupe/ORG),
+        # pas un check user-only (qui ratait une clé d'org). BYO → subscribed (l'user
+        # paie Unipile en direct).
+        mode = access.credential_mode_for(sub, "unipile")
+        byo = mode in access.BYO_MODES
         subscribed = byo or access.has_option(sub, "unipile")
 
         def _ch(p: str) -> dict:
@@ -255,6 +267,8 @@ def make_routes(
             }
         return json_response(request, {
             "subscribed": subscribed,
+            "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
+            "byo": byo,
             "channels": {
                 "linkedin": _ch("LINKEDIN"), "whatsapp": _ch("WHATSAPP"),
                 "telegram": _ch("TELEGRAM"), "instagram": _ch("INSTAGRAM"),

@@ -193,6 +193,14 @@ class Connector:
                     CredentialField("password", "Mot de passe", secret=True))
         return ()
 
+    @property
+    def config_fields(self) -> tuple[CredentialField, ...]:
+        """Champs NON-secrets du credential (endpoint/host/region : `base_url`
+        n8n/make, `data_center` zoho, `org_id` zohodesk…). Dérivés de `secret_fields`
+        (flag `secret=False`) — la config voyage avec la clé via `resolve_credential`
+        (le `meta` non-secret, ex. `dsn` unipile, s'y ajoute à la résolution)."""
+        return tuple(f for f in self.secret_fields if not f.secret)
+
 
 # Connecteurs passant par l'automation navigateur (o-browser) — non dérivable du
 # seul secret_kind (slack est aussi personal_session, mais c'est une API).

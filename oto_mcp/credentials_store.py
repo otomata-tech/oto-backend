@@ -41,6 +41,12 @@ def _public_meta(meta: Optional[dict]) -> dict:
     return {k: v for k, v in (meta or {}).items() if k not in _SECRET_META_KEYS}
 
 
+def public_meta(meta: Optional[dict]) -> dict:
+    """Wrapper public de `_public_meta` — `meta` sans les bearers secrets, pour la
+    résolution de config non-secrète (endpoint/host : dsn, base_url…)."""
+    return _public_meta(meta)
+
+
 def _secret_kind(connector: str) -> str:
     c = connectors.REGISTRY.get(connector)
     return c.secret_kind if c else "api_key"
@@ -89,6 +95,18 @@ def unpack_secret(connector: str, secret: str) -> dict:
         return loaded if isinstance(loaded, dict) else {}
     except (ValueError, TypeError):
         return {}
+
+
+def split_secret_config(connector: str, fields: dict) -> tuple[dict, dict]:
+    """Sépare les champs unpackés en `(secrets, config)` selon le flag `secret`
+    du schéma déclaré (`Connector.secret_fields`). La config = champs non-secrets
+    (endpoint/host : `base_url`, `data_center`, `org_id`…). Champ inconnu = traité
+    comme secret (défaut prudent). Pur — pas d'accès coffre."""
+    c = connectors.REGISTRY.get(connector)
+    is_secret = {f.name: f.secret for f in (c.secret_fields if c is not None else ())}
+    secrets = {k: v for k, v in fields.items() if is_secret.get(k, True)}
+    config = {k: v for k, v in fields.items() if not is_secret.get(k, True)}
+    return secrets, config
 
 
 def secret_from_input(

@@ -37,6 +37,7 @@ n'est accessible qu'avec un grant admin explicite.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Optional
 
 from mcp.shared.exceptions import McpError
@@ -228,31 +229,94 @@ def quota_for(provider: str) -> int:
     return _QUOTA_DEFAULTS.get(provider, 0)
 
 
-def resolve_api_key(provider: str) -> tuple[str, bool]:
-    """Renvoie `(api_key, is_platform)` ou lève McpError actionnable."""
-    sub = current_user_sub_or_raise()
+@dataclass(frozen=True)
+class ResolvedCredential:
+    """Credential GAGNANT de la cascade (ADR 0024) — la clé, son origine, ET sa
+    config non-secrète (endpoint/host) en un seul objet. Source unique : toute
+    résolution (clé seule, multi-champs, ou endpoint) en dérive.
+
+    - `secret` : la valeur stockée brute (la clé pour un keyed ; le pack JSON pour
+      un multi-champs). `key` = alias (un keyed s'instancie avec).
+    - `is_platform` / `mode` : origine (user|group|org|platform) — miroir de `status_for`.
+    - `fields` (lazy) : champs unpackés (un client multi-secrets s'instancie avec).
+    - `config` (lazy) : champs NON-secrets déclarés (data_center, base_url…) ∪ `meta`
+      public du credential (ex. `dsn` unipile). La config voyage avec la clé.
+    - `entity_type`/`entity_id` : niveau gagnant (None pour un grant plateforme — sa
+      config est l'environnement, pas un credential du coffre)."""
+    provider: str
+    secret: str
+    is_platform: bool
+    mode: str
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    account: str = ""
+
+    @property
+    def key(self) -> str:
+        return self.secret
+
+    @property
+    def fields(self) -> dict:
+        return credentials_store.unpack_secret(self.provider, self.secret)
+
+    @property
+    def config(self) -> dict:
+        """Config non-secrète appariée à la clé gagnante. Lazy : aucun coût pour
+        les appelants qui ne lisent que `key` (chemin chaud resolve_api_key)."""
+        _, cfg = credentials_store.split_secret_config(self.provider, self.fields)
+        if self.entity_type is not None:
+            try:
+                row = credentials_store.get_credential_with_meta(
+                    self.entity_type, self.entity_id, self.provider, self.account)
+            except Exception:
+                row = None
+            if row:
+                cfg = {**cfg, **credentials_store.public_meta(row.get("meta"))}
+        return cfg
+
+
+def resolve_credential(provider: str, want: str = "auto",
+                       sub: Optional[str] = None) -> ResolvedCredential:
+    """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
+    user > groupe actif > org active [> grant plateforme] **une fois** et renvoie
+    le credential gagnant (clé + origine + config). `want="byo"` court-circuite le
+    palier plateforme (sémantique byo-only de `resolve_credential_fields`) ;
+    `want="auto"` inclut le grant plateforme + quota (sémantique `resolve_api_key`).
+    `sub` explicite = utilisable HORS contexte MCP (routes REST) ; None = sub courant.
+    Lève une McpError actionnable si rien ne résout."""
+    sub = sub or current_user_sub_or_raise()
 
     user_key = db.get_user_api_key(sub, provider)
     if user_key:
-        return user_key, False
+        return ResolvedCredential(provider, user_key, False, "user", "user", sub)
 
     # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
     # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
-    # (-> None) → comportement strictement identique à avant pour tout user flat.
-    # is_platform=False : credential possédé par le groupe/org (coût fixe), jamais
-    # métré sur un quota plateforme. Override perso (ci-dessus) prime toujours.
+    # (-> None) → strictement identique à avant pour tout user flat.
     # Cascade : user_key > group_secret > org_secret > platform_grant.
     if provider in ORG_SHAREABLE_PROVIDERS:
         active_group = current_group(sub)
         if active_group is not None:
             grp_key = group_store.get_group_secret(active_group, provider)
             if grp_key:
-                return grp_key, False
+                return ResolvedCredential(provider, grp_key, False, "group",
+                                          "group", str(active_group))
         active_org = current_org(sub)
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
             if org_key:
-                return org_key, False
+                return ResolvedCredential(provider, org_key, False, "org",
+                                          "org", str(active_org))
+
+    # byo-only : pas de palier plateforme (mounts basic_auth, clients multi-secrets).
+    if want == "byo":
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
+                f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+            ),
+        ))
 
     # Défense en profondeur : le chemin platform-grant n'est valide que si le
     # registre AUTORISE `platform` pour ce provider. Un provider byo-only
@@ -291,36 +355,14 @@ def resolve_api_key(provider: str) -> tuple[str, bool]:
             ),
         ))
 
-    return grant["api_key"], True
+    return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
-def resolve_unipile_dsn(sub: str) -> Optional[str]:
-    """DSN (`api<NN>.unipile.com:port`) de l'instance Unipile du credential BYO
-    **gagnant** de la cascade, ou None si aucun n'en porte (→ le client retombe
-    sur l'env/défaut `api25`, l'instance plateforme).
-
-    Une clé Unipile est liée à SON sous-domaine dédié : le DSN doit donc voyager
-    avec la clé. On marche le **même ordre** que `resolve_api_key` (user > groupe
-    actif > org active) et on s'arrête au **premier niveau qui porte un credential**
-    — on renvoie son `meta.dsn` (possiblement None), jamais celui d'un autre niveau,
-    pour rester apparié à la clé réellement résolue. Le palier plateforme (grant)
-    n'est pas concerné : il utilise l'instance plateforme (env), d'où l'appel
-    uniquement quand `resolve_api_key` a renvoyé `is_platform=False`."""
-    levels: list[tuple[str, str]] = [("user", sub)]
-    active_group = current_group(sub)
-    if active_group is not None:
-        levels.append(("group", str(active_group)))
-    active_org = current_org(sub)
-    if active_org is not None:
-        levels.append(("org", str(active_org)))
-    for entity_type, entity_id in levels:
-        try:
-            row = credentials_store.get_credential_with_meta(entity_type, entity_id, "unipile")
-        except Exception:
-            continue  # niveau inéligible à porter un credential unipile
-        if row:
-            return (row.get("meta") or {}).get("dsn")
-    return None
+def resolve_api_key(provider: str) -> tuple[str, bool]:
+    """Renvoie `(api_key, is_platform)` ou lève McpError actionnable. Vue mince
+    sur `resolve_credential` (contrat inchangé pour les ~15 tools keyed)."""
+    rc = resolve_credential(provider, want="auto")
+    return rc.key, rc.is_platform
 
 
 def resolve_credential_fields(provider: str) -> dict:
@@ -330,38 +372,9 @@ def resolve_credential_fields(provider: str) -> dict:
     Pour les connecteurs in-process dont le client s'instancie avec plusieurs
     secrets (ex. Silae : client_id / client_secret / subscription_key, OAuth2
     client-credentials). **byo-only** : pas de clé plateforme ni de quota — le
-    credential EST le grant, comme un mount. Lève une McpError actionnable si le
-    user n'a rien posé. Fait partie du seam de résolution `access` (avec
-    resolve_api_key / resolve_mount_token), candidat broker (ADR 0004)."""
-    sub = current_user_sub_or_raise()
-    secret = credentials_store.get_credential("user", sub, provider)
-    if secret:
-        return credentials_store.unpack_secret(provider, secret)
-
-    # Paliers partagés (ADR 0012/0015) — miroir de resolve_api_key : secret
-    # multi-champs du GROUPE actif (le plus spécifique) puis de l'ORG active.
-    # Gaté sur byo_org (org_shareable) ; l'override perso ci-dessus prime
-    # toujours. Le secret stocké est packé → on l'unpacke comme le scope user.
-    con = connectors.connector_for_provider(provider)
-    if con is not None and con.org_shareable:
-        active_group = current_group(sub)
-        if active_group is not None:
-            grp = group_store.get_group_secret(active_group, provider)
-            if grp:
-                return credentials_store.unpack_secret(provider, grp)
-        active_org = current_org(sub)
-        if active_org is not None:
-            org = org_store.get_org_secret(active_org, provider)
-            if org:
-                return credentials_store.unpack_secret(provider, org)
-
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(
-            f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
-            f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
-        ),
-    ))
+    credential EST le grant, comme un mount. Vue mince sur `resolve_credential`
+    (cascade user > groupe > org, sans palier plateforme)."""
+    return resolve_credential(provider, want="byo").fields
 
 
 def resolve_field_filter(service: str):
@@ -420,6 +433,38 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
         if grant:
             return grant["api_key"]
     return None
+
+
+def credential_mode_for(sub: str, provider: str) -> str:
+    """Origine de la clé `provider` pour `sub` (EXPLICITE, hors contexte MCP) :
+    `user|group|org|platform|over_quota|forbidden`. PRÉSENCE seulement (pas de
+    déchiffrement → sûr/léger pour un statut). **Miroir** de la cascade
+    `resolve_credential` (incl. fallback grant org) — une divergence ferait mentir
+    l'UI. « BYO » (clé propre, pas la plateforme) = mode ∈ {user, group, org}."""
+    if db.has_user_api_key(sub, provider):
+        return "user"
+    if provider in ORG_SHAREABLE_PROVIDERS:
+        g = current_group(sub)
+        if g is not None and group_store.has_group_secret(g, provider):
+            return "group"
+        o = current_org(sub)
+        if o is not None and org_store.has_org_secret(o, provider):
+            return "org"
+    con = connectors.connector_for_provider(provider)
+    if not (con and "platform" in con.auth_modes):
+        return "forbidden"
+    grant = db.get_active_grant(sub, provider)
+    if not grant:
+        org = current_org(sub)
+        grant = db.get_active_org_grant(org, provider) if org is not None else None
+    if not grant:
+        return "forbidden"
+    used = db.get_usage_today(sub, provider)
+    limit = grant.get("daily_quota") or quota_for(provider)
+    return "over_quota" if (limit and used >= limit) else "platform"
+
+
+BYO_MODES = ("user", "group", "org")
 
 
 def resolve_remote_credential(provider: str) -> tuple[str, str]:

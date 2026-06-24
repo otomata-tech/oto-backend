@@ -16,7 +16,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.sirene import EntreprisesClient, SireneClient
     from oto.tools.inpi import InpiClient
     from oto.tools.bodacc import BodaccClient
-    from oto.tools.boamp import BoampClient
+    from france_opendata import BoampClient  # source unique (aligné sur foncier)
 
     entreprises = EntreprisesClient()
     inpi = InpiClient()

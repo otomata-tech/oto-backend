@@ -17,7 +17,7 @@ oto.ninja sous `/account` et parle au MCP via REST.
 - Python 3.10 (target `>=3.10` — c'est ce que tuls.me a)
 - `fastmcp>=3.4.2` (plancher = dernier ; prod aligné au deploy via `pip install -e .`) + `mcp` SDK
 - **`oto-core[browser]` PINNÉ sur un tag git** (`@ git+…@vX.Y.Z` dans `pyproject.toml`, plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy **force-réinstalle** oto-core depuis le tag lu du `pyproject` (`pip install --force-reinstall …@$tag`). Bump connecteurs = tag oto-core + édit du pin + deploy (PAS de `git pull` box). Cf. ADR 0020. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.)
-- `psycopg[binary]` + `psycopg-pool` (PostgreSQL managed Scaleway `otomata-main`, DB `oto_mcp`) pour le state par utilisateur — migré depuis SQLite le 2026-05-20. Row factory custom dans `db.py` (`_str_dict_row`) qui normalise `datetime`/`date` → strings "YYYY-MM-DD HH:MM:SS" : sinon `JSONResponse` crash sur `/api/me` car le code historique attend des strings comme avec SQLite.
+- `psycopg[binary]` + `psycopg-pool` (PostgreSQL managed Scaleway `otomata-main`, DB `oto_mcp`) pour le state par utilisateur — migré depuis SQLite le 2026-05-20. Row factory custom dans `db.py` (`_str_dict_row`) qui normalise `datetime`/`date` → strings "YYYY-MM-DD HH:MM:SS" : sinon `JSONResponse` crash sur `/api/me` car le code historique attend des strings comme avec SQLite. ⚠️ **Les rows sont des DICTS (accès par nom de colonne `r["col"]`), JAMAIS positionnel `r[0]`** (→ `KeyError: 0`). Vécu 2026-06-25 : deux fonctions RBAC en `r[0]` plantaient à chaque appel, **masqué** par leur fail-open + des tests qui stubbaient ces fonctions → bug invisible jusqu'à un seed réel. Leçon : un **fail-open silencieux + des tests stubbés cachent un bug de forme de row** ; exercer le vrai chemin (cf. [[feedback_verify_empirically]]).
 - Auth = JWT Logto (`RemoteAuthProvider + JWTVerifier(jwks_uri=…, algorithm="ES384")`)
 
 ## Architecture
@@ -78,47 +78,41 @@ grants/quota, platform keys, providers byo-only).
 Endpoints `/api/*` (compte, settings, orgs, admin, billing, datastore…), même
 `JWTVerifier` que `/mcp`. **Inventaire : `docs/rest-api.md`**.
 
-## Browser automation — état réel : crunchbase in-process only (⚠️ délégation conteneur NON câblée)
+## Browser automation — substrat HÉBERGÉ Browserbase (ADR 0026)
 
-⚠️ **La délégation à un conteneur o-browser-full (`OBROWSER_URL` / `RemoteBrowser` /
-`ensure_session`) n'existe PAS dans ce backend** (`grep -r OBROWSER|RemoteBrowser
-oto_mcp/` = 0). Elle a été décrite comme cible mais jamais portée sur la box dédiée
-(le conteneur o-browser-full vit sur **tuls.me/otomata-0**, pas sur la box
-`151.115.148.128`). État réel vérifié (2026-06-24) :
+⚠️ **Plus de browser in-process sur la box, plus de délégation à un conteneur
+o-browser-full** (`OBROWSER_URL`/`RemoteBrowser` = 0 référence — jamais portée). Le
+harnais browser server-side = **service navigateur HÉBERGÉ Browserbase**
+(`oto_mcp/browserbase.py`, seam à sens unique ADR 0004), réutilisable par tout
+connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
 
-- **LinkedIn** : `tools/linkedin.py` **supprimé** — LinkedIn passe par **Unipile**
-  (hébergé, connecteur `unipile`). Le browser LinkedIn local ne survit que dans
-  oto-cli (fallback) et dans oto-core (`oto.tools.browser.linkedin/`).
-- **Crunchbase** = **seul** connecteur browser (`providers.BROWSER_PROVIDERS={"crunchbase"}`),
-  lancé **in-process** sur la box : `CrunchbaseClient(BrowserClient)` d'**o-browser**
-  (`oto.tools.browser.crunchbase`, `headless=True`). Session (cookies JSON + UA) dans le
-  **coffre chiffré**, résolue par `access.resolve_crunchbase_session()` → `db.get_crunchbase_session()`.
-  ✅ **Réparé le 2026-06-24** : la box n'avait **aucun binaire navigateur** (crunchbase
-  était cassé silencieusement). Installé **`google-chrome-stable`** (Chrome 149, `.deb`
-  direct) → o-browser `_detect_channel()` renvoie `'chrome'`, lance le vrai Chrome.
-  ⚠️ Install **manuelle, hors deploy** : un rebuild de box la perd → à câbler dans le
-  provisioning (`apt-get install google-chrome-stable`, durable dans `/opt/google/chrome`).
-  Chrome `--no-sandbox` requis (service `User=root`).
-- **Conséquence** : harnais browser server-side = **browser in-process façon crunchbase**
-  (la délégation conteneur reste à porter si l'isolation OOM devient nécessaire ;
-  box 2 Go → préférer **browserless**/conteneur pour un browser permanent). ✅ **Une
-  session privée cookie-bound SE transplante vers le serveur** (prouvé sur brevo le
-  2026-06-24, cf. `tools/brevo.py`) : vrai Chrome box + **cookie d'auth httpOnly + UA
-  d'origine** → **200**. C'est le modèle LinkedIn `li_at`. ⚠️ **Deux pièges** : (1) capter sur une
-  session **vérifiée vivante** (cookie d'auth présent / fetch sanity = 200) — le faux
-  négatif « auth cookie missing » venait d'une extraction sur **profil déconnecté** (un
-  relancement à froid tombe sur `login.brevo.com`), PAS d'un souci de lecture httpOnly
-  (`context.cookies()` les lit) ; le cookie d'auth de brevo=`auth` (httpOnly, **avec
-  expiry**) ; (2) httpx ne marche **pas** (client non-navigateur → 403), transport =
-  **browser-driven** (`page.evaluate(fetch())` / `RemoteBrowser`). Session d'origine potentiellement
-  invalidée par l'usage serveur (li_at #5) → **session dédiée** conseillée.
-- ✅ **Implémenté pour `brevo` via Browserbase** (`oto_mcp/browserbase.py`) : Chrome
-  HÉBERGÉ (off-box, anti-OOM) + **Context** per-user (profil persistant = la session
-  loguée, prouvé 200) + **Live View** pour le login interactif (SSO/captcha gérés par
-  l'user) — pas d'export de cookie, pas de browser sur la box. Creds plateforme env
-  `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`. Onboarding = `brevo_connect_start`/
-  `brevo_connect_status`. C'est le substrat « pairing browser hébergé » réutilisable
-  par tout connecteur d'API privée cookie-bound.
+- **LinkedIn** : `tools/linkedin.py` **supprimé** — passe par **Unipile** (hébergé,
+  connecteur `unipile`). Le browser LinkedIn local ne survit que dans oto-cli
+  (fallback) et oto-core (`oto.tools.browser.linkedin/`).
+- **Substrat `browserbase.py`** : Chrome HÉBERGÉ (off-box → anti-OOM) + **Context**
+  per-user (profil persistant = la session loguée, = le credential coffre) + **Live
+  View** pour le login interactif (l'user gère SSO/captcha/2FA — pas d'export de
+  cookie, la session naît native, zéro `li_at` kill). Exécution = `run_fetch(ctx,
+  method, path, body, *, base, app)` : ouvre une session éphémère sur le Context, charge
+  une page `app` puis exécute un `fetch(base+path)` **same-origin** (la session vivante
+  porte les cookies). `base`/`app` sont **propres au connecteur** (le substrat n'en
+  hardcode aucun). Creds plateforme env `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`.
+- **Connecteurs sur le substrat** (tous deux : Live View `*_connect_start`/`*_connect_status`,
+  Context au coffre, family dérivée=`api`, plus aucun browser local) :
+  - **`brevo`** (`tools/brevo.py`) — automations marketing via l'API privée
+    `workflow-apis.brevo.com/v1` (cookie `auth` httpOnly). **Prouvé 200** le 2026-06-24.
+  - **`crunchbase`** (`tools/crunchbase.py`) — fiches société/personne via l'API privée
+    du frontend `www.crunchbase.com/v4/data` (schéma v4 sans `user_key` ; lookup
+    `entities/organizations|people/{slug}` + cards `founders`/`raised_funding_rounds`,
+    recherche via `autocompletes`). **Migré du scraping DOM in-process** (ADR 0026,
+    `BROWSER_PROVIDERS` désormais vide, plus de `CrunchbaseClient` o-browser ni de Chrome
+    sur la box). ⚠️ **Reste à smoke en live** (Browserbase + login crunchbase réel) :
+    confirmer `field_ids`/`card_ids`/`collection_ids` et l'absence de header anti-CSRF.
+- **Leçons empiriques (toujours valides)** : (1) un `httpx`/curl brut est **rejeté
+  (403)** — transport obligatoirement **browser-driven** (`page.evaluate(fetch())`) ;
+  (2) une session **ne se transplante pas** par export de cookie (le faux négatif « auth
+  cookie missing » venait d'une extraction sur **profil déconnecté**) → login-en-place
+  via Live View ; (3) capter/vérifier sur une session **vivante** (fetch sanity = 200).
 
 ## LinkedIn cookies
 
@@ -269,6 +263,45 @@ d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/f
 Deux modèles **cumulables** : credits d'appel (1 appel = 1 credit, packs Stripe
 one-off) + **abonnements récurrents par option** (`mode=subscription`, ex. messagerie
 unipile, prix Stripe gradué). **Détail : `docs/billing.md`**.
+
+## Email (envoi per-org, PAR CONNECTEUR)
+
+Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
+celle d'un connecteur, pas une page à part). **Deux connecteurs** (`providers.py`) :
+`scaleway` (hébergé Otomata via Scaleway TEM = service `otomata-auth-mailer`, clé
+**plateforme**, `secret_kind=none`, **grant-only** → réservé aux orgs accordées ;
+Otomata seule aujourd'hui) + `resend` (BYOK, `auth_modes={byo_org}`). **Le transport
+DÉRIVE du connecteur** : `providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:mailer,
+resend:resend}` (pas de champ transport sur l'expéditeur).
+
+- `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
+  `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
+  déclarée ; super_admin pour le repli marque `oto@otomata.tech`). `email.py` =
+  `send_composed_email` (mailer.oto.zone, env `OTO_MAILER_SEND_BEARER`) +
+  `send_via_resend` (httpx direct, clé org). `scaleway`/`resend` = providers
+  credential/config-only (`tools/{scaleway,resend}.py` = `register()` no-op).
+- **Config = `orgs.email_settings` JSONB keyé PAR CONNECTEUR** :
+  `{<connector>:{senders:[{email,name?,reply_to?}], quiet_hours?}}` (calqué sur
+  `field_filters`). `org_store.get/set_org_email_settings(org, connector)`,
+  `resolve_sender(org, from)→(sender, connector)`, `org_email_quiet_hours`. Capacité
+  `orgs_email_settings` : GET bundle + `PUT /api/orgs/{id}/email-settings/{connector}`.
+- **Envoi différé** : params `send_at`/`force_now` + garde-fou **quiet hours par
+  connecteur** (défaut Europe/Paris 20h–8h). `scheduler.py` : `compute_scheduled_at`
+  (pure, testée) + boucle asyncio démarrée via le lifespan (`server.py`), batch isolé
+  en `asyncio.to_thread` (ne bloque pas l'event loop) ; table `scheduled_emails`
+  (claim `FOR UPDATE SKIP LOCKED`, retry ×3). Gestion : `oto_list/cancel_scheduled_emails`.
+- **Vérif de domaine d'envoi = différée (issue #64)** : le domaine est un **objet
+  d'ORG** (pas du connecteur — réutilisable signature/identité), table future
+  `org_email_domains` + vérif DNS via Scaleway TEM. Tant qu'absente : scaleway reste
+  grant-only Otomata (otomata.tech dans `MAILER_FROM_DOMAINS`) ; resend ouvert à
+  toute org (Resend garde la porte du domaine).
+
+> **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
+> `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**
+> (master ON, ou grant-only accordé à l'org), comme la surface USER
+> (`_visible_catalog`). Master-OFF non accordé → invisible (fin du levier inerte
+> « coupé par la plateforme »). Filtre sur le **cap master**, pas sur `effective`
+> (un override OFF d'org doit rester réactivable).
 
 ## Visibility per-user
 

@@ -49,8 +49,11 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **add-ons payants reve
 - **RBAC interne à l'org (ADR 0025)** — grain plus fin que l'org entière : un org_admin réserve
   un connecteur à des **départements (groupes)** et/ou **membres** via `org_connector_access`
   (présence de ≥1 ligne ⟹ RESTREINT/deny-by-default ; absence ⟹ ouvert). **DUR** (réemploi du
-  patron grant-only) : masquage visibilité + backstop call-time `access.require_connector_access`
-  dans `resolve_credential` → bloque **même avec une clé BYO** ; super_admin bypasse ; fail-open infra.
+  patron grant-only). **3 surfaces d'enforcement cohérentes** : (a) visibilité MCP (`session_visibility`
+  masque les tools), (b) **marketplace dashboard** (`/api/me/connectors` via `connectors_selection._visible_catalog`
+  → la page `/console/connectors` du membre, donc « voir en tant que » reflète l'effet réel), (c) **backstop
+  call-time** `access.require_connector_access` dans `resolve_credential` → bloque **même avec une clé BYO**.
+  super_admin bypasse ; fail-open sur erreur infra.
   Surface : `oto_{list,set,clear}_connector_access` / `/api/orgs/{id}/connectors/{acl,…/access}`
   (`ORG_ADMIN_OF`) + levier « accès » sur la carte `/org/connectors`.
 

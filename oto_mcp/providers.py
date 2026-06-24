@@ -381,17 +381,21 @@ _REGISTRY_LIST = [
     # vit dans orgs.email_settings, pas dans le credential. default_hidden + hors
     # bundle (pas un tool à exposer). tools/resend.py = register() no-op pour
     # satisfaire l'invariant « un fichier tools/ par provider kind=tools ».
-    _c("resend", ["resend"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+    # resend : email transactionnel BYOK (clé Resend de l'ORG). byo_org uniquement
+    # (l'email est org-level) ; self_serve = dispo à la demande pour toute org. La
+    # propriété du domaine est garantie par Resend (la clé ne peut envoyer que depuis
+    # les domaines vérifiés dans le compte Resend de l'org) → zéro logique domaine côté oto.
+    _c("resend", ["resend"], auth_modes={"byo_org"}, keyed=True,
        secret_kind="api_key", in_default_bundle=False, default_hidden=True,
        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
-    # scaleway : email hébergé Otomata (Scaleway TEM via mailer.oto.zone). PAS de clé
-    # d'org — l'envoi part avec la clé d'Otomata (transport "mailer"), domaine vérifié
-    # côté TEM + allowlist MAILER_FROM_DOMAINS du service. Aucun credential à poser
-    # (secret_kind="none"). Comme resend : credential/config-only, sa gestion (expéditeurs
-    # + fenêtre calme) vit dans le panneau email de la carte connecteur ORG ; email_send
-    # (spine) route sender→connecteur→transport. tools/scaleway.py = register() no-op.
-    _c("scaleway", ["scaleway"], secret_kind="none",
+    # scaleway : email hébergé Otomata (Scaleway TEM via mailer.oto.zone). Clé PLATEFORME
+    # (pas de clé d'org, secret_kind="none") → grant-only (availability="platform_granted"),
+    # réservé aux orgs explicitement accordées (Otomata = otomata.tech, déjà dans l'allowlist
+    # MAILER_FROM_DOMAINS). Ouvrir à d'autres orgs exige la vérification de domaine par org
+    # (cf. issue B — domaine = objet d'ORG). Config (expéditeurs + fenêtre calme) dans le
+    # panneau email de la carte connecteur ORG ; email_send (spine) route sender→connecteur→transport.
+    _c("scaleway", ["scaleway"], availability="platform_granted", secret_kind="none",
        in_default_bundle=False, default_hidden=True,
        label="Email hébergé (Scaleway TEM)",
        help="envoi d'email via le service Otomata (domaine vérifié)",

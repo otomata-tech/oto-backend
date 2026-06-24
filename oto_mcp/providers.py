@@ -465,6 +465,18 @@ _REGISTRY_LIST = [
     # `unipile` (LinkedIn hébergé). Le browser LinkedIn local reste dans oto-cli.
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase"),
+    # brevo : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
+    # (`workflow-apis.brevo.com/v1`). À distinguer de l'API publique v3
+    # (transactionnel/contacts/campagnes, clé api-key) — pas exposée ici.
+    # Exécution = **Browserbase** (Chrome distant hébergé) : l'user se logue 1× via
+    # Live View (`brevo_connect_start`), sa session persiste dans un Context = le
+    # credential per-user (coffre). Pas de browser sur la box, pas d'export de cookie.
+    # personal_session (session physiologiquement per-user). Expérimental (API non
+    # documentée) : hors bundle + masqué, self-activable.
+    _c("brevo", ["brevo"], auth_modes={"byo_user"}, personal_session=True,
+       secret_kind="cookie", in_default_bundle=False, default_hidden=True,
+       label="Brevo (automation)", help="automations marketing (session Browserbase)",
+       publisher="Brevo", href="https://app.brevo.com/automation/automations"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
     # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),
     # pas un connecteur Google — chargé explicitement dans register_all, non gaté

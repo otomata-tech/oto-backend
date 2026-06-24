@@ -90,16 +90,35 @@ oto_mcp/` = 0). Elle a été décrite comme cible mais jamais portée sur la box
   (hébergé, connecteur `unipile`). Le browser LinkedIn local ne survit que dans
   oto-cli (fallback) et dans oto-core (`oto.tools.browser.linkedin/`).
 - **Crunchbase** = **seul** connecteur browser (`providers.BROWSER_PROVIDERS={"crunchbase"}`),
-  lancé **in-process** sur la box : `oto.tools.browser.crunchbase.CrunchbaseClient(
-  cookies, user_agent, headless=True)` (suppose Chrome+patchright+RAM dispo). Session
-  (cookies JSON + UA) dans le **coffre chiffré**, résolue par
-  `access.resolve_crunchbase_session()` → `db.get_crunchbase_session()`.
-- **Conséquence** : **pas de harnais browser serveur « propre »** aujourd'hui. Un
-  connecteur à credential cookie a deux voies — (a) rejouer le cookie en **httpx
-  direct** (ex. `brevo` automation, aucun browser), (b) relancer un **browser
-  in-process** façon crunchbase. La délégation conteneur reste à porter si besoin.
-  ⚠️ Risque commun (a)/(b) : un cookie rejoué depuis l'IP datacenter de la box peut
-  être invalidé/refusé (cf. §LinkedIn cookies, leçon `li_at`).
+  lancé **in-process** sur la box : `CrunchbaseClient(BrowserClient)` d'**o-browser**
+  (`oto.tools.browser.crunchbase`, `headless=True`). Session (cookies JSON + UA) dans le
+  **coffre chiffré**, résolue par `access.resolve_crunchbase_session()` → `db.get_crunchbase_session()`.
+  ✅ **Réparé le 2026-06-24** : la box n'avait **aucun binaire navigateur** (crunchbase
+  était cassé silencieusement). Installé **`google-chrome-stable`** (Chrome 149, `.deb`
+  direct) → o-browser `_detect_channel()` renvoie `'chrome'`, lance le vrai Chrome.
+  ⚠️ Install **manuelle, hors deploy** : un rebuild de box la perd → à câbler dans le
+  provisioning (`apt-get install google-chrome-stable`, durable dans `/opt/google/chrome`).
+  Chrome `--no-sandbox` requis (service `User=root`).
+- **Conséquence** : harnais browser server-side = **browser in-process façon crunchbase**
+  (la délégation conteneur reste à porter si l'isolation OOM devient nécessaire ;
+  box 2 Go → préférer **browserless**/conteneur pour un browser permanent). ✅ **Une
+  session privée cookie-bound SE transplante vers le serveur** (prouvé sur brevo le
+  2026-06-24, cf. `tools/brevo.py`) : vrai Chrome box + **cookie d'auth httpOnly + UA
+  d'origine** → **200**. C'est le modèle LinkedIn `li_at`. ⚠️ **Deux pièges** : (1) capter sur une
+  session **vérifiée vivante** (cookie d'auth présent / fetch sanity = 200) — le faux
+  négatif « auth cookie missing » venait d'une extraction sur **profil déconnecté** (un
+  relancement à froid tombe sur `login.brevo.com`), PAS d'un souci de lecture httpOnly
+  (`context.cookies()` les lit) ; le cookie d'auth de brevo=`auth` (httpOnly, **avec
+  expiry**) ; (2) httpx ne marche **pas** (client non-navigateur → 403), transport =
+  **browser-driven** (`page.evaluate(fetch())` / `RemoteBrowser`). Session d'origine potentiellement
+  invalidée par l'usage serveur (li_at #5) → **session dédiée** conseillée.
+- ✅ **Implémenté pour `brevo` via Browserbase** (`oto_mcp/browserbase.py`) : Chrome
+  HÉBERGÉ (off-box, anti-OOM) + **Context** per-user (profil persistant = la session
+  loguée, prouvé 200) + **Live View** pour le login interactif (SSO/captcha gérés par
+  l'user) — pas d'export de cookie, pas de browser sur la box. Creds plateforme env
+  `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`. Onboarding = `brevo_connect_start`/
+  `brevo_connect_status`. C'est le substrat « pairing browser hébergé » réutilisable
+  par tout connecteur d'API privée cookie-bound.
 
 ## LinkedIn cookies
 

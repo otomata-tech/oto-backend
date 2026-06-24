@@ -665,6 +665,33 @@ CREATE TABLE IF NOT EXISTS scheduled_emails (
 );
 CREATE INDEX IF NOT EXISTS idx_sched_due ON scheduled_emails(scheduled_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_sched_org ON scheduled_emails(org_id, status, created_at DESC);
+
+-- BOAMP (avis de marchés publics) : index local des avis DILA (france-opendata#3).
+-- OpenDataSoft bloqué datacenter → on ingère le dump XML DILA en PG (petite table,
+-- ~110k lignes sur 2 ans) plutôt qu'un parquet/DuckDB (réservé au monstre SIRENE).
+-- Dates stockées en TEXT YYYY-MM-DD (identique à la source ; comparaisons lexicales OK).
+CREATE TABLE IF NOT EXISTS boamp (
+    idweb TEXT PRIMARY KEY,
+    annee INTEGER,
+    objet TEXT,
+    organisme TEXT,
+    date_publication TEXT,
+    date_limite_reponse TEXT,
+    date_fin_diffusion TEXT,
+    dep_publication TEXT,
+    nature_marche TEXT,
+    type_procedure TEXT,
+    type_avis_nature TEXT,
+    type_avis_famille TEXT,
+    statut TEXT,
+    descripteurs_libelle TEXT,
+    descripteurs_json TEXT,
+    synthese TEXT,
+    url TEXT,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_boamp_date ON boamp(date_publication DESC);
+CREATE INDEX IF NOT EXISTS idx_boamp_dep ON boamp(dep_publication);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -3133,3 +3160,108 @@ def upsert_connector_schema(service: str, schema: dict) -> None:
             "ON CONFLICT (service) DO UPDATE SET schema = EXCLUDED.schema, updated_at = NOW()",
             (service, json.dumps(schema)),
         )
+
+
+# --- BOAMP (avis de marchés publics, france-opendata#3) ----------------------
+
+_BOAMP_COLS = [
+    "idweb", "annee", "objet", "organisme",
+    "date_publication", "date_limite_reponse", "date_fin_diffusion",
+    "dep_publication", "nature_marche", "type_procedure",
+    "type_avis_nature", "type_avis_famille", "statut",
+    "descripteurs_libelle", "descripteurs_json", "synthese", "url",
+]
+
+
+def upsert_boamp(rows: list[dict]) -> int:
+    """Insère/met à jour des avis BOAMP (clé idweb). Idempotent. Retourne le nb
+    de lignes traitées. Conçu pour des batches (ingestion jour-par-jour)."""
+    if not rows:
+        return 0
+    cols = ", ".join(_BOAMP_COLS)
+    placeholders = ", ".join(["%s"] * len(_BOAMP_COLS))
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in _BOAMP_COLS if c != "idweb")
+    sql = (
+        f"INSERT INTO boamp ({cols}, ingested_at) "
+        f"VALUES ({placeholders}, NOW()) "
+        f"ON CONFLICT (idweb) DO UPDATE SET {updates}, ingested_at = NOW()"
+    )
+    data = [tuple(r.get(c) for c in _BOAMP_COLS) for r in rows]
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, data)
+    return len(data)
+
+
+def _boamp_row(r: dict) -> dict:
+    """Normalise une ligne BOAMP : descripteurs_json (TEXT) → liste `descripteurs`."""
+    out = dict(r)
+    raw = out.pop("descripteurs_json", None)
+    if raw:
+        try:
+            out["descripteurs"] = json.loads(raw)
+        except (ValueError, TypeError):
+            pass
+    out.pop("ingested_at", None)
+    return out
+
+
+def search_boamp(
+    query: Optional[str] = None,
+    descripteur: Optional[str] = None,
+    departement: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    type_marche: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Recherche d'avis BOAMP (table PG). Filtres AND. Renvoie {results, total_count}."""
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    clauses, params = ["1=1"], []
+    if query:
+        clauses.append("objet ILIKE %s"); params.append(f"%{query}%")
+    if descripteur:
+        clauses.append("descripteurs_libelle ILIKE %s"); params.append(f"%{descripteur}%")
+    if departement:
+        clauses.append("dep_publication = %s"); params.append(departement)
+    if date_from:
+        clauses.append("date_publication >= %s"); params.append(date_from)
+    if date_to:
+        clauses.append("date_publication <= %s"); params.append(date_to)
+    if type_marche:
+        clauses.append("nature_marche = %s"); params.append(type_marche.upper())
+    where = " AND ".join(clauses)
+    cols = ", ".join(_BOAMP_COLS)
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM boamp WHERE {where}", tuple(params)
+        ).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT {cols} FROM boamp WHERE {where} "
+            "ORDER BY date_publication DESC NULLS LAST, idweb DESC "
+            "LIMIT %s OFFSET %s",
+            tuple(params) + (limit, offset),
+        ).fetchall()
+    return {"results": [_boamp_row(r) for r in rows], "total_count": int(total)}
+
+
+def get_boamp(idweb: str) -> Optional[dict]:
+    """Un avis BOAMP par idweb, ou None."""
+    cols = ", ".join(_BOAMP_COLS)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {cols} FROM boamp WHERE idweb = %s LIMIT 1", (idweb,)
+        ).fetchone()
+    return _boamp_row(row) if row else None
+
+
+def boamp_info() -> dict:
+    """Métadonnées pour healthcheck : nb de lignes + plage de dates."""
+    with _connect() as conn:
+        r = conn.execute(
+            "SELECT COUNT(*) AS n, MIN(date_publication) AS dmin, "
+            "MAX(date_publication) AS dmax FROM boamp"
+        ).fetchone()
+    return {"total_rows": int(r["n"]), "date_min": r["dmin"], "date_max": r["dmax"]}

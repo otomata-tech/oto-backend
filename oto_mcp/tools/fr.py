@@ -16,12 +16,11 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.sirene import EntreprisesClient, SireneClient
     from oto.tools.inpi import InpiClient
     from oto.tools.bodacc import BodaccClient
-    from france_opendata import BoampClient  # source unique (aligné sur foncier)
+    from .. import db  # BOAMP : index PG local (france-opendata#3), pas d'API live
 
     entreprises = EntreprisesClient()
     inpi = InpiClient()
     bodacc = BodaccClient()
-    boamp = BoampClient()
 
     # --- Identité (API Recherche Entreprises, open data) ---
 
@@ -334,7 +333,7 @@ def register(mcp: FastMCP) -> None:
             type_marche: Market type (TRAVAUX, FOURNITURES, SERVICES).
             limit: Max results (default 20, max 100).
         """
-        return boamp.search(
+        return db.search_boamp(
             query=query, descripteur=descripteur, departement=departement,
             date_from=date_from, date_to=date_to, type_marche=type_marche,
             limit=limit,
@@ -347,7 +346,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             idweb: BOAMP notice identifier (e.g. "26-50647").
         """
-        result = boamp.get(idweb)
+        result = db.get_boamp(idweb)
         if result is None:
             return {"error": "not_found", "idweb": idweb}
         return result

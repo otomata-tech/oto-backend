@@ -26,6 +26,7 @@ def register(mcp: FastMCP) -> None:
         ApiCartoClient,
         BanClient,
         BdTopoClient,
+        DpeClient,
         DvfClient,
         EnedisClient,
         PvgisClient,
@@ -38,6 +39,7 @@ def register(mcp: FastMCP) -> None:
     pvgis = PvgisClient()
     enedis = EnedisClient()
     dvf = DvfClient()
+    dpe = DpeClient()
     georisques = GeorisquesClient()
 
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
@@ -247,6 +249,7 @@ def register(mcp: FastMCP) -> None:
         surface_max: Optional[float] = None,
         years: int = 3,
         limit: int = 50,
+        with_dpe: bool = False,
     ) -> dict:
         """Raw DVF+ transactions around a precise address (Cerema open data, since
         2014). Geocodes the address (BAN), returns ALL mutations whose parcel lies
@@ -255,6 +258,11 @@ def register(mcp: FastMCP) -> None:
         property type/nature; `median_prix_m2` is computed on residential mono-bien
         rows only (indicative). Same fields as foncier_comparables.
 
+        With `with_dpe=True`, each sale is enriched with ADEME energy data: a HOUSE
+        gets its matched `dpe` (etiquette + `dpe_match` confidence by proximity &
+        surface); a FLAT gets `dpe_immeuble` (the building's DPE list — NO 1:1 match,
+        as DVF and DPE share no dwelling key).
+
         Args:
             adresse: free-form address (e.g. "44 la canebière marseille").
             radius_m: search radius in metres (default 500).
@@ -262,11 +270,59 @@ def register(mcp: FastMCP) -> None:
             surface_min / surface_max: OPTIONAL surface bâtie band m².
             years: lookback in years with data (default 3, up to ~2014).
             limit: max rows, nearest first (default 50).
+            with_dpe: attach ADEME DPE energy labels per sale (default False).
         """
-        return dvf.comparables_by_address(
+        res = dvf.comparables_by_address(
             adresse=adresse, radius_m=radius_m, type_local=type_local,
             surface_min=surface_min, surface_max=surface_max, years=years, limit=limit,
         )
+        if with_dpe and res.get("mutations"):
+            from ..dpe_match import attach_dpe_to_sales
+            zone = dpe.by_address(adresse, radius_m=radius_m, limit=1000)
+            attach_dpe_to_sales(res["mutations"], zone.get("dpe", []))
+        return res
+
+    @mcp.tool()
+    async def foncier_dpe_adresse(
+        adresse: str,
+        radius_m: int = 200,
+        type_batiment: Optional[str] = None,
+        etiquette: Optional[str] = None,
+        surface_min: Optional[float] = None,
+        surface_max: Optional[float] = None,
+        limit: int = 50,
+    ) -> dict:
+        """Energy performance diagnostics (DPE, ADEME open data) around an address.
+
+        Geocodes the address (BAN), returns raw DPE records within `radius_m` metres,
+        nearest first. Each: etiquette_dpe (A–G), etiquette_ges, conso_ep_kwh_m2_an,
+        surface_habitable, annee_construction, type_batiment, adresse, date_dpe,
+        distance_m, lat/lon. ~15M dwellings, since July 2021.
+
+        Args:
+            adresse: free-form address.
+            radius_m: search radius in metres (default 200).
+            type_batiment: OPTIONAL "maison" | "appartement" | "immeuble".
+            etiquette: OPTIONAL DPE label filter (A..G).
+            surface_min / surface_max: OPTIONAL surface habitable band m².
+            limit: max records, nearest first (default 50).
+        """
+        return dpe.by_address(
+            adresse=adresse, radius_m=radius_m, type_batiment=type_batiment,
+            etiquette=etiquette, surface_min=surface_min, surface_max=surface_max, limit=limit,
+        )
+
+    @mcp.tool()
+    async def foncier_dpe_stats(code_commune: str, type_batiment: Optional[str] = None) -> dict:
+        """DPE label distribution (A–G) for a commune, from ADEME open data.
+
+        Aggregated view of energy performance across all dwellings of the commune.
+
+        Args:
+            code_commune: INSEE code, 5 digits.
+            type_batiment: OPTIONAL "maison" | "appartement" | "immeuble".
+        """
+        return dpe.stats(code_commune=code_commune, type_batiment=type_batiment)
 
     # --- MCP Apps : variantes à interface rendue (SEP-1865) ------------------
     # Quelques tools "flagship" *_app qui renvoient une UI (carte + table) rendue

@@ -92,7 +92,7 @@ def unipile_client(provider: str = "LINKEDIN"):
     credential per-user, sinon McpError actionnable. Réutilisé par tools/whatsapp.py.
     """
     from oto.tools.unipile import UnipileClient
-    key, _is_platform = access.resolve_api_key("unipile")
+    key, is_platform = access.resolve_api_key("unipile")
     sub = access.current_user_sub_or_raise()
     account_id = db.get_unipile_account_id(sub, provider)
     if not account_id:
@@ -101,7 +101,10 @@ def unipile_client(provider: str = "LINKEDIN"):
             message=f"Connecte ton compte {provider.title()} sur "
                     "https://dashboard.oto.ninja/console/connections "
                     "avant d'utiliser ces outils."))
-    return UnipileClient(api_key=key, account_id=account_id)
+    # DSN apparié à la clé BYO gagnante (chaque clé Unipile est liée à son
+    # sous-domaine). Clé plateforme → DSN env/défaut (instance Otomata).
+    dsn = None if is_platform else access.resolve_unipile_dsn(sub)
+    return UnipileClient(api_key=key, account_id=account_id, dsn=dsn)
 
 
 def register_messaging_tools(mcp: FastMCP, channel: str) -> None:

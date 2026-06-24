@@ -294,6 +294,35 @@ def resolve_api_key(provider: str) -> tuple[str, bool]:
     return grant["api_key"], True
 
 
+def resolve_unipile_dsn(sub: str) -> Optional[str]:
+    """DSN (`api<NN>.unipile.com:port`) de l'instance Unipile du credential BYO
+    **gagnant** de la cascade, ou None si aucun n'en porte (→ le client retombe
+    sur l'env/défaut `api25`, l'instance plateforme).
+
+    Une clé Unipile est liée à SON sous-domaine dédié : le DSN doit donc voyager
+    avec la clé. On marche le **même ordre** que `resolve_api_key` (user > groupe
+    actif > org active) et on s'arrête au **premier niveau qui porte un credential**
+    — on renvoie son `meta.dsn` (possiblement None), jamais celui d'un autre niveau,
+    pour rester apparié à la clé réellement résolue. Le palier plateforme (grant)
+    n'est pas concerné : il utilise l'instance plateforme (env), d'où l'appel
+    uniquement quand `resolve_api_key` a renvoyé `is_platform=False`."""
+    levels: list[tuple[str, str]] = [("user", sub)]
+    active_group = current_group(sub)
+    if active_group is not None:
+        levels.append(("group", str(active_group)))
+    active_org = current_org(sub)
+    if active_org is not None:
+        levels.append(("org", str(active_org)))
+    for entity_type, entity_id in levels:
+        try:
+            row = credentials_store.get_credential_with_meta(entity_type, entity_id, "unipile")
+        except Exception:
+            continue  # niveau inéligible à porter un credential unipile
+        if row:
+            return (row.get("meta") or {}).get("dsn")
+    return None
+
+
 def resolve_credential_fields(provider: str) -> dict:
     """Résout un credential **multi-champs** byo_user (modèle générique, ADR 0011)
     du sub courant → dict des champs déclarés (`Connector.secret_fields`).

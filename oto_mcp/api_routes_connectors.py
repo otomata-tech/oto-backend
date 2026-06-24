@@ -250,31 +250,8 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
-        accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
-        # Origine de la clé (mode) via le seam — BYO = clé propre (user/groupe/ORG),
-        # pas un check user-only (qui ratait une clé d'org). BYO → subscribed (l'user
-        # paie Unipile en direct).
-        mode = access.credential_mode_for(sub, "unipile")
-        byo = mode in access.BYO_MODES
-        subscribed = byo or access.has_option(sub, "unipile")
-
-        def _ch(p: str) -> dict:
-            a = accts.get(p)
-            return {
-                "connected": a is not None,
-                "account_id": a["account_id"] if a else None,
-                "connected_at": str(a["connected_at"]) if a else None,
-            }
-        return json_response(request, {
-            "subscribed": subscribed,
-            "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
-            "byo": byo,
-            "channels": {
-                "linkedin": _ch("LINKEDIN"), "whatsapp": _ch("WHATSAPP"),
-                "telegram": _ch("TELEGRAM"), "instagram": _ch("INSTAGRAM"),
-                "messenger": _ch("MESSENGER"), "twitter": _ch("TWITTER"),
-            },
-        })
+        from .tools import unipile
+        return json_response(request, unipile.status_for(sub))
 
     async def unipile_subscribe(request: Request) -> JSONResponse:
         """Démarre l'abonnement « option LinkedIn » (€15/mois/siège) de l'org active.

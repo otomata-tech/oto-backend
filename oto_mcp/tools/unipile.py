@@ -82,6 +82,38 @@ def _sync_feed(client, store, sub: str, provider: str = "LINKEDIN") -> int:
     return new_count
 
 
+# Canaux Unipile : clé front → provider DB. Source unique de la liste de canaux
+# (consommée par status_for ; calquée côté front dans ConnectorHostedWidget).
+UNIPILE_CHANNELS = {
+    "linkedin": "LINKEDIN", "whatsapp": "WHATSAPP", "telegram": "TELEGRAM",
+    "instagram": "INSTAGRAM", "messenger": "MESSENGER", "twitter": "TWITTER",
+}
+
+
+def status_for(sub: str) -> dict:
+    """État Unipile per-user : canaux connectés + abonnement + mode de clé.
+    SOURCE UNIQUE consommée par `/api/me/unipile` (face user) ET la fiche admin
+    (`_user_detail`). BYO (clé propre user/groupe/org) ⇒ subscribed (l'user paie en direct)."""
+    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
+    mode = access.credential_mode_for(sub, "unipile")
+    byo = mode in access.BYO_MODES
+    subscribed = byo or access.has_option(sub, "unipile")
+
+    def _ch(provider: str) -> dict:
+        a = accts.get(provider)
+        return {
+            "connected": a is not None,
+            "account_id": a["account_id"] if a else None,
+            "connected_at": str(a["connected_at"]) if a else None,
+        }
+    return {
+        "subscribed": subscribed,
+        "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
+        "byo": byo,
+        "channels": {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()},
+    }
+
+
 def unipile_client(provider: str = "LINKEDIN"):
     """Client Unipile du user pour un canal (LINKEDIN, WHATSAPP, …).
 

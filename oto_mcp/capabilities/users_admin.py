@@ -102,6 +102,18 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
     pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
                       if u.get("email") else None)
+    # Détail messagerie Unipile : canaux connectés + abonnement (source unique
+    # tools.unipile.status_for, partagée avec /api/me/unipile) + SOURCE de l'option.
+    from ..tools import unipile
+    org = access.current_org(target)
+    messaging = {
+        **unipile.status_for(target),
+        "option_source": {
+            "user_comp": db.has_option_comp("user", target, "unipile"),
+            "org_comp": db.has_option_comp("org", str(org), "unipile") if org else False,
+            "org_subscription": db.get_org_subscription(org, "unipile") if org else None,
+        },
+    }
     return {
         "sub": target, "email": u.get("email"), "name": u.get("name"),
         "role": status["role"], "active_org": status.get("active_org"),
@@ -112,6 +124,7 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
         "grants": db.list_grants_for_user(target),
         "namespace_grants": ns,
         "option_comps": db.list_option_comps("user", target),  # couche 3 (comp user)
+        "unipile": messaging,   # canaux connectés + abonnement + source de l'option
     }
 
 

@@ -30,6 +30,13 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **add-ons payants reve
 - Appliqué à la **visibilité par session** (middleware) + au catalogue `/api/connectors`.
 - Surfaces : `/platform/connectors` (master + clé plateforme, super_admin) ; `/org/connectors`
   (override org).
+- **RBAC interne à l'org (ADR 0025)** — grain plus fin que l'org entière : un org_admin réserve
+  un connecteur à des **départements (groupes)** et/ou **membres** via `org_connector_access`
+  (présence de ≥1 ligne ⟹ RESTREINT/deny-by-default ; absence ⟹ ouvert). **DUR** (réemploi du
+  patron grant-only) : masquage visibilité + backstop call-time `access.require_connector_access`
+  dans `resolve_credential` → bloque **même avec une clé BYO** ; super_admin bypasse ; fail-open infra.
+  Surface : `oto_{list,set,clear}_connector_access` / `/api/orgs/{id}/connectors/{acl,…/access}`
+  (`ORG_ADMIN_OF`) + levier « accès » sur la carte `/org/connectors`.
 
 ## Couche 2 — Authentification (quelle clé ?)
 

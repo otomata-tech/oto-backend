@@ -623,7 +623,9 @@ def status_for(sub: str) -> dict:
             "org_secret_configured": org_has,
             "platform_key_label": grant["label"] if grant else None,
             "quota_used_today": used,
-            "quota_daily": limit if grant else None,
+            # limit 0 = illimité (convention default_quota) → None pour que l'UI
+            # affiche « ∞ », pas « /0 » (qui se lit comme un quota épuisé).
+            "quota_daily": (limit or None) if grant else None,
         }
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique

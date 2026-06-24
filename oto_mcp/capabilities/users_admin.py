@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import access, db, org_store
+from .. import access, db, group_store, org_store
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -98,20 +98,24 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     u = db.get_user(target)
     if not u:
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
-    status = access.status_for(target)
+    # Contexte PERSISTÉ de la cible (org/équipe maison) — PAS current_org/current_group,
+    # qui renverraient le contexte view-as/session du REQUÉRANT admin (fuite vécue
+    # 2026-06-24 : la fiche montrait l'option de l'org du requérant, pas de la cible).
+    target_org = org_store.get_active_org(target)
+    target_group = group_store.get_active_group(target)
+    status = access.status_for(target, org=target_org, group=target_group)
     ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
     pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
                       if u.get("email") else None)
     # Détail messagerie Unipile : canaux connectés + abonnement (source unique
     # tools.unipile.status_for, partagée avec /api/me/unipile) + SOURCE de l'option.
     from ..tools import unipile
-    org = access.current_org(target)
     messaging = {
-        **unipile.status_for(target),
+        **unipile.status_for(target, org=target_org, group=target_group),
         "option_source": {
             "user_comp": db.has_option_comp("user", target, "unipile"),
-            "org_comp": db.has_option_comp("org", str(org), "unipile") if org else False,
-            "org_subscription": db.get_org_subscription(org, "unipile") if org else None,
+            "org_comp": db.has_option_comp("org", str(target_org), "unipile") if target_org else False,
+            "org_subscription": db.get_org_subscription(target_org, "unipile") if target_org else None,
         },
     }
     return {

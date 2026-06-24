@@ -90,14 +90,16 @@ UNIPILE_CHANNELS = {
 }
 
 
-def status_for(sub: str) -> dict:
+def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     """État Unipile per-user : canaux connectés + abonnement + mode de clé.
     SOURCE UNIQUE consommée par `/api/me/unipile` (face user) ET la fiche admin
-    (`_user_detail`). BYO (clé propre user/groupe/org) ⇒ subscribed (l'user paie en direct)."""
+    (`_user_detail`). BYO (clé propre user/groupe/org) ⇒ subscribed (l'user paie en direct).
+    `org`/`group` explicites = état d'un TIERS contre son propre contexte (fiche admin),
+    sans le contexte view-as/session du requérant (anti-fuite, cf. access._UNSET)."""
     accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
-    mode = access.credential_mode_for(sub, "unipile")
+    mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
-    subscribed = byo or access.has_option(sub, "unipile")
+    subscribed = byo or access.has_option(sub, "unipile", org=org)
 
     def _ch(provider: str) -> dict:
         a = accts.get(provider)

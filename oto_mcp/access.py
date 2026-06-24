@@ -464,19 +464,23 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
     return None
 
 
-def credential_mode_for(sub: str, provider: str) -> str:
+def credential_mode_for(sub: str, provider: str, *,
+                        org: "int | None | object" = _UNSET,
+                        group: "int | None | object" = _UNSET) -> str:
     """Origine de la clé `provider` pour `sub` (EXPLICITE, hors contexte MCP) :
     `user|group|org|platform|over_quota|forbidden`. PRÉSENCE seulement (pas de
     déchiffrement → sûr/léger pour un statut). **Miroir** de la cascade
     `resolve_credential` (incl. fallback grant org) — une divergence ferait mentir
-    l'UI. « BYO » (clé propre, pas la plateforme) = mode ∈ {user, group, org}."""
+    l'UI. « BYO » (clé propre, pas la plateforme) = mode ∈ {user, group, org}.
+    `org`/`group` explicites (≠ _UNSET) = calcul pour un TIERS contre son propre
+    contexte (fiche admin), sans current_org/current_group (anti-fuite du requérant)."""
     if db.has_user_api_key(sub, provider):
         return "user"
+    o = current_org(sub) if org is _UNSET else org
+    g = current_group(sub) if group is _UNSET else group
     if provider in ORG_SHAREABLE_PROVIDERS:
-        g = current_group(sub)
         if g is not None and group_store.has_group_secret(g, provider):
             return "group"
-        o = current_org(sub)
         if o is not None and org_store.has_org_secret(o, provider):
             return "org"
     con = connectors.connector_for_provider(provider)
@@ -484,8 +488,7 @@ def credential_mode_for(sub: str, provider: str) -> str:
         return "forbidden"
     grant = db.get_active_grant(sub, provider)
     if not grant:
-        org = current_org(sub)
-        grant = db.get_active_org_grant(org, provider) if org is not None else None
+        grant = db.get_active_org_grant(o, provider) if o is not None else None
     if not grant:
         return "forbidden"
     used = db.get_usage_today(sub, provider)
@@ -597,20 +600,24 @@ def record_platform_usage(provider: str) -> None:
     db.increment_usage(sub, provider)
 
 
-def status_for(sub: str) -> dict:
+def status_for(sub: str, *, org: "int | None | object" = _UNSET,
+               group: "int | None | object" = _UNSET) -> dict:
     """Snapshot pour `/api/me` — rôle + statut par provider :
 
     - `mode` : `user` (clé perso) | `platform` (grant + quota OK)
               | `over_quota` (grant mais quota épuisé)
               | `forbidden` (ni user key ni grant)
+
+    `org`/`group` explicites (≠ _UNSET) = snapshot d'un TIERS contre SON propre
+    contexte (fiche admin), sans current_org/current_group du requérant (anti-fuite).
     """
     role = get_user_role(sub)
     # Org effective résolue une fois (perf : sinon 1 lookup/provider). None pour
     # tout user sans org → la branche org_secret ci-dessous est inerte. Via le seam
     # `current_org` → reflète l'override de session (MCP) ou la consultation (REST
     # view-as) le cas échéant, sinon la maison (ADR 0023).
-    active_org = current_org(sub)
-    active_group = current_group(sub)
+    active_org = current_org(sub) if org is _UNSET else org
+    active_group = current_group(sub) if group is _UNSET else group
     out: dict = {"role": role, "active_org": active_org,
                  "active_group": active_group, "providers": {}}
     for provider in db.KEY_PROVIDERS:

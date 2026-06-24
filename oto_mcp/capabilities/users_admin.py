@@ -107,28 +107,22 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
     pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
                       if u.get("email") else None)
-    # Détail messagerie Unipile : canaux connectés + abonnement (source unique
-    # tools.unipile.status_for, partagée avec /api/me/unipile) + SOURCE de l'option.
+    orgs = org_store.list_orgs_for_user(target)
+    # Messagerie Unipile PAR ORG (l'option est per-org ; un user peut être dans N orgs) :
+    # un bloc par org, abonnement/canaux calculés CONTRE cette org (jamais current_org).
     from ..tools import unipile
-    messaging = {
-        **unipile.status_for(target, org=target_org, group=target_group),
-        "option_source": {
-            "user_comp": db.has_option_comp("user", target, "unipile"),
-            "org_comp": db.has_option_comp("org", str(target_org), "unipile") if target_org else False,
-            "org_subscription": db.get_org_subscription(target_org, "unipile") if target_org else None,
-        },
-    }
+    unipile_orgs = unipile.admin_status_by_org(target, orgs)
     return {
         "sub": target, "email": u.get("email"), "name": u.get("name"),
         "role": status["role"], "active_org": status.get("active_org"),
         "access_status": u.get("access_status"),
         "pending_invite": pending_invite,
-        "orgs": org_store.list_orgs_for_user(target),
+        "orgs": orgs,
         "providers": status["providers"],
         "grants": db.list_grants_for_user(target),
         "namespace_grants": ns,
         "option_comps": db.list_option_comps("user", target),  # couche 3 (comp user)
-        "unipile": messaging,   # canaux connectés + abonnement + source de l'option
+        "unipile_orgs": unipile_orgs,   # état messagerie par org (b)
     }
 
 

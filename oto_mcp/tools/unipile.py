@@ -90,30 +90,70 @@ UNIPILE_CHANNELS = {
 }
 
 
+def _channels_from(accts_by_provider: dict) -> dict:
+    """Construit le dict des 6 canaux à partir des comptes indexés par provider DB."""
+    def _ch(provider: str) -> dict:
+        a = accts_by_provider.get(provider)
+        return {
+            "connected": a is not None,
+            "account_id": a["account_id"] if a else None,
+            "account_name": a.get("account_name") if a else None,
+            "connected_at": str(a["connected_at"]) if a else None,
+        }
+    return {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()}
+
+
 def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     """État Unipile per-user : canaux connectés + abonnement + mode de clé.
-    SOURCE UNIQUE consommée par `/api/me/unipile` (face user) ET la fiche admin
-    (`_user_detail`). BYO (clé propre user/groupe/org) ⇒ subscribed (l'user paie en direct).
-    `org`/`group` explicites = état d'un TIERS contre son propre contexte (fiche admin),
-    sans le contexte view-as/session du requérant (anti-fuite, cf. access._UNSET)."""
+    SOURCE UNIQUE consommée par `/api/me/unipile` (face user). BYO (clé propre
+    user/groupe/org) ⇒ subscribed (l'user paie en direct). `org`/`group` explicites =
+    état d'un TIERS contre son propre contexte, sans le contexte view-as/session du
+    requérant (anti-fuite, cf. access._UNSET)."""
     accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = byo or access.has_option(sub, "unipile", org=org)
-
-    def _ch(provider: str) -> dict:
-        a = accts.get(provider)
-        return {
-            "connected": a is not None,
-            "account_id": a["account_id"] if a else None,
-            "connected_at": str(a["connected_at"]) if a else None,
-        }
     return {
         "subscribed": subscribed,
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
-        "channels": {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()},
+        "channels": _channels_from(accts),
     }
+
+
+def admin_status_by_org(sub: str, orgs: list) -> list:
+    """État messagerie **par org** pour la fiche admin (un user peut être dans N orgs ;
+    l'option/abonnement est PAR ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
+    Pour chaque org : abonnement/mode calculés CONTRE CETTE org + canaux rattachés à elle
+    (`unipile_accounts.org_id`). Les comptes rattachés à une org hors de sa liste tombent
+    dans un bloc « (hors de ses orgs) »."""
+    accts = db.list_unipile_accounts(sub)
+    out = []
+    for o in orgs:
+        oid = o["org_id"]
+        mode = access.credential_mode_for(sub, "unipile", org=oid)
+        byo = mode in access.BYO_MODES
+        by = {a["provider"]: a for a in accts if a.get("org_id") == oid}
+        out.append({
+            "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
+            "subscribed": byo or access.has_option(sub, "unipile", org=oid),
+            "mode": mode, "byo": byo,
+            "channels": _channels_from(by),
+            "option_source": {
+                "user_comp": db.has_option_comp("user", sub, "unipile"),
+                "org_comp": db.has_option_comp("org", str(oid), "unipile"),
+                "org_subscription": db.get_org_subscription(oid, "unipile"),
+            },
+        })
+    member = {o["org_id"] for o in orgs}
+    orphans = {a["provider"]: a for a in accts if a.get("org_id") not in member}
+    if orphans:
+        out.append({
+            "org_id": None, "org_name": "(hors de ses orgs)", "is_active": False,
+            "subscribed": None, "mode": None, "byo": None,
+            "channels": _channels_from(orphans), "option_source": None,
+        })
+    return out
 
 
 def unipile_client(provider: str = "LINKEDIN"):

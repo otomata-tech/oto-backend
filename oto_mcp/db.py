@@ -1288,10 +1288,11 @@ def get_unipile_account(sub: str, provider: str = "LINKEDIN") -> Optional[dict]:
 
 def list_unipile_accounts(sub: str) -> list[dict]:
     """Tous les comptes Unipile connectés du user, tous canaux confondus
-    (`[{provider, account_id, account_name, connected_at}]`) — pour le dashboard."""
+    (`[{provider, account_id, account_name, org_id, connected_at}]`) — pour le dashboard.
+    `org_id` = l'org dont l'abonnement porte le compte (ventilation par org, fiche admin)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT provider, account_id, account_name, connected_at FROM unipile_accounts "
+            "SELECT provider, account_id, account_name, org_id, connected_at FROM unipile_accounts "
             "WHERE sub = %s ORDER BY provider", (sub,)
         ).fetchall()
     return [dict(r) for r in rows]

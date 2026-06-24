@@ -182,7 +182,7 @@ def register(mcp: FastMCP) -> None:
             "data": [_compact_icpe(d) for d in res.get("data", [])],
         }
 
-    # --- valorisation immobilière (DVF Etalab) — repris de `dvf` --------------
+    # --- valorisation immobilière (DVF+ Cerema, depuis 2014) — repris de `dvf` -
 
     @mcp.tool()
     async def foncier_prix_m2(
@@ -190,7 +190,8 @@ def register(mcp: FastMCP) -> None:
         type_local: Optional[str] = None,
         years: int = 3,
     ) -> dict:
-        """Real-estate price stats (€/m²) for a French commune, from DVF open data.
+        """Real-estate price stats (€/m²) for a French commune, from DVF+ open data
+        (Cerema, transactions since 2014).
 
         Median/mean/min/max €/m² + per-year breakdown, on clean mono-bien sales
         (one Appartement or Maison per mutation; outliers <100 or >50000 €/m²
@@ -199,7 +200,8 @@ def register(mcp: FastMCP) -> None:
         Args:
             code_commune: INSEE code, 5 digits (e.g. "13201" = Marseille 1er).
             type_local: "Appartement" | "Maison" (default: both).
-            years: lookback in years WITH data (DVF lags ~6 months; default 3).
+            years: lookback in years WITH data (DVF lags ~6 months; default 3,
+                up to ~2014).
         """
         return dvf.stats(code_commune=code_commune, type_local=type_local, years=years)
 
@@ -212,18 +214,24 @@ def register(mcp: FastMCP) -> None:
         years: int = 2,
         limit: int = 50,
     ) -> dict:
-        """Comparable real-estate transactions for a commune, from DVF open data.
+        """Raw DVF+ real-estate transactions for a commune (Cerema open data, since
+        2014). NOT filtered: ALL property types (flats, houses, land, dependencies,
+        mixed-use, commercial) and ALL natures (sale, VEFA off-plan, auction,
+        exchange) — the agent decides the use (valuation, land analysis, market
+        volume…). For a clean median €/m², use foncier_prix_m2 instead.
 
-        Individual mono-bien sales (date, valeur_fonciere, surface, €/m², adresse,
-        lat/lon), most recent first. Filter by type + surface band to find true
-        comparables.
+        Each row: date_mutation, nature_mutation, valeur_fonciere, type_bien (raw
+        DVF+ label) + type_local (set only for residential mono-bien, else null),
+        surface_reelle_bati, surface_terrain, prix_m2 (null if not computable),
+        nombre_locaux, vefa, id_parcelle(s), adresse (reverse-geocoded BAN), lat/lon.
+        Most recent first.
 
         Args:
             code_commune: INSEE code, 5 digits.
-            type_local: "Appartement" | "Maison" (default: both).
-            surface_min / surface_max: surface bâtie band m².
-            years: lookback in years with data (default 2).
-            limit: max comparables, most recent first (default 50).
+            type_local: OPTIONAL filter "Appartement" | "Maison" (default: everything).
+            surface_min / surface_max: OPTIONAL surface bâtie band m².
+            years: lookback in years with data (default 2, up to ~2014).
+            limit: max rows, most recent first (default 50).
         """
         return dvf.comparables(
             code_commune=code_commune, type_local=type_local,
@@ -240,19 +248,20 @@ def register(mcp: FastMCP) -> None:
         years: int = 3,
         limit: int = 50,
     ) -> dict:
-        """Comparable sales around a precise address (geocode + radius filter), DVF.
-
-        Geocodes the free-form address (BAN), then returns DVF mono-bien sales
-        within `radius_m` metres, nearest first, each with `distance_m`, plus the
-        local median €/m². Sharper than commune-level stats for one property.
+        """Raw DVF+ transactions around a precise address (Cerema open data, since
+        2014). Geocodes the address (BAN), returns ALL mutations whose parcel lies
+        within `radius_m` metres (distance to nearest parcel vertex — robust to
+        multi-parcel goods), nearest first, each with `distance_m`. NOT filtered by
+        property type/nature; `median_prix_m2` is computed on residential mono-bien
+        rows only (indicative). Same fields as foncier_comparables.
 
         Args:
             adresse: free-form address (e.g. "44 la canebière marseille").
             radius_m: search radius in metres (default 500).
-            type_local: "Appartement" | "Maison" (default: both).
-            surface_min / surface_max: surface bâtie band m².
-            years: lookback in years with data (default 3).
-            limit: max comparables, nearest first (default 50).
+            type_local: OPTIONAL filter "Appartement" | "Maison" (default: everything).
+            surface_min / surface_max: OPTIONAL surface bâtie band m².
+            years: lookback in years with data (default 3, up to ~2014).
+            limit: max rows, nearest first (default 50).
         """
         return dvf.comparables_by_address(
             adresse=adresse, radius_m=radius_m, type_local=type_local,
@@ -395,13 +404,13 @@ def register(mcp: FastMCP) -> None:
         years: int = 3,
         limit: int = 50,
     ) -> Card:
-        """Rendered COMPARABLES around an address (MCP App / interactive table), DVF.
+        """Rendered transactions around an address (MCP App / interactive table), DVF+.
 
         Visual flagship variant of foncier_comparables_adresse: geocodes the address,
         then renders the local median €/m² plus a sortable/searchable table of nearby
-        mono-bien sales (date, address, type, surface, price, €/m², distance). Use
-        when the user wants to *see* comparable sales. For raw JSON use
-        foncier_comparables_adresse.
+        DVF+ mutations (date, address, type, surface, price, €/m², distance — all
+        property types). Use when the user wants to *see* nearby sales. For raw JSON
+        use foncier_comparables_adresse.
 
         Args:
             adresse: free-form address (e.g. "44 la canebière marseille").

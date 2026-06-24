@@ -789,10 +789,28 @@ def init_db() -> None:
         #   { "<service>": { "salt": str?, "rules": [ {fields, action, ...} ] } }
         # {} = aucune config → repli sur le défaut serveur (field_filter_defaults).
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS field_filters JSONB NOT NULL DEFAULT '{}'::jsonb")
-        # Adresses expéditrices d'email de l'org (envoi per-org, multi-domaine + BYOK Resend).
-        #   { "senders": [ {email, name?, reply_to?, transport: "mailer"|"resend"} ] }
+        # Adresses expéditrices d'email de l'org, keyées PAR CONNECTEUR (scaleway/resend).
+        #   { "<connector>": { "senders": [{email, name?, reply_to?}], "quiet_hours"?: {...} } }
         # {} = aucune adresse → email_send retombe sur la marque oto@otomata.tech (super_admin).
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS email_settings JSONB NOT NULL DEFAULT '{}'::jsonb")
+        # Migration ONE-SHOT (idempotente, gardée sur le format PLAT = clé `senders` au
+        # top-level) : {senders:[{...,transport}], quiet_hours} → keyé par connecteur.
+        # transport 'resend'→'resend', sinon 'scaleway' ; transport retiré du sender ;
+        # quiet_hours global recopié sur chaque connecteur recevant ≥1 sender.
+        for _row in conn.execute(
+                "SELECT id, email_settings FROM orgs WHERE email_settings ? 'senders'").fetchall():
+            _flat = _row["email_settings"] or {}
+            _qh = _flat.get("quiet_hours")
+            _grouped: dict = {}
+            for _s in _flat.get("senders", []):
+                _cn = "resend" if (_s.get("transport") == "resend") else "scaleway"
+                _grouped.setdefault(_cn, {"senders": []})["senders"].append(
+                    {_k: _v for _k, _v in _s.items() if _k != "transport"})
+            if _qh:
+                for _blk in _grouped.values():
+                    _blk["quiet_hours"] = _qh
+            conn.execute("UPDATE orgs SET email_settings = %s::jsonb WHERE id = %s",
+                         (json.dumps(_grouped), _row["id"]))
         # Archivage (soft-delete) d'une org : masquée de tous les listings, réversible
         # (NULL = active). Pas de hard-delete — les FK (membres, credentials, usage,
         # billing, invitations, groupes) restent intactes pour audit/restauration.

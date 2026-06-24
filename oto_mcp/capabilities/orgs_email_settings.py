@@ -1,13 +1,14 @@
-"""Capacités de gestion des adresses expéditrices d'email d'une org (ADR 0009).
+"""Capacités de gestion d'email d'une org, PAR CONNECTEUR (ADR 0009).
 
-L'org_admin déclare les adresses depuis lesquelles `email_send` peut envoyer, et le
-**transport** de chacune : `mailer` (service Otomata, domaine vérifié côté Scaleway
-TEM + allowlist du service) ou `resend` (BYOK, la clé Resend de l'org vit dans le
-coffre — `oto_set_org_secret(provider="resend")`). Lecture = membre ; écriture =
-org_admin.
+L'org_admin déclare, **par connecteur email** (`scaleway` = hébergé Otomata ; `resend`
+= BYOK), les adresses expéditrices que `email_send` peut utiliser + une fenêtre calme.
+Le **transport dérive du connecteur** (plus de champ transport sur l'expéditeur). La
+clé Resend, elle, se pose dans le coffre (`oto_set_org_secret(provider="resend")`).
+Lecture = membre ; écriture = org_admin.
 
-Une déclaration → deux surfaces (MCP `oto_*` + REST `/api/orgs/{id}/email-settings`).
-Pattern de référence : `orgs_field_filters.py`.
+Modèle calqué sur `orgs_field_filters.py` : get global (toutes les configs keyées par
+connecteur) + set par connecteur. Une déclaration → MCP `oto_*` + REST
+`/api/orgs/{id}/email-settings[/{connector}]`.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from .. import org_store
+from .. import org_store, providers
 from ..scheduler import DEFAULT_QUIET_HOURS
 from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -24,8 +25,7 @@ from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _ID = {"id": "org_id"}
-
-_TRANSPORTS = ("mailer", "resend")
+_ID_CONNECTOR = {"id": "org_id", "connector": "connector"}
 
 
 class GetEmailSettingsInput(BaseModel):
@@ -34,9 +34,10 @@ class GetEmailSettingsInput(BaseModel):
 
 class SetEmailSettingsInput(BaseModel):
     org_id: int
-    senders: Optional[list[dict]] = None     # [{email, name?, reply_to?, transport}]
+    connector: str                           # "scaleway" | "resend"
+    senders: Optional[list[dict]] = None     # [{email, name?, reply_to?}] — SANS transport
     quiet_hours: Optional[dict] = None       # {tz, start, end} — fenêtre d'envoi interdite
-    clear_quiet_hours: bool = False          # True = efface la fenêtre (retour au défaut plateforme)
+    clear_quiet_hours: bool = False          # True = efface la fenêtre du connecteur
 
 
 def _validate_senders(senders: list[dict]) -> list[dict]:
@@ -51,11 +52,7 @@ def _validate_senders(senders: list[dict]) -> list[dict]:
         if key in seen:
             raise AuthzDenied(400, "duplicate_sender", f"Adresse en double : {email}.")
         seen.add(key)
-        transport = (s.get("transport") or "mailer").strip().lower()
-        if transport not in _TRANSPORTS:
-            raise AuthzDenied(400, "unknown_transport",
-                              f"Transport inconnu : {transport!r} (attendu {list(_TRANSPORTS)}).")
-        clean: dict = {"email": email, "transport": transport}
+        clean: dict = {"email": email}
         if s.get("name"):
             clean["name"] = str(s["name"]).strip()
         if s.get("reply_to"):
@@ -84,21 +81,24 @@ def _validate_quiet_hours(qh: dict) -> dict:
 def _get_email_settings(ctx: ResolvedCtx, inp: GetEmailSettingsInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    settings = org_store.get_org_email_settings(inp.org_id)
-    has_resend = org_store.has_org_secret(inp.org_id, "resend")
     return {
         "org_id": inp.org_id,
-        "senders": settings.get("senders") or [],
-        "quiet_hours": settings.get("quiet_hours") or DEFAULT_QUIET_HOURS,
-        "quiet_hours_default": settings.get("quiet_hours") is None,
-        "transports": list(_TRANSPORTS),
-        "resend_key_set": has_resend,   # rappel : le transport=resend exige la clé d'org
+        "settings": org_store.get_org_email_settings(inp.org_id),   # keyé par connecteur
+        "connectors": list(providers.EMAIL_CONNECTOR_TRANSPORT),
+        "transports": dict(providers.EMAIL_CONNECTOR_TRANSPORT),
+        "quiet_hours_default": DEFAULT_QUIET_HOURS,
+        "resend_key_set": org_store.has_org_secret(inp.org_id, "resend"),
     }
 
 
 def _set_email_settings(ctx: ResolvedCtx, inp: SetEmailSettingsInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    connector = (inp.connector or "").strip()
+    if connector not in providers.EMAIL_CONNECTOR_TRANSPORT:
+        raise AuthzDenied(400, "unknown_email_connector",
+                          f"Connecteur email inconnu : {connector!r} "
+                          f"(attendu {list(providers.EMAIL_CONNECTOR_TRANSPORT)}).")
     if inp.clear_quiet_hours and inp.quiet_hours is not None:
         raise AuthzDenied(400, "bad_quiet_hours",
                           "`quiet_hours` et `clear_quiet_hours` sont exclusifs.")
@@ -107,9 +107,9 @@ def _set_email_settings(ctx: ResolvedCtx, inp: SetEmailSettingsInput) -> dict:
                           "Fournis `senders`, `quiet_hours` ou `clear_quiet_hours`.")
     senders = _validate_senders(inp.senders) if inp.senders is not None else None
     quiet = _validate_quiet_hours(inp.quiet_hours) if inp.quiet_hours is not None else None
-    org_store.set_org_email_settings(inp.org_id, senders=senders, quiet_hours=quiet,
-                                     clear_quiet_hours=inp.clear_quiet_hours)
-    out: dict = {"ok": True, "org_id": inp.org_id}
+    org_store.set_org_email_settings(inp.org_id, connector, senders=senders,
+                                     quiet_hours=quiet, clear_quiet_hours=inp.clear_quiet_hours)
+    out: dict = {"ok": True, "org_id": inp.org_id, "connector": connector}
     if senders is not None:
         out["senders"] = senders
         out["count"] = len(senders)
@@ -124,27 +124,28 @@ CAPABILITIES += [
     Capability(
         key="org.email_settings.get", handler=_get_email_settings, Input=GetEmailSettingsInput,
         authz=ORG_MEMBER_OF("org_id"),
-        description=("Read the org's email sender addresses used by `email_send` "
-                     "(each with its transport: mailer or resend), plus whether the "
-                     "org's Resend key is set."),
+        description=("Read the org's email config keyed by connector (scaleway = Otomata-"
+                     "hosted, resend = BYOK): per-connector senders + quiet hours, the known "
+                     "email connectors, connector→transport map, and whether the org's Resend "
+                     "key is set."),
         mcp="oto_get_org_email_settings",
         rest=RestBinding("GET", "/api/orgs/{id}/email-settings", _ID),
     ),
     Capability(
         key="org.email_settings.set", handler=_set_email_settings, Input=SetEmailSettingsInput,
         authz=ORG_ADMIN_OF("org_id"),
-        description=("Set the org's email config for `email_send`. `senders` "
-                     "= [{email, name?, reply_to?, transport}], transport ∈ "
-                     "{mailer (Otomata service, domain verified on Scaleway TEM + in the "
+        description=("Set ONE email connector's config for `email_send`. `connector` ∈ "
+                     "{scaleway (Otomata-hosted via Scaleway TEM — domain verified + in the "
                      "service allowlist), resend (BYOK — set the org's Resend key via "
-                     "oto_set_org_secret provider=resend; domain verified on Resend)} — "
-                     "replaces the full list; the first sender is the default when "
-                     "`email_send` omits `from_email`. `quiet_hours` = {tz, start, end} "
-                     "(hours 0..23, wrap-around midnight ok, ex. Europe/Paris 20→8): emails "
-                     "composed inside this window are auto-deferred to the next `end`. "
-                     "`clear_quiet_hours=true` removes the org window (revert to the platform "
-                     "default at send time). Pass any field (merge)."),
+                     "oto_set_org_secret provider=resend; domain verified on Resend)}; the "
+                     "transport is DERIVED from the connector. `senders` = [{email, name?, "
+                     "reply_to?}] (no transport) — replaces this connector's list; the first "
+                     "sender across connectors is the default when `email_send` omits "
+                     "`from_email`. `quiet_hours` = {tz, start, end} (hours 0..23, wrap-around "
+                     "midnight ok): emails composed inside the window are auto-deferred to the "
+                     "next `end`. `clear_quiet_hours=true` removes this connector's window. "
+                     "Pass any field (merge)."),
         mcp="oto_set_org_email_settings",
-        rest=RestBinding("PUT", "/api/orgs/{id}/email-settings", _ID),
+        rest=RestBinding("PUT", "/api/orgs/{id}/email-settings/{connector}", _ID_CONNECTOR),
     ),
 ]

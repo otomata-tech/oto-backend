@@ -1,13 +1,14 @@
 """Email — envoi d'un message à contenu libre (rédigé par l'agent), per-org.
 
-Deux chemins d'envoi, choisis selon l'**adresse expéditrice** déclarée par l'org
-active (`orgs.email_settings.senders`, chaque sender porte un `transport`) :
-- **`mailer`** — via le service Otomata `mailer.oto.zone` (Scaleway TEM). Le domaine
-  doit être vérifié côté TEM **et** dans l'allowlist `MAILER_FROM_DOMAINS` du service.
-  La clé d'envoi reste celle d'Otomata.
-- **`resend`** — BYOK : appel direct de l'API Resend avec la **clé Resend de l'org**
-  (coffre, résolue par `access.resolve_api_key("resend")`, cascade user > org). Le
-  domaine est vérifié côté Resend par l'org.
+L'adresse expéditrice appartient à un **connecteur email** de l'org (config keyée
+par connecteur dans `orgs.email_settings`) ; le **transport en dérive**
+(`providers.EMAIL_CONNECTOR_TRANSPORT`) :
+- connecteur **`scaleway`** → transport `mailer` : service Otomata `mailer.oto.zone`
+  (Scaleway TEM). Domaine vérifié côté TEM **et** dans l'allowlist `MAILER_FROM_DOMAINS`.
+  La clé d'envoi reste celle d'Otomata (pas de clé d'org).
+- connecteur **`resend`** → transport `resend` : BYOK, appel direct de l'API Resend
+  avec la **clé Resend de l'org** (coffre, `access.resolve_api_key("resend")`). Domaine
+  vérifié côté Resend par l'org.
 
 Autorisation **dynamique** selon le `from` résolu :
 - envoi depuis une adresse déclarée de l'org → **membre de l'org** suffit ;
@@ -29,12 +30,10 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
-from .. import access, db, email as mailer, org_store, roles, scheduler
+from .. import access, db, email as mailer, org_store, providers, roles, scheduler
 from ..auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
-
-_TRANSPORTS = ("mailer", "resend")
 
 
 def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
@@ -53,32 +52,36 @@ def _sub_or_raise() -> str:
 
 
 def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
-    """Résout (sub, route) et APPLIQUE l'autorisation. `route` =
-    {from_email, from_name, transport, reply_to} ; from_email=None ⇒ marque par
-    défaut. Lève McpError actionnable sinon."""
+    """Résout (sub, route) et APPLIQUE l'autorisation. `route` = {org_id, connector,
+    from_email, from_name, transport, reply_to, quiet_hours} ; from_email=None +
+    org sans expéditeur ⇒ marque par défaut. Lève McpError actionnable sinon.
+
+    Le TRANSPORT dérive du CONNECTEUR de l'expéditeur (scaleway→mailer, resend→resend)."""
     sub = _sub_or_raise()
     org = access.current_org(sub)
 
-    # Chemin org : une adresse déclarée de l'org active
+    # Chemin org : une adresse déclarée d'un connecteur email de l'org active
     if org is not None:
-        sender = org_store.resolve_sender(org, from_email)
-        if sender is not None:
+        match = org_store.resolve_sender(org, from_email)
+        if match is not None:
+            sender, connector = match
             if not roles.is_org_member(sub, org):
                 raise _err("Tu n'es pas membre de l'org active — bascule avec `oto_use_org`.")
-            transport = (sender.get("transport") or "mailer").lower()
-            if transport not in _TRANSPORTS:
-                raise _err(f"Transport invalide pour « {sender.get('email')} » : "
-                           f"{transport!r} (attendu {list(_TRANSPORTS)}).")
+            transport = providers.EMAIL_CONNECTOR_TRANSPORT.get(connector)
+            if transport is None:
+                raise _err(f"Connecteur email inconnu pour « {sender.get('email')} » : {connector!r}.")
             return sub, {
                 "org_id": org,
+                "connector": connector,
                 "from_email": sender.get("email"),
                 "from_name": sender.get("name"),
                 "transport": transport,
                 "reply_to": sender.get("reply_to"),
+                "quiet_hours": org_store.org_email_quiet_hours(org, connector),
             }
         if from_email is not None:
-            raise _err(f"« {from_email} » n'est pas une adresse déclarée de l'org active. "
-                       "Ajoute-la via `oto_set_org_email_settings`, ou omets `from_email`.")
+            raise _err(f"« {from_email} » n'est pas une adresse déclarée d'un connecteur email de "
+                       "l'org active. Ajoute-la via `oto_set_org_email_settings`, ou omets `from_email`.")
 
     # Chemin marque oto@otomata.tech — super_admin uniquement
     if from_email is not None:
@@ -88,8 +91,8 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
         raise _err("Ton org n'a pas d'adresse d'envoi configurée — demande à un org_admin "
                    "de l'ajouter via `oto_set_org_email_settings`. L'envoi sous la marque "
                    "oto@otomata.tech est réservé au super_admin de la plateforme.")
-    return sub, {"org_id": None, "from_email": None, "from_name": None,
-                 "transport": "mailer", "reply_to": None}
+    return sub, {"org_id": None, "connector": None, "from_email": None, "from_name": None,
+                 "transport": "mailer", "reply_to": None, "quiet_hours": None}
 
 
 def register(mcp: FastMCP) -> None:
@@ -168,12 +171,9 @@ def register(mcp: FastMCP) -> None:
             return {"sent": False, "dry_run": True, "to": to, "subject": subject,
                     "from": from_hdr, "transport": transport, "html": html}
 
-        # Quiet hours : appliquées seulement pour une org (le repli marque, org=None,
-        # n'a pas de quiet hours — seul un send_at explicite le diffère).
-        if org_id is not None:
-            quiet = org_store.get_org_email_settings(org_id).get("quiet_hours")
-        else:
-            quiet = {"start": 0, "end": 0}   # désactivé (start==end)
+        # Quiet hours du CONNECTEUR de l'expéditeur (résolues dans la route). Repli
+        # marque (org=None / pas de connecteur) → désactivé (seul send_at diffère).
+        quiet = route.get("quiet_hours") or {"start": 0, "end": 0}
         try:
             when = scheduler.compute_scheduled_at(
                 datetime.now(timezone.utc), quiet, send_at, force_now)

@@ -385,6 +385,17 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, default_hidden=True,
        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
+    # scaleway : email hébergé Otomata (Scaleway TEM via mailer.oto.zone). PAS de clé
+    # d'org — l'envoi part avec la clé d'Otomata (transport "mailer"), domaine vérifié
+    # côté TEM + allowlist MAILER_FROM_DOMAINS du service. Aucun credential à poser
+    # (secret_kind="none"). Comme resend : credential/config-only, sa gestion (expéditeurs
+    # + fenêtre calme) vit dans le panneau email de la carte connecteur ORG ; email_send
+    # (spine) route sender→connecteur→transport. tools/scaleway.py = register() no-op.
+    _c("scaleway", ["scaleway"], secret_kind="none",
+       in_default_bundle=False, default_hidden=True,
+       label="Email hébergé (Scaleway TEM)",
+       help="envoi d'email via le service Otomata (domaine vérifié)",
+       publisher="Otomata"),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets
@@ -655,6 +666,11 @@ ADMIN_GRANT_ONLY_NAMESPACES: frozenset = frozenset(
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)
 DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_preset)
+
+# Connecteurs d'envoi d'email → transport effectif. Un expéditeur appartient à un
+# connecteur (sa config vit dans orgs.email_settings keyé par connecteur) ; le
+# transport en DÉRIVE. `email_send` (spine) route sender→connecteur→transport.
+EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "mailer", "resend": "resend"}
 DEFAULT_HIDDEN_NAMESPACES: frozenset = frozenset(
     ns for c in _REGISTRY_LIST if c.default_hidden for ns in c.namespaces
 )

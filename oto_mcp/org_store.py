@@ -312,40 +312,41 @@ def set_org_field_filters(org_id: int, service: str, block: Optional[dict]) -> b
             return True
 
 
-# --- adresses expéditrices d'email de l'org (envoi per-org) ------------------
+# --- adresses expéditrices d'email de l'org, PAR CONNECTEUR ------------------
+# Modèle calqué sur field_filters : JSONB sur orgs, keyé par connecteur. Un
+# expéditeur appartient à un connecteur (scaleway/resend) → le transport en dérive
+# (providers.EMAIL_CONNECTOR_TRANSPORT). Forme :
+#   { "scaleway": {"senders":[{email,name?,reply_to?}], "quiet_hours?":{...}},
+#     "resend":   {"senders":[...], "quiet_hours?":{...}} }
 
-_EMAIL_TRANSPORTS = ("mailer", "resend")
+# Ordre de résolution d'un expéditeur par défaut (from_email omis).
+_EMAIL_CONNECTORS_ORDER = ("scaleway", "resend")
 
 
 def get_org_email_settings(org_id: int) -> dict:
-    """Réglages d'envoi d'email de l'org. Forme : `{ "senders": [...] }`.
+    """Réglages d'envoi d'email de l'org, keyés PAR CONNECTEUR. `{}` si rien posé.
 
-    Chaque sender = `{email, name?, reply_to?, transport: "mailer"|"resend"}`.
-    `{"senders": []}` si rien posé."""
+    Forme : `{ "<connector>": {"senders": [...], "quiet_hours"?: {...}} }`."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT email_settings FROM orgs WHERE id = %s", (org_id,)
         ).fetchone()
         if not row:
-            return {"senders": []}
-        settings = dict(row["email_settings"] or {})
-        settings.setdefault("senders", [])
-        return settings
+            return {}
+        return dict(row["email_settings"] or {})
 
 
-def set_org_email_settings(org_id: int, *, senders: Optional[list[dict]] = None,
+def set_org_email_settings(org_id: int, connector: str, *,
+                           senders: Optional[list[dict]] = None,
                            quiet_hours: Optional[dict] = None,
                            clear_quiet_hours: bool = False) -> bool:
-    """Met à jour les réglages d'email de l'org (merge dans le JSONB : seules les
-    clés fournies changent). False si org absente.
+    """Met à jour le bloc d'un CONNECTEUR (merge dans le JSONB ; ne touche pas les
+    autres connecteurs). False si org absente.
 
-    `quiet_hours=None` = ne touche pas la fenêtre ; `clear_quiet_hours=True` =
-    EFFACE la fenêtre stockée (retour au défaut plateforme à l'envoi). Les deux
-    sont exclusifs (poser une fenêtre OU l'effacer).
-
-    Prose de config (adresses + transport + fenêtre d'envoi), pas un secret →
-    colonne en clair. La clé Resend, elle, vit dans le coffre
-    (`set_org_secret(org_id, "resend", ...)`)."""
+    `senders`/`quiet_hours=None` = ne touche pas ce champ ; `clear_quiet_hours=True`
+    = efface la fenêtre du connecteur (retour au défaut plateforme à l'envoi),
+    exclusif avec `quiet_hours`. Prose de config (pas un secret) → colonne en clair ;
+    la clé Resend, elle, vit dans le coffre (`set_org_secret(org_id, "resend", ...)`)."""
     with _connect() as conn:
         with conn.transaction():
             row = conn.execute(
@@ -354,12 +355,14 @@ def set_org_email_settings(org_id: int, *, senders: Optional[list[dict]] = None,
             if not row:
                 return False
             current = dict(row["email_settings"] or {})
+            block = dict(current.get(connector) or {})
             if senders is not None:
-                current["senders"] = senders
+                block["senders"] = senders
             if clear_quiet_hours:
-                current.pop("quiet_hours", None)
+                block.pop("quiet_hours", None)
             elif quiet_hours is not None:
-                current["quiet_hours"] = quiet_hours
+                block["quiet_hours"] = quiet_hours
+            current[connector] = block
             conn.execute(
                 "UPDATE orgs SET email_settings = %s::jsonb WHERE id = %s",
                 (json.dumps(current), org_id),
@@ -377,20 +380,36 @@ def cancel_scheduled_email(org_id: int, email_id: int) -> bool:
     return db.cancel_scheduled_email(org_id, email_id)
 
 
-def resolve_sender(org_id: int, from_email: Optional[str] = None) -> Optional[dict]:
-    """Sender de l'org à utiliser. `from_email` fourni = doit matcher un sender
-    déclaré (sinon None) ; absent = le 1er sender (défaut). None si l'org n'a
-    aucune adresse configurée."""
-    senders = get_org_email_settings(org_id).get("senders") or []
-    if not senders:
-        return None
-    if from_email is None:
-        return senders[0]
-    want = from_email.strip().lower()
-    for s in senders:
-        if (s.get("email") or "").strip().lower() == want:
-            return s
+def _email_connectors_in_order(settings: dict) -> list[str]:
+    """Connecteurs email présents, dans un ordre déterministe (scaleway, resend,
+    puis tout autre keyé inattendu trié)."""
+    present = list(settings.keys())
+    ordered = [c for c in _EMAIL_CONNECTORS_ORDER if c in present]
+    return ordered + sorted(c for c in present if c not in _EMAIL_CONNECTORS_ORDER)
+
+
+def resolve_sender(org_id: int, from_email: Optional[str] = None
+                   ) -> Optional[tuple[dict, str]]:
+    """`(sender, connector)` à utiliser, ou None si l'org n'a aucun expéditeur.
+
+    `from_email` fourni = doit matcher un expéditeur déclaré (dans n'importe quel
+    connecteur) ; absent = le 1er expéditeur du 1er connecteur (ordre déterministe).
+    Le connecteur retourné détermine le transport (EMAIL_CONNECTOR_TRANSPORT)."""
+    settings = get_org_email_settings(org_id)
+    want = from_email.strip().lower() if from_email else None
+    for connector in _email_connectors_in_order(settings):
+        senders = (settings.get(connector) or {}).get("senders") or []
+        for s in senders:
+            if want is None:
+                return s, connector
+            if (s.get("email") or "").strip().lower() == want:
+                return s, connector
     return None
+
+
+def org_email_quiet_hours(org_id: int, connector: str) -> Optional[dict]:
+    """Fenêtre calme d'un connecteur email de l'org (None = pas posée)."""
+    return (get_org_email_settings(org_id).get(connector) or {}).get("quiet_hours")
 
 
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:

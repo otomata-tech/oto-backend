@@ -31,10 +31,17 @@ import os
 
 import sentry_sdk
 from fastmcp.server.middleware import Middleware
+from mcp.shared.exceptions import McpError
+from mcp.types import INVALID_PARAMS, INVALID_REQUEST
 
 from .auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger("oto_mcp")
+
+# Codes JSON-RPC d'erreur d'ENTRÉE/CONFIG côté user (pendant natif d'un 4xx amont) :
+# « pose ta clé », « connecte ton compte », param/org invalide. Levés
+# intentionnellement par les tools/capacités, pas des bugs backend → non reportés.
+_USER_INPUT_CODES = {INVALID_PARAMS, INVALID_REQUEST}
 
 
 def _upstream_status(exc) -> int | None:
@@ -69,10 +76,36 @@ def _is_managed_connector_error(exc) -> bool:
     return False
 
 
+def _is_user_input_error(exc) -> bool:
+    """True si l'exception (ou sa chaîne) est une `McpError` d'entrée/config user.
+
+    Une `McpError` avec un code de `_USER_INPUT_CODES` (INVALID_PARAMS / INVALID_REQUEST)
+    = refus côté user explicite (« pose ta clé », « connecte ton compte », org/param
+    invalide), levé volontairement par un tool/capacité. C'est le pendant natif du
+    4xx amont — déjà rendu à l'agent et tracé dans `tool_calls`, pas un bug backend.
+    """
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, McpError) and getattr(exc.error, "code", None) in _USER_INPUT_CODES:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _is_expected_error(exc) -> bool:
+    """Erreur gérée, à ne PAS reporter : 4xx amont OU refus d'entrée/config user.
+
+    Les vraies exceptions code (5xx, KeyError, Runtimeable inattendu — y compris
+    `credential indéchiffrable`/InvalidTag, une corruption réelle) restent reportées.
+    """
+    return _is_managed_connector_error(exc) or _is_user_input_error(exc)
+
+
 def _before_send(event, hint):
-    """Droppe les refus client amont (4xx) — couvre la copie LoggingIntegration."""
+    """Droppe les erreurs gérées — couvre aussi la copie LoggingIntegration."""
     exc_info = (hint or {}).get("exc_info")
-    if exc_info and _is_managed_connector_error(exc_info[1]):
+    if exc_info and _is_expected_error(exc_info[1]):
         return None
     return event
 
@@ -91,7 +124,8 @@ def init_sentry() -> bool:
         send_default_pii=False,
         # Tracing de perf désactivé par défaut (on cible l'error tracking).
         traces_sample_rate=float(os.environ.get("OTO_SENTRY_TRACES_SAMPLE_RATE", "0") or "0"),
-        # Ne pas reporter les refus client amont (4xx) : pas des bugs backend.
+        # Ne pas reporter les erreurs gérées (4xx amont + refus d'entrée/config
+        # user McpError) : pas des bugs backend.
         before_send=_before_send,
     )
     logger.info("Sentry actif (env=%s)", os.environ.get("OTO_SENTRY_ENV", "production"))
@@ -102,15 +136,15 @@ class SentryToolErrorMiddleware(Middleware):
     """Capture les exceptions des tools MCP vers Sentry, puis re-raise.
 
     No-op si Sentry n'est pas initialisé (`capture_exception` ne fait rien). Sur le
-    chemin nominal, ce middleware ne fait que déléguer — aucun surcoût. Un **refus
-    client amont (4xx)** n'est PAS capturé (erreur de connecteur gérée, cf. module).
+    chemin nominal, ce middleware ne fait que déléguer — aucun surcoût. Une **erreur
+    gérée** (4xx amont OU refus d'entrée/config user) n'est PAS capturée (cf. module).
     """
 
     async def on_call_tool(self, context, call_next):
         try:
             return await call_next(context)
         except Exception as e:
-            if not _is_managed_connector_error(e):
+            if not _is_expected_error(e):
                 try:
                     with sentry_sdk.new_scope() as scope:
                         scope.set_tag("mcp.tool", context.message.name)

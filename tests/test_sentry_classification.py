@@ -3,9 +3,14 @@
 Garde-fou de la classification PAR TYPE de `sentry_setup` (ADR : Sentry = défauts du
 code ; les 4xx d'API tierces vivent dans le backlog `tool_calls`, pas dans Sentry).
 """
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST
+
 from oto_mcp.sentry_setup import (
     _before_send,
+    _is_expected_error,
     _is_managed_connector_error,
+    _is_user_input_error,
     _upstream_status,
 )
 
@@ -71,8 +76,36 @@ def test_real_bugs_and_5xx_still_reported():
     assert not _is_managed_connector_error(Exception("HTTP 422: x"))
 
 
-def test_before_send_drops_only_4xx():
+def test_mcp_input_errors_are_user_config_noise():
+    # « pose ta clé », « connecte ton compte », param/org invalide → refus user
+    assert _is_user_input_error(McpError(ErrorData(code=INVALID_PARAMS, message="Aucune clé `hunter`")))
+    assert _is_user_input_error(McpError(ErrorData(code=INVALID_REQUEST, message="x")))
+    # remonte la chaîne : ToolError fastmcp emballant la McpError de config
+    assert _is_user_input_error(
+        _chained(Exception("Error calling tool 'gmail_get'"),
+                 McpError(ErrorData(code=INVALID_PARAMS, message="Aucun compte Google connecté")))
+    )
+
+
+def test_mcp_internal_and_real_bugs_still_reported():
+    # INTERNAL_ERROR = vrai défaut serveur, pas un refus user
+    assert not _is_user_input_error(McpError(ErrorData(code=INTERNAL_ERROR, message="boom")))
+    # corruption coffre (clé périmée) = Runtimeable, on VEUT la voir
+    assert not _is_expected_error(RuntimeError("credential indéchiffrable (clé périmée)"))
+    assert not _is_expected_error(AttributeError("module 'oto_mcp.db' has no attribute 'has_option_comp'"))
+
+
+def test_expected_error_unifies_both_classes():
+    assert _is_expected_error(_Upstream(422))                                  # 4xx amont
+    assert _is_expected_error(McpError(ErrorData(code=INVALID_PARAMS, message="x")))  # config user
+    assert not _is_expected_error(_Upstream(503))
+    assert not _is_expected_error(KeyError("sub"))
+
+
+def test_before_send_drops_managed_errors():
     assert _before_send({}, {"exc_info": (_Upstream, _Upstream(422), None)}) is None
+    e = McpError(ErrorData(code=INVALID_PARAMS, message="connecte ton compte"))
+    assert _before_send({}, {"exc_info": (McpError, e, None)}) is None
     ev = {"k": "v"}
     assert _before_send(ev, {"exc_info": (_Upstream, _Upstream(500), None)}) is ev
     assert _before_send(ev, {"exc_info": (KeyError, KeyError("x"), None)}) is ev

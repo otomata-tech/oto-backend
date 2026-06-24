@@ -682,49 +682,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 out[f.name] = fields.get(f.name)
         return _json(request, out)
 
-    async def admin_users(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_platform_operator(sub):
-            return _json_error(request, 403, "forbidden")
-        # Inclut les grants pour la matrice users × keys côté UI.
-        users = db.list_users_with_grants()
-        # Surface le rôle "effectif" (qui peut être promu via OTO_MCP_ADMIN_SUB).
-        for u in users:
-            u["effective_role"] = access.get_user_role(u["sub"])
-        return _json(request, {"users": users})
-
-    async def admin_user_detail(request: Request) -> JSONResponse:
-        """Fiche complète d'un user (admin) : identité + accès EFFECTIF par
-        provider (own key / org / platform+quota / aucun, via status_for) +
-        grants de clé plateforme + namespaces débloqués."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_platform_operator(sub):
-            return _json_error(request, 403, "forbidden")
-        target = request.path_params["sub"]
-        u = db.get_user(target)
-        if not u:
-            return _json_error(request, 404, "unknown_user")
-        status = access.status_for(target)
-        ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
-        pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
-                          if u.get("email") else None)
-        return _json(request, {
-            "sub": target, "email": u.get("email"), "name": u.get("name"),
-            "role": status["role"], "active_org": status.get("active_org"),
-            "access_status": u.get("access_status"),
-            "pending_invite": pending_invite,
-            "orgs": org_store.list_orgs_for_user(target),
-            "providers": status["providers"],
-            "grants": db.list_grants_for_user(target),
-            "namespace_grants": ns,
-            # Options payantes offertes (comp) au niveau USER (couche 3).
-            "option_comps": db.list_option_comps("user", target),
-        })
-
     async def admin_platform_keys_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -784,122 +741,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         db.delete_platform_key(key_id)
         return _json(request, {"ok": True, "id": key_id})
 
-    async def admin_grant(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        target_sub = request.path_params["sub"]
-        try:
-            key_id = int(request.path_params["key_id"])
-        except ValueError:
-            return _json_error(request, 400, "invalid_id")
-        if not db.get_user(target_sub):
-            return _json_error(request, 404, "unknown_user")
-        if not db.get_platform_key(key_id):
-            return _json_error(request, 404, "unknown_key")
-        daily_quota: int | None = None
-        try:
-            body = await request.json()
-            raw = body.get("daily_quota")
-            if raw is not None:
-                daily_quota = max(1, int(raw))
-        except Exception:
-            pass
-        db.grant_platform_key(target_sub, key_id, granted_by=sub, daily_quota=daily_quota)
-        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id, "daily_quota": daily_quota})
-
-    async def admin_option_comp(request: Request) -> JSONResponse:
-        """Offrir / retirer une option payante (comp GRATUIT, couche 3 du modèle de
-        connecteur) à une entité `user` ou `org`. super_admin only. Distinct du Stripe
-        payant — pose/retire une ligne `option_comps` lue par `access.has_option`.
-        Body : {entity_type:'user'|'org', entity_id, option, on:bool}."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        et = body.get("entity_type")
-        eid = body.get("entity_id")
-        option = body.get("option")
-        on = bool(body.get("on"))
-        if et not in ("user", "org") or not eid or not option:
-            return _json_error(request, 400, "invalid_body")
-        eid = str(eid)
-        if et == "user" and not db.get_user(eid):
-            return _json_error(request, 404, "unknown_user")
-        if et == "org":
-            try:
-                if not org_store.get_org(int(eid)):
-                    return _json_error(request, 404, "unknown_org")
-            except (ValueError, TypeError):
-                return _json_error(request, 400, "invalid_body")
-        if on:
-            db.set_option_comp(et, eid, option, granted_by=sub)
-        else:
-            db.clear_option_comp(et, eid, option)
-        return _json(request, {"ok": True, "entity_type": et, "entity_id": eid, "option": option, "on": on})
-
-    async def admin_revoke(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        target_sub = request.path_params["sub"]
-        try:
-            key_id = int(request.path_params["key_id"])
-        except ValueError:
-            return _json_error(request, 400, "invalid_id")
-        db.revoke_platform_key(target_sub, key_id)
-        return _json(request, {"ok": True, "sub": target_sub, "platform_key_id": key_id})
-
-    async def admin_org_grant(request: Request) -> JSONResponse:
-        """Partage une clé plateforme à TOUTE une org (couche 2, grant org-level).
-        super_admin only. Miroir org de admin_grant. Body optionnel {daily_quota}."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        try:
-            org_id = int(request.path_params["id"])
-            key_id = int(request.path_params["key_id"])
-        except ValueError:
-            return _json_error(request, 400, "invalid_id")
-        if not org_store.get_org(org_id):
-            return _json_error(request, 404, "unknown_org")
-        if not db.get_platform_key(key_id):
-            return _json_error(request, 404, "unknown_key")
-        daily_quota: int | None = None
-        try:
-            raw = (await request.json()).get("daily_quota")
-            if raw is not None:
-                daily_quota = max(1, int(raw))
-        except Exception:
-            pass
-        db.grant_org_platform_key(org_id, key_id, granted_by=sub, daily_quota=daily_quota)
-        return _json(request, {"ok": True, "org_id": org_id, "platform_key_id": key_id, "daily_quota": daily_quota})
-
-    async def admin_org_revoke(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        try:
-            org_id = int(request.path_params["id"])
-            key_id = int(request.path_params["key_id"])
-        except ValueError:
-            return _json_error(request, 400, "invalid_id")
-        db.revoke_org_platform_key(org_id, key_id)
-        return _json(request, {"ok": True, "org_id": org_id, "platform_key_id": key_id})
-
     async def admin_tokens_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -945,25 +786,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not ok:
             return _json_error(request, 404, "unknown_token")
         return _json(request, {"ok": True, "id": token_id})
-
-    async def admin_set_role(request: Request) -> JSONResponse:
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        if not access.is_super_admin(sub):
-            return _json_error(request, 403, "forbidden")
-        target_sub = request.path_params["sub"]
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_error(request, 400, "invalid_json")
-        role = (body or {}).get("role")
-        if role not in access.ROLES:
-            return _json_error(request, 400, "invalid_role")
-        if not db.get_user(target_sub):
-            return _json_error(request, 404, "unknown_user")
-        db.set_user_role(target_sub, role)
-        return _json(request, {"ok": True, "sub": target_sub, "role": role})
 
     async def admin_monitoring_summary(request: Request) -> JSONResponse:
         """Agrégats des appels MCP (total / échecs / par tool / par user / par
@@ -1375,25 +1197,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/users", admin_users, methods=["GET"]),
-        Route("/api/admin/users", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/users/{sub}", admin_user_detail, methods=["GET"]),
-        Route("/api/admin/users/{sub}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/users/{sub}/role", admin_set_role, methods=["POST"]),
-        Route("/api/admin/users/{sub}/role", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),
         Route("/api/admin/platform-keys", admin_platform_key_create, methods=["POST"]),
         Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/platform-keys/{key_id}", admin_platform_key_delete, methods=["DELETE"]),
         Route("/api/admin/platform-keys/{key_id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/users/{sub}/grants/{key_id}", admin_grant, methods=["POST"]),
-        Route("/api/admin/users/{sub}/grants/{key_id}", admin_revoke, methods=["DELETE"]),
-        Route("/api/admin/users/{sub}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/option-comps", admin_option_comp, methods=["POST"]),
-        Route("/api/admin/option-comps", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/orgs/{id}/grants/{key_id}", admin_org_grant, methods=["POST"]),
-        Route("/api/admin/orgs/{id}/grants/{key_id}", admin_org_revoke, methods=["DELETE"]),
-        Route("/api/admin/orgs/{id}/grants/{key_id}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),

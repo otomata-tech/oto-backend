@@ -15,6 +15,7 @@ from . import orgs_email_settings  # noqa: F401 — org.email_settings.{get,set}
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept} + platform.invite.alpha
 from . import access_admin  # noqa: F401 — platform.access.{waitlist,grant,set_quota} (ADR 0013)
+from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
 # Sous-palier groupe (ADR 0012) — départements/équipes + chef d'équipe.
 from . import groups  # noqa: F401 — group.create/list/list_mine/use/clear/get/update/delete
 from . import groups_members  # noqa: F401 — group.member.{add,set_role,remove}

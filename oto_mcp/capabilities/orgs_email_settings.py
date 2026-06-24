@@ -36,6 +36,7 @@ class SetEmailSettingsInput(BaseModel):
     org_id: int
     senders: Optional[list[dict]] = None     # [{email, name?, reply_to?, transport}]
     quiet_hours: Optional[dict] = None       # {tz, start, end} — fenêtre d'envoi interdite
+    clear_quiet_hours: bool = False          # True = efface la fenêtre (retour au défaut plateforme)
 
 
 def _validate_senders(senders: list[dict]) -> list[dict]:
@@ -98,17 +99,24 @@ def _get_email_settings(ctx: ResolvedCtx, inp: GetEmailSettingsInput) -> dict:
 def _set_email_settings(ctx: ResolvedCtx, inp: SetEmailSettingsInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    if inp.senders is None and inp.quiet_hours is None:
-        raise AuthzDenied(400, "nothing_to_set", "Fournis `senders` et/ou `quiet_hours`.")
+    if inp.clear_quiet_hours and inp.quiet_hours is not None:
+        raise AuthzDenied(400, "bad_quiet_hours",
+                          "`quiet_hours` et `clear_quiet_hours` sont exclusifs.")
+    if inp.senders is None and inp.quiet_hours is None and not inp.clear_quiet_hours:
+        raise AuthzDenied(400, "nothing_to_set",
+                          "Fournis `senders`, `quiet_hours` ou `clear_quiet_hours`.")
     senders = _validate_senders(inp.senders) if inp.senders is not None else None
     quiet = _validate_quiet_hours(inp.quiet_hours) if inp.quiet_hours is not None else None
-    org_store.set_org_email_settings(inp.org_id, senders=senders, quiet_hours=quiet)
+    org_store.set_org_email_settings(inp.org_id, senders=senders, quiet_hours=quiet,
+                                     clear_quiet_hours=inp.clear_quiet_hours)
     out: dict = {"ok": True, "org_id": inp.org_id}
     if senders is not None:
         out["senders"] = senders
         out["count"] = len(senders)
     if quiet is not None:
         out["quiet_hours"] = quiet
+    if inp.clear_quiet_hours:
+        out["quiet_hours"] = None
     return out
 
 
@@ -134,7 +142,8 @@ CAPABILITIES += [
                      "`email_send` omits `from_email`. `quiet_hours` = {tz, start, end} "
                      "(hours 0..23, wrap-around midnight ok, ex. Europe/Paris 20→8): emails "
                      "composed inside this window are auto-deferred to the next `end`. "
-                     "Pass either field or both (merge)."),
+                     "`clear_quiet_hours=true` removes the org window (revert to the platform "
+                     "default at send time). Pass any field (merge)."),
         mcp="oto_set_org_email_settings",
         rest=RestBinding("PUT", "/api/orgs/{id}/email-settings", _ID),
     ),

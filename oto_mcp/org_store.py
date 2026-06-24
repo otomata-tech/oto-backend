@@ -334,9 +334,14 @@ def get_org_email_settings(org_id: int) -> dict:
 
 
 def set_org_email_settings(org_id: int, *, senders: Optional[list[dict]] = None,
-                           quiet_hours: Optional[dict] = None) -> bool:
+                           quiet_hours: Optional[dict] = None,
+                           clear_quiet_hours: bool = False) -> bool:
     """Met à jour les réglages d'email de l'org (merge dans le JSONB : seules les
     clés fournies changent). False si org absente.
+
+    `quiet_hours=None` = ne touche pas la fenêtre ; `clear_quiet_hours=True` =
+    EFFACE la fenêtre stockée (retour au défaut plateforme à l'envoi). Les deux
+    sont exclusifs (poser une fenêtre OU l'effacer).
 
     Prose de config (adresses + transport + fenêtre d'envoi), pas un secret →
     colonne en clair. La clé Resend, elle, vit dans le coffre
@@ -351,7 +356,9 @@ def set_org_email_settings(org_id: int, *, senders: Optional[list[dict]] = None,
             current = dict(row["email_settings"] or {})
             if senders is not None:
                 current["senders"] = senders
-            if quiet_hours is not None:
+            if clear_quiet_hours:
+                current.pop("quiet_hours", None)
+            elif quiet_hours is not None:
                 current["quiet_hours"] = quiet_hours
             conn.execute(
                 "UPDATE orgs SET email_settings = %s::jsonb WHERE id = %s",

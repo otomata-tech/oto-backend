@@ -29,49 +29,16 @@ jobs:
   deploy:
     needs: test
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oto-platform]
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
     steps:
-      - name: Deploy to box
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd /opt/oto-mcp || exit 1
-            HEALTH="https://mcp.oto.ninja/.well-known/oauth-authorization-server"
-            PREV=$(git rev-parse HEAD)            # commit courant, pour rollback
-
-            # reset → reinstall → restart, chaînés : non-zéro si une étape échoue.
-            # ⚠️ pip NE réinstalle PAS une dép VCS déjà présente (oto-core "satisfait"
-            # quelle que soit sa version) → `pip install -e .` seul ne monte jamais
-            # oto-core au tag bumpé. On force-réinstalle oto-core depuis le tag LU du
-            # pyproject (source unique, pas de hardcode). Cf. ADR 0020 + otomata-private#39.
-            deploy() {
-              git reset --hard "$1" || return 1
-              tag=$(grep -oP 'oto-core\.git@\K[^"]+' pyproject.toml) || return 1
-              ./.venv/bin/pip install -e . --quiet \
-                && ./.venv/bin/pip install --force-reinstall --quiet "oto-core[browser] @ git+https://github.com/otomata-tech/oto-core.git@${tag}" \
-                && systemctl restart oto-mcp
-            }
-            # service actif ET endpoint public répond 200 (retry ~25s pour le boot).
-            healthy() {
-              for i in 1 2 3 4 5 6 7 8; do
-                systemctl is-active --quiet oto-mcp && curl -fsS --max-time 10 "$HEALTH" -o /dev/null 2>/dev/null && return 0
-                sleep 3
-              done
-              return 1
-            }
-
-            git fetch origin main || exit 1
-            if deploy origin/main && healthy; then
-              echo "deploy OK"; journalctl -u oto-mcp -n 10 --no-pager
-            else
-              echo "DÉPLOIEMENT KO (install/restart/healthcheck) → rollback vers $PREV"
-              journalctl -u oto-mcp -n 50 --no-pager
-              deploy "$PREV" && healthy && echo "rollback OK (restauré $PREV)" || echo "⚠️ ROLLBACK EN ÉCHEC — intervention manuelle requise"
-              exit 1
-            fi
+      - name: Deploy (build serveur via script root-restreint)
+        # Runner self-hosted sur la box dédiée (user non-root `gha-runner`, sudo
+        # NOPASSWD limité à /opt/deploy/oto-backend.sh) : plus de SSH entrant (le
+        # port 22 de la box est filtré par CrowdSec, qui droppe les IP des runners
+        # GitHub hosted). La logique de deploy (reset + reinstall oto-core au tag +
+        # restart + healthcheck + rollback) vit dans le script serveur — source de
+        # vérité unique. Cf. ADR 0020 + otomata-private#39.
+        run: sudo /opt/deploy/oto-backend.sh

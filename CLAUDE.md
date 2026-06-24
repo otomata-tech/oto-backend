@@ -71,18 +71,35 @@ appel : `user_key > group_secret > org_secret > platform_grant` (chemin platform
 gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
 grants/quota, platform keys, providers byo-only).
 
+**Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
+
 ## REST API (consommée par le dashboard / oto.ninja)
 
 Endpoints `/api/*` (compte, settings, orgs, admin, billing, datastore…), même
 `JWTVerifier` que `/mcp`. **Inventaire : `docs/rest-api.md`**.
 
-## Browser automation — délégué à o-browser-full (issue oto-app#11)
+## Browser automation — état réel : crunchbase in-process only (⚠️ délégation conteneur NON câblée)
 
-- oto-mcp **ne lance plus Chrome in-process**. `tools/linkedin.py` délègue au conteneur **o-browser-full** (Docker, `OBROWSER_URL` défaut `http://127.0.0.1:8080`, cappé `--memory 2.5g` sur la même box) → un OOM browser ne touche pas `/api/me` (découplage **cgroup**, pas machine).
-- Flux : `RemoteBrowser.ensure_session(OBROWSER_URL, "linkedin-<sub>")` → `cdp_url` → `LinkedInClient(cdp_url=…)`. Session fermée après chaque scrape (`DELETE /api/sessions/current`) — **option A** : 1 Chrome/conteneur, verrou global `_BROWSER_LOCK`.
-- Profils dans le **volume conteneur** `/var/lib/o-browser/profiles/linkedin-<sub>` (override `OBROWSER_PROFILES_DIR`), partagé avec le pairing. `linkedin_pairing.has_profile` (check **FS**, suit les symlinks) = source de vérité de `/api/me` (le `GET /api/profiles` du conteneur, lui, filtre les symlinks).
-- Dépend de **`o-browser>=0.4.0`** (RemoteBrowser `profile`/`ensure_session`). Publier o-browser = tag `vX.Y.Z` → CI PyPI (trusted publishing).
-- Reste in-process (à migrer) : **Crunchbase** (`tools/crunchbase.py`) et le **pairing** LinkedIn (rare, supervisé).
+⚠️ **La délégation à un conteneur o-browser-full (`OBROWSER_URL` / `RemoteBrowser` /
+`ensure_session`) n'existe PAS dans ce backend** (`grep -r OBROWSER|RemoteBrowser
+oto_mcp/` = 0). Elle a été décrite comme cible mais jamais portée sur la box dédiée
+(le conteneur o-browser-full vit sur **tuls.me/otomata-0**, pas sur la box
+`151.115.148.128`). État réel vérifié (2026-06-24) :
+
+- **LinkedIn** : `tools/linkedin.py` **supprimé** — LinkedIn passe par **Unipile**
+  (hébergé, connecteur `unipile`). Le browser LinkedIn local ne survit que dans
+  oto-cli (fallback) et dans oto-core (`oto.tools.browser.linkedin/`).
+- **Crunchbase** = **seul** connecteur browser (`providers.BROWSER_PROVIDERS={"crunchbase"}`),
+  lancé **in-process** sur la box : `oto.tools.browser.crunchbase.CrunchbaseClient(
+  cookies, user_agent, headless=True)` (suppose Chrome+patchright+RAM dispo). Session
+  (cookies JSON + UA) dans le **coffre chiffré**, résolue par
+  `access.resolve_crunchbase_session()` → `db.get_crunchbase_session()`.
+- **Conséquence** : **pas de harnais browser serveur « propre »** aujourd'hui. Un
+  connecteur à credential cookie a deux voies — (a) rejouer le cookie en **httpx
+  direct** (ex. `brevo` automation, aucun browser), (b) relancer un **browser
+  in-process** façon crunchbase. La délégation conteneur reste à porter si besoin.
+  ⚠️ Risque commun (a)/(b) : un cookie rejoué depuis l'IP datacenter de la box peut
+  être invalidé/refusé (cf. §LinkedIn cookies, leçon `li_at`).
 
 ## LinkedIn cookies
 
@@ -155,7 +172,18 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 > **Mode plateforme unipile** (revente) : `auth_modes` inclut `platform` → la clé
 > Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
 > `access.unipile_api_key_for` a le fallback platform-grant. Le gate abonnement reste
-> par org (un grant donne la clé, ne bypasse pas le paiement).
+> par org (un grant donne la clé, ne bypasse pas le paiement). **« Offrir sans payer »
+> = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
+
+> **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
+> à SON sous-domaine `api<NN>.unipile.com:port` ; le DSN vit dans le `meta` du credential
+> et voyage avec la clé via `resolve_credential` (défaut env `UNIPILE_DSN`=api25, instance
+> plateforme). Une clé BYO porte N comptes → capacités génériques **`connectors.identities`/
+> `set_default_identity`** (REST `/api/connectors/{c}/identities[/default]`, registre
+> `connector_identities.py` ; unipile = `list_accounts` sur clé+DSN, **valide id∈liste**
+> anti-binding, **BYO-only** — en revente la liste est vide, hosted-auth conservé). Vue admin
+> **sièges clé plateforme** `GET /api/admin/unipile/seats` (super_admin, `db.unipile_account_owners`) :
+> réconcilie les comptes de l'instance partagée ↔ leur owner oto (flag **orphelin**).
 
 ## Monitoring des appels MCP
 

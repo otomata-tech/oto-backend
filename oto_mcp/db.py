@@ -2537,7 +2537,7 @@ def list_connector_access(org_id: int, connector: Optional[str] = None) -> list[
 def org_restricted_connectors(org_id: int) -> set:
     """Connecteurs RESTREINTS dans l'org (≥1 ligne d'ACL) — deny-by-default pour eux."""
     with _connect() as conn:
-        return {r[0] for r in conn.execute(
+        return {r["connector"] for r in conn.execute(
             "SELECT DISTINCT connector FROM org_connector_access WHERE org_id = %s",
             (org_id,)).fetchall()}
 
@@ -2547,7 +2547,7 @@ def member_allowed_connectors(sub: str, org_id: int) -> set:
     OU groupe ∈ ses groupes de l'org. (Un connecteur non restreint n'est pas listé
     ici mais reste ouvert — cf. org_restricted_connectors.)"""
     with _connect() as conn:
-        return {r[0] for r in conn.execute(
+        return {r["connector"] for r in conn.execute(
             """
             SELECT DISTINCT a.connector FROM org_connector_access a
              WHERE a.org_id = %s AND (

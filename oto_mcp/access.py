@@ -36,6 +36,7 @@ n'est accessible qu'avec un grant admin explicite.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -46,6 +47,8 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from . import connectors, credentials_store, db, group_store, org_store, session_org
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
+
+logger = logging.getLogger(__name__)
 
 # Rôles plateforme, du plus faible au plus fort : `member` (défaut non-admin) <
 # `admin` (opérateur : supervision sans escalade en masse) < `super_admin`
@@ -255,11 +258,14 @@ def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
         if org is None or provider not in db.org_restricted_connectors(org):
             return  # pas d'org, ou connecteur ouvert dans l'org
         allowed = provider in db.member_allowed_connectors(sub, org)
-    except Exception:
+    except Exception as e:
         # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de
         # credential → ne doit pas casser tous les connecteurs sur un hoquet DB.
         # Pas de bypass exploitable : la résolution qui suit retape la DB et échoue
-        # pareil ; et la visibilité masque déjà le connecteur restreint.
+        # pareil ; et la visibilité masque déjà le connecteur restreint. On LOGUE
+        # (un silence avait masqué un bug `r[0]` 2026-06-25) → un fail-open persistant
+        # = une régression visible, pas un trou muet.
+        logger.warning("require_connector_access fail-open %s/%s: %s", sub, provider, e)
         return
     if not allowed:
         raise McpError(ErrorData(

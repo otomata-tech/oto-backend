@@ -286,6 +286,12 @@ def main():
         # le header X-Oto-Org (pass-through total sinon → n'altère pas le streaming /mcp).
         app.add_middleware(api_routes.ViewAsMiddleware, verifier=verifier)
 
+        # Endpoint scopé par org (« 1 oto par org ») : épingle l'org depuis le Host
+        # `<slug>--mcp.oto.ninja` (pass-through sur le host canonique). Ajouté APRÈS
+        # → outermost, pose le candidat avant le reste de la chaîne.
+        from . import subdomain_org
+        app.add_middleware(subdomain_org.SubdomainOrgMiddleware)
+
         # Scheduler d'email différé : boucle de fond démarrée au boot en composant le
         # lifespan FastMCP existant (mono-process → une seule boucle). Opt-out local
         # via OTO_SCHEDULER_ENABLED=0. Isolée en thread côté scheduler (ne bloque pas).

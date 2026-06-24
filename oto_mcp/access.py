@@ -111,6 +111,15 @@ def current_org(sub: str | None) -> Optional[int]:
     REST only). Garder ce seam étroit : candidat broker de credentials (ADR 0004)."""
     if sub is None:
         return None
+    # Endpoint scopé par sous-domaine (« 1 oto par org ») : épingle l'org de la
+    # connexion AVANT tout. Garde d'appartenance ici (sub connu) → un non-membre
+    # est ignoré (repli maison, zéro fuite). Précédence ⇒ hard-lock : `oto_use_org`
+    # (override de session) ne peut pas sortir de l'org du sous-domaine.
+    cand = session_org.current_subdomain_candidate()
+    if cand is not None:
+        from . import roles
+        if roles.is_org_member(sub, cand):
+            return cand
     present, org = session_org.current_override()
     if present:
         return org
@@ -122,16 +131,24 @@ def current_org(sub: str | None) -> Optional[int]:
 
 _SUBSCRIBED_STATUSES = ("active", "trialing", "past_due")
 
+# Sentinelle « param non fourni » — distingue « org=None » (perso, valeur légitime)
+# de « pas d'org explicite → résous via current_org ». Sert à calculer l'état d'un
+# TIERS (fiche admin) contre SON org persistée, sans laisser fuiter le contexte
+# view-as/session du REQUÉRANT (bug 2026-06-24 : has_option(cible) lisait l'org du
+# requérant). Le chemin self (/api/me) ne passe rien → comportement inchangé.
+_UNSET: object = object()
 
-def has_option(sub: str, option: str) -> bool:
+
+def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) -> bool:
     """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option
     payante `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
     débloquée si l'UNE des trois : comp admin sur l'USER, comp admin sur l'ORG active,
     ou abonnement Stripe de l'ORG active. Ne JAMAIS lire les sources en direct ailleurs
-    (un nouveau chemin passe par ici)."""
+    (un nouveau chemin passe par ici). `org` explicite (≠ _UNSET) = calcul pour un tiers
+    contre une org donnée (fiche admin), sans current_org (anti-fuite de contexte)."""
     if db.has_option_comp("user", sub, option):
         return True
-    org = current_org(sub)
+    org = current_org(sub) if org is _UNSET else org
     if org is not None:
         if db.has_option_comp("org", str(org), option):
             return True
@@ -147,6 +164,18 @@ def current_group(sub: str | None) -> Optional[int]:
     l'invariant « groupe ⊂ org » : un override/consultation d'ORG **sans** groupe
     explicite ⇒ niveau org (None), jamais le home_group d'une autre org."""
     if sub is None:
+        return None
+    # Sous lock d'org par sous-domaine : le groupe n'est rendu QUE s'il ⊂ l'org
+    # épinglée (sinon None = niveau org). Ignore tout override de session vers un
+    # groupe d'une autre org → hard-lock cohérent avec current_org.
+    cand = session_org.current_subdomain_candidate()
+    if cand is not None:
+        from . import roles
+        if not roles.is_org_member(sub, cand):
+            return None
+        ag = group_store.get_active_group(sub)
+        if ag is not None and (group_store.get_group(ag) or {}).get("org_id") == cand:
+            return ag
         return None
     has_g, g = session_org.current_group_override()
     if has_g:

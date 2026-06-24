@@ -149,3 +149,42 @@ def get_override(session_id: Optional[str]) -> tuple[bool, Optional[int]]:
 def current_override() -> tuple[bool, Optional[int]]:
     """Override de la session courante (convenience MCP)."""
     return get_override(current_session_id())
+
+
+# ── Org épinglée par sous-domaine (« 1 oto par org », endpoint scopé) ─────────
+# Un endpoint `<slug>--mcp.oto.ninja` épingle l'org POUR LA CONNEXION. Le Host est
+# sur CHAQUE requête HTTP → on l'enregistre per-requête sur deux supports : un
+# contextvar (couvre les handlers de la MÊME requête, ex. l'initialize qui calcule
+# la visibilité) ET un dict keyé par session_id (couvre les lectures hors-contextvar
+# des appels d'outils, comme l'override de session). La GARDE d'appartenance vit
+# dans `access.current_org` (sub connu) : un non-membre est ignoré → repli maison,
+# zéro fuite. Hard-lock : `current_org` priorise ce candidat ⇒ `oto_use_org` no-op.
+_SUBDOMAIN_ORG: dict[str, int] = {}
+_SUBDOMAIN_CV: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_subdomain_org", default=None)
+
+
+def set_subdomain_cv(org_id: int) -> contextvars.Token:
+    return _SUBDOMAIN_CV.set(org_id)
+
+
+def reset_subdomain_cv(token: contextvars.Token) -> None:
+    _SUBDOMAIN_CV.reset(token)
+
+
+def store_subdomain_org(session_id: str, org_id: int) -> None:
+    """Mémorise l'org du sous-domaine pour la session MCP (lecture hors-contextvar)."""
+    _SUBDOMAIN_ORG.pop(session_id, None)
+    _SUBDOMAIN_ORG[session_id] = org_id
+    while len(_SUBDOMAIN_ORG) > _CAP:
+        del _SUBDOMAIN_ORG[next(iter(_SUBDOMAIN_ORG))]
+
+
+def current_subdomain_candidate() -> Optional[int]:
+    """Org candidate épinglée par le sous-domaine de la connexion courante, ou None.
+    Candidate = AVANT garde d'appartenance (appliquée par `access.current_org`)."""
+    v = _SUBDOMAIN_CV.get()
+    if v is not None:
+        return v
+    sid = current_session_id()
+    return _SUBDOMAIN_ORG.get(sid) if sid else None

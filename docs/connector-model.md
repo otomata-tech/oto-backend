@@ -1,3 +1,19 @@
+---
+title: Modèle de connecteur — les 3 couches
+type: explanation
+description: >-
+  Carte conceptuelle canonique des trois couches orthogonales qui gouvernent tout
+  connecteur oto (unipile, google, pennylane, sirene…) : disponibilité (connector_activation
+  master ± override org + availability self_serve/platform_granted), authentification
+  (cascade resolve_api_key BYO-user > groupe > org > clé plateforme), et abonnement
+  pour les options payantes (has_option = Stripe org_subscriptions OU comp admin via
+  option_comps). Explique aussi le RBAC interne org-connector-access (ADR 0025). À lire
+  AVANT de toucher activation, clés ou abonnement ; les autres docs (connector-vault,
+  roles-and-resolution, billing) sont le détail de chaque couche.
+adr:
+  - "0025"
+---
+
 # Modèle de connecteur — les 3 couches
 
 > **Pourquoi ce doc.** Un connecteur (unipile, google, pennylane, sirene…) a son
@@ -58,6 +74,16 @@ Deux notions à ne **pas** confondre :
 
 Surfaces : fiche user `/platform/users/<sub>` carte « connector access » → **« grant key »**
 (prête la clé plateforme à CET user, métré) ; `/account` (l'user pose sa BYO).
+
+**Attribution côté système tiers (BYO partagé groupe/org).** Un secret **partagé** (byo_org)
+= **une seule identité** côté tiers : c'est **oto** qui agit sous le **propriétaire du credential**
+(compte de service), pas le membre qui déclenche l'action. Sans effet en **lecture** ; en
+**écriture**, l'audit « créé par » est le compte de service, pas l'utilisateur. Mitigation quand
+le tiers sépare audit et assignation : poser explicitement le champ **owner** par enregistrement
+(map *user oto → user tiers*) — ex. **Zoho CRM** `Owner` (le lead **appartient** au bon
+commercial, seul « Created By » reste le compte de service). Attribution **native par personne**
+⇒ il faut du **per-user** (BYO user, ou OAuth/mount per-user — cf. fédération MCP), pas un secret
+partagé. (Noté 2026-06-24 — pertinent pour l'automatisation d'écriture Zoho/Movinmotion.)
 
 ## Couche 3 — Abonnement (options payantes : unipile, linkedin)
 

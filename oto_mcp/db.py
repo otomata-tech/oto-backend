@@ -3265,3 +3265,13 @@ def boamp_info() -> dict:
             "MAX(date_publication) AS dmax FROM boamp"
         ).fetchone()
     return {"total_rows": int(r["n"]), "date_min": r["dmin"], "date_max": r["dmax"]}
+
+
+def boamp_last_ingested_epoch() -> Optional[float]:
+    """Epoch (s) du dernier upsert BOAMP, ou None si table vide. Sert de garde de
+    fraîcheur au rafraîchissement in-process (ne pas recrawler si récent)."""
+    with _connect() as conn:
+        r = conn.execute(
+            "SELECT EXTRACT(EPOCH FROM MAX(ingested_at)) AS e FROM boamp"
+        ).fetchone()
+    return float(r["e"]) if r and r["e"] is not None else None

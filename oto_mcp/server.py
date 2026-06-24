@@ -292,24 +292,33 @@ def main():
         from . import subdomain_org
         app.add_middleware(subdomain_org.SubdomainOrgMiddleware)
 
-        # Scheduler d'email différé : boucle de fond démarrée au boot en composant le
-        # lifespan FastMCP existant (mono-process → une seule boucle). Opt-out local
-        # via OTO_SCHEDULER_ENABLED=0. Isolée en thread côté scheduler (ne bloque pas).
+        # Boucles de fond démarrées au boot en composant le lifespan FastMCP existant
+        # (mono-process → une boucle par tâche). Chacune isolée en thread (ne bloque
+        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé) /
+        # OTO_BOAMP_REFRESH_ENABLED (index BOAMP, france-opendata#3).
+        _bg_loops = []
         if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
-            import contextlib
             from . import scheduler
+            _bg_loops.append(scheduler.run_scheduler_loop)
+        if os.environ.get("OTO_BOAMP_REFRESH_ENABLED", "1") != "0":
+            from . import boamp_refresh
+            _bg_loops.append(boamp_refresh.run_boamp_refresh_loop)
+        if _bg_loops:
+            import contextlib
             _prev_lifespan = app.router.lifespan_context
 
             @contextlib.asynccontextmanager
             async def _lifespan(app_):
-                task = asyncio.create_task(scheduler.run_scheduler_loop())
+                tasks = [asyncio.create_task(f()) for f in _bg_loops]
                 try:
                     async with _prev_lifespan(app_):
                         yield
                 finally:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                    for t in tasks:
+                        t.cancel()
+                    for t in tasks:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await t
 
             app.router.lifespan_context = _lifespan
 

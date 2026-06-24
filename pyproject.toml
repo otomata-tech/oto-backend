@@ -16,6 +16,11 @@ dependencies = [
     "pydantic>=2.0",
     "google-api-python-client>=2.0",
     "google-auth>=2.0",
+    # `oto.tools.google.credentials` importe `google_auth_oauthlib` au top-level
+    # (InstalledAppFlow). Vit dans l'extra `google` d'oto-core, NON tiré par
+    # `oto-core[browser,anonymize]` → drive_*/gmail_* crashent en prod
+    # ('No module named google_auth_oauthlib'). Même cas que `markdown` ci-dessous.
+    "google-auth-oauthlib>=1.0",
     # Rendu markdown→HTML des gmail_* (défaut markdown=True). Vit dans l'extra
     # `google` d'oto-cli, mais le serveur installe `oto-cli[browser]` → on le
     # déclare ici pour qu'il soit installé par le `pip install -e .` du deploy

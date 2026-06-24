@@ -11,12 +11,9 @@ colonne `orgs.slug` unique + index ; invalidation de cache.
 """
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from starlette.requests import Request
-
-logger = logging.getLogger(__name__)
 
 # Le label avant `--mcp` est le slug d'org. Suffixe figé sur le domaine public.
 _SUFFIX = "--mcp.oto.ninja"
@@ -69,24 +66,6 @@ class SubdomainOrgMiddleware:
         org_id = org_id_for_host(request.headers.get("host", ""))
         if org_id is None:
             return await self.app(scope, receive, send)
-        # DEBUG TEMPORAIRE (diagnostic audience sous-domaine) : décode SANS vérifier
-        # l'aud/iss du token présenté. À retirer une fois la cause confirmée.
-        try:
-            import base64 as _b64
-            import json as _json
-            authz = request.headers.get("authorization", "")
-            if authz[:7].lower() == "bearer ":
-                p = authz.split(None, 1)[1].split(".")[1]
-                p += "=" * (-len(p) % 4)
-                c = _json.loads(_b64.urlsafe_b64decode(p))
-                logger.info("SUBDOMAIN-AUTH host=%s org=%s aud=%r iss=%r azp=%r",
-                            request.headers.get("host"), org_id, c.get("aud"),
-                            c.get("iss"), c.get("azp") or c.get("client_id"))
-            else:
-                logger.info("SUBDOMAIN-AUTH host=%s org=%s no-bearer",
-                            request.headers.get("host"), org_id)
-        except Exception as _e:
-            logger.info("SUBDOMAIN-AUTH decode failed: %s", _e)
         from . import session_org
         token = session_org.set_subdomain_cv(org_id)
         sid = request.headers.get("mcp-session-id")

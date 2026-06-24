@@ -118,6 +118,23 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         }
     except Exception as e:
         logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
+    # RBAC connecteur interne à l'org (ADR 0025) : un connecteur RESTREINT dans
+    # l'org active est masqué pour un membre non autorisé (département/user). Le
+    # backstop DUR est au call-time (`resolve_credential` → `require_connector_access`) ;
+    # ici = ergonomie (best-effort, fail-OPEN sur glitch — le call-time garantit).
+    try:
+        if active_org is not None:
+            restricted = db.org_restricted_connectors(active_org)
+            if restricted:
+                deny = restricted - db.member_allowed_connectors(sub, active_org)
+                if deny:
+                    to_hide |= {
+                        n for n in all_names
+                        if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                        and c.name in deny
+                    }
+    except Exception as e:
+        logger.warning("org connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
     # Sélection marketplace (ADR 0019, B5) : masque les tools d'un connecteur que
     # le membre a mis en PAUSE (state='paused'). `not_selected` reste visible à ce
     # barreau (rétro-compatible ; le flip du défaut « non-sélectionné = masqué » =

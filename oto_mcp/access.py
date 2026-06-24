@@ -238,6 +238,39 @@ def require_namespace(namespace: str) -> None:
         ))
 
 
+def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
+    """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si
+    `provider` est RESTREINT dans l'org active du `sub` et que `sub` n'y est pas
+    autorisé (département/user), lève. **DUR** — appelé dans `resolve_credential`
+    (couvre keyed + fields + BYO : pas de clé perso qui contourne). super_admin
+    bypasse ; pas d'org active → restriction non applicable ; stdio local (sub=None)
+    = accès complet."""
+    sub = sub or current_user_sub_from_token()
+    if sub is None:
+        return
+    try:
+        if is_super_admin(sub):
+            return
+        org = current_org(sub)
+        if org is None or provider not in db.org_restricted_connectors(org):
+            return  # pas d'org, ou connecteur ouvert dans l'org
+        allowed = provider in db.member_allowed_connectors(sub, org)
+    except Exception:
+        # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de
+        # credential → ne doit pas casser tous les connecteurs sur un hoquet DB.
+        # Pas de bypass exploitable : la résolution qui suit retape la DB et échoue
+        # pareil ; et la visibilité masque déjà le connecteur restreint.
+        return
+    if not allowed:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                f"Le connecteur `{provider}` est réservé à certaines équipes/personnes "
+                f"de ton organisation. Demande l'accès à un admin de ton org."
+            ),
+        ))
+
+
 def current_user_sub_or_raise() -> str:
     sub = current_user_sub_from_token()
     if not sub:
@@ -314,6 +347,10 @@ def resolve_credential(provider: str, want: str = "auto",
     `sub` explicite = utilisable HORS contexte MCP (routes REST) ; None = sub courant.
     Lève une McpError actionnable si rien ne résout."""
     sub = sub or current_user_sub_or_raise()
+    # RBAC connecteur interne à l'org (ADR 0025) — backstop DUR : un connecteur
+    # restreint dans l'org du sub n'est résolu que pour les principals autorisés
+    # (département/user). Avant toute résolution → couvre keyed/fields/BYO.
+    require_connector_access(provider, sub)
 
     user_key = db.get_user_api_key(sub, provider)
     if user_key:

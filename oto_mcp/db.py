@@ -216,6 +216,22 @@ CREATE TABLE IF NOT EXISTS org_grants (
     PRIMARY KEY (org_id, platform_key_id)
 );
 
+-- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
+-- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne
+-- pour (org_id, connector) ⟹ connecteur RESTREINT dans l'org (deny-by-default) ;
+-- absence ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user.
+-- DUR : enforced en visibilité (session_visibility) + au call-time (resolve_credential
+-- via access.require_connector_access). Ouvert par défaut = zéro disruption.
+CREATE TABLE IF NOT EXISTS org_connector_access (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    connector TEXT NOT NULL,
+    principal_type TEXT NOT NULL CHECK (principal_type IN ('group', 'user')),
+    principal_id TEXT NOT NULL,   -- group_id (en texte) ou sub
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, connector, principal_type, principal_id)
+);
+
 -- Grants de namespace sensible (deny-by-default). Un user non-admin ne voit/
 -- n'appelle un tool d'un ADMIN_GRANT_ONLY_NAMESPACE que s'il a une ligne ici,
 -- posée par un admin. Distinct de user_grants (qui porte une platform_key/quota).
@@ -2495,6 +2511,73 @@ def get_active_org_grant(org_id: int, provider: str) -> Optional[dict]:
     d["api_key"] = _pk_reveal(d, provider)
     d.pop("api_key_enc", None)
     return d
+
+
+# ── RBAC connecteur interne à l'org (ADR 0025) ──────────────────────────────
+def set_connector_access(org_id: int, connector: str, principal_type: str,
+                         principal_id: str, granted_by: Optional[str] = None) -> None:
+    """Autorise un principal (groupe/user) sur un connecteur dans l'org → le rend
+    RESTREINT (deny-by-default) s'il ne l'était pas. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO org_connector_access (org_id, connector, principal_type, principal_id, granted_by)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (org_id, connector, principal_type, principal_id) DO NOTHING
+            """,
+            (org_id, connector, principal_type, str(principal_id), granted_by),
+        )
+
+
+def clear_connector_access(org_id: int, connector: str, principal_type: str,
+                           principal_id: str) -> None:
+    """Retire un principal. Quand la dernière ligne d'un (org, connector) part,
+    le connecteur redevient OUVERT à toute l'org (absence ⟹ non restreint)."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM org_connector_access WHERE org_id = %s AND connector = %s "
+            "AND principal_type = %s AND principal_id = %s",
+            (org_id, connector, principal_type, str(principal_id)),
+        )
+
+
+def list_connector_access(org_id: int, connector: Optional[str] = None) -> list[dict]:
+    """ACL connecteur de l'org : [{connector, principal_type, principal_id, granted_at}]."""
+    sql = ("SELECT connector, principal_type, principal_id, granted_by, granted_at "
+           "FROM org_connector_access WHERE org_id = %s")
+    args: tuple = (org_id,)
+    if connector is not None:
+        sql += " AND connector = %s"
+        args = (org_id, connector)
+    sql += " ORDER BY connector, principal_type, principal_id"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def org_restricted_connectors(org_id: int) -> set:
+    """Connecteurs RESTREINTS dans l'org (≥1 ligne d'ACL) — deny-by-default pour eux."""
+    with _connect() as conn:
+        return {r[0] for r in conn.execute(
+            "SELECT DISTINCT connector FROM org_connector_access WHERE org_id = %s",
+            (org_id,)).fetchall()}
+
+
+def member_allowed_connectors(sub: str, org_id: int) -> set:
+    """Connecteurs (restreints) auxquels `sub` a droit dans l'org : ligne user=sub
+    OU groupe ∈ ses groupes de l'org. (Un connecteur non restreint n'est pas listé
+    ici mais reste ouvert — cf. org_restricted_connectors.)"""
+    with _connect() as conn:
+        return {r[0] for r in conn.execute(
+            """
+            SELECT DISTINCT a.connector FROM org_connector_access a
+             WHERE a.org_id = %s AND (
+                   (a.principal_type = 'user' AND a.principal_id = %s)
+                OR (a.principal_type = 'group' AND a.principal_id IN (
+                       SELECT m.group_id::text FROM org_group_members m
+                         JOIN org_groups g ON g.id = m.group_id
+                        WHERE m.sub = %s AND g.org_id = %s)))
+            """,
+            (org_id, sub, sub, org_id)).fetchall()}
 
 
 def list_users_with_grants() -> list[dict]:

@@ -60,6 +60,25 @@ def as_metadata(public_url: str) -> dict:
     }
 
 
+def as_oidc_metadata(public_url: str) -> dict:
+    """OIDC Discovery 1.0 servie sur NOTRE domaine (`/.well-known/openid-configuration`).
+
+    Certains clients OAuth 2.1 (dont Mistral) sondent l'OIDC discovery EN PLUS de
+    RFC 8414 (`oauth-authorization-server`) ; un 404 ici peut casser leur résolution
+    d'AS. On réutilise `as_metadata` et on ajoute les champs OIDC OBLIGATOIRES
+    (`subject_types_supported`, `id_token_signing_alg_values_supported` = ES384, ce
+    que Logto self-hosted signe) + `userinfo_endpoint`. Même issuer (normalisé) →
+    pas de mismatch."""
+    logto = _logto_issuer()
+    return {
+        **as_metadata(public_url),
+        "userinfo_endpoint": f"{logto}/me",
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["ES384"],
+        "claims_supported": ["sub", "iss", "aud", "exp", "iat", "email", "name"],
+    }
+
+
 def _cors() -> dict:
     return {
         "Access-Control-Allow-Origin": "*",
@@ -247,6 +266,9 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
     async def as_meta(request: Request) -> JSONResponse:
         return JSONResponse(as_metadata(public_url))
 
+    async def oidc_meta(request: Request) -> JSONResponse:
+        return JSONResponse(as_oidc_metadata(public_url))
+
     async def dcr(request: Request) -> JSONResponse:
         if request.method == "OPTIONS":
             return JSONResponse({}, headers=_cors())
@@ -299,5 +321,9 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # ressource `/mcp` (RFC 8414 path-insertion — claude.ai essaie les deux).
         Route("/.well-known/oauth-authorization-server", as_meta, methods=["GET"]),
         Route("/.well-known/oauth-authorization-server/mcp", as_meta, methods=["GET"]),
+        # OIDC discovery (en plus de RFC 8414) — sondé par les clients OAuth 2.1/OIDC
+        # (Mistral) ; un 404 ici peut casser leur résolution d'AS. Mêmes 2 variantes.
+        Route("/.well-known/openid-configuration", oidc_meta, methods=["GET"]),
+        Route("/.well-known/openid-configuration/mcp", oidc_meta, methods=["GET"]),
         Route("/oauth/register", dcr, methods=["POST", "OPTIONS"]),
     ]

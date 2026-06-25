@@ -9,7 +9,7 @@ dans le PRM `authorization_servers`. Le PRM passe l'URL par `AnyHttpUrl`
 import pytest
 from pydantic import AnyHttpUrl
 
-from oto_mcp.oauth_facade import as_metadata
+from oto_mcp.oauth_facade import as_metadata, as_oidc_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +28,16 @@ def test_issuer_matches_prm_authorization_server(public_url):
     meta = as_metadata(public_url)
     prm_authz_server = str(AnyHttpUrl(public_url))  # ce que RemoteAuthProvider sert
     assert meta["issuer"] == prm_authz_server
+
+
+def test_oidc_metadata_issuer_matches_and_has_required_fields():
+    """OIDC discovery : même issuer normalisé que le PRM + champs OBLIGATOIRES
+    OpenID Connect Discovery 1.0 (subject_types / id_token alg)."""
+    meta = as_oidc_metadata("https://mcp.oto.ninja")
+    assert meta["issuer"] == str(AnyHttpUrl("https://mcp.oto.ninja"))
+    assert meta["subject_types_supported"] == ["public"]
+    assert meta["id_token_signing_alg_values_supported"] == ["ES384"]  # Logto self-hosted
+    assert meta["userinfo_endpoint"] == "https://auth.oto.ninja/oidc/me"
 
 
 def test_oauth_endpoints_point_to_logto():

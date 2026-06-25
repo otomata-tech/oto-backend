@@ -351,3 +351,77 @@ def register(mcp: FastMCP) -> None:
             return {"error": "not_found", "idweb": idweb}
         return result
 
+    # --- Accords d'entreprise (ACCO, open data) ---
+    # Base nationale des accords collectifs (DILA), accords conclus depuis le
+    # 01/09/2017. Métadonnées : qui (SIRET, raison sociale, IDCC = convention
+    # collective), quoi (thèmes codés), quand (date_texte), nature (ACCORD initial
+    # vs AVENANT = renégociation). Le texte intégral n'est pas toujours publié
+    # (conforme_version_integrale), mais le « qui a négocié quoi et quand » l'est.
+
+    @mcp.tool()
+    async def fr_accords_search(
+        query: Optional[str] = None,
+        themes: Optional[list[str]] = None,
+        nature: Optional[str] = None,
+        siret: Optional[str] = None,
+        idcc: Optional[str] = None,
+        departement: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        latest_per_siret: bool = False,
+        sort_by: str = "date",
+        sort_dir: str = "desc",
+        limit: int = 20,
+    ) -> dict:
+        """Search French company collective agreements (accords d'entreprise, ACCO).
+
+        Neutral primitive returning raw rows — compose your own need via filters,
+        sort and per-company reduction. Common recipes:
+        - Who just renegotiated their health/pension scheme:
+          themes=["111","112"], nature="AVENANT", sort_dir="desc".
+        - Companies whose health scheme is STALE (dormant contract, no recent act):
+          themes=["111","112"], latest_per_siret=True, sort_dir="asc",
+          date_to=<today-12months>.
+        - Full history of one company: siret="...".
+
+        Args:
+            query: Substring in the agreement title (ILIKE).
+            themes: Theme codes (OR). Health/pension: "111" (complémentaire santé),
+                "112" (prévoyance), "113" (retraite supplémentaire). Use
+                fr_accords_themes to discover codes.
+            nature: ACCORD (initial) | AVENANT (amendment = renegotiation) | …
+            siret: Exact SIRET. idcc: Exact branch code (convention collective).
+            departement: Postal code prefix (2 digits).
+            date_from / date_to: Bounds on the signature date (YYYY-MM-DD).
+            latest_per_siret: Keep only one row per company — its most recent act —
+                BEFORE applying date_from/date_to (so date bounds then filter the
+                company's LAST act → dormant-contract detection).
+            sort_by: date | date_depot | date_diffusion | date_maj (default date).
+            sort_dir: asc (oldest first) | desc (newest first).
+            limit: Max results (default 20, max 100).
+        """
+        return db.search_acco(
+            query=query, themes=themes, nature=nature, siret=siret, idcc=idcc,
+            departement=departement, date_from=date_from, date_to=date_to,
+            latest_per_siret=latest_per_siret, sort_by=sort_by, sort_dir=sort_dir,
+            limit=limit,
+        )
+
+    @mcp.tool()
+    async def fr_accords_get(id_or_numero: str) -> dict:
+        """Fetch a single company agreement by its DILA id (ACCOTEXT…) or numero (T…).
+
+        Args:
+            id_or_numero: DILA identifier (ACCOTEXT000…) or deposit number (T…).
+        """
+        result = db.get_acco(id_or_numero)
+        if result is None:
+            return {"error": "not_found", "id_or_numero": id_or_numero}
+        return result
+
+    @mcp.tool()
+    async def fr_accords_themes() -> list[dict]:
+        """List the agreement theme codes present in the database (code → label →
+        count). Discovery helper so you can pick `themes` for fr_accords_search."""
+        return db.acco_themes()
+

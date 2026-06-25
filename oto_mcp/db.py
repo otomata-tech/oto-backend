@@ -692,6 +692,40 @@ CREATE TABLE IF NOT EXISTS boamp (
 );
 CREATE INDEX IF NOT EXISTS idx_boamp_date ON boamp(date_publication DESC);
 CREATE INDEX IF NOT EXISTS idx_boamp_dep ON boamp(dep_publication);
+
+-- ACCO (accords d'entreprise) : index local de la base nationale des accords
+-- collectifs (dump XML DILA, accords conclus depuis le 1er sept. 2017). Même
+-- substrat que BOAMP : table PG (~387k lignes de métadonnées) plutôt qu'un
+-- parquet/DuckDB (réservé au monstre SIRENE). Dates en TEXT YYYY-MM-DD (source ;
+-- comparaisons lexicales OK). theme_codes = JSON array de codes (match par LIKE).
+CREATE TABLE IF NOT EXISTS acco (
+    id TEXT PRIMARY KEY,
+    nature TEXT,
+    numero TEXT,
+    siret TEXT,
+    raison_sociale TEXT,
+    code_ape TEXT,
+    code_idcc TEXT,
+    secteur TEXT,
+    date_texte TEXT,
+    date_depot TEXT,
+    date_effet TEXT,
+    date_fin TEXT,
+    date_maj TEXT,
+    date_diffusion TEXT,
+    conforme_version_integrale TEXT,
+    theme_codes TEXT,
+    themes_libelle TEXT,
+    syndicats_libelle TEXT,
+    code_postal TEXT,
+    ville TEXT,
+    titre TEXT,
+    url TEXT,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_acco_siret ON acco(siret);
+CREATE INDEX IF NOT EXISTS idx_acco_idcc ON acco(code_idcc);
+CREATE INDEX IF NOT EXISTS idx_acco_date ON acco(date_texte DESC);
 """
 
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
@@ -3273,5 +3307,175 @@ def boamp_last_ingested_epoch() -> Optional[float]:
     with _connect() as conn:
         r = conn.execute(
             "SELECT EXTRACT(EPOCH FROM MAX(ingested_at)) AS e FROM boamp"
+        ).fetchone()
+    return float(r["e"]) if r and r["e"] is not None else None
+
+
+# --- ACCO (accords d'entreprise, base nationale des accords collectifs) -------
+# Colonnes alignées sur france_opendata.acco.COLUMNS (l'ingestion réutilise le parser).
+
+_ACCO_COLS = [
+    "id", "nature", "numero", "siret", "raison_sociale", "code_ape", "code_idcc",
+    "secteur", "date_texte", "date_depot", "date_effet", "date_fin", "date_maj",
+    "date_diffusion", "conforme_version_integrale", "theme_codes", "themes_libelle",
+    "syndicats_libelle", "code_postal", "ville", "titre", "url",
+]
+
+# Colonnes triables (whitelist anti-injection : sort_by n'est jamais interpolé brut).
+_ACCO_SORT = {
+    "date": "date_texte", "date_depot": "date_depot",
+    "date_diffusion": "date_diffusion", "date_maj": "date_maj",
+}
+
+
+def upsert_acco(rows: list[dict]) -> int:
+    """Insère/met à jour des accords (clé id DILA). Idempotent. Pour batches."""
+    if not rows:
+        return 0
+    cols = ", ".join(_ACCO_COLS)
+    placeholders = ", ".join(["%s"] * len(_ACCO_COLS))
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in _ACCO_COLS if c != "id")
+    sql = (
+        f"INSERT INTO acco ({cols}, ingested_at) "
+        f"VALUES ({placeholders}, NOW()) "
+        f"ON CONFLICT (id) DO UPDATE SET {updates}, ingested_at = NOW()"
+    )
+    data = [tuple(r.get(c) for c in _ACCO_COLS) for r in rows]
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, data)
+    return len(data)
+
+
+def _acco_row(r: dict) -> dict:
+    """Normalise une ligne ACCO : theme_codes (TEXT JSON) → liste `theme_codes`."""
+    out = dict(r)
+    raw = out.get("theme_codes")
+    if raw:
+        try:
+            out["theme_codes"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["theme_codes"] = None
+    out.pop("ingested_at", None)
+    return out
+
+
+def search_acco(
+    query: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    nature: Optional[str] = None,
+    siret: Optional[str] = None,
+    idcc: Optional[str] = None,
+    departement: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    latest_per_siret: bool = False,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Recherche d'accords d'entreprise (table PG) — primitive neutre, lignes brutes.
+
+    Filtres AND (sauf `themes` : OR interne). `latest_per_siret` réduit à 1 ligne par
+    entreprise (l'acte le plus récent) AVANT d'appliquer date_from/date_to (→ « dernier
+    accord antérieur à X » = contrat dormant). Renvoie {results, total_count}."""
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    order_col = _ACCO_SORT.get(sort_by, "date_texte")
+    order_dir = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+    order = f"{order_col} {order_dir} NULLS LAST, id {order_dir}"
+
+    # Filtres « population » (avant réduction par SIRET).
+    pop, params = ["1=1"], []
+    if query:
+        pop.append("titre ILIKE %s"); params.append(f"%{query}%")
+    if themes:
+        ors = []
+        for t in themes:
+            ors.append("theme_codes LIKE %s"); params.append(f'%"{t}"%')
+        pop.append("(" + " OR ".join(ors) + ")")
+    if nature:
+        pop.append("nature = %s"); params.append(nature.upper())
+    if siret:
+        pop.append("siret = %s"); params.append(siret)
+    if idcc:
+        pop.append("code_idcc = %s"); params.append(idcc)
+    if departement:
+        pop.append("code_postal LIKE %s"); params.append(f"{departement}%")
+    pop_clause = " AND ".join(pop)
+
+    # Filtres de date (sur la ligne retenue → après réduction si latest_per_siret).
+    date_conds, date_params = [], []
+    if date_from:
+        date_conds.append("date_texte >= %s"); date_params.append(date_from)
+    if date_to:
+        date_conds.append("date_texte <= %s"); date_params.append(date_to)
+    date_clause = (" AND " + " AND ".join(date_conds)) if date_conds else ""
+
+    cols = ", ".join(_ACCO_COLS)
+    if latest_per_siret:
+        inner = (
+            f"SELECT {cols}, ROW_NUMBER() OVER "
+            "(PARTITION BY siret ORDER BY date_texte DESC NULLS LAST, id DESC) AS rn "
+            f"FROM acco WHERE {pop_clause} AND siret IS NOT NULL"
+        )
+        base = f"SELECT {cols} FROM ({inner}) t WHERE rn = 1{date_clause}"
+        qparams = params + date_params
+    else:
+        base = f"SELECT {cols} FROM acco WHERE {pop_clause}{date_clause}"
+        qparams = params + date_params
+
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({base}) c", tuple(qparams)
+        ).fetchone()["n"]
+        rows = conn.execute(
+            f"{base} ORDER BY {order} LIMIT %s OFFSET %s",
+            tuple(qparams) + (limit, offset),
+        ).fetchall()
+    return {"results": [_acco_row(r) for r in rows], "total_count": int(total)}
+
+
+def get_acco(id_or_numero: str) -> Optional[dict]:
+    """Un accord par son id DILA (ACCOTEXT…) ou son numero (T…), ou None."""
+    cols = ", ".join(_ACCO_COLS)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {cols} FROM acco WHERE id = %s OR numero = %s LIMIT 1",
+            (id_or_numero, id_or_numero),
+        ).fetchone()
+    return _acco_row(row) if row else None
+
+
+def acco_themes() -> list[dict]:
+    """Catalogue des thèmes présents (code → libellé + nb d'accords). Découverte."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT code, libelle, COUNT(*) AS n FROM acco a, "
+            "  UNNEST("
+            "    ARRAY(SELECT json_array_elements_text(a.theme_codes::json)), "
+            "    string_to_array(a.themes_libelle, ' | ')"
+            "  ) AS t(code, libelle) "
+            "WHERE a.theme_codes IS NOT NULL "
+            "GROUP BY code, libelle ORDER BY n DESC"
+        ).fetchall()
+    return [{"code": r["code"], "libelle": r["libelle"], "count": int(r["n"])} for r in rows]
+
+
+def acco_info() -> dict:
+    """Métadonnées healthcheck : nb de lignes + plage de dates."""
+    with _connect() as conn:
+        r = conn.execute(
+            "SELECT COUNT(*) AS n, MIN(date_texte) AS dmin, MAX(date_texte) AS dmax FROM acco"
+        ).fetchone()
+    return {"total_rows": int(r["n"]), "date_min": r["dmin"], "date_max": r["dmax"]}
+
+
+def acco_last_ingested_epoch() -> Optional[float]:
+    """Epoch (s) du dernier upsert ACCO, ou None si table vide."""
+    with _connect() as conn:
+        r = conn.execute(
+            "SELECT EXTRACT(EPOCH FROM MAX(ingested_at)) AS e FROM acco"
         ).fetchone()
     return float(r["e"]) if r and r["e"] is not None else None

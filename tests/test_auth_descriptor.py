@@ -7,7 +7,7 @@ comportement runtime (B1 = additif, no-op).
 """
 from oto_mcp.providers import _REGISTRY_LIST, public_catalog
 
-_METHODS = {"secret", "oauth", "cookie", "remote", "none"}
+_METHODS = {"secret", "oauth", "cookie", "remote", "hosted", "none"}
 
 
 def test_method_in_closed_set():
@@ -18,7 +18,10 @@ def test_method_in_closed_set():
 def test_method_derivation_matches_kind_and_secret_kind():
     for c in _REGISTRY_LIST:
         m = c.auth_method
-        if c.kind == "remote":
+        if c.hosted_auth:
+            # flux hébergé tiers (unipile) — prime sur le credential sous-jacent.
+            assert m == "hosted", c.name
+        elif c.kind == "remote":
             assert m == "remote", c.name
         elif c.secret_kind in ("oauth", "cookie", "none"):
             assert m == c.secret_kind, c.name
@@ -27,12 +30,20 @@ def test_method_derivation_matches_kind_and_secret_kind():
             assert m == "secret", c.name
 
 
-def test_fields_only_for_secret_method():
-    # un schéma de saisie n'a de sens que pour method=secret (les flux
-    # oauth/cookie/remote/none sont dédiés, pas un formulaire de champs).
+def test_fields_only_for_secret_or_hosted_method():
+    # un schéma de saisie n'a de sens que pour method=secret (formulaire de
+    # champs) OU hosted (le credential reste une clé résolue en cascade, même si
+    # la connexion user passe par un flux hébergé) ; les flux oauth/cookie/remote/
+    # none sont dédiés, sans formulaire.
     for c in _REGISTRY_LIST:
         if c.auth["fields"]:
-            assert c.auth_method == "secret", f"{c.name}: fields hors method=secret"
+            assert c.auth_method in ("secret", "hosted"), \
+                f"{c.name}: fields hors method secret/hosted"
+
+
+def test_hosted_is_unipile_only():
+    hosted = {c.name for c in _REGISTRY_LIST if c.auth_method == "hosted"}
+    assert hosted == {"unipile"}, hosted
 
 
 def test_multi_account_is_google_only():

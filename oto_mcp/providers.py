@@ -83,6 +83,13 @@ class Connector:
     # qu'un provider porte plusieurs modules (google→gmail/datastore/tasks).
     # `register_all` DÉRIVE le chargement de ce champ (fin de la liste hardcodée, #24).
     modules: tuple[str, ...] = ()
+    # Auth « hébergée » (ADR 0024) : le credential est une clé (resolve_api_key,
+    # cascade inchangée), MAIS la connexion user-facing passe par un flux hébergé
+    # tiers (ex. unipile : l'org pose l'abonnement, chaque membre lie son compte
+    # LinkedIn/WhatsApp par hosted-auth) — pas un formulaire de clé. Posé ici, le
+    # descripteur `auth.method` vaut "hosted" → la carte rend le widget dédié sans
+    # cas par nom côté front.
+    hosted_auth: bool = False
 
     @property
     def org_shareable(self) -> bool:
@@ -147,10 +154,13 @@ class Connector:
     def auth_method(self) -> str:
         """Mécanisme d'obtention du credential (ADR 0024) — DÉRIVÉ. Pilote le
         widget rendu par la `ConnectorCard` (un flux, une carte). Priorité :
-        `remote` (bridge ADR 0003, posé par grant d'org) > `oauth`/`cookie`/`none`
-        (flux dédiés / pas de credential) > `secret` (champ(s) à coller : api_key,
-        basic_auth, fields, refresh_token). NB : un MCP fédéré (kind=mount) hérite
-        de son `secret_kind` (planity=basic_auth→secret, memento=oauth→oauth)."""
+        `hosted` (flux hébergé tiers, ex. unipile) > `remote` (bridge ADR 0003,
+        posé par grant d'org) > `oauth`/`cookie`/`none` (flux dédiés / pas de
+        credential) > `secret` (champ(s) à coller : api_key, basic_auth, fields,
+        refresh_token). NB : un MCP fédéré (kind=mount) hérite de son `secret_kind`
+        (planity=basic_auth→secret, memento=oauth→oauth)."""
+        if self.hosted_auth:
+            return "hosted"
         if self.kind == "remote":
             return "remote"
         if self.secret_kind in ("oauth", "cookie", "none"):
@@ -294,7 +304,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        default_quota=0, in_default_bundle=True, in_default_preset=False,
        default_hidden=False, label="", help="", href=None,
        publisher="", logo_url=None, kind="tools", mount_url=None,
-       credential_fields=(), modules=()) -> Connector:
+       credential_fields=(), modules=(), hosted_auth=False) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -304,7 +314,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         label=label or name.capitalize(), help=help, href=href,
         publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
-        modules=tuple(modules),
+        modules=tuple(modules), hosted_auth=hosted_auth,
     )
 
 
@@ -365,7 +375,7 @@ _REGISTRY_LIST = [
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key",
+       secret_kind="api_key", hosted_auth=True,
        in_default_bundle=False, label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",

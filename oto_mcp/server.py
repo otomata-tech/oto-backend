@@ -110,6 +110,14 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
         token_verifier=verifier,
         authorization_servers=[AnyHttpUrl(authz)],
         base_url=public_base,
+        # Scopes annoncés dans le PRM (RFC 9728). Sans ça le PRM expose
+        # `scopes_supported: []` → un client conforme (Mistral) qui DÉRIVE le
+        # `scope` de sa requête authorize du PRM n'envoie AUCUN scope → l'authorize
+        # authentifié échoue côté Logto et renvoie une erreur au callback (erreur de
+        # connexion immédiate, sans navigateur). claude.ai contourne en envoyant
+        # `offline_access` en dur, d'où « marche dans Claude, pas dans Mistral ».
+        # Mêmes scopes que l'AS metadata (oauth_facade.as_metadata). Vécu 2026-06-25.
+        scopes_supported=["openid", "profile", "email", "offline_access"],
         resource_name="oto MCP",
     )
 

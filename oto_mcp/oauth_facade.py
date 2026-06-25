@@ -22,6 +22,7 @@ import os
 import time
 from urllib.parse import urlparse
 
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -35,13 +36,21 @@ def _logto_issuer() -> str:
 
 def as_metadata(public_url: str) -> dict:
     """Métadonnée RFC 8414 servie sur NOTRE domaine : issuer = nous, le
-    `registration_endpoint` est à nous, tous les endpoints OAuth sont ceux de Logto."""
-    issuer = _logto_issuer()
+    `registration_endpoint` est à nous, tous les endpoints OAuth sont ceux de Logto.
+
+    ⚠️ RFC 8414 §3.3 : l'`issuer` retourné DOIT être IDENTIQUE à l'identifiant d'AS
+    que le client a annoncé dans le PRM (`authorization_servers`) et dans lequel il
+    a inséré le chemin well-known. Le PRM passe `public_base` par `AnyHttpUrl`
+    (RemoteAuthProvider, server.py), qui NORMALISE en ajoutant un slash final
+    (`https://x` → `https://x/`). On normalise l'issuer par le MÊME `AnyHttpUrl` →
+    égalité byte-à-byte garantie. Sans ça, un client strict (Mistral) rejette le
+    discovery pour issuer mismatch (claude.ai, lui, tolère le slash). Vécu 2026-06-25."""
+    logto = _logto_issuer()
     return {
-        "issuer": public_url,
-        "authorization_endpoint": f"{issuer}/auth",
-        "token_endpoint": f"{issuer}/token",
-        "jwks_uri": f"{issuer}/jwks",
+        "issuer": str(AnyHttpUrl(public_url)),
+        "authorization_endpoint": f"{logto}/auth",
+        "token_endpoint": f"{logto}/token",
+        "jwks_uri": f"{logto}/jwks",
         "registration_endpoint": f"{public_url}/oauth/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],

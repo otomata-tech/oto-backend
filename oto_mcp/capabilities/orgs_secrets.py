@@ -70,13 +70,13 @@ def _set_org_preset(ctx: ResolvedCtx, inp: SetOrgPresetInput) -> dict:
 
 CAPABILITIES += [
     Capability(
+        # MCP retiré (2026-06-25) : pose de secret brut = dashboard-only. REST conservé.
         key="org.secret.set", handler=_set_secret, Input=SetSecretInput,
         authz=ORG_ADMIN_OF("org_id"),
         description=("Set/rotate an org's shared account credential for a provider "
                      "(org-shareable only). Single-key connectors: pass `api_key`. "
                      "Multi-field connectors (zoho/silae…): pass `fields` "
                      "(all declared credential fields). base_url for remote bridges."),
-        mcp="oto_admin_set_org_secret",
         rest=(RestBinding("PUT", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("PUT", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),
     ),
@@ -84,7 +84,6 @@ CAPABILITIES += [
         key="org.secret.delete", handler=_delete_secret, Input=DeleteSecretInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="Remove an org's shared secret for a provider.",
-        mcp="oto_admin_delete_org_secret",
         rest=(RestBinding("DELETE", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("DELETE", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),
     ),

@@ -11,7 +11,7 @@ Deux niveaux de masquage :
 2. **ADMIN_GRANT_ONLY_NAMESPACES** — namespaces sensibles (mission/prod-client).
    Deny-by-default : un user non-admin **ne peut PAS** s'auto-activer ces tools
    (`oto_enable_tool` refuse). Seul un **grant admin** (`user_namespace_grants`,
-   posé via `oto_admin_grant_namespace`) les rend visibles + appelables. Un admin
+   posé via `oto_admin_namespace_access`) les rend visibles + appelables. Un admin
    les voit comme masqués-par-défaut (self-activables). C'est la vraie barrière
    d'autorisation, par opposition au masquage cosmétique de niveau 1.
 

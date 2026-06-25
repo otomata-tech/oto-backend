@@ -23,7 +23,6 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, db, org_store
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
-    ADMIN_GRANT_ONLY_NAMESPACES,
     PROTECTED_TOOLS,
     is_default_hidden,
     is_entitled,
@@ -127,7 +126,7 @@ def register(mcp: FastMCP) -> None:
 
         Tools in an admin-grant-only namespace (e.g. `gocardless_*`, `mm_*`)
         cannot be self-enabled by a non-admin: an admin must grant the namespace
-        first (`oto_admin_grant_namespace`). The call is refused otherwise.
+        first (`oto_admin_namespace_access`). The call is refused otherwise.
 
         Args:
             name: Exact tool name to re-enable.
@@ -140,7 +139,7 @@ def register(mcp: FastMCP) -> None:
                 message=(
                     f"`{name}` relève du namespace contrôlé `{namespace_of(name)}` "
                     f"(accès sensible). Auto-activation refusée — demande à un admin "
-                    f"de t'accorder ce namespace (oto_admin_grant_namespace)."
+                    f"de t'accorder ce namespace (oto_admin_namespace_access)."
                 ),
             ))
         org = _active_org(sub)
@@ -298,100 +297,9 @@ def register(mcp: FastMCP) -> None:
             ))
         return sub
 
-    def _resolve_target_sub(target: str) -> str:
-        if "@" in target:
-            user = db.get_user_by_email(target)
-            if not user:
-                raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=f"Aucun user connu avec l'email `{target}`.",
-                ))
-            return user["sub"]
-        return target
-
-    def _check_grant_namespace(namespace: str) -> None:
-        if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(
-                    f"`{namespace}` n'est pas un namespace contrôlé. "
-                    f"Contrôlés : {sorted(ADMIN_GRANT_ONLY_NAMESPACES)}."
-                ),
-            ))
-
-    @mcp.tool()
-    async def oto_admin_grant_namespace(target: str, namespace: str, ctx: Context) -> dict:
-        """[admin] Accorde à un user l'accès à un namespace sensible (grant-only).
-
-        Args:
-            target: `sub` Logto, ou email du user destinataire.
-            namespace: namespace contrôlé (`mm`, `gocardless`).
-        """
-        admin_sub = _require_admin()
-        _check_grant_namespace(namespace)
-        target_sub = _resolve_target_sub(target)
-        db.grant_namespace(target_sub, namespace, granted_by=admin_sub)
-        return {"granted": namespace, "to": target_sub}
-
-    @mcp.tool()
-    async def oto_admin_revoke_namespace(target: str, namespace: str, ctx: Context) -> dict:
-        """[admin] Révoque l'accès d'un user à un namespace sensible."""
-        _require_admin()
-        target_sub = _resolve_target_sub(target)
-        existed = db.revoke_namespace(target_sub, namespace)
-        return {"revoked": namespace, "from": target_sub, "existed": existed}
-
-    @mcp.tool()
-    async def oto_admin_list_namespace_grants(
-        ctx: Context, namespace: Optional[str] = None
-    ) -> dict:
-        """[admin] Liste les grants de namespace (tous, ou filtrés par namespace)."""
-        _require_admin()
-        return {"grants": db.list_namespace_grants(namespace)}
-
-    @mcp.tool()
-    async def oto_admin_list_platform_keys(ctx: Context) -> dict:
-        """[admin] Liste les clés plateforme (coffre DB) — provider, label, id.
-
-        Jamais la valeur du secret. La DB est la seule source des platform keys
-        (plus de bootstrap SOPS au boot) : ce qui est listé ici est exactement
-        ce que `resolve_api_key` peut servir via un grant.
-        """
-        _require_admin()
-        keys = [
-            {"id": k["id"], "provider": k["provider"], "label": k["label"]}
-            for k in db.list_platform_keys()
-        ]
-        return {"platform_keys": keys}
-
-    @mcp.tool()
-    async def oto_admin_set_platform_key(
-        provider: str, api_key: str, ctx: Context, label: str = "env"
-    ) -> dict:
-        """[admin] Pose ou rote une clé plateforme dans le coffre DB.
-
-        Remplace l'ancien import SOPS au boot : c'est LE chemin pour provisionner
-        ou roter une clé partagée (modèle : user key OU platform key + grant +
-        quota). Poser une clé ne la grante à personne.
-
-        Args:
-            provider: provider keyé du registre (serper, hunter, sirene, attio,
-                lemlist, kaspr, pennylane, slack, fullenrich).
-            api_key: la nouvelle valeur (rotation = re-poser sur le même
-                provider+label).
-            label: étiquette de la clé (défaut `env`, le label historique servi
-                par resolve_api_key).
-        """
-        _require_admin()
-        if provider not in db.KEY_PROVIDERS:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(
-                    f"`{provider}` n'est pas un provider keyé. "
-                    f"Valides : {sorted(db.KEY_PROVIDERS)}."
-                ),
-            ))
-        if not api_key.strip():
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="api_key vide."))
-        key_id = db.upsert_platform_key(provider, label.strip() or "env", api_key.strip())
-        return {"id": key_id, "provider": provider, "label": label.strip() or "env", "set": True}
+    # Grants de namespace (user + org) fusionnés dans la capacité MCP
+    # `oto_admin_namespace_access` (capabilities/namespace_access.py).
+    #
+    # Clés plateforme (list/set) RETIRÉES de la face MCP (2026-06-25) : poser une
+    # clé brute = un secret en clair dans le contexte LLM → dashboard-only. CRUD
+    # servi par les routes REST `/api/admin/platform-keys*` (api_routes.py).

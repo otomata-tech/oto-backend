@@ -68,21 +68,21 @@ CAPABILITIES += [
         key="org.admin.create", handler=_create_org, Input=CreateOrgInput,
         authz=SUPER_ADMIN,
         description="[super admin] Create an organization (perimeter). Returns its id.",
-        mcp="oto_admin_create_org",
+        # MCP fusionné dans oto_admin_org(op=create). REST conservé (dashboard).
         rest=RestBinding("POST", "/api/admin/orgs"),
     ),
     Capability(
         key="org.entitlement.grant", handler=_grant_entitlement, Input=EntitlementInput,
         authz=SUPER_ADMIN,
         description="[super admin] Entitle an org to a controlled (grant-only) namespace.",
-        mcp="oto_admin_grant_org_entitlement",
+        # MCP fusionné dans oto_admin_namespace_access (scope=org). REST conservé (dashboard).
         rest=RestBinding("POST", "/api/admin/orgs/{id}/entitlements/{namespace}", _ID),
     ),
     Capability(
         key="org.entitlement.revoke", handler=_revoke_entitlement, Input=EntitlementInput,
         authz=SUPER_ADMIN,
         description="[super admin] Revoke an org's entitlement to a controlled namespace.",
-        mcp="oto_admin_revoke_org_entitlement",
+        # MCP fusionné dans oto_admin_namespace_access (scope=org). REST conservé (dashboard).
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/entitlements/{namespace}", _ID),
     ),
     Capability(
@@ -90,7 +90,7 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Archive (soft-delete) an org: hidden from all "
                     "listings, reversible in DB. Members fall back to their other orgs.",
-        mcp="oto_admin_archive_org",
+        # MCP fusionné dans oto_admin_org(op=archive). REST conservé (dashboard).
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}", _ID),
     ),
 ]

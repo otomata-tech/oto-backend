@@ -85,7 +85,6 @@ CAPABILITIES += [
         key="platform.access.waitlist", handler=_list_waitlist, Input=WaitlistInput,
         authz=PLATFORM_ADMIN,
         description="[platform admin] List accounts awaiting alpha access (the waitlist).",
-        mcp="oto_admin_list_waitlist",
         rest=RestBinding("GET", "/api/admin/waitlist"),
     ),
     Capability(
@@ -93,7 +92,6 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="[platform admin] Grant alpha access to an account (sets active + invite quota, "
                     "emails them). quota defaults to OTO_ALPHA_INVITE_QUOTA.",
-        mcp="oto_admin_grant_access",
         rest=RestBinding("POST", "/api/admin/users/{sub}/access", _SUB),
     ),
     Capability(
@@ -101,14 +99,12 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="[platform admin] Reject an account's access request (sets blocked; "
                     "drops it from the waitlist). Reversible via grant.",
-        mcp="oto_admin_reject_access",
         rest=RestBinding("POST", "/api/admin/users/{sub}/block", _SUB),
     ),
     Capability(
         key="platform.access.set_quota", handler=_set_quota, Input=SetQuotaInput,
         authz=PLATFORM_ADMIN,
         description="[platform admin] Set an account's remaining alpha invitation quota.",
-        mcp="oto_admin_set_quota",
         rest=RestBinding("PUT", "/api/admin/users/{sub}/quota", _SUB),
     ),
 ]

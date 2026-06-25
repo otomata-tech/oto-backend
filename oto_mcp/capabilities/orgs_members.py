@@ -105,7 +105,7 @@ CAPABILITIES += [
         key="org.member.add", handler=_add_member, Input=AddMemberInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="Add a member (by email or sub) to an org you administer. role: org_member|org_admin.",
-        mcp="oto_admin_add_org_member",
+        # MCP fusionné dans oto_admin_org_member(op=add). REST conservé (dashboard).
         rest=(RestBinding("POST", "/api/orgs/{id}/members", _ID),
               RestBinding("POST", "/api/admin/orgs/{id}/members", _ID)),
     ),
@@ -120,7 +120,7 @@ CAPABILITIES += [
         key="org.member.remove", handler=_remove_member, Input=RemoveMemberInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="Remove a member (by email or sub) from an org you administer.",
-        mcp="oto_admin_remove_org_member",
+        # MCP fusionné dans oto_admin_org_member(op=remove). REST conservé (dashboard).
         rest=(RestBinding("DELETE", "/api/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"}),
               RestBinding("DELETE", "/api/admin/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"})),
     ),

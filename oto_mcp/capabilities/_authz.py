@@ -95,6 +95,24 @@ def NAMESPACE_GRANT(namespace: str):
     return rule
 
 
+def ADMIN_BY_OP(by_op: dict, *, field: str = "op"):
+    """Autz **op-aware** : choisit la règle d'autz selon `input.<field>` (typiquement
+    `op`). Permet à un outil consolidé `*_op` de réunir des verbes à paliers d'autz
+    différents (ex. lecture `PLATFORM_ADMIN`, mutation `SUPER_ADMIN`) **sans** redescendre
+    l'autz dans le handler : l'autz reste DÉCLARÉE au niveau de la capacité, juste
+    paramétrée par op (esprit ADR 0009 §7 préservé — pas de drift, pas d'oubli). Chaque
+    branche est une règle fermée de ce module ; un op hors map = refus net (jamais
+    fail-open). La validation de `op` reste portée par le `Literal` de l'Input."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        op = getattr(inp, field, None) if inp is not None else None
+        chosen = by_op.get(op)
+        if chosen is None:
+            raise AuthzDenied(400, "unsupported_op",
+                              f"op `{op}` non supporté (attendu : {sorted(by_op)}).")
+        return chosen(raw, inp)
+    return rule
+
+
 def _field_int(inp: Optional[BaseModel], field: str, code: str, label: str) -> int:
     val = getattr(inp, field, None) if inp is not None else None
     if val is None:

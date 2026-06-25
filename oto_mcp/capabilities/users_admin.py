@@ -192,7 +192,6 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="[platform admin] List all accounts (with their platform-key grants and "
                     "effective role). Optional `query` filters by email/name/sub substring.",
-        mcp="oto_admin_list_users",
         rest=RestBinding("GET", "/api/admin/users"),
     ),
     Capability(
@@ -200,7 +199,6 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="[platform admin] Full account fiche by email or sub: identity, effective "
                     "per-provider access, platform-key grants, unlocked namespaces, paid-option comps.",
-        mcp="oto_admin_user_detail",
         rest=RestBinding("GET", "/api/admin/users/{sub}", _SUB),
     ),
     Capability(
@@ -208,7 +206,6 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Set an account's platform role (member|admin|super_admin). "
                     "target = email or sub.",
-        mcp="oto_admin_set_role",
         rest=RestBinding("POST", "/api/admin/users/{sub}/role", _SUB),
     ),
     Capability(
@@ -216,14 +213,12 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Grant a platform key (by id) to a user, with an optional "
                     "per-day quota. target = email or sub. Never reveals the key.",
-        mcp="oto_admin_grant_key",
         rest=RestBinding("POST", "/api/admin/users/{sub}/grants/{key_id}", _SUB),
     ),
     Capability(
         key="platform.key.revoke", handler=_revoke_key, Input=RevokeKeyInput,
         authz=SUPER_ADMIN,
         description="[super admin] Revoke a user's grant of a platform key (by id).",
-        mcp="oto_admin_revoke_key",
         rest=RestBinding("DELETE", "/api/admin/users/{sub}/grants/{key_id}", _SUB),
     ),
     Capability(
@@ -231,14 +226,12 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Share a platform key (by id) with a WHOLE org — every member "
                     "resolves it (metered per-member). Optional per-day quota.",
-        mcp="oto_admin_grant_org_key",
         rest=RestBinding("POST", "/api/admin/orgs/{id}/grants/{key_id}", _ID),
     ),
     Capability(
         key="platform.org.revoke_key", handler=_revoke_org_key, Input=OrgRevokeKeyInput,
         authz=SUPER_ADMIN,
         description="[super admin] Revoke an org's share of a platform key (by id).",
-        mcp="oto_admin_revoke_org_key",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{key_id}", _ID),
     ),
     Capability(

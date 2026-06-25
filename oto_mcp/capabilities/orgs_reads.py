@@ -88,27 +88,18 @@ CAPABILITIES += [
     Capability(key="org.list", handler=_list_my_orgs, Input=NoInput, authz=SUB_ONLY,
                description="List the organizations you belong to and which one is active.",
                mcp="oto_list_orgs", rest=RestBinding("GET", "/api/me/orgs")),
+    # MCP fusionné dans oto_admin_org(op=list). REST conservé (dashboard).
     Capability(key="org.admin.list", handler=_list_all_orgs, Input=NoInput, authz=PLATFORM_ADMIN,
                description="[platform admin] List all organizations.",
-               mcp="oto_admin_list_orgs", rest=RestBinding("GET", "/api/admin/orgs")),
+               rest=RestBinding("GET", "/api/admin/orgs")),
     # org.get : REST-only, deux faces (membre vs platform), handler partagé.
     Capability(key="org.get", handler=_org_detail, Input=OrgIdInput, authz=ORG_MEMBER_OF("org_id"),
                rest=RestBinding("GET", "/api/orgs/{id}", _ID)),
     Capability(key="org.admin.get", handler=_org_detail, Input=OrgIdInput, authz=PLATFORM_ADMIN,
                rest=RestBinding("GET", "/api/admin/orgs/{id}", _ID)),
-    # listes MCP-only (platform admin) — pas de contrepartie REST historique.
-    Capability(key="org.member.list", handler=lambda c, i: {"org_id": i.org_id, "members": _members(i.org_id)},
-               Input=OrgIdInput, authz=PLATFORM_ADMIN,
-               description="[platform admin] List members of an org (sub, role, active flag).",
-               mcp="oto_admin_list_org_members"),
-    Capability(key="org.secret.list",
-               handler=lambda c, i: {"org_id": i.org_id, "secrets": org_store.list_org_secrets(i.org_id)},
-               Input=OrgIdInput, authz=PLATFORM_ADMIN,
-               description="[platform admin] List providers an org has a shared secret for (never the keys).",
-               mcp="oto_admin_list_org_secrets"),
-    Capability(key="org.entitlement.list",
-               handler=lambda c, i: {"org_id": i.org_id, "entitlements": org_store.list_org_entitlements(i.org_id)},
-               Input=OrgIdInput, authz=PLATFORM_ADMIN,
-               description="[platform admin] List an org's controlled-namespace entitlements.",
-               mcp="oto_admin_list_org_entitlements"),
+    # org.member.list (MCP-only) fusionné dans oto_admin_org_member(op=list).
+    # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les
+    # secrets via la fiche org (org.admin.get → _org_detail). Pose = dashboard-only.
+    # org.entitlement.list (MCP-only) fusionné dans oto_admin_namespace_access(op=list, scope=org).
+    # Le dashboard lit les entitlements via la fiche org (org.admin.get → _org_detail).
 ]

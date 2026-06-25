@@ -93,6 +93,7 @@ def register(mcp: FastMCP) -> None:
         enseigne: Optional[str] = None,
         active_only: bool = True,
         sieges_only: bool = False,
+        tranche_effectifs: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict:
@@ -104,7 +105,9 @@ def register(mcp: FastMCP) -> None:
         - All NAF 4711F (supermarchés) in Marseille (`code_commune=13201` or `code_postal=13001`)
         - All "Carrefour Express" branded locations (`enseigne='carrefour express'`)
         - All "Intermarché" supermarkets in a département (`enseigne='intermarché', naf='47.11F', departement='26'`)
-        - All active establishments of a given activity in a commune
+        - **Companies of 100-499 employees HEADQUARTERED in a département**
+          (`departement='13', sieges_only=True, tranche_effectifs='22,31,32'`) — the
+          clean way to enumerate ETI/large-PME by real HQ location + size, server-side.
 
         Args:
             naf: APE/NAF code exact match (ex. "4711F").
@@ -117,9 +120,20 @@ def register(mcp: FastMCP) -> None:
             enseigne: case-insensitive substring across enseigne 1/2/3.
             active_only: filter etatAdministratif='A' (default True).
             sieges_only: restrict to headquarters only (default False).
+            tranche_effectifs: comma-separated INSEE TEFEN size codes — keep only
+                establishments whose effectif is one of them. Codes: 00=0, 01=1-2,
+                02=3-5, 03=6-9, 11=10-19, 12=20-49, 21=50-99, 22=100-199, 31=200-249,
+                32=250-499, 41=500-999, 42=1000-1999, 51=2000-4999, 52=5000-9999,
+                53=10000+. Ex. "22,31,32" = 100-499 salariés. With sieges_only=True
+                this filters by company size for single-site firms.
             limit: max 1000, default 100.
             offset: pagination offset.
         """
+        tranches = (
+            [c.strip() for c in tranche_effectifs.split(",") if c.strip()]
+            if tranche_effectifs
+            else None
+        )
         items = sirene_duckdb.search(
             naf=naf,
             code_commune=code_commune,
@@ -129,6 +143,7 @@ def register(mcp: FastMCP) -> None:
             enseigne=enseigne,
             active_only=active_only,
             sieges_only=sieges_only,
+            tranche_effectifs=tranches,
             limit=limit,
             offset=offset,
         )

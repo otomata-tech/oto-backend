@@ -88,6 +88,7 @@ def make_routes(
         sub, err = await authenticate(request, verifier)
         if err:
             return err
+        _tranche = _qp(request, "tranche_effectifs")
         items = sirene_duckdb.search(
             naf=_qp(request, "naf"),
             code_commune=_qp(request, "code_commune"),
@@ -97,6 +98,11 @@ def make_routes(
             enseigne=_qp(request, "enseigne"),
             active_only=_qp_bool(request, "active_only", True),
             sieges_only=_qp_bool(request, "sieges_only", False),
+            tranche_effectifs=(
+                [c.strip() for c in _tranche.split(",") if c.strip()]
+                if _tranche
+                else None
+            ),
             limit=_qp_int(request, "limit", 100),
             offset=_qp_int(request, "offset", 0),
         )

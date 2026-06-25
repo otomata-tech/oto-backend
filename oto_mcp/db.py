@@ -3404,6 +3404,7 @@ def search_acco(
     query: Optional[str] = None,
     themes: Optional[list[str]] = None,
     nature: Optional[str] = None,
+    siren: Optional[str] = None,
     siret: Optional[str] = None,
     idcc: Optional[str] = None,
     departement: Optional[str] = None,
@@ -3417,9 +3418,12 @@ def search_acco(
 ) -> dict:
     """Recherche d'accords d'entreprise (table PG) — primitive neutre, lignes brutes.
 
-    Filtres AND (sauf `themes` : OR interne). `latest_per_siret` réduit à 1 ligne par
-    entreprise (l'acte le plus récent) AVANT d'appliquer date_from/date_to (→ « dernier
-    accord antérieur à X » = contrat dormant). Renvoie {results, total_count}."""
+    Filtres AND (sauf `themes` : OR interne). `siren` (9 chiffres) matche TOUS les
+    établissements de l'entreprise (ACCO indexe l'accord sous le SIRET déposant, pas
+    le siège → toujours préférer `siren` à `siret` pour « cette société a-t-elle un
+    accord ? »). `latest_per_siret` réduit à 1 ligne par établissement (l'acte le plus
+    récent) AVANT d'appliquer date_from/date_to (→ « dernier accord antérieur à X » =
+    contrat dormant). Renvoie {results, total_count}."""
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     order_col = _ACCO_SORT.get(sort_by, "date_texte")
@@ -3437,6 +3441,8 @@ def search_acco(
         pop.append("(" + " OR ".join(ors) + ")")
     if nature:
         pop.append("nature = %s"); params.append(nature.upper())
+    if siren:
+        pop.append("LEFT(siret, 9) = %s"); params.append(siren)
     if siret:
         pop.append("siret = %s"); params.append(siret)
     if idcc:

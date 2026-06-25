@@ -363,6 +363,7 @@ def register(mcp: FastMCP) -> None:
         query: Optional[str] = None,
         themes: Optional[list[str]] = None,
         nature: Optional[str] = None,
+        siren: Optional[str] = None,
         siret: Optional[str] = None,
         idcc: Optional[str] = None,
         departement: Optional[str] = None,
@@ -382,7 +383,8 @@ def register(mcp: FastMCP) -> None:
         - Companies whose health scheme is STALE (dormant contract, no recent act):
           themes=["111","112"], latest_per_siret=True, sort_dir="asc",
           date_to=<today-12months>.
-        - Full history of one company: siret="...".
+        - Does THIS company have any health/pension agreement (and when):
+          siren="123456789", themes=["111","112"].
 
         Args:
             query: Substring in the agreement title (ILIKE).
@@ -390,7 +392,12 @@ def register(mcp: FastMCP) -> None:
                 "112" (prévoyance), "113" (retraite supplémentaire). Use
                 fr_accords_themes to discover codes.
             nature: ACCORD (initial) | AVENANT (amendment = renegotiation) | …
-            siret: Exact SIRET. idcc: Exact branch code (convention collective).
+            siren: Company SIREN (9 digits) — matches ALL its establishments.
+                PREFER this over siret to check a company: ACCO files an agreement
+                under the DEPOSITING establishment's SIRET, often not the siège, so a
+                siège-SIRET lookup misses agreements.
+            siret: Exact establishment SIRET (14 digits).
+            idcc: Exact branch code (convention collective).
             departement: Postal code prefix (2 digits).
             date_from / date_to: Bounds on the signature date (YYYY-MM-DD).
             latest_per_siret: Keep only one row per company — its most recent act —
@@ -401,8 +408,8 @@ def register(mcp: FastMCP) -> None:
             limit: Max results (default 20, max 100).
         """
         return db.search_acco(
-            query=query, themes=themes, nature=nature, siret=siret, idcc=idcc,
-            departement=departement, date_from=date_from, date_to=date_to,
+            query=query, themes=themes, nature=nature, siren=siren, siret=siret,
+            idcc=idcc, departement=departement, date_from=date_from, date_to=date_to,
             latest_per_siret=latest_per_siret, sort_by=sort_by, sort_dir=sort_dir,
             limit=limit,
         )

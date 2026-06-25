@@ -108,9 +108,13 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- otomata-calllog) : session_id = session mcp transport (grossier) ; run_id =
     -- déroulé/run (fin, posé par run_start, stampé ici). NULL hors run.
     session_id TEXT,
-    run_id TEXT
+    run_id TEXT,
+    -- Org sous laquelle l'appel a été émis (seam current_org au moment du call,
+    -- extension OTO-LOCALE) — scope EXACT du journal d'audit org (#67). NULL hors org.
+    org_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_org ON tool_calls(org_id, created_at DESC) WHERE org_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
 -- idx_tool_calls_run (sur run_id) créé dans le bloc ALTER de init_db, APRÈS l'ADD
@@ -776,6 +780,9 @@ def init_db() -> None:
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, created_at) WHERE run_id IS NOT NULL")
+        # Org de l'appel (#67, scope d'audit exact) — extension OTO-LOCALE.
+        conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS org_id BIGINT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_org ON tool_calls(org_id, created_at DESC) WHERE org_id IS NOT NULL")
         # Résolution des signaux d'usage (ADR 0017) : marquer un feedback/gap traité.
         # NULL = ouvert. resolution = note libre de l'opérateur (ce qui a été fait).
         conn.execute("ALTER TABLE usage_signals ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
@@ -1695,14 +1702,14 @@ def insert_tool_call(row: dict) -> None:
         conn.execute(
             """
             INSERT INTO tool_calls
-                (server, sub, email, tool, args, ok, error, duration_ms, session_id, run_id)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                (server, sub, email, tool, args, ok, error, duration_ms, session_id, run_id, org_id)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("sub"), row.get("email"),
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
                 bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
-                row.get("session_id"), row.get("run_id"),
+                row.get("session_id"), row.get("run_id"), row.get("org_id"),
             ),
         )
 
@@ -1896,6 +1903,39 @@ def list_tool_calls(
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
+            ORDER BY l.created_at DESC, l.id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        ).fetchall()
+        return list(rows)
+
+
+def list_tool_calls_for_org(
+    org_id: int, since: Optional[str] = None, until: Optional[str] = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """Journal d'audit org-scopé (export #67) : appels émis **sous** `org_id`
+    (colonne `tool_calls.org_id`, stampée par le seam `current_org` au moment de
+    l'appel — scope EXACT, pas l'appartenance), récent d'abord, fenêtre
+    `[since, until]` (ISO timestamptz, bornes incluses). JAMAIS d'args ni de secret
+    (garantie calllog). ⚠ Les appels antérieurs à la colonne (`org_id` NULL)
+    n'apparaissent dans aucun export org — non reconstructibles a posteriori."""
+    limit = max(1, min(int(limit), 5000))
+    clauses = ["l.org_id = %s"]
+    params: list[Any] = [int(org_id)]
+    if since:
+        clauses.append("l.created_at >= %s::timestamptz"); params.append(since)
+    if until:
+        clauses.append("l.created_at <= %s::timestamptz"); params.append(until)
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT l.id, l.created_at, l.sub, u.email, l.tool, l.ok, l.error, l.duration_ms
+            FROM tool_calls l
+            LEFT JOIN users u ON u.sub = l.sub
+            WHERE {" AND ".join(clauses)}
             ORDER BY l.created_at DESC, l.id DESC
             LIMIT %s
             """,

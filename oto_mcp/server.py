@@ -208,6 +208,10 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
             ctx = get_context()
             row["session_id"] = ctx.session_id
             row["run_id"] = await doctrine_run.active_run_id(ctx)
+            # Org de l'appel (#67) : seam current_org du caller dans CE contexte de
+            # session → scope exact du journal d'audit org. NULL hors org.
+            from . import access
+            row["org_id"] = access.current_org(row.get("sub"))
         except Exception:
             pass
         # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas bloquer

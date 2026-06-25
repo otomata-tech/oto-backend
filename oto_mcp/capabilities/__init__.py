@@ -25,6 +25,8 @@ from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,
 from . import billing  # noqa: F401 — billing.{balance,transactions,packs,checkout}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
 from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) + projections
+# Substrat typé générique (ADR 0008/0018) — facts typés exposés MCP+REST, schema-aware.
+from . import facts  # noqa: F401 — facts.{kinds,write,list,get,link}
 # Doctrine & instructions d'org (ADR 0009) — CRUD doctrine + usage, membre + admin.
 from . import orgs_instructions  # noqa: F401 — org.{doctrine.*, instruction.*}
 # Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.

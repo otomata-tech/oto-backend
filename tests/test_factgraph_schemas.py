@@ -58,3 +58,27 @@ def test_edge_role_inconnu_rejete():
 def test_edge_role_wildcard_accepte_tout():
     # derived-from = endpoints libres (set() vide).
     schemas.validate_edge("derived-from", "action", "facture")
+
+
+# ── lead générique + describe_kinds (« theme data model » exposé à la vue) ────
+def test_lead_data_plus_qualif_texte():
+    out = schemas.validate_fact("lead", {"raison_sociale": "ACME", "ca": 450000,
+                                         "pourquoi_lead": "utilise Swile", "emetteur_actuel": "Swile"})
+    assert out["raison_sociale"] == "ACME"
+    assert out["statut"] == "nouveau"           # défaut
+    assert out["pourquoi_lead"] == "utilise Swile"
+
+
+def test_describe_kinds_expose_roles_et_domaine():
+    by_kind = {k["kind"]: k for k in schemas.describe_kinds()}
+    lead = by_kind["lead"]
+    assert lead["domain"] == "prospection"
+    roles = {f["name"]: f["role"] for f in lead["fields"]}
+    assert roles["raison_sociale"] == "title"
+    # les champs de qualification sont du TEXTE LIBRE (role=qualif/note)
+    assert roles["pourquoi_lead"] == "qualif"
+    assert roles["accroche"] == "qualif"
+    assert roles["notes"] == "note"
+    # chaque kind du registre est décrit + mappé à un domaine
+    assert set(by_kind) == set(schemas.REGISTRY)
+    assert all(k["domain"] for k in by_kind.values())

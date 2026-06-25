@@ -146,3 +146,39 @@ def find(workspace_id: int, kind: str) -> list[dict]:
             "WHERE workspace_id = %s AND kind = %s ORDER BY id",
             (workspace_id, kind),
         ).fetchall()
+
+
+# ── accès générique org-scopé (anti-IDOR par JOIN sur workspace.org_id) ──────
+def list_facts_for_org(org_id: int, domain: str, kind: str, limit: int = 200) -> list[dict]:
+    """Facts d'un `kind` dans le workspace (org × domaine). [] si pas de workspace."""
+    with db._connect() as conn:
+        return conn.execute(
+            "SELECT f.id, f.workspace_id, f.kind, f.data, f.created_at, f.created_by "
+            "FROM factgraph.fact f JOIN factgraph.workspace w ON w.id = f.workspace_id "
+            "WHERE w.org_id = %s AND w.kind = %s AND f.kind = %s "
+            "ORDER BY f.id DESC LIMIT %s",
+            (org_id, domain, kind, limit),
+        ).fetchall()
+
+
+def get_fact_for_org(org_id: int, fact_id: int) -> Optional[dict]:
+    """Un fact SI son workspace appartient à `org_id`, sinon None (verrou IDOR)."""
+    with db._connect() as conn:
+        return conn.execute(
+            "SELECT f.id, f.workspace_id, f.kind, f.data, f.created_at, f.created_by "
+            "FROM factgraph.fact f JOIN factgraph.workspace w ON w.id = f.workspace_id "
+            "WHERE f.id = %s AND w.org_id = %s",
+            (fact_id, org_id),
+        ).fetchone()
+
+
+def update_fact(fact_id: int, kind: str, data: dict) -> dict:
+    """Remplace le payload d'un fact (re-validé contre le schéma du kind).
+    Le scope org est garanti par l'appelant (get_fact_for_org en amont)."""
+    clean = validate_fact(kind, data)
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE factgraph.fact SET data = %s WHERE id = %s",
+            (Json(clean), fact_id),
+        )
+    return clean

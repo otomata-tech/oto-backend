@@ -939,11 +939,11 @@ def init_db() -> None:
         # TTL opt-in des tokens API (audit 2026-06-13) : NULL = non-expirant.
         conn.execute("ALTER TABLE user_api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
         _drop_legacy_plaintext_stores(conn)
-        # Substrat « graphe de facts structurés » (ADR 0008) — schéma factgraph.
-        from .factgraph import projection as _fg_projection
+        # Substrat « graphe de facts structurés » (ADR 0008) — schéma factgraph
+        # générique (fact/edge/workspace). La projection prospection (`prospect`)
+        # a été retirée avec le cockpit scout (ADR 0027).
         from .factgraph import store as _fg_store
         _fg_store.init_schema(conn)
-        _fg_projection.init_schema(conn)
         # Cran d'activation des connecteurs (ADR 0010, B1) — table + seed unique
         # (snapshot du registre courant à ON). Aucun lecteur encore (canari) :
         # le câblage catalogue/chargement suit en B2/B3.

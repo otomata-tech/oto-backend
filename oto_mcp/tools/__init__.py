@@ -41,13 +41,12 @@ def register_all(mcp: FastMCP) -> None:
     # est 100% migré en capacités (ADR 0009) — monté par `_mcp_adapter`/`_rest_adapter`
     # depuis `capabilities.registry`, plus aucun `tools/orgs.py`.
 
-    # Harnais prospection « scout » (ADR 0008) — tools scout_* sur le substrat
-    # factgraph, scopés à l'org active. Pas de dépendance externe.
-    from . import scout
-    scout.register(mcp)
+    # (Le harnais prospection « scout » a été RETIRÉ — ADR 0027 amende 0008/0018 :
+    # le cockpit/vertical sort, le substrat factgraph générique reste, exposé par la
+    # capacité `facts` + la vue dashboard « Fact graph ».)
 
     # Datastore (ADR 0016) — spine plateforme `data_*` sur substrat PG natif, plus
-    # un connecteur Google. Chargé explicitement (comme meta/orgs/scout), donc hors
+    # un connecteur Google. Chargé explicitement (comme meta/orgs), donc hors
     # gate d'activation. Pas de dépendance externe.
     from . import datastore
     datastore.register(mcp)

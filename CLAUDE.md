@@ -423,6 +423,15 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. ⚠️ **Aucune CI de test sur
   les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main) → un test
   rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
+- **PERF — un handler de tool fait du I/O bloquant ⟹ il est `def` SYNC, jamais `async def`.**
+  Le serveur est **mono-event-loop** (`uvicorn.run(app)`, pas de `workers=`). FastMCP route
+  un `def` sync en **threadpool** (`call_sync_fn_in_threadpool`) mais exécute un `async def`
+  **dans la boucle**. Nos connecteurs appellent des libs **synchrones** (`requests` via
+  france_opendata, DuckDB, clients HTTP sync) → un `async def` **sans `await`** gèle TOUTE la
+  boucle le temps de l'appel (vécu 2026-06-25 : `/health` à 110 s, p95 `fr_stock_search` 218 s ;
+  fix `async`→`def` sur `fr.py`/`fr_stock.py` → `/health` ~0,1 s). Règle : un handler `tools/*.py`
+  qui n'`await` rien doit être `def`. Ne garder `async def` que s'il `await` réellement (httpx
+  async, etc.). NE PAS ajouter de workers uvicorn (état de session streamable_http en mémoire).
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_

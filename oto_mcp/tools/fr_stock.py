@@ -29,7 +29,7 @@ from france_opendata import sirene_stock as sirene_duckdb
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def fr_stock_siege(siren: str) -> Optional[dict]:
+    def fr_stock_siege(siren: str) -> Optional[dict]:
         """Headquarters (siège) of a French company from the local SIRENE
         stock parquet (INSEE, monthly snapshot).
 
@@ -42,7 +42,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.lookup_siege(siren)
 
     @mcp.tool()
-    async def fr_stock_etablissements(siren: str, active_only: bool = True) -> list[dict]:
+    def fr_stock_etablissements(siren: str, active_only: bool = True) -> list[dict]:
         """All establishments (siège + secondaires) of a French company from
         the local SIRENE stock parquet.
 
@@ -56,7 +56,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.list_establishments(siren, active_only=active_only)
 
     @mcp.tool()
-    async def fr_stock_enrich(sirens: list[str]) -> dict:
+    def fr_stock_enrich(sirens: list[str]) -> dict:
         """Batch headquarters enrichment: pass a LIST of SIRENs, get each one's
         head-office address in a SINGLE scan. This is the bulk strength of the
         stock parquet — far faster than N calls to fr_get/fr_stock_siege
@@ -75,7 +75,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.headquarters_addresses(clean)
 
     @mcp.tool()
-    async def fr_stock_siret(siret: str) -> Optional[dict]:
+    def fr_stock_siret(siret: str) -> Optional[dict]:
         """Fetch a specific establishment by SIRET (14 digits) from the stock parquet.
 
         Args:
@@ -84,7 +84,7 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.lookup_siret(siret)
 
     @mcp.tool()
-    async def fr_stock_search(
+    def fr_stock_search(
         naf: Optional[str] = None,
         code_commune: Optional[str] = None,
         code_postal: Optional[str] = None,

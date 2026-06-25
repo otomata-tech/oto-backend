@@ -25,7 +25,7 @@ def register(mcp: FastMCP) -> None:
     # --- Identité (API Recherche Entreprises, open data) ---
 
     @mcp.tool()
-    async def fr_search(
+    def fr_search(
         query: Optional[str] = None,
         naf: Optional[str] = None,
         departement: Optional[str] = None,
@@ -133,7 +133,7 @@ def register(mcp: FastMCP) -> None:
         return out
 
     @mcp.tool()
-    async def fr_get(siren: str) -> dict:
+    def fr_get(siren: str) -> dict:
         """Full company profile by SIREN: identity (siège, directors, NAF,
         employees) + 7 top financial ratios from the latest INPI/BCE filing
         + recent BODACC legal events. Aggregates 3 open data sources in parallel.
@@ -218,7 +218,7 @@ def register(mcp: FastMCP) -> None:
         return out
 
     @mcp.tool()
-    async def fr_directors(siren: str) -> list[dict]:
+    def fr_directors(siren: str) -> list[dict]:
         """List directors (dirigeants) of a French company.
 
         Args:
@@ -233,7 +233,7 @@ def register(mcp: FastMCP) -> None:
         return SireneClient(api_key=key), is_platform
 
     @mcp.tool()
-    async def fr_siret(siret: str) -> dict:
+    def fr_siret(siret: str) -> dict:
         """Fetch a French establishment by SIRET (14 digits) from INSEE SIRENE.
 
         Args:
@@ -246,7 +246,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def fr_headquarters(siren: str) -> Optional[dict]:
+    def fr_headquarters(siren: str) -> Optional[dict]:
         """Fetch the headquarters (siège) of a company from INSEE SIRENE.
 
         Args:
@@ -261,7 +261,7 @@ def register(mcp: FastMCP) -> None:
     # --- Finances (INPI/BCE, open data) ---
 
     @mcp.tool()
-    async def fr_bilans(siren: str) -> dict:
+    def fr_bilans(siren: str) -> dict:
         """List available INPI/BCE annual filings for a SIREN.
 
         Returns exercise dates, bilan type (C=complet, S=simplifié, K=consolidé),
@@ -274,7 +274,7 @@ def register(mcp: FastMCP) -> None:
         return {"siren": siren, "items": items, "total": len(items)}
 
     @mcp.tool()
-    async def fr_bilan(siren: str, date_cloture: str) -> dict:
+    def fr_bilan(siren: str, date_cloture: str) -> dict:
         """Fetch one INPI/BCE annual filing with full financial ratios.
 
         Returns: CA, EBE, EBIT, résultat net, marge EBE, autonomie financière,
@@ -294,7 +294,7 @@ def register(mcp: FastMCP) -> None:
     # --- Événements légaux (BODACC, open data) ---
 
     @mcp.tool()
-    async def fr_events(
+    def fr_events(
         siren: str,
         famille: Optional[str] = None,
         limit: int = 20,
@@ -313,7 +313,7 @@ def register(mcp: FastMCP) -> None:
     # --- Appels d'offres (BOAMP, open data) ---
 
     @mcp.tool()
-    async def fr_tenders_search(
+    def fr_tenders_search(
         query: Optional[str] = None,
         descripteur: Optional[str] = None,
         departement: Optional[str] = None,
@@ -340,7 +340,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def fr_tenders_get(idweb: str) -> dict:
+    def fr_tenders_get(idweb: str) -> dict:
         """Fetch a single BOAMP tender by its ID.
 
         Args:
@@ -359,7 +359,7 @@ def register(mcp: FastMCP) -> None:
     # (conforme_version_integrale), mais le « qui a négocié quoi et quand » l'est.
 
     @mcp.tool()
-    async def fr_accords_search(
+    def fr_accords_search(
         query: Optional[str] = None,
         themes: Optional[list[str]] = None,
         nature: Optional[str] = None,
@@ -408,7 +408,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def fr_accords_get(id_or_numero: str) -> dict:
+    def fr_accords_get(id_or_numero: str) -> dict:
         """Fetch a single company agreement by its DILA id (ACCOTEXT…) or numero (T…).
 
         Args:
@@ -420,7 +420,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def fr_accords_themes() -> list[dict]:
+    def fr_accords_themes() -> list[dict]:
         """List the agreement theme codes present in the database (code → label →
         count). Discovery helper so you can pick `themes` for fr_accords_search."""
         return db.acco_themes()

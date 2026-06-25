@@ -114,12 +114,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     org_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_org ON tool_calls(org_id, created_at DESC) WHERE org_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_server_tool ON tool_calls(server, tool, created_at);
--- idx_tool_calls_run (sur run_id) créé dans le bloc ALTER de init_db, APRÈS l'ADD
--- COLUMN run_id : sur une table existante, CREATE TABLE IF NOT EXISTS est un no-op
--- donc la colonne n'existe pas encore ici (sinon crash UndefinedColumn au boot).
+-- idx_tool_calls_run (run_id) ET idx_tool_calls_org (org_id) créés dans le bloc
+-- ALTER de init_db, APRÈS leur ADD COLUMN : sur une table existante, CREATE TABLE
+-- IF NOT EXISTS est un no-op donc ces colonnes n'existent pas encore ici (un index
+-- les référençant dans _SCHEMA = crash UndefinedColumn au boot, vécu le 2026-06-25).
 
 -- Signaux d'usage volontaires (ADR 0017, barreau 3) : feedback de l'agent/humain
 -- sur un outil + cas d'usage non couverts (gap). DURABLE (hors prune 30j de

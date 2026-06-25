@@ -60,21 +60,6 @@ class _IatGatedVerifier(JWTVerifier):
             if iat < self._min_iat:
                 logger.info(f"iat-gate reject sub={result.claims.get('sub')} iat={iat} < min_iat={self._min_iat}")
                 return None
-        if not result and token:
-            # DEBUG TEMPORAIRE (diag Mistral 2026-06-25, À RETIRER) : décode le token
-            # REJETÉ sans le vérifier → voir iss/aud/iat/client pour comprendre le rejet.
-            try:
-                import base64
-                import json as _json
-                p = token.split(".")
-                if len(p) >= 2:
-                    c = _json.loads(base64.urlsafe_b64decode(p[1] + "=" * (-len(p[1]) % 4)))
-                    logger.warning(
-                        "DEBUG token rejeté: iss=%s aud=%s iat=%s exp=%s sub=%s client=%s",
-                        c.get("iss"), c.get("aud"), c.get("iat"), c.get("exp"),
-                        c.get("sub"), c.get("client_id") or c.get("azp"))
-            except Exception as e:
-                logger.warning("DEBUG token rejeté indécodable: %s (prefix=%s)", e, token[:16])
         return result
 
 

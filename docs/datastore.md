@@ -1,3 +1,21 @@
+---
+title: Datastore (spine natif PG, ADR 0016)
+type: reference
+description: >-
+  Référence du spine de stockage structuré per-user de oto-backend : tables PG
+  user_datastores + datastore_rows (JSONB natif, uuid7, _created/_updated_at auto),
+  chargé hors gate d'activation (provider=None, ADR 0011), partage DB-only via
+  datastore_shares, deep-link dashboard via data_url. Couvre les surfaces MCP data_*
+  et REST /api/datastore/*, l'auth double (JWT Logto ou API token oto_*), l'OAuth
+  Google per-user multi-compte (flux /api/google/oauth/*, refresh token chiffré,
+  scopes Sheets/Drive/Gmail/Tasks et gotcha CASA gmail.modify restricted), et la
+  procédure de setup GCP one-shot. À consulter pour ajouter ou déboguer le datastore,
+  configurer OAuth Google ou comprendre la séparation identité Logto vs délégation.
+adr:
+  - "0016"
+  - "0011"
+---
+
 # Datastore (spine natif PG, ADR 0016)
 
 Stockage structuré léger par user, **substrat PostgreSQL natif** (plus Google
@@ -26,6 +44,13 @@ pas une URL de Sheet. Code : `datastore.py` (`DatastorePg`) + `tools/datastore.p
 Surfaces :
 - MCP tools `data_*` (`data_create_namespace`, `data_write`, `data_rows`,
   `data_delete_row`, `data_url`, `data_share`, etc.) — pour Claude.ai / Claude Code.
+- MCP **App** `data_app` (`@mcp.tool(app=True)`, SEP-1865, prefab_ui) — variante à
+  interface rendue : sans `namespace` = table des namespaces ; avec `namespace` =
+  table triable/cherchable/paginée des rows, avec `filter` exact-match optionnel
+  (même forme que `data_rows`) et `show_meta` pour les colonnes `_id/_created/_updated`.
+  Rend le contenu INLINE dans le chat au lieu du seul deep-link `data_url`. Dégradation
+  gracieuse si l'extra `fastmcp[apps]` est absent (non enregistré). Pattern : cf.
+  `tools/foncier.py` (`foncier_*_app`).
 - REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard.
 
 Auth :

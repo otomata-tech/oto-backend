@@ -187,3 +187,121 @@ def register(mcp: FastMCP) -> None:
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
+
+    # --- MCP App : variante à interface rendue du datastore (SEP-1865) --------
+    # `data_app` rend le contenu d'un namespace INLINE (carte + table triable /
+    # cherchable) au lieu de seulement renvoyer un lien dashboard (`data_url`).
+    # Import OPTIONNEL de prefab_ui (extra `fastmcp[apps]`) : absent → on
+    # n'enregistre pas l'app, les tools JSON ci-dessus suffisent (dégradation
+    # gracieuse, même pattern que foncier.py).
+    try:
+        from prefab_ui.components import (  # type: ignore
+            Card, Column, DataTable, DataTableColumn, Heading, Text,
+        )
+    except Exception:  # pragma: no cover - extra `apps` absent
+        return
+
+    _META = ("_id", "_created_at", "_updated_at")
+
+    def _label(k: str) -> str:
+        return str(k).lstrip("_").replace("_", " ").capitalize()
+
+    def _is_scalar(v: object) -> bool:
+        return isinstance(v, (str, int, float, bool)) or v is None
+
+    def _message_card(title: str, message: str) -> "Card":
+        with Card() as card:
+            with Column(gap=4):
+                Heading(title)
+                Text(message)
+        return card
+
+    def _rows_table(records: list, *, show_meta: bool) -> None:
+        """Rend une liste de dicts en DataTable triable/cherchable (cellules
+        scalaires uniquement). Les colonnes méta (`_id`/`_created_at`/
+        `_updated_at`) sont masquées par défaut pour une vue épurée — `data_rows`
+        les expose en JSON quand il faut agir (ex. `_id` pour un update)."""
+        rows, keys = [], []
+        for r in records:
+            row = {}
+            for k, v in r.items():
+                if not _is_scalar(v):
+                    continue
+                if k in _META and not show_meta:
+                    continue
+                row[k] = v
+                if k not in keys:
+                    keys.append(k)
+            rows.append(row)
+        cols = [DataTableColumn(key=k, header=_label(k), sortable=True) for k in keys]
+        DataTable(columns=cols, rows=rows, search=True, paginated=len(rows) > 20, pageSize=20)
+
+    @mcp.tool(app=True)
+    async def data_app(
+        namespace: str | None = None,
+        filter: Optional[dict] = None,
+        limit: int = 100,
+        show_meta: bool = False,
+    ) -> Card:
+        """Rendered datastore browser (MCP App / interactive card).
+
+        Visual variant of `data_url` that renders the data INLINE instead of just
+        returning a dashboard link. WITHOUT `namespace` = a table of your
+        namespaces. WITH `namespace` = a sortable/searchable table of its rows,
+        with an optional exact-match `filter` (same shape as `data_rows`).
+
+        Use when the user wants to *see* and explore datastore content (e.g. a
+        watch-list) without leaving the chat. For raw JSON use `data_rows`; to
+        edit a row, follow the dashboard link shown on the card.
+
+        Args:
+            namespace: target namespace ; omit = list all your namespaces.
+            filter: dict `{column: value}` exact match to pre-filter rows,
+                e.g. `{"priorite": "P1"}`.
+            limit: max rows rendered (default 100).
+            show_meta: also show the `_id`/`_created_at`/`_updated_at` columns
+                (hidden by default).
+        """
+        sub = access.current_user_sub_or_raise()
+        store = _store_for(sub)
+
+        if not namespace:
+            spaces = store.list_namespaces()
+            if not spaces:
+                return _message_card(
+                    "Aucun namespace",
+                    "Crée-en un avec data_create_namespace, puis écris avec data_write.",
+                )
+            index = [
+                {"namespace": s["namespace"],
+                 "partage": "oui" if s.get("shared") else "non",
+                 "lien": s.get("url", "")}
+                for s in spaces
+            ]
+            with Card() as card:
+                with Column(gap=4):
+                    Heading("Datastore")
+                    Text(f"{len(spaces)} namespace(s)")
+                    _rows_table(index, show_meta=True)
+            return card
+
+        try:
+            rows = store.list_rows(namespace, filter=filter, limit=limit)
+            url = store.get_url(namespace)
+        except NamespaceNotFound:
+            return _message_card(
+                "Namespace introuvable",
+                f"Aucun namespace « {namespace} » sur ton compte.",
+            )
+        suffix = f" (filtre {filter})" if filter else ""
+        with Card() as card:
+            with Column(gap=4):
+                Heading(namespace)
+                Text(f"{len(rows)} ligne(s){suffix} · éditer : {url}")
+                if rows:
+                    _rows_table(rows, show_meta=show_meta)
+                elif filter:
+                    Text("Aucune ligne pour ce filtre.")
+                else:
+                    Text("Aucune ligne.")
+        return card

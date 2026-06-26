@@ -1,7 +1,8 @@
 """Routes REST `/api/sirene/*` — consommé par oto-cli (HTTP client) et autres
 scripts qui veulent du batch enrichment sans gérer un parquet local.
 
-Backend = `sirene_duckdb` (DuckDB sur le parquet INSEE).
+Backend = service FOD dédié (ADR 0028) via `fod_client` — le scan DuckDB ne tourne
+plus in-process, il est déporté sur la box `fod-0`. Surface inchangée.
 
 - `POST /api/sirene/headquarters` {sirens:[...]}  → sièges en batch (1 scan)
 - `GET /api/sirene/siege?siren=`                 → siège (1 dict ou null)
@@ -21,7 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from france_opendata import sirene_stock as sirene_duckdb
+from oto_mcp import fod_client as sirene_duckdb  # ADR 0028 : scan déporté sur FOD
 
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]

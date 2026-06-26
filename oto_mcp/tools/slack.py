@@ -6,8 +6,11 @@ Per-user : chaque user pose son propre **user token** (`xoxp-`) sur
 `access.resolve_api_key("slack")` — pas de token serveur partagé en clair.
 
 Tous les appels passent par le user token (`as_user=True`) : les messages
-apparaissent comme l'humain qui a installé l'app. Le mode bot (`xoxb-`) n'est
-pas exposé en multi-tenant — il viendra avec l'OAuth install flow (issue #4).
+apparaissent comme l'humain qui a installé l'app. ⚠️ Aujourd'hui ce `xoxp-` est
+posé à la main et souvent partagé en clé plateforme → tout le monde poste comme
+le même humain. La cible (per-user OAuth : clé app plateforme + `xoxp-` per-user,
++ mode bot `xoxb-` pour les comptes de service) est suivie en
+otomata-tech/otomata-private#7.
 """
 from __future__ import annotations
 

@@ -52,7 +52,10 @@ def register(mcp: FastMCP) -> None:
             naf: NAF activity codes, comma-separated (e.g. "62.01Z,62.02A").
             departement: Department code (e.g. "75").
             code_postal: Postal code (e.g. "75001").
-            commune: City name.
+            commune: INSEE commune code (COG, 5 digits — e.g. "67482" for
+                Strasbourg). NOT a city name (a name raises "valeur non valide").
+                For a place, pass `code_postal`, or use `fr_stock_search` (which
+                resolves enseigne/commune by code too).
             employees: Employee-range codes (INSEE TEFEN) of the unité légale, comma-separated.
             categorie_entreprise: INSEE size category — "PME", "ETI" or "GE".
             ca_min: Minimum turnover in euros.

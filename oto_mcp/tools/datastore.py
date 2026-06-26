@@ -76,8 +76,13 @@ def register(mcp: FastMCP) -> None:
         columns). WITH `id` = PARTIAL update of that row (only provided fields
         change). Returns the row (with `_id`/`_created_at`/`_updated_at`).
 
+        ⚠️ The namespace must EXIST first (create it with `data_create_namespace`);
+        writing to an unknown namespace raises "namespace inconnu" — it is NOT
+        auto-created. New JSON KEYS within an existing namespace, however, do
+        auto-create their columns.
+
         Args:
-            namespace: target namespace.
+            namespace: target namespace (must already exist).
             row: row content as a dict (strings/numbers/bools/objects/arrays,
                 JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`.

@@ -101,7 +101,15 @@ def register(mcp: FastMCP) -> None:
             id: the record ID (the deal_id for a deal).
             fields: Folk API field names, camelCase (e.g. {"jobTitle": "CTO"},
                 {"industry": "SaaS"}, ou champs custom d'un deal).
-            group_id: REQUIRED for `deal` (le groupe où vit le deal).
+                **Champs CUSTOM d'une person/company** (ex. Status d'un groupe) :
+                les passer SOUS `customFieldValues`, keyés par group_id —
+                `{"customFieldValues": {"<group_id>": {"Status": "Follow-up"}}}`.
+                Un champ custom passé à plat (`{"Status": …}`) est rejeté (422
+                "Unrecognized key"). La structure se découvre via folk_search
+                (customFieldValues groupée par group_id).
+            group_id: REQUIRED for `deal` only (le groupe où vit le deal). Ne PAS
+                le passer pour person/company (sans effet, source d'erreur) — pour
+                leurs champs custom, utiliser `customFieldValues` ci-dessus.
             object_type: nom de la collection (défaut "deals"), `deal` seulement.
         """
         c = _client()

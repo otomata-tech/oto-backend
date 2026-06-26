@@ -99,28 +99,28 @@ def search(
         "limit": limit,
         "offset": offset,
     }
-    return _post("/v1/search", body)["items"]
+    return _post("/api/sirene/search", body)["items"]
 
 
 def lookup_siege(siren: str) -> Optional[dict[str, Any]]:
-    return _get(f"/v1/siege/{siren}")
+    return _get(f"/api/sirene/siege/{siren}")
 
 
 def lookup_sieges(sirens: Iterable[str]) -> dict[str, dict[str, Any]]:
-    return _post("/v1/sieges", {"sirens": list(sirens)})
+    return _post("/api/sirene/sieges", {"sirens": list(sirens)})
 
 
 def headquarters_addresses(sirens: Iterable[str]) -> dict[str, dict[str, Any]]:
-    return _post("/v1/enrich", {"sirens": list(sirens)})
+    return _post("/api/sirene/enrich", {"sirens": list(sirens)})
 
 
 def list_establishments(siren: str, active_only: bool = True) -> list[dict[str, Any]]:
-    return _get(f"/v1/etablissements/{siren}", {"active_only": active_only})
+    return _get(f"/api/sirene/etablissements/{siren}", {"active_only": active_only})
 
 
 def lookup_siret(siret: str) -> Optional[dict[str, Any]]:
-    return _get(f"/v1/siret/{siret}")
+    return _get(f"/api/sirene/siret/{siret}")
 
 
 def parquet_info() -> dict[str, Any]:
-    return _get("/health").get("parquet", {})
+    return _get("/api/sirene/info")

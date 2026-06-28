@@ -1,15 +1,14 @@
-"""Capacité fact générique (ADR 0008/0009) — substrat typé exposé sur 2 faces.
+"""Capacité record typé générique (ADR 0008/0009, amendé ADR 0029) — 2 faces.
 
-Le graphe de facts (fact/edge typés, `factgraph/`) est le **substrat typé canonique**
-(le datastore reste libre). Cette capacité l'expose **génériquement** (aucune logique
-prospection) : écrire/lire des facts typés validés contre le registre `schemas.py`,
-les relier, et **décrire les schémas** (`fact_kinds`) pour que la vue dashboard
-« Fact graph » rende des fiches lisibles, schema-aware.
+Le store de records typés (`factgraph/`, table `fact`) porte la **sortie structurée
+d'une doctrine** (le datastore reste le store libre). Cette capacité l'expose
+**génériquement** : écrire/lire/décrire des records typés validés contre le registre
+`schemas.py`, pour que la vue dashboard rende des **fiches lisibles**, schema-aware.
 
-Un « thème » = un `kind` (ex. `lead`) ; son `domain` (= `kind` du workspace, scopé
-org) est résolu automatiquement → la doctrine/agent n'écrit qu'un `kind` + `fields`.
-Le chemin d'écriture prospection-spécifique (scout scoring/claim/cockpit) est retiré
-par ailleurs (ADR 0018) ; ici on ne garde que le générique.
+⚠️ ADR 0029 : **pas de graphe** — aucune arête (`fact_link`/`incoming` retirés ;
+oto n'a pas de résolution d'entité, la clé SIREN suffit). Un « thème » = un `kind`
+(ex. `lead`) ; son `domain` (= `kind` du workspace, scopé org) est résolu
+automatiquement → la doctrine/agent n'écrit qu'un `kind` + `fields`.
 
 Org-scopé via `ORG_MEMBER` (org active injectée, jamais d'un param client → IDOR
 verrouillé). Handlers SYNC (I/O psycopg bloquant), comme les autres capacités DB.
@@ -44,12 +43,6 @@ class FactListInput(BaseModel):
 
 class FactGetInput(BaseModel):
     id: int
-
-
-class FactLinkInput(BaseModel):
-    from_id: int
-    to_id: int
-    role: str
 
 
 def _domain_for(kind: str) -> str:
@@ -102,28 +95,11 @@ def _list(ctx: ResolvedCtx, inp: FactListInput) -> dict:
 
 
 def _get(ctx: ResolvedCtx, inp: FactGetInput) -> dict:
-    """Un fact + ses arêtes entrantes (contacts/actions qui le concernent)."""
+    """Un record typé par id (scopé à ton org)."""
     f = store.get_fact_for_org(ctx.org_id, inp.id)
     if not f:
         raise AuthzDenied(404, "not_found", f"fact #{inp.id} introuvable dans ton org.")
-    inc = store.incoming(inp.id)
-    return {
-        "id": f["id"], "kind": f["kind"], "data": f["data"], "created_at": f["created_at"],
-        "incoming": [{"id": r["id"], "kind": r["kind"], "role": r["role"], "data": r["data"]}
-                     for r in inc],
-    }
-
-
-def _link(ctx: ResolvedCtx, inp: FactLinkInput) -> dict:
-    """Relie deux facts par une arête typée (les deux doivent être dans ton org)."""
-    if not store.get_fact_for_org(ctx.org_id, inp.from_id) or \
-       not store.get_fact_for_org(ctx.org_id, inp.to_id):
-        raise AuthzDenied(404, "not_found", "fact source ou cible hors de ton org.")
-    try:
-        store.link(inp.from_id, inp.to_id, inp.role)
-    except (ValueError, schemas.SchemaError) as e:
-        raise AuthzDenied(400, "link_error", str(e))
-    return {"ok": True, "from_id": inp.from_id, "to_id": inp.to_id, "role": inp.role}
+    return {"id": f["id"], "kind": f["kind"], "data": f["data"], "created_at": f["created_at"]}
 
 
 CAPABILITIES += [
@@ -153,14 +129,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="facts.get", handler=_get, Input=FactGetInput, authz=ORG_MEMBER,
-        description="Get one fact by id + its incoming edges (linked contacts/actions).",
+        description="Get one typed record by id (scoped to your active org).",
         mcp="fact_get",
         rest=RestBinding("GET", "/api/facts/item/{id}"),
-    ),
-    Capability(
-        key="facts.link", handler=_link, Input=FactLinkInput, authz=ORG_MEMBER,
-        description="Link two facts with a typed edge (role: concerns | derived-from | ...).",
-        mcp="fact_link",
-        rest=RestBinding("POST", "/api/facts/item/{id}/links", {"id": "from_id"}),
     ),
 ]

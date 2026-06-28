@@ -1,12 +1,12 @@
-"""Store du graphe de facts — write-model générique (ADR 0008).
+"""Store des records typés — write-model générique (ADR 0008, amendé ADR 0029).
 
 Schéma PG dédié `factgraph` :
-- `workspace` : une instance de cas d'usage, scopée org (org × kind de harnais).
-- `fact`      : les nœuds (un `kind` + un payload JSONB *validé* contre le registre).
-- `edge`      : les arêtes dirigées typées (`role`).
+- `workspace` : une instance de cas d'usage, scopée org (org × domaine).
+- `fact`      : les records typés (un `kind` + un payload JSONB *validé* contre le registre).
 
-Tout le métier (statut, contacts, historique…) se lit en parcourant le graphe ;
-le read-model typé (file priorisée, scoring) vit dans `projection.py`.
+⚠️ ADR 0029 : l'ambition « graphe » est retirée — **pas d'arêtes** (la table `edge`
+et les fonctions `link`/`incoming` ont été supprimées : aucune résolution d'entité
+en oto, la clé SIREN suffit). Ne reste que le **record typé**, rendu en fiches.
 
 Branché sur le pool psycopg existant (`db._connect`) ; rows = dicts (`_str_dict_row`).
 """
@@ -19,7 +19,7 @@ import psycopg
 from psycopg.types.json import Json
 
 from .. import db
-from .schemas import validate_edge, validate_fact
+from .schemas import validate_fact
 
 _SCHEMA = """
 CREATE SCHEMA IF NOT EXISTS factgraph;
@@ -47,16 +47,6 @@ CREATE INDEX IF NOT EXISTS fact_ws_kind_idx ON factgraph.fact (workspace_id, kin
 CREATE INDEX IF NOT EXISTS fact_data_gin_idx ON factgraph.fact USING gin (data jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS fact_siren_idx
   ON factgraph.fact ((data->>'siren')) WHERE data ? 'siren';
-
-CREATE TABLE IF NOT EXISTS factgraph.edge (
-  src_id   BIGINT NOT NULL REFERENCES factgraph.fact(id) ON DELETE CASCADE,
-  dst_id   BIGINT NOT NULL REFERENCES factgraph.fact(id) ON DELETE CASCADE,
-  role     TEXT NOT NULL,
-  PRIMARY KEY (src_id, dst_id, role),
-  CHECK (src_id <> dst_id)
-);
-CREATE INDEX IF NOT EXISTS edge_dst_idx ON factgraph.edge (dst_id);
-CREATE INDEX IF NOT EXISTS edge_role_idx ON factgraph.edge (role);
 """
 
 
@@ -92,20 +82,6 @@ def add_fact(workspace_id: int, kind: str, data: dict, created_by: str = "system
         return row["id"]
 
 
-def link(src_id: int, dst_id: int, role: str) -> None:
-    with db._connect() as conn:
-        src = _get(conn, src_id)
-        dst = _get(conn, dst_id)
-        if src["workspace_id"] != dst["workspace_id"]:
-            raise ValueError("arête inter-workspace interdite")
-        validate_edge(role, src["kind"], dst["kind"])   # ← arête typée
-        conn.execute(
-            "INSERT INTO factgraph.edge (src_id, dst_id, role) VALUES (%s, %s, %s) "
-            "ON CONFLICT DO NOTHING",
-            (src_id, dst_id, role),
-        )
-
-
 # ── lecture ──────────────────────────────────────────────────────────────────
 def _get(conn: psycopg.Connection, fact_id: int) -> dict:
     r = conn.execute(
@@ -120,23 +96,6 @@ def _get(conn: psycopg.Connection, fact_id: int) -> dict:
 def get_fact(fact_id: int) -> dict:
     with db._connect() as conn:
         return _get(conn, fact_id)
-
-
-def incoming(dst_id: int, role: Optional[str] = None) -> list[dict]:
-    """Facts pointant VERS dst_id (ex : contacts/actions qui concernent une entreprise).
-    Chaque dict porte une clé `role` en plus des colonnes du fact."""
-    sql = (
-        "SELECT f.id, f.workspace_id, f.kind, f.data, f.created_at, e.role "
-        "FROM factgraph.edge e JOIN factgraph.fact f ON f.id = e.src_id "
-        "WHERE e.dst_id = %s"
-    )
-    params: list = [dst_id]
-    if role:
-        sql += " AND e.role = %s"
-        params.append(role)
-    sql += " ORDER BY f.id"
-    with db._connect() as conn:
-        return conn.execute(sql, params).fetchall()
 
 
 def find(workspace_id: int, kind: str) -> list[dict]:

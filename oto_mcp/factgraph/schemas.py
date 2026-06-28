@@ -100,15 +100,6 @@ KIND_DOMAIN: dict[str, str] = {
     "ecriture": "compta",
 }
 
-# Arêtes typées : role → (kinds source autorisés, kinds cible autorisés).
-# set() vide = n'importe quel kind.
-EDGE_RULES: dict[str, tuple[set[str], set[str]]] = {
-    "concerns":     ({"contact", "action"}, {"entreprise"}),
-    "derived-from": (set(), set()),
-    "rapproche":    ({"ecriture"}, {"facture"}),
-}
-
-
 class SchemaError(ValueError):
     """Un fact ou une arête ne respecte pas la structure déclarée."""
 
@@ -123,18 +114,6 @@ def validate_fact(kind: str, data: dict) -> dict:
         return model.model_validate(data).model_dump(mode="json")
     except ValidationError as e:
         raise SchemaError(f"fact {kind!r} invalide: {e}") from e
-
-
-def validate_edge(role: str, src_kind: str, dst_kind: str) -> None:
-    """Valide qu'une arête `role` est permise entre ces deux kinds."""
-    rule = EDGE_RULES.get(role)
-    if rule is None:
-        raise SchemaError(f"role d'arête inconnu: {role!r} (règles: {sorted(EDGE_RULES)})")
-    allowed_src, allowed_dst = rule
-    if allowed_src and src_kind not in allowed_src:
-        raise SchemaError(f"role {role!r}: source {src_kind!r} interdite (attendu {sorted(allowed_src)})")
-    if allowed_dst and dst_kind not in allowed_dst:
-        raise SchemaError(f"role {role!r}: cible {dst_kind!r} interdite (attendu {sorted(allowed_dst)})")
 
 
 # ── Description du schéma (« theme data model » exposé à la vue Fact graph) ───

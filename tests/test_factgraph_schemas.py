@@ -1,6 +1,6 @@
 """Tests purs du registre de schémas factgraph (ADR 0008).
 
-`schemas.validate_fact`/`validate_edge` sont la garde « facts structurés » :
+`schemas.validate_fact` est la garde « records typés » :
 pures (registre seul), testables sans DB — comme `test_org_secret_meta`.
 """
 import pytest
@@ -38,26 +38,6 @@ def test_fact_compta_meme_registre():
     # canari de généricité : un autre cas d'usage passe par le même registre.
     out = schemas.validate_fact("facture", {"numero": "F-1", "montant_cents": 120000, "tiers": "ACME"})
     assert out["montant_cents"] == 120000
-
-
-# ── validate_edge ────────────────────────────────────────────────────────────
-def test_edge_role_valide():
-    schemas.validate_edge("concerns", "contact", "entreprise")  # ne lève pas
-
-
-def test_edge_source_interdite_rejete():
-    with pytest.raises(schemas.SchemaError):
-        schemas.validate_edge("concerns", "entreprise", "contact")  # sens inverse
-
-
-def test_edge_role_inconnu_rejete():
-    with pytest.raises(schemas.SchemaError):
-        schemas.validate_edge("bidon", "contact", "entreprise")
-
-
-def test_edge_role_wildcard_accepte_tout():
-    # derived-from = endpoints libres (set() vide).
-    schemas.validate_edge("derived-from", "action", "facture")
 
 
 # ── lead générique + describe_kinds (« theme data model » exposé à la vue) ────

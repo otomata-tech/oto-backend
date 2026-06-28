@@ -15,6 +15,8 @@ Config (env de process) : `FOD_BASE_URL` (ex. http://<ip-fod>:8000) + `FOD_API_T
 from __future__ import annotations
 
 import os
+import random
+import time
 from typing import Any, Iterable, Optional
 
 import httpx
@@ -24,6 +26,16 @@ _TOKEN = os.environ.get("FOD_API_TOKEN")
 # Lecture longue : le timeout DUR de FOD est ~90 s, on laisse FOD répondre/erreur
 # avant de couper côté client (connexion courte, lecture large).
 _TIMEOUT = httpx.Timeout(connect=5.0, read=100.0, write=10.0, pool=5.0)
+
+# Back-pressure de saturation (503) : le service borne la concurrence du scan et
+# REJETTE en non-bloquant dès que le plafond « en vol » est atteint (il rend la
+# main au thread plutôt que d'empiler des waiters), en demandant explicitement de
+# « réessayer dans un instant ». L'attente est donc DÉLÉGUÉE à l'appelant : on
+# absorbe ici les rafales transitoires par un retry borné à backoff jitteré, au
+# lieu de propager un 503 sec à l'agent (ToolError + bruit Sentry). 504 (scan trop
+# long) n'est PAS retryé : le répéter ne ferait que regaspiller un slot de scan.
+_RETRY_ATTEMPTS = int(os.environ.get("FOD_RETRY_ATTEMPTS", "3"))
+_RETRY_BACKOFF_S = float(os.environ.get("FOD_RETRY_BACKOFF_S", "0.5"))
 
 _client: Optional[httpx.Client] = None
 
@@ -59,16 +71,26 @@ def _raise_for(r: httpx.Response) -> None:
     r.raise_for_status()
 
 
-def _get(path: str, params: Optional[dict] = None) -> Any:
-    r = _c().get(path, params=params)
+def _request(method: str, path: str, *, params: Optional[dict] = None,
+             json_body: Optional[dict] = None) -> Any:
+    """Appel HTTP avec retry borné sur 503 (saturation transitoire du scan)."""
+    r: Optional[httpx.Response] = None
+    for attempt in range(_RETRY_ATTEMPTS + 1):
+        r = _c().request(method, path, params=params, json=json_body)
+        if r.status_code != 503 or attempt == _RETRY_ATTEMPTS:
+            break
+        # backoff exponentiel + jitter : laisse un slot de scan se libérer.
+        time.sleep(_RETRY_BACKOFF_S * (2 ** attempt) + random.uniform(0, _RETRY_BACKOFF_S))
     _raise_for(r)
     return r.json()
+
+
+def _get(path: str, params: Optional[dict] = None) -> Any:
+    return _request("GET", path, params=params)
 
 
 def _post(path: str, body: dict) -> Any:
-    r = _c().post(path, json=body)
-    _raise_for(r)
-    return r.json()
+    return _request("POST", path, json_body=body)
 
 
 # --- Surface identique à france_opendata.sirene_stock ----------------------

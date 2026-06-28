@@ -242,7 +242,11 @@ def register(mcp: FastMCP) -> None:
         filter: Optional[dict] = None,
         limit: int = 100,
         show_meta: bool = False,
-    ) -> Card:
+    ):  # pas d'annotation de retour `-> Card` : avec `from __future__ import
+        # annotations`, fastmcp résout les hints contre les globals du module au
+        # build du schéma, or `Card` (prefab_ui) est importé LOCAL à register() →
+        # NameError fatal au démarrage (data_app hors try/except de register_all,
+        # crash-loop prod vécu 2026-06-28). Le corps marche par closure. Cf. #69.
         """Rendered datastore browser (MCP App / interactive card).
 
         Visual variant of `data_url` that renders the data INLINE instead of just

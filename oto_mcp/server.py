@@ -25,7 +25,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
-from . import api_routes, db
+from . import api_routes, db, providers
 from .config import require_env
 from .tools import register_all
 
@@ -137,26 +137,11 @@ En début de session, appelle `oto_get_doctrine()` — il renvoie la doctrine de
 
 **Encadre et remonte.** Quand tu exécutes une procédure — un workflow doctriné OU un déroulé one-shot qui mérite d'être tracé — ouvre-la par `run_start(label, doctrine?)` (passe `doctrine`=slug pour une doctrine nommée, omets-le pour un run ad-hoc) et ferme-la par `run_finish(run_id, outcome)` (done|abandoned|failed|blocked). **Remonte tout signal d'usage** via `feedback(signal, kind, target, text?)` : `signal='gap'` quand oto ne couvre PAS ce dont tu as besoin (outil, doctrine ou donnée manquants — `target`=ce que tu voulais faire) plutôt que d'abandonner en silence ; `signal='tool_feedback'` quand un outil se comporte mal ou excellemment (`target`=le nom de l'outil). **Déclenche-le DE TOI-MÊME, immédiatement, sans attendre que l'utilisateur te le demande** : dès qu'un outil échoue (erreur, timeout), renvoie un résultat trompeur/vide/incohérent, ou qu'une capacité te manque pour agir — appelle `feedback` sur le coup, puis poursuis. Un signal manqué = un bug que la plateforme ne verra jamais. C'est ainsi que la plateforme apprend.
 
-Namespaces :
-• fr_* — données entreprise France (open data + INSEE). fr_get = fiche complète agrégée (identité + bilan INPI + événements BODACC). fr_search = recherche multicritère.
-• unipile_* — LinkedIn hébergé (Unipile) : profil, entreprise, recherche, messagerie. Requiert un compte LinkedIn connecté par l'user (dashboard.oto.ninja).
-• attio_* — CRM Attio complet (companies, people, deals, notes, tasks, lists, entries, threads). Masqué par défaut (préférer le MCP Attio officiel) — réactivable via oto_enable_tool.
-• serper_* — recherche web (Serper API) : web, news, scrape.
-• hunter_* — emails : domain search, finder, vérification.
-• kaspr_* — enrichissement contacts depuis profil LinkedIn.
-• fullenrich_* — enrichissement contacts waterfall multi-provider (phones ~70% hit).
-• lemlist_* — campagnes cold outreach.
-• crunchbase_* — données startups, levées de fonds.
-• reddit_* — recherche et posts Reddit.
-• slack_* — messagerie Slack.
-• whatsapp_* / telegram_* / instagram_* — messagerie hébergée (Unipile) par canal. Chacun requiert que l'user connecte le compte du canal (dashboard.oto.ninja, option messagerie).
-• data_* — datastore tabulaire per-user (PG natif, schéma libre ; data_write/data_rows/data_share).
-• gmail_* — Gmail per-user, multi-compte (search, get, send, reply, draft, archive, trash). OAuth Google requis (app.oto.ninja). gmail_list_accounts liste les comptes ; param `account` (email) pour cibler un compte précis.
-• culture_spectacle_* — entreprises du spectacle vivant.
-• oto_* — méta-tools : list/enable/disable tools, presets nommés.
+Namespaces (capacités appelables ; certaines « à activer » selon la config de ton org — leurs outils apparaissent une fois activées) :
+{namespace_catalog}
 
 Configuration compte : https://oto.ninja/account (cookie LinkedIn, clés API, presets de toolset).\
-"""
+""".format(namespace_catalog=providers.render_namespace_catalog())
 
 
 def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:

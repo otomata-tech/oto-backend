@@ -715,6 +715,56 @@ REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote"
 MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 
 
+# --- catalogue de namespaces présenté à l'agent (_SERVER_INSTRUCTIONS) -------
+# DÉRIVÉ du registre (fini la liste écrite à la main qui dérivait — reddit/culture
+# mentionnés, foncier/pennylane/apollo/sante… omis). Améliorer le blurb d'un
+# namespace = éditer le `help` du connecteur (source unique : catalogue + carte +
+# ce primer). Les concepts SPINE (hors registre connecteurs, chargés explicitement
+# dans register_all, non gatés) sont déclarés ici car ils ne portent pas de
+# `Connector` — datastore/facts/email/méta/boucle d'usage.
+SPINE_CONCEPTS: tuple[tuple[str, str], ...] = (
+    ("data_*", "datastore tabulaire per-user (PG natif, schéma libre) — data_write/data_rows/data_share"),
+    ("fact_*", "graphe de facts typés (aboutissement d'une doctrine) — fact_write/fact_list/fact_kinds"),
+    ("email_send", "envoi d'email per-org (transports scaleway/resend), différé + quiet-hours"),
+    ("oto_*", "méta : visibilité des outils (enable/disable + presets), doctrine d'org, orgs & équipes"),
+    ("run_* / feedback", "boucle d'usage : run_start/run_finish encadrent un déroulé ; feedback(gap|tool_feedback) remonte les signaux"),
+)
+
+
+def _availability_tag(c: "Connector") -> str:
+    """Annotation courte de disponibilité (pour ne pas faire croire qu'un namespace
+    gaté/masqué est appelable d'office)."""
+    bits: list[str] = []
+    if c.hosted_auth:
+        bits.append("compte à connecter")
+    if c.grant_only:
+        bits.append("sur accord plateforme")
+    if c.default_hidden:
+        bits.append("masqué — oto_enable_tool")
+    elif not c.in_default_bundle and c.kind == "tools":
+        bits.append("à activer selon ton org")
+    return f" ({'; '.join(bits)})" if bits else ""
+
+
+def render_namespace_catalog() -> str:
+    """Le bloc « namespaces » des instructions serveur, dérivé du registre + spine.
+    Une ligne par connecteur (ses namespaces groupés) + le bloc spine. Couvre TOUT
+    le registre → pas d'omission. Les transports email pur-credential (scaleway/
+    resend, aucun tool propre) sont présentés via le concept spine `email_send`."""
+    lines: list[str] = []
+    for c in _REGISTRY_LIST:
+        if c.name in EMAIL_CONNECTOR_TRANSPORT:   # credential-only → couvert par email_send
+            continue
+        ns = " / ".join(f"{n}_*" for n in c.namespaces)
+        desc = f"{c.label} : {c.help}" if c.help else c.label
+        lines.append(f"• {ns} — {desc}{_availability_tag(c)}")
+    lines.append("")
+    lines.append("Plateforme (spine — toujours dispo, non gaté) :")
+    for ns, desc in SPINE_CONCEPTS:
+        lines.append(f"• {ns} — {desc}")
+    return "\n".join(lines)
+
+
 # --- helpers ----------------------------------------------------------------
 
 def connector_for_provider(name: str) -> Connector | None:

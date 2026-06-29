@@ -1,4 +1,4 @@
-"""Détection texte/binaire de gmail_get_attachment (oto-backend#71).
+"""Détection texte/binaire des contenus de fichier (file_content.as_text).
 
 Le tool décide inline-texte vs URL-signée selon le contenu réel. On teste le pur
 `_as_text` (pas d'I/O Gmail/S3) : un contenu textuel décode → inline ; un binaire
@@ -6,7 +6,7 @@ Le tool décide inline-texte vs URL-signée selon le contenu réel. On teste le 
 """
 from __future__ import annotations
 
-from oto_mcp.tools.gmail import _as_text
+from oto_mcp.file_content import as_text as _as_text
 
 
 def test_json_csv_md_are_text():

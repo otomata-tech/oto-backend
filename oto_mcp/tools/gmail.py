@@ -21,40 +21,11 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, google_oauth
+from .. import access, file_content, google_oauth
 
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
-
-
-# Au-delà de cette taille, même un contenu textuel part en URL signée plutôt que
-# d'être injecté dans le contexte de l'agent (texte = tokens).
-_INLINE_TEXT_CAP = 256 * 1024  # 256 Ko
-
-_TEXTUAL_MIME = {
-    "application/json", "application/ld+json", "application/xml",
-    "application/csv", "application/x-ndjson", "application/markdown",
-    "application/x-yaml", "application/yaml",
-}
-
-
-def _as_text(data: bytes, mime: str) -> Optional[str]:
-    """Renvoie le contenu décodé en UTF-8 si la PJ est textuelle, sinon None.
-
-    Un type `text/*` ou JSON/CSV/XML/YAML est traité comme texte ; pour un type
-    inconnu, on décode quand même et on accepte si c'est de l'UTF-8 propre sans
-    octet NUL (heuristique : un binaire — PDF, image — échoue le decode ou
-    contient des NUL → part en URL signée)."""
-    m = (mime or "").split(";")[0].strip().lower()
-    looks_text = m.startswith("text/") or m in _TEXTUAL_MIME
-    try:
-        s = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    if looks_text or "\x00" not in s:
-        return s
-    return None
 
 
 def _client_for_user(account: Optional[str] = None):
@@ -148,8 +119,8 @@ def register(mcp: FastMCP) -> None:
         data, filename, mime = att["data"], att["filename"], att["mimeType"]
         out = {"filename": filename, "mimeType": mime, "size": len(data)}
 
-        text = _as_text(data, mime)
-        if text is not None and len(data) <= _INLINE_TEXT_CAP:
+        text = file_content.as_text(data, mime)
+        if text is not None and len(data) <= file_content.INLINE_TEXT_CAP:
             out.update(encoding="text", content=text)
             return out
 

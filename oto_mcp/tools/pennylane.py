@@ -12,16 +12,21 @@ séparés** que l'agent n'appelle qu'après validation humaine (modèle de
 supervision validée avec un client). Le lettrage (`pennylane_match`) reste exposé : lien de
 rapprochement réversible, pas une écriture.
 
-Les autres mutations larges (création de facture standard, upload de PDF)
-restent côté CLI `oto pennylane`.
+L'**achat** est désormais couvert pour verser une facture fournisseur depuis un
+fichier « côté oto » : `pennylane_upload_file` (poste un PDF désigné par sa source
+oto — Drive/Gmail/URL) puis `pennylane_import_supplier_invoice` (brouillon, champs
+fournis par l'agent qui a lu le PDF). La création de facture **client** standard
+reste côté CLI `oto pennylane`.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, file_source
 
 
 def register(mcp: FastMCP) -> None:
@@ -32,6 +37,74 @@ def register(mcp: FastMCP) -> None:
         # Rédaction appliquée à la frontière des tools par `FieldRedactionMiddleware`
         # (policy de l'org active), plus au niveau client.
         return PennylaneClient(api_key=key)
+
+    def _bad(msg: str) -> McpError:
+        return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+    @mcp.tool()
+    def pennylane_upload_file(source: dict, account: Optional[str] = None) -> dict:
+        """Upload a file (PDF) to Pennylane from a file that lives "côté oto".
+
+        The agent has no local disk: designate the file by a `source` reference
+        that oto resolves to bytes server-side, then uploads to Pennylane.
+        `source` (object, `kind` selects the origin):
+        - Drive: `{"kind":"drive","file_id":"<id>"}` (id from drive_list/metadata)
+        - Gmail attachment: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
+        - URL: `{"kind":"url","url":"https://…"}` (e.g. a signed URL from
+          drive_download / gmail_get_attachment)
+        Optional `account` (email) targets a specific Google account for drive/gmail.
+
+        Returns {file_attachment_id, filename, url}. Feed `file_attachment_id` to
+        `pennylane_import_supplier_invoice` to create the supplier invoice.
+        """
+        try:
+            rf = file_source.resolve(source)
+        except file_source.FileSourceError as e:
+            raise _bad(str(e))
+        res = _client().upload_file_bytes(rf.data, rf.filename, rf.mime or "application/pdf")
+        if res.get("error") or not res.get("id"):
+            raise _bad(f"Pennylane file upload failed: {res.get('details', res)}")
+        return {"file_attachment_id": res["id"], "filename": rf.filename, "url": res.get("url")}
+
+    @mcp.tool()
+    def pennylane_import_supplier_invoice(
+        file_attachment_id: int, supplier_id: int, date: str, deadline: str,
+        currency_amount_before_tax: str, currency_amount: str, currency_tax: str,
+        invoice_lines: list[dict], currency: str = "EUR",
+        external_reference: Optional[str] = None, import_as_incomplete: bool = False,
+        invoice_number: Optional[str] = None, label: Optional[str] = None,
+    ) -> dict:
+        """Create a SUPPLIER (purchase) invoice in Pennylane from an uploaded PDF.
+
+        Two-step flow: first `pennylane_upload_file(...)` → `file_attachment_id`,
+        then this. Pennylane does NOT OCR — YOU (having read the PDF) provide the
+        fields. Amounts are STRINGS. Creates a draft; reconcile it to a bank
+        transaction afterwards with
+        `pennylane_match(invoice_id, transaction_id, invoice_type="supplier")`.
+
+        Args:
+            file_attachment_id: id returned by pennylane_upload_file.
+            supplier_id: Pennylane supplier (company_supplier) id.
+            date / deadline: ISO dates (invoice date / payment due date).
+            currency_amount_before_tax / currency_amount / currency_tax: amounts as
+                strings — HT / TTC / VAT, in the invoice currency.
+            invoice_lines: ≥1 line (label, amounts… per Pennylane line schema).
+            currency: default EUR. external_reference: your idempotency/trace key.
+            import_as_incomplete: mark the draft incomplete if some data is missing.
+            invoice_number / label: optional supplier number / accounting label.
+        """
+        res = _client().import_supplier_invoice(
+            file_attachment_id=file_attachment_id, supplier_id=supplier_id,
+            date=date, deadline=deadline,
+            currency_amount_before_tax=currency_amount_before_tax,
+            currency_amount=currency_amount, currency_tax=currency_tax,
+            invoice_lines=invoice_lines, currency=currency,
+            external_reference=external_reference, import_as_incomplete=import_as_incomplete,
+            invoice_number=invoice_number, label=label,
+        )
+        if isinstance(res, dict) and res.get("error"):
+            raise _bad(f"Pennylane supplier invoice import failed: {res.get('details', res)}")
+        return res
 
     @mcp.tool()
     def pennylane_company() -> dict:

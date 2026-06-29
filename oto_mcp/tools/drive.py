@@ -5,8 +5,9 @@ renommer, dossiers), supprimer, partager. Scope `/auth/drive` **complet**
 (restricted) — pour voir/gérer TOUS les fichiers, pas seulement ceux créés par
 oto. Compte par défaut ou ciblé par `account`. Per-user via OAuth.
 
-Les transferts binaires local↔Drive (download/upload/export) ne sont pas exposés
-en MCP (pas de FS local côté serveur) — ils restent en CLI.
+L'**upload** local→Drive et l'export Google natif restent côté CLI (pas de FS
+serveur). En revanche le **download bytes** EST exposé (`drive_download`) : il rend
+le contenu à l'agent (inline texte, ou URL signée pour un binaire) sans disque.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, google_oauth
+from .. import access, file_content, google_oauth
 
 
 def _bad(msg: str) -> McpError:
@@ -56,6 +57,45 @@ def register(mcp: FastMCP) -> None:
         client = _client_for_user(account)
         files = await asyncio.to_thread(client.list_files, folder_id, query, page_size)
         return {"files": files, "count": len(files)}
+
+    @mcp.tool()
+    async def drive_download(file_id: str, account: Optional[str] = None) -> dict:
+        """Fetch the CONTENT (bytes) of a Drive file, by file_id.
+
+        Get `file_id` from `drive_list`/`drive_metadata`. The response depends on
+        the file:
+        - **small text** (txt/csv/json/markdown, ≤256 KB) → returned INLINE:
+          `{encoding: "text", content}` — read it directly.
+        - **binary or large** (PDF, image, big file) → uploaded to temporary
+          storage and returned as a short-lived signed URL: `{encoding: "url",
+          url, expires_in}` (seconds). Fetch the URL to get the bytes.
+
+        For a Google-native doc (Docs/Sheets/Slides), this fails — those must be
+        exported (CLI), not downloaded. Returns {filename, mimeType, size,
+        encoding, content|url, expires_in?}.
+        """
+        client = _client_for_user(account)
+        try:
+            f = await asyncio.to_thread(client.get_file_bytes, file_id)
+        except Exception as e:
+            raise _bad(str(e))
+        data, filename, mime = f["data"], f["filename"], f["mimeType"]
+        out = {"filename": filename, "mimeType": mime, "size": len(data)}
+        text = file_content.as_text(data, mime)
+        if text is not None and len(data) <= file_content.INLINE_TEXT_CAP:
+            out.update(encoding="text", content=text)
+            return out
+        from .. import media_store
+        sub = access.current_user_sub_or_raise()
+        try:
+            url = await asyncio.to_thread(
+                media_store.upload_private, "drive-files", sub, data, mime, filename)
+        except media_store.MediaError as e:
+            raise _bad(
+                f"Fichier binaire/volumineux ({len(data)} octets) : stockage "
+                f"temporaire indisponible pour produire une URL ({e}).")
+        out.update(encoding="url", url=url, expires_in=media_store.presign_expiry())
+        return out
 
     @mcp.tool()
     async def drive_metadata(file_id: str, account: Optional[str] = None) -> dict:

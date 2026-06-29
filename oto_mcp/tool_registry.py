@@ -30,6 +30,13 @@ def bind(instance) -> None:
     _INSTANCE = instance
 
 
+def bound_instance():
+    """L'instance FastMCP liée au boot (ou None hors serveur, ex. tests). Permet à
+    la face REST de réutiliser la logique de visibilité MCP (`compute_hidden_tools`,
+    qui attend `ctx.fastmcp.list_tools`) sans contexte MCP."""
+    return _INSTANCE
+
+
 def ref_names(text: str) -> list[str]:
     """Noms d'outils cités via `<tool:slug>`, dédupliqués, dans l'ordre."""
     out: list[str] = []

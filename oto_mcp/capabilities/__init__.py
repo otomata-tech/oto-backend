@@ -50,5 +50,7 @@ from . import audit_log  # noqa: F401 — org.audit_log.export (GET /api/orgs/{i
 from . import resources  # noqa: F401 — resources.govern (oto_resource)
 # Catalogue du registre de capacités (ADR 0030) — alimente l'object-browser admin.
 from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /api/admin/capabilities)
+# Vue de transparence « contexte agent » (otomata-private#49) — ce que Claude reçoit.
+from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

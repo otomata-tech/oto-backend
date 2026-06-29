@@ -98,7 +98,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- Onboarding (Live View) --------------------------------------------
     @mcp.tool()
-    async def crunchbase_connect_start(ctx: Context) -> dict:
+    def crunchbase_connect_start(ctx: Context) -> dict:
         """Démarre la connexion à Crunchbase. Ouvre un navigateur distant et renvoie
         une **`live_view_url`** : ouvre-la, connecte-toi à Crunchbase normalement
         (email/mot de passe, SSO, captcha — tu gères tout dans cette fenêtre). Puis

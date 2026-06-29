@@ -160,7 +160,7 @@ def register(mcp: FastMCP) -> None:
         return {t.name for t in tools}
 
     @mcp.tool()
-    async def oto_list_presets(ctx: Context) -> dict:
+    def oto_list_presets(ctx: Context) -> dict:
         """List the current user's saved presets (named toolset snapshots).
 
         Each preset stores the list of tool names that should be ENABLED
@@ -281,7 +281,7 @@ def register(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    async def oto_delete_preset(name: str, ctx: Context) -> dict:
+    def oto_delete_preset(name: str, ctx: Context) -> dict:
         """Delete a saved preset by name. Does not change current toolset state."""
         sub = _require_sub()
         deleted = db.delete_user_preset(sub, name, _active_org(sub))

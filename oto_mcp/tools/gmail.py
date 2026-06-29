@@ -46,7 +46,7 @@ def _client_for_user(account: Optional[str] = None):
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def gmail_list_accounts() -> dict:
+    def gmail_list_accounts() -> dict:
         """List the Google accounts the user has connected.
 
         Returns {accounts: [{email, is_default}]}. Use an `email` value as the

@@ -96,7 +96,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- Onboarding (Live View) --------------------------------------------
     @mcp.tool()
-    async def brevo_connect_start(ctx: Context) -> dict:
+    def brevo_connect_start(ctx: Context) -> dict:
         """Démarre la connexion à Brevo (automations). Ouvre un navigateur distant
         et renvoie une **`live_view_url`** : ouvre-la, connecte-toi à Brevo
         normalement (email/mot de passe, Google SSO, captcha — tu gères tout dans

@@ -47,17 +47,24 @@ class UserDisabledToolsMiddleware(Middleware):
         return result
 
 
+_DOCTRINE_GET_TOOL = "oto_get_doctrine"
+
+
 class DynamicInstructionsMiddleware(Middleware):
-    """Injecte la doctrine de base de l'org dans les instructions du `initialize`.
+    """Injecte le contexte doctrine de l'org dans la surface vue par le LLM, par-(sub,
+    org), au lieu de dépendre d'un appel volontaire `oto_get_doctrine()` (canal fragile,
+    otomata-private#49, amende ADR 0014). Deux points d'injection, selon la NATURE :
 
-    Le champ `instructions` (le « cheval de Troie » dans le contexte du LLM) est relu
-    par FastMCP à CHAQUE nouvelle session ; on réécrit `result.instructions` par-(sub,
-    org) au handshake. Canal FIABLE de livraison de la doctrine — au lieu de dépendre
-    d'un appel volontaire `oto_get_doctrine()` (otomata-private#49, amende ADR 0014).
-    Claude relance un handshake par conversation → doctrine à jour à chaque fois.
+    - **doctrine de base** (prose à internaliser) → `on_initialize` réécrit
+      `result.instructions` (le « cheval de Troie », relu par session ; Claude
+      rehandshake par conversation). Composition : `instructions.compose_with_org_doctrine`.
+    - **index des doctrines NOMMÉES** (skills) → `on_list_tools` enrichit la
+      **description de `oto_get_doctrine`** (l'outil qui les charge). Les skills ne sont
+      PAS des outils → absents de `tools/list` → ce serait leur seul canal. Co-localisé
+      avec le loader plutôt qu'un bloc dans les instructions.
 
-    Fail-open : pas de sub (stdio/discovery), pas d'org active, ou erreur → on laisse
-    les instructions statiques. La composition vit dans `instructions.compose_with_org_doctrine`.
+    Fail-open partout : pas de sub (stdio/discovery), pas d'org, ou erreur → surface
+    statique inchangée.
     """
 
     async def on_initialize(self, context, call_next):
@@ -79,6 +86,30 @@ class DynamicInstructionsMiddleware(Middleware):
             logger.warning("injection doctrine d'org échouée pour sub=%s (fail-open)",
                            sub, exc_info=True)
         return result
+
+    async def on_list_tools(self, context, call_next):
+        tools = await call_next(context)
+        try:
+            sub = current_user_sub_from_token()
+        except Exception:
+            sub = None
+        if not sub:
+            return tools
+        try:
+            from . import access, instructions
+            index = instructions.skills_index_md(access.current_org(sub))
+            if not index:
+                return tools
+            return [
+                t.model_copy(update={"description":
+                                     f"{(t.description or '').rstrip()}\n\n{index}"})
+                if t.name == _DOCTRINE_GET_TOOL else t
+                for t in tools
+            ]
+        except Exception:
+            logger.warning("enrichissement de %s échoué pour sub=%s (fail-open)",
+                           _DOCTRINE_GET_TOOL, sub, exc_info=True)
+            return tools
 
 
 class FieldRedactionMiddleware(Middleware):

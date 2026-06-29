@@ -64,3 +64,27 @@ def compose_with_org_doctrine(base: str, org_id: int | None) -> str:
                        org_id, exc_info=True)
         return base
     return f"{base}\n\n{_DOCTRINE_HEADER} ({name})\n\n{body}\n"
+
+
+def skills_index_md(org_id: int | None) -> str:
+    """Index markdown des doctrines NOMMÉES (skills) d'une org — `slug — titre :
+    description`, SANS les corps. Sert à enrichir DYNAMIQUEMENT la description de
+    l'outil `oto_get_doctrine` au `tools/list` (les skills ne sont PAS des outils →
+    absents de `tools/list`, donc invisibles sans ça). Fail-open : '' si pas d'org /
+    aucune doctrine / erreur."""
+    if org_id is None:
+        return ""
+    try:
+        from . import org_store
+        rows = org_store.list_instructions(org_id)   # exclut la base (claude_md)
+    except Exception:
+        logger.warning("skills_index_md: lecture org=%s échouée (fail-open)",
+                       org_id, exc_info=True)
+        return ""
+    if not rows:
+        return ""
+    lines = ["Doctrines nommées de ton org (passe le `slug` pour charger le corps) :"]
+    for r in rows:
+        desc = (r.get("description") or "").strip()
+        lines.append(f"- {r['slug']} — {r['title']}" + (f" : {desc}" if desc else ""))
+    return "\n".join(lines)

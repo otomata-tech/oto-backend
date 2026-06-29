@@ -10,7 +10,14 @@ dependencies = [
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
     # on tague oto-core et on bump CE pin par PR. Bump = éditer le tag ici ; rollback
     # = revert ce commit (ramène aussi le bon oto-core). Cf. ADR 0020 (deploy/canari).
-    "oto-core[browser,anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.10.8",
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.10.8",
+    # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
+    # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
+    # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
+    # requis). Déclaré en DIRECT car le backend n'utilise PAS o-browser (la lib de Chrome
+    # LOCAL) : on a donc retiré l'extra `browser` d'oto-core, qui ne servait qu'à tirer
+    # patchright transitivement (via o-browser). Le CLI local, lui, garde oto-core[browser].
+    "patchright>=0.1.0",
     "starlette>=0.37",
     "uvicorn>=0.30",
     "pydantic>=2.0",
@@ -18,7 +25,7 @@ dependencies = [
     "google-auth>=2.0",
     # `oto.tools.google.credentials` importe `google_auth_oauthlib` au top-level
     # (InstalledAppFlow). Vit dans l'extra `google` d'oto-core, NON tiré par
-    # `oto-core[browser,anonymize]` → drive_*/gmail_* crashent en prod
+    # `oto-core[anonymize]` → drive_*/gmail_* crashent en prod
     # ('No module named google_auth_oauthlib'). Même cas que `markdown` ci-dessous.
     "google-auth-oauthlib>=1.0",
     # Rendu markdown→HTML des gmail_* (défaut markdown=True). Vit dans l'extra

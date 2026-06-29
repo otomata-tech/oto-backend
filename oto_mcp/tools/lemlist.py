@@ -30,7 +30,7 @@ def register(mcp: FastMCP) -> None:
             access.record_platform_usage("lemlist")
 
     @mcp.tool()
-    async def lemlist_status() -> dict:
+    def lemlist_status() -> dict:
         """Workspace status (account, credits, plan)."""
         client, is_platform = _client()
         result = client.status()
@@ -38,7 +38,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def lemlist_list_campaigns() -> dict:
+    def lemlist_list_campaigns() -> dict:
         """List all campaigns in the workspace.
 
         Returns a list of `{id, name, status, senders, emoji}`. Use `id` for
@@ -50,7 +50,7 @@ def register(mcp: FastMCP) -> None:
         return {"campaigns": [asdict(c) for c in campaigns]}
 
     @mcp.tool()
-    async def lemlist_get_campaign(campaign_id: str) -> dict:
+    def lemlist_get_campaign(campaign_id: str) -> dict:
         """Fetch full campaign details by ID."""
         client, is_platform = _client()
         result = client.get_campaign(campaign_id)
@@ -58,7 +58,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def lemlist_get_campaign_stats(campaign_id: str) -> dict:
+    def lemlist_get_campaign_stats(campaign_id: str) -> dict:
         """Get campaign performance stats (sent, opened, replied, bounced…)."""
         client, is_platform = _client()
         result = client.get_campaign_stats(campaign_id)
@@ -66,7 +66,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def lemlist_get_activities(
+    def lemlist_get_activities(
         campaign_id: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
@@ -86,7 +86,7 @@ def register(mcp: FastMCP) -> None:
         return {"activities": events}
 
     @mcp.tool()
-    async def lemlist_get_leads(campaign_id: str) -> dict:
+    def lemlist_get_leads(campaign_id: str) -> dict:
         """List all leads for a campaign with their state (sent, replied…)."""
         client, is_platform = _client()
         leads = client.get_all_leads(campaign_id)

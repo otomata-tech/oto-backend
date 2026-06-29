@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
         return ZeroBounceClient(api_key=key)
 
     @mcp.tool()
-    async def zerobounce_verify_email(email: str) -> dict:
+    def zerobounce_verify_email(email: str) -> dict:
         """Verify a single email address.
 
         Returns a status: valid (deliverable), invalid, catch-all, unknown,
@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
         return _client().verify_email(email)
 
     @mcp.tool()
-    async def zerobounce_verify_batch(emails: list[str]) -> dict:
+    def zerobounce_verify_batch(emails: list[str]) -> dict:
         """Verify up to 200 emails in one call. Returns the per-email results."""
         if len(emails) > 200:
             raise McpError(ErrorData(
@@ -37,6 +37,6 @@ def register(mcp: FastMCP) -> None:
         return {"results": _client().verify_batch(emails)}
 
     @mcp.tool()
-    async def zerobounce_credits() -> dict:
+    def zerobounce_credits() -> dict:
         """Remaining ZeroBounce verification credits on the account."""
         return {"credits": _client().get_credits()}

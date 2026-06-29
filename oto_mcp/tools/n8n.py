@@ -23,7 +23,7 @@ def register(mcp: FastMCP) -> None:
                          base_url=creds.get("base_url"))
 
     @mcp.tool()
-    async def n8n_list_workflows(
+    def n8n_list_workflows(
         limit: int = 50,
         active: Optional[bool] = None,
         tags: Optional[str] = None,
@@ -40,22 +40,22 @@ def register(mcp: FastMCP) -> None:
             limit=limit, active=active, tags=tags, cursor=cursor)
 
     @mcp.tool()
-    async def n8n_get_workflow(workflow_id: str) -> dict:
+    def n8n_get_workflow(workflow_id: str) -> dict:
         """Get one workflow (nodes, connections, settings)."""
         return _client().get_workflow(workflow_id)
 
     @mcp.tool()
-    async def n8n_activate_workflow(workflow_id: str) -> dict:
+    def n8n_activate_workflow(workflow_id: str) -> dict:
         """Activate a workflow (its triggers/cron start running)."""
         return _client().activate_workflow(workflow_id)
 
     @mcp.tool()
-    async def n8n_deactivate_workflow(workflow_id: str) -> dict:
+    def n8n_deactivate_workflow(workflow_id: str) -> dict:
         """Deactivate a workflow."""
         return _client().deactivate_workflow(workflow_id)
 
     @mcp.tool()
-    async def n8n_list_executions(
+    def n8n_list_executions(
         limit: int = 50,
         workflow_id: Optional[str] = None,
         status: Optional[str] = None,
@@ -72,13 +72,13 @@ def register(mcp: FastMCP) -> None:
             limit=limit, workflow_id=workflow_id, status=status, cursor=cursor)
 
     @mcp.tool()
-    async def n8n_get_execution(
+    def n8n_get_execution(
         execution_id: int, include_data: bool = False,
     ) -> dict:
         """Get one execution. `include_data` includes per-node run data (large)."""
         return _client().get_execution(execution_id, include_data=include_data)
 
     @mcp.tool()
-    async def n8n_list_tags(limit: int = 50, cursor: Optional[str] = None) -> dict:
+    def n8n_list_tags(limit: int = 50, cursor: Optional[str] = None) -> dict:
         """List workflow tags."""
         return _client().list_tags(limit=limit, cursor=cursor)

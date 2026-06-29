@@ -24,7 +24,7 @@ def register(mcp: FastMCP) -> None:
     # --- annuaire FINESS -----------------------------------------------------
 
     @mcp.tool()
-    async def sante_finess_search(
+    def sante_finess_search(
         q: str,
         departement: Optional[str] = None,
         categorie: Optional[str] = None,
@@ -44,14 +44,14 @@ def register(mcp: FastMCP) -> None:
         return finess.search(q, departement=departement, categorie=categorie, limit=limit)
 
     @mcp.tool()
-    async def sante_finess(finess: str) -> Optional[dict]:
+    def sante_finess(finess: str) -> Optional[dict]:
         """FINESS establishment by exact code (ET or EJ), or null."""
         return finess.by_code(finess)
 
     # --- évaluations qualité ESSMS (HAS) -------------------------------------
 
     @mcp.tool()
-    async def sante_essms_search(
+    def sante_essms_search(
         region_libelle: Optional[str] = None,
         departement_code: Optional[str] = None,
         secteur: Optional[str] = None,
@@ -84,7 +84,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def sante_essms_dimensions() -> dict:
+    def sante_essms_dimensions() -> dict:
         """Distinct filter values for ESSMS evaluations (regions, sectors, types,
         legal statuses, categories, years) with counts — to build a valid
         `sante_essms_search` query."""

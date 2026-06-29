@@ -22,7 +22,7 @@ def register(mcp: FastMCP) -> None:
         return FigmaClient(token=key, cache_enabled=False)
 
     @mcp.tool()
-    async def figma_get_file(
+    def figma_get_file(
         file_key: str,
         depth: Optional[int] = None,
         node_ids: Optional[list[str]] = None,
@@ -37,12 +37,12 @@ def register(mcp: FastMCP) -> None:
         return _client().get_file(file_key, depth=depth, node_ids=node_ids)
 
     @mcp.tool()
-    async def figma_file_meta(file_key: str) -> dict:
+    def figma_file_meta(file_key: str) -> dict:
         """Get a file's metadata only (name, last modified, thumbnail…)."""
         return _client().get_file_meta(file_key)
 
     @mcp.tool()
-    async def figma_get_images(
+    def figma_get_images(
         file_key: str,
         node_ids: list[str],
         format: str = "png",
@@ -57,12 +57,12 @@ def register(mcp: FastMCP) -> None:
         return _client().get_images(file_key, node_ids, format=format, scale=scale)
 
     @mcp.tool()
-    async def figma_get_comments(file_key: str, as_markdown: bool = False) -> dict:
+    def figma_get_comments(file_key: str, as_markdown: bool = False) -> dict:
         """List comments on a file."""
         return _client().get_comments(file_key, as_markdown=as_markdown)
 
     @mcp.tool()
-    async def figma_post_comment(
+    def figma_post_comment(
         file_key: str,
         message: str,
         comment_id: Optional[str] = None,

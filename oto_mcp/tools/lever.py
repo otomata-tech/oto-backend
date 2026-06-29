@@ -25,7 +25,7 @@ def register(mcp: FastMCP) -> None:
         return LeverClient(api_key=key)
 
     @mcp.tool()
-    async def lever_opportunities(
+    def lever_opportunities(
         limit: int = 50,
         offset: Optional[str] = None,
         posting_id: Optional[str] = None,
@@ -46,14 +46,14 @@ def register(mcp: FastMCP) -> None:
             email=email, expand=expand)
 
     @mcp.tool()
-    async def lever_opportunity(
+    def lever_opportunity(
         opportunity_id: str, expand: Optional[list[str]] = None,
     ) -> dict:
         """Fetch one opportunity (candidate) by id."""
         return _client().get_opportunity(opportunity_id, expand=expand)
 
     @mcp.tool()
-    async def lever_add_candidate(
+    def lever_add_candidate(
         candidate: dict, perform_as: str, posting_ids: Optional[list[str]] = None,
     ) -> dict:
         """Create a candidate (opportunity).
@@ -68,12 +68,12 @@ def register(mcp: FastMCP) -> None:
             candidate, perform_as=perform_as, posting_ids=posting_ids)
 
     @mcp.tool()
-    async def lever_add_note(opportunity_id: str, value: str, perform_as: str) -> dict:
+    def lever_add_note(opportunity_id: str, value: str, perform_as: str) -> dict:
         """Add a note to an opportunity (candidate). perform_as = Lever user id."""
         return _client().add_note(opportunity_id, value, perform_as=perform_as)
 
     @mcp.tool()
-    async def lever_postings(
+    def lever_postings(
         limit: int = 50, offset: Optional[str] = None, state: Optional[str] = None,
     ) -> dict:
         """List postings (jobs). state: published | internal | closed | draft |
@@ -81,16 +81,16 @@ def register(mcp: FastMCP) -> None:
         return _client().list_postings(limit=limit, offset=offset, state=state)
 
     @mcp.tool()
-    async def lever_posting(posting_id: str) -> dict:
+    def lever_posting(posting_id: str) -> dict:
         """Fetch one posting (job) by id."""
         return _client().get_posting(posting_id)
 
     @mcp.tool()
-    async def lever_stages() -> dict:
+    def lever_stages() -> dict:
         """List pipeline stages (reference data)."""
         return _client().list_stages()
 
     @mcp.tool()
-    async def lever_users(limit: int = 50, offset: Optional[str] = None) -> dict:
+    def lever_users(limit: int = 50, offset: Optional[str] = None) -> dict:
         """List Lever users (recruiters) — get an id for `perform_as`."""
         return _client().list_users(limit=limit, offset=offset)

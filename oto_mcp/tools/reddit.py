@@ -12,7 +12,7 @@ def register(mcp: FastMCP) -> None:
     client = RedditClient()
 
     @mcp.tool()
-    async def reddit_subreddit(
+    def reddit_subreddit(
         name: str,
         sort: str = "hot",
         limit: int = 25,
@@ -31,7 +31,7 @@ def register(mcp: FastMCP) -> None:
         return client.subreddit(name, sort=sort, limit=limit, time=time, after=after)
 
     @mcp.tool()
-    async def reddit_search(
+    def reddit_search(
         query: str,
         subreddit: Optional[str] = None,
         sort: str = "relevance",
@@ -54,12 +54,12 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def reddit_search_subreddits(query: str, limit: int = 25) -> dict:
+    def reddit_search_subreddits(query: str, limit: int = 25) -> dict:
         """Discover subreddits by name/description match."""
         return client.search_subreddits(query, limit=limit)
 
     @mcp.tool()
-    async def reddit_post(
+    def reddit_post(
         url_or_id: str,
         comment_limit: int = 100,
         depth: int = 5,

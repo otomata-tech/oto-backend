@@ -22,7 +22,7 @@ def register(mcp: FastMCP) -> None:
         return NotionClient(token=key, cache_enabled=False)
 
     @mcp.tool()
-    async def notion_search(
+    def notion_search(
         query: str,
         filter_type: Optional[str] = None,
         sort: str = "relevance",
@@ -36,22 +36,22 @@ def register(mcp: FastMCP) -> None:
         return _client().search(query, filter_type=filter_type, sort=sort)
 
     @mcp.tool()
-    async def notion_get_page(page_id: str) -> dict:
+    def notion_get_page(page_id: str) -> dict:
         """Get a page's metadata/properties (not its block content)."""
         return _client().get_page(page_id)
 
     @mcp.tool()
-    async def notion_get_blocks(page_id: str, recursive: bool = False) -> dict:
+    def notion_get_blocks(page_id: str, recursive: bool = False) -> dict:
         """Get a page's block content. `recursive` fetches nested children too."""
         return _client().get_page_blocks(page_id, recursive=recursive)
 
     @mcp.tool()
-    async def notion_get_database(database_id: str) -> dict:
+    def notion_get_database(database_id: str) -> dict:
         """Get a database's schema (properties + data sources)."""
         return _client().get_database(database_id)
 
     @mcp.tool()
-    async def notion_query_database(
+    def notion_query_database(
         database_id: str,
         filter_obj: Optional[dict] = None,
         sorts: Optional[list] = None,
@@ -68,7 +68,7 @@ def register(mcp: FastMCP) -> None:
             database_id, filter_obj=filter_obj, sorts=sorts, page_size=page_size)
 
     @mcp.tool()
-    async def notion_create_page(
+    def notion_create_page(
         parent_id: str,
         parent_type: str,
         title: str,
@@ -86,7 +86,7 @@ def register(mcp: FastMCP) -> None:
             parent_id, parent_type, title, properties=properties, content=content)
 
     @mcp.tool()
-    async def notion_update_page(
+    def notion_update_page(
         page_id: str,
         properties: Optional[dict] = None,
         archived: Optional[bool] = None,
@@ -95,6 +95,6 @@ def register(mcp: FastMCP) -> None:
         return _client().update_page(page_id, properties=properties, archived=archived)
 
     @mcp.tool()
-    async def notion_append_blocks(page_id: str, blocks: list) -> dict:
+    def notion_append_blocks(page_id: str, blocks: list) -> dict:
         """Append block objects to a page/block's children."""
         return _client().append_blocks(page_id, blocks)

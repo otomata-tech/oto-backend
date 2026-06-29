@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
         return FullenrichClient(api_key=key), is_platform
 
     @mcp.tool()
-    async def fullenrich_enrich_linkedin(
+    def fullenrich_enrich_linkedin(
         linkedin_slug: str,
         first_name: str,
         last_name: str,

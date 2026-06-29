@@ -20,7 +20,7 @@ def register(mcp: FastMCP) -> None:
         return HunterClient(api_key=key), is_platform
 
     @mcp.tool()
-    async def hunter_domain_search(domain: str, limit: int = 10) -> dict:
+    def hunter_domain_search(domain: str, limit: int = 10) -> dict:
         """List public emails found on a company domain (Hunter domain-search).
 
         Useful to discover existing email patterns and contacts.
@@ -33,7 +33,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def hunter_email_finder(
+    def hunter_email_finder(
         domain: str,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
@@ -53,7 +53,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def hunter_email_verify(email: str) -> dict:
+    def hunter_email_verify(email: str) -> dict:
         """Verify a single email's deliverability (Hunter email-verifier).
 
         Coût : 1 crédit Hunter par appel.

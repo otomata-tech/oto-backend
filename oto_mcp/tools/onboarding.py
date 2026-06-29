@@ -206,7 +206,7 @@ def _discover_setup(sub: str) -> tuple[list[dict], dict, list[str], list[str]]:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def oto_onboarding(ctx: Context) -> dict:
+    def oto_onboarding(ctx: Context) -> dict:
         """Accueil / self-onboarding du compte Oto. APPELLE-LA EN DÉBUT DE SESSION
         tant que le compte n'est pas onboardé (`onboarded=false`).
 
@@ -255,7 +255,7 @@ def register(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    async def oto_onboarding_update(
+    def oto_onboarding_update(
         ctx: Context,
         fields: Optional[dict] = None,
         onboarded: Optional[bool] = None,

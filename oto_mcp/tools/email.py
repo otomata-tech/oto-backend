@@ -97,7 +97,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def email_send(
+    def email_send(
         ctx: Context,
         to: str,
         subject: str,

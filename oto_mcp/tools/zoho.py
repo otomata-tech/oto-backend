@@ -44,12 +44,12 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def zoho_modules() -> dict:
+    def zoho_modules() -> dict:
         """List the available CRM modules (Contacts, Leads, Deals, Accounts…)."""
         return {"modules": _client().list_modules()}
 
     @mcp.tool()
-    async def zoho_records(
+    def zoho_records(
         module: str,
         page: int = 1,
         per_page: int = 200,
@@ -65,12 +65,12 @@ def register(mcp: FastMCP) -> None:
         return _client().list_records(module, page=page, per_page=per_page, fields=fields)
 
     @mcp.tool()
-    async def zoho_get(module: str, record_id: str) -> dict:
+    def zoho_get(module: str, record_id: str) -> dict:
         """Get one record by id. {} if not found."""
         return _client().get_record(module, record_id)
 
     @mcp.tool()
-    async def zoho_search(
+    def zoho_search(
         module: str, criteria: str, page: int = 1, per_page: int = 200,
     ) -> dict:
         """Search records.
@@ -82,27 +82,27 @@ def register(mcp: FastMCP) -> None:
         return _client().search_records(module, criteria, page=page, per_page=per_page)
 
     @mcp.tool()
-    async def zoho_create(module: str, data: dict) -> dict:
+    def zoho_create(module: str, data: dict) -> dict:
         """Create a record in a module (data = field → value)."""
         return _client().create_record(module, data)
 
     @mcp.tool()
-    async def zoho_update(module: str, record_id: str, data: dict) -> dict:
+    def zoho_update(module: str, record_id: str, data: dict) -> dict:
         """Update a record's fields."""
         return _client().update_record(module, record_id, data)
 
     @mcp.tool()
-    async def zoho_delete(module: str, record_id: str) -> dict:
+    def zoho_delete(module: str, record_id: str) -> dict:
         """Delete a record. Irreversible."""
         return _client().delete_record(module, record_id)
 
     @mcp.tool()
-    async def zoho_notes(module: str, record_id: str) -> dict:
+    def zoho_notes(module: str, record_id: str) -> dict:
         """List the notes attached to a record."""
         return {"notes": _client().list_notes(module, record_id)}
 
     @mcp.tool()
-    async def zoho_create_note(
+    def zoho_create_note(
         module: str, record_id: str, title: str, content: str,
     ) -> dict:
         """Add a note to a record."""

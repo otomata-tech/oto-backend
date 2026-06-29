@@ -36,7 +36,7 @@ def register(mcp: FastMCP) -> None:
     # --- groups -------------------------------------------------------------
 
     @mcp.tool()
-    async def folk_list_groups() -> dict:
+    def folk_list_groups() -> dict:
         """List all groups in the Folk workspace (a group = a folder of people/companies/deals).
 
         Note: the Folk API is read-only on groups — there is no endpoint to
@@ -46,7 +46,7 @@ def register(mcp: FastMCP) -> None:
         return {"groups": _client().list_groups()}
 
     @mcp.tool()
-    async def folk_group_custom_fields(group_id: str, entity_type: str = "person") -> dict:
+    def folk_group_custom_fields(group_id: str, entity_type: str = "person") -> dict:
         """List the custom fields defined on a group for an entity type.
 
         Args:
@@ -58,7 +58,7 @@ def register(mcp: FastMCP) -> None:
     # --- lecture/écriture par entité (person | company [| deal]) -------------
 
     @mcp.tool()
-    async def folk_search(
+    def folk_search(
         entity: str, filters: Optional[dict] = None, max_results: int = 100,
     ) -> dict:
         """Search Folk records. Fetches ALL matching pages — always pass filters on
@@ -80,7 +80,7 @@ def register(mcp: FastMCP) -> None:
         return {"entity": entity, "count": len(items), "results": items[:max_results]}
 
     @mcp.tool()
-    async def folk_get(entity: str, id: str) -> dict:
+    def folk_get(entity: str, id: str) -> dict:
         """Fetch a Folk record by ID (full record). `entity` = "person" or "company"."""
         c = _client()
         if entity == "person":
@@ -90,7 +90,7 @@ def register(mcp: FastMCP) -> None:
         raise _bad("entity doit être 'person' ou 'company'.")
 
     @mcp.tool()
-    async def folk_update(
+    def folk_update(
         entity: str, id: str, fields: dict,
         group_id: Optional[str] = None, object_type: str = "deals",
     ) -> dict:
@@ -124,7 +124,7 @@ def register(mcp: FastMCP) -> None:
         raise _bad("entity doit être 'person', 'company' ou 'deal'.")
 
     @mcp.tool()
-    async def folk_delete(entity: str, id: str) -> dict:
+    def folk_delete(entity: str, id: str) -> dict:
         """Delete a Folk record. Irreversible. `entity` = "person" or "company"."""
         c = _client()
         if entity == "person":
@@ -136,7 +136,7 @@ def register(mcp: FastMCP) -> None:
     # --- créations (typées : les champs guident le modèle) ------------------
 
     @mcp.tool()
-    async def folk_create_person(
+    def folk_create_person(
         first_name: str,
         last_name: Optional[str] = None,
         emails: Optional[list[str]] = None,
@@ -168,7 +168,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def folk_create_company(
+    def folk_create_company(
         name: str,
         emails: Optional[list[str]] = None,
         industry: Optional[str] = None,
@@ -177,7 +177,7 @@ def register(mcp: FastMCP) -> None:
         return _client().create_company(name=name, emails=emails, industry=industry)
 
     @mcp.tool()
-    async def folk_create_deal(
+    def folk_create_deal(
         group_id: str,
         name: str,
         object_type: str = "deals",
@@ -196,7 +196,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def folk_create_note(
+    def folk_create_note(
         entity_id: str, content: str, visibility: str = "public"
     ) -> dict:
         """Attach a note to a Folk entity (person/company/deal).
@@ -207,7 +207,7 @@ def register(mcp: FastMCP) -> None:
         return _client().create_note(entity_id, content, visibility=visibility)
 
     @mcp.tool()
-    async def folk_create_interaction(
+    def folk_create_interaction(
         entity_id: str,
         type: str,
         title: str,
@@ -225,7 +225,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def folk_create_reminder(
+    def folk_create_reminder(
         entity_id: str, name: str, recurrence_rule: str, visibility: str = "public"
     ) -> dict:
         """Create a reminder on a Folk entity.
@@ -240,7 +240,7 @@ def register(mcp: FastMCP) -> None:
     # --- lists (énumération par collection) ---------------------------------
 
     @mcp.tool()
-    async def folk_list_deals(group_id: str, object_type: str = "deals") -> dict:
+    def folk_list_deals(group_id: str, object_type: str = "deals") -> dict:
         """List the deals (or another custom object) of a Folk group.
 
         Args:
@@ -250,11 +250,11 @@ def register(mcp: FastMCP) -> None:
         return {"deals": _client().list_deals(group_id, object_type=object_type)}
 
     @mcp.tool()
-    async def folk_list_notes(entity_id: Optional[str] = None) -> dict:
+    def folk_list_notes(entity_id: Optional[str] = None) -> dict:
         """List notes, optionally filtered to one entity (person/company/deal ID)."""
         return {"notes": _client().list_notes(entity_id=entity_id)}
 
     @mcp.tool()
-    async def folk_list_reminders(entity_id: Optional[str] = None) -> dict:
+    def folk_list_reminders(entity_id: Optional[str] = None) -> dict:
         """List reminders, optionally filtered to one entity."""
         return {"reminders": _client().list_reminders(entity_id=entity_id)}

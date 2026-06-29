@@ -39,7 +39,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- générique : tout le scope ------------------------------------------
     @mcp.tool()
-    async def serpapi_search(
+    def serpapi_search(
         engine: str,
         params: Optional[dict] = None,
         max_results: Optional[int] = None,
@@ -71,7 +71,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- tools typés phares (complètent Serper) -----------------------------
     @mcp.tool()
-    async def serpapi_bing_search(
+    def serpapi_bing_search(
         query: str,
         country: Optional[str] = None,
         language: Optional[str] = None,
@@ -93,7 +93,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="bing", params=params)
 
     @mcp.tool()
-    async def serpapi_youtube_search(query: str, language: Optional[str] = None,
+    def serpapi_youtube_search(query: str, language: Optional[str] = None,
                                      country: Optional[str] = None) -> dict:
         """YouTube search via SerpApi — videos, channels, playlists for a query.
 
@@ -110,7 +110,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="youtube", params=params)
 
     @mcp.tool()
-    async def serpapi_walmart_search(query: str, page: int = 1) -> dict:
+    def serpapi_walmart_search(query: str, page: int = 1) -> dict:
         """Walmart product search via SerpApi. Returns 'organic_results' (products
         with price, rating, seller).
 
@@ -121,7 +121,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="walmart", params={"query": query, "page": page})
 
     @mcp.tool()
-    async def serpapi_amazon_search(query: str, domain: str = "amazon.com",
+    def serpapi_amazon_search(query: str, domain: str = "amazon.com",
                                     page: int = 1) -> dict:
         """Amazon product search via SerpApi. Returns 'organic_results' (products,
         price, rating, ASIN).
@@ -135,7 +135,7 @@ def register(mcp: FastMCP) -> None:
                     params={"k": query, "amazon_domain": domain, "page": page})
 
     @mcp.tool()
-    async def serpapi_ebay_search(query: str, domain: str = "ebay.com",
+    def serpapi_ebay_search(query: str, domain: str = "ebay.com",
                                   page: int = 1) -> dict:
         """eBay product search via SerpApi. Returns 'organic_results' (listings,
         price, condition, shipping).
@@ -149,7 +149,7 @@ def register(mcp: FastMCP) -> None:
                     params={"_nkw": query, "ebay_domain": domain, "_pgn": page})
 
     @mcp.tool()
-    async def serpapi_google_trends(
+    def serpapi_google_trends(
         query: str,
         data_type: str = "TIMESERIES",
         country: Optional[str] = None,
@@ -172,7 +172,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="google_trends", params=params)
 
     @mcp.tool()
-    async def serpapi_google_finance(query: str, window: Optional[str] = None) -> dict:
+    def serpapi_google_finance(query: str, window: Optional[str] = None) -> dict:
         """Google Finance via SerpApi — quote/markets for a ticker or symbol.
 
         Args:
@@ -185,7 +185,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="google_finance", params=params)
 
     @mcp.tool()
-    async def serpapi_google_flights(
+    def serpapi_google_flights(
         departure_id: str,
         arrival_id: str,
         outbound_date: str,
@@ -216,7 +216,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="google_flights", params=params)
 
     @mcp.tool()
-    async def serpapi_google_hotels(
+    def serpapi_google_hotels(
         query: str,
         check_in_date: str,
         check_out_date: str,
@@ -243,7 +243,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search", engine="google_hotels", params=params)
 
     @mcp.tool()
-    async def serpapi_google_events(query: str, location: Optional[str] = None,
+    def serpapi_google_events(query: str, location: Optional[str] = None,
                                     language: Optional[str] = None,
                                     country: Optional[str] = None) -> dict:
         """Google Events via SerpApi — local/online events for a query.
@@ -265,7 +265,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- jobs (existant, recâblé sur _run) ----------------------------------
     @mcp.tool()
-    async def serpapi_search_jobs(
+    def serpapi_search_jobs(
         query: Optional[str] = None,
         company: Optional[str] = None,
         location: Optional[str] = None,
@@ -295,7 +295,7 @@ def register(mcp: FastMCP) -> None:
             no_cache=no_cache)
 
     @mcp.tool()
-    async def serpapi_job_details(job_id: str) -> dict:
+    def serpapi_job_details(job_id: str) -> dict:
         """Fetch the full detail of one job posting by its Google Jobs `job_id`
         (apply options, full description) — `job_id` comes from serpapi_search_jobs."""
         return _run("get_job_details", job_id=job_id)

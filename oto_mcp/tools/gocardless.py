@@ -33,12 +33,12 @@ def register(mcp: FastMCP) -> None:
         return GoCardlessClient(api_key=key)
 
     @mcp.tool()
-    async def gocardless_creditors() -> list:
+    def gocardless_creditors() -> list:
         """Comptes marchands GoCardless (compte encaisseur)."""
         return _client().list_creditors()
 
     @mcp.tool()
-    async def gocardless_payments(
+    def gocardless_payments(
         status: Optional[str] = None,
         limit: int = 50,
         mandate: Optional[str] = None,
@@ -60,12 +60,12 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def gocardless_payment(payment_id: str) -> dict:
+    def gocardless_payment(payment_id: str) -> dict:
         """Détail brut d'un prélèvement (PM…)."""
         return _client().get_payment(payment_id)
 
     @mcp.tool()
-    async def gocardless_events(
+    def gocardless_events(
         payment: Optional[str] = None,
         mandate: Optional[str] = None,
         action: Optional[str] = None,
@@ -77,7 +77,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def gocardless_payment_party(payment_id: str) -> dict:
+    def gocardless_payment_party(payment_id: str) -> dict:
         """Résout payment → mandat → customer (email, société, metadata aplatis).
 
         ⚠️ La metadata GoCardless peut ne pas porter d'identifiant client
@@ -86,14 +86,14 @@ def register(mcp: FastMCP) -> None:
         return _client().payment_party(payment_id)
 
     @mcp.tool()
-    async def gocardless_failure_reason(payment_id: str) -> dict:
+    def gocardless_failure_reason(payment_id: str) -> dict:
         """Motif du dernier échec d'un prélèvement (cause, description,
         will_attempt_retry). Si will_attempt_retry est True, GoCardless va
         retenter — ne pas émettre d'avoir tant que ce n'est pas False."""
         return _client().failure_reason(payment_id)
 
     @mcp.tool()
-    async def gocardless_failed(
+    def gocardless_failed(
         since: Optional[str] = None,
         limit: int = 200,
     ) -> list:

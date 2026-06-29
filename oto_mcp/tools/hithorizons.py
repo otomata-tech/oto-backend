@@ -21,7 +21,7 @@ def register(mcp: FastMCP) -> None:
         return HitHorizonsClient(api_key=key, country=country)
 
     @mcp.tool()
-    async def hithorizons_search_company(
+    def hithorizons_search_company(
         name: str,
         city: Optional[str] = None,
         postal_code: Optional[str] = None,
@@ -37,7 +37,7 @@ def register(mcp: FastMCP) -> None:
             name, city=city, postal_code=postal_code, max_results=max_results)}
 
     @mcp.tool()
-    async def hithorizons_search_unstructured(
+    def hithorizons_search_unstructured(
         name: str,
         address: Optional[str] = None,
         country: str = "FR",
@@ -48,12 +48,12 @@ def register(mcp: FastMCP) -> None:
             name, address=address, max_results=max_results)}
 
     @mcp.tool()
-    async def hithorizons_company(company_id: str, country: str = "FR") -> dict:
+    def hithorizons_company(company_id: str, country: str = "FR") -> dict:
         """Fetch full company details by HitHorizons company id. {} if not found."""
         return _client(country).get_detail(company_id) or {}
 
     @mcp.tool()
-    async def hithorizons_suggestions(
+    def hithorizons_suggestions(
         query: str, country: str = "FR", max_results: int = 10,
     ) -> dict:
         """Company-name autocomplete suggestions."""

@@ -16,7 +16,7 @@ def register(mcp: FastMCP) -> None:
     client = SpectacleClient()
 
     @mcp.tool()
-    async def culture_spectacle_search(
+    def culture_spectacle_search(
         status: str = "Valide",
         categorie: Optional[str] = None,
         naf: Optional[str] = None,
@@ -57,7 +57,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def culture_spectacle_get(siren: str) -> dict:
+    def culture_spectacle_get(siren: str) -> dict:
         """Fetch all récépissés (L1/L2/L3 categories) for a given SIREN/SIRET.
 
         A single structure often holds multiple licences across categories;
@@ -69,7 +69,7 @@ def register(mcp: FastMCP) -> None:
         return client.get(siren)
 
     @mcp.tool()
-    async def culture_spectacle_stats(
+    def culture_spectacle_stats(
         group_by: str,
         status: str = "Valide",
         categorie: Optional[str] = None,
@@ -102,7 +102,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def culture_spectacle_export_url(
+    def culture_spectacle_export_url(
         fmt: str = "csv",
         status: Optional[str] = "Valide",
         categorie: Optional[str] = None,

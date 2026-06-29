@@ -27,7 +27,7 @@ def register(mcp: FastMCP) -> None:
         return KasprClient(api_key=key), is_platform
 
     @mcp.tool()
-    async def kaspr_verify_key() -> dict:
+    def kaspr_verify_key() -> dict:
         """Verify the configured Kaspr API key — returns account info + remaining credits."""
         client, is_platform = _client()
         result = client.verify_key()
@@ -36,7 +36,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def kaspr_enrich_linkedin(
+    def kaspr_enrich_linkedin(
         linkedin_id: str,
         name: Optional[str] = None,
         with_phone: bool = False,

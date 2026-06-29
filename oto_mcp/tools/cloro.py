@@ -65,7 +65,7 @@ def register(mcp: FastMCP) -> None:
                     "queries (costs extra credits)."
                 ),
             )
-            async def _engine_tool(
+            def _engine_tool(
                 prompt: str,
                 country: Optional[str] = None,
                 markdown: bool = True,
@@ -83,7 +83,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- Google SERP / News : tools nommés (corps `query`) ------------------
     @mcp.tool()
-    async def cloro_google_serp(
+    def cloro_google_serp(
         query: str,
         country: Optional[str] = None,
         ai_overview: bool = True,
@@ -107,7 +107,7 @@ def register(mcp: FastMCP) -> None:
         return _run("google", query=query, country=country, include=include)
 
     @mcp.tool()
-    async def cloro_google_news(query: str, country: Optional[str] = None) -> dict:
+    def cloro_google_news(query: str, country: Optional[str] = None) -> dict:
         """Google News as JSON via Cloro.
 
         Args:

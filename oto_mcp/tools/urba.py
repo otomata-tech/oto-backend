@@ -35,7 +35,7 @@ def register(mcp: FastMCP) -> None:
     # --- zonage PLU/PLUi (Géoportail de l'Urbanisme) -------------------------
 
     @mcp.tool()
-    async def urba_zonage(lat: float, lon: float) -> dict:
+    def urba_zonage(lat: float, lon: float) -> dict:
         """Opposable urban-planning zoning at a point (lat, lon), via the GPU.
 
         Returns the primary PLU/PLUi zone (libellé, type, dominant destination,
@@ -49,7 +49,7 @@ def register(mcp: FastMCP) -> None:
     # --- risques (Géorisques) ------------------------------------------------
 
     @mcp.tool()
-    async def urba_risques(code_insee: str) -> dict:
+    def urba_risques(code_insee: str) -> dict:
         """Natural & technological risks recorded for a commune (Géorisques GASPAR).
 
         Returns distinct long labels: flooding, ground movement, clay shrink-swell,
@@ -59,7 +59,7 @@ def register(mcp: FastMCP) -> None:
         return georisques.risques_commune(code_insee)
 
     @mcp.tool()
-    async def urba_argiles(lat: float, lon: float) -> dict:
+    def urba_argiles(lat: float, lon: float) -> dict:
         """Clay shrink-swell hazard (RGA) at a point (lat, lon), via Géorisques.
 
         Returns exposure level (faible / moyen / fort). High clay exposure is a
@@ -70,7 +70,7 @@ def register(mcp: FastMCP) -> None:
     # --- Quartiers Prioritaires de la Ville (QPV) ----------------------------
 
     @mcp.tool()
-    async def urba_qpv(code_insee: str) -> dict:
+    def urba_qpv(code_insee: str) -> dict:
         """Priority urban districts (QPV) of a commune (national dataset).
 
         Returns the QPV list and count. Presence of a QPV is the geographic
@@ -80,7 +80,7 @@ def register(mcp: FastMCP) -> None:
         return qpv.by_commune(code_insee)
 
     @mcp.tool()
-    async def urba_qpv_proximite(lat: float, lon: float, rayon_m: int = 300) -> dict:
+    def urba_qpv_proximite(lat: float, lon: float, rayon_m: int = 300) -> dict:
         """QPV within `rayon_m` metres of a point (lat, lon) — server-side geo filter.
 
         `eligible_geo`=True if at least one QPV falls within the radius (300 m is the
@@ -91,7 +91,7 @@ def register(mcp: FastMCP) -> None:
     # --- EPFIF (maîtrise foncière, Île-de-France) ----------------------------
 
     @mcp.tool()
-    async def urba_epfif(code_insee: str) -> dict:
+    def urba_epfif(code_insee: str) -> dict:
         """EPFIF land-control intervention status of a commune (Île-de-France only).
 
         Returns whether the commune is under an EPFIF sector (veille / maîtrise /
@@ -105,7 +105,7 @@ def register(mcp: FastMCP) -> None:
     # --- socio-démographie communale (INSEE Mélodi) --------------------------
 
     @mcp.tool()
-    async def urba_socio(code_insee: str) -> dict:
+    def urba_socio(code_insee: str) -> dict:
         """Commune socio-demographic profile (INSEE Mélodi, open data).
 
         Aggregates, best-effort (a failing block is reported per section, not fatal):

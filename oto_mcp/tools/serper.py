@@ -31,7 +31,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def serper_web_search(
+    def serper_web_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -62,7 +62,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_news_search(
+    def serper_news_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -88,7 +88,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_image_search(
+    def serper_image_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -106,7 +106,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_video_search(
+    def serper_video_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -124,7 +124,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_places_search(
+    def serper_places_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -152,7 +152,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_maps_search(
+    def serper_maps_search(
         query: Optional[str] = None,
         ll: Optional[str] = None,
         place_id: Optional[str] = None,
@@ -180,7 +180,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_reviews(
+    def serper_reviews(
         cid: Optional[str] = None,
         fid: Optional[str] = None,
         place_id: Optional[str] = None,
@@ -214,7 +214,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_shopping_search(
+    def serper_shopping_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -232,7 +232,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_scholar_search(
+    def serper_scholar_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -249,7 +249,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_patents_search(
+    def serper_patents_search(
         query: str,
         num: int = 10,
         page: int = 1,
@@ -266,7 +266,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_lens(
+    def serper_lens(
         url: str,
         country: Optional[str] = "fr",
         language: Optional[str] = "fr",
@@ -281,7 +281,7 @@ def register(mcp: FastMCP) -> None:
         return _run("search_lens", url=url, country=country, language=language)
 
     @mcp.tool()
-    async def serper_autocomplete(
+    def serper_autocomplete(
         query: str,
         country: Optional[str] = "fr",
         language: Optional[str] = "fr",
@@ -295,7 +295,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def serper_scrape(url: str, include_markdown: bool = True) -> dict:
+    def serper_scrape(url: str, include_markdown: bool = True) -> dict:
         """Fetch a web page via Serper's scraper.
 
         Returns text + JSON-LD + metadata, optionally a markdown rendition.

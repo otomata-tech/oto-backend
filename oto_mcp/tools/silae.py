@@ -38,17 +38,17 @@ def register(mcp: FastMCP) -> None:
     # --- Dossiers (payroll files) ---
 
     @mcp.tool()
-    async def silae_dossiers() -> object:
+    def silae_dossiers() -> object:
         """List the payroll dossiers (folders) reachable with the API key."""
         return _client().list_dossiers()
 
     @mcp.tool()
-    async def silae_dossier_numbers() -> object:
+    def silae_dossier_numbers() -> object:
         """List just the dossier numbers reachable with the API key."""
         return _client().list_numeros_dossiers()
 
     @mcp.tool()
-    async def silae_dossier_info(numero_dossier: str) -> object:
+    def silae_dossier_info(numero_dossier: str) -> object:
         """Detailed payroll information for a dossier.
 
         Args:
@@ -57,7 +57,7 @@ def register(mcp: FastMCP) -> None:
         return _client().dossier_infos(numero_dossier)
 
     @mcp.tool()
-    async def silae_dossier_current_period(numero_dossier: str) -> object:
+    def silae_dossier_current_period(numero_dossier: str) -> object:
         """Current open payroll period for a dossier.
 
         Args:
@@ -68,7 +68,7 @@ def register(mcp: FastMCP) -> None:
     # --- Salariés (employees) ---
 
     @mcp.tool()
-    async def silae_employees(numero_dossier: str) -> object:
+    def silae_employees(numero_dossier: str) -> object:
         """List the employees of a dossier.
 
         Args:
@@ -77,7 +77,7 @@ def register(mcp: FastMCP) -> None:
         return _client().list_salaries(numero_dossier)
 
     @mcp.tool()
-    async def silae_employee(numero_dossier: str, matricule_salarie: str) -> object:
+    def silae_employee(numero_dossier: str, matricule_salarie: str) -> object:
         """Fetch one employee by registration number (matricule).
 
         Args:
@@ -87,7 +87,7 @@ def register(mcp: FastMCP) -> None:
         return _client().salarie_matricule(numero_dossier, matricule_salarie)
 
     @mcp.tool()
-    async def silae_employee_jobs(
+    def silae_employee_jobs(
         numero_dossier: str,
         matricule_salarie: str = "",
         type_emplois: int = 0,
@@ -106,7 +106,7 @@ def register(mcp: FastMCP) -> None:
     # --- Bulletins (payslips) ---
 
     @mcp.tool()
-    async def silae_payslips(
+    def silae_payslips(
         numero_dossier: str, periode: str, matricule_salarie: str = ""
     ) -> object:
         """Retrieve payslips for a period (one employee or the whole dossier).
@@ -119,7 +119,7 @@ def register(mcp: FastMCP) -> None:
         return _client().bulletins(numero_dossier, periode, matricule_salarie)
 
     @mcp.tool()
-    async def silae_payslip_header(
+    def silae_payslip_header(
         numero_dossier: str, matricule_salarie: str, periode: str
     ) -> object:
         """Payslip header (entête) for one employee/period.
@@ -132,7 +132,7 @@ def register(mcp: FastMCP) -> None:
         return _client().bulletin_entete(numero_dossier, matricule_salarie, periode)
 
     @mcp.tool()
-    async def silae_payslip_lines(
+    def silae_payslip_lines(
         numero_dossier: str, matricule_salarie: str, periode: str
     ) -> object:
         """Payslip lines (lignes) for one employee/period.
@@ -145,7 +145,7 @@ def register(mcp: FastMCP) -> None:
         return _client().bulletin_lignes(numero_dossier, matricule_salarie, periode)
 
     @mcp.tool()
-    async def silae_payslip_totals(
+    def silae_payslip_totals(
         numero_dossier: str, matricule_salarie: str, periode: str
     ) -> object:
         """Payslip cumulative totals (cumuls) for one employee/period.
@@ -160,7 +160,7 @@ def register(mcp: FastMCP) -> None:
     # --- Variables de paie (EVP) ---
 
     @mcp.tool()
-    async def silae_variables_to_enter(numero_dossier: str) -> object:
+    def silae_variables_to_enter(numero_dossier: str) -> object:
         """List the payroll variables (EVP) still awaiting entry for a dossier.
 
         Args:

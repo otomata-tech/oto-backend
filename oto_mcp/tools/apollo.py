@@ -21,7 +21,7 @@ def register(mcp: FastMCP) -> None:
         return ApolloClient(api_key=key)
 
     @mcp.tool()
-    async def apollo_search_organizations(
+    def apollo_search_organizations(
         name: Optional[str] = None,
         domain: Optional[str] = None,
         country: Optional[str] = None,
@@ -32,12 +32,12 @@ def register(mcp: FastMCP) -> None:
             name=name, domain=domain, country=country, per_page=per_page)
 
     @mcp.tool()
-    async def apollo_enrich_organization(domain: str) -> dict:
+    def apollo_enrich_organization(domain: str) -> dict:
         """Enrich a company from its domain (firmographics, size, industry…)."""
         return _client().enrich_organization(domain)
 
     @mcp.tool()
-    async def apollo_search_people(
+    def apollo_search_people(
         domains: Optional[list[str]] = None,
         org_ids: Optional[list[str]] = None,
         departments: Optional[list[str]] = None,
@@ -57,7 +57,7 @@ def register(mcp: FastMCP) -> None:
             titles=titles, seniorities=seniorities, per_page=per_page, page=page)
 
     @mcp.tool()
-    async def apollo_match_person(
+    def apollo_match_person(
         linkedin_url: Optional[str] = None,
         email: Optional[str] = None,
         first_name: Optional[str] = None,
@@ -75,6 +75,6 @@ def register(mcp: FastMCP) -> None:
             last_name=last_name, name=name, domain=domain, org_name=org_name) or {}
 
     @mcp.tool()
-    async def apollo_job_postings(org_id: str) -> dict:
+    def apollo_job_postings(org_id: str) -> dict:
         """List active job postings for an Apollo organization id (hiring signal)."""
         return _client().get_job_postings(org_id)

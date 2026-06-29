@@ -23,34 +23,34 @@ def register(mcp: FastMCP) -> None:
         return PhantombusterClient(api_key=key)
 
     @mcp.tool()
-    async def phantombuster_get_agent(agent_id: str) -> dict:
+    def phantombuster_get_agent(agent_id: str) -> dict:
         """Get an agent's configuration and status."""
         return _client().get_agent(agent_id)
 
     @mcp.tool()
-    async def phantombuster_list_containers(
+    def phantombuster_list_containers(
         agent_id: Optional[str] = None, limit: int = 10,
     ) -> dict:
         """List recent containers (runs), optionally filtered to one agent."""
         return {"containers": _client().list_containers(agent_id=agent_id, limit=limit)}
 
     @mcp.tool()
-    async def phantombuster_get_container(container_id: str) -> dict:
+    def phantombuster_get_container(container_id: str) -> dict:
         """Get a container (run) status and metadata."""
         return _client().get_container(container_id)
 
     @mcp.tool()
-    async def phantombuster_container_results(container_id: str) -> dict:
+    def phantombuster_container_results(container_id: str) -> dict:
         """Get the parsed JSON results produced by a finished container."""
         return {"results": _client().get_container_results(container_id)}
 
     @mcp.tool()
-    async def phantombuster_container_output(container_id: str) -> dict:
+    def phantombuster_container_output(container_id: str) -> dict:
         """Get a container's output logs (text)."""
         return {"output": _client().get_container_output(container_id)}
 
     @mcp.tool()
-    async def phantombuster_launch_agent(
+    def phantombuster_launch_agent(
         agent_id: str, config: Optional[dict] = None,
     ) -> dict:
         """Launch an agent (starts a run). Returns the new containerId.

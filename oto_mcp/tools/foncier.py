@@ -45,7 +45,7 @@ def register(mcp: FastMCP) -> None:
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
 
     @mcp.tool()
-    async def foncier_geocode(
+    def foncier_geocode(
         adresse: str,
         limit: int = 5,
         code_postal: Optional[str] = None,
@@ -65,14 +65,14 @@ def register(mcp: FastMCP) -> None:
         return ban.search(adresse, limit=limit, postcode=code_postal, citycode=code_commune)
 
     @mcp.tool()
-    async def foncier_reverse(lat: float, lon: float) -> Optional[dict]:
+    def foncier_reverse(lat: float, lon: float) -> Optional[dict]:
         """Reverse-geocode a point (lat, lon) → nearest known address, or null."""
         return ban.reverse(lat, lon)
 
     # --- cadastre (API Carto IGN) --------------------------------------------
 
     @mcp.tool()
-    async def foncier_parcelle(lat: float, lon: float) -> Optional[dict]:
+    def foncier_parcelle(lat: float, lon: float) -> Optional[dict]:
         """Cadastral parcel at a point (lat, lon), or null.
 
         Returns idu (unique id), commune, INSEE code, section, numéro, area
@@ -84,7 +84,7 @@ def register(mcp: FastMCP) -> None:
     # --- bâti existant (IGN BDTOPO V3) ---------------------------------------
 
     @mcp.tool()
-    async def foncier_bati(lat: float, lon: float) -> dict:
+    def foncier_bati(lat: float, lon: float) -> dict:
         """Built footprint on the parcel at (lat, lon): ground area, real CES, uses, heights.
 
         Resolves the cadastral parcel at the point, then sums BDTOPO buildings
@@ -100,7 +100,7 @@ def register(mcp: FastMCP) -> None:
     # --- productible solaire (PVGIS, JRC) ------------------------------------
 
     @mcp.tool()
-    async def foncier_productible_solaire(lat: float, lon: float, kwc: float) -> Optional[dict]:
+    def foncier_productible_solaire(lat: float, lon: float, kwc: float) -> Optional[dict]:
         """Annual solar yield (kWh) for a PV system of `kwc` kWp at (lat, lon), via PVGIS.
 
         Picks optimal tilt/azimuth for a rooftop install. Returns physical data
@@ -112,7 +112,7 @@ def register(mcp: FastMCP) -> None:
     # --- consommation électrique par adresse (Enedis) ------------------------
 
     @mcp.tool()
-    async def foncier_conso_elec(
+    def foncier_conso_elec(
         annee: str,
         dept: str,
         secteur: Optional[str] = None,
@@ -157,7 +157,7 @@ def register(mcp: FastMCP) -> None:
         return out
 
     @mcp.tool()
-    async def foncier_icpe(
+    def foncier_icpe(
         siret: Optional[str] = None,
         code_insee: Optional[str] = None,
         page: int = 1,
@@ -187,7 +187,7 @@ def register(mcp: FastMCP) -> None:
     # --- valorisation immobilière (DVF+ Cerema, depuis 2014) — repris de `dvf` -
 
     @mcp.tool()
-    async def foncier_prix_m2(
+    def foncier_prix_m2(
         code_commune: str,
         type_local: Optional[str] = None,
         years: int = 3,
@@ -208,7 +208,7 @@ def register(mcp: FastMCP) -> None:
         return dvf.stats(code_commune=code_commune, type_local=type_local, years=years)
 
     @mcp.tool()
-    async def foncier_comparables(
+    def foncier_comparables(
         code_commune: str,
         type_local: Optional[str] = None,
         surface_min: Optional[float] = None,
@@ -241,7 +241,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def foncier_comparables_adresse(
+    def foncier_comparables_adresse(
         adresse: str,
         radius_m: int = 500,
         type_local: Optional[str] = None,
@@ -283,7 +283,7 @@ def register(mcp: FastMCP) -> None:
         return res
 
     @mcp.tool()
-    async def foncier_dpe_adresse(
+    def foncier_dpe_adresse(
         adresse: str,
         radius_m: int = 200,
         type_batiment: Optional[str] = None,
@@ -313,7 +313,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def foncier_dpe_stats(code_commune: str, type_batiment: Optional[str] = None) -> dict:
+    def foncier_dpe_stats(code_commune: str, type_batiment: Optional[str] = None) -> dict:
         """DPE label distribution (A–G) for a commune, from ADEME open data.
 
         Aggregated view of energy performance across all dwellings of the commune.
@@ -412,7 +412,7 @@ def register(mcp: FastMCP) -> None:
         return card
 
     @mcp.tool(app=True)
-    async def foncier_site_app(adresse: str) -> Card:
+    def foncier_site_app(adresse: str) -> Card:
         """Rendered SITE sheet for a French address (MCP App / interactive card).
 
         Visual flagship variant of foncier_geocode + foncier_parcelle + foncier_bati:
@@ -451,7 +451,7 @@ def register(mcp: FastMCP) -> None:
         return card
 
     @mcp.tool(app=True)
-    async def foncier_comparables_app(
+    def foncier_comparables_app(
         adresse: str,
         radius_m: int = 500,
         type_local: Optional[str] = None,
@@ -492,7 +492,7 @@ def register(mcp: FastMCP) -> None:
         return card
 
     @mcp.tool(app=True)
-    async def foncier_prix_m2_app(
+    def foncier_prix_m2_app(
         code_commune: str,
         type_local: Optional[str] = None,
         years: int = 3,

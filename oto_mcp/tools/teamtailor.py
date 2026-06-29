@@ -25,7 +25,7 @@ def register(mcp: FastMCP) -> None:
         return TeamtailorClient(api_key=key)
 
     @mcp.tool()
-    async def teamtailor_candidates(
+    def teamtailor_candidates(
         page_size: int = 30, page_number: int = 1, email: Optional[str] = None,
     ) -> dict:
         """List candidates (paginated, JSON:API). `email` filters by exact email."""
@@ -33,12 +33,12 @@ def register(mcp: FastMCP) -> None:
             page_size=page_size, page_number=page_number, email=email)
 
     @mcp.tool()
-    async def teamtailor_candidate(candidate_id: str) -> dict:
+    def teamtailor_candidate(candidate_id: str) -> dict:
         """Fetch one candidate by id."""
         return _client().get_candidate(candidate_id)
 
     @mcp.tool()
-    async def teamtailor_create_candidate(attributes: dict) -> dict:
+    def teamtailor_create_candidate(attributes: dict) -> dict:
         """Create a candidate.
 
         Args:
@@ -48,7 +48,7 @@ def register(mcp: FastMCP) -> None:
         return _client().create_candidate(attributes)
 
     @mcp.tool()
-    async def teamtailor_jobs(
+    def teamtailor_jobs(
         page_size: int = 30, page_number: int = 1, status: Optional[str] = None,
     ) -> dict:
         """List jobs. status: open | draft | archived | unlisted."""
@@ -56,12 +56,12 @@ def register(mcp: FastMCP) -> None:
             page_size=page_size, page_number=page_number, status=status)
 
     @mcp.tool()
-    async def teamtailor_job(job_id: str) -> dict:
+    def teamtailor_job(job_id: str) -> dict:
         """Fetch one job by id."""
         return _client().get_job(job_id)
 
     @mcp.tool()
-    async def teamtailor_job_applications(
+    def teamtailor_job_applications(
         page_size: int = 30, page_number: int = 1, job_id: Optional[str] = None,
     ) -> dict:
         """List job applications, optionally filtered by job_id."""

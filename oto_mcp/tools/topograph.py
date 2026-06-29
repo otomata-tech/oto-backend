@@ -22,7 +22,7 @@ def register(mcp: FastMCP) -> None:
         return TopographClient(api_key=key)
 
     @mcp.tool()
-    async def topograph_search(
+    def topograph_search(
         query: str,
         country: Optional[str] = None,
         limit: Optional[int] = None,
@@ -40,7 +40,7 @@ def register(mcp: FastMCP) -> None:
         return _client().search(query=query, country=country, limit=limit)
 
     @mcp.tool()
-    async def topograph_company(
+    def topograph_company(
         country: Optional[str] = None,
         registration_number: Optional[str] = None,
         company_id: Optional[str] = None,

@@ -34,17 +34,17 @@ def register(mcp: FastMCP) -> None:
         return PennylaneClient(api_key=key)
 
     @mcp.tool()
-    async def pennylane_company() -> dict:
+    def pennylane_company() -> dict:
         """Informations de l'entreprise du compte Pennylane courant."""
         return _client().get_company_info()
 
     @mcp.tool()
-    async def pennylane_fiscal_years() -> list:
+    def pennylane_fiscal_years() -> list:
         """Liste des exercices fiscaux."""
         return _client().get_fiscal_years()
 
     @mcp.tool()
-    async def pennylane_trial_balance(start_date: str, end_date: str) -> list:
+    def pennylane_trial_balance(start_date: str, end_date: str) -> list:
         """Balance comptable sur une période.
 
         Args:
@@ -54,32 +54,32 @@ def register(mcp: FastMCP) -> None:
         return _client().get_trial_balance(start_date, end_date)
 
     @mcp.tool()
-    async def pennylane_ledger_accounts() -> list:
+    def pennylane_ledger_accounts() -> list:
         """Plan comptable (comptes du grand livre)."""
         return _client().get_ledger_accounts()
 
     @mcp.tool()
-    async def pennylane_customer_invoices(max_pages: Optional[int] = None) -> list:
+    def pennylane_customer_invoices(max_pages: Optional[int] = None) -> list:
         """Factures clients (paginé ; max_pages limite le volume)."""
         return _client().get_customer_invoices(max_pages=max_pages)
 
     @mcp.tool()
-    async def pennylane_supplier_invoices(max_pages: Optional[int] = None) -> list:
+    def pennylane_supplier_invoices(max_pages: Optional[int] = None) -> list:
         """Factures fournisseurs (paginé ; max_pages limite le volume)."""
         return _client().get_supplier_invoices(max_pages=max_pages)
 
     @mcp.tool()
-    async def pennylane_transactions(max_pages: Optional[int] = None) -> list:
+    def pennylane_transactions(max_pages: Optional[int] = None) -> list:
         """Transactions bancaires (paginé ; max_pages limite le volume)."""
         return _client().get_transactions(max_pages=max_pages)
 
     @mcp.tool()
-    async def pennylane_categories() -> list:
+    def pennylane_categories() -> list:
         """Catégories de dépenses."""
         return _client().get_categories()
 
     @mcp.tool()
-    async def pennylane_match(
+    def pennylane_match(
         invoice_id: int,
         transaction_id: int,
         invoice_type: str = "customer",
@@ -101,7 +101,7 @@ def register(mcp: FastMCP) -> None:
     # --- écriture du flux avoir (brouillon-d'abord, supervision) -------------
 
     @mcp.tool()
-    async def pennylane_find_invoice_by_reference(external_reference: str) -> dict:
+    def pennylane_find_invoice_by_reference(external_reference: str) -> dict:
         """Cherche une facture client par son `external_reference` (anti-doublon).
 
         À appeler AVANT de créer un avoir pour un paiement échoué : si une
@@ -116,7 +116,7 @@ def register(mcp: FastMCP) -> None:
         return inv if inv else {"found": False}
 
     @mcp.tool()
-    async def pennylane_create_credit_note(
+    def pennylane_create_credit_note(
         customer_id: int,
         date: str,
         lines: list,
@@ -143,7 +143,7 @@ def register(mcp: FastMCP) -> None:
             external_reference=external_reference, draft=True)
 
     @mcp.tool()
-    async def pennylane_finalize_invoice(invoice_id: int) -> dict:
+    def pennylane_finalize_invoice(invoice_id: int) -> dict:
         """Finalise une facture/avoir en brouillon (lui donne sa référence définitive).
 
         ⚠️ Écriture engageante — n'appeler qu'après validation humaine explicite.
@@ -154,7 +154,7 @@ def register(mcp: FastMCP) -> None:
         return _client().finalize_invoice(invoice_id)
 
     @mcp.tool()
-    async def pennylane_send_invoice(invoice_id: int) -> dict:
+    def pennylane_send_invoice(invoice_id: int) -> dict:
         """Envoie une facture/avoir finalisé(e) au client par email (email Pennylane du client).
 
         ⚠️ Envoi externe — n'appeler qu'après validation humaine explicite. Le
@@ -167,7 +167,7 @@ def register(mcp: FastMCP) -> None:
         return _client().send_invoice(invoice_id)
 
     @mcp.tool()
-    async def pennylane_update_customer(customer_id: int, fields: dict) -> dict:
+    def pennylane_update_customer(customer_id: int, fields: dict) -> dict:
         """Met à jour un client (compléter email, vat_number, external_reference…).
 
         Pour la réconciliation : Pennylane « connaît » un client exporté de MM

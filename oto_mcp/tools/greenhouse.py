@@ -24,7 +24,7 @@ def register(mcp: FastMCP) -> None:
         return GreenhouseClient(api_key=key)
 
     @mcp.tool()
-    async def greenhouse_candidates(
+    def greenhouse_candidates(
         per_page: int = 50,
         page: int = 1,
         job_id: Optional[int] = None,
@@ -44,12 +44,12 @@ def register(mcp: FastMCP) -> None:
             created_after=created_after, updated_after=updated_after)
 
     @mcp.tool()
-    async def greenhouse_candidate(candidate_id: int) -> dict:
+    def greenhouse_candidate(candidate_id: int) -> dict:
         """Fetch one candidate by id (with their applications)."""
         return _client().get_candidate(candidate_id)
 
     @mcp.tool()
-    async def greenhouse_add_candidate(candidate: dict, on_behalf_of: int) -> dict:
+    def greenhouse_add_candidate(candidate: dict, on_behalf_of: int) -> dict:
         """Create a candidate/prospect.
 
         Args:
@@ -61,7 +61,7 @@ def register(mcp: FastMCP) -> None:
         return _client().add_candidate(candidate, on_behalf_of=on_behalf_of)
 
     @mcp.tool()
-    async def greenhouse_add_note(
+    def greenhouse_add_note(
         candidate_id: int, body: str, user_id: int, visibility: str = "public",
     ) -> dict:
         """Add a note to a candidate's activity feed.
@@ -73,19 +73,19 @@ def register(mcp: FastMCP) -> None:
         return _client().add_note(candidate_id, body, user_id, visibility=visibility)
 
     @mcp.tool()
-    async def greenhouse_jobs(
+    def greenhouse_jobs(
         per_page: int = 50, page: int = 1, status: Optional[str] = None,
     ) -> list:
         """List jobs. status: open | closed | draft."""
         return _client().list_jobs(per_page=per_page, page=page, status=status)
 
     @mcp.tool()
-    async def greenhouse_job(job_id: int) -> dict:
+    def greenhouse_job(job_id: int) -> dict:
         """Fetch one job by id."""
         return _client().get_job(job_id)
 
     @mcp.tool()
-    async def greenhouse_applications(
+    def greenhouse_applications(
         per_page: int = 50, page: int = 1, job_id: Optional[int] = None,
         status: Optional[str] = None,
     ) -> list:
@@ -94,11 +94,11 @@ def register(mcp: FastMCP) -> None:
             per_page=per_page, page=page, job_id=job_id, status=status)
 
     @mcp.tool()
-    async def greenhouse_application(application_id: int) -> dict:
+    def greenhouse_application(application_id: int) -> dict:
         """Fetch one application by id."""
         return _client().get_application(application_id)
 
     @mcp.tool()
-    async def greenhouse_users(per_page: int = 50, page: int = 1) -> list:
+    def greenhouse_users(per_page: int = 50, page: int = 1) -> list:
         """List Greenhouse users (recruiters) — get an id for `on_behalf_of`."""
         return _client().list_users(per_page=per_page, page=page)

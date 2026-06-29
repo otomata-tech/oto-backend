@@ -41,7 +41,7 @@ def _require_sub() -> str:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def oto_whoami(ctx: Context) -> dict:
+    def oto_whoami(ctx: Context) -> dict:
         """Identité MCP courante : sous quel compte et dans quelle org/groupe tu agis.
 
         Appelle-la quand tu as besoin de savoir POUR QUI tu travailles, ou avant une

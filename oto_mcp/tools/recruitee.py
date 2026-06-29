@@ -27,7 +27,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def recruitee_candidates(
+    def recruitee_candidates(
         limit: int = 50, offset: int = 0,
         offer_id: Optional[int] = None, query: Optional[str] = None,
     ) -> dict:
@@ -41,12 +41,12 @@ def register(mcp: FastMCP) -> None:
             limit=limit, offset=offset, offer_id=offer_id, query=query)
 
     @mcp.tool()
-    async def recruitee_candidate(candidate_id: int) -> dict:
+    def recruitee_candidate(candidate_id: int) -> dict:
         """Fetch one candidate by id."""
         return _client().get_candidate(candidate_id)
 
     @mcp.tool()
-    async def recruitee_create_candidate(
+    def recruitee_create_candidate(
         candidate: dict, offer_ids: Optional[list[int]] = None,
     ) -> dict:
         """Create a candidate.
@@ -59,12 +59,12 @@ def register(mcp: FastMCP) -> None:
         return _client().create_candidate(candidate, offer_ids=offer_ids)
 
     @mcp.tool()
-    async def recruitee_add_note(candidate_id: int, body: str) -> dict:
+    def recruitee_add_note(candidate_id: int, body: str) -> dict:
         """Add a note to a candidate."""
         return _client().add_note(candidate_id, body)
 
     @mcp.tool()
-    async def recruitee_offers(
+    def recruitee_offers(
         scope: Optional[str] = None, kind: Optional[str] = None,
     ) -> dict:
         """List offers (jobs). scope: active | archived | not_archived ;
@@ -72,6 +72,6 @@ def register(mcp: FastMCP) -> None:
         return _client().list_offers(scope=scope, kind=kind)
 
     @mcp.tool()
-    async def recruitee_offer(offer_id: int) -> dict:
+    def recruitee_offer(offer_id: int) -> dict:
         """Fetch one offer (job) by id."""
         return _client().get_offer(offer_id)

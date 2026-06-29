@@ -33,7 +33,7 @@ def register(mcp: FastMCP) -> None:
             access.record_platform_usage("slack")
 
     @mcp.tool()
-    async def slack_post_message(
+    def slack_post_message(
         channel: str,
         text: str,
         thread_ts: Optional[str] = None,
@@ -53,7 +53,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_delete_message(channel: str, ts: str) -> dict:
+    def slack_delete_message(channel: str, ts: str) -> dict:
         """Delete a message you previously posted.
 
         Args:
@@ -66,7 +66,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_list_channels(types: str = "public_channel") -> dict:
+    def slack_list_channels(types: str = "public_channel") -> dict:
         """List Slack channels visible to you.
 
         Args:
@@ -78,7 +78,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_read_history(
+    def slack_read_history(
         channel: str,
         limit: int = 20,
         cursor: Optional[str] = None,
@@ -96,7 +96,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_find_user_by_email(email: str) -> dict:
+    def slack_find_user_by_email(email: str) -> dict:
         """Look up a Slack user by email. Returns the user object (id, name, profile)."""
         client, is_platform = _client()
         result = client.find_user_by_email(email)
@@ -104,7 +104,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_open_dm(user: str) -> dict:
+    def slack_open_dm(user: str) -> dict:
         """Open (or return) a DM channel with a user. Returns `{channel: {id: …}}`.
 
         Args:
@@ -116,7 +116,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def slack_add_reaction(channel: str, ts: str, name: str) -> dict:
+    def slack_add_reaction(channel: str, ts: str, name: str) -> dict:
         """Add an emoji reaction to a message.
 
         Args:

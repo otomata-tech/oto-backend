@@ -27,7 +27,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def zohodesk_tickets(
+    def zohodesk_tickets(
         from_index: int = 1,
         limit: int = 50,
         department_id: Optional[str] = None,
@@ -45,43 +45,43 @@ def register(mcp: FastMCP) -> None:
             status=status, sort_by=sort_by)
 
     @mcp.tool()
-    async def zohodesk_ticket(ticket_id: str, include: Optional[str] = None) -> dict:
+    def zohodesk_ticket(ticket_id: str, include: Optional[str] = None) -> dict:
         """Get one ticket. `include` = contacts,products,assignee,team…"""
         return _client().get_ticket(ticket_id, include=include)
 
     @mcp.tool()
-    async def zohodesk_search_tickets(
+    def zohodesk_search_tickets(
         query: dict, from_index: int = 1, limit: int = 50,
     ) -> dict:
         """Search tickets. `query` = dict of field=value pairs (Zoho search params)."""
         return _client().search_tickets(query, from_index=from_index, limit=limit)
 
     @mcp.tool()
-    async def zohodesk_create_ticket(data: dict) -> dict:
+    def zohodesk_create_ticket(data: dict) -> dict:
         """Create a ticket. Required: subject, departmentId, contactId (or contact)."""
         return _client().create_ticket(data)
 
     @mcp.tool()
-    async def zohodesk_update_ticket(ticket_id: str, data: dict) -> dict:
+    def zohodesk_update_ticket(ticket_id: str, data: dict) -> dict:
         """Patch ticket fields (status, priority, assignee, customFields…)."""
         return _client().update_ticket(ticket_id, data)
 
     @mcp.tool()
-    async def zohodesk_ticket_threads(ticket_id: str) -> dict:
+    def zohodesk_ticket_threads(ticket_id: str) -> dict:
         """List the threads (replies/comments) of a ticket."""
         return _client().list_threads(ticket_id)
 
     @mcp.tool()
-    async def zohodesk_contacts(from_index: int = 1, limit: int = 50) -> dict:
+    def zohodesk_contacts(from_index: int = 1, limit: int = 50) -> dict:
         """List Desk contacts."""
         return _client().list_contacts(from_index=from_index, limit=limit)
 
     @mcp.tool()
-    async def zohodesk_create_contact(data: dict) -> dict:
+    def zohodesk_create_contact(data: dict) -> dict:
         """Create a Desk contact. Required: lastName. Optional: firstName, email, phone."""
         return _client().create_contact(data)
 
     @mcp.tool()
-    async def zohodesk_departments() -> dict:
+    def zohodesk_departments() -> dict:
         """List Desk departments."""
         return _client().list_departments()

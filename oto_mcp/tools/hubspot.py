@@ -24,7 +24,7 @@ def register(mcp: FastMCP) -> None:
         return HubSpotClient(api_key=key)
 
     @mcp.tool()
-    async def hubspot_search(
+    def hubspot_search(
         object_type: str,
         query: Optional[str] = None,
         filters: Optional[list[dict]] = None,
@@ -48,7 +48,7 @@ def register(mcp: FastMCP) -> None:
             limit=limit, after=after)
 
     @mcp.tool()
-    async def hubspot_get(
+    def hubspot_get(
         object_type: str,
         object_id: str,
         properties: Optional[list[str]] = None,
@@ -64,7 +64,7 @@ def register(mcp: FastMCP) -> None:
             object_type, object_id, properties=properties, associations=associations)
 
     @mcp.tool()
-    async def hubspot_list(
+    def hubspot_list(
         object_type: str,
         properties: Optional[list[str]] = None,
         limit: int = 100,
@@ -75,7 +75,7 @@ def register(mcp: FastMCP) -> None:
             object_type, properties=properties, limit=limit, after=after)
 
     @mcp.tool()
-    async def hubspot_create(
+    def hubspot_create(
         object_type: str,
         properties: dict,
         associations: Optional[list[dict]] = None,
@@ -91,19 +91,19 @@ def register(mcp: FastMCP) -> None:
             object_type, properties, associations=associations)
 
     @mcp.tool()
-    async def hubspot_update(
+    def hubspot_update(
         object_type: str, object_id: str, properties: dict,
     ) -> dict:
         """Update (PATCH) a CRM object's properties."""
         return _client().update_object(object_type, object_id, properties)
 
     @mcp.tool()
-    async def hubspot_delete(object_type: str, object_id: str) -> dict:
+    def hubspot_delete(object_type: str, object_id: str) -> dict:
         """Archive a CRM object (moves it to HubSpot's recycle bin)."""
         return _client().delete_object(object_type, object_id)
 
     @mcp.tool()
-    async def hubspot_associations(
+    def hubspot_associations(
         object_type: str, object_id: str, to_object_type: str,
     ) -> dict:
         """List objects of `to_object_type` associated with an object.
@@ -113,13 +113,13 @@ def register(mcp: FastMCP) -> None:
         return _client().list_associations(object_type, object_id, to_object_type)
 
     @mcp.tool()
-    async def hubspot_create_note(
+    def hubspot_create_note(
         body: str, object_type: str, object_id: str,
     ) -> dict:
         """Attach a note to a CRM object (contacts/companies/deals/tickets)."""
         return _client().create_note(body, object_type, object_id)
 
     @mcp.tool()
-    async def hubspot_owners() -> dict:
+    def hubspot_owners() -> dict:
         """List HubSpot owners (users) — to assign records by ownerId."""
         return _client().list_owners()

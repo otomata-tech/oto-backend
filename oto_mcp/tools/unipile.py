@@ -193,19 +193,19 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
 
     @mcp.tool(name=f"{cl}_list_chats",
               description=f"Liste les conversations {channel} (messagerie) via Unipile.")
-    async def _list_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
+    def _list_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
         return unipile_client(prov).list_chats(limit=limit, cursor=cursor)
 
     @mcp.tool(name=f"{cl}_read_chat",
               description=f"Lit les messages d'une conversation {channel} via Unipile "
                           f"(chat_id renvoyé par {cl}_list_chats).")
-    async def _read_chat(chat_id: str, limit: int = 30) -> dict:
+    def _read_chat(chat_id: str, limit: int = 30) -> dict:
         return unipile_client(prov).list_messages(chat_id, limit=limit)
 
     @mcp.tool(name=f"{cl}_send_message",
               description=f"Envoie un message {channel} via Unipile. chat_id = répondre "
                           f"dans un fil existant ; sinon recipient_id = nouveau fil.")
-    async def _send_message(text: str, chat_id: Optional[str] = None,
+    def _send_message(text: str, chat_id: Optional[str] = None,
                             recipient_id: Optional[str] = None) -> dict:
         return unipile_client(prov).send_message(text, chat_id=chat_id, attendee_id=recipient_id)
 
@@ -213,7 +213,7 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def unipile_search(
+    def unipile_search(
         keywords: Optional[str] = None,
         category: str = "people",
         company: Optional[list[str]] = None,
@@ -255,7 +255,7 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def unipile_profile(identifier: str, sections: str = "*") -> dict:
+    def unipile_profile(identifier: str, sections: str = "*") -> dict:
         """Profil LinkedIn complet (carrière datée, écoles, réseau) via Unipile.
 
         Args:
@@ -265,7 +265,7 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().get_profile(identifier, sections=sections)
 
     @mcp.tool()
-    async def unipile_company(identifier: str) -> dict:
+    def unipile_company(identifier: str) -> dict:
         """Fiche société LinkedIn via Unipile.
 
         Args:
@@ -274,12 +274,12 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().get_company(identifier)
 
     @mcp.tool()
-    async def unipile_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
+    def unipile_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
         """Liste les conversations LinkedIn (messagerie) via Unipile."""
         return unipile_client().list_chats(limit=limit, cursor=cursor)
 
     @mcp.tool()
-    async def unipile_read_chat(chat_id: str, limit: int = 30) -> dict:
+    def unipile_read_chat(chat_id: str, limit: int = 30) -> dict:
         """Lit les messages d'une conversation LinkedIn via Unipile.
 
         Args:
@@ -289,7 +289,7 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().list_messages(chat_id, limit=limit)
 
     @mcp.tool()
-    async def unipile_send_message(
+    def unipile_send_message(
         text: str,
         chat_id: Optional[str] = None,
         recipient_id: Optional[str] = None,
@@ -307,20 +307,20 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().send_message(text, chat_id=chat_id, attendee_id=recipient_id)
 
     @mcp.tool()
-    async def unipile_relations(cursor: Optional[str] = None,
+    def unipile_relations(cursor: Optional[str] = None,
                                 limit: Optional[int] = None) -> dict:
         """Liste tes relations LinkedIn de 1er degré (N1) via Unipile — pour
         cibler/exporter ton réseau direct. Paginé (`cursor`)."""
         return unipile_client().list_relations(cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_invitations(direction: str = "received") -> dict:
+    def unipile_invitations(direction: str = "received") -> dict:
         """Liste les invitations de connexion LinkedIn. `direction`='received'
         (reçues, à accepter) ou 'sent' (envoyées, en attente)."""
         return unipile_client().list_invitations(direction)
 
     @mcp.tool()
-    async def unipile_send_invitation(provider_id: str,
+    def unipile_send_invitation(provider_id: str,
                                       message: Optional[str] = None) -> dict:
         """Envoie une demande de connexion LinkedIn (outreach 2e/3e degré).
 
@@ -332,20 +332,20 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().send_invitation(provider_id, message=message)
 
     @mcp.tool()
-    async def unipile_member_posts(identifier: str, cursor: Optional[str] = None,
+    def unipile_member_posts(identifier: str, cursor: Optional[str] = None,
                                    limit: Optional[int] = None) -> dict:
         """Posts publiés par un membre LinkedIn — `identifier` = provider id ou slug.
         Pour repérer un post à commenter/liker (social-selling)."""
         return unipile_client().list_member_posts(identifier, cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_get_post(post_id: str) -> dict:
+    def unipile_get_post(post_id: str) -> dict:
         """Récupère un post LinkedIn — `post_id` = social_id (`urn:li:…`) d'un résultat
         unipile_member_posts."""
         return unipile_client().get_post(post_id)
 
     @mcp.tool()
-    async def unipile_post_engagement(post_id: str, kind: str = "comments",
+    def unipile_post_engagement(post_id: str, kind: str = "comments",
                                       cursor: Optional[str] = None) -> dict:
         """Liste l'engagement d'un post LinkedIn — `kind`='comments' ou 'reactions'."""
         c = unipile_client()
@@ -353,23 +353,23 @@ def register(mcp: FastMCP) -> None:
             else c.list_comments(post_id, cursor=cursor)
 
     @mcp.tool()
-    async def unipile_comment(post_id: str, text: str) -> dict:
+    def unipile_comment(post_id: str, text: str) -> dict:
         """Commente un post LinkedIn (social-selling). `post_id` = social_id du post."""
         return unipile_client().comment_post(post_id, text)
 
     @mcp.tool()
-    async def unipile_react(post_id: str, value: str = "LIKE") -> dict:
+    def unipile_react(post_id: str, value: str = "LIKE") -> dict:
         """Réagit à un post LinkedIn. `value`: LIKE | PRAISE | EMPATHY | INTEREST |
         APPRECIATION | ENTERTAINMENT."""
         return unipile_client().react_post(post_id, value=value)
 
     @mcp.tool()
-    async def unipile_create_post(text: str) -> dict:
+    def unipile_create_post(text: str) -> dict:
         """Publie un post LinkedIn depuis le compte connecté."""
         return unipile_client().create_post(text)
 
     @mcp.tool()
-    async def unipile_feed(limit: int = 20, page: int = 0, refresh: bool = False) -> dict:
+    def unipile_feed(limit: int = 20, page: int = 0, refresh: bool = False) -> dict:
         """Miroir autogéré de ta home LinkedIn. Tu n'as RIEN à gérer (ni curseur, ni
         sync) : l'outil persiste les posts de ta page d'accueil dans ta base
         (datastore `linkedin-feed`, dédupliqués par leur identifiant), rafraîchit
@@ -421,7 +421,7 @@ def register(mcp: FastMCP) -> None:
     # ---- réseau : invitations (accepter / annuler) ----------------------
 
     @mcp.tool()
-    async def unipile_handle_invitation(invitation_id: str, shared_secret: str,
+    def unipile_handle_invitation(invitation_id: str, shared_secret: str,
                                         action: str = "accept") -> dict:
         """Accepte ou refuse une invitation LinkedIn REÇUE.
 
@@ -436,7 +436,7 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().handle_invitation(invitation_id, shared_secret, action)
 
     @mcp.tool()
-    async def unipile_cancel_invitation(invitation_id: str) -> dict:
+    def unipile_cancel_invitation(invitation_id: str) -> dict:
         """Annule une invitation LinkedIn ENVOYÉE (en attente). `invitation_id` =
         id d'un item `unipile_invitations(direction='sent')`."""
         return unipile_client().cancel_invitation(invitation_id)
@@ -444,34 +444,34 @@ def register(mcp: FastMCP) -> None:
     # ---- réseau : moi / followers / activité d'un membre ----------------
 
     @mcp.tool()
-    async def unipile_me() -> dict:
+    def unipile_me() -> dict:
         """Profil du compte LinkedIn connecté lui-même (le « moi » sous lequel les
         autres tools unipile_* agissent)."""
         return unipile_client().get_own_profile()
 
     @mcp.tool()
-    async def unipile_followers(user_id: Optional[str] = None,
+    def unipile_followers(user_id: Optional[str] = None,
                                 cursor: Optional[str] = None,
                                 limit: Optional[int] = None) -> dict:
         """Followers du compte connecté (ou d'un membre via `user_id`). Paginé."""
         return unipile_client().list_followers(user_id=user_id, cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_following(user_id: Optional[str] = None,
+    def unipile_following(user_id: Optional[str] = None,
                                 cursor: Optional[str] = None,
                                 limit: Optional[int] = None) -> dict:
         """Comptes suivis par le compte connecté (ou par un membre via `user_id`). Paginé."""
         return unipile_client().list_following(user_id=user_id, cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_member_comments(identifier: str, cursor: Optional[str] = None,
+    def unipile_member_comments(identifier: str, cursor: Optional[str] = None,
                                       limit: Optional[int] = None) -> dict:
         """Commentaires laissés par un membre LinkedIn (`identifier` = provider id).
         Pour repérer ce qu'un prospect engage → accroche social-selling."""
         return unipile_client().list_member_comments(identifier, cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_member_reactions(identifier: str, cursor: Optional[str] = None,
+    def unipile_member_reactions(identifier: str, cursor: Optional[str] = None,
                                        limit: Optional[int] = None) -> dict:
         """Réactions d'un membre LinkedIn (`identifier` = provider id) — posts qu'il
         a likés/aimés."""
@@ -480,18 +480,18 @@ def register(mcp: FastMCP) -> None:
     # ---- messagerie : participants / contacts / état du fil -------------
 
     @mcp.tool()
-    async def unipile_chat_attendees(chat_id: str) -> dict:
+    def unipile_chat_attendees(chat_id: str) -> dict:
         """Participants d'un fil de messagerie LinkedIn (`chat_id` d'un unipile_chats)."""
         return unipile_client().list_chat_attendees(chat_id)
 
     @mcp.tool()
-    async def unipile_attendees(cursor: Optional[str] = None,
+    def unipile_attendees(cursor: Optional[str] = None,
                                 limit: Optional[int] = None) -> dict:
         """Carnet de contacts de messagerie LinkedIn (interlocuteurs). Paginé."""
         return unipile_client().list_attendees(cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_chat_update(chat_id: str, action: str,
+    def unipile_chat_update(chat_id: str, action: str,
                                   value: Optional[bool | str] = None) -> dict:
         """Modifie l'état d'un fil LinkedIn. `action` ∈ setReadStatus | setMuteStatus
         | setArchiveStatus | setPinnedStatus | setLabel | getInviteLink. `value` =
@@ -500,7 +500,7 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().patch_chat(chat_id, action, value=value)
 
     @mcp.tool()
-    async def unipile_message_react(message_id: str, reaction: str) -> dict:
+    def unipile_message_react(message_id: str, reaction: str) -> dict:
         """Réagit à un message LinkedIn (DM) avec un emoji natif (ex. '👍').
         `message_id` = id d'un message de unipile_read_chat."""
         return unipile_client().react_message(message_id, reaction)
@@ -509,24 +509,24 @@ def register(mcp: FastMCP) -> None:
     # Nécessitent un abonnement Recruiter / Sales Navigator sur le compte connecté.
 
     @mcp.tool()
-    async def unipile_contracts() -> dict:
+    def unipile_contracts() -> dict:
         """Contrats LinkedIn premium (Recruiter / Sales Navigator) disponibles sur le
         compte — id à passer à unipile_select_contract pour activer la bonne ardoise."""
         return unipile_client().list_contracts()
 
     @mcp.tool()
-    async def unipile_select_contract(contract_id: str) -> dict:
+    def unipile_select_contract(contract_id: str) -> dict:
         """Active un contrat Recruiter / Sales Navigator (`contract_id` de
         unipile_contracts) pour les appels premium qui suivent."""
         return unipile_client().select_contract(contract_id)
 
     @mcp.tool()
-    async def unipile_inmail_balance() -> dict:
+    def unipile_inmail_balance() -> dict:
         """Solde de crédits InMail (messages premium) du compte LinkedIn connecté."""
         return unipile_client().inmail_balance()
 
     @mcp.tool()
-    async def unipile_endorse(profile_id: str, skill_endorsement_id: int) -> dict:
+    def unipile_endorse(profile_id: str, skill_endorsement_id: int) -> dict:
         """Recommande une compétence d'un membre LinkedIn.
 
         Args:
@@ -537,7 +537,7 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().endorse_profile(profile_id, skill_endorsement_id)
 
     @mcp.tool()
-    async def unipile_member_action(user_id: str, api: str, action: str,
+    def unipile_member_action(user_id: str, api: str, action: str,
                                     hiring_project_id: Optional[str] = None,
                                     stage: Optional[str] = None,
                                     list_id: Optional[str] = None) -> dict:
@@ -560,29 +560,29 @@ def register(mcp: FastMCP) -> None:
     # ---- LinkedIn recruiter : offres d'emploi & candidats (lectures) ----
 
     @mcp.tool()
-    async def unipile_job_postings(cursor: Optional[str] = None,
+    def unipile_job_postings(cursor: Optional[str] = None,
                                    limit: Optional[int] = None) -> dict:
         """Offres d'emploi (job postings) du compte recruteur LinkedIn. Paginé."""
         return unipile_client().list_job_postings(cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_job_posting(job_id: str) -> dict:
+    def unipile_job_posting(job_id: str) -> dict:
         """Détail d'une offre d'emploi LinkedIn (`job_id` de unipile_job_postings)."""
         return unipile_client().get_job_posting(job_id)
 
     @mcp.tool()
-    async def unipile_job_applicants(job_id: str, cursor: Optional[str] = None,
+    def unipile_job_applicants(job_id: str, cursor: Optional[str] = None,
                                      limit: Optional[int] = None) -> dict:
         """Candidats d'une offre d'emploi LinkedIn. Paginé."""
         return unipile_client().list_job_applicants(job_id, cursor=cursor, limit=limit)
 
     @mcp.tool()
-    async def unipile_job_applicant(job_id: str, applicant_id: str) -> dict:
+    def unipile_job_applicant(job_id: str, applicant_id: str) -> dict:
         """Détail d'un candidat (`applicant_id` de unipile_job_applicants)."""
         return unipile_client().get_job_applicant(job_id, applicant_id)
 
     @mcp.tool()
-    async def unipile_hiring_projects(cursor: Optional[str] = None,
+    def unipile_hiring_projects(cursor: Optional[str] = None,
                                       limit: Optional[int] = None) -> dict:
         """Projets de recrutement (hiring projects) du compte Recruiter LinkedIn.
         Le `hiring_project_id` alimente unipile_member_action (pipeline). Paginé."""

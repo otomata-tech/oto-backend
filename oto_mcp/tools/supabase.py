@@ -21,12 +21,12 @@ def register(mcp: FastMCP) -> None:
         return key
 
     @mcp.tool()
-    async def supabase_list_projects() -> dict:
+    def supabase_list_projects() -> dict:
         """List the Supabase projects reachable with this access token."""
         return {"projects": sb.list_projects(token=_token())}
 
     @mcp.tool()
-    async def supabase_auth_config(project_ref: str) -> dict:
+    def supabase_auth_config(project_ref: str) -> dict:
         """Auth config of a project (site_url, redirect allow-list, providers…).
 
         Args:
@@ -35,7 +35,7 @@ def register(mcp: FastMCP) -> None:
         return sb.get_auth_config(project_ref, token=_token())
 
     @mcp.tool()
-    async def supabase_query_logs(
+    def supabase_query_logs(
         project_ref: str,
         sql: Optional[str] = None,
         source: str = "auth_logs",

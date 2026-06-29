@@ -33,7 +33,7 @@ def register(mcp: FastMCP) -> None:
     # --- companies / people / deals : list / get / search ------------------
 
     @mcp.tool()
-    async def attio_list_companies(limit: int = 50, offset: int = 0) -> dict:
+    def attio_list_companies(limit: int = 50, offset: int = 0) -> dict:
         """List companies in the Attio CRM workspace.
 
         Args:
@@ -46,7 +46,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_company(record_id: str) -> dict:
+    def attio_get_company(record_id: str) -> dict:
         """Fetch a company record by its Attio record ID."""
         client, is_platform = _client()
         result = client.companies.get(record_id)
@@ -54,7 +54,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_search_companies(query: str, limit: int = 50) -> dict:
+    def attio_search_companies(query: str, limit: int = 50) -> dict:
         """Search companies by free-text query (matches name/domain/etc.)."""
         client, is_platform = _client()
         result = client.companies.search(query=query, limit=limit)
@@ -62,7 +62,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_company(attributes: dict) -> dict:
+    def attio_create_company(attributes: dict) -> dict:
         """Create a company record.
 
         Args:
@@ -77,7 +77,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_company(record_id: str, attributes: dict) -> dict:
+    def attio_update_company(record_id: str, attributes: dict) -> dict:
         """Update a company record (PATCH — multiselect values are appended).
 
         Args:
@@ -90,7 +90,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_company(record_id: str) -> dict:
+    def attio_delete_company(record_id: str) -> dict:
         """Delete a company record by ID. Irreversible."""
         client, is_platform = _client()
         result = client.companies.delete(record_id)
@@ -98,7 +98,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_people(limit: int = 50, offset: int = 0) -> dict:
+    def attio_list_people(limit: int = 50, offset: int = 0) -> dict:
         """List people in the Attio CRM workspace."""
         client, is_platform = _client()
         result = client.people.list(limit=limit, offset=offset)
@@ -106,7 +106,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_person(record_id: str) -> dict:
+    def attio_get_person(record_id: str) -> dict:
         """Fetch a person record by its Attio record ID."""
         client, is_platform = _client()
         result = client.people.get(record_id)
@@ -114,7 +114,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_search_people(query: str, limit: int = 50) -> dict:
+    def attio_search_people(query: str, limit: int = 50) -> dict:
         """Search people by free-text query (matches name/email/etc.)."""
         client, is_platform = _client()
         result = client.people.search(query=query, limit=limit)
@@ -122,7 +122,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_person(attributes: dict) -> dict:
+    def attio_create_person(attributes: dict) -> dict:
         """Create a person record.
 
         Args:
@@ -136,7 +136,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_person(record_id: str, attributes: dict) -> dict:
+    def attio_update_person(record_id: str, attributes: dict) -> dict:
         """Update a person record (PATCH — multiselect values are appended).
 
         Args:
@@ -149,7 +149,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_person(record_id: str) -> dict:
+    def attio_delete_person(record_id: str) -> dict:
         """Delete a person record by ID. Irreversible."""
         client, is_platform = _client()
         result = client.people.delete(record_id)
@@ -157,7 +157,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_deals(limit: int = 50, offset: int = 0) -> dict:
+    def attio_list_deals(limit: int = 50, offset: int = 0) -> dict:
         """List deals in the Attio CRM workspace."""
         client, is_platform = _client()
         result = client.deals.list(limit=limit, offset=offset)
@@ -165,7 +165,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_deal(record_id: str) -> dict:
+    def attio_get_deal(record_id: str) -> dict:
         """Fetch a deal record by its Attio record ID."""
         client, is_platform = _client()
         result = client.deals.get(record_id)
@@ -173,7 +173,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_search_deals(query: str, limit: int = 50) -> dict:
+    def attio_search_deals(query: str, limit: int = 50) -> dict:
         """Search deals by free-text query."""
         client, is_platform = _client()
         result = client.deals.search(query=query, limit=limit)
@@ -181,7 +181,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_deal(attributes: dict) -> dict:
+    def attio_create_deal(attributes: dict) -> dict:
         """Create a deal record.
 
         Args:
@@ -208,7 +208,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_deal(record_id: str, attributes: dict) -> dict:
+    def attio_update_deal(record_id: str, attributes: dict) -> dict:
         """Update a deal record (PATCH — multiselect values are appended).
 
         Args:
@@ -221,7 +221,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_deal(record_id: str) -> dict:
+    def attio_delete_deal(record_id: str) -> dict:
         """Delete a deal record by ID. Irreversible."""
         client, is_platform = _client()
         result = client.deals.delete(record_id)
@@ -231,7 +231,7 @@ def register(mcp: FastMCP) -> None:
     # --- notes / tasks : list + create + delete (+ update tasks) -----------
 
     @mcp.tool()
-    async def attio_list_notes(
+    def attio_list_notes(
         parent_object: Optional[str] = None,
         parent_record_id: Optional[str] = None,
     ) -> dict:
@@ -249,7 +249,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_note(
+    def attio_create_note(
         parent_object: str,
         parent_record_id: str,
         title: str,
@@ -274,7 +274,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_note(note_id: str) -> dict:
+    def attio_get_note(note_id: str) -> dict:
         """Get a single note by ID (including markdown content)."""
         client, is_platform = _client()
         result = client.notes.get(note_id)
@@ -282,7 +282,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_note(note_id: str) -> dict:
+    def attio_delete_note(note_id: str) -> dict:
         """Delete a note by ID. Irreversible. Attio API does not support editing note body."""
         client, is_platform = _client()
         result = client.notes.delete(note_id)
@@ -290,7 +290,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_tasks(completed: Optional[bool] = None) -> dict:
+    def attio_list_tasks(completed: Optional[bool] = None) -> dict:
         """List tasks — optionally filtered by completion status."""
         client, is_platform = _client()
         result = client.tasks.list(completed=completed)
@@ -298,7 +298,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_task(
+    def attio_create_task(
         content: str,
         deadline: Optional[str] = None,
         linked_object: Optional[str] = None,
@@ -323,7 +323,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_task(
+    def attio_update_task(
         task_id: str,
         deadline: Optional[str] = None,
         is_completed: Optional[bool] = None,
@@ -354,7 +354,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_task(task_id: str) -> dict:
+    def attio_get_task(task_id: str) -> dict:
         """Get a single task by ID."""
         client, is_platform = _client()
         result = client.tasks.get(task_id)
@@ -362,7 +362,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_task(task_id: str) -> dict:
+    def attio_delete_task(task_id: str) -> dict:
         """Delete a task by ID. Irreversible."""
         client, is_platform = _client()
         result = client.tasks.delete(task_id)
@@ -372,7 +372,7 @@ def register(mcp: FastMCP) -> None:
     # --- lists ------------------------------------------------------------
 
     @mcp.tool()
-    async def attio_list_lists() -> dict:
+    def attio_list_lists() -> dict:
         """List all Attio lists accessible to the token."""
         client, is_platform = _client()
         result = client.lists.list()
@@ -380,7 +380,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_list(list_id_or_slug: str) -> dict:
+    def attio_get_list(list_id_or_slug: str) -> dict:
         """Get a single list by ID or slug."""
         client, is_platform = _client()
         result = client.lists.get(list_id_or_slug)
@@ -388,7 +388,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_list(
+    def attio_create_list(
         name: str,
         parent_object: str,
         api_slug: Optional[str] = None,
@@ -417,7 +417,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_list(list_id_or_slug: str, attributes: dict) -> dict:
+    def attio_update_list(list_id_or_slug: str, attributes: dict) -> dict:
         """Update an existing list (name, api_slug, access controls)."""
         client, is_platform = _client()
         result = client.lists.update(list_id_or_slug, **attributes)
@@ -425,7 +425,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_list_views(list_id_or_slug: str) -> dict:
+    def attio_list_list_views(list_id_or_slug: str) -> dict:
         """List saved views for a list."""
         client, is_platform = _client()
         result = client.lists.views(list_id_or_slug)
@@ -435,7 +435,7 @@ def register(mcp: FastMCP) -> None:
     # --- entries (list membership) ----------------------------------------
 
     @mcp.tool()
-    async def attio_query_entries(
+    def attio_query_entries(
         list_id_or_slug: str,
         filter: Optional[dict] = None,
         sorts: Optional[list] = None,
@@ -457,7 +457,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_entry(list_id_or_slug: str, entry_id: str) -> dict:
+    def attio_get_entry(list_id_or_slug: str, entry_id: str) -> dict:
         """Get a single list entry by ID."""
         client, is_platform = _client()
         result = client.entries.get(list_id_or_slug, entry_id)
@@ -465,7 +465,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_entry(
+    def attio_create_entry(
         list_id_or_slug: str,
         parent_record_id: str,
         parent_object: str,
@@ -490,7 +490,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_update_entry(
+    def attio_update_entry(
         list_id_or_slug: str,
         entry_id: str,
         entry_values: dict,
@@ -508,7 +508,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_entry(list_id_or_slug: str, entry_id: str) -> dict:
+    def attio_delete_entry(list_id_or_slug: str, entry_id: str) -> dict:
         """Remove a record from a list by deleting its entry. Irreversible."""
         client, is_platform = _client()
         result = client.entries.delete(list_id_or_slug, entry_id)
@@ -518,7 +518,7 @@ def register(mcp: FastMCP) -> None:
     # --- workspace members ------------------------------------------------
 
     @mcp.tool()
-    async def attio_list_workspace_members() -> dict:
+    def attio_list_workspace_members() -> dict:
         """List all workspace members (humans with access to the workspace)."""
         client, is_platform = _client()
         result = client.workspace_members.list()
@@ -526,7 +526,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_workspace_member(workspace_member_id: str) -> dict:
+    def attio_get_workspace_member(workspace_member_id: str) -> dict:
         """Get a single workspace member by ID."""
         client, is_platform = _client()
         result = client.workspace_members.get(workspace_member_id)
@@ -536,7 +536,7 @@ def register(mcp: FastMCP) -> None:
     # --- comments / threads -----------------------------------------------
 
     @mcp.tool()
-    async def attio_list_threads(
+    def attio_list_threads(
         parent_object: Optional[str] = None,
         parent_record_id: Optional[str] = None,
         list_id: Optional[str] = None,
@@ -558,7 +558,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_thread(thread_id: str) -> dict:
+    def attio_get_thread(thread_id: str) -> dict:
         """Get a thread with all its comments."""
         client, is_platform = _client()
         result = client.threads.get(thread_id)
@@ -566,7 +566,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_comment(comment_id: str) -> dict:
+    def attio_get_comment(comment_id: str) -> dict:
         """Get a single comment by ID."""
         client, is_platform = _client()
         result = client.comments.get(comment_id)
@@ -574,7 +574,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_create_comment(
+    def attio_create_comment(
         content: str,
         author_id: str,
         thread_id: Optional[str] = None,
@@ -602,7 +602,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_delete_comment(comment_id: str) -> dict:
+    def attio_delete_comment(comment_id: str) -> dict:
         """Delete a comment. If it heads a thread, the whole thread is deleted."""
         client, is_platform = _client()
         result = client.comments.delete(comment_id)
@@ -612,7 +612,7 @@ def register(mcp: FastMCP) -> None:
     # --- meetings / call recordings / transcripts -------------------------
 
     @mcp.tool()
-    async def attio_list_meetings(limit: int = 50, offset: int = 0) -> dict:
+    def attio_list_meetings(limit: int = 50, offset: int = 0) -> dict:
         """List meetings (calendar events synced into Attio)."""
         client, is_platform = _client()
         result = client.meetings.list(limit=limit, offset=offset)
@@ -620,7 +620,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_meeting(meeting_id: str) -> dict:
+    def attio_get_meeting(meeting_id: str) -> dict:
         """Get a single meeting by ID."""
         client, is_platform = _client()
         result = client.meetings.get(meeting_id)
@@ -628,7 +628,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_call_recordings(meeting_id: str) -> dict:
+    def attio_list_call_recordings(meeting_id: str) -> dict:
         """List call recordings for a meeting."""
         client, is_platform = _client()
         result = client.call_recordings.list(meeting_id)
@@ -636,7 +636,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_call_recording(meeting_id: str, call_recording_id: str) -> dict:
+    def attio_get_call_recording(meeting_id: str, call_recording_id: str) -> dict:
         """Get a single call recording by ID."""
         client, is_platform = _client()
         result = client.call_recordings.get(meeting_id, call_recording_id)
@@ -644,7 +644,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_call_transcript(meeting_id: str, call_recording_id: str) -> dict:
+    def attio_get_call_transcript(meeting_id: str, call_recording_id: str) -> dict:
         """Get the transcript text for a call recording."""
         client, is_platform = _client()
         result = client.call_recordings.transcript(meeting_id, call_recording_id)
@@ -654,7 +654,7 @@ def register(mcp: FastMCP) -> None:
     # --- meta (objects + attributes) --------------------------------------
 
     @mcp.tool()
-    async def attio_list_objects() -> dict:
+    def attio_list_objects() -> dict:
         """List all objects (system + custom) defined in the workspace.
 
         Useful for an LLM to discover what record types exist beyond the
@@ -666,7 +666,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_object(object_id_or_slug: str) -> dict:
+    def attio_get_object(object_id_or_slug: str) -> dict:
         """Get a single object definition by ID or slug."""
         client, is_platform = _client()
         result = client.objects.get(object_id_or_slug)
@@ -674,7 +674,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_object_views(object_id_or_slug: str) -> dict:
+    def attio_list_object_views(object_id_or_slug: str) -> dict:
         """List saved views for an object."""
         client, is_platform = _client()
         result = client.objects.views(object_id_or_slug)
@@ -682,7 +682,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_attributes(target: str, identifier: str) -> dict:
+    def attio_list_attributes(target: str, identifier: str) -> dict:
         """List attributes (schema) on an object or list.
 
         Args:
@@ -695,7 +695,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_get_attribute(target: str, identifier: str, attribute: str) -> dict:
+    def attio_get_attribute(target: str, identifier: str, attribute: str) -> dict:
         """Get a single attribute definition."""
         client, is_platform = _client()
         result = client.attributes.get(target, identifier, attribute)
@@ -703,7 +703,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_attribute_options(target: str, identifier: str, attribute: str) -> dict:
+    def attio_list_attribute_options(target: str, identifier: str, attribute: str) -> dict:
         """List the select options for a select-type attribute."""
         client, is_platform = _client()
         result = client.attributes.options(target, identifier, attribute)
@@ -711,7 +711,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    async def attio_list_attribute_statuses(target: str, identifier: str, attribute: str) -> dict:
+    def attio_list_attribute_statuses(target: str, identifier: str, attribute: str) -> dict:
         """List the statuses for a status-type attribute."""
         client, is_platform = _client()
         result = client.attributes.statuses(target, identifier, attribute)

@@ -27,7 +27,7 @@ def register(mcp: FastMCP) -> None:
         return ZapierClient(api_key=key)
 
     @mcp.tool()
-    async def zapier_list_actions() -> dict:
+    def zapier_list_actions() -> dict:
         """List the actions exposed by this Zapier key (id, description, params).
 
         Each action carries an `id` (pass it to zapier_execute_action) and the
@@ -35,7 +35,7 @@ def register(mcp: FastMCP) -> None:
         return _client().list_actions()
 
     @mcp.tool()
-    async def zapier_execute_action(
+    def zapier_execute_action(
         action_id: str,
         instructions: str,
         params: Optional[dict] = None,
@@ -55,6 +55,6 @@ def register(mcp: FastMCP) -> None:
             action_id, instructions, params=params, preview_only=preview_only)
 
     @mcp.tool()
-    async def zapier_execution_log(execution_log_id: str) -> dict:
+    def zapier_execution_log(execution_log_id: str) -> dict:
         """Get the detail of one execution (execution_log_id from execute)."""
         return _client().execution_log(execution_log_id)

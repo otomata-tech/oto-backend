@@ -34,14 +34,14 @@ def _store_for(sub: str):
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def data_list_namespaces() -> dict:
+    def data_list_namespaces() -> dict:
         """List the user's datastore namespaces (owned + shared)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
         return {"namespaces": store.list_namespaces()}
 
     @mcp.tool()
-    async def data_create_namespace(namespace: str) -> dict:
+    def data_create_namespace(namespace: str) -> dict:
         """Create a new datastore namespace (PG-backed, schema-free).
 
         Args:
@@ -60,7 +60,7 @@ def register(mcp: FastMCP) -> None:
             ))
 
     @mcp.tool()
-    async def data_delete_namespace(namespace: str) -> dict:
+    def data_delete_namespace(namespace: str) -> dict:
         """Delete a namespace and all its rows (irreversible). Owner only."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
@@ -71,7 +71,7 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "namespace": namespace}
 
     @mcp.tool()
-    async def data_write(namespace: str, row: dict, id: str | None = None) -> dict:
+    def data_write(namespace: str, row: dict, id: str | None = None) -> dict:
         """Write a row. WITHOUT `id` = append a NEW row (new JSON keys auto-create
         columns). WITH `id` = PARTIAL update of that row (only provided fields
         change). Returns the row (with `_id`/`_created_at`/`_updated_at`).
@@ -102,7 +102,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"row `{id}` introuvable"))
 
     @mcp.tool()
-    async def data_rows(
+    def data_rows(
         namespace: str, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
     ) -> dict:
@@ -129,7 +129,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"row `{id}` introuvable"))
 
     @mcp.tool()
-    async def data_delete_row(namespace: str, id: str) -> dict:
+    def data_delete_row(namespace: str, id: str) -> dict:
         """Delete a row by `_id`."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
@@ -144,7 +144,7 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "id": id}
 
     @mcp.tool()
-    async def data_url(namespace: str) -> dict:
+    def data_url(namespace: str) -> dict:
         """Return the dashboard URL of a namespace (for the user to open/edit in browser)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
@@ -154,7 +154,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
 
     @mcp.tool()
-    async def data_share(
+    def data_share(
         namespace: str, email: str, permission: str = "write", remove: bool = False,
     ) -> dict:
         """Share (or with `remove=True`, unshare) a namespace with another oto user
@@ -237,7 +237,7 @@ def register(mcp: FastMCP) -> None:
         DataTable(columns=cols, rows=rows, search=True, paginated=len(rows) > 20, pageSize=20)
 
     @mcp.tool(app=True)
-    async def data_app(
+    def data_app(
         namespace: str | None = None,
         filter: Optional[dict] = None,
         limit: int = 100,

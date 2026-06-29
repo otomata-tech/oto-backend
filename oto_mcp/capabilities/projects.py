@@ -24,14 +24,21 @@ from .registry import CAPABILITIES
 RTYPE = "project"
 
 
+_LINK_TYPES = ("tableau", "procedure", "connecteur", "base")
+
+
 class ProjectInput(BaseModel):
-    op: Literal["create", "list", "get", "update", "archive"]
+    op: Literal["create", "list", "get", "update", "archive", "link", "unlink"]
     project_id: Optional[int] = None
     name: Optional[str] = None
     brief_md: Optional[str] = None
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
+    # link / unlink : un pointeur typé vers une entité regroupée par le projet.
+    target_type: Optional[Literal["tableau", "procedure", "connecteur", "base"]] = None
+    target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id
+    label: Optional[str] = None        # nom d'affichage (link)
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -77,7 +84,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "get":
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
-        return _view(row)
+        return {**_view(row), "links": db.list_project_links(int(inp.project_id))}
 
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -85,6 +92,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                           name=(inp.name.strip() if inp.name else None),
                           brief_md=inp.brief_md)
         return _view(db.get_project_by_id(int(inp.project_id)))
+
+    if inp.op in ("link", "unlink"):
+        _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
+        _require(inp.target_type and inp.target_ref, "missing_target",
+                 "`target_type` et `target_ref` requis.")
+        if inp.op == "link":
+            db.add_project_link(int(inp.project_id), inp.target_type, inp.target_ref, inp.label)
+        else:
+            db.remove_project_link(int(inp.project_id), inp.target_type, inp.target_ref)
+        return {"ok": True, "id": inp.project_id,
+                "links": db.list_project_links(int(inp.project_id))}
 
     # archive
     _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
@@ -99,8 +117,10 @@ CAPABILITIES += [
         description=(
             "Projects (organization layer, ADR 0030 owned resource). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
-            "(yours + your orgs') / get / update (name, brief_md) / archive. Share & transfer "
-            "go through oto_resource (resource_type='project')."
+            "(yours + your orgs') / get (project + its links) / update (name, brief_md) / "
+            "archive / link & unlink (attach an entity: target_type tableau|procedure|"
+            "connecteur|base + target_ref = its id/slug/name, optional label). Share & "
+            "transfer go through oto_resource (resource_type='project')."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

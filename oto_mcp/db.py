@@ -311,6 +311,22 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_type, owner_id);
 
+-- Liens d'un Projet vers les entités qu'il regroupe (incrément 2). Pointeur TYPÉ,
+-- pas un FK cross-store : `target_type` ∈ {tableau, procedure, connecteur, base} et
+-- `target_ref` = l'id/slug/nom dans le store d'origine (datastore.id, doctrine slug,
+-- connecteur name, memento workspace). `label` dénormalisé pour l'affichage. CASCADE
+-- sur la suppression du projet ; unicité (projet, type, ref) → lien idempotent.
+CREATE TABLE IF NOT EXISTS project_links (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    target_type TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
+    label TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(project_id, target_type, target_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_project_links_project ON project_links(project_id);
+
 -- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
 -- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne
 -- accorde une permission à un principal (user/group/org). L'OWNER de la ressource
@@ -3074,6 +3090,39 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
     with _connect() as conn:
         conn.execute("UPDATE projects SET owner_type = %s, owner_id = %s, updated_at = NOW() "
                      "WHERE id = %s", (new_owner_type, new_owner_id, project_id))
+
+
+def add_project_link(project_id: int, target_type: str, target_ref: str,
+                     label: Optional[str] = None) -> None:
+    """Lie une entité (tableau/procédure/connecteur/base) au projet. Idempotent :
+    re-lier met à jour le label."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO project_links (project_id, target_type, target_ref, label) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (project_id, target_type, target_ref) DO UPDATE SET label = EXCLUDED.label",
+            (project_id, target_type, target_ref, label),
+        )
+        conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+
+
+def remove_project_link(project_id: int, target_type: str, target_ref: str) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM project_links WHERE project_id = %s AND target_type = %s AND target_ref = %s",
+            (project_id, target_type, target_ref),
+        )
+        return cur.rowcount
+
+
+def list_project_links(project_id: int) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT target_type, target_ref, label, created_at FROM project_links "
+            "WHERE project_id = %s ORDER BY target_type, label NULLS LAST, target_ref",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def resolve_datastore_ns(

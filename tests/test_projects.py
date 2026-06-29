@@ -24,6 +24,14 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "update_project",
                         lambda pid, name=None, brief_md=None: rec["update"].append((pid, name, brief_md)))
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
+    rec["link"] = []
+    rec["unlink"] = []
+    monkeypatch.setattr(P.db, "add_project_link",
+                        lambda pid, tt, tr, label=None: rec["link"].append((pid, tt, tr, label)))
+    monkeypatch.setattr(P.db, "remove_project_link",
+                        lambda pid, tt, tr: rec["unlink"].append((pid, tt, tr)) or 1)
+    monkeypatch.setattr(P.db, "list_project_links",
+                        lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads"}])
     monkeypatch.setattr(P.ownership, "accessor_scope",
                         lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
@@ -89,6 +97,37 @@ def test_archive_needs_govern(seams, monkeypatch):
 def test_archive_ok(seams):
     out = P._project(CTX, P.ProjectInput(op="archive", project_id=7))
     assert out == {"ok": True, "id": 7, "archived": True} and seams["archive"] == [7]
+
+
+def test_get_includes_links(seams):
+    out = P._project(CTX, P.ProjectInput(op="get", project_id=7))
+    assert out["id"] == 7
+    assert out["links"] == [{"target_type": "tableau", "target_ref": "7", "label": "Leads"}]
+
+
+def test_link(seams):
+    out = P._project(CTX, P.ProjectInput(op="link", project_id=7,
+                                         target_type="tableau", target_ref="7", label="Leads"))
+    assert seams["link"] == [(7, "tableau", "7", "Leads")]
+    assert out["ok"] is True and out["links"]
+
+
+def test_link_missing_target(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="tableau"))
+    assert e.value.code == "missing_target"
+
+
+def test_link_forbidden_without_write(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base", target_ref="kb1"))
+    assert e.value.code == "forbidden"
+
+
+def test_unlink(seams):
+    P._project(CTX, P.ProjectInput(op="unlink", project_id=7, target_type="tableau", target_ref="7"))
+    assert seams["unlink"] == [(7, "tableau", "7")]
 
 
 def test_capability_registered():

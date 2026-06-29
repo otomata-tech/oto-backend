@@ -199,15 +199,18 @@ class DatastorePg:
         order_by: Optional[str] = None,
         order_dir: str = "desc",
         q: Optional[str] = None,
+        filters: Optional[list] = None,
     ) -> dict:
-        """Page server-side (tri/recherche SQL) + total — pour le dashboard.
+        """Page server-side (tri/recherche/filtres SQL) + total — pour le dashboard.
+        `filters` = filtres par colonne (liste `{field, op, value}`, combinés AND).
         Renvoie `{rows, total, offset, limit}`."""
         ns_id = self._resolve(namespace)
         rows = db.datastore_list_rows(
-            ns_id, offset=offset, limit=limit, order_by=order_by, order_dir=order_dir, q=q)
+            ns_id, offset=offset, limit=limit, order_by=order_by,
+            order_dir=order_dir, q=q, filters=filters)
         return {
             "rows": [self._row_to_dict(r) for r in rows],
-            "total": db.datastore_count_rows(ns_id, q=q),
+            "total": db.datastore_count_rows(ns_id, q=q, filters=filters),
             "offset": offset, "limit": limit,
         }
 

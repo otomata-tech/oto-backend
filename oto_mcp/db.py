@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -3072,20 +3073,95 @@ def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = None,
-                        order_by: Optional[str] = None, order_dir: str = "desc",
-                        q: Optional[str] = None) -> list[dict]:
-    """Page de rows d'un namespace. `order_by` : `_created_at`/`_updated_at`/`_id`
-    (colonnes méta) ou un nom de champ user → `data->>field`. `q` : recherche
-    plein-texte sur tout le JSON (`data::text ILIKE`). Tri/pagination/recherche
-    côté SQL (server-side, ADR 0016). `limit=None` = toutes les rows (compat
-    `store.list_rows` / MCP `data_rows` qui filtrent ensuite en Python)."""
-    direction = "ASC" if str(order_dir).lower() == "asc" else "DESC"
+# Filtres par colonne (vue tableau dashboard, oto-dashboard#18). Chaque filtre =
+# {field, op, value}. Le champ est TOUJOURS paramétré (`data ->> %s`) et l'op tiré
+# d'une whitelist → fragment SQL fixe, zéro interpolation de valeur = pas d'injection.
+_DS_FILTER_OPS = {"contains", "eq", "ne", "in", "gt", "gte", "lt", "lte", "empty", "not_empty"}
+_DS_CMP_SQL = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+_DS_NUM_RE = re.compile(r"^-?[0-9]+(\.[0-9]+)?$")  # numérique strict (pas de nan/1e5)
+_DS_MAX_FILTERS = 30
+
+
+def _ds_filter_clauses(filters: Optional[list]) -> tuple[list[str], list]:
+    """Construit les fragments WHERE (combinés en AND) pour des filtres par colonne
+    JSONB. Champ paramétré + op whitelisté → pas d'injection. Les comparaisons
+    ordonnées (`gt/gte/lt/lte`) sont numériques si la valeur EST numérique (cast
+    gardé `::numeric`, les rows non numériques sont écartées), sinon textuelles
+    (l'ISO `YYYY-MM-DD` se compare correctement en lexicographique). Lève
+    `ValueError` sur un filtre malformé (→ 400 côté route)."""
+    clauses: list[str] = []
+    params: list = []
+    if not filters:
+        return clauses, params
+    if len(filters) > _DS_MAX_FILTERS:
+        raise ValueError("too many filters")
+    for f in filters:
+        if not isinstance(f, dict):
+            raise ValueError("invalid filter")
+        field, op, val = f.get("field"), f.get("op"), f.get("value")
+        if not isinstance(field, str) or not field or op not in _DS_FILTER_OPS:
+            raise ValueError("invalid filter")
+        if op == "empty":
+            clauses.append("(data ->> %s IS NULL OR data ->> %s = '')")
+            params.extend([field, field])
+        elif op == "not_empty":
+            clauses.append("(data ->> %s IS NOT NULL AND data ->> %s <> '')")
+            params.extend([field, field])
+        elif op == "in":
+            vals = [str(v) for v in (val if isinstance(val, list) else [val])
+                    if v is not None and str(v) != ""]
+            if not vals:
+                continue
+            clauses.append("data ->> %s = ANY(%s)")
+            params.extend([field, vals])
+        elif op == "contains":
+            clauses.append("data ->> %s ILIKE %s")
+            params.extend([field, f"%{val}%"])
+        elif op == "eq":
+            clauses.append("data ->> %s = %s")
+            params.extend([field, str(val)])
+        elif op == "ne":
+            clauses.append("(data ->> %s IS DISTINCT FROM %s)")
+            params.extend([field, str(val)])
+        else:  # gt/gte/lt/lte
+            sym = _DS_CMP_SQL[op]
+            sval = str(val)
+            if _DS_NUM_RE.match(sval):
+                clauses.append(
+                    "(data ->> %s ~ '^-?[0-9]+(\\.[0-9]+)?$' "
+                    f"AND (data ->> %s)::numeric {sym} %s::numeric)")
+                params.extend([field, field, sval])
+            else:
+                clauses.append(f"data ->> %s {sym} %s")
+                params.extend([field, sval])
+    return clauses, params
+
+
+def _ds_where(ns_id: int, q: Optional[str], filters: Optional[list]) -> tuple[str, list]:
+    """Clause WHERE partagée par list/count (même filtrage → total cohérent)."""
     where = "WHERE ns_id = %s"
     params: list = [ns_id]
     if q:
         where += " AND data::text ILIKE %s"
         params.append(f"%{q}%")
+    fclauses, fparams = _ds_filter_clauses(filters)
+    for c in fclauses:
+        where += f" AND {c}"
+    params.extend(fparams)
+    return where, params
+
+
+def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = None,
+                        order_by: Optional[str] = None, order_dir: str = "desc",
+                        q: Optional[str] = None, filters: Optional[list] = None) -> list[dict]:
+    """Page de rows d'un namespace. `order_by` : `_created_at`/`_updated_at`/`_id`
+    (colonnes méta) ou un nom de champ user → `data->>field`. `q` : recherche
+    plein-texte sur tout le JSON (`data::text ILIKE`). `filters` : filtres par
+    colonne (liste `{field, op, value}`, combinés AND — cf. `_ds_filter_clauses`).
+    Tri/pagination/recherche/filtres côté SQL (server-side, ADR 0016). `limit=None`
+    = toutes les rows (compat `store.list_rows` / MCP `data_rows`)."""
+    direction = "ASC" if str(order_dir).lower() == "asc" else "DESC"
+    where, params = _ds_where(ns_id, q, filters)
     if order_by in (None, "", "_created_at"):
         order_sql = f"created_at {direction}, row_id {direction}"
     elif order_by == "_updated_at":
@@ -3108,13 +3184,12 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
         return [dict(r) for r in rows]
 
 
-def datastore_count_rows(ns_id: int, q: Optional[str] = None) -> int:
-    """Nombre total de rows d'un namespace (pour la pagination), filtré par `q`."""
-    where = "WHERE ns_id = %s"
-    params: list = [ns_id]
-    if q:
-        where += " AND data::text ILIKE %s"
-        params.append(f"%{q}%")
+def datastore_count_rows(ns_id: int, q: Optional[str] = None,
+                         filters: Optional[list] = None) -> int:
+    """Nombre total de rows d'un namespace (pour la pagination), filtré par `q` et
+    les filtres par colonne — même clause que `datastore_list_rows` → total cohérent
+    avec la page affichée."""
+    where, params = _ds_where(ns_id, q, filters)
     with _connect() as conn:
         row = conn.execute(
             f"SELECT COUNT(*) AS n FROM datastore_rows {where}", tuple(params)

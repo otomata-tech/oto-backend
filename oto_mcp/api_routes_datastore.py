@@ -28,6 +28,7 @@ résolu via `_authenticate` (partagé avec `api_routes.py`).
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Awaitable, Callable
 
@@ -252,12 +253,23 @@ def make_routes(
         order_by = qp.get("order_by") or None
         order_dir = qp.get("order_dir", "desc")
         q = qp.get("q") or None
+        filters = None
+        raw_filters = qp.get("filters")
+        if raw_filters:
+            try:
+                filters = json.loads(raw_filters)
+            except ValueError:
+                return json_error(request, 400, "invalid_filters")
+            if not isinstance(filters, list):
+                return json_error(request, 400, "invalid_filters")
         try:
             page = make_store(sub).page_rows(
                 namespace, offset=offset, limit=limit,
-                order_by=order_by, order_dir=order_dir, q=q)
+                order_by=order_by, order_dir=order_dir, q=q, filters=filters)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
+        except ValueError:
+            return json_error(request, 400, "invalid_filters")
         return json_response(request, page)
 
     async def ds_get_row(request: Request) -> JSONResponse:

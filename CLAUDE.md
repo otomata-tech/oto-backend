@@ -211,6 +211,14 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 > `access.unipile_api_key_for` a le fallback platform-grant. Le gate abonnement reste
 > par org (un grant donne la clé, ne bypasse pas le paiement). **« Offrir sans payer »
 > = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
+> ⚠️ Les deux couches (clé=2, abonnement=3) sont **orthogonales en base** mais l'**action
+> admin les compose** (`capabilities/users_admin._set_option`, 2026-06-29) : `oto_admin_set_option`
+> `on=true` sur un connecteur en mode plateforme **grant aussi la clé plateforme** (sinon
+> `has_option`=true mais aucune clé → 404 au `/connect`, bouton « Connecter » inerte = état
+> mort), `on=false` la révoque ; le champ `platform_key` du retour rend l'effet explicite
+> (`granted`/`no_platform_key`/`byo_inert`/`revoked`). N'applique PAS à un connecteur keyed
+> non-abonnement (serpapi…) : lui se grant via la fiche admin (bouton « grant key » par
+> provider, auto-résout la clé unique) ou `oto_admin_key_grant` (par `key_id`).
 
 > **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
 > à SON sous-domaine `api<NN>.unipile.com:port` ; le DSN vit dans le `meta` du credential

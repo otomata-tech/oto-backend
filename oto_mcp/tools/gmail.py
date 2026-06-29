@@ -119,12 +119,12 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def gmail_get_attachment(
-        message_id: str, attachment_id: str, account: Optional[str] = None
+        message_id: str, filename: str, index: int = 0, account: Optional[str] = None
     ) -> dict:
-        """Fetch the CONTENT of a Gmail attachment.
+        """Fetch the CONTENT of a Gmail attachment, by filename.
 
-        Get `attachment_id` from `gmail_get` — each entry of its `attachments`
-        list carries an `attachmentId`. The response depends on the file:
+        Identify the attachment by its `filename` (from the `attachments` list of
+        `gmail_get`). The response depends on the file:
         - **small text** (JSON/CSV/Markdown/plain, ≤256 KB) → returned INLINE:
           `{encoding: "text", content: "<decoded text>"}` — read it directly.
         - **binary or large** (PDF, image, big file) → uploaded to temporary
@@ -133,14 +133,16 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             message_id: Gmail message id (the one passed to gmail_get).
-            attachment_id: the `attachmentId` of the attachment to fetch.
+            filename: name of the attachment to fetch (e.g. "Contrat.pdf").
+            index: 0-based tiebreaker if several attachments share that name
+                (e.g. inline images); default 0 = the first one.
             account: email of the Google account to use (default if omitted).
 
         Returns {filename, mimeType, size, encoding, content|url, expires_in?}.
         """
         client = _client_for_user(account)
         try:
-            att = await asyncio.to_thread(client.get_attachment, message_id, attachment_id)
+            att = await asyncio.to_thread(client.get_attachment, message_id, filename, index)
         except Exception as e:
             raise _bad(str(e))
         data, filename, mime = att["data"], att["filename"], att["mimeType"]

@@ -207,6 +207,33 @@ def register(mcp: FastMCP) -> None:
         return _client().create_note(entity_id, content, visibility=visibility)
 
     @mcp.tool()
+    def folk_update_note(
+        note_id: str,
+        content: Optional[str] = None,
+        visibility: Optional[str] = None,
+    ) -> dict:
+        """Edit an existing Folk note (PATCH — only the given fields change).
+
+        Args:
+            note_id: the note ID (nte_…).
+            content: new note content (markdown).
+            visibility: "public" (whole workspace) or "private".
+        """
+        fields: dict = {}
+        if content is not None:
+            fields["content"] = content
+        if visibility is not None:
+            fields["visibility"] = visibility
+        if not fields:
+            raise _bad("rien à mettre à jour : passe content et/ou visibility.")
+        return _client().update_note(note_id, **fields)
+
+    @mcp.tool()
+    def folk_delete_note(note_id: str) -> dict:
+        """Delete a Folk note. Irreversible. `note_id` = the note ID (nte_…)."""
+        return _client().delete_note(note_id)
+
+    @mcp.tool()
     def folk_create_interaction(
         entity_id: str,
         type: str,

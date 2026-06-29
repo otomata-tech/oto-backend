@@ -299,9 +299,12 @@ CAPABILITIES += [
     Capability(
         key="org.doctrine.get", handler=_get_doctrine, Input=DoctrineGetInput,
         authz=SUB_ONLY,
-        description=("Operational doctrine of your active org. CALL AT SESSION START "
-                     "(no arg) → base doctrine + named skills index. Pass `slug` for one "
-                     "skill's full markdown; `scope=group` targets your active department."),
+        description=("Operational doctrine of your active org. The base doctrine is now "
+                     "INJECTED into your session instructions at connect — call this with "
+                     "`slug` to load ONE named skill's full markdown (list skills with "
+                     "oto_list_doctrines). No-arg returns base + index, e.g. to refresh "
+                     "after switching org with oto_use_org. `scope=group` targets your "
+                     "active department."),
         mcp=_DOCTRINE_GET_TOOL,
     ),
     Capability(

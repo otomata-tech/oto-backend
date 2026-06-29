@@ -253,6 +253,10 @@ CREATE TABLE IF NOT EXISTS user_namespace_grants (
 -- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de
 -- l'ancien modèle per-sub (nullable, DROP différé Phase H) ; `spreadsheet_id`/
 -- `owner_email` sont des reliques Sheets (nullable, DROP différé).
+-- ⚠️ Les INDEX sur owner_type/owner_id NE sont PAS créés ici : sur une base
+-- existante, `CREATE TABLE IF NOT EXISTS` est un no-op et ces colonnes n'existent
+-- pas encore quand `_SCHEMA` s'exécute (ajoutées plus bas par ALTER). Index +
+-- contrainte d'unicité owner créés dans init_db APRÈS l'ALTER (couvre fresh ET existant).
 CREATE TABLE IF NOT EXISTS user_datastores (
     id BIGSERIAL PRIMARY KEY,
     sub TEXT,
@@ -263,10 +267,6 @@ CREATE TABLE IF NOT EXISTS user_datastores (
     owner_email TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns
-    ON user_datastores(owner_type, owner_id, namespace);
-CREATE INDEX IF NOT EXISTS idx_user_datastores_owner
-    ON user_datastores(owner_type, owner_id);
 
 -- Rows du datastore : un dict JSONB par row (types préservés nativement, fin de
 -- la sentinelle `__j:`). `_id`/`_created_at`/`_updated_at` = colonnes, le reste

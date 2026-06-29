@@ -4,7 +4,7 @@ Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remo
 - **mount** (`kind="mount"`) — monte les outils NATIFS d'un MCP distant (vrais schémas,
   `<ns>_<tool>`), credential **per-user** (token OAuth) injecté par requête. Pilote = **memento**.
 - **remote** (ADR 0003, data-driven) — tunnel `<ns>_describe`/`<ns>_call` vers un bridge, credential
-  d'**org** (token M2M + `meta.base_url`). Pilote = movinmotion.
+  d'**org** (token M2M + `meta.base_url`). Pilote = un connecteur remote client.
 
 **Fédération memento = systématique** (tranché 2026-06-17) :
 - **Compte oto créé ⇒ compte memento créé.** `db.upsert_user` détecte le **vrai INSERT**

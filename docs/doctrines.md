@@ -1,7 +1,7 @@
 # Doctrines & instructions d'org
 
 Prose opératoire métier (workflows validés, règles, vocabulaire) pour les users qui pilotent
-oto **sans produit applicatif dédié** (ex. Celeste, mission Movinmotion — process avoir
+oto **sans produit applicatif dédié** (ex. un process avoir compta client
 GoCardless → Pennylane → back-office, piloté directement depuis Claude sur un sous-ensemble
 de tools). oto est la maison naturelle de cette prose faute de produit. Aligné
 **ADR 0006** (harnais-vs-substrat, repo public `otomata-tech/oto`) : une org oto + sa

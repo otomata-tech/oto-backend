@@ -547,7 +547,7 @@ def resolve_remote_credential(provider: str) -> tuple[str, str]:
     (ADR 0003) depuis le credential de l'org active du sub courant.
 
     Le credential d'org d'un remote n'est PAS le secret du système client (il
-    vit dans le bridge, ex. movinmotion-backoffice-bridge) : c'est le moyen
+    vit dans le bridge, ex. un bridge back-office client) : c'est le moyen
     d'appeler le bridge — `secret` = token M2M, `meta.base_url` = endpoint.
     Lève une McpError actionnable si l'org active n'a pas ce credential —
     **pas** de fallback SOPS côté serveur (cf. Phase 6). Remplace

@@ -86,7 +86,7 @@ le tiers sépare audit et assignation : poser explicitement le champ **owner** p
 (map *user oto → user tiers*) — ex. **Zoho CRM** `Owner` (le lead **appartient** au bon
 commercial, seul « Created By » reste le compte de service). Attribution **native par personne**
 ⇒ il faut du **per-user** (BYO user, ou OAuth/mount per-user — cf. fédération MCP), pas un secret
-partagé. (Noté 2026-06-24 — pertinent pour l'automatisation d'écriture Zoho/Movinmotion.)
+partagé. (Noté 2026-06-24 — pertinent pour l'automatisation d'écriture Zoho (CRM client).)
 
 ## Couche 3 — Abonnement (options payantes : unipile, linkedin)
 

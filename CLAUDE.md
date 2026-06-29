@@ -380,7 +380,7 @@ valoir `group`. **Détails : `docs/groups-and-roles.md`.**
 
 Deux mécanismes : **mount** (MCP distant fédéré, token OAuth per-user, pilote
 memento — systématique) vs **remote** (bridge data-driven ADR 0003, token M2M d'org,
-pilote movinmotion). **Détail : `docs/federation.md`**.
+pilote = un connecteur remote client). **Détail : `docs/federation.md`**.
 
 ## MCP Apps — UI rendue (SEP-1865)
 
@@ -452,7 +452,7 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`) ; le credential
   d'org **EST** le grant (`granted_namespaces_for` + grant-only runtime). Le bridge
   distant détient le credential client (token M2M). Pilote :
-  movinmotion-backoffice-bridge. Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
+  un bridge back-office client (repo privé). Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
   les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
   → pages oto.ninja/tools) filtrent les `platform_granted`/grant-only
   (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13

@@ -5,11 +5,11 @@ clé-per-user (comme Attio), pas de clé plateforme. Chaque utilisateur pose
 sa propre clé Pennylane sur `app.oto.ninja/api-keys` — sa compta n'est
 visible que par lui.
 
-Surface en lecture + lettrage + **écriture du flux avoir** (POC Movinmotion,
-doctrine org 35). Les écritures engageantes sont **brouillon-d'abord** : créer
+Surface en lecture + lettrage + **écriture du flux avoir** (POC chez un client,
+doctrine d'org dédiée). Les écritures engageantes sont **brouillon-d'abord** : créer
 un avoir produit un draft (supprimable), et **finaliser/envoyer sont des tools
 séparés** que l'agent n'appelle qu'après validation humaine (modèle de
-supervision Celeste). Le lettrage (`pennylane_match`) reste exposé : lien de
+supervision validée avec un client). Le lettrage (`pennylane_match`) reste exposé : lien de
 rapprochement réversible, pas une écriture.
 
 Les autres mutations larges (création de facture standard, upload de PDF)

@@ -7,7 +7,7 @@ listes en dur qui dérivaient (`db.KEY_PROVIDERS`, `access.ORG_SHAREABLE_PROVIDE
 
 Chaque connecteur porte les 3 axes du modèle plateforme :
 - **A. Disponibilité** : `availability` (self_serve | platform_granted). platform_granted
-  = grant-only (la plateforme accorde explicitement, ex. `mm` réservé à Movinmotion).
+  = grant-only (la plateforme accorde explicitement, ex. `mm` réservé à un client).
 - **B. Visibilité** : `in_default_bundle` (accordé d'office à une nouvelle entité) /
   `in_default_preset` (affiché+activé par le preset de base). Policy, tunable.
 - **C. Credential** : `auth_modes` ⊆ {byo_user, byo_org, platform} ; `keyed` (résolu via
@@ -434,7 +434,7 @@ _REGISTRY_LIST = [
     # self_serve : chacun connecte SON propre compte GoCardless (sandbox ou prod) —
     # PAS de clé plateforme partagée, donc rien de sensible à gater par grant. Reste
     # hors bundle par défaut (in_default_bundle=False) → opt-in, pas imposé. L'org MM
-    # y pose le token de son compte de service pour le POC avoirs (doctrine org 35).
+    # y pose le token de son compte de service pour le POC avoirs (doctrine d'une org client).
     _c("gocardless", ["gocardless"], availability="self_serve",
        auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),

@@ -47,19 +47,29 @@ def register(mcp: FastMCP) -> None:
         return gpu.zonage(lon, lat)
 
     @mcp.tool()
-    def urba_reglement(url: str) -> dict:
-        """Download a PLU/PLUi règlement PDF and extract its text.
+    def urba_reglement(idurba: str, zone: Optional[str] = None, query: Optional[str] = None,
+                       max_extraits: int = 8, context_lignes: int = 30) -> dict:
+        """Targeted excerpts of a PLU/PLUi written règlement, via the shared FOD service.
 
-        Pass a `reglement_url` returned by `urba_zonage` (the direct GPU PDF link
-        for a zone/document). Returns `{text, chars, scanne_probable, size_mo}` —
-        the full règlement text (often the constructibility rules for the zone),
-        its length, a `scanne_probable` flag (True if the PDF is an image scan with
-        no extractable text, needing OCR), and the downloaded size in MB. Use it to
-        read the actual rules behind a zone label rather than just the zoning code.
+        Intercommunal règlements are huge (often >50 MB, >1000 pages, many zones):
+        the FOD service parses and caches each document **once** (keyed by `idurba`)
+        and this tool serves the relevant **excerpts** for a zone / keyword — never the
+        whole text. READ the excerpts to lift the rules (max height, ground coverage,
+        setback, parking) — never invent a figure that is absent.
+
+        `cached=false` means the règlement is not yet ingested in the service (batch
+        ingestion, not on-the-fly): report that rather than guessing.
+
+        Args:
+            idurba: document version id — the `zone.idurba` field from `urba_zonage`.
+            zone: zone label to search for (e.g. "UCt2", "UM").
+            query: alternative keyword (e.g. "hauteur maximale", "emprise au sol").
+            max_extraits: max passages returned (1-50). context_lignes: lines kept after each hit.
         """
-        from france_opendata.reglement import fetch_and_parse
+        from oto_mcp import fod_reglement
 
-        return fetch_and_parse(url)
+        return fod_reglement.extraits(idurba, zone=zone, query=query,
+                                      max_extraits=max_extraits, context_lignes=context_lignes)
 
     # --- risques (Géorisques) ------------------------------------------------
 

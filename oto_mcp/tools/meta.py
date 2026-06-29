@@ -20,7 +20,7 @@ from fastmcp.server.transforms.visibility import (
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, org_store
+from .. import access, db
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
@@ -60,9 +60,11 @@ def _user_access(sub: str) -> tuple[frozenset, bool]:
 
 
 def _active_org(sub: str) -> int:
-    """Org active du sub = scope du profil de visibilité (ADR 0015). 0 = perso/global
-    (aucune org active). Toggles/presets sont stockés par (sub, org_id)."""
-    return org_store.get_active_org(sub) or 0
+    """Org de session du sub = scope du profil de visibilité (ADR 0015/0023). 0 = perso/global.
+    Toggles/presets sont stockés par (sub, org_id) → on lit l'org **de session** via le seam
+    unique `access.current_org` (ADR 0023 ; jamais `org_store.get_active_org` en direct, qui
+    renverrait l'org maison et désynchroniserait l'UX après `oto_use_org`). ADR 0030 §6 barreau 1."""
+    return access.current_org(sub) or 0
 
 
 def register(mcp: FastMCP) -> None:

@@ -176,7 +176,9 @@ def _make_factory(connector: connectors.Connector):
     ns = connector.namespaces[0]
 
     async def factory() -> Client:
-        access.require_namespace(ns)
+        # Garde d'accès = la résolution du token : `resolve_mount_token` lève si le
+        # user n'a pas connecté son compte fédéré (OAuth per-user). Plus de
+        # `require_namespace` (relicat grant-only, ADR 0031).
         if current_user_sub_from_token() is None:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,

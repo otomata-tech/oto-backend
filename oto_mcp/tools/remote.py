@@ -55,7 +55,9 @@ def register(mcp: FastMCP) -> None:
 
 
 def _bridge_get(ns: str, route: str, params: dict | None = None) -> dict:
-    access.require_namespace(ns)
+    # Garde d'accès = la résolution du credential : `resolve_remote_credential(ns)`
+    # lève si l'org active ne possède pas le credential remote (le credential d'org
+    # EST le grant, ADR 0003/0031). Plus de `require_namespace` (relicat grant-only).
     sub = current_user_sub_from_token()
     if sub is None:
         raise McpError(ErrorData(

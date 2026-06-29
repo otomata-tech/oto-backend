@@ -366,8 +366,21 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 
 ## Doctrines & instructions d'org
 
-Prose opératoire métier par org (skills à la Claude Code, slug + versionnée),
-servie au début de session par `oto_get_doctrine()`. **Détail : `docs/doctrines.md`**.
+Prose opératoire métier par org (skills à la Claude Code, slug + versionnée).
+**Détail : `docs/doctrines.md`**.
+
+> **Livraison au LLM = injection, plus un appel d'outil (otomata-private#49/#50, amende ADR 0014).**
+> Le canal FIABLE de bootstrap = les `instructions` du `initialize` (FastMCP les relit par
+> session ; Claude rehandshake par conversation). `DynamicInstructionsMiddleware` (`middleware.py`)
+> les compose **par-(sub, org)** : `on_initialize` **append la doctrine de base** (`claude_md`)
+> de l'org aux instructions statiques (`instructions.compose_with_org_doctrine`). Donc **ne plus
+> prescrire « appelle `oto_get_doctrine()` au démarrage »** — c'est injecté. Les **doctrines
+> nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools` **enrichit
+> la description de `oto_get_doctrine`** avec leur index per-org (`instructions.skills_index_md`,
+> Tool non-frozen → `model_copy`). Découpage : doctrine de base = prose → instructions ; index des
+> skills = où charger → description de l'outil ; corps d'un skill = `oto_get_doctrine(slug)` à la
+> demande. Tout **fail-open** (pas de sub/org/doctrine → surface statique). Rework complet (artefact
+> composé per-org : secret sauce admin-éditable, onboarding gaté, contexte dynamique à variables) = #50.
 
 ## Groupes (départements) & hiérarchie de droits (ADR 0012)
 

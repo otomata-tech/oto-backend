@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import access, db, group_store, org_store
+from .. import access, connectors, db, group_store, org_store
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -180,10 +180,66 @@ def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
             raise AuthzDenied(400, "invalid_body", "entity_id d'org doit être un entier.")
     if inp.on:
         db.set_option_comp(inp.entity_type, eid, inp.option, granted_by=ctx.sub)
+        key = _compose_platform_grant(ctx, inp, eid)
     else:
         db.clear_option_comp(inp.entity_type, eid, inp.option)
+        key = _compose_platform_revoke(inp, eid)
     return {"ok": True, "entity_type": inp.entity_type, "entity_id": eid,
-            "option": inp.option, "on": inp.on}
+            "option": inp.option, "on": inp.on, "platform_key": key}
+
+
+def _compose_platform_grant(ctx: ResolvedCtx, inp: OptionInput, eid: str) -> Optional[dict]:
+    """Composition opérateur (ADR 0024) : « offrir l'option » ne doit pas laisser un
+    **état mort**. Comper l'abonnement (couche 3, `has_option`) sans donner la clé
+    (couche 2) = `has_option`=true mais aucune clé à résoudre → 404 au `/connect`
+    (bouton « Connecter » inerte). Pour un connecteur en mode **plateforme** (revente),
+    on accorde donc AUSSI la clé plateforme — le grant = droit d'usage de la clé
+    partagée. Les deux couches restent **séparées en base** (orthogonales, ADR 0024) ;
+    c'est l'ACTION admin qui les compose. Renvoie un compte-rendu, jamais la clé.
+
+    `None` = l'option n'est pas un connecteur en mode plateforme (rien à composer ;
+    p.ex. une option non liée à un connecteur) → comp simple."""
+    con = connectors.connector_for_provider(inp.option)
+    if not con or "platform" not in con.auth_modes:
+        return None
+    keys = db.list_platform_keys(inp.option)
+    if not keys:
+        # Connecteur revente sans clé plateforme posée → la comp seule resterait un
+        # état mort. On le signale au lieu de le masquer (cf. feedback governance UI).
+        return {"granted": False, "reason": "no_platform_key",
+                "hint": f"Aucune clé plateforme {inp.option!r} posée — pose-la au dashboard "
+                        "(/platform/connectors) pour que l'option soit utilisable."}
+    key_id = keys[0]["id"]
+    if inp.entity_type == "user":
+        db.grant_platform_key(eid, key_id, granted_by=ctx.sub)
+        byo = db.has_user_api_key(eid, inp.option)
+    else:
+        db.grant_org_platform_key(int(eid), key_id, granted_by=ctx.sub)
+        byo = org_store.has_org_secret(int(eid), inp.option)
+    out = {"granted": True, "platform_key_id": key_id}
+    if byo:
+        # L'entité a sa propre clé (BYO) → en résolution sa clé prime sur la
+        # plateforme, et le gate d'abonnement est court-circuité : l'option ET le
+        # grant sont **inertes**. On le dit plutôt que de faire croire à un effet.
+        out["byo_inert"] = True
+    return out
+
+
+def _compose_platform_revoke(inp: OptionInput, eid: str) -> Optional[dict]:
+    """Symétrique de `_compose_platform_grant` : retirer la comp d'un connecteur en
+    mode plateforme retire aussi le(s) grant(s) de sa clé plateforme — « retirer
+    l'option » = retirer l'accès revente d'un bloc (couche 2 + couche 3)."""
+    con = connectors.connector_for_provider(inp.option)
+    if not con or "platform" not in con.auth_modes:
+        return None
+    revoked = 0
+    for k in db.list_platform_keys(inp.option):
+        if inp.entity_type == "user":
+            db.revoke_platform_key(eid, k["id"])
+        else:
+            db.revoke_org_platform_key(int(eid), k["id"])
+        revoked += 1
+    return {"revoked": revoked} if revoked else None
 
 
 CAPABILITIES += [
@@ -239,7 +295,11 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Offer (on=true) or remove (on=false) a paid option as a FREE "
                     "comp for a user or org (e.g. option='unipile'). Distinct from Stripe billing; "
-                    "read by access.has_option. entity_type='user'|'org', entity_id=sub|org_id.",
+                    "read by access.has_option. entity_type='user'|'org', entity_id=sub|org_id. "
+                    "For a platform-mode connector this ALSO grants/revokes its platform key (so "
+                    "the option is actually usable, not a dead has_option without a key); the "
+                    "`platform_key` field reports what happened (granted / no_platform_key / "
+                    "byo_inert / revoked).",
         mcp="oto_admin_set_option",
         rest=RestBinding("POST", "/api/admin/option-comps", {}),
     ),

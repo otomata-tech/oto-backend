@@ -28,6 +28,35 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+# Au-delà de cette taille, même un contenu textuel part en URL signée plutôt que
+# d'être injecté dans le contexte de l'agent (texte = tokens).
+_INLINE_TEXT_CAP = 256 * 1024  # 256 Ko
+
+_TEXTUAL_MIME = {
+    "application/json", "application/ld+json", "application/xml",
+    "application/csv", "application/x-ndjson", "application/markdown",
+    "application/x-yaml", "application/yaml",
+}
+
+
+def _as_text(data: bytes, mime: str) -> Optional[str]:
+    """Renvoie le contenu décodé en UTF-8 si la PJ est textuelle, sinon None.
+
+    Un type `text/*` ou JSON/CSV/XML/YAML est traité comme texte ; pour un type
+    inconnu, on décode quand même et on accepte si c'est de l'UTF-8 propre sans
+    octet NUL (heuristique : un binaire — PDF, image — échoue le decode ou
+    contient des NUL → part en URL signée)."""
+    m = (mime or "").split(";")[0].strip().lower()
+    looks_text = m.startswith("text/") or m in _TEXTUAL_MIME
+    try:
+        s = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if looks_text or "\x00" not in s:
+        return s
+    return None
+
+
 def _client_for_user(account: Optional[str] = None):
     """Instancie un GmailClient oto-core avec les credentials du user.
 
@@ -87,6 +116,55 @@ def register(mcp: FastMCP) -> None:
         """
         client = _client_for_user(account)
         return await asyncio.to_thread(client.get_message, message_id)
+
+    @mcp.tool()
+    async def gmail_get_attachment(
+        message_id: str, attachment_id: str, account: Optional[str] = None
+    ) -> dict:
+        """Fetch the CONTENT of a Gmail attachment.
+
+        Get `attachment_id` from `gmail_get` — each entry of its `attachments`
+        list carries an `attachmentId`. The response depends on the file:
+        - **small text** (JSON/CSV/Markdown/plain, ≤256 KB) → returned INLINE:
+          `{encoding: "text", content: "<decoded text>"}` — read it directly.
+        - **binary or large** (PDF, image, big file) → uploaded to temporary
+          storage and returned as a short-lived signed URL: `{encoding: "url",
+          url, expires_in}` (seconds). Fetch the URL to get the bytes.
+
+        Args:
+            message_id: Gmail message id (the one passed to gmail_get).
+            attachment_id: the `attachmentId` of the attachment to fetch.
+            account: email of the Google account to use (default if omitted).
+
+        Returns {filename, mimeType, size, encoding, content|url, expires_in?}.
+        """
+        client = _client_for_user(account)
+        try:
+            att = await asyncio.to_thread(client.get_attachment, message_id, attachment_id)
+        except Exception as e:
+            raise _bad(str(e))
+        data, filename, mime = att["data"], att["filename"], att["mimeType"]
+        out = {"filename": filename, "mimeType": mime, "size": len(data)}
+
+        text = _as_text(data, mime)
+        if text is not None and len(data) <= _INLINE_TEXT_CAP:
+            out.update(encoding="text", content=text)
+            return out
+
+        # binaire ou trop gros → stockage temporaire + URL signée
+        from .. import media_store
+        sub = access.current_user_sub_or_raise()
+        try:
+            url = await asyncio.to_thread(
+                media_store.upload_private, "gmail-attachments", sub, data, mime, filename)
+        except media_store.MediaError as e:
+            raise _bad(
+                f"Pièce jointe binaire/volumineuse ({len(data)} octets) : stockage "
+                f"temporaire indisponible pour produire une URL ({e}). "
+                "Configurer OTO_MCP_S3_* pour récupérer ce type de fichier."
+            )
+        out.update(encoding="url", url=url, expires_in=media_store.presign_expiry())
+        return out
 
     @mcp.tool()
     async def gmail_list_drafts(max_results: int = 20, account: Optional[str] = None) -> dict:

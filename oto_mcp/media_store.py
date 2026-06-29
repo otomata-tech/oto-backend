@@ -127,6 +127,49 @@ def upload_image(prefix: str, owner_id: str, data: bytes, content_type: str) -> 
     return public_url(key)
 
 
+_DEFAULT_PRESIGN_EXPIRY = 3600  # 1 h
+
+
+def presign_expiry() -> int:
+    raw = os.environ.get("OTO_MCP_S3_PRESIGN_EXPIRY")
+    return int(raw) if raw else _DEFAULT_PRESIGN_EXPIRY
+
+
+def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
+                   filename: str | None = None, *, expiry: int | None = None) -> str:
+    """Uploade des octets en PRIVÉ (pas d'ACL public) et renvoie une URL GET
+    **signée et expirante**. Pour les contenus retournés par un connecteur que
+    l'agent doit récupérer hors-bande (binaires/gros fichiers) — PJ Gmail
+    aujourd'hui, et besoin transverse Drive/Pennylane à venir (signal #64).
+
+    Clé sous `tmp/<prefix>/<owner>/<hash>/<filename>` : déduplication par contenu
+    + objet jetable (prévoir une règle de lifecycle bucket pour purger `tmp/`).
+    Pas de fallback : si le stockage n'est pas configuré, lève `MediaError`.
+    """
+    if not data:
+        raise MediaError(400, "missing_file", "Contenu vide.")
+    digest = hashlib.sha256(data).hexdigest()[:32]
+    name = quote(filename or "file", safe="")
+    key = f"tmp/{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"
+    try:
+        client = _get_client()
+        client.put_object(
+            Bucket=_bucket(),
+            Key=key,
+            Body=data,
+            ContentType=content_type or "application/octet-stream",
+        )
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": _bucket(), "Key": key},
+            ExpiresIn=expiry or presign_expiry(),
+        )
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+
+
 def delete_by_url(url: str) -> None:
     """Supprime l'objet pointé par `url` (best-effort — n'échoue jamais).
 

@@ -52,5 +52,7 @@ from . import resources  # noqa: F401 — resources.govern (oto_resource)
 from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /api/admin/capabilities)
 # Vue de transparence « contexte agent » (otomata-private#49) — ce que Claude reçoit.
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
+# Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).
+from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

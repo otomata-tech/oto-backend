@@ -188,3 +188,20 @@ register_kind(
     "datastore_namespace",
     ResourceKind(owner_getter=_datastore_owner, reparent=_datastore_reparent),
 )
+
+
+def _project_owner(rid: str) -> Optional[tuple[str, str]]:
+    row = db.get_project_by_id(int(rid))
+    if row is None or row.get("owner_id") is None:
+        return None
+    return (row["owner_type"], row["owner_id"])
+
+
+def _project_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> None:
+    db.reparent_project(int(rid), new_owner_type, new_owner_id)
+
+
+register_kind(
+    "project",
+    ResourceKind(owner_getter=_project_owner, reparent=_project_reparent),
+)

@@ -292,6 +292,25 @@ CREATE TABLE IF NOT EXISTS datastore_shares (
 );
 CREATE INDEX IF NOT EXISTS idx_datastore_shares_recipient ON datastore_shares(shared_with_sub, namespace);
 
+-- Projet = couche d'organisation (modèle produit 2026-06-27). Conteneur de travail
+-- POSSÉDÉ (owner_type/owner_id, ADR 0030) : nom + brief (doc d'entrée inline pour
+-- l'instant ; le Doc arborescent + les liens vers tableaux/procédures/connecteurs/
+-- bases = incréments suivants). Partage/transfert via resource_grants
+-- (resource_type='project'). `archived_at` = soft-delete. Table fraîche → index posé
+-- inline (les colonnes existent dès le CREATE, contrairement à user_datastores).
+CREATE TABLE IF NOT EXISTS projects (
+    id BIGSERIAL PRIMARY KEY,
+    owner_type TEXT NOT NULL DEFAULT 'user',
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    brief_md TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    archived_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_type, owner_id);
+
 -- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
 -- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne
 -- accorde une permission à un principal (user/group/org). L'OWNER de la ressource
@@ -2977,6 +2996,84 @@ def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[
             (otypes, oids),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
+_PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
+                 "archived_at, created_at, updated_at")
+
+
+def create_project(owner_type: str, owner_id: str, name: str,
+                   brief_md: str = "", created_by: Optional[str] = None) -> int:
+    """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
+    (perso) | org.id::text | group.id::text."""
+    if owner_type == "user":
+        upsert_user(owner_id)
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO projects (owner_type, owner_id, name, brief_md, created_by) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (owner_type, owner_id, name, brief_md, created_by),
+        ).fetchone()
+        return int(row["id"])
+
+
+def get_project_by_id(project_id: int) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects WHERE id = %s", (project_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_projects_for_owners(owners: list[tuple[str, str]], *,
+                             include_archived: bool = False) -> list[dict]:
+    """Projets possédés par l'un des `(owner_type, owner_id)` (perso + orgs/groupes)."""
+    if not owners:
+        return []
+    otypes = [o[0] for o in owners]
+    oids = [o[1] for o in owners]
+    sql = (f"SELECT {_PROJECT_COLS} FROM projects p "
+           "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
+           "  ON p.owner_type = o.t AND p.owner_id = o.i ")
+    if not include_archived:
+        sql += "WHERE p.archived_at IS NULL "
+    sql += "ORDER BY p.updated_at DESC"
+    with _connect() as conn:
+        rows = conn.execute(sql, (otypes, oids)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_project(project_id: int, *, name: Optional[str] = None,
+                   brief_md: Optional[str] = None) -> None:
+    sets: list[str] = []
+    params: list = []
+    if name is not None:
+        sets.append("name = %s")
+        params.append(name)
+    if brief_md is not None:
+        sets.append("brief_md = %s")
+        params.append(brief_md)
+    if not sets:
+        return
+    sets.append("updated_at = NOW()")
+    params.append(project_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE projects SET {', '.join(sets)} WHERE id = %s", tuple(params))
+
+
+def archive_project(project_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE projects SET archived_at = NOW(), updated_at = NOW() "
+                     "WHERE id = %s", (project_id,))
+
+
+def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) -> None:
+    if new_owner_type == "user":
+        upsert_user(new_owner_id)
+    with _connect() as conn:
+        conn.execute("UPDATE projects SET owner_type = %s, owner_id = %s, updated_at = NOW() "
+                     "WHERE id = %s", (new_owner_type, new_owner_id, project_id))
 
 
 def resolve_datastore_ns(

@@ -1,0 +1,98 @@
+"""Capacité `oto_project` — CRUD de la couche Projet (owned resource ADR 0030).
+
+Handler sync ; on monkeypatche db/ownership/roles (les seams), pas de DB.
+"""
+import types
+
+import pytest
+
+from oto_mcp.capabilities import projects as P
+from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+
+CTX = ResolvedCtx(sub="u1", org_id=None)
+ROW = {"id": 7, "owner_type": "user", "owner_id": "u1", "name": "Proj", "brief_md": "b",
+       "created_by": "u1", "archived_at": None, "created_at": "2026-06-30", "updated_at": "2026-06-30"}
+
+
+@pytest.fixture
+def seams(monkeypatch):
+    rec = {"create": [], "update": [], "archive": []}
+    monkeypatch.setattr(P.db, "create_project",
+                        lambda ot, oid, name, brief, created_by=None: rec["create"].append((ot, oid, name, brief, created_by)) or 7)
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid == 7 else None)
+    monkeypatch.setattr(P.db, "list_projects_for_owners", lambda owners: [ROW])
+    monkeypatch.setattr(P.db, "update_project",
+                        lambda pid, name=None, brief_md=None: rec["update"].append((pid, name, brief_md)))
+    monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
+    monkeypatch.setattr(P.ownership, "accessor_scope",
+                        lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
+    monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    return rec
+
+
+def test_create_perso(seams):
+    out = P._project(CTX, P.ProjectInput(op="create", name="  Proj  ", brief_md="b"))
+    assert seams["create"] == [("user", "u1", "Proj", "b", "u1")]   # owner=sub, name trimé
+    assert out["id"] == 7 and out["name"] == "Proj"
+
+
+def test_create_org_requires_membership(seams, monkeypatch):
+    monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="org", owner_id="5"))
+    assert e.value.code == "forbidden"
+
+
+def test_create_org_ok(seams):
+    P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="org", owner_id="5"))
+    assert seams["create"][0][:2] == ("org", "5")
+
+
+def test_create_missing_name(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="   "))
+    assert e.value.code == "missing_name"
+
+
+def test_list(seams):
+    out = P._project(CTX, P.ProjectInput(op="list"))
+    assert [p["id"] for p in out["projects"]] == [7]
+
+
+def test_get_forbidden(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="get", project_id=7))
+    assert e.value.code == "forbidden" and e.value.status == 403
+
+
+def test_get_unknown(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="get", project_id=999))
+    assert e.value.code == "unknown_project" and e.value.status == 404
+
+
+def test_update(seams):
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New"))
+    assert seams["update"] == [(7, "New", None)]
+
+
+def test_archive_needs_govern(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="archive", project_id=7))
+    assert e.value.code == "forbidden"
+
+
+def test_archive_ok(seams):
+    out = P._project(CTX, P.ProjectInput(op="archive", project_id=7))
+    assert out == {"ok": True, "id": 7, "archived": True} and seams["archive"] == [7]
+
+
+def test_capability_registered():
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    cap = next((c for c in CAPABILITIES if c.key == "me.project"), None)
+    assert cap is not None and cap.mcp == "oto_project"
+    assert cap.rest is not None and cap.rest.path == "/api/me/projects"

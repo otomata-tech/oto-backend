@@ -143,8 +143,10 @@ def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
     aujourd'hui, et besoin transverse Drive/Pennylane à venir (signal #64).
 
     Clé sous `tmp/<prefix>/<owner>/<hash>/<filename>` : déduplication par contenu
-    + objet jetable (prévoir une règle de lifecycle bucket pour purger `tmp/`).
-    Pas de fallback : si le stockage n'est pas configuré, lève `MediaError`.
+    + objet jetable. **Le bucket a une règle de lifecycle `expire-tmp-1d`** (préfixe
+    `tmp/`, expiration 1 jour) qui purge ces objets — l'URL signée n'expire qu'à
+    `presign_expiry()` (déf. 1 h), bien avant. Pas de fallback : stockage non
+    configuré ⟹ `MediaError`.
     """
     if not data:
         raise MediaError(400, "missing_file", "Contenu vide.")

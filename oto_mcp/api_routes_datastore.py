@@ -37,9 +37,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import db, google_oauth
+from . import db, google_oauth, ownership, roles
 from .datastore import (
     NamespaceExists,
+    NamespaceForbidden,
     NamespaceNotFound,
     NamespaceReadOnly,
     RowNotFound,
@@ -201,8 +202,32 @@ def make_routes(
         namespace = (body or {}).get("namespace", "").strip()
         if not namespace:
             return json_error(request, 400, "missing_namespace")
+        # owner optionnel (ADR 0030) : classeur d'org/groupe. Défaut = perso.
+        owner = (body or {}).get("owner") or {}
+        owner_type = (owner.get("type") or "user").strip()
+        owner_id = sub
+        if owner_type == "org":
+            try:
+                org_id = int(owner.get("id"))
+            except (TypeError, ValueError):
+                return json_error(request, 400, "invalid_owner_id")
+            if not roles.is_org_member(sub, org_id):
+                return json_error(request, 403, "not_org_member")
+            owner_id = str(org_id)
+        elif owner_type == "group":
+            try:
+                group_id = int(owner.get("id"))
+            except (TypeError, ValueError):
+                return json_error(request, 400, "invalid_owner_id")
+            if not roles.can_read_group(sub, group_id):
+                return json_error(request, 403, "not_group_member")
+            owner_id = str(group_id)
+        elif owner_type != "user":
+            return json_error(request, 400, "invalid_owner_type")
         try:
-            return json_response(request, make_store(sub).create_namespace(namespace), status=201)
+            created = make_store(sub).create_namespace(
+                namespace, owner_type=owner_type, owner_id=owner_id)
+            return json_response(request, created, status=201)
         except NamespaceExists:
             return json_error(request, 409, "namespace_exists")
 
@@ -215,6 +240,8 @@ def make_routes(
             make_store(sub).delete_namespace(namespace)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
+        except NamespaceForbidden:
+            return json_error(request, 403, "forbidden")
         return json_response(request, {"ok": True, "namespace": namespace})
 
     async def ds_append(request: Request) -> JSONResponse:
@@ -332,6 +359,17 @@ def make_routes(
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
 
+    def _govern_ns(sub: str, namespace: str) -> tuple[int | None, tuple[int, str] | None]:
+        """Résout le namespace par nom + vérifie le droit de GOUVERNANCE de l'acteur
+        (owner ∪ escalade roles.py). Retourne (ns_id, None) ou (None, (status, code))."""
+        try:
+            ns_id = make_store(sub).resolve_ns_id(namespace)
+        except NamespaceNotFound:
+            return None, (404, "namespace_not_found")
+        if not ownership.can_govern(sub, "datastore_namespace", str(ns_id)):
+            return None, (403, "forbidden")
+        return ns_id, None
+
     async def ds_share(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
@@ -350,12 +388,11 @@ def make_routes(
         recipient = db.get_user_by_email(email)
         if not recipient:
             return json_error(request, 404, f"no oto user with email {email}")
-        if not db.get_datastore_namespace(sub, namespace):
-            return json_error(request, 404, "namespace_not_found")
-        try:
-            db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
-        except ValueError as e:
-            return json_error(request, 400, str(e))
+        ns_id, gerr = _govern_ns(sub, namespace)
+        if gerr:
+            return json_error(request, gerr[0], gerr[1])
+        ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
+                        permission, granted_by=sub)
         return json_response(
             request,
             {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission},
@@ -376,7 +413,10 @@ def make_routes(
         recipient = db.get_user_by_email(email)
         if not recipient:
             return json_error(request, 404, f"no oto user with email {email}")
-        removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
+        ns_id, gerr = _govern_ns(sub, namespace)
+        if gerr:
+            return json_error(request, gerr[0], gerr[1])
+        removed = ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"])
         if not removed:
             return json_error(request, 404, f"no active share for {email} on {namespace}")
         return json_response(request, {"ok": True, "namespace": namespace, "removed": email})
@@ -386,12 +426,14 @@ def make_routes(
         if err:
             return err
         namespace = request.path_params["namespace"]
-        if not db.get_datastore_namespace(sub, namespace):
-            return json_error(request, 404, "namespace_not_found")
+        ns_id, gerr = _govern_ns(sub, namespace)
+        if gerr:
+            return json_error(request, gerr[0], gerr[1])
         shares = [
             {"email": s.get("email"), "permission": s.get("permission"),
-             "created_at": s.get("created_at")}
-            for s in db.list_namespace_shares(sub, namespace)
+             "principal_type": s.get("principal_type"), "principal_id": s.get("principal_id"),
+             "created_at": s.get("granted_at")}
+            for s in ownership.list_grants("datastore_namespace", str(ns_id))
         ]
         return json_response(request, {"shares": shares})
 
@@ -407,10 +449,11 @@ def make_routes(
         new = ((body or {}).get("name") or "").strip()
         if not new:
             return json_error(request, 400, "name_required")
-        if not db.get_datastore_namespace(sub, namespace):
-            return json_error(request, 404, "namespace_not_found")
+        ns_id, gerr = _govern_ns(sub, namespace)
+        if gerr:
+            return json_error(request, gerr[0], gerr[1])
         try:
-            db.rename_datastore_namespace(sub, namespace, new)
+            db.rename_datastore_namespace_by_id(ns_id, new)
         except ValueError as e:
             return json_error(request, 409, str(e))
         return json_response(request, {"ok": True, "namespace": new})
@@ -430,10 +473,11 @@ def make_routes(
         recipient = db.get_user_by_email(email)
         if not recipient:
             return json_error(request, 404, f"no oto user with email {email}")
-        if not db.get_datastore_namespace(sub, namespace):
-            return json_error(request, 404, "namespace_not_found")
+        ns_id, gerr = _govern_ns(sub, namespace)
+        if gerr:
+            return json_error(request, gerr[0], gerr[1])
         try:
-            db.transfer_datastore_namespace(sub, namespace, recipient["sub"])
+            ownership.transfer("datastore_namespace", str(ns_id), "user", recipient["sub"])
         except ValueError as e:
             return json_error(request, 409, str(e))
         return json_response(request, {"ok": True, "namespace": namespace, "new_owner": email})

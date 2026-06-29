@@ -161,10 +161,32 @@ Stock complet (~43M établissements, parquet ~2GB) interrogé via DuckDB :
 
 ## Datastore (spine natif PG, ADR 0016)
 
-Spine plateforme de stockage structuré per-user (PG/JSONB natif, plus Google
+Spine plateforme de stockage structuré (PG/JSONB natif, plus Google
 Sheets). Surfaces : tools `data_*` (MCP) + REST `/api/datastore/*` ; OAuth Google
 per-user (Gmail/Tasks, multi-compte) câblé ici. **Détail : `docs/datastore.md`**
 (surfaces, OAuth multi-compte + scopes restricted/CASA, setup GCP, env vars).
+
+## Propriété de ressource — primitive `ownership` (ADR 0030)
+
+Le datastore n'est **plus scopé par `sub`** : il est le **pilote** de la primitive
+d'ownership générique. `ownership.py` est le **seam unique** : une ressource
+`(resource_type, resource_id)` est possédée par `(owner_type∈{user,group,org},
+owner_id)` (colonnes sur la ressource — pour le datastore : `user_datastores.owner_*`,
+`resource_id = id::text`, **stable au renommage**) ; le partage cross-type vit dans
+**`resource_grants`** (deny-by-default, remplace `datastore_shares`). Deux plans, jamais
+confondus : **`can_access`** (CONTENU = owner-match ∪ grant ; *privacy by default* — pas
+d'escalade admin sur du perso) et **`can_govern`** (GOUVERNANCE = owner ∪ escalade
+`roles.py` : transférer/lister/partager **sans lire**). La lecture opérateur du contenu
+perso reste le **view-as audité** (ADR 0023). `DatastorePg._resolve` passe par
+`can_access` ; le share/transfert/delete par `can_govern` (un super_admin/org_admin
+gouverne donc un datastore tiers). **org-owned activé** : `data_create_namespace` /
+`POST /api/datastore/namespaces` acceptent un `owner` (classeur d'équipe). Capacité
+générique **`oto_resource`** (`capabilities/resources.py`, op `list/get/transfer/share/
+unshare`, autz combinateur `RESOURCE_GOVERN`) = chemin de gouvernance MCP+REST + alimente
+l'object-browser admin. Catalogue du registre : **`GET /api/admin/capabilities`**
+(`capabilities_catalog.py`, `PLATFORM_ADMIN`, JSON Schema dérivé des Input pydantic) →
+UI admin **dérivée**. ⚠️ **Migration en cours** : `user_datastores.sub` + colonnes Sheets
+sont des reliques nullable, **DROP différé** (Phase H) après cutover prod vérifié.
 
 ## WhatsApp / Telegram / Instagram (messagerie via Unipile)
 
@@ -432,6 +454,13 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   fix `async`→`def` sur `fr.py`/`fr_stock.py` → `/health` ~0,1 s). Règle : un handler `tools/*.py`
   qui n'`await` rien doit être `def`. Ne garder `async def` que s'il `await` réellement (httpx
   async, etc.). NE PAS ajouter de workers uvicorn (état de session streamable_http en mémoire).
+  **Lot connecteurs bouclé le 2026-06-29** (361 handlers convertis ; cause re-vue = un flot
+  de `serper_scrape` gelant la boucle, `/.well-known` à 1,4–10,5 s sur une box à 0,2 de load).
+  **CI-enforcé** : `tests/test_no_blocking_async_handlers.py` casse si un `@mcp.tool` async
+  n'`await` rien dans son **propre scope** (AST own-scope, auto-maintenu, pas de whitelist) ;
+  un `client_factory` awaité par FastMCP (`mount.factory`) reste async — « pas d'await » ne
+  suffit pas, vérifier que c'est un handler, pas un callback. Bornes connexions PG posées au
+  passage (`db._connect_options` : `idle_in_transaction_session_timeout` anti-zombie-lock).
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_

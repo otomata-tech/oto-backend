@@ -249,18 +249,24 @@ CREATE TABLE IF NOT EXISTS user_namespace_grants (
 );
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
--- namespaces ; les rows vivent dans `datastore_rows` (JSONB). `spreadsheet_id`/
--- `owner_email` sont des reliques Sheets (nullable, plus utilisées — DROP différé
--- post-backfill).
+-- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
+-- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de
+-- l'ancien modèle per-sub (nullable, DROP différé Phase H) ; `spreadsheet_id`/
+-- `owner_email` sont des reliques Sheets (nullable, DROP différé).
 CREATE TABLE IF NOT EXISTS user_datastores (
     id BIGSERIAL PRIMARY KEY,
-    sub TEXT NOT NULL,
+    sub TEXT,
+    owner_type TEXT NOT NULL DEFAULT 'user',
+    owner_id TEXT,
     namespace TEXT NOT NULL,
     spreadsheet_id TEXT,
     owner_email TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(sub, namespace)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns
+    ON user_datastores(owner_type, owner_id, namespace);
+CREATE INDEX IF NOT EXISTS idx_user_datastores_owner
+    ON user_datastores(owner_type, owner_id);
 
 -- Rows du datastore : un dict JSONB par row (types préservés nativement, fin de
 -- la sentinelle `__j:`). `_id`/`_created_at`/`_updated_at` = colonnes, le reste
@@ -285,6 +291,27 @@ CREATE TABLE IF NOT EXISTS datastore_shares (
     UNIQUE(owner_sub, namespace, shared_with_sub)
 );
 CREATE INDEX IF NOT EXISTS idx_datastore_shares_recipient ON datastore_shares(shared_with_sub, namespace);
+
+-- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
+-- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne
+-- accorde une permission à un principal (user/group/org). L'OWNER de la ressource
+-- vit sur la ressource elle-même (colonnes owner_type/owner_id), PAS ici — derive
+-- don't duplicate. `resource_id` = l'id STABLE de la ressource (ex.
+-- user_datastores.id::text), pas un nom (survit au renommage). Résolu par le seam
+-- `ownership.py` (plan contenu can_access = owner∪grants ; plan gouvernance
+-- can_govern = owner∪escalade roles.py).
+CREATE TABLE IF NOT EXISTS resource_grants (
+    resource_type TEXT NOT NULL,                               -- 'datastore_namespace' | …
+    resource_id TEXT NOT NULL,                                 -- id stable de la ressource
+    principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'group', 'org')),
+    principal_id TEXT NOT NULL,                                -- sub | group_id | org_id (texte)
+    permission TEXT NOT NULL DEFAULT 'write' CHECK (permission IN ('read', 'write')),
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (resource_type, resource_id, principal_type, principal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_grants_principal
+    ON resource_grants(principal_type, principal_id, resource_type);
 
 CREATE TABLE IF NOT EXISTS user_api_tokens (
     id BIGSERIAL PRIMARY KEY,
@@ -877,6 +904,34 @@ def init_db() -> None:
         # natives passent. Idempotent.
         conn.execute("ALTER TABLE user_datastores ALTER COLUMN spreadsheet_id DROP NOT NULL")
         conn.execute("ALTER TABLE datastore_shares ALTER COLUMN spreadsheet_id DROP NOT NULL")
+        # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par
+        # la ressource. `owner_type` défaut 'user' (classeur perso, l'existant) ;
+        # `owner_id` = sub pour un user, org.id::text pour un classeur d'org.
+        # Backfill owner_id ← sub (idempotent : ne touche que les lignes non backfillées).
+        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'user'")
+        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE user_datastores SET owner_id = sub WHERE owner_id IS NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_datastores_owner "
+                     "ON user_datastores(owner_type, owner_id)")
+        # Swap de contrainte (ADR 0030) : la clé logique passe de (sub, namespace) à
+        # (owner_type, owner_id, namespace) — requis pour les classeurs org-owned.
+        # `sub` devient une relique nullable (DROP de la colonne différé à la Phase H).
+        conn.execute("ALTER TABLE user_datastores ALTER COLUMN sub DROP NOT NULL")
+        conn.execute("ALTER TABLE user_datastores DROP CONSTRAINT IF EXISTS user_datastores_sub_namespace_key")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
+                     "ON user_datastores(owner_type, owner_id, namespace)")
+        # Backfill datastore_shares → resource_grants (ADR 0030). One-shot idempotent :
+        # ON CONFLICT DO NOTHING + clé stable resource_id = user_datastores.id::text.
+        # On joint sur (owner_sub, namespace) pour retrouver l'id du namespace.
+        conn.execute(
+            "INSERT INTO resource_grants "
+            "(resource_type, resource_id, principal_type, principal_id, permission, granted_at) "
+            "SELECT 'datastore_namespace', d.id::text, 'user', s.shared_with_sub, "
+            "       s.permission, s.created_at "
+            "FROM datastore_shares s "
+            "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
+            "ON CONFLICT DO NOTHING"
+        )
         # Avatar utilisateur + logo d'org (2026-06-16) : URL publique (Scaleway
         # Object Storage), pas un secret → colonne en clair, hors coffre.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
@@ -2869,185 +2924,254 @@ def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
 
 # --- Datastore namespaces ---------------------------------------------------
 
-def create_datastore_namespace(sub: str, namespace: str) -> int:
-    upsert_user(sub)
+def create_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -> int:
+    """Crée un namespace possédé par `(owner_type, owner_id)` (ADR 0030). `owner_type`
+    ∈ {user, org, group} ; `owner_id` = sub | org.id::text | group.id::text. Lève si
+    le même propriétaire a déjà ce nom."""
+    if owner_type == "user":
+        upsert_user(owner_id)
     with _connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO user_datastores (sub, namespace) VALUES (%s, %s) RETURNING id",
-                (sub, namespace),
+                "INSERT INTO user_datastores (owner_type, owner_id, namespace) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (owner_type, owner_id, namespace),
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"namespace `{namespace}` existe déjà") from e
         return int(row["id"])
 
 
-def get_datastore_namespace(sub: str, namespace: str) -> Optional[dict]:
+def get_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, sub, namespace, created_at FROM user_datastores "
-            "WHERE sub = %s AND namespace = %s",
-            (sub, namespace),
+            "SELECT id, owner_type, owner_id, namespace, created_at FROM user_datastores "
+            "WHERE owner_type = %s AND owner_id = %s AND namespace = %s",
+            (owner_type, owner_id, namespace),
         ).fetchone()
         return dict(row) if row else None
 
 
-def list_datastore_namespaces(sub: str) -> list[dict]:
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, namespace, created_at FROM user_datastores WHERE sub = %s ORDER BY namespace",
-            (sub,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def delete_datastore_namespace(sub: str, namespace: str) -> bool:
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM user_datastores WHERE sub = %s AND namespace = %s",
-            (sub, namespace),
-        )
-        return cur.rowcount > 0
-
-
-# --- Datastore shares --------------------------------------------------------
-
-def share_datastore_namespace(
-    owner_sub: str, namespace: str, shared_with_sub: str, permission: str = "write",
-) -> int:
-    ns = get_datastore_namespace(owner_sub, namespace)
-    if not ns:
-        raise ValueError(f"namespace `{namespace}` not found for owner")
-    with _connect() as conn:
-        try:
-            row = conn.execute(
-                "INSERT INTO datastore_shares (owner_sub, namespace, shared_with_sub, permission) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (owner_sub, namespace, shared_with_sub, permission),
-            ).fetchone()
-        except psycopg.errors.UniqueViolation:
-            conn.execute(
-                "UPDATE datastore_shares SET permission = %s "
-                "WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
-                (permission, owner_sub, namespace, shared_with_sub),
-            )
-            return 0
-        return int(row["id"])
-
-
-def unshare_datastore_namespace(owner_sub: str, namespace: str, shared_with_sub: str) -> bool:
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM datastore_shares WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
-            (owner_sub, namespace, shared_with_sub),
-        )
-        return cur.rowcount > 0
-
-
-def get_shared_namespace(sub: str, namespace: str) -> Optional[dict]:
-    """Le partage reçu par `sub` pour `namespace` (owner_sub + permission). La
-    résolution du `ns_id` réel (pour lire les rows) se fait côté store via
-    `get_datastore_namespace(owner_sub, namespace)`."""
+def get_datastore_namespace_by_id(ns_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT owner_sub, namespace, permission, created_at FROM datastore_shares "
-            "WHERE shared_with_sub = %s AND namespace = %s LIMIT 1",
-            (sub, namespace),
+            "SELECT id, owner_type, owner_id, namespace, created_at FROM user_datastores WHERE id = %s",
+            (ns_id,),
         ).fetchone()
         return dict(row) if row else None
 
 
-def list_shared_namespaces(sub: str) -> list[dict]:
+def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
+    """Namespaces possédés par l'un des `(owner_type, owner_id)` fournis."""
+    if not owners:
+        return []
+    otypes = [o[0] for o in owners]
+    oids = [o[1] for o in owners]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT s.namespace, s.owner_sub, s.permission, s.created_at, d.id "
-            "FROM datastore_shares s "
-            "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
-            "WHERE s.shared_with_sub = %s ORDER BY s.namespace",
-            (sub,),
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "
+            "FROM user_datastores d "
+            "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
+            "  ON d.owner_type = o.t AND d.owner_id = o.i "
+            "ORDER BY d.namespace",
+            (otypes, oids),
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def list_namespace_shares(owner_sub: str, namespace: str) -> list[dict]:
-    """Bénéficiaires d'un namespace possédé (email + permission), pour l'UI de
-    gestion du partage. Email résolu par join sur `users` (None si user effacé)."""
+def resolve_datastore_ns(
+    namespace: str, *, sub: str, org_ids: list[int], group_ids: list[int],
+) -> Optional[dict]:
+    """Résout un namespace VISIBLE par l'acteur, par NOM, parmi : possédé en perso,
+    possédé par une de ses orgs, ou accordé (grant user/org/group). Priorité
+    perso > org > grant. Retourne la ligne `user_datastores` (avec `id`) ou None.
+    La décision read/write fine est ensuite faite par `ownership.can_access` sur l'id."""
+    org_txt = [str(o) for o in org_ids]
+    grp_txt = [str(g) for g in group_ids]
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "
+            "FROM user_datastores d "
+            "WHERE d.namespace = %(ns)s AND ("
+            "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"
+            "  OR (d.owner_type = 'org'  AND d.owner_id = ANY(%(org)s))"
+            "  OR EXISTS ("
+            "       SELECT 1 FROM resource_grants g"
+            "        WHERE g.resource_type = 'datastore_namespace' AND g.resource_id = d.id::text"
+            "          AND ( (g.principal_type = 'user'  AND g.principal_id = %(sub)s)"
+            "             OR (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
+            "             OR (g.principal_type = 'group' AND g.principal_id = ANY(%(grp)s)) ))"
+            ") "
+            "ORDER BY CASE WHEN d.owner_type='user' AND d.owner_id=%(sub)s THEN 0 "
+            "              WHEN d.owner_type='org' THEN 1 ELSE 2 END "
+            "LIMIT 1",
+            {"ns": namespace, "sub": sub, "org": org_txt, "grp": grp_txt},
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_datastore_namespaces_granted_to(
+    sub: str, org_ids: list[int], group_ids: list[int],
+) -> list[dict]:
+    """Namespaces accordés à l'acteur via `resource_grants` (principal user/org/group),
+    avec la permission gagnante. Exclut ceux possédés en perso (gérés à part)."""
+    org_txt = [str(o) for o in org_ids]
+    grp_txt = [str(g) for g in group_ids]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT s.shared_with_sub, s.permission, s.created_at, u.email "
-            "FROM datastore_shares s LEFT JOIN users u ON u.sub = s.shared_with_sub "
-            "WHERE s.owner_sub = %s AND s.namespace = %s ORDER BY s.created_at",
-            (owner_sub, namespace),
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at, "
+            "       max(g.permission) AS permission "
+            "FROM resource_grants g "
+            "JOIN user_datastores d ON d.id::text = g.resource_id "
+            "WHERE g.resource_type = 'datastore_namespace' AND ("
+            "     (g.principal_type = 'user'  AND g.principal_id = %(sub)s)"
+            "  OR (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
+            "  OR (g.principal_type = 'group' AND g.principal_id = ANY(%(grp)s)) ) "
+            "AND NOT (d.owner_type = 'user' AND d.owner_id = %(sub)s) "
+            "GROUP BY d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "
+            "ORDER BY d.namespace",
+            {"sub": sub, "org": org_txt, "grp": grp_txt},
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def rename_datastore_namespace(sub: str, old: str, new: str) -> bool:
-    """Renomme un namespace possédé (l'`id` BIGSERIAL est conservé → URL/deeplink
-    stables) et propage le nouveau nom aux partages (`datastore_shares` est keyé par
-    nom). Lève si `new` existe déjà ou si `old` est introuvable."""
+def rename_datastore_namespace_by_id(ns_id: int, new: str) -> bool:
+    """Renomme un namespace par id (l'id BIGSERIAL est conservé → URL/deeplink/grants
+    stables ; les grants sont keyés par id, donc rien à propager). Lève si le même
+    propriétaire a déjà ce nom, ou si l'id est introuvable."""
     new = (new or "").strip()
     if not new:
         raise ValueError("nouveau nom de namespace requis")
-    if new == old:
-        return True
     with _connect() as conn:
         with conn.transaction():
+            cur = conn.execute(
+                "SELECT owner_type, owner_id, namespace FROM user_datastores WHERE id = %s FOR UPDATE",
+                (ns_id,),
+            ).fetchone()
+            if not cur:
+                raise ValueError("namespace introuvable")
+            if cur["namespace"] == new:
+                return True
             if conn.execute(
-                "SELECT 1 FROM user_datastores WHERE sub = %s AND namespace = %s",
-                (sub, new),
+                "SELECT 1 FROM user_datastores WHERE owner_type = %s AND owner_id = %s AND namespace = %s",
+                (cur["owner_type"], cur["owner_id"], new),
             ).fetchone():
                 raise ValueError(f"un namespace `{new}` existe déjà")
-            cur = conn.execute(
-                "UPDATE user_datastores SET namespace = %s WHERE sub = %s AND namespace = %s",
-                (new, sub, old),
-            )
-            if (cur.rowcount or 0) == 0:
-                raise ValueError(f"namespace `{old}` introuvable")
             conn.execute(
-                "UPDATE datastore_shares SET namespace = %s WHERE owner_sub = %s AND namespace = %s",
-                (new, sub, old),
+                "UPDATE user_datastores SET namespace = %s WHERE id = %s", (new, ns_id),
             )
     return True
 
 
-def transfer_datastore_namespace(owner_sub: str, namespace: str, new_owner_sub: str) -> bool:
-    """Transfère la propriété d'un namespace à `new_owner_sub` (l'`id` est conservé)
-    et **repasse l'ancien propriétaire en partage `write`** (« tu passes en partagé »).
-    Lève si le destinataire possède déjà un namespace de ce nom, ou si introuvable."""
-    if new_owner_sub == owner_sub:
-        return True
+def delete_datastore_namespace_by_id(ns_id: int) -> bool:
+    """Supprime un namespace par id (CASCADE sur `datastore_rows`) + ses grants
+    (`resource_grants` n'a pas de FK car `resource_id` est générique)."""
     with _connect() as conn:
         with conn.transaction():
+            conn.execute(
+                "DELETE FROM resource_grants WHERE resource_type = 'datastore_namespace' AND resource_id = %s",
+                (str(ns_id),),
+            )
+            cur = conn.execute("DELETE FROM user_datastores WHERE id = %s", (ns_id,))
+        return cur.rowcount > 0
+
+
+def reparent_datastore_namespace(ns_id: int, new_owner_type: str, new_owner_id: str) -> None:
+    """Re-parente un namespace vers un nouveau propriétaire (cœur du transfert).
+    Lève si le destinataire possède déjà un namespace de ce nom."""
+    with _connect() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT namespace FROM user_datastores WHERE id = %s FOR UPDATE", (ns_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("namespace introuvable")
             if conn.execute(
-                "SELECT 1 FROM user_datastores WHERE sub = %s AND namespace = %s",
-                (new_owner_sub, namespace),
+                "SELECT 1 FROM user_datastores WHERE owner_type = %s AND owner_id = %s AND namespace = %s",
+                (new_owner_type, new_owner_id, row["namespace"]),
             ).fetchone():
-                raise ValueError(f"le destinataire possède déjà un namespace `{namespace}`")
-            cur = conn.execute(
-                "UPDATE user_datastores SET sub = %s WHERE sub = %s AND namespace = %s",
-                (new_owner_sub, owner_sub, namespace),
-            )
-            if (cur.rowcount or 0) == 0:
-                raise ValueError(f"namespace `{namespace}` introuvable")
-            # Repointer les partages existants vers le nouveau propriétaire.
+                raise ValueError(f"le destinataire possède déjà un namespace `{row['namespace']}`")
             conn.execute(
-                "UPDATE datastore_shares SET owner_sub = %s WHERE owner_sub = %s AND namespace = %s",
-                (new_owner_sub, owner_sub, namespace),
+                "UPDATE user_datastores SET owner_type = %s, owner_id = %s WHERE id = %s",
+                (new_owner_type, new_owner_id, ns_id),
             )
-            # Le nouveau propriétaire ne peut pas être bénéficiaire de son propre ns.
-            conn.execute(
-                "DELETE FROM datastore_shares WHERE owner_sub = %s AND namespace = %s AND shared_with_sub = %s",
-                (new_owner_sub, namespace, new_owner_sub),
-            )
-            # L'ancien propriétaire devient bénéficiaire en write.
-            conn.execute(
-                "INSERT INTO datastore_shares (owner_sub, namespace, shared_with_sub, permission) "
-                "VALUES (%s, %s, %s, 'write') "
-                "ON CONFLICT (owner_sub, namespace, shared_with_sub) DO UPDATE SET permission = 'write'",
-                (new_owner_sub, namespace, owner_sub),
-            )
-    return True
+
+
+def list_all_datastore_namespaces() -> list[dict]:
+    """Tous les namespaces, toutes propriétés confondues — pour l'object-browser
+    PLATEFORME (gate super_admin/platform_admin côté capacité)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, owner_type, owner_id, namespace, created_at "
+            "FROM user_datastores ORDER BY owner_type, owner_id, namespace",
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_datastore_rows_for_ns(ns_id: int) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT count(*) AS n FROM datastore_rows WHERE ns_id = %s", (ns_id,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+
+# --- Resource grants (primitive de partage générique, ADR 0030) --------------
+
+def grant_resource(
+    resource_type: str, resource_id: str, principal_type: str, principal_id: str,
+    permission: str = "write", granted_by: Optional[str] = None,
+) -> None:
+    """Accorde (ou met à jour) une permission à un principal sur une ressource.
+    Idempotent : ON CONFLICT met à jour la permission."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO resource_grants "
+            "(resource_type, resource_id, principal_type, principal_id, permission, granted_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (resource_type, resource_id, principal_type, principal_id) "
+            "DO UPDATE SET permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by",
+            (resource_type, resource_id, principal_type, principal_id, permission, granted_by),
+        )
+
+
+def revoke_resource_grant(
+    resource_type: str, resource_id: str, principal_type: str, principal_id: str,
+) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
+            "AND principal_type = %s AND principal_id = %s",
+            (resource_type, resource_id, principal_type, principal_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_resource_grant(
+    resource_type: str, resource_id: str, principal_type: str, principal_id: str,
+) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT permission FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
+            "AND principal_type = %s AND principal_id = %s",
+            (resource_type, resource_id, principal_type, principal_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_resource_grants(resource_type: str, resource_id: str) -> list[dict]:
+    """Bénéficiaires d'une ressource (principal + permission + email si user), pour
+    l'UI de gestion du partage."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT g.principal_type, g.principal_id, g.permission, g.granted_at, u.email "
+            "FROM resource_grants g "
+            "LEFT JOIN users u ON g.principal_type = 'user' AND u.sub = g.principal_id "
+            "WHERE g.resource_type = %s AND g.resource_id = %s "
+            "ORDER BY g.granted_at",
+            (resource_type, resource_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- Datastore rows (substrat PG natif, ADR 0016) ---------------------------

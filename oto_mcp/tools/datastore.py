@@ -17,9 +17,10 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db
+from .. import access, db, ownership
 from ..datastore import (
     NamespaceExists,
+    NamespaceForbidden,
     NamespaceNotFound,
     NamespaceReadOnly,
     RowNotFound,
@@ -61,13 +62,17 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_delete_namespace(namespace: str) -> dict:
-        """Delete a namespace and all its rows (irreversible). Owner only."""
+        """Delete a namespace and all its rows (irreversible). Owner (or org/platform
+        admin governing it) only."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
         try:
             store.delete_namespace(namespace)
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        except NamespaceForbidden:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"tu n'as pas le droit de supprimer `{namespace}`"))
         return {"ok": True, "namespace": namespace}
 
     @mcp.tool()
@@ -171,8 +176,17 @@ def register(mcp: FastMCP) -> None:
         if not recipient:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
 
+        # Le partage est une action de GOUVERNANCE (owner ∪ escalade roles.py).
+        try:
+            ns_id = _store_for(sub).resolve_ns_id(namespace)
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        if not ownership.can_govern(sub, "datastore_namespace", str(ns_id)):
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"tu n'as pas le droit de gérer le partage de `{namespace}`"))
+
         if remove:
-            removed = db.unshare_datastore_namespace(sub, namespace, recipient["sub"])
+            removed = ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"])
             if not removed:
                 raise McpError(ErrorData(code=INVALID_PARAMS,
                                          message=f"pas de partage actif pour {email} sur {namespace}"))
@@ -180,12 +194,8 @@ def register(mcp: FastMCP) -> None:
 
         if permission not in ("read", "write"):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="permission must be 'read' or 'write'"))
-        if not db.get_datastore_namespace(sub, namespace):
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` not found"))
-        try:
-            db.share_datastore_namespace(sub, namespace, recipient["sub"], permission)
-        except ValueError as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
+                        permission, granted_by=sub)
         return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
 
     # --- MCP App : variante à interface rendue du datastore (SEP-1865) --------

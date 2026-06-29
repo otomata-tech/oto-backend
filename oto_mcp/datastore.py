@@ -9,10 +9,11 @@ la row renvoyée :
 - `_created_at` / `_updated_at` : timestamps (colonnes dédiées).
 
 Plus de dépendance Google : la vérité est en base, types préservés nativement
-par JSONB (fin de la sentinelle `__j:` de l'ère Sheets). Le partage est DB-only
-(`datastore_shares`) — le destinataire lit via son propre `sub`. L'export vers un
-provider tiers (Sheets/Notion…) est une projection optionnelle, déférée à
-otomata#29.
+par JSONB (fin de la sentinelle `__j:` de l'ère Sheets). La propriété et le partage
+passent par la primitive générique `ownership` (ADR 0030) : un namespace est possédé
+par `(owner_type, owner_id)` (user/org/group) et accessible via owner-match ∪ grants
+(`resource_grants`). L'export vers un provider tiers (Sheets/Notion…) est une
+projection optionnelle, déférée à otomata#29.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from . import db
+from . import db, ownership
 
 
 _META_COLS = ("_id", "_created_at", "_updated_at")
@@ -67,6 +68,11 @@ class NamespaceReadOnly(Exception):
     pass
 
 
+class NamespaceForbidden(Exception):
+    """Action de gouvernance (supprimer/transférer) tentée sans droit de gouvernance."""
+    pass
+
+
 def make_store(sub: str) -> "DatastorePg":
     """Construit un store PG pour `sub`. Plus aucune dépendance externe (ADR 0016)
     — datastore est une surface plateforme self-contained."""
@@ -82,24 +88,28 @@ class DatastorePg:
 
     def __init__(self, sub: str):
         self.sub = sub
+        self._scope_cache: Optional[ownership.AccessorScope] = None
 
-    # --- résolution namespace -> (ns_id, writable) ---------------------------
+    # --- résolution namespace -> ns_id ---------------------------------------
+
+    def _scope(self) -> ownership.AccessorScope:
+        if self._scope_cache is None:
+            self._scope_cache = ownership.accessor_scope(self.sub)
+        return self._scope_cache
 
     def _resolve(self, namespace: str, *, write: bool = False) -> int:
-        """ns_id d'un namespace possédé ou partagé. `write=True` exige le droit
-        d'écriture (owner, ou partage `write`)."""
-        own = db.get_datastore_namespace(self.sub, namespace)
-        if own:
-            return int(own["id"])
-        share = db.get_shared_namespace(self.sub, namespace)
-        if not share:
+        """ns_id d'un namespace VISIBLE par l'acteur (possédé perso/org, ou accordé).
+        `write=True` exige le droit d'écriture via `ownership.can_access`."""
+        scope = self._scope()
+        ns = db.resolve_datastore_ns(
+            namespace, sub=self.sub, org_ids=scope.org_ids, group_ids=scope.group_ids)
+        if not ns:
             raise NamespaceNotFound(namespace)
-        if write and share.get("permission") != "write":
+        ns_id = int(ns["id"])
+        if write and not ownership.can_access(
+                self.sub, "datastore_namespace", str(ns_id), "write"):
             raise NamespaceReadOnly(namespace)
-        owner_ns = db.get_datastore_namespace(share["owner_sub"], namespace)
-        if not owner_ns:
-            raise NamespaceNotFound(namespace)
-        return int(owner_ns["id"])
+        return ns_id
 
     @staticmethod
     def _row_to_dict(row: dict) -> dict:
@@ -115,28 +125,60 @@ class DatastorePg:
 
     # --- namespace lifecycle -------------------------------------------------
 
-    def list_namespaces(self) -> list[dict]:
-        own = db.list_datastore_namespaces(self.sub)
-        out = [{"id": n["id"], "namespace": n["namespace"], "created_at": n.get("created_at"),
-                "url": _ns_url(n["namespace"]), "shared": False} for n in own]
-        for n in db.list_shared_namespaces(self.sub):
-            out.append({"id": n["id"], "namespace": n["namespace"], "created_at": n.get("created_at"),
-                        "url": _ns_url(n["namespace"]), "shared": True,
-                        "owner_sub": n.get("owner_sub"), "permission": n.get("permission")})
-        return out
+    def _entry(self, n: dict, *, shared: bool, permission: Optional[str] = None) -> dict:
+        ns_id = int(n["id"])
+        perso = n.get("owner_type") == "user" and n.get("owner_id") == self.sub
+        return {
+            "id": ns_id,
+            "namespace": n["namespace"],
+            "created_at": n.get("created_at"),
+            "url": _ns_url(n["namespace"]),
+            "shared": shared,
+            "owner_type": n.get("owner_type"),
+            "owner_id": n.get("owner_id"),
+            "permission": permission if shared else "write",
+            "can_write": (permission == "write") if shared else True,
+            "can_govern": ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)),
+            "is_personal": perso,
+        }
 
-    def create_namespace(self, namespace: str) -> dict:
+    def list_namespaces(self) -> list[dict]:
+        """Namespaces visibles : possédés (perso + ceux des orgs/groupes de l'acteur)
+        + accordés via grant. Dédupliqués par id (priorité possédé)."""
+        scope = self._scope()
+        out: dict[int, dict] = {}
+        for n in db.list_datastore_namespaces_for_owners(scope.owner_pairs()):
+            out[int(n["id"])] = self._entry(n, shared=False)
+        for n in db.list_datastore_namespaces_granted_to(
+                self.sub, scope.org_ids, scope.group_ids):
+            if int(n["id"]) in out:
+                continue
+            out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))
+        return list(out.values())
+
+    def create_namespace(
+        self, namespace: str, *, owner_type: str = "user", owner_id: Optional[str] = None,
+    ) -> dict:
+        """Crée un namespace. Défaut = perso (`owner_type='user'`, `owner_id=sub`).
+        Pour un classeur d'org/groupe, passer `owner_type`/`owner_id` — l'autorisation
+        (appartenance) est vérifiée par l'appelant (capacité/route)."""
+        oid = owner_id if owner_id is not None else self.sub
         try:
-            db.create_datastore_namespace(self.sub, namespace)
+            db.create_datastore_namespace(owner_type, oid, namespace)
         except ValueError as e:
             raise NamespaceExists(str(e))
         return {"namespace": namespace, "url": _ns_url(namespace)}
 
     def delete_namespace(self, namespace: str) -> None:
-        # Seul le propriétaire supprime (les rows partent en CASCADE).
-        if not db.get_datastore_namespace(self.sub, namespace):
-            raise NamespaceNotFound(namespace)
-        db.delete_datastore_namespace(self.sub, namespace)
+        ns_id = self._resolve(namespace)
+        if not ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)):
+            raise NamespaceForbidden(namespace)
+        db.delete_datastore_namespace_by_id(ns_id)  # rows + grants partent avec
+
+    def resolve_ns_id(self, namespace: str) -> int:
+        """ns_id d'un namespace visible par l'acteur (lève `NamespaceNotFound`).
+        Surface publique pour les chemins de gouvernance (partage/transfert)."""
+        return self._resolve(namespace)
 
     def get_url(self, namespace: str) -> str:
         self._resolve(namespace)  # 404 si inconnu
@@ -158,7 +200,8 @@ class DatastorePg:
         try:
             ns_id = self._resolve(namespace, write=True)
         except NamespaceNotFound:
-            db.create_datastore_namespace(self.sub, namespace)
+            db.create_datastore_namespace("user", self.sub, namespace)
+            self._scope_cache = None  # le nouveau ns doit être visible à la résolution
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)

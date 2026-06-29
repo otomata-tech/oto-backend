@@ -113,6 +113,34 @@ def ADMIN_BY_OP(by_op: dict, *, field: str = "op"):
     return rule
 
 
+def RESOURCE_GOVERN(*, type_field: str = "resource_type", id_field: str = "resource_id",
+                    op_field: str = "op", list_ops: tuple[str, ...] = ("list",)):
+    """Gouvernance d'une ressource possédée (ADR 0030) : owner ∪ escalade `roles.py`,
+    résolu par `ownership.can_govern(sub, resource_type, resource_id)`. Couvre owner
+    self-service ET super_admin/org_admin/group_admin en une règle. Les ops de
+    `list_ops` (qui n'ont pas de `resource_id`) sont autorisées à tout authentifié —
+    le handler FILTRE aux ressources gouvernables. Import paresseux d'`ownership`
+    (évite tout cycle au chargement des modules de capacités)."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        op = getattr(inp, op_field, None) if inp is not None else None
+        if op in list_ops:
+            return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
+                               role=access.get_user_role(sub))
+        rtype = getattr(inp, type_field, None) if inp is not None else None
+        rid = getattr(inp, id_field, None) if inp is not None else None
+        if not rtype or rid is None:
+            raise AuthzDenied(400, "missing_resource",
+                              "`resource_type` et `resource_id` requis.")
+        from .. import ownership
+        if not ownership.can_govern(sub, rtype, str(rid)):
+            raise AuthzDenied(403, "forbidden",
+                              "Gouvernance de cette ressource refusée.")
+        return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
+                           role=access.get_user_role(sub))
+    return rule
+
+
 def _field_int(inp: Optional[BaseModel], field: str, code: str, label: str) -> int:
     val = getattr(inp, field, None) if inp is not None else None
     if val is None:

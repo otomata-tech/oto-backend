@@ -45,5 +45,10 @@ from . import namespace_access  # noqa: F401 — connectors.namespace_access (ot
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,key_grant}
 # Export du journal d'audit org-scopé (oto-backend#67) — REST-only, org_admin.
 from . import audit_log  # noqa: F401 — org.audit_log.export (GET /api/orgs/{id}/audit-log/export)
+# Gouvernance générique des ressources possédées (ADR 0030) — transfert/partage
+# d'un objet possédé (datastore pilote), owner ∪ escalade roles.py.
+from . import resources  # noqa: F401 — resources.govern (oto_resource)
+# Catalogue du registre de capacités (ADR 0030) — alimente l'object-browser admin.
+from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /api/admin/capabilities)
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

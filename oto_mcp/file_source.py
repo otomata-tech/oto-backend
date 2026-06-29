@@ -60,6 +60,27 @@ def _from_gmail(src: dict) -> ResolvedFile:
                         att.get("mimeType") or "application/octet-stream")
 
 
+def _assert_public_host(host: str) -> None:
+    """Anti-SSRF : refuse une cible qui résout vers une IP non-publique (loopback,
+    privée, link-local — dont les métadonnées cloud 169.254.169.254 —, reserved,
+    multicast). Sans ce garde-fou, un agent pourrait faire lire au serveur ses
+    services internes (`localhost:9103`) ou l'IMDS. Toutes les IP résolues du host
+    doivent être globales."""
+    import ipaddress
+    import socket
+    if not host:
+        raise FileSourceError("source url : hôte manquant.")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as e:
+        raise FileSourceError(f"source url : hôte non résolu ({e}).")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global or ip.is_multicast:
+            raise FileSourceError(
+                f"source url : cible non autorisée ({ip}) — adresse interne/réservée.")
+
+
 def _from_url(src: dict, max_bytes: int) -> ResolvedFile:
     url = src.get("url")
     if not url or not str(url).lower().startswith(("http://", "https://")):
@@ -68,8 +89,16 @@ def _from_url(src: dict, max_bytes: int) -> ResolvedFile:
     from urllib.parse import unquote, urlsplit
 
     import httpx
-    with httpx.Client(follow_redirects=True, timeout=60.0) as c:
+    host = urlsplit(str(url)).hostname
+    _assert_public_host(host or "")
+    # Redirections DÉSACTIVÉES : un 3xx pourrait pointer une IP interne (le garde-fou
+    # ci-dessus ne valide que l'hôte initial). Nos sources légitimes (URLs signées S3,
+    # gmail_get_attachment) sont directes → pas de redirect attendu.
+    with httpx.Client(follow_redirects=False, timeout=60.0) as c:
         with c.stream("GET", url) as r:
+            if 300 <= r.status_code < 400:
+                raise FileSourceError(
+                    "source url : redirection non suivie (anti-SSRF) — fournir l'URL finale directe.")
             r.raise_for_status()
             declared = r.headers.get("content-length")
             if declared and int(declared) > max_bytes:

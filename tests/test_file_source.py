@@ -87,3 +87,21 @@ def test_size_cap_enforced(monkeypatch):
 def test_url_requires_http():
     with pytest.raises(fs.FileSourceError):
         fs.resolve({"kind": "url", "url": "file:///etc/passwd"})
+
+
+@pytest.mark.parametrize("host", [
+    "http://127.0.0.1/x",            # loopback
+    "http://localhost/x",            # loopback (résolu)
+    "http://169.254.169.254/latest", # IMDS cloud
+    "http://10.0.0.5/x",             # privé
+    "http://192.168.1.1/x",          # privé
+])
+def test_url_ssrf_blocked(host):
+    # Anti-SSRF : une cible interne/réservée est refusée AVANT toute requête.
+    with pytest.raises(fs.FileSourceError):
+        fs.resolve({"kind": "url", "url": host})
+
+
+def test_assert_public_host_passes_for_global():
+    # Un host public ne lève pas (résolution réelle d'une IP globale).
+    fs._assert_public_host("example.com")

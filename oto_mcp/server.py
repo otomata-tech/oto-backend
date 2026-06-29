@@ -163,8 +163,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     instance.add_middleware(SentryToolErrorMiddleware())
 
     # Filtrage per-user des tools (toggle individuel sur /account).
-    from .middleware import UserDisabledToolsMiddleware
+    from .middleware import DynamicInstructionsMiddleware, UserDisabledToolsMiddleware
     instance.add_middleware(UserDisabledToolsMiddleware())
+    # Injection de la doctrine de base de l'org dans les instructions du `initialize`
+    # (canal fiable, par-(sub,org) — otomata-private#49, amende ADR 0014).
+    instance.add_middleware(DynamicInstructionsMiddleware())
     # Journalisation des appels MCP (lib commune otomata-calllog, table tool_calls,
     # lue par /api/admin/monitoring/*). Identité via auth_hooks (auth Logto custom —
     # le get_access_token fastmcp par défaut ne la voit pas).

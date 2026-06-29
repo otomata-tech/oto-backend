@@ -76,8 +76,11 @@ async def _agent_context(ctx: ResolvedCtx, inp: AgentContextInput) -> dict:
         ctx, types.SimpleNamespace(slug=None, scope=None, version=None,
                                    org_id=None, with_history=False))
     return {
+        # Instructions RÉELLEMENT reçues = statiques + doctrine de base de l'org
+        # injectée au handshake (même composition que DynamicInstructionsMiddleware).
         "org_id": ctx.org_id,
-        "instructions": _instructions.render(),
+        "instructions": _instructions.compose_with_org_doctrine(
+            _instructions.render(), ctx.org_id),
         "doctrine": doctrine,
         "tools": await _tools_view(ctx),
     }

@@ -47,6 +47,40 @@ class UserDisabledToolsMiddleware(Middleware):
         return result
 
 
+class DynamicInstructionsMiddleware(Middleware):
+    """Injecte la doctrine de base de l'org dans les instructions du `initialize`.
+
+    Le champ `instructions` (le « cheval de Troie » dans le contexte du LLM) est relu
+    par FastMCP à CHAQUE nouvelle session ; on réécrit `result.instructions` par-(sub,
+    org) au handshake. Canal FIABLE de livraison de la doctrine — au lieu de dépendre
+    d'un appel volontaire `oto_get_doctrine()` (otomata-private#49, amende ADR 0014).
+    Claude relance un handshake par conversation → doctrine à jour à chaque fois.
+
+    Fail-open : pas de sub (stdio/discovery), pas d'org active, ou erreur → on laisse
+    les instructions statiques. La composition vit dans `instructions.compose_with_org_doctrine`.
+    """
+
+    async def on_initialize(self, context, call_next):
+        result = await call_next(context)
+        if result is None or not getattr(result, "instructions", None):
+            return result
+        try:
+            sub = current_user_sub_from_token()
+        except Exception:
+            sub = None
+        if not sub:
+            return result
+        try:
+            from . import access, instructions
+            org_id = access.current_org(sub)
+            result.instructions = instructions.compose_with_org_doctrine(
+                result.instructions, org_id)
+        except Exception:
+            logger.warning("injection doctrine d'org échouée pour sub=%s (fail-open)",
+                           sub, exc_info=True)
+        return result
+
+
 class FieldRedactionMiddleware(Middleware):
     """Redacte les champs sensibles du RÉSULTAT de tout tool, selon la politique de
     rédaction de l'org active (ADR 0009/0015, « la policy gouverne l'exposition »).

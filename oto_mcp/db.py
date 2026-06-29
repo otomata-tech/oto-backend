@@ -748,6 +748,27 @@ def _database_url() -> str:
     return url
 
 
+def _connect_options() -> str:
+    """Bornes serveur posées par connexion via l'option libpq `options` (issue #70).
+
+    `idle_in_transaction_session_timeout` (défaut 60 s) tue une transaction laissée
+    IDLE → empêche qu'un process hangé laisse une connexion zombie tenant un lock
+    qui bloquerait le boot suivant (`init_db`, incident 2026-06-25). Sans effet sur
+    une requête EN COURS (seules les txns inactives sont coupées).
+
+    `statement_timeout` est **opt-in** (défaut 0 = off) : on ne l'active pas par
+    défaut car un `CREATE INDEX` de migration sur une grosse table (tool_calls,
+    datastore_rows) pourrait dépasser le seuil au boot. Le borné cold-S3 du scan
+    SIRENE est déjà porté par le service FOD (watchdog 90 s), pas par ce pool.
+    """
+    idle = os.environ.get("OTO_MCP_DB_IDLE_TX_TIMEOUT_MS", "60000")
+    stmt = os.environ.get("OTO_MCP_DB_STATEMENT_TIMEOUT_MS", "0")
+    parts = [f"-c idle_in_transaction_session_timeout={idle}"]
+    if stmt and stmt != "0":
+        parts.append(f"-c statement_timeout={stmt}")
+    return " ".join(parts)
+
+
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
@@ -755,7 +776,7 @@ def _get_pool() -> ConnectionPool:
             conninfo=_database_url(),
             min_size=1,
             max_size=int(os.environ.get("OTO_MCP_DB_POOL_MAX", "8")),
-            kwargs={"row_factory": _str_dict_row},
+            kwargs={"row_factory": _str_dict_row, "options": _connect_options()},
             open=True,
         )
     return _pool

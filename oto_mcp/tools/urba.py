@@ -46,6 +46,21 @@ def register(mcp: FastMCP) -> None:
         """
         return gpu.zonage(lon, lat)
 
+    @mcp.tool()
+    def urba_reglement(url: str) -> dict:
+        """Download a PLU/PLUi règlement PDF and extract its text.
+
+        Pass a `reglement_url` returned by `urba_zonage` (the direct GPU PDF link
+        for a zone/document). Returns `{text, chars, scanne_probable, size_mo}` —
+        the full règlement text (often the constructibility rules for the zone),
+        its length, a `scanne_probable` flag (True if the PDF is an image scan with
+        no extractable text, needing OCR), and the downloaded size in MB. Use it to
+        read the actual rules behind a zone label rather than just the zoning code.
+        """
+        from france_opendata.reglement import fetch_and_parse
+
+        return fetch_and_parse(url)
+
     # --- risques (Géorisques) ------------------------------------------------
 
     @mcp.tool()

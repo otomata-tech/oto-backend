@@ -12,7 +12,6 @@ from .providers import (  # noqa: F401  (ré-export rétrocompat, ADR 0010)
     REGISTRY,
     KEY_PROVIDERS,
     ORG_SHAREABLE_PROVIDERS,
-    ADMIN_GRANT_ONLY_NAMESPACES,
     QUOTA_DEFAULTS,
     DEFAULT_BUNDLE,
     DEFAULT_PRESET,

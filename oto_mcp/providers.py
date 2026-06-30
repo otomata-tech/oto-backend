@@ -96,15 +96,6 @@ class Connector:
         return "byo_org" in self.auth_modes
 
     @property
-    def grant_only(self) -> bool:
-        # ADR 0031 : le concept « grant-only » est retiré. Plus aucun connecteur
-        # n'est « sur autorisation » — la réservation d'un connecteur passe par
-        # l'activation (interdire/forcer) + le credential ; le masquage des bridges
-        # remote par une règle dédiée (le credential d'org EST le grant). Conservé
-        # `False` le temps de retirer les derniers call-sites (barreau de nettoyage).
-        return False
-
-    @property
     def family(self) -> str:
         """Nature de l'intégration (axe *builder*, ADR 0011) — DÉRIVÉE du credential
         + runtime : open-data | api | browser | google | federated | bridge."""
@@ -702,9 +693,6 @@ for _c_obj in _REGISTRY_LIST:
 
 KEY_PROVIDERS: tuple = tuple(c.name for c in _REGISTRY_LIST if c.keyed)
 ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.org_shareable)
-ADMIN_GRANT_ONLY_NAMESPACES: frozenset = frozenset(
-    ns for c in _REGISTRY_LIST if c.grant_only for ns in c.namespaces
-)
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)
 DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_preset)
@@ -741,8 +729,6 @@ def _availability_tag(c: "Connector") -> str:
     bits: list[str] = []
     if c.hosted_auth:
         bits.append("compte à connecter")
-    if c.grant_only:
-        bits.append("sur accord plateforme")
     if c.default_hidden:
         bits.append("masqué — oto_enable_tool")
     elif not c.in_default_bundle and c.kind == "tools":

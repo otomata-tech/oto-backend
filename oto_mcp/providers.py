@@ -863,6 +863,9 @@ def public_catalog() -> list[dict]:
                 {"name": f.name, "label": f.label, "secret": f.secret}
                 for f in c.secret_fields
             ],
+            # Free-tier (ADR 0031) : clé plateforme ouverte sans grant, quota gratuit
+            # par user/jour. Le dashboard affiche un badge « gratuit : N/j » côté USER.
+            "free_tier": {"daily_quota": c.default_quota} if c.platform_key_open else None,
         }
         for c in _REGISTRY_LIST
     ]

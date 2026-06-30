@@ -25,9 +25,7 @@ from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
     is_default_hidden,
-    is_grant_only,
     is_tool_visible,
-    namespace_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,29 +123,14 @@ def register(mcp: FastMCP) -> None:
     async def oto_enable_tool(name: str, ctx: Context) -> dict:
         """Re-enable a previously disabled tool for the current user.
 
-        Tools in an admin-grant-only namespace (e.g. `gocardless_*`, `mm_*`)
-        cannot be self-enabled by a non-admin: an admin must grant the namespace
-        first (`oto_admin_namespace_access`). The call is refused otherwise.
-
         Args:
             name: Exact tool name to re-enable.
         """
         sub = _require_sub()
-        granted, is_admin = _user_access(sub)
-        if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(
-                    f"`{name}` relève du namespace contrôlé `{namespace_of(name)}` "
-                    f"(accès sensible). Auto-activation refusée — demande à un admin "
-                    f"de t'accorder ce namespace (oto_admin_namespace_access)."
-                ),
-            ))
         org = _active_org(sub)
         db.remove_user_disabled_tool(sub, name, org)
-        # Override positif requis pour rendre visible un masqué-par-défaut, ou un
-        # grant-only côté admin (côté user granté, le grant suffit à le révéler).
-        if is_default_hidden(name) or (is_grant_only(name) and is_admin):
+        # Override positif requis pour rendre visible un masqué-par-défaut.
+        if is_default_hidden(name):
             db.add_user_enabled_tool(sub, name, org)
         await enable_components(ctx, names={name}, components={"tool"})
         return {"name": name, "enabled": True, "persistent": True}

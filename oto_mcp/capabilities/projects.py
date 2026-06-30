@@ -116,7 +116,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "get":
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
-        return {**_view(row), "links": db.list_project_links(int(inp.project_id))}
+        return {**_view(row),
+                "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
+                "links": db.list_project_links(int(inp.project_id))}
 
     if inp.op == "activity":
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)

@@ -37,6 +37,10 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
+    monkeypatch.setattr(P.db, "list_project_activity",
+                        lambda pid, limit=50: [{"sub": "u1", "action": "project.create",
+                                                "detail": "Proj", "created_at": "2026-06-30"}])
     return rec
 
 
@@ -128,6 +132,11 @@ def test_link_forbidden_without_write(seams, monkeypatch):
 def test_unlink(seams):
     P._project(CTX, P.ProjectInput(op="unlink", project_id=7, target_type="tableau", target_ref="7"))
     assert seams["unlink"] == [(7, "tableau", "7")]
+
+
+def test_activity(seams):
+    out = P._project(CTX, P.ProjectInput(op="activity", project_id=7))
+    assert out["id"] == 7 and out["activity"][0]["action"] == "project.create"
 
 
 def test_capability_registered():

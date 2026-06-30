@@ -26,6 +26,7 @@ def seams(monkeypatch):
                         lambda did, title=None, body_md=None, kind=None: rec["update"].append((did, title, body_md, kind)))
     monkeypatch.setattr(D.db, "delete_doc", lambda did: rec["delete"].append(did))
     monkeypatch.setattr(D.db, "move_doc", lambda did, p: rec["move"].append((did, p)))
+    monkeypatch.setattr(D.db, "log_project_activity", lambda *a, **k: None)
     return rec
 
 

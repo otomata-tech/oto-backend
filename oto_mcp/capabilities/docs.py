@@ -57,6 +57,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                      "Parent invalide (autre projet ou inexistant).")
         did = db.create_doc(int(inp.project_id), inp.title.strip(), parent_id=inp.parent_id,
                             body_md=inp.body_md or "", kind=(inp.kind or "doc"), created_by=sub)
+        db.log_project_activity(int(inp.project_id), sub, "doc.create", inp.title.strip())
         return _view(db.get_doc_by_id(did))
 
     if inp.op == "list":
@@ -79,11 +80,13 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         db.update_doc(int(inp.doc_id), title=(inp.title.strip() if inp.title else None),
                       body_md=inp.body_md, kind=inp.kind)
+        db.log_project_activity(pid, sub, "doc.update", row.get("title"))
         return _view(db.get_doc_by_id(int(inp.doc_id)))
 
     if inp.op == "delete":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         db.delete_doc(int(inp.doc_id))   # CASCADE sur le sous-arbre
+        db.log_project_activity(pid, sub, "doc.delete", row.get("title"))
         return {"ok": True, "id": inp.doc_id, "deleted": True}
 
     # move — nouveau parent dans le MÊME projet (cycle profond non gardé en v1).

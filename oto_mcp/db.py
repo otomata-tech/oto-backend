@@ -346,6 +346,19 @@ CREATE TABLE IF NOT EXISTS docs (
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);
 
+-- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté
+-- best-effort par les capacités projet/doc sur les mutations. `action` = verbe court
+-- (project.create, doc.update…), `detail` = libellé libre.
+CREATE TABLE IF NOT EXISTS project_activity (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    sub TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_activity_project ON project_activity(project_id, created_at DESC);
+
 -- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
 -- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne
 -- accorde une permission à un principal (user/group/org). L'OWNER de la ressource
@@ -3217,6 +3230,30 @@ def move_doc(doc_id: int, new_parent_id: Optional[int]) -> None:
     with _connect() as conn:
         conn.execute("UPDATE docs SET parent_id = %s, updated_at = NOW() WHERE id = %s",
                      (new_parent_id, doc_id))
+
+
+# --- Journal d'activité du projet (incrément 5) ------------------------------
+def log_project_activity(project_id: int, sub: Optional[str], action: str,
+                         detail: Optional[str] = None) -> None:
+    """Best-effort : ne jamais faire échouer la mutation principale sur un log raté."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO project_activity (project_id, sub, action, detail) "
+                "VALUES (%s, %s, %s, %s)", (project_id, sub, action, detail),
+            )
+    except Exception:
+        logger.warning("log_project_activity échoué (project=%s action=%s)", project_id, action)
+
+
+def list_project_activity(project_id: int, limit: int = 50) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, action, detail, created_at FROM project_activity "
+            "WHERE project_id = %s ORDER BY created_at DESC LIMIT %s",
+            (project_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def resolve_datastore_ns(

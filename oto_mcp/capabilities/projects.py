@@ -28,7 +28,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "base")
 
 
 class ProjectInput(BaseModel):
-    op: Literal["create", "list", "get", "update", "archive", "link", "unlink"]
+    op: Literal["create", "list", "get", "update", "archive", "link", "unlink", "activity"]
     project_id: Optional[int] = None
     name: Optional[str] = None
     brief_md: Optional[str] = None
@@ -70,6 +70,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             owner_type, owner_id = "user", sub
         pid = db.create_project(owner_type, owner_id, inp.name.strip(),
                                 inp.brief_md or "", created_by=sub)
+        db.log_project_activity(pid, sub, "project.create", inp.name.strip())
         return _view(db.get_project_by_id(pid))
 
     if inp.op == "list":
@@ -86,11 +87,16 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         return {**_view(row), "links": db.list_project_links(int(inp.project_id))}
 
+    if inp.op == "activity":
+        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+        return {"id": inp.project_id, "activity": db.list_project_activity(int(inp.project_id))}
+
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
         db.update_project(int(inp.project_id),
                           name=(inp.name.strip() if inp.name else None),
                           brief_md=inp.brief_md)
+        db.log_project_activity(int(inp.project_id), sub, "project.update", inp.name or None)
         return _view(db.get_project_by_id(int(inp.project_id)))
 
     if inp.op in ("link", "unlink"):
@@ -101,6 +107,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             db.add_project_link(int(inp.project_id), inp.target_type, inp.target_ref, inp.label)
         else:
             db.remove_project_link(int(inp.project_id), inp.target_type, inp.target_ref)
+        db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
+                                f"{inp.target_type}:{inp.label or inp.target_ref}")
         return {"ok": True, "id": inp.project_id,
                 "links": db.list_project_links(int(inp.project_id))}
 
@@ -108,6 +116,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
              "Archivage réservé au propriétaire / admin.", 403)
     db.archive_project(int(inp.project_id))
+    db.log_project_activity(int(inp.project_id), sub, "project.archive", row.get("name"))
     return {"ok": True, "id": inp.project_id, "archived": True}
 
 

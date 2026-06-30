@@ -192,7 +192,8 @@ def list_docs_for_project(project_id: int) -> list[dict]:
 
 
 def update_doc(doc_id: int, *, title: Optional[str] = None,
-               body_md: Optional[str] = None, kind: Optional[str] = None) -> None:
+               body_md: Optional[str] = None, kind: Optional[str] = None,
+               edited_by: Optional[str] = None) -> None:
     sets: list[str] = []
     params: list = []
     if title is not None:
@@ -209,7 +210,27 @@ def update_doc(doc_id: int, *, title: Optional[str] = None,
     sets.append("updated_at = NOW()")
     params.append(doc_id)
     with _connect() as conn:
+        # Snapshot de l'état ANTÉRIEUR avant d'écrire (chaîne de versions, ADR 0032 §3 B4c).
+        prior = conn.execute("SELECT title, body_md FROM docs WHERE id = %s",
+                             (doc_id,)).fetchone()
+        if prior is not None:
+            conn.execute(
+                "INSERT INTO doc_revisions (doc_id, title, body_md, edited_by) "
+                "VALUES (%s, %s, %s, %s)",
+                (doc_id, prior["title"], prior["body_md"], edited_by),
+            )
         conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = %s", tuple(params))
+
+
+def list_doc_revisions(doc_id: int, limit: int = 50) -> list[dict]:
+    """Versions antérieures d'un doc, plus récentes d'abord (ADR 0032 §3, B4c)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, title, body_md, edited_by, created_at FROM doc_revisions "
+            "WHERE doc_id = %s ORDER BY created_at DESC LIMIT %s",
+            (doc_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def delete_doc(doc_id: int) -> None:

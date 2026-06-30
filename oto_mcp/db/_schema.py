@@ -313,6 +313,20 @@ CREATE TABLE IF NOT EXISTS docs (
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);
 
+-- Historique de versions d'un Doc (ADR 0032 §3, B4c) : à chaque mise à jour, l'état
+-- ANTÉRIEUR (title + body_md) est snapshotté ici avant écriture → chaîne de versions
+-- consultable. `edited_by` = qui a posé la nouvelle version (a remplacé ce snapshot).
+-- CASCADE sur la suppression du doc. Pas de revue/validation (auto-accept, cf. réunion).
+CREATE TABLE IF NOT EXISTS doc_revisions (
+    id BIGSERIAL PRIMARY KEY,
+    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body_md TEXT NOT NULL DEFAULT '',
+    edited_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_revisions_doc ON doc_revisions(doc_id, created_at DESC);
+
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté
 -- best-effort par les capacités projet/doc sur les mutations. `action` = verbe court
 -- (project.create, doc.update…), `detail` = libellé libre.

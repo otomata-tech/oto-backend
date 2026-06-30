@@ -20,7 +20,7 @@ PROJECT_RTYPE = "project"
 
 
 class DocInput(BaseModel):
-    op: Literal["create", "list", "get", "update", "delete", "move"]
+    op: Literal["create", "list", "get", "update", "delete", "move", "revisions"]
     project_id: Optional[int] = None   # create / list
     doc_id: Optional[int] = None       # get / update / delete / move
     parent_id: Optional[int] = None    # create / move (None = 1er niveau sous le projet)
@@ -76,10 +76,15 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
         return _view(row)
 
+    if inp.op == "revisions":
+        _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
+        return {"doc_id": inp.doc_id,
+                "revisions": db.list_doc_revisions(int(inp.doc_id))}
+
     if inp.op == "update":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         db.update_doc(int(inp.doc_id), title=(inp.title.strip() if inp.title else None),
-                      body_md=inp.body_md, kind=inp.kind)
+                      body_md=inp.body_md, kind=inp.kind, edited_by=sub)
         db.log_project_activity(pid, sub, "doc.update", row.get("title"))
         return _view(db.get_doc_by_id(int(inp.doc_id)))
 
@@ -108,8 +113,9 @@ CAPABILITIES += [
             "Docs (markdown pages tree inside a project; inherit the project's access). "
             "op=create (project_id, title; optional parent_id/body_md/kind) / list "
             "(project_id → all pages, build the tree via parent_id) / get / update "
-            "(title/body_md/kind) / delete (cascades its subtree) / move (parent_id, "
-            "null=top-level). kind ∈ doc|note|source."
+            "(title/body_md/kind ; snapshots the prior version) / revisions (doc_id → "
+            "version history, newest first) / delete (cascades its subtree) / move "
+            "(parent_id, null=top-level). kind ∈ doc|note|source."
         ),
         mcp="oto_doc",
         rest=RestBinding("POST", "/api/me/docs"),

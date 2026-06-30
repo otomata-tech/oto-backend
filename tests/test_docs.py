@@ -23,7 +23,9 @@ def seams(monkeypatch):
                         rec["create"].append((pid, title, parent_id, kind, created_by)) or 3)
     monkeypatch.setattr(D.db, "list_docs_for_project", lambda pid: [DOC])
     monkeypatch.setattr(D.db, "update_doc",
-                        lambda did, title=None, body_md=None, kind=None: rec["update"].append((did, title, body_md, kind)))
+                        lambda did, title=None, body_md=None, kind=None, edited_by=None: rec["update"].append((did, title, body_md, kind, edited_by)))
+    monkeypatch.setattr(D.db, "list_doc_revisions",
+                        lambda did, limit=50: [{"id": 1, "title": "v0", "body_md": "old", "edited_by": "u1", "created_at": "2026-06-30"}])
     monkeypatch.setattr(D.db, "delete_doc", lambda did: rec["delete"].append(did))
     monkeypatch.setattr(D.db, "move_doc", lambda did, p: rec["move"].append((did, p)))
     monkeypatch.setattr(D.db, "log_project_activity", lambda *a, **k: None)
@@ -62,7 +64,12 @@ def test_get_unknown(seams):
 
 def test_update(seams):
     D._doc(CTX, D.DocInput(op="update", doc_id=3, body_md="new"))
-    assert seams["update"] == [(3, None, "new", None)]
+    assert seams["update"] == [(3, None, "new", None, "u1")]   # edited_by = ctx.sub
+
+
+def test_revisions(seams):
+    out = D._doc(CTX, D.DocInput(op="revisions", doc_id=3))
+    assert out["doc_id"] == 3 and out["revisions"][0]["title"] == "v0"
 
 
 def test_delete(seams):

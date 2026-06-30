@@ -136,9 +136,9 @@ def register(mcp: FastMCP) -> None:
         renvoyées pour finaliser (ta session est mémorisée ; à refaire seulement
         quand elle expire).
         """
-        _sub()
+        sub = _sub()
         try:
-            out = browser_session.start()
+            out = browser_session.start(sub)
         except browser_session.SessionError as e:
             raise _err(str(e), code=INTERNAL_ERROR)
         out["instructions"] = ("Ouvre `live_view_url`, connecte-toi à Crunchbase, puis "

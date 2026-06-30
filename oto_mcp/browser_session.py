@@ -18,9 +18,13 @@ Le substrat Browserbase lui-même vit dans `browserbase.py` (seam à sens unique
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from typing import Awaitable, Callable
 
 from . import browserbase, db
+
+logger = logging.getLogger(__name__)
 
 # verify(session_id) -> bool : True si la session est bel et bien loguée (vérifié sur
 # la session VIVANTE, jamais sur un export de cookie — cf. leçons ADR 0026).
@@ -28,9 +32,25 @@ Verify = Callable[[str], Awaitable[bool]]
 
 _REGISTRY: dict[str, Verify] = {}
 
+# Sessions ÉMISES par `start()`, liées au `sub` qui les a demandées : `finalize` n'accepte
+# qu'un (context_id, session_id) qu'IL a émis pour CE user (anti-IDOR : empêche de
+# persister le Context — donc la session loguée — d'un tiers). In-memory : le serveur est
+# mono-worker (cf. CLAUDE.md) et start→finalize vivent dans le même process à quelques
+# minutes d'intervalle ; un restart entre les deux = re-cliquer « Connecter » (rare).
+_PENDING: dict[tuple[str, str, str], float] = {}
+_PENDING_TTL = 1000.0  # > keep-alive de session Browserbase (900 s)
+
 
 class SessionError(RuntimeError):
-    """Erreur actionnable du flux de connexion (Browserbase indispo, vérif KO…)."""
+    """Erreur actionnable du flux de connexion (Browserbase indispo, vérif KO…).
+    Son message est rendu au client → ne JAMAIS y interpoler une exception brute
+    (peut contenir l'URL CDP avec `?apiKey=…`) : logguer le détail, message propre."""
+
+
+def _prune(now: float) -> None:
+    for k, exp in list(_PENDING.items()):
+        if exp < now:
+            _PENDING.pop(k, None)
 
 
 def register(connector: str, verify: Verify) -> None:
@@ -42,8 +62,9 @@ def is_session_connector(connector: str) -> bool:
     return connector in _REGISTRY
 
 
-def start() -> dict:
-    """Ouvre un Context + une session keep-alive et renvoie la Live View interactive.
+def start(sub: str) -> dict:
+    """Ouvre un Context + une session keep-alive pour `sub` et renvoie la Live View
+    interactive. La session émise est LIÉE à `sub` (consommée par `finalize`).
     BLOQUANT (HTTP Browserbase synchrone) → appeler via `asyncio.to_thread` depuis une
     route async. Lève `SessionError` si Browserbase n'est pas configuré côté plateforme."""
     if not browserbase.is_configured():
@@ -54,7 +75,11 @@ def start() -> dict:
         sess = browserbase.start_session(context_id, keep_alive=True, timeout=900)
         live = browserbase.live_view_url(sess["id"])
     except browserbase.BrowserbaseError as e:
-        raise SessionError(f"Browserbase : {e}")
+        logger.warning("browserbase start failed: %s", e)
+        raise SessionError("connexion au navigateur distant impossible — réessaie.")
+    now = time.monotonic()
+    _prune(now)
+    _PENDING[(sub, context_id, sess["id"])] = now + _PENDING_TTL
     return {"live_view_url": live, "context_id": context_id, "session_id": sess["id"]}
 
 
@@ -69,11 +94,19 @@ async def finalize(sub: str, connector: str, context_id: str, session_id: str) -
     verify = _REGISTRY.get(connector)
     if verify is None:
         raise SessionError(f"{connector} n'est pas un connecteur à session navigateur.")
+    # La session DOIT avoir été émise par `start()` pour CE sub (anti-IDOR) : on ne
+    # persiste jamais un Context tiers passé à la main.
+    key = (sub, context_id, session_id)
+    if _PENDING.get(key, 0.0) < time.monotonic():
+        _PENDING.pop(key, None)
+        raise SessionError("session de connexion inconnue ou expirée — relance « Connecter ».")
     try:
         ok = await verify(session_id)
-    except Exception as e:  # noqa: BLE001 — toute panne de vérif = message actionnable
-        raise SessionError(f"vérification de la session impossible ({e}).")
+    except Exception:  # noqa: BLE001 — détail loggué, jamais renvoyé (peut porter l'apiKey)
+        logger.exception("session verify failed for %s", connector)
+        raise SessionError("vérification de la session impossible — réessaie.")
     if not ok:
         return False
     await asyncio.to_thread(_persist, sub, connector, context_id, session_id)
+    _PENDING.pop(key, None)
     return True

@@ -711,7 +711,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not browser_session.is_session_connector(name):
             return _json_error(request, 404, "not_a_session_connector")
         try:
-            out = await asyncio.to_thread(browser_session.start)
+            out = await asyncio.to_thread(browser_session.start, sub)
         except browser_session.SessionError as e:
             return _json_error(request, 503, "browserbase_unavailable", str(e))
         return _json(request, out)

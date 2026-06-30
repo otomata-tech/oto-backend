@@ -194,15 +194,19 @@ def current_group(sub: str | None) -> Optional[int]:
 
 
 def granted_namespaces_for(sub: str) -> frozenset:
-    """Namespaces auxquels le `sub` a droit = grants per-user UNION entitlements
-    de son org active.
+    """Namespaces gouvernés visibles pour le `sub` = entitlements de son org active
+    ∪ namespaces remote dont l'org possède le credential.
 
     SOURCE UNIQUE de la visibilité des namespaces gouvernés (grant-only),
     consommée par le middleware, les meta-tools MCP ET les gardes REST — pour
     qu'aucune surface ne diverge (sinon un namespace refusé côté MCP serait
     contournable côté /account). Cf. project_oto_mcp_org_tier.
+
+    ADR 0031 : les **grants per-user** (`user_namespace_grants`) sont retirés du
+    calcul (relicat — « pas utile, trop peu de users »). Restent les entitlements
+    d'org et le remote data-driven (le credential d'org EST le grant, ADR 0003).
     """
-    ns = set(db.list_user_granted_namespaces(sub))
+    ns: set = set()
     active_org = current_org(sub)
     if active_org is not None:
         ns |= set(org_store.list_org_entitled_namespaces(active_org))

@@ -254,14 +254,22 @@ def list_tool_calls(
     tool_name: Optional[str] = None,
     errors_only: bool = False,
     since_days: Optional[int] = None,
+    org_id: Optional[int] = None,
 ) -> list[dict]:
-    """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI."""
+    """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI.
+
+    `org_id` (si fourni) scope les appels émis SOUS cette org (colonne `tool_calls.org_id`
+    stampée par le seam `current_org` au moment de l'appel, ADR 0023) — l'activité « la
+    mienne » du dashboard doit refléter l'org chargée, pas l'union de toutes mes orgs."""
     limit = max(1, min(int(limit), 1000))
     clauses: list[str] = ["l.kind = 'mcp'"]
     params: list[Any] = []
     if sub:
         clauses.append("l.sub = %s")
         params.append(sub)
+    if org_id is not None:
+        clauses.append("l.org_id = %s")
+        params.append(int(org_id))
     if tool_name:
         clauses.append("l.tool = %s")
         params.append(tool_name)

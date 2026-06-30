@@ -1066,8 +1066,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
 
     async def my_calls(request: Request) -> JSONResponse:
         """Journal des appels MCP de l'utilisateur courant (sa propre activité).
-        Filtres `?limit=`/`?tool=`/`?errors=1`/`?days=`. Toujours scopé au sub
-        du token — un user ne voit QUE ses propres appels (≠ /api/admin/monitoring
+        Filtres `?limit=`/`?tool=`/`?errors=1`/`?days=`. Scopé au sub du token ET à
+        l'**org active** (consultation `X-Oto-Org` ?? maison, seam `current_org`, ADR 0023)
+        — un user ne voit QUE ses propres appels DANS l'org chargée (≠ /api/admin/monitoring
         qui agrège tout le monde et reste admin-only)."""
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -1086,6 +1087,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         calls = db.list_tool_calls(
             limit=limit,
             sub=sub,
+            org_id=access.current_org(sub),
             tool_name=qp.get("tool") or None,
             errors_only=qp.get("errors") in ("1", "true"),
             since_days=since_days,

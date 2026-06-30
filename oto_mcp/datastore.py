@@ -145,9 +145,11 @@ class DatastorePg:
 
     def list_namespaces(self) -> list[dict]:
         """Namespaces visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
-        possédés par l'org active + accordés à elle (grant d'org/groupe actif) +
-        partagés avec l'acteur en propre (grant user, partage délibéré). Un namespace
-        possédé par une AUTRE org ne fuite plus. Dédupliqués par id (priorité possédé)."""
+        possédés par l'org active + accordés à elle (grant d'org/groupe actif). Un
+        namespace possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant
+        user, cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
+        2026-07-01). Dédupliqués par id (priorité possédé). L'agent garde l'accès par
+        nom (`can_access` inchangé) même si le namespace n'est pas listé ici."""
         from . import access
         owner = ownership.active_owner(access.current_org(self.sub))
         if owner is None:

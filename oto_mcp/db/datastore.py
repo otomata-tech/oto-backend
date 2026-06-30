@@ -122,8 +122,14 @@ def resolve_datastore_ns(
 def list_datastore_namespaces_granted_to(
     sub: str, org_ids: list[int], group_ids: list[int],
 ) -> list[dict]:
-    """Namespaces accordés à l'acteur via `resource_grants` (principal user/org/group),
-    avec la permission gagnante. Exclut ceux possédés en perso (gérés à part)."""
+    """Namespaces accordés à l'**org active / groupe actif** via `resource_grants`
+    (principal org/group), avec la permission gagnante.
+
+    Volontairement **PAS** les grants `principal_type='user'` : un partage *en propre*
+    (cross-org, ex. un namespace de ton org perso partagé à ton compte) ne doit pas
+    polluer la vue Données de CHAQUE org — l'org est le contexte (ADR 0023, scope décidé
+    avec l'utilisateur le 2026-07-01). L'agent garde l'accès par nom (`can_access`
+    inchangé). `sub` ne sert plus qu'à exclure les reliques perso possédées (gérées à part)."""
     org_txt = [str(o) for o in org_ids]
     grp_txt = [str(g) for g in group_ids]
     with _connect() as conn:
@@ -133,8 +139,7 @@ def list_datastore_namespaces_granted_to(
             "FROM resource_grants g "
             "JOIN user_datastores d ON d.id::text = g.resource_id "
             "WHERE g.resource_type = 'datastore_namespace' AND ("
-            "     (g.principal_type = 'user'  AND g.principal_id = %(sub)s)"
-            "  OR (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
+            "     (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
             "  OR (g.principal_type = 'group' AND g.principal_id = ANY(%(grp)s)) ) "
             "AND NOT (d.owner_type = 'user' AND d.owner_id = %(sub)s) "
             "GROUP BY d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "

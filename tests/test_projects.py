@@ -27,12 +27,12 @@ def seams(monkeypatch):
     rec["link"] = []
     rec["unlink"] = []
     monkeypatch.setattr(P.db, "add_project_link",
-                        lambda pid, tt, tr, label=None, role=None: rec["link"].append((pid, tt, tr, label, role)))
+                        lambda pid, tt, tr, label=None, role=None, config=None: rec["link"].append((pid, tt, tr, label, role, config)))
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr: rec["unlink"].append((pid, tt, tr)) or 1)
     monkeypatch.setattr(P.db, "list_project_links",
                         lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
-                                      "role": "vivier de leads", "cross_project": False}])
+                                      "role": "vivier de leads", "config": {}, "cross_project": False}])
     monkeypatch.setattr(P.ownership, "accessor_scope",
                         lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
@@ -122,7 +122,7 @@ def test_get_includes_links(seams):
 def test_link(seams):
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7,
                                          target_type="tableau", target_ref="7", label="Leads"))
-    assert seams["link"] == [(7, "tableau", "7", "Leads", None)]
+    assert seams["link"] == [(7, "tableau", "7", "Leads", None, None)]
     assert out["ok"] is True and out["links"]
 
 
@@ -130,7 +130,28 @@ def test_link_with_role(seams):
     P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base",
                                    target_ref="kb1", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence")]
+    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence", None)]
+
+
+def test_link_connector_with_config(seams):
+    # ADR 0032 §4 (B2) : surcharge connecteur préfaite — identité + instructions en prose.
+    cfg = {"identity_id": "acc_1", "instructions_md": "filtrer les accords par thème mutuelle"}
+    out = P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                         target_ref="fr", label="Entreprises FR", config=cfg))
+    assert seams["link"] == [(7, "connecteur", "fr", "Entreprises FR", None, cfg)]
+    assert out["ok"] is True
+
+
+def test_link_config_defaults_none(seams):
+    # `config` absent côté handler → None (la couche DB le traduit en {} à la création,
+    # ou préserve l'existant via COALESCE au re-link).
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur", target_ref="fr"))
+    assert seams["link"][0][5] is None
+
+
+def test_get_link_carries_config(seams):
+    out = P._project(CTX, P.ProjectInput(op="get", project_id=7))
+    assert out["links"][0]["config"] == {}
 
 
 def test_link_missing_target(seams):

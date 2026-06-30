@@ -513,6 +513,81 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             media_store.delete_by_url(old)
         return _json(request, {"ok": True})
 
+    # --- Fichiers bruts d'un projet — carte « Autre document » (ADR 0032 §3) ---
+    # Upload multipart (PDF/HTML…) → hors couche capacité (corps binaire, pas JSON).
+    # Blob DURABLE+privé en Object Storage ; accès par presigned à la lecture.
+
+    def _signed(row: dict) -> dict:
+        from . import media_store
+        key = row.pop("s3_key", None)
+        try:
+            row["download_url"] = media_store.presign_get(key) if key else None
+        except media_store.MediaError:
+            row["download_url"] = None
+        return row
+
+    async def project_files_list(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import ownership
+        pid = int(request.path_params["project_id"])
+        if not db.get_project_by_id(pid):
+            return _json_error(request, 404, "unknown_project")
+        if not ownership.can_access(sub, "project", str(pid), "read"):
+            return _json_error(request, 403, "forbidden")
+        return _json(request, {"files": [_signed(r) for r in db.list_project_files(pid)]})
+
+    async def project_files_upload(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import ownership, media_store
+        pid = int(request.path_params["project_id"])
+        if not db.get_project_by_id(pid):
+            return _json_error(request, 404, "unknown_project")
+        if not ownership.can_access(sub, "project", str(pid), "write"):
+            return _json_error(request, 403, "forbidden")
+        try:
+            form = await request.form()
+        except Exception:
+            return _json_error(request, 400, "invalid_multipart")
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            return _json_error(request, 400, "missing_file")
+        data = await upload.read()
+        filename = getattr(upload, "filename", None) or "file"
+        content_type = getattr(upload, "content_type", None) or "application/octet-stream"
+        title = (str(form.get("title") or "")).strip() or None
+        description = (str(form.get("description") or "")).strip() or None
+        try:
+            key = media_store.upload_object("project-files", str(pid), data, content_type, filename)
+        except media_store.MediaError as e:
+            return _json_error(request, e.status, e.code)
+        row = db.add_project_file(pid, key, filename, mime=content_type,
+                                  size_bytes=len(data), title=title,
+                                  description=description, created_by=sub)
+        db.log_project_activity(pid, sub, "project.file_add", title or filename)
+        return _json(request, {"ok": True, "file": _signed(row)})
+
+    async def project_file_delete(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import ownership, media_store
+        pid = int(request.path_params["project_id"])
+        file_id = int(request.path_params["file_id"])
+        existing = db.get_project_file(file_id)
+        if not existing or existing["project_id"] != pid:
+            return _json_error(request, 404, "unknown_file")
+        if not ownership.can_access(sub, "project", str(pid), "write"):
+            return _json_error(request, 403, "forbidden")
+        db.delete_project_file(file_id)
+        media_store.delete_by_key(existing["s3_key"])
+        db.log_project_activity(pid, sub, "project.file_delete",
+                                existing.get("title") or existing.get("filename"))
+        return _json(request, {"ok": True})
+
     def _org_logo_gate(request: Request, sub: str):
         """Renvoie (org_id, err). 400 id invalide, 404 org inconnue, 403 non-admin."""
         from . import roles
@@ -1093,6 +1168,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/avatar", avatar_save, methods=["POST"]),
         Route("/api/me/avatar", avatar_clear, methods=["DELETE"]),
         Route("/api/me/avatar", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/projects/{project_id:int}/files", project_files_list, methods=["GET"]),
+        Route("/api/me/projects/{project_id:int}/files", project_files_upload, methods=["POST"]),
+        Route("/api/me/projects/{project_id:int}/files", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/projects/{project_id:int}/files/{file_id:int}", project_file_delete, methods=["DELETE"]),
+        Route("/api/me/projects/{project_id:int}/files/{file_id:int}", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
         Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),

@@ -276,8 +276,11 @@ CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_type, owner_id);
 -- connecteur name, memento workspace). `label` dénormalisé pour l'affichage ; `role`
 -- = pourquoi cette entité est ici / ce qu'elle apporte au projet — le « pourquoi » vit
 -- sur le LIEN, pas sur l'entité (ADR 0032 §2). Le caractère cross-projet n'est PAS
--- stocké : il est DÉRIVÉ (même (target_type, target_ref) dans ≥2 projets). CASCADE sur
--- la suppression du projet ; unicité (projet, type, ref) → lien idempotent.
+-- stocké : il est DÉRIVÉ (même (target_type, target_ref) dans ≥2 projets). `config` =
+-- surcharge contextuelle PRÉFAITE de l'entité dans CE projet (ADR 0032 §4, B2) — pour
+-- un `connecteur` : {identity_id?, instructions_md?} (quel compte + instructions de
+-- surcharge en prose, lues par l'agent au chargement, jamais déclarées à la volée).
+-- CASCADE sur la suppression du projet ; unicité (projet, type, ref) → lien idempotent.
 CREATE TABLE IF NOT EXISTS project_links (
     id BIGSERIAL PRIMARY KEY,
     project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -285,6 +288,7 @@ CREATE TABLE IF NOT EXISTS project_links (
     target_ref TEXT NOT NULL,
     label TEXT,
     role TEXT,
+    config JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(project_id, target_type, target_ref)
 );
@@ -321,6 +325,26 @@ CREATE TABLE IF NOT EXISTS project_activity (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_project_activity_project ON project_activity(project_id, created_at DESC);
+
+-- Fichiers bruts d'un projet — carte « Autre document » (ADR 0032 §3). PDF/HTML/etc.
+-- stockés en Object Storage DURABLE+privé (media_store.upload_object → `s3_key`
+-- persistée, presigned à la lecture). `title`/`description` = la coquille légère
+-- décrite en réunion (consommable par l'agent) ; `summary` = résumé IA, rempli plus
+-- tard. CASCADE sur la suppression du projet ; pas d'ownership propre (hérite du projet).
+CREATE TABLE IF NOT EXISTS project_files (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    s3_key TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime TEXT,
+    size_bytes BIGINT,
+    title TEXT,
+    description TEXT,
+    summary TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
 
 -- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
 -- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne

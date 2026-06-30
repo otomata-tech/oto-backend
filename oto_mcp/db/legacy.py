@@ -2064,17 +2064,22 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
 
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,
-                     label: Optional[str] = None, role: Optional[str] = None) -> None:
+                     label: Optional[str] = None, role: Optional[str] = None,
+                     config: Optional[dict] = None) -> None:
     """Lie une entité (tableau/procédure/connecteur/base) au projet. Idempotent :
-    re-lier met à jour le label ; le `role` n'est écrasé que s'il est fourni (un
-    re-link pour changer le seul label ne perd pas la description de rôle déjà posée)."""
+    re-lier met à jour le label ; le `role` et le `config` (surcharge contextuelle
+    préfaite, ADR 0032 §4) ne sont écrasés que s'ils sont fournis (un re-link pour
+    changer le seul label ne perd ni la description de rôle ni la config déjà posées).
+    `config` absent à la création → `{}`."""
+    cfg = json.dumps(config) if config is not None else None
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO project_links (project_id, target_type, target_ref, label, role) "
-            "VALUES (%s, %s, %s, %s, %s) "
+            "INSERT INTO project_links (project_id, target_type, target_ref, label, role, config) "
+            "VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
             "ON CONFLICT (project_id, target_type, target_ref) DO UPDATE SET "
-            "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role)",
-            (project_id, target_type, target_ref, label, role),
+            "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
+            "config = COALESCE(%s::jsonb, project_links.config)",
+            (project_id, target_type, target_ref, label, role, cfg, cfg),
         )
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
 
@@ -2094,7 +2099,7 @@ def list_project_links(project_id: int) -> list[dict]:
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT pl.target_type, pl.target_ref, pl.label, pl.role, pl.created_at, "
+            "SELECT pl.target_type, pl.target_ref, pl.label, pl.role, pl.config, pl.created_at, "
             "       EXISTS(SELECT 1 FROM project_links o "
             "              WHERE o.target_type = pl.target_type "
             "                AND o.target_ref = pl.target_ref "
@@ -2193,6 +2198,56 @@ def list_project_activity(project_id: int, limit: int = 50) -> list[dict]:
             (project_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Fichiers bruts d'un projet (carte « Autre document », ADR 0032 §3) -------
+_PFILE_COLS = ("id, project_id, s3_key, filename, mime, size_bytes, title, "
+               "description, summary, created_by, created_at")
+
+
+def add_project_file(project_id: int, s3_key: str, filename: str, *,
+                     mime: Optional[str] = None, size_bytes: Optional[int] = None,
+                     title: Optional[str] = None, description: Optional[str] = None,
+                     created_by: Optional[str] = None) -> dict:
+    """Enregistre un fichier brut (déjà uploadé en S3) attaché au projet. Le blob
+    durable vit dans Object Storage (`s3_key`) ; cette ligne porte sa métadonnée."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO project_files (project_id, s3_key, filename, mime, "
+            "size_bytes, title, description, created_by) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_PFILE_COLS}",
+            (project_id, s3_key, filename, mime, size_bytes, title, description, created_by),
+        ).fetchone()
+        conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+        return dict(row)
+
+
+def list_project_files(project_id: int) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_PFILE_COLS} FROM project_files WHERE project_id = %s "
+            "ORDER BY created_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_project_file(file_id: int) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_PFILE_COLS} FROM project_files WHERE id = %s", (file_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_project_file(file_id: int) -> Optional[dict]:
+    """Supprime la ligne et renvoie la `s3_key` à purger (ou None si inconnu)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "DELETE FROM project_files WHERE id = %s RETURNING project_id, s3_key",
+            (file_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def resolve_datastore_ns(

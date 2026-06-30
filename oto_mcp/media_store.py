@@ -191,3 +191,54 @@ def delete_by_url(url: str) -> None:
         _get_client().delete_object(Bucket=_bucket(), Key=key)
     except Exception:
         pass  # best-effort : un orphelin ne doit jamais casser la requête user
+
+
+# --- Blobs applicatifs DURABLES (documents de projet, ADR 0032 §3) -----------
+# Ni `upload_image` (ACL public) ni `upload_private` (préfixe `tmp/` purgé en 1 j)
+# ne conviennent à un document de projet : on veut du **durable + privé**. On
+# persiste la CLÉ (pas une URL signée qui expire) et on signe à la demande.
+
+def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
+                  filename: str | None = None) -> str:
+    """Stocke un blob DURABLE (hors `tmp/`, pas d'ACL public) et renvoie sa **clé**
+    S3 (à persister). L'URL d'accès se génère à la lecture via `presign_get`. Clé
+    par hash de contenu → ré-upload identique idempotent."""
+    if not data:
+        raise MediaError(400, "missing_file", "Contenu vide.")
+    if len(data) > _max_bytes():
+        raise MediaError(413, "file_too_large", f"Fichier > {_max_bytes()} octets.")
+    digest = hashlib.sha256(data).hexdigest()[:32]
+    name = quote(filename or "file", safe="")
+    key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"
+    try:
+        _get_client().put_object(
+            Bucket=_bucket(), Key=key, Body=data,
+            ContentType=content_type or "application/octet-stream",
+        )
+        return key
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+
+
+def presign_get(key: str, *, expiry: int | None = None) -> str:
+    """URL GET signée et expirante pour une clé privée (lecture à la demande)."""
+    try:
+        return _get_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": _bucket(), "Key": key},
+            ExpiresIn=expiry or presign_expiry(),
+        )
+    except Exception as e:
+        raise MediaError(500, "presign_failed", str(e))
+
+
+def delete_by_key(key: str) -> None:
+    """Supprime un objet par sa clé (best-effort — n'échoue jamais)."""
+    if not key:
+        return
+    try:
+        _get_client().delete_object(Bucket=_bucket(), Key=key)
+    except Exception:
+        pass

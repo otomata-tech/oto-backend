@@ -188,6 +188,33 @@ l'object-browser admin. Catalogue du registre : **`GET /api/admin/capabilities`*
 UI admin **dérivée**. ⚠️ **Migration en cours** : `user_datastores.sub` + colonnes Sheets
 sont des reliques nullable, **DROP différé** (Phase H) après cutover prod vérifié.
 
+> **Suppression du « perso » (2026-06-30, amende ADR 0015/0023/0030).** Plus d'état
+> **org-less** (`org_id=0` / `current_org`=None) : **tout user est TOUJOURS dans une org**.
+> Chaque user a une **org perso dédiée** (`orgs.personal_of=sub`, privée mono-membre) —
+> `org_store.ensure_personal_org` (créée au 1er insert d'`upsert_user` + au boot par
+> `backfill_personal_orgs`, **reclaim sûr** : ne marque une org existante comme perso que
+> si c'est la SEULE org du user, créée par lui ; sinon org fraîche → multi-org intact, zéro
+> fuite). Les ressources `owner_type='user'` ont **migré** vers l'org perso ; les **défauts
+> de création** (datastore/projet) vont dans l'**org active** (`current_org`, toujours posé).
+> Plus de retour-perso (`clear_active_org` retiré ; `oto_clear_org` REST → org perso, MCP →
+> maison). Filets gardés : `ownership` accepte encore `owner_type='user'` **en lecture**
+> (reliquat) ; `session_visibility` `prof_org = active_org or 0` (défensif). `org_id=0`
+> purgé des profils de visibilité.
+
+## Projet — couche d'organisation (ADR 0030, modèle produit 2026-06-27)
+
+Conteneur de travail **possédé** (owned resource ADR 0030) : un but + ses entités. Tables
+`projects` (owner_type/owner_id, `brief_md` = doc d'entrée, soft-delete `archived_at`),
+`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,base}` + `target_ref`
++ label, pas de FK cross-store), `docs` (pages markdown **en arbre** `parent_id`, héritent de
+l'accès du projet — pas d'ownership propre), `project_activity` (journal best-effort).
+Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
+update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
+docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/transfert via
+**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`). UI : `oto-dashboard`
+`/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
+(MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
+
 ## WhatsApp / Telegram / Instagram (messagerie via Unipile)
 
 Tools `whatsapp_*` / `telegram_*` / `instagram_*` (`list_chats`/`read_chat`/

@@ -145,6 +145,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         org_store.backfill_personal_orgs()
     except Exception as e:
         logger.warning("backfill_personal_orgs at _build_mcp failed: %s", e)
+    # Seed des blocs plateforme A/B (#50) s'ils n'existent pas (idempotent).
+    try:
+        instructions.seed_platform_blocks()
+    except Exception as e:
+        logger.warning("seed_platform_blocks at _build_mcp failed: %s", e)
 
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:

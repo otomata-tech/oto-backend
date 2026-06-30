@@ -55,9 +55,9 @@ class DynamicInstructionsMiddleware(Middleware):
     org), au lieu de dépendre d'un appel volontaire `oto_get_doctrine()` (canal fragile,
     otomata-private#49, amende ADR 0014). Deux points d'injection, selon la NATURE :
 
-    - **doctrine de base** (prose à internaliser) → `on_initialize` réécrit
-      `result.instructions` (le « cheval de Troie », relu par session ; Claude
-      rehandshake par conversation). Composition : `instructions.compose_with_org_doctrine`.
+    - **artefact composé** (blocs A/B/C, #50) → `on_initialize` REMPLACE
+      `result.instructions` par `instructions.compose_session(sub, org, onboarded)`
+      (le « cheval de Troie », relu par session ; Claude rehandshake par conversation).
     - **index des doctrines NOMMÉES** (skills) → `on_list_tools` enrichit la
       **description de `oto_get_doctrine`** (l'outil qui les charge). Les skills ne sont
       PAS des outils → absents de `tools/list` → ce serait leur seul canal. Co-localisé
@@ -78,12 +78,13 @@ class DynamicInstructionsMiddleware(Middleware):
         if not sub:
             return result
         try:
-            from . import access, instructions
+            from . import access, db, instructions
             org_id = access.current_org(sub)
-            result.instructions = instructions.compose_with_org_doctrine(
-                result.instructions, org_id)
+            onboarded = bool(db.get_account_profile(sub).get("onboarded"))
+            result.instructions = instructions.compose_session(
+                sub, org_id, onboarded=onboarded)
         except Exception:
-            logger.warning("injection doctrine d'org échouée pour sub=%s (fail-open)",
+            logger.warning("composition des instructions échouée pour sub=%s (fail-open)",
                            sub, exc_info=True)
         return result
 

@@ -10,13 +10,42 @@ d'activation.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import doctrine_run as dr
 
+logger = logging.getLogger(__name__)
+
 _OUTCOMES = ("done", "abandoned", "failed", "blocked")
+
+
+async def _persist_open(run_id: str, label: str, doctrine: str | None) -> None:
+    """Trace durable de l'ouverture (best-effort, off-loop). La pile session reste
+    la source du run actif ; ceci ne fait qu'ajouter label/doctrine en base."""
+    try:
+        from .. import access, db
+        from ..auth_hooks import current_user_sub_from_token
+        sub = current_user_sub_from_token()
+        org_id = access.current_org(sub) if sub else None
+        await asyncio.to_thread(
+            db.insert_run, run_id, sub=sub, org_id=org_id, label=label, doctrine=doctrine)
+    except Exception:
+        logger.warning("persistance run_start échouée pour run_id=%s (best-effort)",
+                       run_id, exc_info=True)
+
+
+async def _persist_close(run_id: str, outcome: str, note: str | None) -> None:
+    try:
+        from .. import db
+        await asyncio.to_thread(db.finish_run, run_id, outcome, note)
+    except Exception:
+        logger.warning("persistance run_finish échouée pour run_id=%s (best-effort)",
+                       run_id, exc_info=True)
 
 
 def register(mcp: FastMCP) -> None:
@@ -37,6 +66,7 @@ def register(mcp: FastMCP) -> None:
         """
         run_id = dr.new_run_id()
         await dr.push_run(ctx, run_id, label, doctrine)
+        await _persist_open(run_id, label, doctrine)
         return {"run_id": run_id, "label": label, "doctrine": doctrine}
 
     @mcp.tool()
@@ -56,4 +86,5 @@ def register(mcp: FastMCP) -> None:
                 message=f"outcome must be one of {', '.join(_OUTCOMES)}",
             ))
         removed = await dr.pop_run(ctx, run_id)
+        await _persist_close(run_id, outcome, note)
         return {"ok": True, "run_id": run_id, "outcome": outcome, "was_open": removed is not None}

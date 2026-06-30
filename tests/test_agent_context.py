@@ -10,15 +10,27 @@ from oto_mcp.capabilities._types import ResolvedCtx
 
 
 def test_assembles_three_layers(monkeypatch):
-    # Pas d'org active, pas d'instance liée → doctrine vide + tools indispo, mais
-    # les instructions statiques (dérivées) sont toujours là.
+    # Pas d'org active, pas d'instance liée → doctrine vide + tools indispo. Compte
+    # non onboarded → le bloc B (catalogue) est présent ; le bloc A toujours.
     monkeypatch.setattr(ac.tool_registry, "bound_instance", lambda: None)
+    monkeypatch.setattr(ac._db, "get_account_profile", lambda sub: {"onboarded": False})
     ctx = ResolvedCtx(sub="u1", org_id=None)
     out = asyncio.run(ac._agent_context(ctx, ac.AgentContextInput()))
     assert set(out) == {"org_id", "instructions", "doctrine", "tools"}
-    assert "data_*" in out["instructions"] and "apollo_*" in out["instructions"]
+    assert "TA boîte à outils" in out["instructions"]                 # bloc A
+    assert "data_*" in out["instructions"] and "apollo_*" in out["instructions"]  # bloc B catalogue
     assert out["doctrine"]["org_id"] is None
     assert out["tools"] == {"available": False}
+
+
+def test_onboarded_account_omits_catalog(monkeypatch):
+    # Compte onboarded → bloc B (catalogue d'onboarding) retiré de l'injection.
+    monkeypatch.setattr(ac.tool_registry, "bound_instance", lambda: None)
+    monkeypatch.setattr(ac._db, "get_account_profile", lambda sub: {"onboarded": True})
+    out = asyncio.run(ac._agent_context(ResolvedCtx(sub="u1", org_id=None),
+                                        ac.AgentContextInput()))
+    assert "TA boîte à outils" in out["instructions"]                 # bloc A reste
+    assert "apollo_*" not in out["instructions"]                      # catalogue absent
 
 
 def test_tools_view_groups_by_namespace(monkeypatch):

@@ -303,14 +303,18 @@ CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_type, owner_id);
 -- Liens d'un Projet vers les entités qu'il regroupe (incrément 2). Pointeur TYPÉ,
 -- pas un FK cross-store : `target_type` ∈ {tableau, procedure, connecteur, base} et
 -- `target_ref` = l'id/slug/nom dans le store d'origine (datastore.id, doctrine slug,
--- connecteur name, memento workspace). `label` dénormalisé pour l'affichage. CASCADE
--- sur la suppression du projet ; unicité (projet, type, ref) → lien idempotent.
+-- connecteur name, memento workspace). `label` dénormalisé pour l'affichage ; `role`
+-- = pourquoi cette entité est ici / ce qu'elle apporte au projet — le « pourquoi » vit
+-- sur le LIEN, pas sur l'entité (ADR 0032 §2). Le caractère cross-projet n'est PAS
+-- stocké : il est DÉRIVÉ (même (target_type, target_ref) dans ≥2 projets). CASCADE sur
+-- la suppression du projet ; unicité (projet, type, ref) → lien idempotent.
 CREATE TABLE IF NOT EXISTS project_links (
     id BIGSERIAL PRIMARY KEY,
     project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     target_type TEXT NOT NULL,
     target_ref TEXT NOT NULL,
     label TEXT,
+    role TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(project_id, target_type, target_ref)
 );
@@ -870,6 +874,8 @@ def init_db() -> None:
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
         conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
+        # ADR 0032 §2 : le lien projet→entité porte un `role` (pourquoi cette entité est ici).
+        conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # Corrélation des appels (ADR 0017, extension OTO-LOCALE de tool_calls).
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")
@@ -3082,15 +3088,17 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
 
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,
-                     label: Optional[str] = None) -> None:
+                     label: Optional[str] = None, role: Optional[str] = None) -> None:
     """Lie une entité (tableau/procédure/connecteur/base) au projet. Idempotent :
-    re-lier met à jour le label."""
+    re-lier met à jour le label ; le `role` n'est écrasé que s'il est fourni (un
+    re-link pour changer le seul label ne perd pas la description de rôle déjà posée)."""
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO project_links (project_id, target_type, target_ref, label) "
-            "VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (project_id, target_type, target_ref) DO UPDATE SET label = EXCLUDED.label",
-            (project_id, target_type, target_ref, label),
+            "INSERT INTO project_links (project_id, target_type, target_ref, label, role) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (project_id, target_type, target_ref) DO UPDATE SET "
+            "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role)",
+            (project_id, target_type, target_ref, label, role),
         )
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
 
@@ -3105,10 +3113,18 @@ def remove_project_link(project_id: int, target_type: str, target_ref: str) -> i
 
 
 def list_project_links(project_id: int) -> list[dict]:
+    """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
+    le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
+    modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT target_type, target_ref, label, created_at FROM project_links "
-            "WHERE project_id = %s ORDER BY target_type, label NULLS LAST, target_ref",
+            "SELECT pl.target_type, pl.target_ref, pl.label, pl.role, pl.created_at, "
+            "       EXISTS(SELECT 1 FROM project_links o "
+            "              WHERE o.target_type = pl.target_type "
+            "                AND o.target_ref = pl.target_ref "
+            "                AND o.project_id <> pl.project_id) AS cross_project "
+            "FROM project_links pl WHERE pl.project_id = %s "
+            "ORDER BY pl.target_type, pl.label NULLS LAST, pl.target_ref",
             (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]

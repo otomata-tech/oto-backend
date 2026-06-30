@@ -27,11 +27,12 @@ def seams(monkeypatch):
     rec["link"] = []
     rec["unlink"] = []
     monkeypatch.setattr(P.db, "add_project_link",
-                        lambda pid, tt, tr, label=None: rec["link"].append((pid, tt, tr, label)))
+                        lambda pid, tt, tr, label=None, role=None: rec["link"].append((pid, tt, tr, label, role)))
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr: rec["unlink"].append((pid, tt, tr)) or 1)
     monkeypatch.setattr(P.db, "list_project_links",
-                        lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads"}])
+                        lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
+                                      "role": "vivier de leads", "cross_project": False}])
     monkeypatch.setattr(P.ownership, "accessor_scope",
                         lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
@@ -114,14 +115,22 @@ def test_archive_ok(seams):
 def test_get_includes_links(seams):
     out = P._project(CTX, P.ProjectInput(op="get", project_id=7))
     assert out["id"] == 7
-    assert out["links"] == [{"target_type": "tableau", "target_ref": "7", "label": "Leads"}]
+    assert out["links"][0]["role"] == "vivier de leads"
+    assert out["links"][0]["cross_project"] is False
 
 
 def test_link(seams):
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7,
                                          target_type="tableau", target_ref="7", label="Leads"))
-    assert seams["link"] == [(7, "tableau", "7", "Leads")]
+    assert seams["link"] == [(7, "tableau", "7", "Leads", None)]
     assert out["ok"] is True and out["links"]
+
+
+def test_link_with_role(seams):
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base",
+                                   target_ref="kb1", label="Ton of voice",
+                                   role="charte éditoriale de référence"))
+    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence")]
 
 
 def test_link_missing_target(seams):

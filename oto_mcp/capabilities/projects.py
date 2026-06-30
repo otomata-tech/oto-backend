@@ -39,6 +39,7 @@ class ProjectInput(BaseModel):
     target_type: Optional[Literal["tableau", "procedure", "connecteur", "base"]] = None
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id
     label: Optional[str] = None        # nom d'affichage (link)
+    role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -106,7 +107,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(inp.target_type and inp.target_ref, "missing_target",
                  "`target_type` et `target_ref` requis.")
         if inp.op == "link":
-            db.add_project_link(int(inp.project_id), inp.target_type, inp.target_ref, inp.label)
+            db.add_project_link(int(inp.project_id), inp.target_type, inp.target_ref,
+                                inp.label, role=inp.role)
         else:
             db.remove_project_link(int(inp.project_id), inp.target_type, inp.target_ref)
         db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
@@ -130,8 +132,11 @@ CAPABILITIES += [
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
             "(yours + your orgs') / get (project + its links) / update (name, brief_md) / "
             "archive / link & unlink (attach an entity: target_type tableau|procedure|"
-            "connecteur|base + target_ref = its id/slug/name, optional label). Share & "
-            "transfer go through oto_resource (resource_type='project')."
+            "connecteur|base + target_ref = its id/slug/name, optional label + optional "
+            "role = why this entity belongs to the project). get/link return each link's "
+            "role + a derived `cross_project` flag (the same entity is linked by another "
+            "project → avoid brutal edits / ask). Share & transfer go through oto_resource "
+            "(resource_type='project')."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

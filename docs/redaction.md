@@ -45,7 +45,7 @@ Les sorties connecteurs sont des **passthrough d'API tierces qu'on ne possède p
 - **Garde-fou anti-empilement** : union-only donc monotone, mais converge (clés nommées,
   tableaux collapsés en `[]`) ; cap `_MAX_KEYS=1000` / `_MAX_PATHS_PER_KEY=50` contre les
   réponses à **clés dynamiques** (map keyée par id). Spine/données user (`oto`/`run`/
-  `feedback`/`data`/`scout`) exclus de la capture. Pas de purge par fraîcheur (clé
+  `feedback`/`data`) exclus de la capture. Pas de purge par fraîcheur (clé
   retirée par l'API = persiste, inoffensif : règle no-op).
 
 Le bundle `GET /api/orgs/{id}/field-filters` fusionne **observé + curé**

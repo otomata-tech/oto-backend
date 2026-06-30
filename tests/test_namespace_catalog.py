@@ -32,7 +32,7 @@ def test_spine_concepts_present():
         head = ns.split(" ")[0]   # "run_* / feedback" → "run_*"
         assert head in cat, f"concept spine {head} absent"
     # les piliers concrets
-    for token in ("data_*", "fact_*", "oto_*"):
+    for token in ("data_*", "oto_*"):
         assert token in cat
 
 

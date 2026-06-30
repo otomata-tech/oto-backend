@@ -205,9 +205,9 @@ class FieldRedactionMiddleware(Middleware):
         )
 
 
-# Spine / méta : pas de capture de schéma (pas des connecteurs ; `data`/`scout` =
+# Spine / méta : pas de capture de schéma (pas des connecteurs ; `data` =
 # données arbitraires de l'user → bruit). La rédaction, elle, reste possible partout.
-_SPINE_SERVICES = {"oto", "run", "feedback", "data", "scout"}
+_SPINE_SERVICES = {"oto", "run", "feedback", "data"}
 
 
 def _observe_schema(service: str, payload) -> None:

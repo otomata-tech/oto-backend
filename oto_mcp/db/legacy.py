@@ -1487,6 +1487,17 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
     return out
 
 
+def get_platform_api_key(provider: str) -> Optional[dict]:
+    """Clé plateforme la plus récente d'un provider, déchiffrée (free-tier ADR 0031).
+    Renvoie {api_key, label} ou None — utilisée SANS grant pour les connecteurs
+    `platform_key_open` (quota gratuit per-user appliqué dans resolve_credential)."""
+    keys = list_platform_keys(provider)  # ORDER BY created_at ASC → dernière = la + récente
+    if not keys:
+        return None
+    k = keys[-1]
+    return {"api_key": k["api_key"], "label": k["label"]}
+
+
 def get_platform_key(key_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(

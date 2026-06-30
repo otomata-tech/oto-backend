@@ -54,6 +54,8 @@ class Connector:
     default_hidden: bool = False       # axe B : namespaces masqués par défaut mais
                                        # self-activables (oto_enable_tool) — découvrabilité,
                                        # pas sécurité (≠ platform_granted)
+    platform_key_open: bool = False    # free-tier : clé plateforme utilisable SANS grant
+                                       # (quota gratuit = default_quota par user/jour, ADR 0031)
     label: str = ""
     help: str = ""
     href: str | None = None
@@ -298,7 +300,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none",
        default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, label="", help="", href=None,
+       default_hidden=False, platform_key_open=False, label="", help="", href=None,
        publisher="", logo_url=None, kind="tools", mount_url=None,
        credential_fields=(), modules=(), hosted_auth=False) -> Connector:
     return Connector(
@@ -306,7 +308,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
         secret_kind=secret_kind, default_quota=default_quota,
         in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
-        default_hidden=default_hidden,
+        default_hidden=default_hidden, platform_key_open=platform_key_open,
         label=label or name.capitalize(), help=help, href=href,
         publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, credential_fields=tuple(credential_fields),
@@ -319,16 +321,16 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
 _REGISTRY_LIST = [
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     _c("serper", ["serper"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=50,
+       secret_kind="api_key", default_quota=200, platform_key_open=True,
        in_default_preset=True, label="Serper", help="recherche web", href="https://serper.dev"),
     _c("hunter", ["hunter"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=10,
+       secret_kind="api_key", default_quota=5, platform_key_open=True,
        in_default_preset=True, label="Hunter.io", help="emails", href="https://hunter.io"),
     # `fr` (APIs live SIRENE/Recherche Entreprises/INPI/BODACC/BOAMP) + `fr_stock`
     # (stock SIRENE parquet, ex-connecteur `sirene_stock`, fusionné 2026-06-22 :
     # même domaine entreprises FR, namespace fr_stock_* → namespace_of="fr").
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=200,
+       secret_kind="api_key", default_quota=200, platform_key_open=True,
        in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr", "fr_stock")),
     # attio : masqué par défaut (2026-06-11) — le MCP Attio officiel est meilleur
@@ -341,7 +343,7 @@ _REGISTRY_LIST = [
        secret_kind="api_key",
        label="Lemlist", help="cold outreach", href="https://app.lemlist.com"),
     _c("kaspr", ["kaspr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=5,
+       secret_kind="api_key", default_quota=5, platform_key_open=True,
        label="Kaspr", help="enrichissement", href="https://app.kaspr.io"),
     _c("pennylane", ["pennylane"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
@@ -350,7 +352,7 @@ _REGISTRY_LIST = [
        secret_kind="refresh_token",
        label="Slack", help="messagerie (user token)"),
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=25,
+       secret_kind="api_key", default_quota=5, platform_key_open=True,
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
     # folk : né APRÈS le coffre — pas de colonne legacy users.folk_api_key,
     # le coffre connector_credentials est canonique. byo-only (pas de clé
@@ -629,7 +631,7 @@ _REGISTRY_LIST = [
     # + Bing/YouTube/Walmart/Amazon/eBay/… + Google Jobs). keyed api_key, platform-
     # eligible (clé plateforme + quota daily, comme serper).
     _c("serpapi", ["serpapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=50,
+       secret_kind="api_key", default_quota=200, platform_key_open=True,
        in_default_bundle=False, label="SerpApi",
        help="recherche multi-moteurs (Google verticals, Bing, YouTube, Walmart, Amazon, jobs…)",
        href="https://serpapi.com"),

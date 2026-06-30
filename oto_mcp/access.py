@@ -357,6 +357,15 @@ def resolve_credential(provider: str, want: str = "auto",
         org = current_org(sub)
         if org is not None:
             grant = db.get_active_org_grant(org, provider)
+    # Free-tier (ADR 0031) : clé plateforme OUVERTE sans grant pour les connecteurs
+    # `platform_key_open`, avec quota gratuit par user (`default_quota`). N'est atteint
+    # qu'en l'absence de toute clé BYO (cascade user>groupe>org>grant épuisée) — en BYO
+    # on n'utilise JAMAIS la clé plateforme. Le quota ci-dessous est métré per-user.
+    if not grant and platform_eligible and con.platform_key_open:
+        pk = db.get_platform_api_key(provider)
+        if pk:
+            grant = {"api_key": pk["api_key"], "label": pk["label"],
+                     "daily_quota": con.default_quota}
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

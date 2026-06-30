@@ -237,17 +237,6 @@ CREATE TABLE IF NOT EXISTS org_connector_access (
     PRIMARY KEY (org_id, connector, principal_type, principal_id)
 );
 
--- Grants de namespace sensible (deny-by-default). Un user non-admin ne voit/
--- n'appelle un tool d'un ADMIN_GRANT_ONLY_NAMESPACE que s'il a une ligne ici,
--- posée par un admin. Distinct de user_grants (qui porte une platform_key/quota).
-CREATE TABLE IF NOT EXISTS user_namespace_grants (
-    sub TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    granted_by TEXT,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, namespace)
-);
-
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
 -- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de
@@ -425,9 +414,8 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
 );
 
 -- Palier organization (= périmètre / store serveur). Une org possède des
--- credentials propres (coffre `connector_credentials`, entity_type='org'), un
--- set de namespaces autorisés (org_entitlements), et des opérateurs
--- (org_members). Source de vérité de l'appartenance = ces tables, résolues par
+-- credentials propres (coffre `connector_credentials`, entity_type='org') et
+-- des opérateurs (org_members). Source de vérité de l'appartenance = ces tables, résolues par
 -- `sub` — JAMAIS un claim du token
 -- Logto (le token MCP ne porte que sub). Cf. project_oto_mcp_org_tier.
 -- NB barreau 1 : tables seules, aucun helper ne les lit encore (canari de
@@ -460,16 +448,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHE
 -- Les credentials d'org (Attio, Pennylane, MM token…) vivent dans le coffre
 -- chiffré `connector_credentials` (entity_type='org'), pas dans une table dédiée.
 
--- Plafond de visibilité plateforme -> org : généralise
--- ADMIN_GRANT_ONLY_NAMESPACES + user_namespace_grants au niveau org. Débloque
--- un namespace gouverné (mm, gocardless) pour les membres de l'org.
-CREATE TABLE IF NOT EXISTS org_entitlements (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    namespace TEXT NOT NULL,
-    granted_by TEXT,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, namespace)
-);
 
 -- Invitations d'équipe (onboarding SaaS). Le token plaintext n'est jamais
 -- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
@@ -1235,13 +1213,13 @@ _SUB_COLUMNS = [
     # données de l'user
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
     ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"), ("user_presets", "sub"),
-    ("user_grants", "sub"), ("user_namespace_grants", "sub"), ("user_datastores", "sub"),
+    ("user_grants", "sub"), ("user_datastores", "sub"),
     ("datastore_shares", "owner_sub"), ("datastore_shares", "shared_with_sub"),
     ("org_members", "sub"), ("org_group_members", "sub"),
     ("user_api_tokens", "sub"), ("unipile_accounts", "sub"), ("unipile_pending", "sub"),
     # attribution (soft)
-    ("users", "invited_by"), ("user_grants", "granted_by"), ("user_namespace_grants", "granted_by"),
-    ("orgs", "created_by"), ("org_entitlements", "granted_by"),
+    ("users", "invited_by"), ("user_grants", "granted_by"),
+    ("orgs", "created_by"),
     ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
     ("org_groups", "created_by"), ("org_instructions", "set_by"),
     ("org_instruction_revisions", "set_by"), ("org_group_instructions", "set_by"),
@@ -2806,56 +2784,6 @@ def list_users_with_grants() -> list[dict]:
         u["grants"] = list_grants_for_user(u["sub"])
         out.append(u)
     return out
-
-
-# --- namespace grants (deny-by-default pour namespaces sensibles) -----------
-
-def grant_namespace(sub: str, namespace: str, granted_by: Optional[str] = None) -> None:
-    """Accorde à `sub` l'accès au namespace sensible `namespace` (idempotent)."""
-    upsert_user(sub)
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_namespace_grants (sub, namespace, granted_by)
-            VALUES (%s, %s, %s)
-            ON CONFLICT(sub, namespace) DO UPDATE SET
-                granted_at = NOW(),
-                granted_by = EXCLUDED.granted_by
-            """,
-            (sub, namespace, granted_by),
-        )
-
-
-def revoke_namespace(sub: str, namespace: str) -> bool:
-    """Révoque l'accès. Renvoie True si un grant existait."""
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM user_namespace_grants WHERE sub = %s AND namespace = %s",
-            (sub, namespace),
-        )
-        return (cur.rowcount or 0) > 0
-
-
-def list_user_granted_namespaces(sub: str) -> list[str]:
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT namespace FROM user_namespace_grants WHERE sub = %s ORDER BY namespace",
-            (sub,),
-        ).fetchall()
-        return [r["namespace"] for r in rows]
-
-
-def list_namespace_grants(namespace: Optional[str] = None) -> list[dict]:
-    """Tous les grants de namespace (vue admin), filtrable par namespace."""
-    sql = "SELECT sub, namespace, granted_by, granted_at FROM user_namespace_grants"
-    params: tuple = ()
-    if namespace:
-        sql += " WHERE namespace = %s"
-        params = (namespace,)
-    sql += " ORDER BY namespace, granted_at DESC"
-    with _connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
 
 
 # --- Google OAuth -----------------------------------------------------------

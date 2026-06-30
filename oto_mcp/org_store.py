@@ -1,7 +1,7 @@
 """Accès DB du palier organization (= périmètre / store serveur).
 
-Domaine isolé du monolithe `db.py` : les tables org (orgs, org_members,
-org_entitlements) restent déclarées dans `db._SCHEMA` (DDL centralisée, jouée
+Domaine isolé du monolithe `db.py` : les tables org (orgs, org_members)
+restent déclarées dans `db._SCHEMA` (DDL centralisée, jouée
 par `init_db`), mais leurs requêtes vivent ici. Les credentials d'org vivent
 dans le coffre chiffré `connector_credentials` (entity_type='org'), pas dans
 une table dédiée. Réutilise les primitives partagées de `db` (`_connect`,
@@ -695,50 +695,6 @@ def list_org_secrets(org_id: int) -> list[dict]:
             entry["base_url"] = base_url
         out.append(entry)
     return out
-
-
-# --- entitlements : plafond de visibilité plateforme -> org (barreau 4) ------
-
-def list_org_entitled_namespaces(org_id: int) -> list[str]:
-    """Namespaces gouvernés débloqués pour les membres de l'org."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT namespace FROM org_entitlements WHERE org_id = %s ORDER BY namespace",
-            (org_id,),
-        ).fetchall()
-        return [r["namespace"] for r in rows]
-
-
-def grant_org_entitlement(org_id: int, namespace: str, granted_by: Optional[str] = None) -> None:
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO org_entitlements (org_id, namespace, granted_by)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (org_id, namespace) DO UPDATE SET
-                granted_at = NOW(), granted_by = EXCLUDED.granted_by
-            """,
-            (org_id, namespace, granted_by),
-        )
-
-
-def revoke_org_entitlement(org_id: int, namespace: str) -> bool:
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM org_entitlements WHERE org_id = %s AND namespace = %s",
-            (org_id, namespace),
-        )
-        return (cur.rowcount or 0) > 0
-
-
-def list_org_entitlements(org_id: int) -> list[dict]:
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT namespace, granted_by, granted_at FROM org_entitlements "
-            "WHERE org_id = %s ORDER BY namespace",
-            (org_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 # --- création self-serve + invitations (onboarding SaaS) --------------------

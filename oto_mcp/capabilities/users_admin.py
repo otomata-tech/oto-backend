@@ -104,7 +104,6 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     target_org = org_store.get_active_org(target)
     target_group = group_store.get_active_group(target)
     status = access.status_for(target, org=target_org, group=target_group)
-    ns = [g for g in db.list_namespace_grants() if g["sub"] == target]
     pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
                       if u.get("email") else None)
     orgs = org_store.list_orgs_for_user(target)
@@ -120,7 +119,6 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
         "orgs": orgs,
         "providers": status["providers"],
         "grants": db.list_grants_for_user(target),
-        "namespace_grants": ns,
         "option_comps": db.list_option_comps("user", target),  # couche 3 (comp user)
         "unipile_orgs": unipile_orgs,   # état messagerie par org (b)
     }

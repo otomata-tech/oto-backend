@@ -71,7 +71,6 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         elif r["org_id"] == inp.org_id:
             override[r["connector"]] = bool(r["enabled"])
     recommended = set(org_store.get_org_default_connectors(inp.org_id) or [])
-    org_entitled = set(org_store.list_org_entitled_namespaces(inp.org_id))
     out = []
     for name, c in providers.REGISTRY.items():
         master = glob.get(name)          # None = jamais posé = OFF
@@ -80,11 +79,8 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         # cohérent avec la surface USER (_visible_catalog). On filtre sur le CAP
         # plateforme (master), pas sur `effective` (sinon un connecteur que l'org a
         # override OFF disparaîtrait → impossible à réactiver). master OFF + pas
-        # d'override = jamais activé → invisible (plus de levier inerte). grant-only
-        # = visible seulement si l'org est accordée (entitlement de namespace).
+        # d'override = jamais activé → invisible (plus de levier inerte).
         if not master and org_ov is None:
-            continue
-        if c.grant_only and not (set(c.namespaces) & org_entitled):
             continue
         effective = org_ov if org_ov is not None else bool(master)
         option = _PAID_OPTION_BY_CONNECTOR.get(name)   # add-on payant (couche 3) ou None

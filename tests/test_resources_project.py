@@ -51,6 +51,28 @@ def test_transfer_routes_generically(monkeypatch):
     assert seen == {"rt": "project", "rid": "7", "ot": "user", "oid": "u2"} and out["ok"]
 
 
+def test_transfer_to_own_org(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.roles, "is_org_member", lambda sub, oid: oid == 35)
+    monkeypatch.setattr(R.org_store, "get_org", lambda oid: {"name": "movinmotion"})
+    seen = {}
+    monkeypatch.setattr(R.ownership, "transfer",
+                        lambda rt, rid, ot, oid: seen.update(rt=rt, rid=rid, ot=ot, oid=oid))
+    out = R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
+                                            resource_id="7", new_owner_org=35))
+    assert seen == {"rt": "project", "rid": "7", "ot": "org", "oid": "35"}
+    assert out["ok"] and out["new_owner"] == "movinmotion"
+
+
+def test_transfer_to_org_requires_membership(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.roles, "is_org_member", lambda sub, oid: False)
+    with pytest.raises(AuthzDenied) as e:
+        R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
+                                          resource_id="7", new_owner_org=99))
+    assert e.value.code == "not_org_member"
+
+
 def test_unknown_type(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         R._resources(CTX, R.ResourceInput(op="list", resource_type="nope"))

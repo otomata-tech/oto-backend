@@ -27,7 +27,8 @@ class ResourceInput(BaseModel):
     op: Literal["list", "get", "transfer", "share", "unshare"]
     resource_type: str = "datastore_namespace"
     resource_id: Optional[str] = None
-    new_owner_email: Optional[str] = None   # transfer
+    new_owner_email: Optional[str] = None   # transfer → un utilisateur
+    new_owner_org: Optional[int] = None     # transfer → une de SES orgs (ADR 0030, owner_type='org')
     email: Optional[str] = None             # share / unshare (principal user)
     permission: Literal["read", "write"] = "write"  # share
 
@@ -148,12 +149,25 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "transfer":
-        recipient = _resolve_recipient(inp.new_owner_email)
+        # Cible : une de SES orgs (owner_type='org') OU un utilisateur (par email).
+        # Transférer VERS une org exige d'en être membre (on n'envoie pas une ressource
+        # dans une org où on n'est pas — comme on ne crée un namespace d'org que membre).
+        if inp.new_owner_org is not None:
+            org_id = int(inp.new_owner_org)
+            if not roles.is_org_member(ctx.sub, org_id):
+                raise AuthzDenied(403, "not_org_member",
+                                  "tu dois être membre de l'org cible pour lui transférer une ressource.")
+            new_owner_type, new_owner_id = "org", str(org_id)
+            new_owner_label = _owner_label("org", str(org_id))
+        else:
+            recipient = _resolve_recipient(inp.new_owner_email)
+            new_owner_type, new_owner_id = "user", recipient["sub"]
+            new_owner_label = recipient.get("email")
         try:
-            ownership.transfer(inp.resource_type, rid, "user", recipient["sub"])
+            ownership.transfer(inp.resource_type, rid, new_owner_type, new_owner_id)
         except ValueError as e:
             raise AuthzDenied(409, "transfer_failed", str(e))
-        return {"ok": True, "resource_id": rid, "new_owner": recipient.get("email")}
+        return {"ok": True, "resource_id": rid, "new_owner": new_owner_label}
 
     if inp.op == "share":
         recipient = _resolve_recipient(inp.email)
@@ -178,8 +192,9 @@ CAPABILITIES += [
         description=(
             "Govern an OWNED resource (ADR 0030) without reading its content. "
             "op=list: resources you govern (platform admins see all); op=get: owner + "
-            "shares + metadata; op=transfer: hand ownership to `new_owner_email` (the "
-            "previous owner keeps write access); op=share/unshare: grant/revoke access to "
+            "shares + metadata; op=transfer: hand ownership to a user (`new_owner_email`) "
+            "OR to one of YOUR orgs (`new_owner_org`, you must be a member); the previous "
+            "owner keeps write access; op=share/unshare: grant/revoke access to "
             "`email` (`permission` read|write). resource_type ∈ {datastore_namespace, project}. "
             "Owner OR org/platform admin governing it; never exposes row content."
         ),

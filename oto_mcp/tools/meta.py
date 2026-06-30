@@ -45,17 +45,6 @@ def _require_sub() -> str:
     return sub
 
 
-def _user_access(sub: str) -> tuple[frozenset, bool]:
-    """(namespaces grantés, is_admin) pour décider la visibilité grant-only.
-
-    `granted` = grants per-user ∪ entitlements de l'org active (source unique
-    `access.granted_namespaces_for` — même calcul que le middleware et les
-    gardes REST, pour qu'aucune surface ne diverge)."""
-    granted = access.granted_namespaces_for(sub)
-    is_admin = access.is_super_admin(sub)
-    return granted, is_admin
-
-
 def _active_org(sub: str) -> int:
     """Org de session du sub = scope du profil de visibilité (ADR 0015/0023). 0 = perso/global.
     Toggles/presets sont stockés par (sub, org_id) → on lit l'org **de session** via le seam
@@ -75,13 +64,12 @@ def register(mcp: FastMCP) -> None:
         org = _active_org(sub)
         disabled = set(db.list_user_disabled_tools(sub, org))
         enabled_override = set(db.list_user_enabled_tools(sub, org))
-        granted, is_admin = _user_access(sub)
         # run_middleware=False : on veut la liste complète (y compris les
         # tools masqués pour ce user), sinon on n'affiche pas leur état.
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
         names = sorted(t.name for t in all_tools)
         states = {
-            n: is_tool_visible(n, disabled, enabled_override, granted, is_admin)
+            n: is_tool_visible(n, disabled, enabled_override)
             for n in names
         }
         return {
@@ -211,10 +199,9 @@ def register(mcp: FastMCP) -> None:
         else:
             disabled = set(db.list_user_disabled_tools(sub, org))
             enabled_override = set(db.list_user_enabled_tools(sub, org))
-            granted, is_admin = _user_access(sub)
             enabled = sorted(
                 n for n in all_names
-                if is_tool_visible(n, disabled, enabled_override, granted, is_admin)
+                if is_tool_visible(n, disabled, enabled_override)
             )
 
         db.save_user_preset(sub, name, enabled, org)

@@ -82,8 +82,6 @@ def is_tool_visible(
     name: str,
     disabled: set[str],
     enabled_override: set[str],
-    granted_namespaces: frozenset[str] = frozenset(),
-    is_admin: bool = False,
     group_baseline: "frozenset[str] | None" = None,
 ) -> bool:
     """Règle de visibilité effective pour un tool donné.
@@ -92,23 +90,9 @@ def is_tool_visible(
     a posé pour son équipe. None = pas de baseline (visibilité par défaut). Quand
     une baseline existe, elle décide la visibilité par défaut des tools NORMAUX
     (dans la baseline → visible, même un masqué-par-défaut ; hors baseline →
-    masqué) — mais les overrides perso priment, et elle ne touche JAMAIS les
-    grant-only (barrière de sécurité distincte, anti-escalade)."""
+    masqué) — mais les overrides perso priment."""
     if name in PROTECTED_TOOLS:
         return True  # anti-lockout : jamais masqué (ni baseline, ni default-hidden)
-    if is_grant_only(name):
-        # L'admin HÉRITE de la visibilité des namespaces entitled de son org
-        # active (comme un user normal entitled). Sinon l'admin qui veut SE
-        # SERVIR d'un connecteur grant-only (ex. memento fédéré, 51 outils)
-        # devrait les activer un par un. Les namespaces NON entitled restent
-        # masqués + opt-in manuel pour l'admin (anti-encombrement de sa vue sur
-        # TOUS les connecteurs clients de la plateforme).
-        if namespace_of(name) in granted_namespaces:
-            return name not in disabled
-        if is_admin:
-            return name in enabled_override
-        # Non-admin sans grant : invisible, pas d'auto-activation.
-        return False
     if name in enabled_override:
         return True
     if name in disabled:
@@ -125,14 +109,11 @@ def effective_disabled(
     all_names: set[str],
     disabled: set[str],
     enabled_override: set[str],
-    granted_namespaces: frozenset[str] = frozenset(),
-    is_admin: bool = False,
     group_baseline: "frozenset[str] | None" = None,
 ) -> set[str]:
     """Ensemble des tools à masquer pour cet user, parmi `all_names`."""
     return {
         n
         for n in all_names
-        if not is_tool_visible(
-            n, disabled, enabled_override, granted_namespaces, is_admin, group_baseline)
+        if not is_tool_visible(n, disabled, enabled_override, group_baseline)
     }

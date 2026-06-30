@@ -25,17 +25,15 @@ from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
     effective_disabled,
     is_default_hidden,
-    is_grant_only,
     namespace_of,
 )
 
 logger = logging.getLogger(__name__)
 
-# Backstop FAIL-CLOSED : noms grant-only / masqués-par-défaut vus lors d'un
-# list_tools réussi. Si le listing échoue, on les réinjecte dans `all_names`
-# pour qu'ils restent candidats au masquage (la denylist fastmcp les laisserait
-# visibles sinon — défaut is_enabled=True). Caches process, alimentés au listing.
-_KNOWN_GRANT_ONLY: set[str] = set()
+# Backstop FAIL-CLOSED : noms masqués-par-défaut vus lors d'un list_tools réussi.
+# Si le listing échoue, on les réinjecte dans `all_names` pour qu'ils restent
+# candidats au masquage (la denylist fastmcp les laisserait visibles sinon —
+# défaut is_enabled=True). Cache process, alimenté au listing.
 _KNOWN_DEFAULT_HIDDEN: set[str] = set()
 
 # Gate doux alpha (ADR 0013) : un compte non-'active' ne voit QUE ces tools —
@@ -64,8 +62,6 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         prof_org = active_org or 0
         disabled = set(db.list_user_disabled_tools(sub, prof_org))
         enabled_override = set(db.list_user_enabled_tools(sub, prof_org))
-        # Union grants per-user + entitlements de l'org active (source unique).
-        granted = access.granted_namespaces_for(sub)
         is_admin = access.is_super_admin(sub)
         # Baseline de toolset (preset de visibilité). Cascade ADR 0015/0012 :
         # le GROUPE actif raffine l'ORG active. Le chef d'équipe a priorité ; à
@@ -82,29 +78,24 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
             if ot is not None:
                 group_baseline = frozenset(ot)
     except Exception as e:
-        # FAIL-CLOSED : sur erreur DB, ne PAS révéler les namespaces grant-only.
-        # granted=∅ + is_admin=False → is_tool_visible masque tout grant-only
-        # (la visibilité est ergonomie, mais grant-only est une vraie barrière).
-        logger.warning("Cannot read tool visibility for %s (fail-closed): %s", sub, e)
-        disabled, enabled_override, granted, is_admin = set(), set(), frozenset(), False
+        # Sur erreur DB : repli neutre (rien de désactivé). La sécurité d'accès ne
+        # dépend PAS de cette visibilité — elle est gardée au call-time (credential
+        # + require_connector_access ADR 0025 + activation + remote credential).
+        logger.warning("Cannot read tool visibility for %s: %s", sub, e)
+        disabled, enabled_override, is_admin = set(), set(), False
         group_baseline = None
         active_org, prof_org = None, 0
     try:
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
         all_names = {t.name for t in all_tools}
-        _KNOWN_GRANT_ONLY.update(n for n in all_names if is_grant_only(n))
         _KNOWN_DEFAULT_HIDDEN.update(n for n in all_names if is_default_hidden(n))
     except Exception as e:
         logger.warning("Cannot list tools for %s: %s", sub, e)
-        # repli FAIL-CLOSED : disabled explicites + masqués connus + tous les
-        # grant-only déjà vus (sinon ils resteraient visibles, denylist
-        # incomplète). Les noms inconnus de ce process restent couverts par
-        # le backstop call-time (access.require_namespace).
-        all_names = (
-            disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN | _KNOWN_GRANT_ONLY
-        )
+        # repli FAIL-CLOSED : disabled explicites + masqués-par-défaut connus
+        # (sinon ils resteraient visibles, denylist incomplète).
+        all_names = disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN
     to_hide = effective_disabled(
-        all_names, disabled, enabled_override, granted, is_admin, group_baseline)
+        all_names, disabled, enabled_override, group_baseline)
     # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
     # l'org de la session — à chaud, per-org. Fail-OPEN (gouvernance d'exposition,
     # pas une barrière de sécurité ; le grant-only reste fail-closed ci-dessus).

@@ -7,13 +7,12 @@ client au registre. Pour chaque namespace découvert, enregistre 2 tools :
 AUCUN code ni credential client ici : le bridge (service HTTP distant) détient le
 credential du système client ; le coffre plateforme ne tient que le moyen de
 l'appeler (token M2M + `meta.base_url`, credential de l'org active — cf.
-`access.resolve_remote_credential`). Le credential d'org EST le grant (visibilité
-deny-by-default via un set grant-only runtime rempli au boot).
-
-Gating identique aux connecteurs in-process : namespace grant-only
-(deny-by-default via la visibilité) + backstop `require_namespace` au
-call-time. L'identité de l'appelant est forwardée (`X-Oto-Sub`) pour que
-l'audit trail vive du côté du bridge.
+`access.resolve_remote_credential`). Le credential d'org EST le grant : la
+**visibilité** masque un outil remote pour toute org qui ne détient pas son
+credential (règle dédiée dans `session_visibility`, ADR 0031), et l'**exécution**
+est gardée par `resolve_remote_credential` (lève sans credential d'org).
+L'identité de l'appelant est forwardée (`X-Oto-Sub`) pour que l'audit trail vive
+du côté du bridge.
 
 Contexte stdio local (sub=None) : pas de coffre → raise actionnable vers la
 CLI locale (le package bridge expose `oto <ns>` par entry-point, secrets locaux).
@@ -28,7 +27,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connectors, credentials_store, tool_visibility
+from .. import access, connectors, credentials_store
 from ..auth_hooks import current_user_sub_from_token
 
 TIMEOUT = 45  # le bridge a lui-même un timeout amont de 30s
@@ -47,9 +46,6 @@ def register(mcp: FastMCP) -> None:
         return
     if not namespaces:
         return
-    # Deny-by-default sans entrée registre : grant-only runtime (le credential
-    # d'org EST le grant, cf. access.granted_namespaces_for).
-    tool_visibility.register_runtime_grant_only(namespaces)
     for ns in sorted(namespaces):
         _register_one(mcp, ns)
 

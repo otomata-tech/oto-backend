@@ -13,10 +13,13 @@ Consommé par : `access.resolve_api_key`/`status_for` (reads org credential) et
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 from . import credentials_store
 from . import connectors
@@ -538,6 +541,49 @@ def list_orgs_for_user(sub: str) -> list[dict]:
             (sub,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def ensure_home_org(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> int:
+    """Garantit que `sub` a une **org maison active** (suppression du perso, otomata-private).
+    Idempotent :
+    - org active déjà posée → la renvoie ;
+    - orgs sans active (défensif) → active la 1ʳᵉ ;
+    - aucune org → crée son **espace perso** ('{nom}'/'{email}'/'Mon espace'), l'y ajoute
+      `org_admin`, l'active. Plus jamais d'état sans org (org_id=0)."""
+    active = get_active_org(sub)
+    if active is not None:
+        return active
+    orgs = list_orgs_for_user(sub)
+    if orgs:
+        oid = int(orgs[0]["org_id"])
+        set_active_org(sub, oid)
+        return oid
+    label = (name or (email.split("@")[0] if email else None) or "Mon espace").strip() or "Mon espace"
+    oid = create_org(label, created_by=sub)
+    add_org_member(oid, sub, org_role="org_admin")
+    set_active_org(sub, oid)
+    _log.info("ensure_home_org: créé l'espace #%s « %s » pour %s", oid, label, sub)
+    return oid
+
+
+def backfill_home_orgs() -> int:
+    """One-shot idempotent (boot) : chaque user SANS org active reçoit son espace.
+    Renvoie le nb traité ; no-op aux boots suivants (plus d'orphelin)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT u.sub, u.email, u.name FROM users u "
+            "WHERE NOT EXISTS (SELECT 1 FROM org_members m WHERE m.sub = u.sub AND m.is_active)"
+        ).fetchall()
+    n = 0
+    for r in rows:
+        try:
+            ensure_home_org(r["sub"], email=r.get("email"), name=r.get("name"))
+            n += 1
+        except Exception:
+            _log.warning("backfill_home_orgs: échec pour %s", r.get("sub"), exc_info=True)
+    if n:
+        _log.info("backfill_home_orgs: %s espace(s) créé(s)", n)
+    return n
 
 
 def resolve_org_for_user(sub: str, org: str) -> int:

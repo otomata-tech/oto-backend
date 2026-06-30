@@ -1182,6 +1182,15 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
         from . import memento_federation
         memento_federation.provision_async(sub, email)
+    if row and row.get("inserted"):
+        # Suppression du perso (otomata-private) : tout user a TOUJOURS une org maison.
+        # Si l'inscription ne l'a pas déjà rattaché à une org (invitation/referral
+        # ci-dessus), on lui crée son espace. Idempotent, best-effort, hors gate email.
+        try:
+            from . import org_store
+            org_store.ensure_home_org(sub, email=email, name=name)
+        except Exception:
+            pass
     # Bascule de tenant (B1, otomata#35) : sur un login du NOUVEAU tenant, fusionner
     # l'ancien compte (même email) → ce sub. Gaté par env `OTO_MCP_TENANT_MIGRATION_ISS`
     # (dormant hors fenêtre de bascule). Idempotent, best-effort, à chaque login

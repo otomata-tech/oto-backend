@@ -138,6 +138,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         db.init_db()
     except Exception as e:
         logger.warning("init_db at _build_mcp failed: %s", e)
+    # Suppression du perso : tout user existant sans org reçoit son espace maison
+    # (one-shot idempotent, no-op aux boots suivants).
+    try:
+        from . import org_store
+        org_store.backfill_home_orgs()
+    except Exception as e:
+        logger.warning("backfill_home_orgs at _build_mcp failed: %s", e)
 
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:

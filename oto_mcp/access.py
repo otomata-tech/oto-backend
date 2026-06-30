@@ -46,7 +46,6 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from . import connectors, credentials_store, db, group_store, org_store, session_org
 from .auth_hooks import current_user_sub_from_token
-from .tool_visibility import ADMIN_GRANT_ONLY_NAMESPACES
 
 logger = logging.getLogger(__name__)
 
@@ -214,35 +213,6 @@ def granted_namespaces_for(sub: str) -> frozenset:
         # base_url) EST le grant du namespace remote — pas d'entitlement séparé.
         ns |= credentials_store.org_remote_namespaces(active_org)
     return frozenset(ns)
-
-
-def require_namespace(namespace: str) -> None:
-    """Backstop d'autorisation AU CALL-TIME pour un namespace gouverné
-    (grant-only) à credential SERVEUR — lève si le sub courant n'y a pas droit.
-
-    Indépendant de la visibilité : l'autorisation ne doit JAMAIS reposer sur le
-    seul masquage (qui peut fail-open si `list_tools` échoue au handshake →
-    denylist incomplète). `gocardless` a déjà ce backstop via `resolve_api_key`
-    (clé per-user) ; `mm` utilise un secret serveur (MM_REFRESH_TOKEN) sans clé
-    per-user, d'où ce garde explicite à appeler dans son `_client()`.
-
-    stdio local (sub=None) = accès complet, cohérent avec le middleware.
-    """
-    if namespace not in ADMIN_GRANT_ONLY_NAMESPACES:
-        return
-    sub = current_user_sub_from_token()
-    if sub is None:
-        return
-    if is_super_admin(sub):
-        return
-    if namespace not in granted_namespaces_for(sub):
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Accès au namespace `{namespace}` non accordé. Demande à un "
-                f"admin de te l'accorder (per-user ou via l'entitlement de ton org)."
-            ),
-        ))
 
 
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:

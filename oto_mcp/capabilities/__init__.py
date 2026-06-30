@@ -55,6 +55,7 @@ from . import platform_instructions  # noqa: F401 — platform.instructions (oto
 # Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).
 from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
 from . import project_files  # noqa: F401 — me.project_files (oto_project_files, MCP-only, ADR 0032 §3)
+from . import kb  # noqa: F401 — me.kb (oto_kb : base de connaissance d'org = zone Documents, remplace Memento)
 from . import docs  # noqa: F401 — me.doc (oto_doc, POST /api/me/docs) — pages d'un projet
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     server TEXT NOT NULL DEFAULT 'oto',
+    -- Discriminateur d'événement (ADR 0017, « un seul flux ») : 'mcp' = invocation
+    -- d'outil MCP (le cas historique, défaut) ; 'rest' = appel /api/* ; 'connector'
+    -- = échec/événement de résolution de credential ou de connexion connecteur.
+    -- `tool` porte alors l'identifiant d'événement (route REST, nom de provider…).
+    -- Les lectures du monitoring d'outils filtrent kind='mcp' pour rester iso.
+    kind TEXT NOT NULL DEFAULT 'mcp',
     sub TEXT,
     email TEXT,
     tool TEXT NOT NULL,
@@ -339,6 +345,24 @@ CREATE TABLE IF NOT EXISTS doc_revisions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_doc_revisions_doc ON doc_revisions(doc_id, created_at DESC);
+
+-- Demandes de modification d'un Doc (ADR 0032 §3, gap #4b réunion 30/06) : un
+-- utilisateur en LECTURE SEULE propose un nouveau contenu ; le propriétaire (write)
+-- accepte (→ applique via update_doc, qui snapshotte la version courante) ou refuse.
+-- `status` ∈ pending|accepted|rejected. CASCADE sur la suppression du doc.
+CREATE TABLE IF NOT EXISTS doc_change_requests (
+    id BIGSERIAL PRIMARY KEY,
+    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    requested_by TEXT,
+    proposed_title TEXT,
+    proposed_body_md TEXT NOT NULL DEFAULT '',
+    message TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    resolved_by TEXT,
+    resolved_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté
 -- best-effort par les capacités projet/doc sur les mutations. `action` = verbe court

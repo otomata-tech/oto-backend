@@ -29,6 +29,19 @@ def seams(monkeypatch):
     monkeypatch.setattr(D.db, "delete_doc", lambda did: rec["delete"].append(did))
     monkeypatch.setattr(D.db, "move_doc", lambda did, p: rec["move"].append((did, p)))
     monkeypatch.setattr(D.db, "log_project_activity", lambda *a, **k: None)
+    # gap #4b — demandes de modif
+    rec["cr_add"], rec["cr_resolve"] = [], []
+    monkeypatch.setattr(D.db, "add_doc_change_request",
+                        lambda did, by, proposed_title=None, proposed_body_md="", message=None:
+                        rec["cr_add"].append((did, by, proposed_title, proposed_body_md, message))
+                        or {"id": 5, "status": "pending"})
+    monkeypatch.setattr(D.db, "list_doc_change_requests",
+                        lambda did, only_pending=True: [{"id": 5, "proposed_body_md": "new", "status": "pending"}])
+    monkeypatch.setattr(D.db, "get_doc_change_request",
+                        lambda rid: {"id": rid, "doc_id": 3, "status": "pending",
+                                     "proposed_title": "T", "proposed_body_md": "new"})
+    monkeypatch.setattr(D.db, "resolve_doc_change_request",
+                        lambda rid, status, by: rec["cr_resolve"].append((rid, status, by)))
     return rec
 
 
@@ -92,3 +105,32 @@ def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.doc"), None)
     assert cap is not None and cap.mcp == "oto_doc" and cap.rest.path == "/api/me/docs"
+
+
+def test_request_change_with_read_only(seams, monkeypatch):
+    # Lecture seule (can_access read True, write False) → la demande passe quand même.
+    monkeypatch.setattr(D.ownership, "can_access",
+                        lambda sub, t, rid, want="read": want == "read")
+    out = D._doc(CTX, D.DocInput(op="request_change", doc_id=3, body_md="new", message="svp"))
+    assert out["ok"] is True
+    assert seams["cr_add"] == [(3, "u1", None, "new", "svp")]
+
+
+def test_list_changes_needs_write(seams, monkeypatch):
+    monkeypatch.setattr(D.ownership, "can_access", lambda sub, t, rid, want="read": want == "read")
+    with pytest.raises(AuthzDenied) as e:
+        D._doc(CTX, D.DocInput(op="list_changes", doc_id=3))
+    assert e.value.code == "forbidden"
+
+
+def test_resolve_change_accept_applies(seams):
+    out = D._doc(CTX, D.DocInput(op="resolve_change", doc_id=3, request_id=5, accept=True))
+    assert out["accepted"] is True
+    assert seams["update"] == [(3, "T", "new", None, "u1")]      # contenu proposé appliqué
+    assert seams["cr_resolve"] == [(5, "accepted", "u1")]
+
+
+def test_resolve_change_reject(seams):
+    D._doc(CTX, D.DocInput(op="resolve_change", doc_id=3, request_id=5, accept=False))
+    assert seams["update"] == []                                  # rien appliqué
+    assert seams["cr_resolve"] == [(5, "rejected", "u1")]

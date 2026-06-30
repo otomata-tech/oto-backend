@@ -242,6 +242,52 @@ def list_doc_revisions(doc_id: int, limit: int = 50) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# --- Demandes de modification (gap #4b, lecture seule → propose, owner tranche) --
+_DCR_COLS = ("id, doc_id, requested_by, proposed_title, proposed_body_md, message, "
+             "status, resolved_by, resolved_at, created_at")
+
+
+def add_doc_change_request(doc_id: int, requested_by: Optional[str], *,
+                           proposed_title: Optional[str], proposed_body_md: str,
+                           message: Optional[str] = None) -> dict:
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO doc_change_requests (doc_id, requested_by, proposed_title, "
+            "proposed_body_md, message) VALUES (%s, %s, %s, %s, %s) "
+            f"RETURNING {_DCR_COLS}",
+            (doc_id, requested_by, proposed_title, proposed_body_md, message),
+        ).fetchone()
+        return dict(row)
+
+
+def list_doc_change_requests(doc_id: int, *, only_pending: bool = True) -> list[dict]:
+    sql = f"SELECT {_DCR_COLS} FROM doc_change_requests WHERE doc_id = %s "
+    if only_pending:
+        sql += "AND status = 'pending' "
+    sql += "ORDER BY created_at DESC"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (doc_id,)).fetchall()]
+
+
+def get_doc_change_request(request_id: int) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_DCR_COLS} FROM doc_change_requests WHERE id = %s", (request_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def resolve_doc_change_request(request_id: int, status: str, resolved_by: Optional[str]) -> None:
+    """Marque une demande accepted|rejected. L'APPLICATION du contenu (si accepted)
+    est faite par l'appelant via `update_doc` (qui snapshotte la version courante)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE doc_change_requests SET status = %s, resolved_by = %s, "
+            "resolved_at = NOW() WHERE id = %s AND status = 'pending'",
+            (status, resolved_by, request_id),
+        )
+
+
 def delete_doc(doc_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM docs WHERE id = %s", (doc_id,))

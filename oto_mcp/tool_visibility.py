@@ -35,7 +35,10 @@ ADMIN_GRANT_ONLY_NAMESPACES = connectors.ADMIN_GRANT_ONLY_NAMESPACES
 # l'org pour une adresse déclarée de l'org ; super_admin pour le repli marque
 # oto@otomata.tech) — masqué ici pour ne pas encombrer la toolbox des orgs sans
 # adresse configurée. La vraie barrière reste le check de rôle, pas ce masquage.
-DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send"})
+# `fr_egapro_declaration` : source de niche (index égalité F-H par SIREN, surtout
+# utile en qualif sociale type Mūcho) — masquée pour ne pas charger la toolbox `fr`
+# par défaut ; activable à la demande (oto_enable_tool fr_egapro_declaration).
+DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send", "fr_egapro_declaration"})
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut

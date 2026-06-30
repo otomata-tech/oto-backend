@@ -144,14 +144,22 @@ class DatastorePg:
         }
 
     def list_namespaces(self) -> list[dict]:
-        """Namespaces visibles : possédés (perso + ceux des orgs/groupes de l'acteur)
-        + accordés via grant. Dédupliqués par id (priorité possédé)."""
-        scope = self._scope()
+        """Namespaces visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
+        possédés par l'org active + accordés à elle (grant d'org/groupe actif) +
+        partagés avec l'acteur en propre (grant user, partage délibéré). Un namespace
+        possédé par une AUTRE org ne fuite plus. Dédupliqués par id (priorité possédé)."""
+        from . import access
+        owner = ownership.active_owner(access.current_org(self.sub))
+        if owner is None:
+            return []
+        org = int(owner[1])
+        grp = access.current_group(self.sub)
+        org_ids = [org]
+        group_ids = [grp] if grp is not None else []
         out: dict[int, dict] = {}
-        for n in db.list_datastore_namespaces_for_owners(scope.owner_pairs()):
+        for n in db.list_datastore_namespaces_for_owners([owner]):
             out[int(n["id"])] = self._entry(n, shared=False)
-        for n in db.list_datastore_namespaces_granted_to(
-                self.sub, scope.org_ids, scope.group_ids):
+        for n in db.list_datastore_namespaces_granted_to(self.sub, org_ids, group_ids):
             if int(n["id"]) in out:
                 continue
             out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))

@@ -20,8 +20,10 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "create_project",
                         lambda ot, oid, name, brief, created_by=None: rec["create"].append((ot, oid, name, brief, created_by)) or 7)
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
+    rec["list_owners"] = []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
-                        lambda owners, templates_only=False: [dict(ROW, is_template=True)] if templates_only else [ROW])
+                        lambda owners, templates_only=False: rec["list_owners"].append(owners) or (
+                            [dict(ROW, is_template=True)] if templates_only else [ROW]))
     monkeypatch.setattr(P.db, "update_project",
                         lambda pid, name=None, brief_md=None, is_template=None: rec["update"].append((pid, name, brief_md, is_template)))
     rec["copy"] = []
@@ -88,9 +90,19 @@ def test_create_missing_name(seams):
     assert e.value.code == "missing_name"
 
 
-def test_list(seams):
-    out = P._project(CTX, P.ProjectInput(op="list"))
+def test_list_scoped_to_active_org(seams):
+    # La liste ne montre QUE les projets de l'org active (pas l'union de toutes les
+    # orgs) : charger une org n'expose plus les projets d'une autre.
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="list"))
     assert [p["id"] for p in out["projects"]] == [7]
+    assert seams["list_owners"] == [[("org", "99")]]
+
+
+def test_list_without_active_org_rejected(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="list"))      # CTX.org_id = None
+    assert e.value.code == "no_active_org"
 
 
 def test_get_forbidden(seams, monkeypatch):

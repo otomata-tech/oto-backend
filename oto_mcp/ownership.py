@@ -48,6 +48,22 @@ def accessor_scope(sub: str) -> AccessorScope:
     return AccessorScope(sub=sub, org_ids=org_ids, group_ids=group_ids)
 
 
+def active_owner(org_id: Optional[int]) -> Optional[tuple[str, str]]:
+    """Owner-pair du CONTEXTE COURANT (= l'org active) — le pendant `ownership` de
+    `access.current_org` (ADR 0023).
+
+    **Règle de scoping** : toute LISTE DE CONTENU possédé (datastore, projets…) scope
+    là-dessus → charger une org ne montre QUE ses ressources. `accessor_scope`/
+    `owner_pairs` (union de TOUTES les orgs de l'acteur) est réservé au plan
+    GOUVERNANCE / découverte cross-org (ex. `oto_resource list`, bibliothèque de
+    modèles). Mélanger les deux = fuite cross-org *fail-open* (le superset expose
+    plus que le contexte) — cf. garde-fou `tests/test_owner_scope_tripwire.py`.
+
+    Retourne `None` si aucune org active (le caller tranche : 400 en capacité, liste
+    vide en rendu). Post-abolition du perso, `current_org` est toujours posé."""
+    return None if org_id is None else ("org", str(org_id))
+
+
 # --- Registre des types de ressource ----------------------------------------
 
 @dataclass(frozen=True)

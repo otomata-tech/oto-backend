@@ -99,8 +99,12 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         return _view(db.get_project_by_id(pid))
 
     if inp.op == "list":
-        owners = ownership.accessor_scope(sub).owner_pairs()
-        return {"projects": [_view(r) for r in db.list_projects_for_owners(owners)]}
+        # Scopé à l'org active (seam `ownership.active_owner`) : charger une org ne
+        # montre QUE ses projets (l'org est le contexte, ADR 0023). Un projet d'une
+        # autre org ne fuite plus.
+        owner = ownership.active_owner(ctx.org_id)
+        _require(owner is not None, "no_active_org", "Aucune org active.", 400)
+        return {"projects": [_view(r) for r in db.list_projects_for_owners([owner])]}
 
     if inp.op == "list_templates":
         # Modèles (is_template) lisibles par l'acteur — la bibliothèque copiable (B5a).

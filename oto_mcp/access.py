@@ -705,4 +705,24 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             "quota_used_today": 0,
             "quota_daily": None,
         }
+
+    # Connecteurs à SESSION navigateur (`personal_session`, secret_kind="cookie" :
+    # brevo/crunchbase) : pas de champ à saisir → connexion par Live View Browserbase
+    # (MCP `<ns>_connect_start`), le credential = le Context persisté au coffre. On
+    # expose juste « configuré + depuis quand » pour que la carte rende son widget
+    # session (ADR 0026 prévoyait `providers` sans jamais l'alimenter → /api/me ne
+    # disait plus rien sur ces sessions ; corrigé 2026-06-30).
+    for c in connectors.REGISTRY.values():
+        if c.name in out["providers"] or c.secret_kind != "cookie":
+            continue
+        st = credentials_store.credential_status("user", sub, c.name)
+        out["providers"][c.name] = {
+            "mode": "user" if st else "forbidden",
+            "user_key_configured": st is not None,
+            "session_set_at": st["set_at"] if st else None,
+            "org_secret_configured": False,
+            "platform_key_label": None,
+            "quota_used_today": 0,
+            "quota_daily": None,
+        }
     return out

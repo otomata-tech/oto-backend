@@ -605,7 +605,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         provider = request.path_params["provider"]
-        if _credentialable(provider) is None:
+        # Effacer est générique : tout connecteur byo_user (clé multi-champs OU
+        # session navigateur sans champ, ex. brevo/crunchbase). On ne dépend PAS de
+        # `secret_fields` comme GET/SAVE — sinon la déconnexion d'une session
+        # Browserbase 404 (route `/api/settings/crunchbase` retirée par ADR 0026).
+        c = connectors.connector_for_provider(provider)
+        if c is None or not connectors.is_byo_user(provider):
             return _json_error(request, 404, "unknown_provider")
         from . import credentials_store
         credentials_store.clear_credential("user", sub, provider)

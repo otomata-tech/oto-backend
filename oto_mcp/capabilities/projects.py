@@ -29,7 +29,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "base")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "copy", "link", "unlink", "activity"]
+                "copy", "handoff", "link", "unlink", "activity"]
     project_id: Optional[int] = None
     name: Optional[str] = None
     brief_md: Optional[str] = None
@@ -48,6 +48,24 @@ class ProjectInput(BaseModel):
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
     if not cond:
         raise AuthzDenied(status, code, msg)
+
+
+def _handoff_md(row: dict) -> str:
+    """Texte copier-coller « reprendre dans Claude » (ADR 0032 §7 B5b) : un blob
+    universel (Claude/GPT/markdown) qui pré-écrit « charge ce projet ». Pur (entrée
+    = dict projet, sortie = str), sans I/O — testable isolément."""
+    pid, name = row["id"], row.get("name") or f"#{row['id']}"
+    brief = (row.get("brief_md") or "").strip()
+    excerpt = (brief[:280] + "…") if len(brief) > 280 else brief
+    lines = [
+        f"Charge le projet Oto #{pid} « {name} » : appelle `oto_use_project({pid})` "
+        f"pour l'activer dans cette conversation, puis `oto_project(op=get, "
+        f"project_id={pid})` pour son brief, ses pages et ses entités liées. "
+        f"Travaille DANS ce projet (ses connecteurs préconfigurés, ses tableaux de sortie).",
+    ]
+    if excerpt:
+        lines += ["", f"Brief : {excerpt}"]
+    return "\n".join(lines)
 
 
 def _view(row: dict) -> dict:
@@ -103,6 +121,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     if inp.op == "activity":
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         return {"id": inp.project_id, "activity": db.list_project_activity(int(inp.project_id))}
+
+    if inp.op == "handoff":
+        # « Reprendre dans Claude » (B5b) : blob copier-coller qui charge ce projet.
+        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+        return {"id": inp.project_id, "markdown": _handoff_md(row)}
 
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -161,7 +184,9 @@ CAPABILITIES += [
             "as a copyable model) / copy (deep-copy a project you can read — its own or a model "
             "— into a NEW project in your active org: brief + doc tree + links + raw files; "
             "datastore rows are NOT duplicated, tableau links stay pointers; pass project_id "
-            "= source + name = target) / archive / link & unlink (attach an entity: "
+            "= source + name = target) / handoff (a copy-paste « resume in Claude » blob "
+            "that pre-writes oto_use_project for this project) / archive / link & unlink "
+            "(attach an entity: "
             "target_type tableau|procedure|"
             "connecteur|base + target_ref = its id/slug/name, optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "

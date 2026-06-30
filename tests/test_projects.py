@@ -234,6 +234,29 @@ def test_activity(seams):
     assert out["id"] == 7 and out["activity"][0]["action"] == "project.create"
 
 
+def test_handoff_md_pure():
+    md = P._handoff_md({"id": 7, "name": "Prospection MM", "brief_md": "le but du projet"})
+    assert "oto_use_project(7)" in md and "#7" in md and "Prospection MM" in md
+    assert "le but du projet" in md
+
+
+def test_handoff_md_truncates_brief():
+    md = P._handoff_md({"id": 7, "name": "X", "brief_md": "a" * 400})
+    assert "…" in md and len(md) < 600
+
+
+def test_handoff_op(seams):
+    out = P._project(CTX, P.ProjectInput(op="handoff", project_id=7))
+    assert out["id"] == 7 and "oto_use_project(7)" in out["markdown"]
+
+
+def test_handoff_forbidden(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="handoff", project_id=7))
+    assert e.value.code == "forbidden"
+
+
 def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.project"), None)

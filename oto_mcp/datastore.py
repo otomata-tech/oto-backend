@@ -140,6 +140,7 @@ class DatastorePg:
             "can_write": (permission == "write") if shared else True,
             "can_govern": ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)),
             "is_personal": perso,
+            "schema": n.get("schema"),   # mode typé optionnel (ADR 0032 §6 / 0029, B6) ; None = table libre
         }
 
     def list_namespaces(self) -> list[dict]:
@@ -193,6 +194,22 @@ class DatastorePg:
     def get_url(self, namespace: str) -> str:
         self._resolve(namespace)  # 404 si inconnu
         return _ns_url(namespace)
+
+    # --- mode typé (ADR 0032 §6 / 0029, B6) ----------------------------------
+
+    def get_schema(self, namespace: str) -> Optional[dict]:
+        ns_id = self._resolve(namespace)
+        ns = db.get_datastore_namespace_by_id(ns_id)
+        return (ns or {}).get("schema")
+
+    def set_schema(self, namespace: str, schema: Optional[dict]) -> dict:
+        """Pose (ou retire si None) le schéma typé d'un namespace. Exige le droit
+        d'écriture. SOFT : pas de validation des rows existantes (schéma de rendu)."""
+        ns_id = self._resolve(namespace, write=True)
+        if schema is not None and not isinstance(schema, dict):
+            raise ValueError("schema doit être un objet {fields:[...]} ou null")
+        db.set_datastore_schema(ns_id, schema)
+        return {"namespace": namespace, "schema": schema}
 
     # --- row ops -------------------------------------------------------------
 

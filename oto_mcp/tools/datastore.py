@@ -76,6 +76,32 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "namespace": namespace}
 
     @mcp.tool()
+    def data_set_schema(namespace: str, schema: Optional[dict] = None) -> dict:
+        """Declare (or clear with schema=null) a namespace's TYPED schema (ADR 0032 §6).
+
+        A typed namespace renders as readable cards/records instead of a flat table.
+        `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
+        bool|json", "role"?: "title|badge|metric|status|qualif|note"}]}. SOFT: no write
+        validation — it drives rendering and tells the agent what each field means.
+        Requires write access. Pass schema=null to switch back to free-table mode.
+
+        Args:
+            namespace: target namespace (must exist; you must have write access).
+            schema: the schema object, or null to clear it.
+        """
+        sub = access.current_user_sub_or_raise()
+        store = _store_for(sub)
+        try:
+            return store.set_schema(namespace, schema)
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        except NamespaceReadOnly:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+
+    @mcp.tool()
     def data_write(namespace: str, row: dict, id: str | None = None) -> dict:
         """Write a row. WITHOUT `id` = append a NEW row (new JSON keys auto-create
         columns). WITH `id` = PARTIAL update of that row (only provided fields

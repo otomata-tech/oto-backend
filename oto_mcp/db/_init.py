@@ -32,6 +32,8 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
+        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # Corrélation des appels (ADR 0017, extension OTO-LOCALE de tool_calls).
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")

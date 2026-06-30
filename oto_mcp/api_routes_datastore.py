@@ -359,6 +359,28 @@ def make_routes(
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
 
+    async def ds_set_schema(request: Request) -> JSONResponse:
+        """Pose/retire le schéma typé d'un namespace (ADR 0032 §6 / 0029, B6).
+        Corps : {schema: {fields:[...]}} ou {schema: null} pour repasser en table libre."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_json")
+        if not isinstance(body, dict):
+            return json_error(request, 400, "invalid_body")
+        namespace = request.path_params["namespace"]
+        try:
+            return json_response(request, make_store(sub).set_schema(namespace, body.get("schema")))
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        except NamespaceReadOnly:
+            return json_error(request, 403, "namespace_read_only")
+        except ValueError:
+            return json_error(request, 400, "invalid_schema")
+
     def _govern_ns(sub: str, namespace: str) -> tuple[int | None, tuple[int, str] | None]:
         """Résout le namespace par nom + vérifie le droit de GOUVERNANCE de l'acteur
         (owner ∪ escalade roles.py). Retourne (ns_id, None) ou (None, (status, code))."""
@@ -507,6 +529,8 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/url", ds_url, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/url", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/schema", ds_set_schema, methods=["PUT"]),
+        Route("/api/datastore/namespaces/{namespace}/schema", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_list_rows, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_append, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/rows", options_handler, methods=["OPTIONS"]),

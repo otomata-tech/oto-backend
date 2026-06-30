@@ -224,6 +224,11 @@ CREATE TABLE IF NOT EXISTS user_datastores (
     namespace TEXT NOT NULL,
     spreadsheet_id TEXT,
     owner_email TEXT,
+    -- Mode TYPÉ optionnel (ADR 0032 §6 / 0029) : NULL = table libre (colonnes
+    -- découvertes des rows) ; sinon un schéma déclaré
+    -- {fields:[{key,label?,type?,role?}]} où role ∈ title|badge|metric|status|
+    -- qualif|note pilote le rendu en fiches. Soft : pas de validation à l'écriture.
+    schema JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

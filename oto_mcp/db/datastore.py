@@ -53,10 +53,21 @@ def get_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -> O
 def get_datastore_namespace_by_id(ns_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, owner_type, owner_id, namespace, created_at FROM user_datastores WHERE id = %s",
+            "SELECT id, owner_type, owner_id, namespace, schema, created_at "
+            "FROM user_datastores WHERE id = %s",
             (ns_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def set_datastore_schema(ns_id: int, schema: Optional[dict]) -> None:
+    """Pose (ou retire si None) le schéma typé d'un namespace (ADR 0032 §6 / 0029, B6).
+    Soft : aucune validation des rows existantes — c'est un schéma de rendu, pas une
+    contrainte d'écriture."""
+    cfg = json.dumps(schema) if schema is not None else None
+    with _connect() as conn:
+        conn.execute("UPDATE user_datastores SET schema = %s::jsonb WHERE id = %s",
+                     (cfg, ns_id))
 
 
 def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
@@ -67,7 +78,7 @@ def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[
     oids = [o[1] for o in owners]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.schema, d.created_at "
             "FROM user_datastores d "
             "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
             "  ON d.owner_type = o.t AND d.owner_id = o.i "
@@ -88,7 +99,7 @@ def resolve_datastore_ns(
     grp_txt = [str(g) for g in group_ids]
     with _connect() as conn:
         row = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at "
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.schema, d.created_at "
             "FROM user_datastores d "
             "WHERE d.namespace = %(ns)s AND ("
             "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"

@@ -316,8 +316,9 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
     )
 
 
-# Ordre des 9 connecteurs `keyed` = ordre EXACT de l'ancien KEY_PROVIDERS
+# Ordre des connecteurs `keyed` = ordre EXACT de l'ancien KEY_PROVIDERS
 # (status_for itère dessus, l'affichage en dépend). Ne pas réordonner.
+# (slack est sorti du modèle keyed le 2026-06-30 → fields multi-champs, #25.)
 _REGISTRY_LIST = [
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     _c("serper", ["serper"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
@@ -348,9 +349,19 @@ _REGISTRY_LIST = [
     _c("pennylane", ["pennylane"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
        label="Pennylane", help="compta", href="https://app.pennylane.com"),
-    _c("slack", ["slack"], auth_modes={"byo_user"}, keyed=True, personal_session=True,
-       secret_kind="refresh_token",
-       label="Slack", help="messagerie (user token)"),
+    # slack : messagerie. BYO 100% configurable par org/user (#25) — credential
+    # MULTI-CHAMPS (bot token xoxb- ET/OU user token xoxp-, au moins un requis),
+    # résolu via resolve_credential_fields (modèle silae/zoho, PAS keyed). byo_user
+    # OU byo_org (un workspace partagé par l'org = son bot token). Le workspace est
+    # implicite = celui des tokens posés. Fallback de lecture du credential legacy
+    # (token unique pré-multichamps) dans tools/slack.py.
+    _c("slack", ["slack"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
+       personal_session=False, label="Slack",
+       help="messagerie Slack (bot token xoxb- et/ou user token xoxp-)",
+       href="https://slack.com", credential_fields=(
+           CredentialField("bot_token", "Bot token (xoxb-)", secret=True),
+           CredentialField("user_token", "User token (xoxp-)", secret=True),
+       )),
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
        label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),

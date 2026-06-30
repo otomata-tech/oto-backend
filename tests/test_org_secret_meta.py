@@ -16,11 +16,19 @@ def test_shareable_provider_no_base_url_ok():
 
 
 def test_per_user_provider_refused():
-    # slack/linkedin/google/whatsapp = sessions perso → jamais partageables.
-    for provider in ("slack", "linkedin", "google", "whatsapp"):
+    # linkedin/google/whatsapp = sessions perso → jamais partageables.
+    for provider in ("linkedin", "google", "whatsapp"):
         meta, code = connectors.org_secret_meta(provider, None)
         assert code == "provider_not_shareable", provider
         assert meta is None
+
+
+def test_slack_now_org_shareable():
+    # slack = BYO configurable par org/user (#25, byo_org) → partageable comme
+    # serper (un workspace partagé par l'org = son bot token).
+    meta, code = connectors.org_secret_meta("slack", None)
+    assert code is None
+    assert meta is None
 
 
 def test_unknown_provider_refused():

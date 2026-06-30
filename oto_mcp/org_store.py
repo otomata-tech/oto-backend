@@ -107,9 +107,8 @@ def get_active_org(sub: str) -> Optional[int]:
 def get_org_secret(org_id: int, provider: str) -> Optional[str]:
     """Clé du secret partagé `provider` possédé par l'org, ou None.
 
-    `provider` validé dans le store (require_keyed). La restriction aux providers
-    org-partageables (exclut slack) est portée par la couche access et le
-    write-path.
+    La restriction aux providers org-partageables (`byo_org`) est portée par la
+    couche access et le write-path (`org_secret_meta`).
 
     Lit le coffre chiffré `connector_credentials` (entité 'org', déchiffre).
     """

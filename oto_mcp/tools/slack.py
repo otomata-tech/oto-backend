@@ -25,8 +25,25 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.slack.client import SlackClient
 
     def _client() -> tuple[SlackClient, bool]:
-        key, is_platform = access.resolve_api_key("slack")
-        return SlackClient(user_token=key, default_as_user=True), is_platform
+        # BYO multi-champs (#25) : bot token (xoxb-) et/ou user token (xoxp-),
+        # résolus par (sub, org active) via la cascade credential (user > groupe
+        # actif > org active). default_as_user suit la présence d'un user token
+        # (préserve le comportement legacy : un token unique = user token).
+        rc = access.resolve_credential("slack", want="byo")
+        f = rc.fields
+        bot = f.get("bot_token") or None
+        user = f.get("user_token") or None
+        if not bot and not user:
+            # Fallback legacy : credential pré-multichamps = token unique brut (non
+            # JSON → rc.fields vide). Lu via rc.key, routé par préfixe.
+            raw = (rc.key or "").strip()
+            if raw.startswith("xoxb-"):
+                bot = raw
+            elif raw:
+                user = raw
+        client = SlackClient(bot_token=bot, user_token=user,
+                             default_as_user=bool(user))
+        return client, rc.is_platform
 
     def _record_if_platform(is_platform: bool) -> None:
         if is_platform:

@@ -16,11 +16,13 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.sirene import EntreprisesClient, SireneClient
     from oto.tools.inpi import InpiClient
     from oto.tools.bodacc import BodaccClient
+    from france_opendata import EgaproClient  # open data, sans clé (comme foncier/urba)
     from .. import db  # BOAMP : index PG local (france-opendata#3), pas d'API live
 
     entreprises = EntreprisesClient()
     inpi = InpiClient()
     bodacc = BodaccClient()
+    egapro = EgaproClient()
 
     # --- Identité (API Recherche Entreprises, open data) ---
 
@@ -434,4 +436,26 @@ def register(mcp: FastMCP) -> None:
         """List the agreement theme codes present in the database (code → label →
         count). Discovery helper so you can pick `themes` for fr_accords_search."""
         return db.acco_themes()
+
+    # --- Index égalité F-H (Egapro, open data) -------------------------------
+
+    @mcp.tool()
+    def fr_egapro_declaration(siren: str, year: Optional[int] = None) -> dict:
+        """Gender-equality index (Egapro) declaration of a company, by SIREN.
+
+        Every French company with 50+ employees must file an annual Egapro index.
+        The payoff here is the **exact headcount** (`entreprise.effectif.total`) —
+        where SIRENE only gives a bracket — plus the NAF code and per-indicator
+        scores. Useful to qualify a lead's real size and confirm it is a 50+
+        employer subject to social obligations.
+
+        `year` omitted = most recent filing found (the API does not list a SIREN's
+        years, so it scans back from the current year). Returns `{found: false}`
+        when the company has no Egapro declaration (under 50 employees, or not filed).
+        """
+        decl = egapro.declaration(siren, year) if year else egapro.latest_declaration(siren)
+        if decl is None:
+            return {"found": False, "siren": siren,
+                    "message": "Aucune déclaration Egapro (entreprise <50 salariés ou non déposée)."}
+        return decl
 

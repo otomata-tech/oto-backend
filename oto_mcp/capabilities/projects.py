@@ -53,19 +53,19 @@ def _require(cond, code: str, msg: str, status: int = 400) -> None:
 def _handoff_md(row: dict) -> str:
     """Texte copier-coller « reprendre dans Claude » (ADR 0032 §7 B5b) : un blob
     universel (Claude/GPT/markdown) qui pré-écrit « charge ce projet ». Pur (entrée
-    = dict projet, sortie = str), sans I/O — testable isolément."""
+    = dict projet, sortie = str), sans I/O — testable isolément.
+
+    SÉCURITÉ — n'embarque PAS le `brief_md` : un projet partagé/modèle peut porter un
+    brief à contenu hostile (injection de prompt) qui, collé dans Claude, s'exécuterait
+    comme une consigne. Le blob ne porte que l'instruction de CHARGEMENT (id + nom) ;
+    l'agent lit le brief via `oto_project(op=get)` — donnée d'outil, pas texte pré-collé."""
     pid, name = row["id"], row.get("name") or f"#{row['id']}"
-    brief = (row.get("brief_md") or "").strip()
-    excerpt = (brief[:280] + "…") if len(brief) > 280 else brief
-    lines = [
+    return (
         f"Charge le projet Oto #{pid} « {name} » : appelle `oto_use_project({pid})` "
         f"pour l'activer dans cette conversation, puis `oto_project(op=get, "
         f"project_id={pid})` pour son brief, ses pages et ses entités liées. "
-        f"Travaille DANS ce projet (ses connecteurs préconfigurés, ses tableaux de sortie).",
-    ]
-    if excerpt:
-        lines += ["", f"Brief : {excerpt}"]
-    return "\n".join(lines)
+        f"Travaille DANS ce projet (ses connecteurs préconfigurés, ses tableaux de sortie)."
+    )
 
 
 def _view(row: dict) -> dict:

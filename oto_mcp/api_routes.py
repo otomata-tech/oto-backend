@@ -719,6 +719,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                                 f"{existing.get('title') or existing.get('filename')}:{make_public}")
         return _json(request, {"ok": True, "file": _signed(row)})
 
+    async def public_doc(request: Request) -> JSONResponse:
+        """Lecture publique d'un doc partagé par token (gap #4a) — PAS d'auth,
+        lecture seule. Le dashboard rend le markdown sur sa route publique /p/d/<token>."""
+        token = request.path_params.get("token", "")
+        doc = db.get_doc_by_public_token(token) if token else None
+        if not doc:
+            return _json_error(request, 404, "not_found")
+        return _json(request, {"title": doc["title"], "body_md": doc["body_md"],
+                               "updated_at": doc.get("updated_at")})
+
     def _org_logo_gate(request: Request, sub: str):
         """Renvoie (org_id, err). 400 id invalide, 404 org inconnue, 403 non-admin."""
         from . import roles
@@ -1383,6 +1393,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}", options_handler, methods=["OPTIONS"]),
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}/public", project_file_public, methods=["POST"]),
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}/public", options_handler, methods=["OPTIONS"]),
+        Route("/api/public/docs/{token}", public_doc, methods=["GET"]),
+        Route("/api/public/docs/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
         Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),

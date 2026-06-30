@@ -19,9 +19,17 @@ from .registry import CAPABILITIES
 PROJECT_RTYPE = "project"
 
 
+def _public_doc_url(token: str) -> str:
+    """Lien public d'un doc partagé (gap #4a) — pointe sur la route publique du
+    dashboard qui rend le markdown. Base configurable (défaut prod)."""
+    import os
+    base = os.environ.get("OTO_DASHBOARD_BASE_URL", "https://dashboard.oto.ninja").rstrip("/")
+    return f"{base}/p/d/{token}"
+
+
 class DocInput(BaseModel):
     op: Literal["create", "list", "get", "update", "delete", "move", "revisions",
-                "request_change", "list_changes", "resolve_change"]
+                "request_change", "list_changes", "resolve_change", "set_public"]
     project_id: Optional[int] = None   # create / list
     doc_id: Optional[int] = None       # get / update / delete / move / request_change / list_changes
     parent_id: Optional[int] = None    # create / move (None = 1er niveau sous le projet)
@@ -31,6 +39,7 @@ class DocInput(BaseModel):
     request_id: Optional[int] = None   # resolve_change
     message: Optional[str] = None      # request_change : note libre du demandeur
     accept: Optional[bool] = None      # resolve_change : True = accepter (applique), False = refuser
+    public: Optional[bool] = None      # set_public : True = partager publiquement, False = retirer
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -43,9 +52,13 @@ def _can(sub: str, project_id: int, want: str) -> bool:
 
 
 def _view(row: dict) -> dict:
-    return {k: row.get(k) for k in
-            ("id", "project_id", "parent_id", "title", "body_md", "kind",
-             "created_at", "updated_at")}
+    out = {k: row.get(k) for k in
+           ("id", "project_id", "parent_id", "title", "body_md", "kind",
+            "created_at", "updated_at")}
+    tok = row.get("public_token")
+    out["public"] = bool(tok)
+    out["public_url"] = _public_doc_url(tok) if tok else None
+    return out
 
 
 def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
@@ -84,6 +97,15 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
         return {"doc_id": inp.doc_id,
                 "revisions": db.list_doc_revisions(int(inp.doc_id))}
+
+    if inp.op == "set_public":
+        # Partager publiquement (ou retirer) — action d'écriture (gap #4a).
+        _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
+        token = db.set_doc_public(int(inp.doc_id), bool(inp.public))
+        db.log_project_activity(pid, sub, "doc.set_public",
+                                f"{row.get('title')}:{bool(inp.public)}")
+        return {"ok": True, "id": inp.doc_id, "public": bool(token),
+                "public_url": _public_doc_url(token) if token else None}
 
     if inp.op == "request_change":
         # Lecture seule → propose ; il faut au moins l'accès LECTURE au projet.
@@ -156,7 +178,8 @@ CAPABILITIES += [
             "(title/body_md/kind ; snapshots the prior version) / revisions (doc_id → "
             "version history, newest first) / request_change (read-only users propose a "
             "new body_md/title + message) / list_changes (owner: pending requests) / "
-            "resolve_change (request_id + accept: true applies it, false rejects) / delete "
+            "resolve_change (request_id + accept: true applies it, false rejects) / set_public "
+            "(public: true → shareable public read-only link, false → private ; returns public_url) / delete "
             "(cascades its subtree) / move (parent_id, null=top-level). kind ∈ doc|note|source."
         ),
         mcp="oto_doc",

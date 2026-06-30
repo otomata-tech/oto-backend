@@ -42,7 +42,22 @@ def seams(monkeypatch):
                                      "proposed_title": "T", "proposed_body_md": "new"})
     monkeypatch.setattr(D.db, "resolve_doc_change_request",
                         lambda rid, status, by: rec["cr_resolve"].append((rid, status, by)))
+    rec["set_public"] = []
+    monkeypatch.setattr(D.db, "set_doc_public",
+                        lambda did, public: rec["set_public"].append((did, public)) or ("tok123" if public else None))
     return rec
+
+
+def test_set_public_on(seams):
+    out = D._doc(CTX, D.DocInput(op="set_public", doc_id=3, public=True))
+    assert seams["set_public"] == [(3, True)]
+    assert out["public"] is True and out["public_url"].endswith("/p/d/tok123")
+
+
+def test_set_public_off(seams):
+    out = D._doc(CTX, D.DocInput(op="set_public", doc_id=3, public=False))
+    assert seams["set_public"] == [(3, False)]
+    assert out["public"] is False and out["public_url"] is None
 
 
 def test_create(seams):

@@ -329,6 +329,10 @@ CREATE TABLE IF NOT EXISTS docs (
     title TEXT NOT NULL,
     body_md TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'doc',
+    -- Partage public (gap #4a) : NULL = privé ; sinon un token aléatoire qui sert
+    -- de lien public en lecture seule (/api/public/docs/{token}). Index unique créé
+    -- dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).
+    public_token TEXT,
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

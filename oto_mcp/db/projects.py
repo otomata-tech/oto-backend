@@ -168,8 +168,8 @@ def list_project_links(project_id: int) -> list[dict]:
 
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
-_DOC_COLS = ("id, project_id, parent_id, title, body_md, kind, created_by, "
-             "created_at, updated_at")
+_DOC_COLS = ("id, project_id, parent_id, title, body_md, kind, public_token, "
+             "created_by, created_at, updated_at")
 
 
 def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
@@ -187,6 +187,30 @@ def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
 def get_doc_by_id(doc_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(f"SELECT {_DOC_COLS} FROM docs WHERE id = %s", (doc_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_doc_public(doc_id: int, public: bool) -> Optional[str]:
+    """Active/retire le partage public d'un doc (gap #4a). Renvoie le `public_token`
+    (généré à l'activation, conservé si déjà public ; None si retiré)."""
+    import secrets as _secrets
+    with _connect() as conn:
+        if not public:
+            conn.execute("UPDATE docs SET public_token = NULL WHERE id = %s", (doc_id,))
+            return None
+        cur = conn.execute("SELECT public_token FROM docs WHERE id = %s", (doc_id,)).fetchone()
+        token = (cur or {}).get("public_token") or _secrets.token_urlsafe(16)
+        conn.execute("UPDATE docs SET public_token = %s WHERE id = %s", (token, doc_id))
+        return token
+
+
+def get_doc_by_public_token(token: str) -> Optional[dict]:
+    """Lecture publique d'un doc par son token (gap #4a) — title/body_md/updated_at."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT title, body_md, updated_at FROM docs WHERE public_token = %s",
+            (token,),
+        ).fetchone()
         return dict(row) if row else None
 
 

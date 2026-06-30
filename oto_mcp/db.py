@@ -327,6 +327,25 @@ CREATE TABLE IF NOT EXISTS project_links (
 );
 CREATE INDEX IF NOT EXISTS idx_project_links_project ON project_links(project_id);
 
+-- Doc = page markdown d'un projet, en ARBRE (incrément 3). `parent_id` NULL = page
+-- de 1er niveau sous le projet (le `brief_md` du projet reste la page d'entrée, pas
+-- une ligne ici). `kind` ∈ {doc (humain), note (agent), source (import)}. CASCADE sur
+-- la suppression du projet ET du parent (sous-arbre). Pas d'ownership propre : un Doc
+-- hérite de l'accès de SON projet (ownership.can_access sur le projet).
+CREATE TABLE IF NOT EXISTS docs (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    parent_id BIGINT REFERENCES docs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body_md TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'doc',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
+CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);
+
 -- Primitive de ressource possédée (ADR 0030). Partage cross-type deny-by-default :
 -- une ressource est identifiée par (resource_type, resource_id) ; chaque ligne
 -- accorde une permission à un principal (user/group/org). L'OWNER de la ressource
@@ -3133,6 +3152,71 @@ def list_project_links(project_id: int) -> list[dict]:
             (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
+_DOC_COLS = ("id, project_id, parent_id, title, body_md, kind, created_by, "
+             "created_at, updated_at")
+
+
+def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
+               body_md: str = "", kind: str = "doc", created_by: Optional[str] = None) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO docs (project_id, parent_id, title, body_md, kind, created_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (project_id, parent_id, title, body_md, kind, created_by),
+        ).fetchone()
+        conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+        return int(row["id"])
+
+
+def get_doc_by_id(doc_id: int) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(f"SELECT {_DOC_COLS} FROM docs WHERE id = %s", (doc_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_docs_for_project(project_id: int) -> list[dict]:
+    """Toutes les pages du projet (l'UI/agent reconstruit l'arbre via parent_id)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_DOC_COLS} FROM docs WHERE project_id = %s "
+            "ORDER BY parent_id NULLS FIRST, title", (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_doc(doc_id: int, *, title: Optional[str] = None,
+               body_md: Optional[str] = None, kind: Optional[str] = None) -> None:
+    sets: list[str] = []
+    params: list = []
+    if title is not None:
+        sets.append("title = %s")
+        params.append(title)
+    if body_md is not None:
+        sets.append("body_md = %s")
+        params.append(body_md)
+    if kind is not None:
+        sets.append("kind = %s")
+        params.append(kind)
+    if not sets:
+        return
+    sets.append("updated_at = NOW()")
+    params.append(doc_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = %s", tuple(params))
+
+
+def delete_doc(doc_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM docs WHERE id = %s", (doc_id,))
+
+
+def move_doc(doc_id: int, new_parent_id: Optional[int]) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE docs SET parent_id = %s, updated_at = NOW() WHERE id = %s",
+                     (new_parent_id, doc_id))
 
 
 def resolve_datastore_ns(

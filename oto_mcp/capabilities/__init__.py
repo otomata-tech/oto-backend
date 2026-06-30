@@ -54,5 +54,6 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).
 from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
+from . import docs  # noqa: F401 — me.doc (oto_doc, POST /api/me/docs) — pages d'un projet
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

@@ -249,7 +249,7 @@ def init_db() -> None:
         _conn_sel.init_schema(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
-        from .legacy import prune_tool_calls
+        from .usage import prune_tool_calls
         prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
     except Exception as e:
         logger.warning("prune_tool_calls failed: %s", e)

@@ -1,23 +1,45 @@
-"""Façade du store PostgreSQL.
+"""Façade du store PostgreSQL (package `db`).
 
-⚠️ Transitoire (refactor de découpage). La plomberie est extraite en `_conn`,
-la DDL en `_schema`, l'init/migrations en `_init` ; le reste des fonctions de
-domaine vit encore dans `legacy.py` (réparti par domaine aux barreaux suivants).
+Le store est découpé en modules : `_conn` (pool/connexion), `_schema` (DDL),
+`_init` (init/migrations) et un module par domaine métier (`users`, `unipile`,
+`keys`, `usage`, `platform_instructions`, `visibility`, `emails`, `google`,
+`datastore`, `projects`, `tokens`, `opendata`).
 
 Ce `__init__` ré-exporte l'intégralité du namespace de ces sous-modules pour que
-la surface historique `db.<symbole>` (publics + privés consommés à l'extérieur
-comme `db._connect` / `db._ds_filter_clauses`) reste identique. Le shim
-disparaîtra quand `legacy.py` sera vide et les imports explicites.
+la surface `db.<symbole>` (publics + privés consommés à l'extérieur comme
+`db._connect` / `db._ds_filter_clauses`) reste plate et stable. Les modules
+n'ont pas de dépendance circulaire : tout pointe vers `_conn` puis `users`.
 """
 from __future__ import annotations
 
-from . import _conn, _schema, _init, legacy
+from . import (
+    _conn,
+    _schema,
+    _init,
+    users,
+    unipile,
+    keys,
+    usage,
+    platform_instructions,
+    visibility,
+    emails,
+    google,
+    datastore,
+    projects,
+    tokens,
+    opendata,
+)
 
-# Ré-export exhaustif (publics + privés à un underscore), garanti no-op vs l'ancien
-# module monolithique. Les noms dunder sont laissés au package lui-même.
+# Ré-export plat (publics + privés à un underscore). Les noms dunder restent au
+# package. L'ordre place les bases (_conn, users) d'abord — sans incidence, les
+# noms sont disjoints entre modules.
+_MODULES = (
+    _conn, _schema, _init, users, unipile, keys, usage, platform_instructions,
+    visibility, emails, google, datastore, projects, tokens, opendata,
+)
 _g = globals()
-for _mod in (_conn, _schema, _init, legacy):
+for _mod in _MODULES:
     for _name in dir(_mod):
         if not _name.startswith("__"):
             _g[_name] = getattr(_mod, _name)
-del _g, _mod, _name
+del _g, _mod, _name, _MODULES

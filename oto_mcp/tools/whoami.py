@@ -50,7 +50,7 @@ def register(mcp: FastMCP) -> None:
         qui détermine quelles clés API sont résolues et à quelles données tu accèdes.
 
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
-        id, name, rôle ; `null` = espace perso), `group` (groupe actif éventuel),
+        id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
         `knowledge` (base Memento connectée ?), `connectors` (résumé des connecteurs
         configurés), `onboarded`, et un `summary` lisible. Lecture seule.
 

@@ -1079,6 +1079,12 @@ def init_db() -> None:
                 "SELECT p.sub, m.org_id, p.name, p.enabled_tools, p.created_at, p.updated_at "
                 "FROM user_presets p JOIN org_members m ON m.sub = p.sub AND m.is_active "
                 "WHERE p.org_id = 0 ON CONFLICT DO NOTHING")
+        # Suppression du perso : les profils de visibilité `org_id=0` (perso/global)
+        # ont été copiés vers l'org active ci-dessus et ne sont plus jamais relus
+        # (`session_visibility` lit l'org active, toujours posée). Purge des orphelins
+        # (idempotent : no-op une fois vide ; plus aucune écriture en org_id=0).
+        for _t in ("user_disabled_tools", "user_enabled_tools", "user_presets"):
+            conn.execute(f"DELETE FROM {_t} WHERE org_id = 0")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")

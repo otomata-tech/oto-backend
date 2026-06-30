@@ -59,16 +59,17 @@ def insert_tool_call(row: dict) -> None:
 
 def insert_run(
     run_id: str, *, sub: Optional[str], org_id: Optional[int], label: str,
-    doctrine: Optional[str] = None,
+    doctrine: Optional[str] = None, project_id: Optional[int] = None,
 ) -> None:
     """Persiste l'ouverture d'un run (best-effort, idempotent sur `run_id`). La pile
     session-scopée de `doctrine_run.py` reste la source du run ACTIF ; cette ligne
-    est la trace durable (label/doctrine)."""
+    est la trace durable (label/doctrine). `project_id` = projet actif gelé au start
+    (ADR 0032 §5/§6, B3) ; NULL hors projet."""
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO runs (run_id, sub, org_id, label, doctrine) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
-            (run_id, sub, org_id, label, doctrine),
+            "INSERT INTO runs (run_id, sub, org_id, project_id, label, doctrine) "
+            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
+            (run_id, sub, org_id, project_id, label, doctrine),
         )
 
 
@@ -87,7 +88,7 @@ def recent_runs(sub: str, org_id: Optional[int], limit: int = 5) -> list[dict]:
     l'anticipation du contexte injecté (#50 bloc C) + la boucle d'usage."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT run_id, label, doctrine, outcome, started_at, finished_at "
+            "SELECT run_id, label, doctrine, outcome, project_id, started_at, finished_at "
             "FROM runs WHERE sub = %s AND org_id IS NOT DISTINCT FROM %s "
             "ORDER BY started_at DESC LIMIT %s",
             (sub, org_id, limit),

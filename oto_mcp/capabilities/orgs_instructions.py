@@ -107,6 +107,34 @@ class AdminSlugInput(BaseModel):
     slug: str
 
 
+def _project_instance(member_mode: bool) -> Optional[dict]:
+    """Bloc « instance » du projet actif (ADR 0032 §5, B3) : les entités du projet
+    (tableaux + connecteurs surchargés) contre lesquelles l'agent résout les
+    placeholders de la procédure — « la procédure partage à 100 % les ressources du
+    projet, pas de ressources propres ». None hors projet, ou en mode admin cross-org
+    (le bracelet est une notion de session membre). Best-effort."""
+    if not member_mode:
+        return None
+    pid = access.current_project()
+    if pid is None:
+        return None
+    try:
+        p = db.get_project_by_id(pid)
+        if p is None:
+            return None
+        return {
+            "project_id": pid,
+            "name": p.get("name"),
+            "entities": [
+                {"target_type": l["target_type"], "target_ref": l["target_ref"],
+                 "label": l.get("label"), "role": l.get("role"), "config": l.get("config") or {}}
+                for l in db.list_project_links(pid)
+            ],
+        }
+    except Exception:
+        return None
+
+
 # ── Handlers (core ; org_id depuis ctx → partagés membre/admin) ─────────────
 async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
     """Bundle session-start (slug omis) OU une doctrine nommée. En mode membre
@@ -138,11 +166,13 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
                        "description": i["description"], "scope": "group"}
                       for i in group_store.list_group_instructions(group_id)]
         doctrine_body = (base or {}).get("body_md", "") or ""
+        pi = _project_instance(member_mode)
         return {
             "org_id": org_id, "org": o["name"] if o else None, "doctrine": doctrine_body,
             "group_id": group_id, "group": group_name, "group_doctrine": group_doctrine,
             "doctrines": index,
             "referenced_tools": await tool_registry.manifest_for(doctrine_body, group_doctrine),
+            **({"project_instance": pi} if pi else {}),
         }
 
     # Une doctrine nommée précise.
@@ -166,6 +196,9 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
            "description": instr["description"], "version": instr["version"],
            "body_md": instr["body_md"],
            "referenced_tools": await tool_registry.manifest_for(instr["body_md"])}
+    pi = _project_instance(member_mode)
+    if pi:
+        out["project_instance"] = pi
     if inp.with_history and "org_id" in scope_ref:
         out["versions"] = org_store.list_instruction_versions(org_id, slug)
     return out

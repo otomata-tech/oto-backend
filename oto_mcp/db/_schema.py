@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     sub TEXT,
     org_id BIGINT,
+    project_id BIGINT,                          -- projet actif GELÉ au start (ADR 0032 §5/§6, B3) ; NULL hors projet
     label TEXT NOT NULL,
     doctrine TEXT,                              -- slug de la doctrine nommée ; NULL = run ad-hoc
     outcome TEXT,                               -- done|abandoned|failed|blocked ; NULL = ouvert
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runs_sub_org ON runs(sub, org_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC);
 
 -- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
 -- org active), >0 = profil de cette org. Une identité par (sub, org_id).

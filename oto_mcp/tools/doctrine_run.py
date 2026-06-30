@@ -32,8 +32,10 @@ async def _persist_open(run_id: str, label: str, doctrine: str | None) -> None:
         from ..auth_hooks import current_user_sub_from_token
         sub = current_user_sub_from_token()
         org_id = access.current_org(sub) if sub else None
+        project_id = access.current_project() if sub else None  # projet actif gelé (ADR 0032 B3)
         await asyncio.to_thread(
-            db.insert_run, run_id, sub=sub, org_id=org_id, label=label, doctrine=doctrine)
+            db.insert_run, run_id, sub=sub, org_id=org_id, label=label,
+            doctrine=doctrine, project_id=project_id)
     except Exception:
         logger.warning("persistance run_start échouée pour run_id=%s (best-effort)",
                        run_id, exc_info=True)

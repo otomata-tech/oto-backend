@@ -87,3 +87,65 @@ def test_mcp_adapter_awaits_async_handler(monkeypatch):
     )
     tool = _mcp_adapter._make_tool(cap)
     assert asyncio.run(tool()) == {"ok": True, "sub": "u1"}
+
+
+# ── Contexte d'instance d'un projet actif (ADR 0032 §5, B3.2) ───────────────
+def _wire_project(monkeypatch, pid):
+    monkeypatch.setattr(oi.access, "current_project", lambda: pid)
+    monkeypatch.setattr(oi.db, "get_project_by_id",
+                        lambda p: {"id": p, "name": "Démo B3"} if p else None)
+    monkeypatch.setattr(oi.db, "list_project_links", lambda p: [
+        {"target_type": "connecteur", "target_ref": "fr", "label": "FR",
+         "role": "enrichissement", "config": {"identity_id": "acc_1"}},
+        {"target_type": "tableau", "target_ref": "9", "label": "Leads",
+         "role": None, "config": {}},
+    ])
+
+
+def test_project_instance_none_without_project(monkeypatch):
+    _wire_project(monkeypatch, None)
+    assert oi._project_instance(member_mode=True) is None
+
+
+def test_project_instance_none_in_admin_mode(monkeypatch):
+    _wire_project(monkeypatch, 7)
+    assert oi._project_instance(member_mode=False) is None   # bracelet = notion membre
+
+
+def test_project_instance_lists_entities(monkeypatch):
+    _wire_project(monkeypatch, 7)
+    pi = oi._project_instance(member_mode=True)
+    assert pi["project_id"] == 7 and pi["name"] == "Démo B3"
+    refs = {e["target_ref"] for e in pi["entities"]}
+    assert refs == {"fr", "9"}
+    fr = next(e for e in pi["entities"] if e["target_ref"] == "fr")
+    assert fr["config"]["identity_id"] == "acc_1"
+
+
+def test_get_doctrine_includes_project_instance(monkeypatch):
+    _wire_project(monkeypatch, 7)
+    monkeypatch.setattr(oi.org_store, "get_instruction",
+                        lambda org, slug, version=None: {"slug": "prospection", "title": "T",
+                                                         "description": "d", "version": 1, "body_md": "…"})
+
+    async def _manifest(*a, **k):
+        return []
+    monkeypatch.setattr(oi.tool_registry, "manifest_for", _manifest)
+    out = asyncio.run(oi._get_doctrine(ResolvedCtx(sub="u1", org_id=3),
+                                       oi.DoctrineGetInput(slug="prospection")))
+    assert out["slug"] == "prospection"
+    assert out["project_instance"]["project_id"] == 7
+
+
+def test_get_doctrine_no_project_no_instance(monkeypatch):
+    _wire_project(monkeypatch, None)
+    monkeypatch.setattr(oi.org_store, "get_instruction",
+                        lambda org, slug, version=None: {"slug": "prospection", "title": "T",
+                                                         "description": "d", "version": 1, "body_md": "…"})
+
+    async def _manifest(*a, **k):
+        return []
+    monkeypatch.setattr(oi.tool_registry, "manifest_for", _manifest)
+    out = asyncio.run(oi._get_doctrine(ResolvedCtx(sub="u1", org_id=3),
+                                       oi.DoctrineGetInput(slug="prospection")))
+    assert "project_instance" not in out

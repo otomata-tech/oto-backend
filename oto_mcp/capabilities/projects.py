@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, ownership, roles
+from .. import db, ownership, roles, session_org
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -144,5 +144,68 @@ CAPABILITIES += [
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),
+    ),
+]
+
+
+# ── Bracelet de session « projet actif » (ADR 0032 §4, B2.2) ─────────────────
+# `oto_use_project` pose un projet ACTIF pour la conversation (override de session,
+# éphémère, MCP-only — pas de « projet maison »). Tant qu'il est actif, la résolution
+# d'identité d'un connecteur applique la surcharge PRÉFAITE du projet (le compte épinglé
+# sur le lien). Le bracelet SÉLECTIONNE un projet préfait ; il ne déclare aucune config.
+# Miroir de `oto_use_org` (ADR 0023), sans persistance.
+
+
+class UseProjectInput(BaseModel):
+    project_id: int   # id d'un projet auquel tu as accès (cf. oto_project op=list)
+
+
+class NoInput(BaseModel):
+    pass
+
+
+def _use_project(ctx: ResolvedCtx, inp: UseProjectInput) -> dict:
+    """Active un projet pour CETTE conversation (override de session, ADR 0032 §4)."""
+    rid = str(inp.project_id)
+    row = db.get_project_by_id(inp.project_id)
+    _require(row is not None, "unknown_project", f"Projet #{inp.project_id} inconnu.", 404)
+    _require(ownership.can_access(ctx.sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+    sid = session_org.current_session_id()
+    _require(sid is not None, "no_session",
+             "oto_use_project ne s'utilise que dans une conversation MCP.", 400)
+    session_org.set_project_override(sid, inp.project_id)
+    # Surcharges connecteur préfaites portées par ce projet (informatif pour l'agent).
+    overrides = [{"connector": l["target_ref"], "config": l.get("config") or {}}
+                 for l in db.list_project_links(inp.project_id)
+                 if l.get("target_type") == "connecteur" and (l.get("config") or {})]
+    return {"active_project": inp.project_id, "name": row.get("name"),
+            "connector_overrides": overrides}
+
+
+def _clear_project(ctx: ResolvedCtx, inp: NoInput) -> dict:
+    """Quitte le projet actif de la conversation (retour « hors projet »)."""
+    sid = session_org.current_session_id()
+    if sid is not None:
+        session_org.clear_project_override(sid)
+    return {"active_project": None}
+
+
+CAPABILITIES += [
+    Capability(
+        key="me.use_project", handler=_use_project, Input=UseProjectInput, authz=SUB_ONLY,
+        description=(
+            "Set the ACTIVE PROJECT for this conversation (project_id from oto_project "
+            "op=list). While a project is active, connectors resolve the project's PRE-MADE "
+            "identity (which account to act as), set up ahead of time on the project — you "
+            "don't declare it. Ephemeral: this conversation only; a new conversation starts "
+            "with no active project. Returns the project's connector overrides. Leave with "
+            "oto_clear_project."
+        ),
+        mcp="oto_use_project",
+    ),
+    Capability(
+        key="me.clear_project", handler=_clear_project, Input=NoInput, authz=SUB_ONLY,
+        description="Leave the active project of this conversation (back to no project).",
+        mcp="oto_clear_project",
     ),
 ]

@@ -228,10 +228,16 @@ def _refresh_access_token(refresh_token: str) -> dict:
 def credentials_for(sub: str, account: Optional[str] = None):
     """Renvoie un `google.oauth2.credentials.Credentials` valide pour ce sub.
 
-    `account` (email) cible un compte précis ; None = compte par défaut.
+    `account` (email) cible un compte précis ; None = compte par défaut. Si aucun
+    compte n'est demandé explicitement, un **projet actif** (bracelet de session,
+    ADR 0032 §4) peut épingler le compte à utiliser (surcharge préfaite du lien
+    connecteur) ; sinon repli sur le `is_default` du coffre.
     Charge depuis la DB, refresh transparent si access_token absent ou expiré.
     Lève RuntimeError actionnable si pas de compte connecté.
     """
+    if account is None:
+        from . import access  # lazy : évite tout cycle d'import au boot
+        account = access.project_pinned_identity("google")
     row = db.get_google_oauth(sub, account=account)
     if not row:
         suffix = f" pour {account}" if account else ""

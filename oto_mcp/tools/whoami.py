@@ -105,6 +105,17 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             logger.warning("whoami: group lookup failed: %s", e)
 
+        # Projet actif de la conversation (bracelet de session, ADR 0032 §4 B2.2).
+        project_block = None
+        try:
+            active_project = access.current_project()
+            if active_project is not None:
+                p = db.get_project_by_id(active_project)
+                if p is not None:
+                    project_block = {"id": active_project, "name": p.get("name")}
+        except Exception as e:
+            logger.warning("whoami: project lookup failed: %s", e)
+
         # Connecteurs configurés (résumé, pas le détail des clés).
         configured: list[str] = []
         platform_ready: list[str] = []
@@ -141,6 +152,8 @@ def register(mcp: FastMCP) -> None:
             scope = "espace perso (aucune org active)"
         if has_override:
             scope += " — override de session (cette conversation ; oto_use_org)"
+        if project_block:
+            scope += f" — projet actif « {project_block['name']} » (oto_use_project)"
         summary = f"Tu agis pour {who} dans {scope}."
 
         return {
@@ -152,6 +165,7 @@ def register(mcp: FastMCP) -> None:
             },
             "org": org_block,
             "group": group_block,
+            "project": project_block,
             "knowledge": {"memento_connected": memento_connected},
             "connectors": {
                 "configured": configured,

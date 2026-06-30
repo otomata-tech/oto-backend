@@ -42,6 +42,13 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "list_project_activity",
                         lambda pid, limit=50: [{"sub": "u1", "action": "project.create",
                                                 "detail": "Proj", "created_at": "2026-06-30"}])
+    # Bracelet projet (B2.2) : session présente + record des poses/retraits.
+    rec["proj"] = []
+    monkeypatch.setattr(P.session_org, "current_session_id", lambda: "sess1")
+    monkeypatch.setattr(P.session_org, "set_project_override",
+                        lambda sid, pid: rec["proj"].append((sid, pid)))
+    monkeypatch.setattr(P.session_org, "clear_project_override",
+                        lambda sid: rec["proj"].append((sid, None)))
     return rec
 
 
@@ -182,3 +189,57 @@ def test_capability_registered():
     cap = next((c for c in CAPABILITIES if c.key == "me.project"), None)
     assert cap is not None and cap.mcp == "oto_project"
     assert cap.rest is not None and cap.rest.path == "/api/me/projects"
+
+
+# ── Bracelet « projet actif » (B2.2) ─────────────────────────────────────────
+
+def test_use_project_sets_session_override(seams):
+    out = P._use_project(CTX, P.UseProjectInput(project_id=7))
+    assert seams["proj"] == [("sess1", 7)]
+    assert out["active_project"] == 7 and out["name"] == "Proj"
+
+
+def test_use_project_unknown(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._use_project(CTX, P.UseProjectInput(project_id=999))
+    assert e.value.code == "unknown_project" and e.value.status == 404
+    assert seams["proj"] == []          # rien posé sur un projet inconnu
+
+
+def test_use_project_forbidden(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
+    with pytest.raises(AuthzDenied) as e:
+        P._use_project(CTX, P.UseProjectInput(project_id=7))
+    assert e.value.code == "forbidden" and e.value.status == 403
+
+
+def test_use_project_requires_session(seams, monkeypatch):
+    monkeypatch.setattr(P.session_org, "current_session_id", lambda: None)   # face REST
+    with pytest.raises(AuthzDenied) as e:
+        P._use_project(CTX, P.UseProjectInput(project_id=7))
+    assert e.value.code == "no_session"
+
+
+def test_use_project_returns_connector_overrides(seams, monkeypatch):
+    monkeypatch.setattr(P.db, "list_project_links", lambda pid: [
+        {"target_type": "connecteur", "target_ref": "fr",
+         "config": {"identity_id": "acc_1", "instructions_md": "thème mutuelle"}},
+        {"target_type": "connecteur", "target_ref": "google", "config": {}},  # sans surcharge → exclu
+        {"target_type": "tableau", "target_ref": "9", "config": {}},
+    ])
+    out = P._use_project(CTX, P.UseProjectInput(project_id=7))
+    assert out["connector_overrides"] == [
+        {"connector": "fr", "config": {"identity_id": "acc_1", "instructions_md": "thème mutuelle"}}]
+
+
+def test_clear_project(seams):
+    out = P._clear_project(CTX, P.NoInput())
+    assert out == {"active_project": None} and seams["proj"] == [("sess1", None)]
+
+
+def test_use_clear_project_registered():
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    use = next((c for c in CAPABILITIES if c.key == "me.use_project"), None)
+    clear = next((c for c in CAPABILITIES if c.key == "me.clear_project"), None)
+    assert use is not None and use.mcp == "oto_use_project" and use.rest is None
+    assert clear is not None and clear.mcp == "oto_clear_project" and clear.rest is None

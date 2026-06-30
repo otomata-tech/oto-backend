@@ -192,6 +192,31 @@ def current_group(sub: str | None) -> Optional[int]:
     return group_store.get_active_group(sub)  # maison
 
 
+def current_project() -> Optional[int]:
+    """Projet ACTIF de la conversation (ADR 0032 §4, B2.2) — **bracelet de session**
+    posé par `oto_use_project`, MCP-only, éphémère. Pas de projet « maison » : pas
+    d'override ⇒ None. Sert à appliquer la surcharge connecteur PRÉFAITE du projet
+    (le bracelet sélectionne un projet préfait ; il ne déclare jamais de config)."""
+    return session_org.current_project_override()
+
+
+def project_pinned_identity(connector: str, project_id: Optional[int] = None) -> Optional[str]:
+    """Identité (account / identity_id) ÉPINGLÉE par le projet actif pour `connector`,
+    ou None ⇒ la résolution retombe sur le défaut user. Lit la config PRÉFAITE du lien
+    connecteur du projet (`project_links.config.identity_id`, ADR 0032 §4). `project_id`
+    omis ⇒ projet de session (`current_project`). **Fail-soft** : toute erreur ⇒ None
+    (jamais de plantage de la résolution d'un tool sur ce chemin)."""
+    pid = current_project() if project_id is None else project_id
+    if pid is None:
+        return None
+    try:
+        for link in db.list_project_links(int(pid)):
+            if link.get("target_type") == "connecteur" and link.get("target_ref") == connector:
+                return (link.get("config") or {}).get("identity_id") or None
+    except Exception as e:
+        logger.warning("project_pinned_identity fail-soft %s/%s: %s", pid, connector, e)
+    return None
+
 
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
     """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si

@@ -151,6 +151,40 @@ def current_override() -> tuple[bool, Optional[int]]:
     return get_override(current_session_id())
 
 
+# ── Projet de session (bracelet éphémère, ADR 0032 §4 B2.2) ──────────────────
+# Mirroir de l'override d'org : un projet « actif » DANS la conversation, posé par
+# `oto_use_project`, lu par la résolution d'identité pour appliquer la surcharge
+# connecteur PRÉFAITE du projet (jamais déclarée à la volée). Pas de « projet maison »
+# persistant (un projet est toujours explicite) ⇒ pas d'override = None. Keyé par
+# session_id (sync), MCP-only ; meurt avec la conversation. Borné (`_CAP`).
+_PROJECT_OVERRIDES: dict[str, int] = {}
+
+
+def set_project_override(session_id: str, project_id: int) -> None:
+    """Pose le projet actif de la session (le bracelet sélectionne, ne déclare rien)."""
+    _PROJECT_OVERRIDES.pop(session_id, None)  # ré-insère en queue (récence)
+    _PROJECT_OVERRIDES[session_id] = project_id
+    while len(_PROJECT_OVERRIDES) > _CAP:
+        del _PROJECT_OVERRIDES[next(iter(_PROJECT_OVERRIDES))]
+
+
+def clear_project_override(session_id: str) -> None:
+    """Retire le projet actif (retour « hors projet » pour la session)."""
+    _PROJECT_OVERRIDES.pop(session_id, None)
+
+
+def get_project_override(session_id: Optional[str]) -> Optional[int]:
+    """`project_id` actif de la session, ou None (pas de projet épinglé)."""
+    if session_id is None:
+        return None
+    return _PROJECT_OVERRIDES.get(session_id)
+
+
+def current_project_override() -> Optional[int]:
+    """Projet actif de la session courante (convenience MCP)."""
+    return get_project_override(current_session_id())
+
+
 # ── Org épinglée par sous-domaine (« 1 oto par org », endpoint scopé) ─────────
 # Un endpoint `<slug>--mcp.oto.ninja` épingle l'org POUR LA CONNEXION. Le Host est
 # sur CHAQUE requête HTTP → on l'enregistre per-requête sur deux supports : un

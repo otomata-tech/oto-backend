@@ -121,7 +121,10 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runs_sub_org ON runs(sub, org_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC);
+-- idx_runs_project est créé dans `_init` APRÈS l'ADD COLUMN project_id : sur une table
+-- `runs` préexistante, CREATE TABLE IF NOT EXISTS est un no-op → la colonne n'existe
+-- pas encore ici, un index la référençant dans _SCHEMA crashe au boot (vécu 2026-06-30,
+-- même gotcha que idx_tool_calls_run/org ci-dessus).
 
 -- Visibilité scopée par org (ADR 0015) : org_id=0 = profil perso/global (aucune
 -- org active), >0 = profil de cette org. Une identité par (sub, org_id).

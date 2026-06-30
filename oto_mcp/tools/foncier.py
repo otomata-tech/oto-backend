@@ -20,6 +20,23 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
+# Import OPTIONNEL de prefab_ui (extra `fastmcp[apps]`) au niveau MODULE — et NON
+# local à register() : les tools *_app ci-dessous annotent leur retour `-> Card`,
+# et FastMCP résout les type-hints (via get_type_hints, d'autant que
+# `from __future__ import annotations` les rend lazy) contre `fn.__globals__`,
+# le namespace MODULE. Un import local laisse `Card` indéfini au module →
+# `NameError: name 'Card' is not defined` à l'enregistrement (issue #69), ce qui
+# désactivait TOUS les tools foncier *_app en prod. S'il manque (extra `apps`
+# absent), on n'enregistre pas les *_app — les tools JSON restent (dégradation
+# gracieuse, même principe que « si le rendu échoue, utiliser le tool JSON »).
+try:
+    from prefab_ui.components import (  # type: ignore
+        Card, Column, DataTable, DataTableColumn, Heading, Text,
+    )
+    _PREFAB_UI_AVAILABLE = True
+except Exception:  # pragma: no cover - extra `apps` absent
+    _PREFAB_UI_AVAILABLE = False
+
 
 def register(mcp: FastMCP) -> None:
     from france_opendata import (
@@ -333,11 +350,7 @@ def register(mcp: FastMCP) -> None:
     # editable pas réinstallé), on n'enregistre simplement PAS ces tools — les
     # tools JSON ci-dessus restent disponibles (dégradation gracieuse, même
     # principe que « si le rendu échoue, utiliser les tools JSON équivalents »).
-    try:
-        from prefab_ui.components import (  # type: ignore
-            Card, Column, DataTable, DataTableColumn, Heading, Text,
-        )
-    except Exception:  # pragma: no cover - extra `apps` absent
+    if not _PREFAB_UI_AVAILABLE:
         return
 
     # Libellés FR curés pour les clés connues ; sinon on humanise la clé brute,

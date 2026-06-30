@@ -38,7 +38,7 @@ from . import access, api_routes_atlassian, api_routes_connectors, api_routes_co
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import (
-    PROTECTED_TOOLS, is_default_hidden, is_grant_only, namespace_of)
+    PROTECTED_TOOLS, is_default_hidden, namespace_of)
 
 logger = logging.getLogger(__name__)
 
@@ -271,11 +271,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except Exception as e:
             return _json_error(request, 500, f"list_tools_failed:{e}")
         payload = []
+        from . import credentials_store
+        remote_ns = credentials_store.list_remote_namespaces()
         for t in tools:
-            # Doctrine deny-by-default : les namespaces grant-only (connecteurs
-            # client-sensibles type bridge, ADR 0003) n'apparaissent JAMAIS dans
-            # l'autodoc publique — elle alimente les pages marketing oto.ninja.
-            if is_grant_only(t.name):
+            # Les bridges remote (connecteurs client-sensibles, ADR 0003) ne
+            # paraissent JAMAIS dans l'autodoc publique — elle alimente les pages
+            # marketing oto.ninja (confidentialité : aucun nom client exposé).
+            if namespace_of(t.name) in remote_ns:
                 continue
             # Tool object exposes name, description, parameters (input schema),
             # output_schema. Some attributes may be None depending on the type.
@@ -309,12 +311,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         if not access.is_platform_operator(sub):
+            # Visibilité par l'activation (master × override d'org). Un connecteur à
+            # clé plateforme réservé (ex. scaleway) est tenu hors des orgs non
+            # autorisées par son activation (master OFF + override org ON), plus par
+            # un grant de namespace (retiré, ADR 0031).
             exposed = connector_activation.exposed_connectors(org_store.get_active_org(sub))
             cat = [c for c in cat if c["name"] in exposed]
-            granted = access.granted_namespaces_for(sub)
-            cat = [c for c in cat
-                   if c["availability"] != "platform_granted"
-                   or any(ns in granted for ns in c["namespaces"])]
         return _json(request, {"connectors": cat})
 
     async def doctrines_library_public(request: Request) -> JSONResponse:
@@ -873,27 +875,18 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     async def my_tools_enable(request: Request) -> JSONResponse:
         """Réactive un tool pour l'utilisateur courant (live).
 
-        Refuse l'activation d'un tool d'un namespace gouverné (grant-only) si
-        l'user n'y a pas droit — même barrière que le meta-tool MCP
-        `oto_enable_tool`, sinon le plafond org serait contournable via /account.
+        Visibilité-only (ADR 0031) — même modèle que le meta-tool `oto_enable_tool` :
+        activer = préférence d'affichage, pas une autorisation (accès réel gardé au
+        call-time : credential + require_connector_access ADR 0025 + activation).
         """
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
         name = request.path_params["name"]
-        granted = access.granted_namespaces_for(sub)
-        is_admin = access.is_super_admin(sub)
-        if is_grant_only(name) and not is_admin and namespace_of(name) not in granted:
-            return _json(request, {
-                "error": "forbidden",
-                "name": name,
-                "detail": f"namespace `{namespace_of(name)}` non accordé",
-            }, status_code=403)
         org = org_store.get_active_org(sub) or 0
         db.remove_user_disabled_tool(sub, name, org)
-        # Override positif requis pour rendre visible un masqué-par-défaut, ou un
-        # grant-only côté admin — même logique que le meta-tool oto_enable_tool.
-        if is_default_hidden(name) or (is_grant_only(name) and is_admin):
+        # Override positif requis pour rendre visible un masqué-par-défaut.
+        if is_default_hidden(name):
             db.add_user_enabled_tool(sub, name, org)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 

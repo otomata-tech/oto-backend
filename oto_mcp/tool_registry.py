@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from . import providers
-from .tool_visibility import is_grant_only, namespace_of
+from .tool_visibility import namespace_of
 
 _MARKER = re.compile(r"<tool:([a-z0-9_]+)>")
 
@@ -72,13 +72,13 @@ def _entry(tool) -> dict:
 
 
 async def build_registry(mcp_instance=None) -> dict[str, dict]:
-    """Map nom → entrée pour tous les tools exposés (hors grant-only).
+    """Map nom → entrée pour tous les tools exposés.
     `mcp_instance` omise = l'instance liée au boot (`bind`)."""
     mcp_instance = mcp_instance or _INSTANCE
     if mcp_instance is None:
         return {}
     tools = await mcp_instance.list_tools(run_middleware=False)
-    return {t.name: _entry(t) for t in tools if not is_grant_only(t.name)}
+    return {t.name: _entry(t) for t in tools}
 
 
 def resolve_refs(names: list[str], registry: dict[str, dict]) -> list[dict]:

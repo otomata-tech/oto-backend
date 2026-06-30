@@ -80,15 +80,17 @@ def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
 
 
 def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    """Retour au profil perso/global (ADR 0015/0023). MCP = perso pour CETTE
-    conversation (override de session) ; REST = efface l'org maison."""
+    """Retour à l'espace par défaut (suppression du perso : plus d'état org-less).
+    MCP = retire l'override de session → retombe sur la maison (override None) ; REST
+    = bascule la maison sur l'**org perso** de l'user (jamais org-less)."""
     sid = session_org.current_session_id()
     if sid is not None:
-        session_org.set_override(sid, None)          # MCP : perso pour la session
-        session_org.clear_group_override(sid)        # perso → pas d'équipe (invariant)
-    else:
-        org_store.clear_active_org(ctx.sub)          # REST : efface la maison
-    return {"active_org": None}
+        session_org.set_override(sid, None)          # MCP : override None → retombe maison
+        session_org.clear_group_override(sid)
+        return {"active_org": None}
+    pid = org_store.ensure_personal_org(ctx.sub)     # REST : maison = org perso
+    org_store.set_active_org(ctx.sub, pid)
+    return {"active_org": pid}
 
 
 CAPABILITIES += [

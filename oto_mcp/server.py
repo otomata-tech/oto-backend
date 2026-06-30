@@ -142,9 +142,9 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # (one-shot idempotent, no-op aux boots suivants).
     try:
         from . import org_store
-        org_store.backfill_home_orgs()
+        org_store.backfill_personal_orgs()
     except Exception as e:
-        logger.warning("backfill_home_orgs at _build_mcp failed: %s", e)
+        logger.warning("backfill_personal_orgs at _build_mcp failed: %s", e)
 
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:

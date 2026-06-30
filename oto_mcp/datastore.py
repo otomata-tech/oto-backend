@@ -156,12 +156,22 @@ class DatastorePg:
             out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))
         return list(out.values())
 
+    def _default_owner(self) -> tuple[str, str]:
+        """Owner d'un namespace créé sans précision = l'**org ACTIVE** (suppression du
+        perso ; `current_org` toujours posé). Filet `user` si jamais None (ne devrait
+        plus arriver)."""
+        from . import access
+        oid = access.current_org(self.sub)
+        return ("org", str(oid)) if oid is not None else ("user", self.sub)
+
     def create_namespace(
-        self, namespace: str, *, owner_type: str = "user", owner_id: Optional[str] = None,
+        self, namespace: str, *, owner_type: Optional[str] = None, owner_id: Optional[str] = None,
     ) -> dict:
-        """Crée un namespace. Défaut = perso (`owner_type='user'`, `owner_id=sub`).
-        Pour un classeur d'org/groupe, passer `owner_type`/`owner_id` — l'autorisation
+        """Crée un namespace. Défaut = **org active** de l'user (plus de perso). Pour un
+        classeur d'org/groupe précis, passer `owner_type`/`owner_id` — l'autorisation
         (appartenance) est vérifiée par l'appelant (capacité/route)."""
+        if owner_type is None:
+            owner_type, owner_id = self._default_owner()
         oid = owner_id if owner_id is not None else self.sub
         try:
             db.create_datastore_namespace(owner_type, oid, namespace)
@@ -200,7 +210,8 @@ class DatastorePg:
         try:
             ns_id = self._resolve(namespace, write=True)
         except NamespaceNotFound:
-            db.create_datastore_namespace("user", self.sub, namespace)
+            _ot, _oid = self._default_owner()
+            db.create_datastore_namespace(_ot, _oid, namespace)
             self._scope_cache = None  # le nouveau ns doit être visible à la résolution
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}

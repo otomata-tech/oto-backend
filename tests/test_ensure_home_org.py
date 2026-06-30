@@ -1,54 +1,74 @@
-"""Suppression du perso : tout user a TOUJOURS une org maison.
-
-`ensure_home_org` (idempotent : active existante → 1ʳᵉ org → création) + le backfill
-boot. On monkeypatche les fonctions DB d'org_store.
+"""Suppression du perso : org perso dédiée (marquée `personal_of`) + migration des
+ressources `owner_type='user'` vers l'org perso. On monkeypatche les seams DB.
 """
+import oto_mcp.db as db
 import oto_mcp.org_store as org_store
 
 
-def _wire(monkeypatch, *, active=None, orgs=None):
-    rec = {"created": [], "members": [], "active": []}
-    monkeypatch.setattr(org_store, "get_active_org", lambda sub: active)
-    monkeypatch.setattr(org_store, "list_orgs_for_user", lambda sub: orgs or [])
+# ── ensure_personal_org : idempotence + activation ───────────────────────────
+def test_returns_existing_keeps_active(monkeypatch):
+    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: 9)
+    monkeypatch.setattr(org_store, "get_active_org", lambda sub: 3)   # déjà une org active
+    seen = []
+    monkeypatch.setattr(org_store, "set_active_org", lambda s, o: seen.append((s, o)))
+    assert org_store.ensure_personal_org("u1") == 9
+    assert seen == []                                                 # ne change pas l'active
+
+
+def test_sets_active_when_none(monkeypatch):
+    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: 9)
+    monkeypatch.setattr(org_store, "get_active_org", lambda sub: None)
+    seen = []
+    monkeypatch.setattr(org_store, "set_active_org", lambda s, o: seen.append((s, o)))
+    assert org_store.ensure_personal_org("u1") == 9
+    assert seen == [("u1", 9)]                                        # perso devient maison
+
+
+def test_creates_when_no_personal(monkeypatch):
+    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: None)
+    monkeypatch.setattr(org_store, "_reclaim_or_create_personal", lambda sub, e, n: 42)
+    monkeypatch.setattr(org_store, "get_active_org", lambda sub: None)
+    monkeypatch.setattr(org_store, "set_active_org", lambda s, o: None)
+    assert org_store.ensure_personal_org("u1", email="a@x.co") == 42
+
+
+# ── _reclaim_or_create_personal : reclaim sûr vs création ────────────────────
+class _Conn:
+    def __init__(self, reclaim_row):
+        self._row = reclaim_row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        is_reclaim = "SELECT o.id FROM orgs o" in sql
+        row = self._row if is_reclaim else None
+        return type("R", (), {"fetchone": lambda s: row})()
+
+
+def test_reclaims_sole_org(monkeypatch):
+    monkeypatch.setattr(org_store, "_connect", lambda: _Conn({"id": 7}))
     monkeypatch.setattr(org_store, "create_org",
-                        lambda name, created_by=None: rec["created"].append((name, created_by)) or 42)
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("ne doit PAS créer")))
+    assert org_store._reclaim_or_create_personal("u1", None, None) == 7
+
+
+def test_creates_fresh_when_no_reclaim(monkeypatch):
+    monkeypatch.setattr(org_store, "_connect", lambda: _Conn(None))   # rien à réclamer
+    rec = {"create": [], "member": []}
+    monkeypatch.setattr(org_store, "create_org",
+                        lambda name, created_by=None: rec["create"].append((name, created_by)) or 42)
     monkeypatch.setattr(org_store, "add_org_member",
-                        lambda oid, sub, org_role="org_member": rec["members"].append((oid, sub, org_role)))
-    monkeypatch.setattr(org_store, "set_active_org",
-                        lambda sub, oid: rec["active"].append((sub, oid)) or True)
-    return rec
+                        lambda oid, sub, org_role="org_member": rec["member"].append((oid, sub, org_role)))
+    assert org_store._reclaim_or_create_personal("u1", "a@x.co", "Alice") == 42
+    assert rec["create"] == [("Alice", "u1")] and rec["member"] == [(42, "u1", "org_admin")]
 
 
-def test_returns_existing_active(monkeypatch):
-    rec = _wire(monkeypatch, active=7)
-    assert org_store.ensure_home_org("u1") == 7
-    assert rec["created"] == [] and rec["active"] == []   # idempotent, rien créé
-
-
-def test_activates_first_when_member_but_inactive(monkeypatch):
-    rec = _wire(monkeypatch, active=None, orgs=[{"org_id": 5}])
-    assert org_store.ensure_home_org("u1") == 5
-    assert rec["active"] == [("u1", 5)] and rec["created"] == []
-
-
-def test_creates_personal_org(monkeypatch):
-    rec = _wire(monkeypatch, active=None, orgs=[])
-    assert org_store.ensure_home_org("u1", email="ed@x.co", name="Edouard") == 42
-    assert rec["created"] == [("Edouard", "u1")]
-    assert rec["members"] == [(42, "u1", "org_admin")]
-    assert rec["active"] == [("u1", 42)]
-
-
-def test_label_fallbacks(monkeypatch):
-    rec = _wire(monkeypatch, active=None, orgs=[])
-    org_store.ensure_home_org("u1", email="ed@x.co")          # pas de name → local email
-    assert rec["created"][0][0] == "ed"
-    rec2 = _wire(monkeypatch, active=None, orgs=[])
-    org_store.ensure_home_org("u2")                           # ni name ni email → défaut
-    assert rec2["created"][0][0] == "Mon espace"
-
-
-class _FakeConn:
+# ── backfill : migration des ressources user-owned ──────────────────────────
+class _Users:
     def __init__(self, rows):
         self._rows = rows
 
@@ -63,11 +83,14 @@ class _FakeConn:
         return type("R", (), {"fetchall": lambda s: rows})()
 
 
-def test_backfill_creates_for_orphans(monkeypatch):
-    orphans = [{"sub": "a", "email": "a@x.co", "name": "A"}, {"sub": "b", "email": None, "name": None}]
-    monkeypatch.setattr(org_store, "_connect", lambda: _FakeConn(orphans))
-    seen = []
-    monkeypatch.setattr(org_store, "ensure_home_org",
-                        lambda sub, email=None, name=None: seen.append((sub, email, name)) or 1)
-    assert org_store.backfill_home_orgs() == 2
-    assert seen == [("a", "a@x.co", "A"), ("b", None, None)]
+def test_backfill_migrates_user_owned(monkeypatch):
+    monkeypatch.setattr(org_store, "_connect", lambda: _Users([{"sub": "u1", "email": "a@x.co", "name": "A"}]))
+    monkeypatch.setattr(org_store, "ensure_personal_org", lambda sub, e, n: 42)
+    rep = {"ds": [], "pj": []}
+    monkeypatch.setattr(db, "list_datastore_namespaces_for_owners", lambda owners: [{"id": 1}])
+    monkeypatch.setattr(db, "reparent_datastore_namespace", lambda i, t, o: rep["ds"].append((i, t, o)))
+    monkeypatch.setattr(db, "list_projects_for_owners", lambda owners, include_archived=False: [{"id": 5}])
+    monkeypatch.setattr(db, "reparent_project", lambda i, t, o: rep["pj"].append((i, t, o)))
+    c = org_store.backfill_personal_orgs()
+    assert rep["ds"] == [(1, "org", "42")] and rep["pj"] == [(5, "org", "42")]
+    assert c == {"users": 1, "datastores": 1, "projects": 1}

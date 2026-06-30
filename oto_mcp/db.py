@@ -1043,6 +1043,11 @@ def init_db() -> None:
         # (NULL = active). Pas de hard-delete — les FK (membres, credentials, usage,
         # billing, invitations, groupes) restent intactes pour audit/restauration.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
+        # Org PERSO (suppression du perso) : `personal_of` = sub dont c'est l'espace
+        # privé mono-membre (NULL = org partagée). Unicité : 1 org perso par user.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS personal_of TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_orgs_personal_of "
+                     "ON orgs(personal_of) WHERE personal_of IS NOT NULL")
         # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
         # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
         # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =
@@ -1188,7 +1193,7 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         # ci-dessus), on lui crée son espace. Idempotent, best-effort, hors gate email.
         try:
             from . import org_store
-            org_store.ensure_home_org(sub, email=email, name=name)
+            org_store.ensure_personal_org(sub, email=email, name=name)
         except Exception:
             pass
     # Bascule de tenant (B1, otomata#35) : sur un login du NOUVEAU tenant, fusionner

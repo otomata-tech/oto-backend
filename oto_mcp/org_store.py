@@ -543,47 +543,92 @@ def list_orgs_for_user(sub: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def ensure_home_org(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> int:
-    """Garantit que `sub` a une **org maison active** (suppression du perso, otomata-private).
-    Idempotent :
-    - org active déjà posée → la renvoie ;
-    - orgs sans active (défensif) → active la 1ʳᵉ ;
-    - aucune org → crée son **espace perso** ('{nom}'/'{email}'/'Mon espace'), l'y ajoute
-      `org_admin`, l'active. Plus jamais d'état sans org (org_id=0)."""
-    active = get_active_org(sub)
-    if active is not None:
-        return active
-    orgs = list_orgs_for_user(sub)
-    if orgs:
-        oid = int(orgs[0]["org_id"])
-        set_active_org(sub, oid)
-        return oid
-    label = (name or (email.split("@")[0] if email else None) or "Mon espace").strip() or "Mon espace"
-    oid = create_org(label, created_by=sub)
+def get_personal_org(sub: str) -> Optional[int]:
+    """Org PERSO (privée, mono-membre) de `sub`, marquée `personal_of=sub`, ou None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM orgs WHERE personal_of = %s AND archived_at IS NULL", (sub,)
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+
+def _personal_label(email: Optional[str], name: Optional[str]) -> str:
+    return (name or (email.split("@")[0] if email else None) or "Mon espace").strip() or "Mon espace"
+
+
+def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[str]) -> int:
+    """Récupère ou crée l'org perso de `sub`. **Réclamation SÛRE** : on ne marque une
+    org existante comme perso QUE si c'est la SEULE org du user (mono-membre, créée par
+    lui) — un user multi-org garde ses orgs partagées intactes, on lui crée une perso
+    fraîche."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT o.id FROM orgs o
+             WHERE o.created_by = %s AND o.personal_of IS NULL AND o.archived_at IS NULL
+               AND (SELECT count(*) FROM org_members m WHERE m.org_id = o.id) = 1
+               AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.sub = %s)
+               AND (SELECT count(*) FROM org_members m2 JOIN orgs o2 ON o2.id = m2.org_id
+                     WHERE m2.sub = %s AND o2.archived_at IS NULL) = 1
+             LIMIT 1
+            """,
+            (sub, sub, sub),
+        ).fetchone()
+        if row:
+            oid = int(row["id"])
+            conn.execute("UPDATE orgs SET personal_of = %s WHERE id = %s", (sub, oid))
+            _log.info("ensure_personal_org: org #%s réclamée comme perso de %s", oid, sub)
+            return oid
+    oid = create_org(_personal_label(email, name), created_by=sub)
     add_org_member(oid, sub, org_role="org_admin")
-    set_active_org(sub, oid)
-    _log.info("ensure_home_org: créé l'espace #%s « %s » pour %s", oid, label, sub)
+    with _connect() as conn:
+        conn.execute("UPDATE orgs SET personal_of = %s WHERE id = %s", (sub, oid))
+    _log.info("ensure_personal_org: org perso #%s créée pour %s", oid, sub)
     return oid
 
 
-def backfill_home_orgs() -> int:
-    """One-shot idempotent (boot) : chaque user SANS org active reçoit son espace.
-    Renvoie le nb traité ; no-op aux boots suivants (plus d'orphelin)."""
+def ensure_personal_org(sub: str, email: Optional[str] = None, name: Optional[str] = None) -> int:
+    """Garantit l'**org perso** de `sub` (suppression du perso `org_id=0`) ET qu'il a une
+    org active (la perso si aucune autre). Idempotent."""
+    pid = get_personal_org(sub)
+    if pid is None:
+        pid = _reclaim_or_create_personal(sub, email, name)
+    if get_active_org(sub) is None:   # nouveau user / ex-perso → la perso devient maison
+        set_active_org(sub, pid)
+    return pid
+
+
+def backfill_personal_orgs() -> dict:
+    """One-shot idempotent (boot) : chaque user a une org perso marquée ; ses ressources
+    `owner_type='user'` (datastores/projets) y MIGRENT (owner_type='user' disparaît des
+    données) ; si aucune org active → la perso devient maison. No-op aux boots suivants."""
+    from . import db as _db
+    counts = {"users": 0, "datastores": 0, "projects": 0}
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT u.sub, u.email, u.name FROM users u "
-            "WHERE NOT EXISTS (SELECT 1 FROM org_members m WHERE m.sub = u.sub AND m.is_active)"
-        ).fetchall()
-    n = 0
-    for r in rows:
+        users = conn.execute("SELECT sub, email, name FROM users").fetchall()
+    for u in users:
+        sub = u["sub"]
         try:
-            ensure_home_org(r["sub"], email=r.get("email"), name=r.get("name"))
-            n += 1
+            pid = ensure_personal_org(sub, u.get("email"), u.get("name"))
         except Exception:
-            _log.warning("backfill_home_orgs: échec pour %s", r.get("sub"), exc_info=True)
-    if n:
-        _log.info("backfill_home_orgs: %s espace(s) créé(s)", n)
-    return n
+            _log.warning("backfill_personal_orgs: ensure échoué %s", sub, exc_info=True)
+            continue
+        for d in _db.list_datastore_namespaces_for_owners([("user", sub)]):
+            try:
+                _db.reparent_datastore_namespace(int(d["id"]), "org", str(pid))
+                counts["datastores"] += 1
+            except Exception:
+                _log.warning("reparent datastore %s échoué", d.get("id"), exc_info=True)
+        for p in _db.list_projects_for_owners([("user", sub)], include_archived=True):
+            try:
+                _db.reparent_project(int(p["id"]), "org", str(pid))
+                counts["projects"] += 1
+            except Exception:
+                _log.warning("reparent project %s échoué", p.get("id"), exc_info=True)
+        counts["users"] += 1
+    if counts["datastores"] or counts["projects"]:
+        _log.info("backfill_personal_orgs: %s", counts)
+    return counts
 
 
 def resolve_org_for_user(sub: str, org: str) -> int:

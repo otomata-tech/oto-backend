@@ -44,10 +44,18 @@ def seams(monkeypatch):
     return rec
 
 
-def test_create_perso(seams):
-    out = P._project(CTX, P.ProjectInput(op="create", name="  Proj  ", brief_md="b"))
-    assert seams["create"] == [("user", "u1", "Proj", "b", "u1")]   # owner=sub, name trimé
+def test_create_defaults_to_active_org(seams):
+    # Suppression du perso : le défaut crée dans l'ORG ACTIVE (ctx.org_id), plus en user.
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="create", name="  Proj  ", brief_md="b"))
+    assert seams["create"] == [("org", "99", "Proj", "b", "u1")]     # owner=org active
     assert out["id"] == 7 and out["name"] == "Proj"
+
+
+def test_create_without_active_org_rejected(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X"))      # CTX.org_id = None
+    assert e.value.code == "no_active_org"
 
 
 def test_create_org_requires_membership(seams, monkeypatch):

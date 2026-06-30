@@ -67,7 +67,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                      "Tu n'es pas membre de cette org.", 403)
             owner_type, owner_id = "org", str(inp.owner_id)
         else:
-            owner_type, owner_id = "user", sub
+            # Défaut = org ACTIVE de l'user (plus de perso ; ctx.org_id toujours posé).
+            _require(ctx.org_id is not None, "no_active_org", "Aucune org active.", 400)
+            owner_type, owner_id = "org", str(ctx.org_id)
         pid = db.create_project(owner_type, owner_id, inp.name.strip(),
                                 inp.brief_md or "", created_by=sub)
         db.log_project_activity(pid, sub, "project.create", inp.name.strip())

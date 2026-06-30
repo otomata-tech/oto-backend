@@ -42,7 +42,7 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 # --- Bloc B — onboarding (défaut seedé + fallback) --------------------------
 # La prose ; le catalogue de namespaces est dérivé et appendé à la composition.
 _ONBOARDING = """\
-Pour un compte récent ou peu configuré, commence par `oto_onboarding()` — il explique Oto, fait l'état de la configuration du compte (org active, base de connaissance, clés de connecteurs, doctrine) et donne les prochaines étapes de paramétrage à proposer à l'utilisateur.
+Pour un compte récent ou peu configuré, commence par `oto_onboarding()` — il explique Oto, fait l'état de la configuration du compte (org active, base de connaissance, clés de connecteurs, doctrine), te donne le **projet « Découverte »** à ouvrir (`oto_use_project`, son brief guide l'accueil) et les prochaines étapes de paramétrage à proposer à l'utilisateur.
 
 Namespaces (capacités appelables ; certaines « à activer » selon la config de ton org — leurs outils apparaissent une fois activées) :"""
 

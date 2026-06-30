@@ -157,6 +157,9 @@ CREATE TABLE IF NOT EXISTS user_account_profile (
     sub TEXT PRIMARY KEY,
     onboarded BOOLEAN NOT NULL DEFAULT FALSE,
     profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Onboarding = un PROJET « Découverte » (ADR 0032 §7 B5c) : id du projet d'accueil
+    -- de l'user (porteur du brief de self-onboarding). NULL tant qu'il n'a pas été créé.
+    discovery_project_id BIGINT,
     onboarded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

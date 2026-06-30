@@ -360,12 +360,13 @@ def get_account_profile(sub: str) -> dict:
     profile vide). Lecture seule (ne crée pas la ligne)."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT onboarded, profile, onboarded_at, updated_at "
+            "SELECT onboarded, profile, discovery_project_id, onboarded_at, updated_at "
             "FROM user_account_profile WHERE sub = %s",
             (sub,),
         ).fetchone()
     if not row:
-        return {"onboarded": False, "profile": {}, "onboarded_at": None, "updated_at": None}
+        return {"onboarded": False, "profile": {}, "discovery_project_id": None,
+                "onboarded_at": None, "updated_at": None}
     profile = row["profile"]
     if isinstance(profile, str):  # selon le driver, JSONB peut revenir en texte
         try:
@@ -375,9 +376,24 @@ def get_account_profile(sub: str) -> dict:
     return {
         "onboarded": bool(row["onboarded"]),
         "profile": profile or {},
+        "discovery_project_id": row["discovery_project_id"],
         "onboarded_at": row["onboarded_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def set_discovery_project_id(sub: str, project_id: int) -> None:
+    """Mémorise l'id du projet « Découverte » d'onboarding de l'user (ADR 0032 §7 B5c).
+    Upsert : crée la fiche si besoin (l'user passe par ici avant d'être onboardé)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_account_profile (sub, discovery_project_id, updated_at) "
+            "VALUES (%s, %s, NOW()) "
+            "ON CONFLICT (sub) DO UPDATE SET discovery_project_id = EXCLUDED.discovery_project_id, "
+            "updated_at = NOW()",
+            (sub, project_id),
+        )
 
 
 def update_account_profile(

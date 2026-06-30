@@ -95,6 +95,28 @@ fiche « situation avec oto » — puis valider `onboarded`. Reste bref, une que
 Si l'utilisateur veut passer l'accueil, valide `onboarded=True` sans insister.
 """
 
+# Brief du projet « Découverte » (ADR 0032 §7 B5c) : onboarding = un PROJET, pas un
+# mode spécial. Le projet d'accueil porte ce brief ; l'agent l'ouvre comme n'importe
+# quel projet (`oto_use_project`) et déroule l'accueil. La fiche structurée
+# (`user_account_profile`) reste le data model nourri par `oto_onboarding_update`.
+_DISCOVERY_PROJECT_NAME = "Découverte"
+_DISCOVERY_BRIEF = """\
+# Bienvenue sur Oto — projet « Découverte »
+
+Ce projet est ton point d'entrée. Oto est ta boîte à outils d'automatisation
+branchée dans Claude (prospection B2B, données entreprise France, CRM, email,
+messagerie, base de connaissance…).
+
+Pour démarrer, appelle `oto_onboarding()` : il explique Oto, fait l'état de ton
+compte (org, connecteurs, base de connaissance, doctrine) et te guide pour le
+paramétrer. Déroule l'accueil avec l'utilisateur, une question à la fois, puis
+valide `oto_onboarding_update(onboarded=True)` quand c'est fait.
+
+Quand tu auras pris tes marques, crée des projets pour tes vrais cas d'usage
+(prospection, veille, suivi client…) — chaque projet regroupe son but, ses
+tableaux, ses connecteurs préconfigurés et ses procédures.
+"""
+
 
 def _require_sub() -> str:
     sub = None
@@ -204,6 +226,28 @@ def _discover_setup(sub: str) -> tuple[list[dict], dict, list[str], list[str]]:
     return steps, account, configured, platform_ready
 
 
+def ensure_discovery_project(sub: str) -> Optional[int]:
+    """Le projet « Découverte » de l'user (ADR 0032 §7 B5c) — onboarding = un PROJET.
+    Idempotent : renvoie l'id mémorisé s'il pointe un projet vivant ; sinon crée le
+    projet dans l'org perso (porteur du brief d'accueil) et le mémorise. Best-effort :
+    renvoie None si la création échoue (l'accueil reste possible sans projet)."""
+    try:
+        existing = db.get_account_profile(sub).get("discovery_project_id")
+        if existing is not None:
+            row = db.get_project_by_id(int(existing))
+            if row is not None and row.get("archived_at") is None:
+                return int(existing)
+        org_id = org_store.ensure_personal_org(sub)
+        pid = db.create_project("org", str(org_id), _DISCOVERY_PROJECT_NAME,
+                                _DISCOVERY_BRIEF, created_by=sub)
+        db.log_project_activity(pid, sub, "project.create", _DISCOVERY_PROJECT_NAME)
+        db.set_discovery_project_id(sub, pid)
+        return pid
+    except Exception as e:
+        logger.warning("ensure_discovery_project échoué pour %s: %s", sub, e)
+        return None
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def oto_onboarding(ctx: Context) -> dict:
@@ -227,14 +271,20 @@ def register(mcp: FastMCP) -> None:
         profile = state["profile"]
         missing = [f["key"] for f in _PROFILE_FIELDS if not str(profile.get(f["key"]) or "").strip()]
 
+        # Onboarding = un PROJET « Découverte » (ADR 0032 §7 B5c) : on le matérialise
+        # (idempotent) et on le rend à l'agent pour qu'il l'ouvre (`oto_use_project`).
+        discovery_project_id = ensure_discovery_project(sub) if not state["onboarded"] else \
+            state.get("discovery_project_id")
+
         todo = [s["key"] for s in steps if s["status"] == "todo"]
         if state["onboarded"]:
             nxt = ("Compte déjà onboardé — pas besoin de refaire l'accueil. Appelle "
                    "`oto_get_doctrine()` et enchaîne sur la tâche de l'utilisateur.")
         elif missing:
-            nxt = ("Déroule le self-onboarding (`doctrine`) : pose les champs `missing` "
-                   "un par un et persiste avec `oto_onboarding_update`. Valide "
-                   "`onboarded=True` à la fin.")
+            nxt = ("Ouvre le projet « Découverte » (`oto_use_project`, id ci-dessous) puis "
+                   "déroule le self-onboarding (`doctrine`) : pose les champs `missing` un "
+                   "par un et persiste avec `oto_onboarding_update`. Valide `onboarded=True` "
+                   "à la fin.")
         else:
             nxt = ("Fiche complète — récapitule à l'utilisateur puis valide avec "
                    "`oto_onboarding_update(onboarded=True)`, et appelle `oto_get_doctrine()`.")
@@ -247,6 +297,7 @@ def register(mcp: FastMCP) -> None:
             "profile_fields": _PROFILE_FIELDS,
             "missing": missing,
             "doctrine": _SELF_ONBOARDING_DOCTRINE,
+            "discovery_project_id": discovery_project_id,
             "setup": steps,
             "configured_connectors": configured,
             "platform_connectors": platform_ready,
@@ -288,6 +339,13 @@ def register(mcp: FastMCP) -> None:
         # Ne persiste que des valeurs non vides (garde la fiche propre).
         clean = {k: v for k, v in (fields or {}).items() if v not in (None, "", [])} or None
         state = db.update_account_profile(sub, clean, onboarded)
+        # Accueil terminé → archive le projet « Découverte » (best-effort) : il sort de
+        # la liste des projets actifs, l'user repart sur ses vrais projets (ADR 0032 §7 B5c).
+        if onboarded is True and state.get("discovery_project_id"):
+            try:
+                db.archive_project(int(state["discovery_project_id"]))
+            except Exception as e:
+                logger.warning("archivage projet Découverte échoué: %s", e)
         profile = state["profile"]
         missing = [f["key"] for f in _PROFILE_FIELDS if not str(profile.get(f["key"]) or "").strip()]
         return {"onboarded": state["onboarded"], "profile": profile, "missing": missing}

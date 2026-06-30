@@ -317,6 +317,13 @@ Flux d'événements de session unifié : calllog (involontaire) + feedback volon
 d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/finish`,
 `doctrine` optionnel → doctrine nommée ou run one-shot). **Détail : `docs/usage-loop.md`**.
 
+> **Runs persistés (#50, amende le « state-only » d'ADR 0017).** La métadonnée
+> sémantique d'un run (label / doctrine / outcome) vit désormais dans la table `runs`
+> (`db.insert_run`/`finish_run`/`recent_runs`) — la pile session-scopée de
+> `doctrine_run.py` reste la **source du run actif** (stampe `tool_calls.run_id`),
+> `run_start`/`run_finish` y ajoutent la trace durable (best-effort, off-loop). Sert
+> l'anticipation du contexte injecté (instructions bloc C) + la boucle d'usage dashboard.
+
 ## Billing — credits d'appel par org (paiement Stripe)
 
 Deux modèles **cumulables** : credits d'appel (1 appel = 1 credit, packs Stripe
@@ -396,18 +403,27 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 Prose opératoire métier par org (skills à la Claude Code, slug + versionnée).
 **Détail : `docs/doctrines.md`**.
 
-> **Livraison au LLM = injection, plus un appel d'outil (otomata-private#49/#50, amende ADR 0014).**
+> **Livraison au LLM = injection, plus un appel d'outil (otomata-private#49 puis #50, amende ADR 0014).**
 > Le canal FIABLE de bootstrap = les `instructions` du `initialize` (FastMCP les relit par
-> session ; Claude rehandshake par conversation). `DynamicInstructionsMiddleware` (`middleware.py`)
-> les compose **par-(sub, org)** : `on_initialize` **append la doctrine de base** (`claude_md`)
-> de l'org aux instructions statiques (`instructions.compose_with_org_doctrine`). Donc **ne plus
-> prescrire « appelle `oto_get_doctrine()` au démarrage »** — c'est injecté. Les **doctrines
-> nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools` **enrichit
-> la description de `oto_get_doctrine`** avec leur index per-org (`instructions.skills_index_md`,
-> Tool non-frozen → `model_copy`). Découpage : doctrine de base = prose → instructions ; index des
-> skills = où charger → description de l'outil ; corps d'un skill = `oto_get_doctrine(slug)` à la
-> demande. Tout **fail-open** (pas de sub/org/doctrine → surface statique). Rework complet (artefact
-> composé per-org : secret sauce admin-éditable, onboarding gaté, contexte dynamique à variables) = #50.
+> session ; Claude rehandshake par conversation). `DynamicInstructionsMiddleware.on_initialize`
+> (`middleware.py`) **remplace** `result.instructions` par `instructions.compose_session(sub, org_id,
+> onboarded)` — un **artefact composé de 3 blocs** (`instructions.py`, #50) :
+> - **bloc A « secret sauce »** (posture + boucle d'usage) — DB `platform_instructions['secret_sauce']`,
+>   éditable admin plateforme, **inviolable par l'org**, toujours injecté (seedé depuis la constante = fallback) ;
+> - **bloc B « onboarding »** (amorce `oto_onboarding` + **catalogue de namespaces** dérivé) — injecté
+>   **uniquement si `onboarded=false`** ;
+> - **bloc C « contexte dynamique »** par-(sub, org) — section de contexte résolu (org / équipe /
+>   connecteurs actifs / N derniers projets / derniers déroulés via `db.recent_runs`) + doctrine de
+>   base de l'org (`claude_md`) avec substitution `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
+>
+> Donc **ne plus prescrire « appelle `oto_get_doctrine()` au démarrage »** — la doctrine est injectée.
+> Les **doctrines nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools`
+> **enrichit la description de `oto_get_doctrine`** avec leur index per-org (`instructions.skills_index_md`,
+> Tool non-frozen → `model_copy`). `render()` reste la surface STATIQUE (boot / fallback, sans DB).
+> Tout **fail-open** (pas de sub/org/doctrine/DB → surface statique). Édition des blocs A/B : capacité
+> `oto_admin_platform_instructions` (+ REST `/api/admin/platform-instructions`, `PLATFORM_ADMIN`) →
+> éditeur dashboard `/platform/instructions`. Transparence : `/api/me/agent-context` rend le même
+> artefact composé. **Reste (#54)** : anticipation **pilotée** (message proactif amorcé par l'admin).
 
 ## Groupes (départements) & hiérarchie de droits (ADR 0012)
 

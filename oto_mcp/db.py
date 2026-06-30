@@ -3060,6 +3060,16 @@ def list_projects_for_owners(owners: list[tuple[str, str]], *,
         return [dict(r) for r in rows]
 
 
+def list_all_projects(*, include_archived: bool = False) -> list[dict]:
+    """Tous les projets (vue opérateur plateforme — gouvernance, pas de contenu)."""
+    sql = f"SELECT {_PROJECT_COLS} FROM projects "
+    if not include_archived:
+        sql += "WHERE archived_at IS NULL "
+    sql += "ORDER BY updated_at DESC"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql).fetchall()]
+
+
 def update_project(project_id: int, *, name: Optional[str] = None,
                    brief_md: Optional[str] = None) -> None:
     sets: list[str] = []

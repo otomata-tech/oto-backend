@@ -32,13 +32,10 @@ class ResourceInput(BaseModel):
     permission: Literal["read", "write"] = "write"  # share
 
 
-_SUPPORTED = ("datastore_namespace",)
-
-
 def _check_type(resource_type: str) -> None:
-    if resource_type not in _SUPPORTED:
+    if resource_type not in _OPS:
         raise AuthzDenied(400, "unsupported_resource_type",
-                          f"type `{resource_type}` non supporté (pilote : {list(_SUPPORTED)}).")
+                          f"type `{resource_type}` non supporté ({list(_OPS)}).")
 
 
 def _owner_label(owner_type: str, owner_id: str) -> Optional[str]:
@@ -69,6 +66,39 @@ def _enrich_datastore(row: dict) -> dict:
     }
 
 
+def _enrich_project(row: dict) -> dict:
+    return {
+        "resource_type": "project",
+        "resource_id": str(row["id"]),
+        "name": row["name"],
+        "owner_type": row.get("owner_type"),
+        "owner_id": row.get("owner_id"),
+        "owner_label": _owner_label(row.get("owner_type"), row.get("owner_id")),
+        "archived_at": row.get("archived_at"),
+        "created_at": row.get("created_at"),
+    }
+
+
+# Dispatch par type de ressource pour list/get (transfer/share/unshare sont déjà
+# génériques via le seam `ownership`). Étendre = une entrée ici.
+# Lambdas (pas des références directes) → `db.X` est résolu au call-time (testable,
+# le monkeypatch de db.X est vu).
+_OPS: dict[str, dict] = {
+    "datastore_namespace": {
+        "list_all": lambda: db.list_all_datastore_namespaces(),
+        "list_for_owners": lambda owners: db.list_datastore_namespaces_for_owners(owners),
+        "get_by_id": lambda i: db.get_datastore_namespace_by_id(i),
+        "enrich": _enrich_datastore,
+    },
+    "project": {
+        "list_all": lambda: db.list_all_projects(),
+        "list_for_owners": lambda owners: db.list_projects_for_owners(owners),
+        "get_by_id": lambda i: db.get_project_by_id(i),
+        "enrich": _enrich_project,
+    },
+}
+
+
 def _grants_view(resource_type: str, resource_id: str) -> list[dict]:
     return [
         {"principal_type": g.get("principal_type"), "principal_id": g.get("principal_id"),
@@ -90,29 +120,30 @@ def _resolve_recipient(email: Optional[str]) -> dict:
 
 def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
     _check_type(inp.resource_type)
+    ops = _OPS[inp.resource_type]
 
     if inp.op == "list":
         # PLATEFORME → tout ; sinon → ce que l'acteur gouverne (perso + orgs/groupes
         # qu'il administre). Plan gouvernance : métadonnées seulement, pas de contenu.
         if access.is_platform_operator(ctx.sub):
-            rows = db.list_all_datastore_namespaces()
+            rows = ops["list_all"]()
         else:
             scope = ownership.accessor_scope(ctx.sub)
             governed = [("user", ctx.sub)]
             governed += [("org", str(o)) for o in scope.org_ids if roles.is_org_admin(ctx.sub, o)]
-            rows = db.list_datastore_namespaces_for_owners(governed)
+            rows = ops["list_for_owners"](governed)
         return {"resource_type": inp.resource_type,
-                "resources": [_enrich_datastore(r) for r in rows]}
+                "resources": [ops["enrich"](r) for r in rows]}
 
     if inp.resource_id is None:
         raise AuthzDenied(400, "missing_resource_id", "`resource_id` requis.")
     rid = str(inp.resource_id)
 
     if inp.op == "get":
-        row = db.get_datastore_namespace_by_id(int(rid))
+        row = ops["get_by_id"](int(rid))
         if not row:
             raise AuthzDenied(404, "not_found", "ressource introuvable.")
-        out = _enrich_datastore(row)
+        out = ops["enrich"](row)
         out["grants"] = _grants_view(inp.resource_type, rid)
         return out
 
@@ -149,7 +180,7 @@ CAPABILITIES += [
             "op=list: resources you govern (platform admins see all); op=get: owner + "
             "shares + metadata; op=transfer: hand ownership to `new_owner_email` (the "
             "previous owner keeps write access); op=share/unshare: grant/revoke access to "
-            "`email` (`permission` read|write). Pilot resource_type='datastore_namespace'. "
+            "`email` (`permission` read|write). resource_type ∈ {datastore_namespace, project}. "
             "Owner OR org/platform admin governing it; never exposes row content."
         ),
         mcp="oto_resource",

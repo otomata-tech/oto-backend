@@ -131,9 +131,13 @@ async def _authenticate(
     return _maybe_view_as(sub, apply_view_as), None
 
 
-def _json_error(request: Request, status: int, code: str) -> JSONResponse:
+def _json_error(request: Request, status: int, code: str,
+                detail: str | None = None) -> JSONResponse:
+    payload = {"error": code}
+    if detail:
+        payload["detail"] = detail
     return JSONResponse(
-        {"error": code},
+        payload,
         status_code=status,
         headers=_cors_headers(request.headers.get("origin")),
     )
@@ -693,6 +697,47 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         credentials_store.clear_credential("user", sub, provider)
         return _json(request, {"ok": True, "provider": provider})
 
+    # --- Connexion par session navigateur (brevo, crunchbase) — la VOIE PRODUIT :
+    # le bouton « Connecter » du dashboard ouvre une Live View Browserbase en iframe,
+    # l'utilisateur se logue, puis « finalize » vérifie + persiste le Context. Même
+    # corps de logique que les tools MCP `<name>_connect_start/_status` (seam partagé
+    # `browser_session`). `start` est BLOQUANT (HTTP Browserbase) → `to_thread`.
+    async def session_start(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import browser_session
+        name = request.path_params["name"]
+        if not browser_session.is_session_connector(name):
+            return _json_error(request, 404, "not_a_session_connector")
+        try:
+            out = await asyncio.to_thread(browser_session.start)
+        except browser_session.SessionError as e:
+            return _json_error(request, 503, "browserbase_unavailable", str(e))
+        return _json(request, out)
+
+    async def session_finalize(request: Request) -> JSONResponse:
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import browser_session
+        name = request.path_params["name"]
+        if not browser_session.is_session_connector(name):
+            return _json_error(request, 404, "not_a_session_connector")
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        context_id = (body or {}).get("context_id")
+        session_id = (body or {}).get("session_id")
+        if not context_id or not session_id:
+            return _json_error(request, 400, "missing_params")
+        try:
+            connected = await browser_session.finalize(sub, name, context_id, session_id)
+        except browser_session.SessionError as e:
+            return _json_error(request, 502, "session_verify_failed", str(e))
+        return _json(request, {"connected": connected})
+
     async def api_key_get(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
         if err:
@@ -1200,6 +1245,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/settings/api-keys/{provider}", api_key_save, methods=["POST"]),
         Route("/api/settings/api-keys/{provider}", api_key_clear, methods=["DELETE"]),
         Route("/api/settings/api-keys/{provider}", options_handler, methods=["OPTIONS"]),
+        # Connexion par session navigateur (brevo/crunchbase) — Live View depuis le dashboard.
+        Route("/api/me/connectors/{name}/session/start", session_start, methods=["POST"]),
+        Route("/api/me/connectors/{name}/session/start", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/connectors/{name}/session/finalize", session_finalize, methods=["POST"]),
+        Route("/api/me/connectors/{name}/session/finalize", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),
         Route("/api/admin/platform-keys", admin_platform_key_create, methods=["POST"]),
         Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),

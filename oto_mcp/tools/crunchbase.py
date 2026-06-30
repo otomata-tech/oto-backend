@@ -30,7 +30,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS, INTERNAL_ERROR
 
-from .. import access, browserbase, db
+from .. import access, browser_session, browserbase
 from ..auth_hooks import current_user_sub_from_token
 
 # Couple (API privée, page d'origine) propre à Crunchbase. Le `fetch` est
@@ -38,6 +38,36 @@ from ..auth_hooks import current_user_sub_from_token
 # l'API `/v4/data` vit sous le MÊME host (pas un sous-domaine séparé comme brevo).
 _API = "https://www.crunchbase.com/v4/data"
 _APP = "https://www.crunchbase.com/"
+
+
+async def _verify_session(session_id: str) -> bool:
+    """Login Crunchbase confirmé ? Sonde l'API privée DEPUIS la session vivante
+    (same-origin) : elle ne répond 200 que loguée. Partagé par les deux surfaces de
+    connexion (dashboard REST + MCP) via `browser_session`."""
+    from patchright.async_api import async_playwright
+    async with async_playwright() as p:
+        b = await p.chromium.connect_over_cdp(browserbase.connect_url(session_id))
+        try:
+            c = b.contexts[0] if b.contexts else await b.new_context()
+            pg = c.pages[0] if c.pages else await c.new_page()
+            await pg.goto(_APP, wait_until="domcontentloaded", timeout=40000)
+            res = await pg.evaluate(
+                """async (base) => {
+                    try {
+                        const r = await fetch(base + "/entities/organizations/crunchbase"
+                            + "?field_ids=identifier", {credentials: "include",
+                            headers: {"content-type": "application/json"}});
+                        return r.status;
+                    } catch (e) { return 0; }
+                }""", _API)
+            return res == 200
+        finally:
+            await b.close()
+
+
+# Déclare Crunchbase comme connecteur à session navigateur (start générique + ce
+# verify) — alimente le flux de connexion REST (dashboard) ET MCP. À l'import.
+browser_session.register("crunchbase", _verify_session)
 
 
 def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
@@ -107,21 +137,13 @@ def register(mcp: FastMCP) -> None:
         quand elle expire).
         """
         _sub()
-        if not browserbase.is_configured():
-            raise _err("Browserbase non configuré côté plateforme.", code=INTERNAL_ERROR)
         try:
-            context_id = browserbase.create_context()
-            sess = browserbase.start_session(context_id, keep_alive=True, timeout=900)
-            live = browserbase.live_view_url(sess["id"])
-        except browserbase.BrowserbaseError as e:
-            raise _err(f"Browserbase : {e}", code=INTERNAL_ERROR)
-        return {
-            "live_view_url": live,
-            "context_id": context_id,
-            "session_id": sess["id"],
-            "instructions": "Ouvre `live_view_url`, connecte-toi à Crunchbase, puis "
-                            "appelle `crunchbase_connect_status` avec context_id + session_id.",
-        }
+            out = browser_session.start()
+        except browser_session.SessionError as e:
+            raise _err(str(e), code=INTERNAL_ERROR)
+        out["instructions"] = ("Ouvre `live_view_url`, connecte-toi à Crunchbase, puis "
+                               "appelle `crunchbase_connect_status` avec context_id + session_id.")
+        return out
 
     @mcp.tool()
     async def crunchbase_connect_status(ctx: Context, context_id: str,
@@ -131,33 +153,13 @@ def register(mcp: FastMCP) -> None:
         **mémorise** ta session (le Context) pour les prochains appels. Renvoie
         `{connected}`. Rappelle-le si `connected=false` (pas encore logué)."""
         sub = _sub()
-        from patchright.async_api import async_playwright
-        authed = False
         try:
-            async with async_playwright() as p:
-                b = await p.chromium.connect_over_cdp(browserbase.connect_url(session_id))
-                c = b.contexts[0] if b.contexts else await b.new_context()
-                pg = c.pages[0] if c.pages else await c.new_page()
-                await pg.goto(_APP, wait_until="domcontentloaded", timeout=40000)
-                # Sanity same-origin : l'API privée ne répond 200 que loguée.
-                res = await pg.evaluate(
-                    """async (base) => {
-                        try {
-                            const r = await fetch(base + "/entities/organizations/crunchbase"
-                                + "?field_ids=identifier", {credentials: "include",
-                                headers: {"content-type": "application/json"}});
-                            return r.status;
-                        } catch (e) { return 0; }
-                    }""", _API)
-                authed = (res == 200)
-                await b.close()
-        except Exception as e:
-            raise _err(f"Impossible de vérifier la session ({e}).", code=INTERNAL_ERROR)
-        if not authed:
+            connected = await browser_session.finalize(sub, "crunchbase", context_id, session_id)
+        except browser_session.SessionError as e:
+            raise _err(str(e), code=INTERNAL_ERROR)
+        if not connected:
             return {"connected": False,
                     "hint": "Pas encore logué — connecte-toi dans la Live View puis relance."}
-        browserbase.release_session(session_id)  # persiste le Context
-        db.set_user_api_key(sub, "crunchbase", context_id)
         return {"connected": True, "context_id": context_id}
 
     # --- Lecture ------------------------------------------------------------

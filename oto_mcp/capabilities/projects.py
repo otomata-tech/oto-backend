@@ -28,10 +28,12 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "base")
 
 
 class ProjectInput(BaseModel):
-    op: Literal["create", "list", "get", "update", "archive", "link", "unlink", "activity"]
+    op: Literal["create", "list", "list_templates", "get", "update", "archive",
+                "copy", "link", "unlink", "activity"]
     project_id: Optional[int] = None
     name: Optional[str] = None
     brief_md: Optional[str] = None
+    is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
@@ -52,6 +54,7 @@ def _view(row: dict) -> dict:
     return {
         "id": row["id"], "name": row["name"], "brief_md": row.get("brief_md", ""),
         "owner_type": row["owner_type"], "owner_id": row["owner_id"],
+        "is_template": bool(row.get("is_template")),
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
         "archived_at": row.get("archived_at"),
     }
@@ -81,6 +84,12 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         owners = ownership.accessor_scope(sub).owner_pairs()
         return {"projects": [_view(r) for r in db.list_projects_for_owners(owners)]}
 
+    if inp.op == "list_templates":
+        # Modèles (is_template) lisibles par l'acteur — la bibliothèque copiable (B5a).
+        owners = ownership.accessor_scope(sub).owner_pairs()
+        return {"projects": [_view(r) for r in
+                             db.list_projects_for_owners(owners, templates_only=True)]}
+
     # ops ciblées : project_id requis + existence
     _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
     rid = str(inp.project_id)
@@ -97,11 +106,27 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
+        # Publier/retirer comme MODÈLE est un acte de gouvernance (visible aux autres
+        # membres de l'org comme bibliothèque) → can_govern, pas un simple write.
+        if inp.is_template is not None:
+            _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
+                     "Publier un modèle est réservé au propriétaire / admin.", 403)
         db.update_project(int(inp.project_id),
                           name=(inp.name.strip() if inp.name else None),
-                          brief_md=inp.brief_md)
+                          brief_md=inp.brief_md, is_template=inp.is_template)
         db.log_project_activity(int(inp.project_id), sub, "project.update", inp.name or None)
         return _view(db.get_project_by_id(int(inp.project_id)))
+
+    if inp.op == "copy":
+        # Copier un projet qu'on peut LIRE (le sien ou un modèle) → nouveau projet
+        # possédé par l'org active (ADR 0032 §7 B5a). L'original reste intact.
+        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+        _require(inp.name and inp.name.strip(), "missing_name", "`name` (cible) requis.")
+        _require(ctx.org_id is not None, "no_active_org", "Aucune org active.", 400)
+        new_id = db.duplicate_project(int(inp.project_id), inp.name.strip(),
+                                      "org", str(ctx.org_id), copied_by=sub)
+        return {**_view(db.get_project_by_id(new_id)),
+                "links": db.list_project_links(new_id), "copied_from": inp.project_id}
 
     if inp.op in ("link", "unlink"):
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -131,8 +156,13 @@ CAPABILITIES += [
         description=(
             "Projects (organization layer, ADR 0030 owned resource). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
-            "(yours + your orgs') / get (project + its links) / update (name, brief_md) / "
-            "archive / link & unlink (attach an entity: target_type tableau|procedure|"
+            "(yours + your orgs') / list_templates (published MODEL projects you can copy) / "
+            "get (project + its links) / update (name, brief_md, is_template = publish/unpublish "
+            "as a copyable model) / copy (deep-copy a project you can read — its own or a model "
+            "— into a NEW project in your active org: brief + doc tree + links + raw files; "
+            "datastore rows are NOT duplicated, tableau links stay pointers; pass project_id "
+            "= source + name = target) / archive / link & unlink (attach an entity: "
+            "target_type tableau|procedure|"
             "connecteur|base + target_ref = its id/slug/name, optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "

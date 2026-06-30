@@ -271,11 +271,14 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     brief_md TEXT NOT NULL DEFAULT '',
     created_by TEXT,
+    is_template BOOLEAN NOT NULL DEFAULT FALSE,
     archived_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_type, owner_id);
+-- ADR 0032 §7 (B5a) : un projet publié comme MODÈLE (template) est copiable (op=copy).
+CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template;
 
 -- Liens d'un Projet vers les entités qu'il regroupe (incrément 2). Pointeur TYPÉ,
 -- pas un FK cross-store : `target_type` ∈ {tableau, procedure, connecteur, base} et

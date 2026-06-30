@@ -24,7 +24,7 @@ from .users import upsert_user
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
-                 "archived_at, created_at, updated_at")
+                 "is_template, archived_at, created_at, updated_at")
 
 
 def create_project(owner_type: str, owner_id: str, name: str,
@@ -51,17 +51,22 @@ def get_project_by_id(project_id: int) -> Optional[dict]:
 
 
 def list_projects_for_owners(owners: list[tuple[str, str]], *,
-                             include_archived: bool = False) -> list[dict]:
-    """Projets possédés par l'un des `(owner_type, owner_id)` (perso + orgs/groupes)."""
+                             include_archived: bool = False,
+                             templates_only: bool = False) -> list[dict]:
+    """Projets possédés par l'un des `(owner_type, owner_id)` (perso + orgs/groupes).
+    `templates_only` = ne garder que les modèles publiés (`is_template`, ADR 0032 §7 B5a)."""
     if not owners:
         return []
     otypes = [o[0] for o in owners]
     oids = [o[1] for o in owners]
     sql = (f"SELECT {_PROJECT_COLS} FROM projects p "
            "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
-           "  ON p.owner_type = o.t AND p.owner_id = o.i ")
+           "  ON p.owner_type = o.t AND p.owner_id = o.i "
+           "WHERE TRUE ")
     if not include_archived:
-        sql += "WHERE p.archived_at IS NULL "
+        sql += "AND p.archived_at IS NULL "
+    if templates_only:
+        sql += "AND p.is_template "
     sql += "ORDER BY p.updated_at DESC"
     with _connect() as conn:
         rows = conn.execute(sql, (otypes, oids)).fetchall()
@@ -79,7 +84,8 @@ def list_all_projects(*, include_archived: bool = False) -> list[dict]:
 
 
 def update_project(project_id: int, *, name: Optional[str] = None,
-                   brief_md: Optional[str] = None) -> None:
+                   brief_md: Optional[str] = None,
+                   is_template: Optional[bool] = None) -> None:
     sets: list[str] = []
     params: list = []
     if name is not None:
@@ -88,6 +94,9 @@ def update_project(project_id: int, *, name: Optional[str] = None,
     if brief_md is not None:
         sets.append("brief_md = %s")
         params.append(brief_md)
+    if is_template is not None:
+        sets.append("is_template = %s")
+        params.append(is_template)
     if not sets:
         return
     sets.append("updated_at = NOW()")
@@ -328,3 +337,70 @@ def set_project_file_public(file_id: int, public: bool,
             (public, public_url, file_id),
         ).fetchone()
         return dict(row) if row else None
+
+
+# --- Copie profonde d'un projet (« modèle », ADR 0032 §7 B5a) -----------------
+def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str,
+                      copied_by: Optional[str] = None) -> int:
+    """Copie un projet en un NOUVEAU projet possédé par `(owner_type, owner_id)` :
+    brief + arbre des docs (hiérarchie préservée) + liens (label/role/config) +
+    fichiers bruts (copie S3, repartis PRIVÉS). La donnée datastore n'est PAS
+    dupliquée — les liens `tableau` restent des pointeurs (réutilisation par
+    référence, ADR §6) ; l'agent arbitre doublon vs réutilisation. La copie n'est
+    jamais un modèle elle-même (`is_template=false` par défaut). Retourne le nouvel id."""
+    from .. import media_store
+
+    src = get_project_by_id(src_id)
+    if src is None:
+        raise ValueError(f"projet source #{src_id} introuvable")
+
+    new_id = create_project(owner_type, owner_id, new_name,
+                            brief_md=src.get("brief_md", ""), created_by=copied_by)
+
+    # Arbre des docs : copie niveau par niveau, en remappant parent_id src→cible.
+    docs = list_docs_for_project(src_id)
+    id_map: dict[int, int] = {}
+    remaining = list(docs)
+    # Itère jusqu'à ce que chaque doc ait son parent déjà copié (les racines d'abord).
+    while remaining:
+        progressed = False
+        still: list[dict] = []
+        for d in remaining:
+            parent = d.get("parent_id")
+            if parent is None or parent in id_map:
+                new_parent = id_map.get(parent) if parent is not None else None
+                id_map[d["id"]] = create_doc(
+                    new_id, d["title"], parent_id=new_parent,
+                    body_md=d.get("body_md", ""), kind=d.get("kind", "doc"),
+                    created_by=copied_by)
+                progressed = True
+            else:
+                still.append(d)
+        if not progressed:   # cycle/parent orphelin (ne devrait pas arriver) : rattache à la racine
+            for d in still:
+                id_map[d["id"]] = create_doc(
+                    new_id, d["title"], parent_id=None,
+                    body_md=d.get("body_md", ""), kind=d.get("kind", "doc"),
+                    created_by=copied_by)
+            break
+        remaining = still
+
+    # Liens typés : label + role + config préservés (le « pourquoi » suit l'entité).
+    for link in list_project_links(src_id):
+        add_project_link(new_id, link["target_type"], link["target_ref"],
+                         label=link.get("label"), role=link.get("role"),
+                         config=link.get("config") or None)
+
+    # Fichiers bruts : copie S3 server-side, la copie repart privée (public=false).
+    for f in list_project_files(src_id):
+        try:
+            new_key = media_store.copy_object(f["s3_key"], "project-files", str(new_id))
+        except Exception:
+            logger.warning("duplicate_project: copie S3 échouée (file=%s)", f.get("id"))
+            continue
+        add_project_file(new_id, new_key, f["filename"], mime=f.get("mime"),
+                         size_bytes=f.get("size_bytes"), title=f.get("title"),
+                         description=f.get("description"), created_by=copied_by)
+
+    log_project_activity(new_id, copied_by, "project.copy", f"from #{src_id}")
+    return new_id

@@ -222,6 +222,32 @@ def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
         raise MediaError(500, "upload_failed", str(e))
 
 
+def copy_object(src_key: str, prefix: str, owner_id: str) -> str:
+    """Copie un blob DURABLE privé vers le namespace `(prefix, owner_id)` et renvoie
+    la clé neuve (copie server-side, sans télécharger ni ré-uploader). Le contenu
+    étant identique, on réutilise le `digest`/`filename` portés par la clé source
+    (`{prefix}/{owner}/{digest}/{name}`) → copie idempotente. Pas d'ACL public (la
+    copie repart privée, même si l'original était partagé)."""
+    parts = src_key.split("/")
+    if len(parts) < 2:
+        raise MediaError(400, "bad_src_key", f"Clé source invalide : {src_key!r}.")
+    digest, name = parts[-2], parts[-1]
+    dest_key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"
+    if dest_key == src_key:
+        return src_key
+    try:
+        _get_client().copy_object(
+            Bucket=_bucket(),
+            CopySource={"Bucket": _bucket(), "Key": src_key},
+            Key=dest_key,
+        )
+        return dest_key
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "copy_failed", str(e))
+
+
 def presign_get(key: str, *, expiry: int | None = None) -> str:
     """URL GET signée et expirante pour une clé privée (lecture à la demande)."""
     try:

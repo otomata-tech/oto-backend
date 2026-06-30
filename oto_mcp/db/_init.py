@@ -32,6 +32,9 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.

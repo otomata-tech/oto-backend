@@ -19,10 +19,14 @@ def seams(monkeypatch):
     rec = {"create": [], "update": [], "archive": []}
     monkeypatch.setattr(P.db, "create_project",
                         lambda ot, oid, name, brief, created_by=None: rec["create"].append((ot, oid, name, brief, created_by)) or 7)
-    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid == 7 else None)
-    monkeypatch.setattr(P.db, "list_projects_for_owners", lambda owners: [ROW])
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
+    monkeypatch.setattr(P.db, "list_projects_for_owners",
+                        lambda owners, templates_only=False: [dict(ROW, is_template=True)] if templates_only else [ROW])
     monkeypatch.setattr(P.db, "update_project",
-                        lambda pid, name=None, brief_md=None: rec["update"].append((pid, name, brief_md)))
+                        lambda pid, name=None, brief_md=None, is_template=None: rec["update"].append((pid, name, brief_md, is_template)))
+    rec["copy"] = []
+    monkeypatch.setattr(P.db, "duplicate_project",
+                        lambda src, name, ot, oid, copied_by=None: rec["copy"].append((src, name, ot, oid, copied_by)) or 8)
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
     rec["link"] = []
     rec["unlink"] = []
@@ -104,7 +108,53 @@ def test_get_unknown(seams):
 
 def test_update(seams):
     P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New"))
-    assert seams["update"] == [(7, "New", None)]
+    assert seams["update"] == [(7, "New", None, None)]
+
+
+def test_update_publish_template_needs_govern(seams, monkeypatch):
+    # Publier comme modèle = gouvernance (can_govern), pas un simple write.
+    monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="update", project_id=7, is_template=True))
+    assert e.value.code == "forbidden"
+
+
+def test_update_publish_template_ok(seams):
+    out = P._project(CTX, P.ProjectInput(op="update", project_id=7, is_template=True))
+    assert seams["update"] == [(7, None, None, True)]
+    assert out["is_template"] is False   # vue reflète ROW (stub) — publication persistée côté db
+
+
+def test_list_templates(seams):
+    out = P._project(CTX, P.ProjectInput(op="list_templates"))
+    assert [p["id"] for p in out["projects"]] == [7]
+    assert out["projects"][0]["is_template"] is True
+
+
+def test_copy(seams):
+    ctx = ResolvedCtx(sub="u1", org_id=42)
+    out = P._project(ctx, P.ProjectInput(op="copy", project_id=7, name="  Ma copie  "))
+    assert seams["copy"] == [(7, "Ma copie", "org", "42", "u1")]
+    assert out["id"] == 8 and out["copied_from"] == 7 and "links" in out
+
+
+def test_copy_needs_read(seams, monkeypatch):
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=42), P.ProjectInput(op="copy", project_id=7, name="X"))
+    assert e.value.code == "forbidden" and e.value.status == 403
+
+
+def test_copy_requires_name(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=42), P.ProjectInput(op="copy", project_id=7, name="  "))
+    assert e.value.code == "missing_name"
+
+
+def test_copy_requires_active_org(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="copy", project_id=7, name="X"))   # CTX.org_id=None
+    assert e.value.code == "no_active_org"
 
 
 def test_archive_needs_govern(seams, monkeypatch):

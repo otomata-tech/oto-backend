@@ -22,7 +22,6 @@ import types
 
 from pydantic import BaseModel
 
-from .. import db as _db
 from .. import instructions as _instructions
 from .. import session_visibility, tool_registry
 from . import orgs_instructions
@@ -76,16 +75,11 @@ async def _agent_context(ctx: ResolvedCtx, inp: AgentContextInput) -> dict:
     doctrine = await orgs_instructions._get_doctrine(
         ctx, types.SimpleNamespace(slug=None, scope=None, version=None,
                                    org_id=None, with_history=False))
-    # Instructions RÉELLEMENT reçues = artefact composé A/B/C (#50), même chemin que
+    # Instructions RÉELLEMENT reçues = artefact composé A/C (#50), même chemin que
     # DynamicInstructionsMiddleware → la vue montre exactement ce que reçoit l'agent.
-    try:
-        onboarded = bool(_db.get_account_profile(ctx.sub).get("onboarded"))
-    except Exception:
-        onboarded = True
     return {
         "org_id": ctx.org_id,
-        "instructions": _instructions.compose_session(
-            ctx.sub, ctx.org_id, onboarded=onboarded),
+        "instructions": _instructions.compose_session(ctx.sub, ctx.org_id),
         "doctrine": doctrine,
         "tools": await _tools_view(ctx),
     }

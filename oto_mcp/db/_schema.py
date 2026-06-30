@@ -158,18 +158,13 @@ CREATE TABLE IF NOT EXISTS user_presets (
     PRIMARY KEY (sub, org_id, name)
 );
 
--- Onboarding par utilisateur (fiche « situation avec oto »). `profile` = data
--- model libre nourri au fil du self-onboarding (qui est l'user, son métier, ses
--- objectifs, connecteurs voulus…) ; `onboarded` = booléan validé quand l'accueil
--- est terminé. Une ligne par sub, créée à la 1re lecture.
+-- Fiche « situation avec oto » par utilisateur. `profile` = data model libre (qui est
+-- l'user, son métier, ses objectifs, connecteurs voulus, ton…) entretenu au fil de l'eau
+-- via `oto_profile` et relu à chaque session (injecté au handshake). Une ligne par sub,
+-- créée à la 1re écriture. (L'onboarding n'est PAS un mode : c'est un projet, ADR 0032 §7.)
 CREATE TABLE IF NOT EXISTS user_account_profile (
     sub TEXT PRIMARY KEY,
-    onboarded BOOLEAN NOT NULL DEFAULT FALSE,
     profile JSONB NOT NULL DEFAULT '{}'::jsonb,
-    -- Onboarding = un PROJET « Découverte » (ADR 0032 §7 B5c) : id du projet d'accueil
-    -- de l'user (porteur du brief de self-onboarding). NULL tant qu'il n'a pas été créé.
-    discovery_project_id BIGINT,
-    onboarded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

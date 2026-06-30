@@ -2,22 +2,24 @@
 injecté à Claude au handshake `initialize`. C'est LE canal fiable de bootstrap d'un
 agent (model-agnostic), pas un appel d'outil volontaire.
 
-Refonte #50 (amende ADR 0014/0017) — l'artefact injecté est **composé de 3 blocs** :
+Refonte #50 (amende ADR 0014/0017) — l'artefact injecté est **composé de 2 blocs** :
 
-- **Bloc A — secret sauce plateforme** : posture + boucle d'usage. Stocké en DB
-  (`platform_instructions['secret_sauce']`), éditable seulement par l'admin
-  plateforme, **inviolable par l'org**, toujours injecté. La constante `_SECRET_SAUCE`
-  = le défaut seedé au boot + le fallback (aucun accès DB à l'import).
-- **Bloc B — onboarding** : amorce `oto_onboarding()` + **catalogue de namespaces**
-  (dérivé du registre). Injecté **uniquement si le compte n'est pas onboarded**.
-  Prose en DB (`platform_instructions['onboarding']`) + catalogue dérivé.
-- **Bloc C — contexte dynamique** par-(sub, org) : section de contexte résolu
-  (org / équipe / connecteurs actifs / N derniers projets / derniers déroulés) +
-  la **doctrine de base de l'org** (`claude_md`) avec substitution des variables
-  `{{org}}` / `{{user}}` / `{{équipe}}` / `{{connecteurs_actifs}}`.
+- **Bloc A — secret sauce plateforme** : posture + boucle d'usage + **catalogue de
+  namespaces** (dérivé du registre). Prose stockée en DB
+  (`platform_instructions['secret_sauce']`), éditable seulement par l'admin plateforme,
+  **inviolable par l'org**, toujours injectée ; le catalogue est appendé à la composition.
+  La constante `_SECRET_SAUCE` = le défaut seedé au boot + le fallback (aucun accès DB à
+  l'import).
+- **Bloc C — contexte dynamique** par-(sub, org) : section de contexte résolu (org /
+  équipe / connecteurs actifs / N derniers projets / derniers déroulés / fiche
+  « situation avec oto » de l'user) + la **doctrine de base de l'org** (`claude_md`) avec
+  substitution des variables `{{org}}` / `{{user}}` / `{{équipe}}` / `{{connecteurs_actifs}}`.
 
-`render()` (STATIQUE, sans DB) = A+B seed + catalogue → défaut de boot et fallback.
-`compose_session(sub, org_id, onboarded)` (RUNTIME) = l'artefact réel par session.
+L'onboarding n'est PAS un bloc : c'est un projet « Découverte » (ADR 0032 §7) semé à la
+création de l'org perso, qui remonte via la ligne « Projets récents » du bloc C.
+
+`render()` (STATIQUE, sans DB) = bloc A seed + catalogue → défaut de boot et fallback.
+`compose_session(sub, org_id)` (RUNTIME) = l'artefact réel par session.
 Tout est **fail-open** : toute erreur retombe sur la surface statique."""
 from __future__ import annotations
 
@@ -27,9 +29,8 @@ from . import providers
 
 logger = logging.getLogger(__name__)
 
-# Clés des blocs plateforme en DB (table `platform_instructions`).
+# Clé du bloc plateforme en DB (table `platform_instructions`).
 KEY_SECRET_SAUCE = "secret_sauce"
-KEY_ONBOARDING = "onboarding"
 
 # --- Bloc A — secret sauce plateforme (défaut seedé + fallback) -------------
 _SECRET_SAUCE = """\
@@ -39,12 +40,11 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 
 **Travaille dans un projet.** Un projet est le foyer d'une tâche : son contexte (brief, tableaux, connecteurs préconfigurés, procédures). Quand tu agis POUR un projet, active-le par `oto_use_project(project_id)` (liste/charge via `oto_project` op=list/get) — alors tes connecteurs prennent l'identité préconfigurée du projet, tes runs lui sont rattachés, et tes tableaux de sortie doivent y être liés (`oto_project(op=link, target_type=tableau)`). Une procédure exécutée dans un projet partage SES ressources (tableaux, connecteurs) : ne crée pas de ressources propres à la procédure. Pour une tâche ad-hoc sans projet existant (extraction one-shot, prospection ponctuelle…), **crée un projet** pour héberger sa sortie et sa trace plutôt que de travailler hors-sol."""
 
-# --- Bloc B — onboarding (défaut seedé + fallback) --------------------------
-# La prose ; le catalogue de namespaces est dérivé et appendé à la composition.
-_ONBOARDING = """\
-Pour un compte récent ou peu configuré, commence par `oto_onboarding()` — il explique Oto, fait l'état de la configuration du compte (org active, base de connaissance, clés de connecteurs, doctrine), te donne le **projet « Découverte »** à ouvrir (`oto_use_project`, son brief guide l'accueil) et les prochaines étapes de paramétrage à proposer à l'utilisateur.
-
-Namespaces (capacités appelables ; certaines « à activer » selon la config de ton org — leurs outils apparaissent une fois activées) :"""
+# En-tête du catalogue de namespaces (dérivé du registre), appendé au bloc A.
+_CATALOG_HEADER = (
+    "Namespaces (capacités appelables ; certaines « à activer » selon la config de ton "
+    "org — leurs outils apparaissent une fois activées) :"
+)
 
 _DOCTRINE_HEADER = "## Doctrine de ton organisation"
 _CONTEXT_HEADER = "## Ton contexte oto"
@@ -70,12 +70,13 @@ def _platform_block(key: str, seed: str) -> str:
     return seed.strip()
 
 
+def _catalog() -> str:
+    """L'en-tête + le catalogue de namespaces dérivé du registre (toujours injecté)."""
+    return f"{_CATALOG_HEADER}\n{providers.render_namespace_catalog()}"
+
+
 def _block_a() -> str:
-    return _platform_block(KEY_SECRET_SAUCE, _SECRET_SAUCE)
-
-
-def _block_b() -> str:
-    return f"{_platform_block(KEY_ONBOARDING, _ONBOARDING)}\n{providers.render_namespace_catalog()}"
+    return f"{_platform_block(KEY_SECRET_SAUCE, _SECRET_SAUCE)}\n\n{_catalog()}"
 
 
 # --- Bloc C — contexte dynamique par-(sub, org) -----------------------------
@@ -137,10 +138,19 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
         except Exception:
             pass
 
+    # Fiche « situation avec oto » (ce que l'agent sait de l'utilisateur, entretenu via
+    # `oto_profile`) — réinjectée pour personnaliser l'aide. Best-effort.
+    profile: dict = {}
+    if sub:
+        try:
+            profile = db.get_account_profile(sub).get("profile") or {}
+        except Exception:
+            pass
+
     return {
         "org_name": org_name, "user_name": user_name, "role": role,
         "group_name": group_name, "connectors": connectors,
-        "projects": projects, "runs": runs,
+        "projects": projects, "runs": runs, "profile": profile,
     }
 
 
@@ -180,7 +190,33 @@ def _format_context(ctx: dict) -> str:
             outcome = f" → {r['outcome']}" if r.get("outcome") else " (en cours)"
             bits.append(f"{label}{doc}{outcome}")
         lines.append(f"- Derniers déroulés : {' · '.join(bits)}")
+    profile_md = _format_profile(ctx.get("profile") or {})
+    if profile_md:
+        lines += ["", profile_md]
     return "\n".join(lines)
+
+
+# Libellés lisibles des champs connus de la fiche (cf. tools/profile.PROFILE_FIELDS) ;
+# une clé libre inconnue est rendue telle quelle.
+_PROFILE_LABELS = {
+    "full_name": "Nom", "role": "Rôle", "company": "Entreprise / secteur",
+    "goals": "Objectifs", "crm": "CRM", "connectors_wanted": "Connecteurs voulus",
+    "tone": "Ton / préférences",
+}
+
+
+def _format_profile(profile: dict) -> str:
+    """La fiche « situation avec oto » de l'user (champs remplis seulement). '' si vide.
+    Entretenue par l'agent via `oto_profile` ; sert à personnaliser l'aide."""
+    rows = []
+    for key, value in profile.items():
+        text = str(value).strip() if value is not None else ""
+        if not text:
+            continue
+        rows.append(f"- {_PROFILE_LABELS.get(key, key)} : {text}")
+    if not rows:
+        return ""
+    return "### Ce que tu sais de l'utilisateur\n" + "\n".join(rows)
 
 
 def _block_c(sub: str | None, org_id: int | None) -> str:
@@ -236,18 +272,16 @@ def _doctrine_only(org_id: int) -> str:
 # --- Composition ------------------------------------------------------------
 
 def render() -> str:
-    """Surface STATIQUE (constantes seules, aucun accès DB) : bloc A + bloc B (avec
+    """Surface STATIQUE (constantes seules, aucun accès DB) : bloc A (secret sauce +
     catalogue dérivé). Défaut de boot `FastMCP(instructions=…)` et fallback ultime."""
-    return f"{_SECRET_SAUCE.strip()}\n\n{_ONBOARDING.strip()}\n{providers.render_namespace_catalog()}"
+    return f"{_SECRET_SAUCE.strip()}\n\n{_catalog()}"
 
 
-def compose_session(sub: str | None, org_id: int | None, *, onboarded: bool) -> str:
-    """L'artefact injecté pour UNE session : bloc A (toujours) + bloc B (si pas
-    onboarded) + bloc C (contexte + doctrine, si org). Runtime. Fail-open géré dans
-    chaque bloc (un bloc qui échoue retombe sur son seed / est omis)."""
+def compose_session(sub: str | None, org_id: int | None) -> str:
+    """L'artefact injecté pour UNE session : bloc A (toujours) + bloc C (contexte +
+    doctrine, si org). Runtime. Fail-open géré dans chaque bloc (un bloc qui échoue
+    retombe sur son seed / est omis)."""
     parts = [_block_a()]
-    if not onboarded:
-        parts.append(_block_b())
     block_c = _block_c(sub, org_id)
     if block_c:
         parts.append(block_c)
@@ -255,20 +289,19 @@ def compose_session(sub: str | None, org_id: int | None, *, onboarded: bool) -> 
 
 
 def default_block(key: str) -> str:
-    """Le défaut (seed constant) d'un bloc plateforme — sert la surface admin à
-    afficher le contenu effectif quand la DB n'a pas (encore) de ligne."""
-    return {KEY_SECRET_SAUCE: _SECRET_SAUCE, KEY_ONBOARDING: _ONBOARDING}.get(key, "").strip()
+    """Le défaut (seed constant) du bloc plateforme — sert la surface admin à afficher
+    le contenu effectif quand la DB n'a pas (encore) de ligne."""
+    return {KEY_SECRET_SAUCE: _SECRET_SAUCE}.get(key, "").strip()
 
 
 def seed_platform_blocks() -> None:
-    """Pose au boot les défauts des blocs plateforme A/B s'ils n'existent pas encore
-    (idempotent, best-effort). Le code reste le défaut ; la DB porte l'override admin."""
+    """Pose au boot le défaut du bloc plateforme s'il n'existe pas encore (idempotent,
+    best-effort). Le code reste le défaut ; la DB porte l'override admin."""
     try:
         from . import db
         db.seed_platform_instruction(KEY_SECRET_SAUCE, _SECRET_SAUCE.strip())
-        db.seed_platform_instruction(KEY_ONBOARDING, _ONBOARDING.strip())
     except Exception:
-        logger.warning("seed des blocs plateforme échoué (non bloquant)", exc_info=True)
+        logger.warning("seed du bloc plateforme échoué (non bloquant)", exc_info=True)
 
 
 def skills_index_md(org_id: int | None) -> str:

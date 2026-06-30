@@ -1,6 +1,6 @@
-"""Édition des blocs d'instructions PLATEFORME (#50) — secret sauce (bloc A) +
-onboarding (bloc B). Surface admin plateforme (PLATFORM_ADMIN) : ces blocs sont
-injectés à TOUS les comptes au handshake et **inviolables par l'org**.
+"""Édition du bloc d'instructions PLATEFORME (#50) — secret sauce (bloc A). Surface
+admin plateforme (PLATFORM_ADMIN) : ce bloc est injecté à TOUS les comptes au handshake
+et **inviolable par l'org**. (L'onboarding n'est plus un bloc : c'est un projet, ADR 0032 §7.)
 
 Pattern ADR 0009 : capacités par-verbe (avec REST `/api/admin/platform-instructions`)
 + un outil MCP op-aware consolidé `oto_admin_platform_instructions` qui les réutilise.
@@ -16,7 +16,7 @@ from ._authz import PLATFORM_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
-_KEYS = (instructions.KEY_SECRET_SAUCE, instructions.KEY_ONBOARDING)
+_KEYS = (instructions.KEY_SECRET_SAUCE,)
 
 
 class _NoInput(BaseModel):
@@ -86,11 +86,10 @@ CAPABILITIES += [
         key="platform.instructions", handler=_platform_instructions,
         Input=PlatformInstrInput, authz=PLATFORM_ADMIN,
         description=(
-            "Platform-level injected instruction blocks (#50), shown to EVERY account at "
+            "Platform-level injected instruction block (#50), shown to EVERY account at "
             "handshake, editable only by platform admins, immutable by orgs. op=list / "
             "get (`key`) / set (`key`, `body_md`). key = 'secret_sauce' (block A: posture "
-            "+ usage loop, always injected) | 'onboarding' (block B: onboarding prompt + "
-            "namespace catalog, injected only until an account is onboarded)."),
+            "+ usage loop + derived namespace catalog, always injected)."),
         mcp="oto_admin_platform_instructions",
     ),
     # Faces REST par-verbe (dashboard éditeur).

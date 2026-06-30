@@ -354,78 +354,41 @@ def set_avatar_url(sub: str, url: Optional[str]) -> None:
 
 
 def get_account_profile(sub: str) -> dict:
-    """Fiche d'onboarding de l'user : {onboarded, profile, onboarded_at, updated_at}.
+    """Fiche « situation avec oto » de l'user : {profile, updated_at}.
 
-    Jamais None — un sub sans ligne renvoie l'état par défaut (non onboardé,
-    profile vide). Lecture seule (ne crée pas la ligne)."""
+    Jamais None — un sub sans ligne renvoie l'état par défaut (profile vide).
+    Lecture seule (ne crée pas la ligne)."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT onboarded, profile, discovery_project_id, onboarded_at, updated_at "
-            "FROM user_account_profile WHERE sub = %s",
+            "SELECT profile, updated_at FROM user_account_profile WHERE sub = %s",
             (sub,),
         ).fetchone()
     if not row:
-        return {"onboarded": False, "profile": {}, "discovery_project_id": None,
-                "onboarded_at": None, "updated_at": None}
+        return {"profile": {}, "updated_at": None}
     profile = row["profile"]
     if isinstance(profile, str):  # selon le driver, JSONB peut revenir en texte
         try:
             profile = json.loads(profile)
         except Exception:
             profile = {}
-    return {
-        "onboarded": bool(row["onboarded"]),
-        "profile": profile or {},
-        "discovery_project_id": row["discovery_project_id"],
-        "onboarded_at": row["onboarded_at"],
-        "updated_at": row["updated_at"],
-    }
+    return {"profile": profile or {}, "updated_at": row["updated_at"]}
 
 
-def set_discovery_project_id(sub: str, project_id: int) -> None:
-    """Mémorise l'id du projet « Découverte » d'onboarding de l'user (ADR 0032 §7 B5c).
-    Upsert : crée la fiche si besoin (l'user passe par ici avant d'être onboardé)."""
-    upsert_user(sub)
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO user_account_profile (sub, discovery_project_id, updated_at) "
-            "VALUES (%s, %s, NOW()) "
-            "ON CONFLICT (sub) DO UPDATE SET discovery_project_id = EXCLUDED.discovery_project_id, "
-            "updated_at = NOW()",
-            (sub, project_id),
-        )
-
-
-def update_account_profile(
-    sub: str, fields: Optional[dict] = None, onboarded: Optional[bool] = None,
-) -> dict:
-    """Met à jour la fiche d'onboarding (upsert). `fields` est **shallow-mergé**
-    dans le JSONB `profile` (clés existantes écrasées, les autres conservées).
-    `onboarded` (si fourni) bascule le booléan + stampe `onboarded_at` au passage
-    à vrai. Renvoie l'état résultant (comme `get_account_profile`)."""
+def update_account_profile(sub: str, fields: Optional[dict] = None) -> dict:
+    """Met à jour la fiche « situation avec oto » (upsert). `fields` est **shallow-mergé**
+    dans le JSONB `profile` (clés existantes écrasées, les autres conservées). Renvoie
+    l'état résultant (comme `get_account_profile`)."""
     upsert_user(sub)
     patch = json.dumps(fields or {})
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO user_account_profile (sub, profile, onboarded, onboarded_at, updated_at)
-            VALUES (
-                %s,
-                %s::jsonb,
-                COALESCE(%s, FALSE),
-                CASE WHEN %s IS TRUE THEN NOW() ELSE NULL END,
-                NOW()
-            )
+            INSERT INTO user_account_profile (sub, profile, updated_at)
+            VALUES (%s, %s::jsonb, NOW())
             ON CONFLICT (sub) DO UPDATE SET
                 profile = user_account_profile.profile || EXCLUDED.profile,
-                onboarded = COALESCE(%s, user_account_profile.onboarded),
-                onboarded_at = CASE
-                    WHEN %s IS TRUE AND user_account_profile.onboarded_at IS NULL THEN NOW()
-                    WHEN %s IS FALSE THEN NULL
-                    ELSE user_account_profile.onboarded_at
-                END,
                 updated_at = NOW()
             """,
-            (sub, patch, onboarded, onboarded, onboarded, onboarded, onboarded),
+            (sub, patch),
         )
     return get_account_profile(sub)

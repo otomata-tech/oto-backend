@@ -35,8 +35,13 @@ def init_db() -> None:
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
-        # ADR 0032 §7 (B5c) : onboarding = un projet « Découverte » (id porté par la fiche).
-        conn.execute("ALTER TABLE user_account_profile ADD COLUMN IF NOT EXISTS discovery_project_id BIGINT")
+        # ADR 0032 §7 : l'onboarding n'est plus un mode spécial mais un projet « Découverte »
+        # (semé à la création de l'org perso). On retire la machinerie d'accueil de la fiche
+        # « situation avec oto » — il ne reste que le data model `profile`, relu à chaque session.
+        conn.execute("ALTER TABLE user_account_profile DROP COLUMN IF EXISTS discovery_project_id")
+        conn.execute("ALTER TABLE user_account_profile DROP COLUMN IF EXISTS onboarded")
+        conn.execute("ALTER TABLE user_account_profile DROP COLUMN IF EXISTS onboarded_at")
+        conn.execute("DELETE FROM platform_instructions WHERE key = 'onboarding'")
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).

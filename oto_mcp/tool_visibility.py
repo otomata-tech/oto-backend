@@ -28,13 +28,13 @@ DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send", "fr_egapro_decla
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
-# plus se déverrouiller (lister/activer/appliquer un preset) — plus l'accueil
-# `oto_onboarding` et l'identité `oto_whoami`, qui doivent rester atteignables au
+# plus se déverrouiller (lister/activer/appliquer un preset) — plus l'identité
+# `oto_whoami` et la fiche `oto_profile`, qui doivent rester atteignables au
 # démarrage d'un compte même sous un preset/baseline restrictif. Une baseline (org
 # ADR 0015 ou groupe ADR 0012) ne doit JAMAIS les masquer. SOURCE UNIQUE : meta.py
 # et api_routes en dérivent.
 PROTECTED_TOOLS: frozenset[str] = frozenset(
-    {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset", "oto_onboarding",
+    {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset", "oto_profile",
      "oto_whoami"})
 
 

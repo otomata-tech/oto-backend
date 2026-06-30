@@ -1,5 +1,6 @@
-"""Capacité d'édition des blocs plateforme A/B (#50). On monkeypatche les seams DB
-(get/set/list_platform_instruction) — pas de vraie DB.
+"""Capacité d'édition du bloc plateforme A (#50). On monkeypatche les seams DB
+(get/set/list_platform_instruction) — pas de vraie DB. (Le bloc onboarding a disparu :
+l'onboarding est un projet, ADR 0032 §7.)
 """
 import pytest
 
@@ -33,18 +34,18 @@ def test_get_returns_seed_when_absent(store):
 
 def test_set_then_get(store):
     P._platform_instructions(CTX, P.PlatformInstrInput(
-        op="set", key="onboarding", body_md="NOUVELLE PROSE"))
-    out = P._platform_instructions(CTX, P.PlatformInstrInput(op="get", key="onboarding"))
+        op="set", key="secret_sauce", body_md="NOUVELLE PROSE"))
+    out = P._platform_instructions(CTX, P.PlatformInstrInput(op="get", key="secret_sauce"))
     assert out["is_seed"] is False and out["body_md"] == "NOUVELLE PROSE"
     assert out["updated_by"] == "admin1"
     # le défaut reste accessible (bouton « rétablir »)
-    assert "oto_onboarding()" in out["default_md"]
+    assert "TA boîte à outils" in out["default_md"]
 
 
-def test_list_covers_both_blocks(store):
+def test_list_covers_block(store):
     out = P._platform_instructions(CTX, P.PlatformInstrInput(op="list"))
-    assert out["keys"] == ["secret_sauce", "onboarding"]
-    assert {b["key"] for b in out["blocks"]} == {"secret_sauce", "onboarding"}
+    assert out["keys"] == ["secret_sauce"]
+    assert {b["key"] for b in out["blocks"]} == {"secret_sauce"}
 
 
 def test_unknown_key_rejected(store):

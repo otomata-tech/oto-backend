@@ -572,6 +572,10 @@ def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[s
     with _connect() as conn:
         conn.execute("UPDATE orgs SET personal_of = %s WHERE id = %s", (sub, oid))
     _log.info("ensure_personal_org: org perso #%s créée pour %s", oid, sub)
+    # Onboarding = un projet (ADR 0032 §7) : on sème le projet « Découverte » dans l'org
+    # perso fraîchement créée (une seule fois, ici — pas sur la branche reclaim). Best-effort.
+    from . import discovery
+    discovery.seed_for_org(sub, oid)
     return oid
 
 

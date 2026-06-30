@@ -52,7 +52,7 @@ def register(mcp: FastMCP) -> None:
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
         id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
         `knowledge` (base Memento connectée ?), `connectors` (résumé des connecteurs
-        configurés), `onboarded`, et un `summary` lisible. Lecture seule.
+        configurés), et un `summary` lisible. Lecture seule.
 
         Pour basculer d'org dans la conversation en cours : `oto_use_org <org>`
         (override de session éphémère — recharge toolbox + credentials, n'affecte
@@ -136,12 +136,6 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             logger.warning("whoami: memento status failed: %s", e)
 
-        onboarded = False
-        try:
-            onboarded = bool(db.get_account_profile(sub).get("onboarded"))
-        except Exception as e:
-            logger.warning("whoami: account profile failed: %s", e)
-
         who = user.get("name") or user.get("email") or sub
         has_override, _ = session_org.current_override()
         if org_block:
@@ -171,7 +165,6 @@ def register(mcp: FastMCP) -> None:
                 "configured": configured,
                 "platform_available": platform_ready,
             },
-            "onboarded": onboarded,
             "summary": summary,
             "dashboard_url": _DASHBOARD,
         }

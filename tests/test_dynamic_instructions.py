@@ -1,8 +1,8 @@
-"""Instructions injectées au `initialize` — artefact composé A/B/C (#50).
+"""Instructions injectées au `initialize` — artefact composé A/C (#50).
 
-Bloc A (secret sauce, DB→seed), bloc B (onboarding + catalogue, gaté `onboarded`),
-bloc C (contexte résolu + doctrine d'org avec variables). Style `asyncio.run` +
-monkeypatch des seams, comme les autres tests du repo.
+Bloc A (secret sauce DB→seed + catalogue dérivé, toujours injecté), bloc C (contexte
+résolu + fiche profil + doctrine d'org avec variables). L'onboarding n'est plus un bloc
+(c'est un projet, ADR 0032 §7). Style `asyncio.run` + monkeypatch des seams.
 """
 import asyncio
 import types
@@ -17,33 +17,31 @@ from oto_mcp import instructions as instr
 from oto_mcp import middleware as mw
 
 
-# ── blocs plateforme A/B (DB override → seed) ────────────────────────────────
+# ── bloc plateforme A (DB override → seed) + catalogue dérivé toujours appendé ─
 def test_block_a_db_override(monkeypatch):
     monkeypatch.setattr(db, "get_platform_instruction",
                         lambda key: {"body_md": "POSTURE ÉDITÉE"})
-    assert instr._block_a() == "POSTURE ÉDITÉE"
+    monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "• fr_* — entreprises")
+    out = instr._block_a()
+    assert "POSTURE ÉDITÉE" in out                 # la prose éditée
+    assert "• fr_* — entreprises" in out           # + le catalogue dérivé, toujours
 
 
 def test_block_a_seed_fallback(monkeypatch):
     monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)
+    monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     out = instr._block_a()
     assert "TA boîte à outils" in out          # le seed constant
     assert "Encadre et remonte" in out
+    assert "CATALOGUE" in out                  # catalogue appendé
 
 
 def test_block_a_fail_open_to_seed(monkeypatch):
     def boom(key):
         raise RuntimeError("db down")
     monkeypatch.setattr(db, "get_platform_instruction", boom)
+    monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     assert "TA boîte à outils" in instr._block_a()
-
-
-def test_block_b_includes_catalog(monkeypatch):
-    monkeypatch.setattr(db, "get_platform_instruction",
-                        lambda key: {"body_md": "ONBOARDING PROSE"})
-    monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "• fr_* — entreprises")
-    out = instr._block_b()
-    assert "ONBOARDING PROSE" in out and "• fr_* — entreprises" in out
 
 
 # ── substitution de variables (bloc C) ───────────────────────────────────────
@@ -90,33 +88,37 @@ def _wire_context(monkeypatch, *, doctrine_body="Doctrine de {{org}}."):
                                                    "x": {"mode": "forbidden"}}})
     monkeypatch.setattr(db, "list_projects_for_owners", lambda owners: [{"id": 1, "name": "P1"}])
     monkeypatch.setattr(db, "recent_runs", lambda sub, oid, limit=5: [])
+    monkeypatch.setattr(db, "get_account_profile",
+                        lambda sub: {"profile": {"role": "fondateur"}})
     monkeypatch.setattr(org_store, "get_instruction",
                         lambda oid, slug: {"body_md": doctrine_body})
 
 
 def test_compose_session_full(monkeypatch):
     _wire_context(monkeypatch)
-    out = instr.compose_session("u1", 7, onboarded=False)
+    out = instr.compose_session("u1", 7)
     assert "TA boîte à outils" in out                       # bloc A
-    assert "CATALOGUE" in out                               # bloc B (pas onboarded)
+    assert "CATALOGUE" in out                               # catalogue (bloc A, toujours)
     assert "## Ton contexte oto" in out                     # bloc C contexte
     assert "Connecteurs actifs : folk" in out               # forbidden exclu
+    assert "Ce que tu sais de l'utilisateur" in out         # fiche profil injectée
+    assert "Rôle : fondateur" in out
     assert "## Doctrine de ton organisation (Acme)" in out  # bloc C doctrine
     assert "Doctrine de Acme." in out                       # variable {{org}} substituée
 
 
-def test_compose_session_onboarded_skips_b(monkeypatch):
+def test_compose_session_catalog_always_present(monkeypatch):
     _wire_context(monkeypatch)
-    out = instr.compose_session("u1", 7, onboarded=True)
-    assert "CATALOGUE" not in out                           # bloc B omis
-    assert "TA boîte à outils" in out                       # bloc A reste
-    assert "## Ton contexte oto" in out                     # bloc C reste
+    out = instr.compose_session("u1", 7)
+    assert "CATALOGUE" in out                               # plus de gate onboarded
+    assert "TA boîte à outils" in out
+    assert "## Ton contexte oto" in out
 
 
 def test_compose_session_no_org(monkeypatch):
     monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
-    out = instr.compose_session("u1", None, onboarded=True)
+    out = instr.compose_session("u1", None)
     assert "TA boîte à outils" in out
     assert "## Ton contexte oto" not in out                 # pas d'org → pas de bloc C
 
@@ -127,7 +129,7 @@ def test_compose_session_doctrine_fail_open(monkeypatch):
     def boom(sub):
         raise RuntimeError("status down")
     monkeypatch.setattr(access, "status_for", boom)
-    out = instr.compose_session("u1", 7, onboarded=True)
+    out = instr.compose_session("u1", 7)
     assert "## Doctrine de ton organisation (Acme)" in out  # doctrine encore servie
 
 
@@ -142,12 +144,11 @@ def _run(result, sub, monkeypatch):
 
 def test_middleware_composes_session(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    monkeypatch.setattr(db, "get_account_profile", lambda sub: {"onboarded": False})
     monkeypatch.setattr(instr, "compose_session",
-                        lambda sub, org, *, onboarded: f"[A/B/C org={org} onb={onboarded}]")
+                        lambda sub, org: f"[A/C org={org}]")
     res = types.SimpleNamespace(instructions="BASE")
     out = _run(res, "u1", monkeypatch)
-    assert out.instructions == "[A/B/C org=7 onb=False]"
+    assert out.instructions == "[A/C org=7]"
 
 
 def test_middleware_noop_without_sub(monkeypatch):
@@ -164,9 +165,9 @@ def test_middleware_noop_when_no_instructions(monkeypatch):
 
 def test_middleware_fail_open(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    def boom(sub):
-        raise RuntimeError("db down")
-    monkeypatch.setattr(db, "get_account_profile", boom)
+    def boom(sub, org):
+        raise RuntimeError("compose down")
+    monkeypatch.setattr(instr, "compose_session", boom)
     res = types.SimpleNamespace(instructions="BASE")
     out = _run(res, "u1", monkeypatch)
     assert out.instructions == "BASE"            # composition échoue → statique gardé

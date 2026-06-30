@@ -19,11 +19,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import meta
     meta.register(mcp)
 
-    # Onboarding — outil d'accueil servi au démarrage d'un compte (explication Oto +
-    # état de configuration découvert + prochaines étapes). Spine, hors gate
+    # Profil — fiche « situation avec oto » de l'user (qui il est, ses objectifs, son
+    # CRM…), entretenue par l'agent et relue à chaque session. L'onboarding n'est plus
+    # un mode : c'est un projet « Découverte » (ADR 0032 §7). Spine, hors gate
     # d'activation, toujours visible (PROTECTED_TOOLS). Pas de dépendance externe.
-    from . import onboarding
-    onboarding.register(mcp)
+    from . import profile
+    profile.register(mcp)
 
     # Whoami — identité MCP courante (compte × org active × groupe actif) servie à
     # l'agent pour savoir pour qui/dans quel contexte il agit. Spine, hors gate

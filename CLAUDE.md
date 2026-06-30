@@ -284,33 +284,33 @@ backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région 
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = doctrine oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
 
-## Onboarding (accueil au démarrage d'un compte)
+## Onboarding = un projet « Découverte » (ADR 0032 §7)
 
-`tools/onboarding.py` (spine, chargé explicitement dans `register_all`, hors gate
-d'activation, **toujours visible** via `PROTECTED_TOOLS`) expose 2 méta-tools :
-- `oto_onboarding()` (lecture) — sert l'explication d'Oto, l'**état découvert** du
-  compte (`status_for` providers + memento + org + doctrine, best-effort), la fiche
-  « situation avec oto » déjà remplie (`profile`) + les champs restants (`missing`),
-  et un **script de self-onboarding** (`doctrine`) que l'agent déroule.
-- `oto_onboarding_update(fields=…, onboarded=…)` — persiste les réponses (shallow-
-  merge JSONB) et valide le booléan d'accueil.
+**Plus de mode d'accueil spécial** (retiré le 2026-07-01) : pas de booléen `onboarded`,
+pas de checklist dashboard, pas de tool d'onboarding scripté. L'onboarding est **un
+projet** comme un autre — un projet « Découverte » porteur d'un brief d'accueil, **semé
+à la création de l'org perso** (`discovery.seed_for_org`, appelé par
+`org_store.ensure_personal_org` sur la branche création, best-effort). Il remonte à
+l'agent via la ligne « Projets récents » du bloc C des instructions (`instructions.py`) ;
+l'agent l'ouvre (`oto_use_project`) et déroule l'accueil depuis son brief.
+
+**La fiche « situation avec oto » reste** (qui est l'user, son métier, ses objectifs, son
+CRM, les connecteurs voulus, son ton) — découplée de l'accueil, c'est un data model libre
+relu à chaque session :
+- `tools/profile.py` expose `oto_profile(op="get"|"update", fields=…)` (spine, hors gate,
+  **toujours visible** via `PROTECTED_TOOLS`) — l'agent l'entretient au fil de l'eau.
+- DB : table `user_account_profile(sub PK, profile jsonb, created_at, updated_at)`
+  (`db.get_account_profile` / `db.update_account_profile`). **Injectée au handshake**
+  (bloc C, section « Ce que tu sais de l'utilisateur ») → enfin utilisée, plus seulement
+  collectée. N'est plus exposée sur `/api/me` (le bloc `onboarding` a été retiré).
 
 `tools/whoami.py` (spine, chargé explicitement dans `register_all`, hors gate
 d'activation, **toujours visible** via `PROTECTED_TOOLS`) expose `oto_whoami()`
 (lecture) — l'**identité MCP courante** sous laquelle Claude agit : compte (`sub` +
 email + rôle plateforme) × **org active** (id/name/rôle) × **groupe actif**, plus un
-résumé des connecteurs configurés, l'état Memento et `onboarded`. C'est le pendant
-agent du badge « identité MCP » du dashboard ; à appeler pour confirmer le contexte
-avant une action sensible. Pour basculer : `oto_use_org`.
-
-État en DB : table `user_account_profile(sub PK, onboarded bool, profile jsonb,
-onboarded_at)` (`db.get_account_profile` / `db.update_account_profile`). Le booléan
-gouverne « reprendre l'accueil à la session suivante ». Exposé sur `/api/me`
-(`onboarding: {onboarded, updated_at}`, best-effort). Le serveur invite l'agent à
-appeler `oto_onboarding()` en début de session tant que `onboarded` est faux
-(`_SERVER_INSTRUCTIONS`). **Pas réservé aux comptes neufs** : un compte actif peut
-le rappeler à tout moment (ré-explication, paramétrage), et rouvrir l'accueil via
-`oto_onboarding_update(onboarded=False)`.
+résumé des connecteurs configurés et l'état Memento. C'est le pendant agent du badge
+« identité MCP » du dashboard ; à appeler pour confirmer le contexte avant une action
+sensible. Pour basculer : `oto_use_org`.
 
 ## Boucle d'usage (ADR 0017)
 
@@ -407,15 +407,16 @@ Prose opératoire métier par org (skills à la Claude Code, slug + versionnée)
 > **Livraison au LLM = injection, plus un appel d'outil (otomata-private#49 puis #50, amende ADR 0014).**
 > Le canal FIABLE de bootstrap = les `instructions` du `initialize` (FastMCP les relit par
 > session ; Claude rehandshake par conversation). `DynamicInstructionsMiddleware.on_initialize`
-> (`middleware.py`) **remplace** `result.instructions` par `instructions.compose_session(sub, org_id,
-> onboarded)` — un **artefact composé de 3 blocs** (`instructions.py`, #50) :
-> - **bloc A « secret sauce »** (posture + boucle d'usage) — DB `platform_instructions['secret_sauce']`,
->   éditable admin plateforme, **inviolable par l'org**, toujours injecté (seedé depuis la constante = fallback) ;
-> - **bloc B « onboarding »** (amorce `oto_onboarding` + **catalogue de namespaces** dérivé) — injecté
->   **uniquement si `onboarded=false`** ;
+> (`middleware.py`) **remplace** `result.instructions` par `instructions.compose_session(sub, org_id)`
+> — un **artefact composé de 2 blocs** (`instructions.py`, #50 ; l'ex-bloc B onboarding a été
+> retiré le 2026-07-01 — l'onboarding est un projet, ADR 0032 §7) :
+> - **bloc A « secret sauce »** (posture + boucle d'usage + **catalogue de namespaces** dérivé) —
+>   prose en DB `platform_instructions['secret_sauce']`, éditable admin plateforme, **inviolable par
+>   l'org**, toujours injecté (seedé depuis la constante = fallback) ; le catalogue est appendé à la composition ;
 > - **bloc C « contexte dynamique »** par-(sub, org) — section de contexte résolu (org / équipe /
->   connecteurs actifs / N derniers projets / derniers déroulés via `db.recent_runs`) + doctrine de
->   base de l'org (`claude_md`) avec substitution `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
+>   connecteurs actifs / N derniers projets / derniers déroulés via `db.recent_runs` / fiche profil
+>   « situation avec oto » de l'user) + doctrine de base de l'org (`claude_md`) avec substitution
+>   `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
 >
 > Donc **ne plus prescrire « appelle `oto_get_doctrine()` au démarrage »** — la doctrine est injectée.
 > Les **doctrines nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools`

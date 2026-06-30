@@ -152,19 +152,6 @@ def _json(request: Request, payload: dict, status: int = 200) -> JSONResponse:
     )
 
 
-def _onboarding_block(sub: str) -> dict:
-    """Snapshot d'onboarding pour /api/me : {onboarded, updated_at, discovery_project_id}.
-    `discovery_project_id` = le projet « Découverte » (ADR 0032 §7 B5c) si déjà créé
-    (null sinon — il l'est paresseusement au 1er `oto_onboarding()`). Best-effort —
-    ne jamais faire échouer le chemin critique /api/me sur un hoquet DB."""
-    try:
-        st = db.get_account_profile(sub)
-        return {"onboarded": st["onboarded"], "updated_at": st["updated_at"],
-                "discovery_project_id": st.get("discovery_project_id")}
-    except Exception:
-        return {"onboarded": False, "updated_at": None, "discovery_project_id": None}
-
-
 # ── View-as (ADR 0023) : consultation d'une org dans le dashboard ───────────
 def _parse_view_org(request: Request) -> int | None:
     """Org de consultation (header `X-Oto-Org`). None = pas de header ; 0 = perso ;
@@ -559,9 +546,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "memento": memento_oauth.status_for(sub),
             "providers": status["providers"],
             "billing": billing_block,
-            # Onboarding (fiche « situation avec oto ») — alimente l'auto-prompt
-            # d'accueil. Best-effort : ne jamais 500 /api/me sur un hoquet DB.
-            "onboarding": _onboarding_block(sub),
         })
 
     # Saisie de credential per-user, GÉNÉRIQUE (modèle multi-champs, ADR 0011) :

@@ -36,6 +36,8 @@ from . import connectors_identities  # noqa: F401 — connectors.{identities,set
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
+# Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — override positif (allow).
+from . import connectors_force  # noqa: F401 — connectors.force.member (oto_force_connector)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin, access_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,key_grant}

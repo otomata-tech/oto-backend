@@ -25,7 +25,6 @@ from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
     is_default_hidden,
-    is_entitled,
     is_grant_only,
     is_tool_visible,
     namespace_of,
@@ -252,21 +251,14 @@ def register(mcp: FastMCP) -> None:
                 message=f"Preset `{name}` not found. Use oto_list_presets.",
             ))
         all_names = await _all_tool_names(ctx)
-        granted, is_admin = _user_access(sub)
-        requested = (set(preset["enabled_tools"]) | _PROTECTED) & all_names
-        # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade).
-        enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
+        enabled = (set(preset["enabled_tools"]) | _PROTECTED) & all_names
         disabled = sorted(all_names - enabled)
 
         db.replace_user_disabled_tools(sub, disabled, org)
-        # Override positif pour les tools qui en ont besoin pour être visibles :
-        # masqués-par-défaut, et grant-only côté admin.
+        # Override positif pour les tools masqués-par-défaut qui en ont besoin.
         db.replace_user_enabled_tools(
             sub,
-            sorted(
-                n for n in enabled
-                if is_default_hidden(n) or (is_grant_only(n) and is_admin)
-            ),
+            sorted(n for n in enabled if is_default_hidden(n)),
             org,
         )
 

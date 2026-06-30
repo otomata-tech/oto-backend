@@ -78,21 +78,6 @@ def is_grant_only(name: str) -> bool:
     return ns in ADMIN_GRANT_ONLY_NAMESPACES or ns in _RUNTIME_GRANT_ONLY
 
 
-def is_entitled(
-    name: str,
-    granted_namespaces: frozenset[str] = frozenset(),
-    is_admin: bool = False,
-) -> bool:
-    """L'user a-t-il le DROIT de voir ce tool (hors préférence d'affichage) ?
-
-    Un grant-only exige admin ou grant de namespace ; tout le reste est de droit.
-    Utilisé pour empêcher un preset de révéler un grant-only non autorisé.
-    """
-    if is_grant_only(name):
-        return is_admin or namespace_of(name) in granted_namespaces
-    return True
-
-
 def is_tool_visible(
     name: str,
     disabled: set[str],

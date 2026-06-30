@@ -38,7 +38,7 @@ from . import access, api_routes_atlassian, api_routes_connectors, api_routes_co
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from .tool_visibility import (
-    PROTECTED_TOOLS, is_default_hidden, is_entitled, is_grant_only, namespace_of)
+    PROTECTED_TOOLS, is_default_hidden, is_grant_only, namespace_of)
 
 logger = logging.getLogger(__name__)
 
@@ -989,12 +989,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         all_names = await _list_all_tool_names()
-        granted = access.granted_namespaces_for(sub)
-        is_admin = access.is_super_admin(sub)
-        requested = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
-        # Un preset ne peut pas révéler un grant-only non autorisé (anti-escalade,
-        # miroir de oto_apply_preset côté MCP).
-        enabled = {n for n in requested if is_entitled(n, granted, is_admin)}
+        enabled = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
         disabled = sorted(all_names - enabled)
         db.replace_user_disabled_tools(sub, disabled, org)
         return _json(request, {

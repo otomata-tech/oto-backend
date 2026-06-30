@@ -242,3 +242,23 @@ def delete_by_key(key: str) -> None:
         _get_client().delete_object(Bucket=_bucket(), Key=key)
     except Exception:
         pass
+
+
+def make_public(key: str) -> str:
+    """Bascule un objet DURABLE existant en `public-read` et renvoie son URL
+    publique permanente (ADR 0032 §3 — un « Autre document » partagé publiquement)."""
+    try:
+        _get_client().put_object_acl(Bucket=_bucket(), Key=key, ACL="public-read")
+    except Exception as e:
+        raise MediaError(500, "acl_failed", str(e))
+    return public_url(key)
+
+
+def make_private(key: str) -> None:
+    """Repasse un objet en privé (best-effort)."""
+    if not key:
+        return
+    try:
+        _get_client().put_object_acl(Bucket=_bucket(), Key=key, ACL="private")
+    except Exception:
+        pass

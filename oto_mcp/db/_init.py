@@ -29,6 +29,9 @@ def init_db() -> None:
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # ADR 0032 §4 (B2) : surcharge contextuelle préfaite du lien (connecteur → identité/instructions).
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS config JSONB NOT NULL DEFAULT '{}'")
+        # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
+        conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
+        conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
         # Corrélation des appels (ADR 0017, extension OTO-LOCALE de tool_calls).
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")

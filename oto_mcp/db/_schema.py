@@ -341,6 +341,8 @@ CREATE TABLE IF NOT EXISTS project_files (
     title TEXT,
     description TEXT,
     summary TEXT,
+    public BOOLEAN NOT NULL DEFAULT FALSE,    -- partagé publiquement (ACL public-read, ADR 0032 §3)
+    public_url TEXT,                          -- URL publique permanente quand public ; NULL sinon
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

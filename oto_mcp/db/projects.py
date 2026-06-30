@@ -249,7 +249,7 @@ def list_project_activity(project_id: int, limit: int = 50) -> list[dict]:
 
 # --- Fichiers bruts d'un projet (carte « Autre document », ADR 0032 §3) -------
 _PFILE_COLS = ("id, project_id, s3_key, filename, mime, size_bytes, title, "
-               "description, summary, created_by, created_at")
+               "description, summary, public, public_url, created_by, created_at")
 
 
 def add_project_file(project_id: int, s3_key: str, filename: str, *,
@@ -293,5 +293,17 @@ def delete_project_file(file_id: int) -> Optional[dict]:
         row = conn.execute(
             "DELETE FROM project_files WHERE id = %s RETURNING project_id, s3_key",
             (file_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_project_file_public(file_id: int, public: bool,
+                            public_url: Optional[str]) -> Optional[dict]:
+    """Bascule l'état public d'un fichier (ADR 0032 §3, B4b) ; renvoie la ligne à jour."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"UPDATE project_files SET public = %s, public_url = %s WHERE id = %s "
+            f"RETURNING {_PFILE_COLS}",
+            (public, public_url, file_id),
         ).fetchone()
         return dict(row) if row else None

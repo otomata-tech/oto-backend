@@ -97,7 +97,12 @@ class Connector:
 
     @property
     def grant_only(self) -> bool:
-        return self.availability == "platform_granted"
+        # ADR 0031 : le concept « grant-only » est retiré. Plus aucun connecteur
+        # n'est « sur autorisation » — la réservation d'un connecteur passe par
+        # l'activation (interdire/forcer) + le credential ; le masquage des bridges
+        # remote par une règle dédiée (le credential d'org EST le grant). Conservé
+        # `False` le temps de retirer les derniers call-sites (barreau de nettoyage).
+        return False
 
     @property
     def family(self) -> str:

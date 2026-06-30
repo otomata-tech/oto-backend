@@ -25,4 +25,4 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
   (NULL = ouvert) ; `resolved=false` ré-ouvre. Le backlog vivant = `signals?status=open`.
 - **Harnais impératif** : `_SERVER_INSTRUCTIONS` pousse l'agent à réflexer oto, encadrer
   par `run_start/finish` et émettre `feedback`.
-- Déféré (otomata#32) : promotion des signaux en facts factgraph (0008) ; `why`-par-appel.
+- Déféré (otomata#32) : `why`-par-appel.

@@ -25,7 +25,7 @@ fin de la sentinelle `__j:`). Schéma libre. Trois champs auto-managés exposés
 plat : `_id` (uuid7-like), `_created_at`, `_updated_at`.
 
 **Datastore = spine plateforme** (`provider=None`, ADR 0011), PAS un connecteur
-Google : chargé explicitement dans `register_all` (à côté de meta/orgs/scout),
+Google : chargé explicitement dans `register_all` (à côté de meta/orgs),
 donc **hors gate d'activation** et **sans dépendance externe** — marche sans
 connecter Google (plus de `412 google_not_connected`). Le partage est **DB-only**
 (`datastore_shares` ; le destinataire lit via son propre `sub`, plus de

@@ -6,7 +6,7 @@ GoCardless → Pennylane → back-office, piloté directement depuis Claude sur 
 de tools). oto est la maison naturelle de cette prose faute de produit. Aligné
 **ADR 0006** (harnais-vs-substrat, repo public `otomata-tech/oto`) : une org oto + sa
 doctrine = un **harnais sans état** (étage zéro) ; le jour où un workflow doit persister un
-pipeline/des statuts, il graduate en harnais à part (chemin blitz → scout).
+pipeline/des statuts, il graduate en harnais à part.
 
 **Modèle = skills, à la Claude Code.** Une org possède des **instructions markdown**
 identifiées par `slug`, chacune versionnée :
@@ -41,5 +41,4 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   par `(org, slug)` via verrou advisory (mirroir `add_org_member`).
 - **Pas d'instruction par namespace d'outil** : un gotcha d'outil est vrai pour tout le monde et
   évolue avec le code du connecteur → sa place reste le repo (docstring, `_SERVER_INSTRUCTIONS`),
-  versionné avec l'outil. La doctrine de prospection de scout ne passe pas par ce mécanisme —
-  elle vit chez scout (son propre mécanisme de doctrine, distinct).
+  versionné avec l'outil.

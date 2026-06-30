@@ -724,7 +724,6 @@ MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 # `Connector` — datastore/facts/email/méta/boucle d'usage.
 SPINE_CONCEPTS: tuple[tuple[str, str], ...] = (
     ("data_*", "datastore tabulaire per-user (PG natif, schéma libre) — data_write/data_rows/data_share"),
-    ("fact_*", "graphe de facts typés (aboutissement d'une doctrine) — fact_write/fact_list/fact_kinds"),
     ("email_send", "envoi d'email per-org (transports scaleway/resend), différé + quiet-hours"),
     ("oto_*", "méta : visibilité des outils (enable/disable + presets), doctrine d'org, orgs & équipes"),
     ("run_* / feedback", "boucle d'usage : run_start/run_finish encadrent un déroulé ; feedback(gap|tool_feedback) remonte les signaux"),

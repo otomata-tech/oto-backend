@@ -107,7 +107,7 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
     # l'org de la session — à chaud, per-org. Fail-OPEN (gouvernance d'exposition,
     # pas une barrière de sécurité ; le grant-only reste fail-closed ci-dessus).
-    # Les tools plateforme (scout/oto/data/doctrine) n'ont pas de connecteur au
+    # Les tools plateforme (oto/data/doctrine) n'ont pas de connecteur au
     # registre → jamais gatés.
     try:
         exposed = connector_activation.exposed_connectors(active_org)

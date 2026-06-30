@@ -56,9 +56,9 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 
 ### Couche capacité (`oto_mcp/capabilities/`, ADR 0009)
 
-Pour les opérations exposées sur **deux faces** (MCP + REST), arrêter de câbler les adaptateurs 2× à la main (drift de surface + autz divergente — ex. `oto_use_org` jadis absent en REST, IDOR cross-org). Une **capacité** = un descripteur co-déclaré : `handler` core + `Input` pydantic (seule validation) + règle `authz` **obligatoire** + bindings `mcp`/`rest` (multi-binding possible). Les adaptateurs `_mcp_adapter`/`_rest_adapter` **bouclent** sur `registry.CAPABILITIES` et appliquent **validation → autz → handler** ; le refus est un `AuthzDenied` neutre traduit par chaque face (`McpError` / `json_error`+CORS). `authz` = combinateurs fermés (`SUB_ONLY`, `ORG_MEMBER`, `ORG_ADMIN`, `ORG_MEMBER_OF`, `PLATFORM_ADMIN`, `SUPER_ADMIN`, `NAMESPACE_GRANT`, `ORG_ADMIN_OF`, `GROUP_MEMBER_OF`, `GROUP_ADMIN_OF`) — `ORG_MEMBER`/`ORG_ADMIN` scopent l'**org active** (lecture/écriture self-service `/api/me/*`), les `*_OF(field)` une org/groupe ciblé par id de path. Schéma MCP **plat** via `apply_flat_signature` (gotcha pydantic single-param, cf. memory). Montés dans `server._build_mcp` + `api_routes.make_routes` (no-op si registre vide). **Domaines orgs + doctrine/instructions 100% migrés** : orgs (use_org, membres, secrets, create, entitlements, lectures) → `api_routes_orgs` réduit aux namespace-grants per-user ; doctrine (`capabilities/orgs_instructions.py` : get/list/set/delete/versions/revert/usage membre `/api/me/instructions*` + outils `oto_*_doctrine`, et palier admin cross-org `oto_admin_*_doctrine` / `/api/admin/orgs/{id}/instructions*`) — `tools/orgs.py` supprimé, bloc doctrine d'`api_routes.py` retiré. ⚠️ Handler async supporté par les deux adaptateurs (`inspect.isawaitable`) ; le manifeste `referenced_tools` (ADR 0014) résout l'instance FastMCP via `tool_registry.bind(instance)` (posé au boot dans `_build_mcp`). **Domaine user-admin migré** (`capabilities/users_admin.py`) : retrouver/lister un user (`oto_admin_list_users`, filtre `query`), fiche (`oto_admin_user_detail`, par email **ou** sub), rôle (`oto_admin_set_role`), grant de clé plateforme user **et** org (`oto_admin_grant_key`/`oto_admin_grant_org_key` + revoke), option payante comp (`oto_admin_set_option`) — les handlers REST écrits main correspondants ont été retirés d'`api_routes.py` (mêmes chemins servis par les capacités → dashboard inchangé). Donne la face MCP au **setup complet d'un compte depuis Claude**.
+Pour les opérations exposées sur **deux faces** (MCP + REST), arrêter de câbler les adaptateurs 2× à la main (drift de surface + autz divergente — ex. `oto_use_org` jadis absent en REST, IDOR cross-org). Une **capacité** = un descripteur co-déclaré : `handler` core + `Input` pydantic (seule validation) + règle `authz` **obligatoire** + bindings `mcp`/`rest` (multi-binding possible). Les adaptateurs `_mcp_adapter`/`_rest_adapter` **bouclent** sur `registry.CAPABILITIES` et appliquent **validation → autz → handler** ; le refus est un `AuthzDenied` neutre traduit par chaque face (`McpError` / `json_error`+CORS). `authz` = combinateurs fermés (`SUB_ONLY`, `ORG_MEMBER`, `ORG_ADMIN`, `ORG_MEMBER_OF`, `PLATFORM_ADMIN`, `SUPER_ADMIN`, `ORG_ADMIN_OF`, `GROUP_MEMBER_OF`, `GROUP_ADMIN_OF`) — `ORG_MEMBER`/`ORG_ADMIN` scopent l'**org active** (lecture/écriture self-service `/api/me/*`), les `*_OF(field)` une org/groupe ciblé par id de path. Schéma MCP **plat** via `apply_flat_signature` (gotcha pydantic single-param, cf. memory). Montés dans `server._build_mcp` + `api_routes.make_routes` (no-op si registre vide). **Domaines orgs + doctrine/instructions 100% migrés** : orgs (use_org, membres, secrets, create, lectures) → 100% en capacités, `api_routes_orgs.py` supprimé ; doctrine (`capabilities/orgs_instructions.py` : get/list/set/delete/versions/revert/usage membre `/api/me/instructions*` + outils `oto_*_doctrine`, et palier admin cross-org `oto_admin_*_doctrine` / `/api/admin/orgs/{id}/instructions*`) — `tools/orgs.py` supprimé, bloc doctrine d'`api_routes.py` retiré. ⚠️ Handler async supporté par les deux adaptateurs (`inspect.isawaitable`) ; le manifeste `referenced_tools` (ADR 0014) résout l'instance FastMCP via `tool_registry.bind(instance)` (posé au boot dans `_build_mcp`). **Domaine user-admin migré** (`capabilities/users_admin.py`) : retrouver/lister un user (`oto_admin_list_users`, filtre `query`), fiche (`oto_admin_user_detail`, par email **ou** sub), rôle (`oto_admin_set_role`), grant de clé plateforme user **et** org (`oto_admin_grant_key`/`oto_admin_grant_org_key` + revoke), option payante comp (`oto_admin_set_option`) — les handlers REST écrits main correspondants ont été retirés d'`api_routes.py` (mêmes chemins servis par les capacités → dashboard inchangé). Donne la face MCP au **setup complet d'un compte depuis Claude**.
 
-**Console admin consolidée par concept (`*_op`, 2026-06-25, commit 92462fe).** Les outils admin ci-dessus sont fusionnés de **36 → 13 `oto_admin_*`** — un outil par objet métier, verbe en param `op` : `oto_admin_{org,org_member,user,access,key_grant,namespace_access}` (ce dernier réunit entitlement d'org + grant per-user via `scope=user|org`). Les handlers de domaine sont **réutilisés tels quels** (zéro duplication ; `capabilities/admin_console.py` construit l'`Input` spécifique et appelle `_create_org`/`_add_member`/…). Quand les paliers d'autz divergent dans un même outil (ex. `org` : create=`SUPER_ADMIN`, list=`PLATFORM_ADMIN`), le **combinateur op-aware `ADMIN_BY_OP({op: règle})`** (`_authz.py`) choisit la règle fermée selon `inp.op` → l'autz reste **déclarée au niveau capacité**, jamais redescendue dans le handler (esprit ADR 0009 préservé). ⚠️ Les faces **REST restent par-verbe** (idiomatique + dashboard) → l'autz d'un verbe fusionné est désormais déclarée 2× (MCP op-aware + route REST), même combinateur/handler dessous. **Règle de design — secret brut jamais en argument MCP** (il transiterait dans le contexte LLM) : la **pose** de secret (`set_org_secret`, `delete_org_secret`, `set_platform_key`, `set_quota`) est **dashboard-only** (binding `mcp` retiré, REST conservé) ; le MCP ne porte que les **droits/grants** (`oto_admin_key_grant`, `oto_admin_namespace_access`).
+**Console admin consolidée par concept (`*_op`, 2026-06-25, commit 92462fe).** Les outils admin ci-dessus sont fusionnés de **36 → 12 `oto_admin_*`** — un outil par objet métier, verbe en param `op` : `oto_admin_{org,org_member,user,access,key_grant}`. Les handlers de domaine sont **réutilisés tels quels** (zéro duplication ; `capabilities/admin_console.py` construit l'`Input` spécifique et appelle `_create_org`/`_add_member`/…). Quand les paliers d'autz divergent dans un même outil (ex. `org` : create=`SUPER_ADMIN`, list=`PLATFORM_ADMIN`), le **combinateur op-aware `ADMIN_BY_OP({op: règle})`** (`_authz.py`) choisit la règle fermée selon `inp.op` → l'autz reste **déclarée au niveau capacité**, jamais redescendue dans le handler (esprit ADR 0009 préservé). ⚠️ Les faces **REST restent par-verbe** (idiomatique + dashboard) → l'autz d'un verbe fusionné est désormais déclarée 2× (MCP op-aware + route REST), même combinateur/handler dessous. **Règle de design — secret brut jamais en argument MCP** (il transiterait dans le contexte LLM) : la **pose** de secret (`set_org_secret`, `delete_org_secret`, `set_platform_key`, `set_quota`) est **dashboard-only** (binding `mcp` retiré, REST conservé) ; le MCP ne porte que les **droits/grants** (`oto_admin_key_grant`).
 
 ## Auth — Logto
 
@@ -328,8 +328,8 @@ unipile, prix Stripe gradué). **Détail : `docs/billing.md`**.
 Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
 celle d'un connecteur, pas une page à part). **Deux connecteurs** (`providers.py`) :
 `scaleway` (hébergé Otomata via Scaleway TEM = service `otomata-auth-mailer`, clé
-**plateforme**, `secret_kind=none`, **grant-only** → réservé aux orgs accordées ;
-Otomata seule aujourd'hui) + `resend` (BYOK, `auth_modes={byo_org}`). **Le transport
+**plateforme**, `secret_kind=none`, **réservé à Otomata via l'activation**
+(master OFF + override org Otomata ON)) + `resend` (BYOK, `auth_modes={byo_org}`). **Le transport
 DÉRIVE du connecteur** : `providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:mailer,
 resend:resend}` (pas de champ transport sur l'expéditeur).
 
@@ -352,12 +352,12 @@ resend:resend}` (pas de champ transport sur l'expéditeur).
 - **Vérif de domaine d'envoi = différée (issue #64)** : le domaine est un **objet
   d'ORG** (pas du connecteur — réutilisable signature/identité), table future
   `org_email_domains` + vérif DNS via Scaleway TEM. Tant qu'absente : scaleway reste
-  grant-only Otomata (otomata.tech dans `MAILER_FROM_DOMAINS`) ; resend ouvert à
+  réservé à Otomata via l'activation (otomata.tech dans `MAILER_FROM_DOMAINS`) ; resend ouvert à
   toute org (Resend garde la porte du domaine).
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
 > `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**
-> (master ON, ou grant-only accordé à l'org), comme la surface USER
+> (master ON, ou forcé par l'override d'org), comme la surface USER
 > (`_visible_catalog`). Master-OFF non accordé → invisible (fin du levier inerte
 > « coupé par la plateforme »). Filtre sur le **cap master**, pas sur `effective`
 > (un override OFF d'org doit rester réactivable).
@@ -368,7 +368,7 @@ resend:resend}` (pas de champ transport sur l'expéditeur).
 
 Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) + `user_enabled_tools(sub, tool_name)` (override positif). Table sœur `user_presets(sub, name, enabled_tools[])` pour les snapshots nommés.
 
-**Masqués par défaut** (`is_default_hidden`) : invisibles par défaut sur la surface authentifiée, **self-activables** (≠ grant-only). Deux grains : `tool_visibility.py::DEFAULT_HIDDEN_TOOLS` (noms individuels) et `DEFAULT_HIDDEN_NAMESPACES` (namespaces entiers, **dérivé du registre** — champ `default_hidden` de `connectors.py`). Cas actuel : **`attio_*`** (le MCP Attio officiel est préféré ; code conservé pour implems custom). Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève, `apply_preset` le réplique (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Masquer un connecteur entier = poser `default_hidden=True` au registre ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
+**Masqués par défaut** (`is_default_hidden`) : invisibles par défaut sur la surface authentifiée, **self-activables**. Deux grains : `tool_visibility.py::DEFAULT_HIDDEN_TOOLS` (noms individuels) et `DEFAULT_HIDDEN_NAMESPACES` (namespaces entiers, **dérivé du registre** — champ `default_hidden` de `connectors.py`). Cas actuel : **`attio_*`** (le MCP Attio officiel est préféré ; code conservé pour implems custom). Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève, `apply_preset` le réplique (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Masquer un connecteur entier = poser `default_hidden=True` au registre ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
 
 Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_list_presets`, `oto_save_preset`, `oto_apply_preset`, `oto_delete_preset`. Le set protégé `{oto_list_my_tools, oto_enable_tool, oto_apply_preset}` reste toujours activé pour éviter le lock-out.
 
@@ -380,7 +380,7 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 
 ## Org/équipe : session vs maison vs consultation (ADR 0023, amende 0015)
 
-Le pointeur unique « org active » est scindé en **3 notions**, résolues par le **seam unique `access.current_org(sub)`** (mirroir `access.current_group(sub)` pour l'équipe) = `session ?? consultation ?? maison`. **TOUTE résolution d'action passe par ce seam** (`resolve_api_key`, visibilité `session_visibility`, entitlements, field-filters, billing, doctrine de groupe, `/api/me`, whoami, et l'injection `org_id` des règles d'autz `_authz`) — ne plus lire `org_store.get_active_org` en direct dans un chemin de résolution.
+Le pointeur unique « org active » est scindé en **3 notions**, résolues par le **seam unique `access.current_org(sub)`** (mirroir `access.current_group(sub)` pour l'équipe) = `session ?? consultation ?? maison`. **TOUTE résolution d'action passe par ce seam** (`resolve_api_key`, visibilité `session_visibility`, field-filters, billing, doctrine de groupe, `/api/me`, whoami, et l'injection `org_id` des règles d'autz `_authz`) — ne plus lire `org_store.get_active_org` en direct dans un chemin de résolution.
 
 ⚠️ **Ce seam est scopé sur l'ACTEUR courant** : session/consultation sont stockées **par requête**, le `sub` ne sert qu'au repli `home_org`. Donc `current_org(autre_sub)` renvoie le contexte du **requérant**, pas du tiers — **NE JAMAIS** l'utiliser (ni `status_for`/`has_option`/`credential_mode_for` qui en dérivent) pour calculer l'état d'un **tiers** (écran admin). Passer son org/groupe **explicitement** via le kwarg `org`/`group` (sentinelle `access._UNSET` = défaut `current_org`, self inchangé), source = `org_store.get_active_org(target)`. Bug vécu 2026-06-24 (fiche admin montrant l'option de l'org du requérant). L'état d'un user est par ailleurs souvent **per-org** (∈ N orgs) → préférer une vue par org (cf. `tools/unipile.admin_status_by_org`).
 
@@ -424,15 +424,13 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 3 ressources** par délégation de l'org (pas les entitlements,
-restés org-level) :
+Un groupe **gouverne 3 ressources** par délégation de l'org :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
 - **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_get_doctrine()`
   sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
 - **preset de toolset** — `org_groups.default_tools` (NULL = pas de baseline) ;
-  baseline de visibilité au handshake (les toggles perso priment, **jamais**
-  d'élévation d'un grant-only).
+  baseline de visibilité au handshake (les toggles perso priment).
 
 **Groupe actif** : ≤1 par sub (`org_group_members.is_active`, index partiel),
 **invariant** = appartient à l'org active. `set_active_group` pose aussi l'org
@@ -527,11 +525,13 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   du bridge) suffit, **zéro nom client au registre** (plus de `_c("mm")`). Découvert
   au boot (`credentials_store.list_remote_namespaces`, gracieux si DB indispo), servi
   par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`) ; le credential
-  d'org **EST** le grant (`granted_namespaces_for` + grant-only runtime). Le bridge
+  d'org **EST** la condition de visibilité : un outil remote n'apparaît qu'à l'org
+  qui détient son credential remote (règle **dédiée credential-based** dans
+  `session_visibility`, `credentials_store.org_remote_namespaces`). Le bridge
   distant détient le credential client (token M2M). Pilote :
   un bridge back-office client (repo privé). Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
   les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
-  → pages oto.ninja/tools) filtrent les `platform_granted`/grant-only
+  → pages oto.ninja/tools) filtrent les `platform_granted`
   (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13
   (page marketing /tools/mm).
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**

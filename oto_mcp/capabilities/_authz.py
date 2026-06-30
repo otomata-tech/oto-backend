@@ -82,19 +82,6 @@ def SUPER_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
                        role=access.get_user_role(sub))
 
 
-def NAMESPACE_GRANT(namespace: str):
-    """Grant per-user OU entitlement d'org sur un namespace gouverné (escalade
-    platform_admin incluse). Renvoie une règle paramétrée par `namespace`."""
-    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
-        sub = _require_sub(raw)
-        role = access.get_user_role(sub)
-        if not access.is_super_admin(sub) and namespace not in access.granted_namespaces_for(sub):
-            raise AuthzDenied(403, "namespace_not_granted",
-                              f"Accès au namespace `{namespace}` non accordé.")
-        return ResolvedCtx(sub=sub, org_id=access.current_org(sub), role=role)
-    return rule
-
-
 def ADMIN_BY_OP(by_op: dict, *, field: str = "op"):
     """Autz **op-aware** : choisit la règle d'autz selon `input.<field>` (typiquement
     `op`). Permet à un outil consolidé `*_op` de réunir des verbes à paliers d'autz

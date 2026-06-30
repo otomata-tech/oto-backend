@@ -367,7 +367,8 @@ def list_remote_namespaces() -> set[str]:
 
 def org_remote_namespaces(org_id) -> set[str]:
     """Namespaces remote possédés par cette org (ses credentials avec `base_url`).
-    Le credential EST le grant : possession ⇒ visibilité (cf. granted_namespaces_for)."""
+    Le credential EST le grant : possession ⇒ visibilité (cf. la règle de masquage
+    remote de `session_visibility`, ADR 0031)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT connector, meta FROM connector_credentials WHERE entity_type = 'org' AND entity_id = %s",

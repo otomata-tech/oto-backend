@@ -44,11 +44,10 @@ class RecommendInput(BaseModel):
 
 def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
     """Catalogue exposé pour l'org active du caller — miroir du filtrage de
-    `api_routes.connectors_catalog` : activation (plafond) + grant-only entitlé.
+    `api_routes.connectors_catalog` : activation (plafond) + RBAC org (ADR 0025).
     L'admin plateforme voit tout l'exposé."""
     exposed = connector_activation.exposed_connectors(ctx.org_id)
     is_admin = access.is_platform_operator(ctx.sub)
-    granted = access.granted_namespaces_for(ctx.sub)
     # RBAC connecteur interne à l'org (ADR 0025) : un connecteur restreint dans l'org
     # n'apparaît dans la marketplace du membre que s'il y est autorisé (département/user).
     # Miroir de l'enforcement call-time → la page « voir en tant que » reflète l'effet réel.
@@ -59,11 +58,6 @@ def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
     for c in providers.public_catalog():
         if c["name"] not in exposed:
             continue
-        # grant-only (platform_granted) : visible seulement si entitlé (un namespace
-        # granté) ou admin — jamais relâcher le deny-by-default.
-        if c.get("availability") == "platform_granted" and not is_admin:
-            if not (set(c.get("namespaces") or []) & granted):
-                continue
         # RBAC org : restreint + non autorisé + pas admin plateforme → masqué.
         if c["name"] in restricted and not is_admin and c["name"] not in allowed:
             continue

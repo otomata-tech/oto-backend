@@ -28,7 +28,6 @@ def _neutral(monkeypatch):
     monkeypatch.setattr(sv.db, "list_user_enabled_tools", lambda sub, org: [])
     monkeypatch.setattr(sv.db, "org_restricted_connectors", lambda org: set())
     monkeypatch.setattr(sv.access, "is_super_admin", lambda sub: False)
-    monkeypatch.setattr(sv.access, "granted_namespaces_for", lambda sub: frozenset())
     monkeypatch.setattr(sv.access, "current_group", lambda sub: None)
     monkeypatch.setattr(sv.connector_activation, "exposed_connectors", lambda org: set())
     monkeypatch.setattr(sv.connectors, "connector_for_namespace", lambda ns: None)

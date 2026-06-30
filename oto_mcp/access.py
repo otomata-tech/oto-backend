@@ -192,28 +192,6 @@ def current_group(sub: str | None) -> Optional[int]:
     return group_store.get_active_group(sub)  # maison
 
 
-def granted_namespaces_for(sub: str) -> frozenset:
-    """Namespaces gouvernés visibles pour le `sub` = entitlements de son org active
-    ∪ namespaces remote dont l'org possède le credential.
-
-    SOURCE UNIQUE de la visibilité des namespaces gouvernés (grant-only),
-    consommée par le middleware, les meta-tools MCP ET les gardes REST — pour
-    qu'aucune surface ne diverge (sinon un namespace refusé côté MCP serait
-    contournable côté /account). Cf. project_oto_mcp_org_tier.
-
-    ADR 0031 : les **grants per-user** (`user_namespace_grants`) sont retirés du
-    calcul (relicat — « pas utile, trop peu de users »). Restent les entitlements
-    d'org et le remote data-driven (le credential d'org EST le grant, ADR 0003).
-    """
-    ns: set = set()
-    active_org = current_org(sub)
-    if active_org is not None:
-        ns |= set(org_store.list_org_entitled_namespaces(active_org))
-        # Remote data-driven (ADR 0003/0011) : posséder le credential d'org (avec
-        # base_url) EST le grant du namespace remote — pas d'entitlement séparé.
-        ns |= credentials_store.org_remote_namespaces(active_org)
-    return frozenset(ns)
-
 
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
     """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si

@@ -27,7 +27,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from . import connectors
+from .. import connectors
 
 logger = logging.getLogger(__name__)
 
@@ -1085,14 +1085,14 @@ def init_db() -> None:
         # Cran d'activation des connecteurs (ADR 0010, B1) — table + seed unique
         # (snapshot du registre courant à ON). Aucun lecteur encore (canari) :
         # le câblage catalogue/chargement suit en B2/B3.
-        from . import connector_activation as _conn_act
+        from .. import connector_activation as _conn_act
         _conn_act.init_schema(conn)
         _conn_act.seed_initial(conn)
         # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
         # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
         # (capacité connectors.me/select/pause) et le masquage pause au middleware
         # suivent en B3/B4/B5.
-        from . import connector_selection as _conn_sel
+        from .. import connector_selection as _conn_sel
         _conn_sel.init_schema(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
@@ -1169,20 +1169,20 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         # au lieu d'y rester coincé avec une invitation orpheline. Synchrone (une
         # fois, au 1er insert) mais best-effort : un échec ne casse pas l'auth.
         try:
-            from . import org_store
+            from .. import org_store
             org_store.reconcile_signup_with_invitation(sub, email)
         except Exception:
             pass
         # Import paresseux : la fédération est optionnelle (no-op sans secret), et
         # on ne veut pas de dépendance dure au boot. Jamais bloquant / jamais fatal.
-        from . import memento_federation
+        from .. import memento_federation
         memento_federation.provision_async(sub, email)
     if row and row.get("inserted"):
         # Suppression du perso (otomata-private) : tout user a TOUJOURS une org maison.
         # Si l'inscription ne l'a pas déjà rattaché à une org (invitation/referral
         # ci-dessus), on lui crée son espace. Idempotent, best-effort, hors gate email.
         try:
-            from . import org_store
+            from .. import org_store
             org_store.ensure_personal_org(sub, email=email, name=name)
         except Exception:
             pass
@@ -1346,7 +1346,7 @@ def reconcile_tenant_migration(new_sub: str, email_hint: Optional[str] = None) -
             if not pre:
                 return False
         # Email AUTORITATIF (source de vérité) — la décision de merge se prend ici.
-        from .oauth_facade import logto_user_primary_email
+        from ..oauth_facade import logto_user_primary_email
         email = logto_user_primary_email(new_sub)
         if not email:
             return False
@@ -1798,26 +1798,26 @@ def set_user_api_key(sub: str, provider: str, key: str) -> None:
     upsert_user(sub)
     # Coffre chiffré, source unique. Import lazy (db ne doit pas importer
     # credentials_store au niveau module — cycle).
-    from . import credentials_store
+    from .. import credentials_store
     credentials_store.set_credential("user", sub, provider, key, set_by=sub)
 
 
 def clear_user_api_key(sub: str, provider: str) -> None:
     _check_provider(provider)
-    from . import credentials_store
+    from .. import credentials_store
     credentials_store.clear_credential("user", sub, provider)
 
 
 def get_user_api_key(sub: str, provider: str) -> Optional[str]:
     # Lit le coffre `connector_credentials` (déchiffre — chemin de RÉSOLUTION).
     # Import lazy (anti-cycle) ; require_keyed dans le store.
-    from . import credentials_store
+    from .. import credentials_store
     return credentials_store.get_credential("user", sub, provider)
 
 
 def has_user_api_key(sub: str, provider: str) -> bool:
     """Présence d'une clé perso SANS la déchiffrer (status_for / /api/me)."""
-    from . import credentials_store
+    from .. import credentials_store
     return credentials_store.has_credential("user", sub, provider)
 
 
@@ -2486,7 +2486,7 @@ def _pk_aad(provider: str, label: str) -> str:
 def _pk_encrypt(provider: str, label: str, api_key: str) -> str:
     """Enveloppe AES-256-GCM à écrire. crypto.encrypt lève si master key absente
     (pas de stockage plaintext)."""
-    from . import crypto
+    from .. import crypto
     return crypto.encrypt(api_key, _pk_aad(provider, label))
 
 
@@ -2497,7 +2497,7 @@ def _pk_reveal(row: dict, provider: str) -> Optional[str]:
     enc = row.get("api_key_enc")
     if not enc:
         return None
-    from . import crypto
+    from .. import crypto
     return crypto.decrypt(enc, _pk_aad(provider, row["label"]))
 
 
@@ -2829,7 +2829,7 @@ def set_google_oauth(
     (existing OR new). Claime la ligne mono pré-migration (account='').
     """
     upsert_user(sub)
-    from . import credentials_store
+    from .. import credentials_store
     account = google_email or ""
     accts = credentials_store.list_accounts("user", sub, GOOGLE)
     n_named = sum(1 for a in accts if a["account"])
@@ -2862,7 +2862,7 @@ def update_google_access_token(
     """Met à jour SEULEMENT l'access_token + expiry (sur refresh) — merge meta dans
     le coffre, SANS re-chiffrer le refresh_token. `google_email` None = compte mono
     (account='')."""
-    from . import credentials_store
+    from .. import credentials_store
     account = google_email or ""
     credentials_store.update_meta(
         "user", sub, GOOGLE, account,
@@ -2873,7 +2873,7 @@ def get_google_oauth(sub: str, account: Optional[str] = None) -> Optional[dict]:
     """Renvoie un compte Google du user depuis le COFFRE (déchiffre le
     refresh_token). `account` (email) cible un compte ; None = le défaut
     (meta.is_default), à défaut le plus ancien (granted_at)."""
-    from . import credentials_store
+    from .. import credentials_store
     if account:
         cur = credentials_store.get_credential_with_meta("user", sub, GOOGLE, account=account)
         return _google_row(account, cur) if cur else None
@@ -2888,7 +2888,7 @@ def get_google_oauth(sub: str, account: Optional[str] = None) -> Optional[dict]:
 
 def list_google_accounts(sub: str) -> list[dict]:
     """Liste les comptes Google connectés (sans les tokens) — depuis le coffre."""
-    from . import credentials_store
+    from .. import credentials_store
     accts = credentials_store.list_accounts("user", sub, GOOGLE)
     out = [{
         "google_email": a["account"] or None,
@@ -2904,7 +2904,7 @@ def list_google_accounts(sub: str) -> list[dict]:
 def set_default_google_account(sub: str, account: str) -> bool:
     """Marque `account` comme défaut (meta.is_default) dans le coffre. False si le
     compte n'existe pas."""
-    from . import credentials_store
+    from .. import credentials_store
     accts = credentials_store.list_accounts("user", sub, GOOGLE)
     if not any(a["account"] == account for a in accts):
         return False
@@ -2921,7 +2921,7 @@ def set_default_google_account(sub: str, account: str) -> bool:
 def delete_google_oauth(sub: str, account: Optional[str] = None) -> None:
     """Supprime un compte (account=email) ou tous (account=None) du coffre. Si on
     retire le défaut et qu'il reste des comptes, promeut le plus ancien."""
-    from . import credentials_store
+    from .. import credentials_store
     with _connect() as conn:
         with conn.transaction():
             if account is None:

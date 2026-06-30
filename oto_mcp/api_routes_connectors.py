@@ -184,7 +184,9 @@ def make_routes(
         dsn = None
         if byo:
             try:
-                dsn = access.resolve_credential("unipile", want="byo", sub=sub).config.get("dsn")
+                # Sonde (lookup DSN) : avale la McpError → pas un échec de connecteur réel.
+                dsn = access.resolve_credential(
+                    "unipile", want="byo", sub=sub, emit_on_failure=False).config.get("dsn")
             except McpError:
                 dsn = None
         client = UnipileClient(api_key=api_key, dsn=dsn)

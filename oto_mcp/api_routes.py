@@ -27,8 +27,11 @@ import os
 from typing import Iterable
 
 import asyncio
+import base64
 import json
 import logging
+import re
+import time
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
@@ -256,6 +259,97 @@ class ViewAsMiddleware:
                 session_org.reset_view_org(org_token)
             if usr_token is not None:
                 session_org.reset_view_user(usr_token)
+
+
+# --- Journalisation des appels REST dans le flux unifié (ADR 0017, kind='rest') ---
+# La face MCP est tracée par otomata-calllog ; la face REST ne l'était PAS (3/4 de
+# la plateforme invisibles au monitoring). Ce middleware comble le trou : une ligne
+# tool_calls(kind='rest') par requête /api/*, dérivée du même substrat.
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_REST_LOG_TASKS: set = set()  # garde les refs des tâches fire-and-forget (anti-GC)
+
+
+def _claimed_sub(request: Request) -> str | None:
+    """Sub revendiqué par le bearer JWT, **NON vérifié** — attribution de log
+    uniquement (jamais d'autz ; la route, elle, vérifie pour de vrai). Best-effort :
+    token API opaque (`oto_…`) ou JWT malformé → None (ligne anonyme)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    parts = auth[7:].strip().split(".")
+    if len(parts) != 3:  # pas un JWT → token opaque, pas d'attribution
+        return None
+    try:
+        pad = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(pad))
+        sub = claims.get("sub")
+        return sub if isinstance(sub, str) else None
+    except Exception:
+        return None
+
+
+def _normalize_route(path: str) -> str:
+    """Réduit la cardinalité pour l'agrégation : segments d'id (numériques / UUID)
+    → `:id`. `/api/orgs/7/audit-log` → `/api/orgs/:id/audit-log`."""
+    return "/".join(
+        ":id" if (seg.isdigit() or _UUID_RE.match(seg)) else seg
+        for seg in path.split("/")
+    )
+
+
+async def _emit_rest_event(row: dict) -> None:
+    """Écrit l'événement hors event-loop (to_thread → insert sync non bloquant).
+    Best-effort : une panne de log n'a jamais d'effet sur la requête servie."""
+    try:
+        await asyncio.to_thread(db.insert_tool_call, row)
+    except Exception:  # noqa: BLE001 — le monitoring ne casse jamais le service
+        logger.debug("rest call-log emit failed", exc_info=True)
+
+
+class RestCallLogger:
+    """Middleware ASGI **brut** : journalise chaque requête `/api/*` comme événement
+    `kind='rest'` du flux unifié (ADR 0017). Pass-through total hors `/api/*` (ne
+    touche JAMAIS le streaming `/mcp`) et sur les préflights `OPTIONS` (bruit CORS).
+    `tool` = `MÉTHODE /route-normalisée` ; `ok` = 2xx/3xx ; les ≥400 portent le code
+    dans `error`. Écriture en tâche de fond → zéro latence ajoutée, jamais bloquant."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not scope.get("path", "").startswith("/api/"):
+            return await self.app(scope, receive, send)
+        method = scope.get("method", "")
+        if method == "OPTIONS":
+            return await self.app(scope, receive, send)
+        status = {"code": 0}
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                status["code"] = message.get("status", 0)
+            await send(message)
+
+        request = Request(scope, receive)  # headers/query only → ne consomme pas le body
+        sub = _claimed_sub(request)
+        org = _parse_view_org(request)  # org de consultation revendiquée (header), best-effort
+        started = time.monotonic()
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            code = status["code"]
+            row = {
+                "kind": "rest",
+                "tool": f"{method} {_normalize_route(scope.get('path', ''))}",
+                "sub": sub,
+                "org_id": org,
+                "ok": 200 <= code < 400,
+                "error": (f"HTTP {code}" if code >= 400 else None),
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            }
+            task = asyncio.create_task(_emit_rest_event(row))
+            _REST_LOG_TASKS.add(task)
+            task.add_done_callback(_REST_LOG_TASKS.discard)
 
 
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
@@ -940,6 +1034,42 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         )
         return _json(request, {"calls": calls})
 
+    def _monitoring_days(request: Request, default: int = 7) -> int:
+        try:
+            return int(request.query_params.get("days", str(default)))
+        except ValueError:
+            return default
+
+    async def admin_monitoring_rest(request: Request) -> JSONResponse:
+        """Lentille REST (ADR 0017, kind='rest') : volume/erreurs/latence des appels
+        `/api/*` par route, sur `?days=` (défaut 7). Admin only."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_platform_operator(sub):
+            return _json_error(request, 403, "forbidden")
+        return _json(request, db.rest_call_stats(since_days=_monitoring_days(request)))
+
+    async def admin_monitoring_connectors(request: Request) -> JSONResponse:
+        """Santé connecteurs (ADR 0017, kind='connector') : échecs de résolution de
+        credential par provider, sur `?days=` (défaut 7). Admin only."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_platform_operator(sub):
+            return _json_error(request, 403, "forbidden")
+        return _json(request, db.connector_failure_stats(since_days=_monitoring_days(request)))
+
+    async def admin_monitoring_funnel(request: Request) -> JSONResponse:
+        """Funnel d'activation : comptes vs usage réel (idle / jamais actif / bloqué
+        connecteur), fenêtre `?days=` (défaut 30). Admin only."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        if not access.is_platform_operator(sub):
+            return _json_error(request, 403, "forbidden")
+        return _json(request, db.activation_funnel(active_window_days=_monitoring_days(request, 30)))
+
     async def my_calls(request: Request) -> JSONResponse:
         """Journal des appels MCP de l'utilisateur courant (sa propre activité).
         Filtres `?limit=`/`?tool=`/`?errors=1`/`?days=`. Toujours scopé au sub
@@ -1299,6 +1429,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/monitoring/summary", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/calls", admin_monitoring_calls, methods=["GET"]),
         Route("/api/admin/monitoring/calls", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/monitoring/rest", admin_monitoring_rest, methods=["GET"]),
+        Route("/api/admin/monitoring/rest", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/monitoring/connectors", admin_monitoring_connectors, methods=["GET"]),
+        Route("/api/admin/monitoring/connectors", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/monitoring/funnel", admin_monitoring_funnel, methods=["GET"]),
+        Route("/api/admin/monitoring/funnel", options_handler, methods=["OPTIONS"]),
         *datastore_routes,
         *sirene_routes,
         *memento_routes,

@@ -291,6 +291,11 @@ def main():
         from . import subdomain_org
         app.add_middleware(subdomain_org.SubdomainOrgMiddleware)
 
+        # Monitoring REST (ADR 0017, kind='rest') : journalise chaque /api/* dans le
+        # flux unifié. Ajouté EN DERNIER → outermost : chronomètre toute la requête
+        # (y compris ViewAs/Subdomain). Pass-through total hors /api/* (n'altère pas /mcp).
+        app.add_middleware(api_routes.RestCallLogger)
+
         # Boucles de fond démarrées au boot en composant le lifespan FastMCP existant
         # (mono-process → une boucle par tâche). Chacune isolée en thread (ne bloque
         # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé) /

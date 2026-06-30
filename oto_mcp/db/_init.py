@@ -42,6 +42,11 @@ def init_db() -> None:
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
         conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC)")
+        # Discriminateur d'événement (ADR 0017, « un seul flux ») : 'mcp' (défaut,
+        # cas historique) / 'rest' / 'connector'. Les lignes existantes deviennent
+        # 'mcp' par le DEFAULT → les lectures kind='mcp' restent iso (canari no-op).
+        conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'mcp'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_kind ON tool_calls(kind, created_at DESC)")
         # Corrélation des appels (ADR 0017, extension OTO-LOCALE de tool_calls).
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS session_id TEXT")
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS run_id TEXT")

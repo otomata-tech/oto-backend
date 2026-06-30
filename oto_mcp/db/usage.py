@@ -39,17 +39,19 @@ def increment_usage(sub: str, tool: str) -> int:
 def insert_tool_call(row: dict) -> None:
     """Sink otomata-calllog : insère un row canonique (server, sub, email, tool,
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
-    ADR 0017, absents du contrat canonique → enrichis par le sink). Best-effort
-    côté middleware — jamais bloquant."""
+    ADR 0017, absents du contrat canonique → enrichis par le sink). `kind` discrimine
+    l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux »).
+    Best-effort côté middleware — jamais bloquant."""
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO tool_calls
-                (server, sub, email, tool, args, ok, error, duration_ms, session_id, run_id, org_id)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id, run_id, org_id)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             """,
             (
-                row.get("server") or "oto", row.get("sub"), row.get("email"),
+                row.get("server") or "oto", row.get("kind") or "mcp",
+                row.get("sub"), row.get("email"),
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
                 bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
                 row.get("session_id"), row.get("run_id"), row.get("org_id"),
@@ -255,7 +257,7 @@ def list_tool_calls(
 ) -> list[dict]:
     """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI."""
     limit = max(1, min(int(limit), 1000))
-    clauses: list[str] = []
+    clauses: list[str] = ["l.kind = 'mcp'"]
     params: list[Any] = []
     if sub:
         clauses.append("l.sub = %s")
@@ -298,7 +300,7 @@ def list_tool_calls_for_org(
     (garantie calllog). ⚠ Les appels antérieurs à la colonne (`org_id` NULL)
     n'apparaissent dans aucun export org — non reconstructibles a posteriori."""
     limit = max(1, min(int(limit), 5000))
-    clauses = ["l.org_id = %s"]
+    clauses = ["l.kind = 'mcp'", "l.org_id = %s"]
     params: list[Any] = [int(org_id)]
     if since:
         clauses.append("l.created_at >= %s::timestamptz"); params.append(since)
@@ -376,7 +378,7 @@ def tool_call_stats(since_days: int = 7) -> dict:
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    COUNT(DISTINCT sub) AS users
             FROM tool_calls
-            WHERE created_at >= NOW() - make_interval(days => %s)
+            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
             """,
             (since_days,),
         ).fetchone() or {}
@@ -385,9 +387,10 @@ def tool_call_stats(since_days: int = 7) -> dict:
             SELECT tool AS tool_name,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   ROUND(AVG(duration_ms))::int AS avg_ms
+                   ROUND(AVG(duration_ms))::int AS avg_ms,
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
             FROM tool_calls
-            WHERE created_at >= NOW() - make_interval(days => %s)
+            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
             GROUP BY tool
             ORDER BY calls DESC
             LIMIT 100
@@ -401,7 +404,7 @@ def tool_call_stats(since_days: int = 7) -> dict:
                    COUNT(*) FILTER (WHERE NOT l.ok) AS errors
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
-            WHERE l.created_at >= NOW() - make_interval(days => %s)
+            WHERE l.kind = 'mcp' AND l.created_at >= NOW() - make_interval(days => %s)
             GROUP BY l.sub, u.email, u.name
             ORDER BY calls DESC
             LIMIT 100
@@ -414,7 +417,7 @@ def tool_call_stats(since_days: int = 7) -> dict:
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors
             FROM tool_calls
-            WHERE created_at >= NOW() - make_interval(days => %s)
+            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
             GROUP BY created_at::date
             ORDER BY created_at::date
             """,
@@ -428,6 +431,116 @@ def tool_call_stats(since_days: int = 7) -> dict:
         "by_tool": list(by_tool),
         "by_user": list(by_user),
         "by_day": list(by_day),
+    }
+
+
+def rest_call_stats(since_days: int = 7) -> dict:
+    """Lentille REST (ADR 0017, kind='rest') : volume + erreurs + latence des appels
+    `/api/*`, par route normalisée. `ok` = 2xx/3xx ; les ≥400 sont comptés erreurs."""
+    since_days = max(1, min(int(since_days), 365))
+    with _connect() as conn:
+        totals = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   COUNT(DISTINCT sub) AS users
+            FROM tool_calls
+            WHERE kind = 'rest' AND created_at >= NOW() - make_interval(days => %s)
+            """,
+            (since_days,),
+        ).fetchone() or {}
+        by_route = conn.execute(
+            """
+            SELECT tool AS route,
+                   COUNT(*) AS calls,
+                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   ROUND(AVG(duration_ms))::int AS avg_ms,
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
+            FROM tool_calls
+            WHERE kind = 'rest' AND created_at >= NOW() - make_interval(days => %s)
+            GROUP BY tool
+            ORDER BY calls DESC
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+    return {
+        "since_days": since_days,
+        "total_calls": int((totals or {}).get("total") or 0),
+        "error_count": int((totals or {}).get("errors") or 0),
+        "active_users": int((totals or {}).get("users") or 0),
+        "by_route": list(by_route),
+    }
+
+
+def connector_failure_stats(since_days: int = 7) -> dict:
+    """Lentille santé connecteurs (ADR 0017, kind='connector') : échecs de résolution
+    de credential par provider — combien, combien d'users distincts touchés, dernier
+    échec. C'est le signal « ce connecteur ne résout pas » (compte actif sans clé valide)."""
+    since_days = max(1, min(int(since_days), 365))
+    with _connect() as conn:
+        by_provider = conn.execute(
+            """
+            SELECT l.tool AS provider,
+                   COUNT(*) AS failures,
+                   COUNT(DISTINCT l.sub) AS users_affected,
+                   MAX(l.created_at) AS last_at
+            FROM tool_calls l
+            WHERE l.kind = 'connector'
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY l.tool
+            ORDER BY failures DESC
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+    return {
+        "since_days": since_days,
+        "total_failures": sum(int(r["failures"]) for r in by_provider),
+        "by_provider": list(by_provider),
+    }
+
+
+def activation_funnel(active_window_days: int = 30) -> dict:
+    """Funnel d'activation (ADR 0017) : distingue COMPTE de USAGE. Un compte avec 0
+    appel d'outil n'a jamais rien déclenché (idle, ou handshake OAuth jamais réussi) —
+    invisible au monitoring d'outils, détecté ici. `active_window_days` borne « actif »."""
+    active_window_days = max(1, min(int(active_window_days), 365))
+    with _connect() as conn:
+        total = int((conn.execute("SELECT COUNT(*) AS n FROM users").fetchone() or {}).get("n") or 0)
+        # Comptes ayant déclenché ≥1 outil MCP dans la fenêtre = vraiment actifs.
+        active = int((conn.execute(
+            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
+            "WHERE kind = 'mcp' AND sub IS NOT NULL "
+            "AND created_at >= NOW() - make_interval(days => %s)",
+            (active_window_days,),
+        ).fetchone() or {}).get("n") or 0)
+        # Comptes ayant touché la plateforme (REST) mais SANS aucun appel d'outil :
+        # connectés-mais-idle (ont ouvert le dashboard, jamais invoqué Claude).
+        rest_only = int((conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM (
+                SELECT sub FROM tool_calls WHERE kind = 'rest' AND sub IS NOT NULL
+                GROUP BY sub
+                EXCEPT
+                SELECT sub FROM tool_calls WHERE kind = 'mcp' AND sub IS NOT NULL
+            ) q
+            """
+        ).fetchone() or {}).get("n") or 0)
+        # Comptes ayant subi ≥1 échec de connecteur dans la fenêtre = bloqués/à débloquer.
+        blocked = int((conn.execute(
+            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
+            "WHERE kind = 'connector' AND sub IS NOT NULL "
+            "AND created_at >= NOW() - make_interval(days => %s)",
+            (active_window_days,),
+        ).fetchone() or {}).get("n") or 0)
+    return {
+        "window_days": active_window_days,
+        "total_accounts": total,
+        "active": active,
+        "rest_only": rest_only,
+        "never_active": max(0, total - active),
+        "blocked_by_connector": blocked,
     }
 
 

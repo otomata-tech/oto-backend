@@ -321,7 +321,42 @@ class ResolvedCredential:
 
 
 def resolve_credential(provider: str, want: str = "auto",
-                       sub: Optional[str] = None) -> ResolvedCredential:
+                       sub: Optional[str] = None, *,
+                       emit_on_failure: bool = True) -> ResolvedCredential:
+    """Vue publique de la résolution. Sur **échec** (McpError actionnable — credential
+    absent / quota dépassé / accès RBAC refusé), émet un événement de monitoring
+    `kind='connector'` dans le flux unifié (ADR 0017) AVANT de relever : c'est LE
+    signal d'un connecteur qui ne résout pas pour un user/org, invisible jusqu'ici
+    (un compte actif sans clé valide n'apparaissait nulle part). `emit_on_failure=False`
+    pour les **sondes** qui avalent la McpError (ex. lookup de DSN), afin de ne pas
+    fausser le signal. Cascade et sémantique : voir `_resolve_credential_impl`."""
+    sub = sub or current_user_sub_or_raise()
+    try:
+        return _resolve_credential_impl(provider, want, sub)
+    except McpError:
+        if emit_on_failure:
+            _emit_connector_failure(provider, sub)
+        raise
+
+
+def _emit_connector_failure(provider: str, sub: str) -> None:
+    """Best-effort : une ligne `tool_calls(kind='connector', ok=False)` = « la
+    résolution de credential a échoué pour ce provider/sub ». Jamais bloquant, jamais
+    d'exception qui masquerait la McpError d'origine (le monitoring ne casse pas le service)."""
+    try:
+        org = current_org(sub)
+    except Exception:
+        org = None
+    try:
+        db.insert_tool_call({
+            "kind": "connector", "tool": provider, "sub": sub, "org_id": org,
+            "ok": False, "error": "credential_resolution_failed",
+        })
+    except Exception:  # noqa: BLE001
+        logger.debug("connector failure emit failed", exc_info=True)
+
+
+def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
     user > groupe actif > org active [> grant plateforme] **une fois** et renvoie
     le credential gagnant (clé + origine + config). `want="byo"` court-circuite le

@@ -96,6 +96,24 @@ def live_view_url(session_id: str) -> str:
     return url
 
 
+async def navigate(session_id: str, url: str) -> None:
+    """Amène la page d'une session **keep-alive** existante sur `url`, puis se détache
+    (la session distante reste vivante, la page reste sur `url`). Sert à ouvrir la Live
+    View directement sur la page de login du connecteur (sinon `about:blank`, l'user ne
+    sait pas où aller). Best-effort : une nav échouée n'empêche pas d'afficher la Live
+    View (l'user peut taper l'URL à la main)."""
+    from patchright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        b = await p.chromium.connect_over_cdp(connect_url(session_id))
+        try:
+            ctx = b.contexts[0] if b.contexts else await b.new_context()
+            pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            await pg.goto(url, wait_until="domcontentloaded", timeout=40000)
+        finally:
+            await b.close()
+
+
 def session_status(session_id: str) -> str:
     return _req("GET", f"/sessions/{session_id}").get("status", "")
 
@@ -109,6 +127,55 @@ def release_session(session_id: str) -> None:
 
 
 # --- exécution --------------------------------------------------------------
+async def run_page_eval(context_id: str, app: str, page_function: str,
+                        arg: Any = None) -> Any:
+    """Charge la page `app` dans une session éphémère du Context et y exécute
+    `page_function` (source JS d'une fonction async `(arg) => …`) avec `arg`,
+    renvoyant sa valeur. Primitive bas-niveau du substrat : ouvre/ferme la session,
+    gère le CDP — le connecteur fournit le JS (un `fetch` same-origin, une sonde…).
+
+    `app` = page à charger pour porter l'origine/les cookies de session (propre au
+    connecteur). Tout `fetch` du JS doit rester **same-origin** avec `app` pour que
+    `credentials: "include"` porte les cookies. Lève BrowserbaseError si la session
+    ne s'ouvre pas.
+
+    Note coût : 1 session browser par appel. L'optimisation (réutiliser une session
+    pour N appels d'un même run) est différée — corrige plus tard si le volume le justifie.
+    """
+    from patchright.async_api import async_playwright
+
+    sess = start_session(context_id)
+    sid = sess["id"]
+    try:
+        async with async_playwright() as p:
+            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
+            try:
+                ctx = b.contexts[0] if b.contexts else await b.new_context()
+                pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
+                return await pg.evaluate(page_function, arg)
+            finally:
+                await b.close()
+    finally:
+        release_session(sid)
+
+
+# JS partagé : un `fetch(base+path)` same-origin avec headers JSON. `run_fetch`
+# l'instancie pour les connecteurs simples (brevo) ; les connecteurs à headers
+# spécifiques (CSRF tournant…) écrivent leur propre JS et passent par `run_page_eval`.
+_FETCH_JS = """async ({base, path, method, body}) => {
+    const r = await fetch(base + path, {
+        method, credentials: "include",
+        headers: {"content-type": "application/json"},
+        body: body ? JSON.stringify(body) : undefined,
+    });
+    let data;
+    try { data = await r.json(); }
+    catch (e) { data = {raw: (await r.text()).slice(0, 400)}; }
+    return {status: r.status, data};
+}"""
+
+
 async def run_fetch(context_id: str, method: str, api_path: str,
                     body: Optional[dict] = None, *, base: str, app: str) -> dict:
     """Exécute UN `fetch(base+api_path)` depuis une page chargée dans une session
@@ -123,35 +190,7 @@ async def run_fetch(context_id: str, method: str, api_path: str,
     ⚠️ Le `fetch` doit être **same-origin** avec `base` pour porter les cookies de
     session : charger une `app` du MÊME host que `base` (sinon `credentials:
     "include"` est cross-origin et la session ne suit pas).
-
-    Note coût : 1 session browser par appel. L'optimisation (réutiliser une
-    session pour N appels d'un même run) est différée — corrige plus tard si le
-    volume le justifie.
     """
-    from patchright.async_api import async_playwright
-
-    sess = start_session(context_id)
-    sid = sess["id"]
-    try:
-        async with async_playwright() as p:
-            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
-            ctx = b.contexts[0] if b.contexts else await b.new_context()
-            pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
-            result = await pg.evaluate(
-                """async ({base, path, method, body}) => {
-                    const r = await fetch(base + path, {
-                        method, credentials: "include",
-                        headers: {"content-type": "application/json"},
-                        body: body ? JSON.stringify(body) : undefined,
-                    });
-                    let data;
-                    try { data = await r.json(); }
-                    catch (e) { data = {raw: (await r.text()).slice(0, 400)}; }
-                    return {status: r.status, data};
-                }""",
-                {"base": base, "path": api_path, "method": method, "body": body})
-            await b.close()
-            return result
-    finally:
-        release_session(sid)
+    return await run_page_eval(
+        context_id, app, _FETCH_JS,
+        {"base": base, "path": api_path, "method": method, "body": body})

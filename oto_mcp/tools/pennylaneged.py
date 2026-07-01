@@ -148,7 +148,7 @@ async def _verify_session(session_id: str) -> bool:
 
 # Déclare Pennylane GED comme connecteur à session navigateur (start générique + ce
 # verify) — alimente le flux de connexion REST (dashboard) ET MCP. À l'import.
-browser_session.register("pennylaneged", _verify_session)
+browser_session.register("pennylaneged", _verify_session, login_url=f"{_ORIGIN}/")
 
 
 def register(mcp: FastMCP) -> None:
@@ -164,7 +164,7 @@ def register(mcp: FastMCP) -> None:
         """
         sub = _sub()
         try:
-            out = browser_session.start(sub)
+            out = browser_session.start(sub, "pennylaneged")
         except browser_session.SessionError as e:
             raise _err(str(e), code=INTERNAL_ERROR)
         out["instructions"] = ("Ouvre `live_view_url`, connecte-toi à Pennylane, puis "

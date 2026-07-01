@@ -32,6 +32,11 @@ Verify = Callable[[str], Awaitable[bool]]
 
 _REGISTRY: dict[str, Verify] = {}
 
+# URL de login par connecteur : la page vers laquelle amener la session dès l'ouverture
+# de la Live View (sinon `about:blank`, l'utilisateur ne sait pas où se loguer). Optionnel
+# — un connecteur sans URL enregistrée ouvre une page vierge (comportement historique).
+_LOGIN_URLS: dict[str, str] = {}
+
 # Sessions ÉMISES par `start()`, liées au `sub` qui les a demandées : `finalize` n'accepte
 # qu'un (context_id, session_id) qu'IL a émis pour CE user (anti-IDOR : empêche de
 # persister le Context — donc la session loguée — d'un tiers). In-memory : le serveur est
@@ -53,26 +58,39 @@ def _prune(now: float) -> None:
             _PENDING.pop(k, None)
 
 
-def register(connector: str, verify: Verify) -> None:
-    """Déclare un connecteur à session navigateur + sa vérification de login."""
+def register(connector: str, verify: Verify, *, login_url: str | None = None) -> None:
+    """Déclare un connecteur à session navigateur + sa vérification de login. `login_url`
+    = page de login vers laquelle ouvrir la Live View (recommandé — évite l'`about:blank`)."""
     _REGISTRY[connector] = verify
+    if login_url:
+        _LOGIN_URLS[connector] = login_url
 
 
 def is_session_connector(connector: str) -> bool:
     return connector in _REGISTRY
 
 
-def start(sub: str) -> dict:
+def start(sub: str, connector: str | None = None) -> dict:
     """Ouvre un Context + une session keep-alive pour `sub` et renvoie la Live View
-    interactive. La session émise est LIÉE à `sub` (consommée par `finalize`).
-    BLOQUANT (HTTP Browserbase synchrone) → appeler via `asyncio.to_thread` depuis une
-    route async. Lève `SessionError` si Browserbase n'est pas configuré côté plateforme."""
+    interactive. Si `connector` a une `login_url` enregistrée, la session est amenée sur
+    cette page avant l'affichage (sinon `about:blank`). La session émise est LIÉE à `sub`
+    (consommée par `finalize`). BLOQUANT (HTTP Browserbase synchrone) → appeler via
+    `asyncio.to_thread` depuis une route async. Lève `SessionError` si Browserbase n'est
+    pas configuré côté plateforme."""
     if not browserbase.is_configured():
         raise SessionError("Browserbase non configuré côté plateforme "
                            "(BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID).")
     try:
         context_id = browserbase.create_context()
         sess = browserbase.start_session(context_id, keep_alive=True, timeout=900)
+        login_url = _LOGIN_URLS.get(connector or "")
+        if login_url:
+            # Best-effort : on amène la session sur la page de login. Un échec (nav lente,
+            # CDP indispo) ne doit pas rater l'ouverture — l'user peut taper l'URL.
+            try:
+                asyncio.run(browserbase.navigate(sess["id"], login_url))
+            except Exception:  # noqa: BLE001 — détail loggué, jamais renvoyé
+                logger.warning("browserbase navigate to login failed for %s", connector)
         live = browserbase.live_view_url(sess["id"])
     except browserbase.BrowserbaseError as e:
         logger.warning("browserbase start failed: %s", e)

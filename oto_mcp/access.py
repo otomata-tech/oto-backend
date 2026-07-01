@@ -196,18 +196,21 @@ def current_project() -> Optional[int]:
 
 
 def project_pinned_identity(connector: str, project_id: Optional[int] = None) -> Optional[str]:
-    """Identité (account / identity_id) ÉPINGLÉE par le projet actif pour `connector`,
-    ou None ⇒ la résolution retombe sur le défaut user. Lit la config PRÉFAITE du lien
-    connecteur du projet (`project_links.config.identity_id`, ADR 0032 §4). `project_id`
+    """Identité (account) ÉPINGLÉE par le projet actif pour `connector`, ou None ⇒ la
+    résolution retombe sur le défaut user. Lit la clé de BINDING `project_links.identity_ref`
+    (ADR 0032 §4 amendé, #57). Multiplicité : **un seul** binding avec identité ⇒ on l'épingle ;
+    **plusieurs** ⇒ None (ambigu → l'agent doit préciser `account=` à l'appel). `project_id`
     omis ⇒ projet de session (`current_project`). **Fail-soft** : toute erreur ⇒ None
     (jamais de plantage de la résolution d'un tool sur ce chemin)."""
     pid = current_project() if project_id is None else project_id
     if pid is None:
         return None
     try:
-        for link in db.list_project_links(int(pid)):
-            if link.get("target_type") == "connecteur" and link.get("target_ref") == connector:
-                return (link.get("config") or {}).get("identity_id") or None
+        pinned = [link.get("identity_ref")
+                  for link in db.list_project_links(int(pid))
+                  if link.get("target_type") == "connecteur"
+                  and link.get("target_ref") == connector and link.get("identity_ref")]
+        return pinned[0] if len(pinned) == 1 else None
     except Exception as e:
         logger.warning("project_pinned_identity fail-soft %s/%s: %s", pid, connector, e)
     return None

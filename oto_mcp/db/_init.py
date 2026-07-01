@@ -74,6 +74,15 @@ def init_db() -> None:
         conn.execute("ALTER TABLE project_links DROP CONSTRAINT IF EXISTS project_links_project_id_target_type_target_ref_key")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_project_links_binding "
                      "ON project_links (project_id, target_type, target_ref, identity_ref) NULLS NOT DISTINCT")
+        # B3 : l'identité épinglée quitte `config.identity_id` pour la clé de binding
+        # `identity_ref` (fin du doublon). config ne garde que instructions_md. Idempotent
+        # (les lecteurs legacy reçoivent identity_id re-dérivé de identity_ref, cf. list_project_links).
+        conn.execute("""
+            UPDATE project_links
+            SET identity_ref = config->>'identity_id', config = config - 'identity_id'
+            WHERE target_type = 'connecteur' AND identity_ref IS NULL
+              AND COALESCE(config->>'identity_id', '') <> ''
+        """)
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
         conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")

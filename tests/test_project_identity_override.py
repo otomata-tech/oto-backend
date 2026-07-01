@@ -27,8 +27,16 @@ def test_none_when_no_active_project(wire):
 def test_returns_pinned_identity(wire):
     wire["pid"] = 7
     wire["links"] = [{"target_type": "connecteur", "target_ref": "google",
-                      "config": {"identity_id": "a@x.co"}}]
+                      "identity_ref": "a@x.co", "config": {}}]
     assert access.project_pinned_identity("google") == "a@x.co"
+
+
+def test_none_when_multiple_bindings_ambiguous(wire):
+    # #57 : plusieurs bindings du même connecteur ⇒ ambigu ⇒ None (l'agent précise account=).
+    wire["pid"] = 7
+    wire["links"] = [{"target_type": "connecteur", "target_ref": "unipile", "identity_ref": "acc_A", "config": {}},
+                     {"target_type": "connecteur", "target_ref": "unipile", "identity_ref": "acc_B", "config": {}}]
+    assert access.project_pinned_identity("unipile") is None
 
 
 def test_none_when_connector_not_pinned(wire):
@@ -48,7 +56,7 @@ def test_none_when_config_has_no_identity(wire):
 def test_explicit_project_id_overrides_session(wire):
     wire["pid"] = None  # pas de projet de session…
     wire["links"] = [{"target_type": "connecteur", "target_ref": "google",
-                      "config": {"identity_id": "b@x.co"}}]
+                      "identity_ref": "b@x.co", "config": {}}]
     assert access.project_pinned_identity("google", project_id=7) == "b@x.co"
 
 

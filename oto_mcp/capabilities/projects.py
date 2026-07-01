@@ -182,19 +182,33 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # la doctrine. On accepte un slug (naturel côté agent) OU un id et on stocke l'id
         # (idem à l'unlink pour matcher les lignes migrées).
         target_ref = inp.target_ref
+        identity_ref = inp.identity_ref
+        config = dict(inp.config) if inp.config else None
         if inp.target_type == "procedure":
             proj_org = int(row["owner_id"]) if row.get("owner_type") == "org" else ctx.org_id
             target_ref = _procedure_ref_to_id(proj_org, target_ref)
-        # `identity_ref` explicite (#57) = multi-binding d'un connecteur (front B4). Absent
-        # ⇒ None : chemin legacy (identité encore dans config.identity_id, binding par
-        # défaut) INCHANGÉ ; unlink None ⇒ tous les bindings du connecteur.
+        elif inp.target_type == "connecteur":
+            # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
+            # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /
+            # agent) = multi-binding ; sinon on prend l'identité du config (chemin legacy).
+            legacy_id = config.pop("identity_id", None) if config else None
+            if identity_ref is None:
+                identity_ref = legacy_id or None
+            # Édition legacy (front actuel, pas d'identity_ref explicite) : s'il existe UN
+            # binding unique avec une AUTRE identité, on le DÉPLACE (delete+insert) au lieu
+            # d'en créer un 2e — préserve la sémantique « éditer le connecteur du projet ».
+            if inp.op == "link" and inp.identity_ref is None:
+                existing = [l for l in db.list_project_links(int(inp.project_id))
+                            if l["target_type"] == "connecteur" and l["target_ref"] == target_ref]
+                if len(existing) == 1 and existing[0].get("identity_ref") != identity_ref:
+                    db.remove_project_link(int(inp.project_id), "connecteur", target_ref,
+                                           identity_ref=existing[0].get("identity_ref"))
         if inp.op == "link":
             db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
-                                inp.label, role=inp.role, config=inp.config,
-                                identity_ref=inp.identity_ref)
+                                inp.label, role=inp.role, config=config, identity_ref=identity_ref)
         else:
             db.remove_project_link(int(inp.project_id), inp.target_type, target_ref,
-                                   identity_ref=inp.identity_ref)
+                                   identity_ref=identity_ref)
         db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
                                 f"{inp.target_type}:{inp.label or target_ref}")
         return {"ok": True, "id": inp.project_id,

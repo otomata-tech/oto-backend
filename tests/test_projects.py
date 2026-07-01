@@ -220,12 +220,23 @@ def test_link_with_role(seams):
 
 
 def test_link_connector_with_config(seams):
-    # ADR 0032 §4 (B2) : surcharge connecteur préfaite — identité + instructions en prose.
+    # ADR 0032 §4 amendé (#57) : l'identité sort de config.identity_id vers la clé de
+    # binding `identity_ref` (fin du doublon) ; config ne garde que instructions_md.
     cfg = {"identity_id": "acc_1", "instructions_md": "filtrer les accords par thème mutuelle"}
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
                                          target_ref="fr", label="Entreprises FR", config=cfg))
-    assert seams["link"] == [(7, "connecteur", "fr", "Entreprises FR", None, cfg, None)]
+    assert seams["link"] == [(7, "connecteur", "fr", "Entreprises FR", None,
+                              {"instructions_md": "filtrer les accords par thème mutuelle"}, "acc_1")]
     assert out["ok"] is True
+
+
+def test_link_connector_explicit_identity_ref(seams):
+    # #57 : multi-binding — identity_ref explicite (front B4 / agent) = un binding par identité.
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                   target_ref="unipile", identity_ref="acc_B",
+                                   config={"instructions_md": "compte perso"}))
+    assert seams["link"] == [(7, "connecteur", "unipile", None, None,
+                              {"instructions_md": "compte perso"}, "acc_B")]
 
 
 def test_link_config_defaults_none(seams):

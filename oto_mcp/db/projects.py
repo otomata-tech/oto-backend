@@ -170,7 +170,16 @@ def list_project_links(project_id: int) -> list[dict]:
             "ORDER BY pl.target_type, pl.label NULLS LAST, pl.target_ref, pl.identity_ref NULLS FIRST",
             (project_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            # Mirror back-compat (B3) : l'identité vit dans `identity_ref` (source de vérité),
+            # mais les lecteurs legacy (front actuel) lisent encore config.identity_id → on le
+            # re-dérive. La résolution (project_pinned_identity) lit identity_ref directement.
+            if d.get("target_type") == "connecteur" and d.get("identity_ref"):
+                d["config"] = {**(d.get("config") or {}), "identity_id": d["identity_ref"]}
+            out.append(d)
+        return out
 
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------

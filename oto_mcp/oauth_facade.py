@@ -318,7 +318,11 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # canonique (identique à fastmcp). valid_org_audience = motif + existence DB.
         candidate = f"https://{host}/mcp"
         from . import subdomain_project
-        resource_url = candidate if subdomain_project.valid_org_audience(candidate) \
+        from .config import mcp_audience_alt_hosts
+        # Host = domaine canonique SECONDAIRE (ex. mcp.oto.cx) → resource = ce host ;
+        # sinon sous-domaine d'un projet org publié ; sinon canonique (mcp.oto.ninja).
+        resource_url = candidate if (host in mcp_audience_alt_hosts()
+                                     or subdomain_project.valid_org_audience(candidate)) \
             else f"{public_url}/mcp"
         return await _prm_handler(public_url, resource_url).handle(request)
 

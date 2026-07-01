@@ -26,7 +26,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
 from . import api_routes, db, instructions
-from .config import require_env
+from .config import require_env, mcp_audience_alts
 from .tools import register_all
 
 logger = logging.getLogger("oto_mcp")
@@ -41,7 +41,8 @@ class _IatGatedVerifier(JWTVerifier):
     """
 
     def __init__(self, *args, min_iat: int = 0, fallback: "JWTVerifier | None" = None,
-                 expected_audience: "str | None" = None, **kwargs) -> None:
+                 expected_audience: "str | None" = None,
+                 alt_audiences: "frozenset[str]" = frozenset(), **kwargs) -> None:
         # Le parent est construit SANS check d'audience (`audience=None`) : on valide
         # l'audience nous-mêmes (canonique OU sous-domaine org publié, ADR 0032 §barreau 4).
         super().__init__(*args, **kwargs)
@@ -51,6 +52,9 @@ class _IatGatedVerifier(JWTVerifier):
         # mono-issuer, comportement inchangé.
         self._fallback = fallback
         self._expected_audience = expected_audience
+        # Audiences canoniques SECONDAIRES (coexistence multi-domaine, ex. mcp.oto.cx).
+        # Vide = no-op → mcp.oto.ninja inchangé.
+        self._alt_audiences = alt_audiences
 
     def _audience_ok(self, claims) -> bool:
         """Canonique (`MCP_AUDIENCE`, DB-INDÉPENDANT → l'auth canonique ne casse jamais)
@@ -61,6 +65,9 @@ class _IatGatedVerifier(JWTVerifier):
         aud = (claims or {}).get("aud")
         auds = aud if isinstance(aud, list) else [aud]
         if self._expected_audience in auds:
+            return True
+        alt = getattr(self, "_alt_audiences", frozenset())
+        if alt and any(a in alt for a in auds):
             return True
         from . import subdomain_project
         return any(subdomain_project.valid_org_audience(a) for a in auds)
@@ -113,6 +120,7 @@ def _build_verifier() -> JWTVerifier:
         min_iat=min_iat,
         fallback=fallback,
         expected_audience=audience,
+        alt_audiences=mcp_audience_alts(),
     )
 
 
@@ -171,6 +179,14 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         org_store.backfill_personal_orgs()
     except Exception as e:
         logger.warning("backfill_personal_orgs at _build_mcp failed: %s", e)
+    # ADR 0033 : credentials per-user (hors oauth) → scope membre (sub, org maison).
+    # Re-chiffrement (l'AAD change) — APRÈS backfill_personal_orgs (org maison garantie).
+    # One-shot idempotent, no-op aux boots suivants.
+    try:
+        from . import credentials_store
+        credentials_store.backfill_member_scope()
+    except Exception as e:
+        logger.warning("backfill_member_scope at _build_mcp failed: %s", e)
     # Seed des blocs plateforme A/B (#50) s'ils n'existent pas (idempotent).
     try:
         instructions.seed_platform_blocks()
@@ -281,11 +297,15 @@ def main():
         port = int(os.environ.get("PORT", "9103"))
 
         # Instance MCP ANONYME (ADR 0032, `<slug>.mcp.oto.cx`) : sans auth, visibilité =
-        # allowlist figée du preset de projet. Construite AVANT l'authentifiée pour que
-        # `tool_registry.bind` (fait dans _build_mcp) finisse lié à l'AUTHENTIFIÉE (le
-        # dernier build gagne — sinon le manifeste doctrine de l'authentifiée casserait).
+        # allowlist figée du preset de projet. On RÉUTILISE l'instance no-auth DÉJÀ
+        # construite au niveau module (`mcp = _build_mcp("noauth")` en haut) au lieu d'en
+        # construire une 3ᵉ : un _build_mcp de plus (register_all + mounts + init_db/
+        # backfill/seed) DOUBLAIT le temps de boot (~53 s) et dépassait la fenêtre du
+        # healthcheck du deploy → KO + rollback avant que uvicorn ne bind (vécu 2026-07-01).
+        # `mcp` pointe encore ici sur l'instance no-auth ; on la capture AVANT de le
+        # réassigner à l'authentifiée (tool_registry.bind finit donc lié à l'authentifiée).
         from .anon_visibility import AnonymousVisibilityMiddleware
-        anon_mcp = _build_mcp("noauth")
+        anon_mcp = mcp
         anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
         anon_app = anon_mcp.http_app()
 

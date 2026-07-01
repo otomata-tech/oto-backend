@@ -204,6 +204,22 @@ def test_verifier_audience_decision(monkeypatch):
     assert v._audience_ok({"aud": "https://other.mcp.oto.cx/mcp"}) is False
 
 
+def test_verifier_alt_audience(monkeypatch):
+    """Audience canonique SECONDAIRE (coexistence multi-domaine, ex. mcp.oto.cx)."""
+    from oto_mcp import server
+    monkeypatch.setattr(sp, "valid_org_audience", lambda a: (_ for _ in ()).throw(AssertionError("DB touched")))
+    v = server._IatGatedVerifier.__new__(server._IatGatedVerifier)
+    v._expected_audience = "https://mcp.oto.ninja/mcp"
+    v._alt_audiences = frozenset({"https://mcp.oto.cx/mcp"})
+    assert v._audience_ok({"aud": "https://mcp.oto.cx/mcp"}) is True                 # alt accepté
+    assert v._audience_ok({"aud": ["https://mcp.oto.cx/mcp", "x"]}) is True          # alt en liste
+    assert v._audience_ok({"aud": "https://mcp.oto.ninja/mcp"}) is True              # canonique toujours OK
+    # _alt_audiences absent (construction __new__ sans __init__) → getattr défaut vide, pas de crash
+    v2 = server._IatGatedVerifier.__new__(server._IatGatedVerifier)
+    v2._expected_audience = "https://mcp.oto.ninja/mcp"
+    assert v2._audience_ok({"aud": "https://mcp.oto.ninja/mcp"}) is True
+
+
 # ── PRM host-aware (discovery, #44) ──────────────────────────────────────────
 def _call_prm(host, valid, monkeypatch):
     import asyncio

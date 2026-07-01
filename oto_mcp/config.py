@@ -10,3 +10,22 @@ def require_env(name: str) -> str:
             f"(systemd EnvironmentFile in prod, .env in dev)."
         )
     return val
+
+
+def mcp_audience_alts() -> frozenset[str]:
+    """Audiences MCP canoniques SECONDAIRES (coexistence multi-domaine, ex.
+    `https://mcp.oto.cx/mcp` en plus de `MCP_AUDIENCE`=`https://mcp.oto.ninja/mcp`).
+
+    Env `MCP_AUDIENCE_ALT` = liste séparée par des virgules (resource indicators
+    complets, sans slash final). Vide/absent = frozenset vide → **no-op** (le
+    comportement mono-audience de mcp.oto.ninja est byte-à-byte inchangé)."""
+    raw = os.environ.get("MCP_AUDIENCE_ALT", "")
+    return frozenset(a.strip() for a in raw.split(",") if a.strip())
+
+
+def mcp_audience_alt_hosts() -> frozenset[str]:
+    """Les HOSTS des audiences alt — pour le PRM Host-aware (un client qui tape
+    `mcp.oto.cx` doit se voir annoncer `resource=https://mcp.oto.cx/mcp`)."""
+    from urllib.parse import urlparse
+    hosts = (urlparse(a).hostname for a in mcp_audience_alts())
+    return frozenset(h for h in hosts if h)

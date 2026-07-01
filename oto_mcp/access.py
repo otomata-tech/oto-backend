@@ -785,10 +785,16 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
                   credentials_store.MEMBER,
                   credentials_store.member_id(active_org, sub), c.name)
               if active_org is not None else None)
+        meta = (st or {}).get("meta") or {}
         out["providers"][c.name] = {
             "mode": "user" if st else "forbidden",
             "user_key_configured": st is not None,
             "session_set_at": st["set_at"] if st else None,
+            # Identité/cible par défaut du sélecteur ADR 0024 (pennylaneged : la
+            # société cliente = SA GED) — satellites PUBLICS du meta, la carte les
+            # affiche sans lister (le listing = une session Browserbase louée).
+            "identity_id": meta.get("default_identity_id"),
+            "identity_label": meta.get("default_identity_label"),
             "org_secret_configured": False,
             "platform_key_label": None,
             "quota_used_today": 0,

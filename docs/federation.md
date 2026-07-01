@@ -6,6 +6,33 @@ Deux mécanismes de fédération coexistent (cf. `tools/mount.py` vs `tools/remo
 - **remote** (ADR 0003, data-driven) — tunnel `<ns>_describe`/`<ns>_call` vers un bridge, credential
   d'**org** (token M2M + `meta.base_url`). Pilote = un connecteur remote client.
 
+## Mount SANS auth (endpoint hébergé public)
+
+Un mount `kind="mount"` dont `auth_modes` est **VIDE** est un **mount no-auth** :
+l'endpoint distant est hébergé et **public** (aucune clé, aucun compte, catalogue
+product-level anonyme). Pilote = **justicelibre** (`https://justicelibre.org/mcp` —
+droit français & européen, législation LEGI/JORF/KALI + jurisprudence
+Cass/Judilibre/CE/CC/CEDH/CJUE/CNIL ; MIT + Licence Ouverte Etalab 2.0).
+
+`tools/mount.py` détecte `not connector.auth_modes` et prend un chemin dédié qui
+**court-circuite tout le machinery per-user** :
+- `_fetch_catalog` liste les outils au boot **sans token ni user connecté** (le
+  fallback historique « token d'un user déjà connecté » ne s'applique pas) ;
+- `_make_factory` renvoie une factory qui forwarde **sans header `Authorization`**,
+  **sans `resolve_mount_token`** et sans exiger un sub courant.
+
+**Gating d'exposition** = `connector_activation` (ADR 0010/0011), comme n'importe
+quel connecteur — c'est le SEUL levier ici (pas de credential per-user à connecter).
+justicelibre est **opt-in par org** : master OFF au registre d'activation, hors
+`_DEFAULT_ENABLED_MOUNTS`, hors bundle par défaut. Une org l'active via l'écran
+connector activation → le mount **suit** (`_db_activated_mounts` inclut tout mount
+ayant ≥1 activation ON, master OU override d'org). Comme le catalogue est **figé au
+boot**, la 1ʳᵉ activation demande un **restart** OU un `oto_admin_refresh_mount
+justicelibre` (admin plateforme) pour le monter à chaud.
+
+Dégradation propre : endpoint distant down au boot → 0 outil fédéré, le reste d'oto
+intact (le fetch est sous try/except). Test : `tests/test_mount_noauth.py`.
+
 **Fédération memento = systématique** (tranché 2026-06-17) :
 - **Compte oto créé ⇒ compte memento créé.** `db.upsert_user` détecte le **vrai INSERT**
   (`RETURNING (xmax = 0)`) et appelle `memento_federation.provision_async(sub, email)` :

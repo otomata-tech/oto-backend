@@ -169,6 +169,13 @@ def unipile_client(provider: str = "LINKEDIN"):
     rc = access.resolve_credential("unipile", want="auto")
     sub = access.current_user_sub_or_raise()
     account_id = db.get_unipile_account_id(sub, provider)
+    # Pin projet (#57) : si le projet actif épingle un compte unipile, il prime sur le
+    # défaut per-canal — MAIS seulement s'il appartient à CE user (anti-usurpation, cf.
+    # note sécu ci-dessus) ET au canal demandé. Sinon on garde le défaut (fail-soft).
+    pinned = access.project_pinned_identity("unipile")
+    if pinned and any(a.get("account_id") == pinned and a.get("provider") == provider
+                      for a in db.list_unipile_accounts(sub)):
+        account_id = pinned
     if not account_id:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

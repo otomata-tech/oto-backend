@@ -41,7 +41,7 @@ def _feed_ttl_seconds() -> int:
 def _feed_is_stale(sub: str, provider: str = "LINKEDIN") -> bool:
     """True si le cache du feed mérite un refresh (jamais sync, ou plus vieux que
     le TTL). Tolérant au format d'horodatage (string row-factory)."""
-    ts = db.get_unipile_feed_synced_at(sub, provider)
+    ts = db.get_unipile_feed_synced_at(sub, access.current_org(sub), provider)
     if not ts:
         return True
     try:
@@ -78,7 +78,7 @@ def _sync_feed(client, store, sub: str, provider: str = "LINKEDIN") -> int:
         cursor = page.get("cursor")
         if page_new == 0 or not cursor:
             break  # rattrapé (page déjà connue) ou fin de flux
-    db.touch_unipile_feed_synced(sub, provider)
+    db.touch_unipile_feed_synced(sub, access.current_org(sub), provider)
     return new_count
 
 
@@ -109,8 +109,12 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     user/groupe/org) ⇒ option ouverte (l'user gère sa propre instance). Sinon l'option
     de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
     `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
-    contexte view-as/session du requérant (anti-fuite, cf. access._UNSET)."""
-    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
+    contexte view-as/session du requérant (anti-fuite, cf. access._UNSET).
+    Scope membre (ADR 0033 B4) : les canaux montrés = ceux rattachés à l'org de
+    contexte (les bindings des autres orgs n'existent pas ici)."""
+    o = access.current_org(sub) if org is access._UNSET else org
+    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)
+             if a.get("org_id") == o}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = byo or access.has_option(sub, "unipile", org=org)
@@ -168,12 +172,14 @@ def unipile_client(provider: str = "LINKEDIN"):
     from oto.tools.unipile import UnipileClient
     rc = access.resolve_credential("unipile", want="auto")
     sub = access.current_user_sub_or_raise()
-    account_id = db.get_unipile_account_id(sub, provider)
+    org = access.current_org(sub)
+    account_id = db.get_unipile_account_id(sub, org, provider)
     # Pin projet (#57) : si le projet actif épingle un compte unipile, il prime sur le
-    # défaut per-canal — MAIS seulement s'il appartient à CE user (anti-usurpation, cf.
-    # note sécu ci-dessus) ET au canal demandé. Sinon on garde le défaut (fail-soft).
+    # défaut per-canal — MAIS seulement s'il appartient à CE user DANS CETTE org
+    # (anti-usurpation + scope membre ADR 0033) ET au canal demandé. Sinon défaut (fail-soft).
     pinned = access.project_pinned_identity("unipile")
     if pinned and any(a.get("account_id") == pinned and a.get("provider") == provider
+                      and a.get("org_id") == org
                       for a in db.list_unipile_accounts(sub)):
         account_id = pinned
     if not account_id:

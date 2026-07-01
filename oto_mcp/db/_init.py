@@ -118,8 +118,11 @@ def init_db() -> None:
         # Multi-canal Unipile : un account_id par (sub, provider). Migration de la
         # PK sub → (sub, provider) ; les lignes existantes prennent 'LINKEDIN' (DEFAULT).
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
-        conn.execute("ALTER TABLE unipile_accounts DROP CONSTRAINT IF EXISTS unipile_accounts_pkey")
-        conn.execute("ALTER TABLE unipile_accounts ADD PRIMARY KEY (sub, provider)")
+        # ⚠️ Le cycle de vie du PK d'unipile_accounts appartient à
+        # db.backfill_unipile_member_scope() (ADR 0033 B4) — l'ex re-pose
+        # inconditionnelle du PK (sub, provider) écraserait la migration.
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS platform_seat BOOLEAN NOT NULL DEFAULT FALSE")
+        conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS platform_seat BOOLEAN NOT NULL DEFAULT FALSE")
         # Horodatage du dernier sync du feed (miroir home, datastore linkedin-feed) :
         # gouverne la fraîcheur du cache (TTL) côté unipile_feed. NULL = jamais sync.
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS feed_synced_at TIMESTAMPTZ")

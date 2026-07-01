@@ -44,8 +44,9 @@ def _google_list(sub: str) -> list[dict]:
 
 
 def _google_select(sub: str, identity_id: str) -> dict:
-    from . import db
-    if not db.set_default_google_account(sub, identity_id):
+    from . import access, db
+    org = access.current_org(sub)
+    if org is None or not db.set_default_google_account(sub, org, identity_id):
         raise ValueError(f"Compte Google inconnu : {identity_id}")
     return {"id": identity_id, "is_default": True, "channel": None}
 
@@ -63,7 +64,7 @@ def _unipile_client(sub: str):
 
 
 def _unipile_list(sub: str) -> list[dict]:
-    from . import db
+    from . import access, db
     cli = _unipile_client(sub)
     if cli is None:
         return []
@@ -71,10 +72,11 @@ def _unipile_list(sub: str) -> list[dict]:
         accounts = cli.list_accounts()
     except Exception:
         return []
+    org = access.current_org(sub)
     out = []
     for a in accounts:
         ch = (a.get("type") or "").upper() or None
-        chosen = db.get_unipile_account_id(sub, ch) if ch else None
+        chosen = db.get_unipile_account_id(sub, org, ch) if ch else None
         sources = a.get("sources") or []
         out.append({
             "id": a.get("id"),
@@ -96,9 +98,14 @@ def _unipile_select(sub: str, identity_id: str) -> dict:
     if match is None:  # anti-binding : l'id DOIT exister sur la clé
         raise ValueError(f"Compte Unipile inconnu sur cette clé : {identity_id}")
     ch = (match.get("type") or "LINKEDIN").upper()
-    # BYO → org porteur None (abonnement propre, pas de plafond org), cohérent
-    # avec unipile_connect.
-    db.set_unipile_account(sub, identity_id, match.get("name"), org_id=None, provider=ch)
+    # Scope membre (ADR 0033 B4) : le binding vaut dans l'org de contexte. BYO →
+    # pas un siège plateforme (platform_seat=False), cohérent avec unipile_connect.
+    from . import access
+    org = access.current_org(sub)
+    if org is None:
+        raise ValueError("Aucune org de contexte — impossible de rattacher le compte.")
+    db.set_unipile_account(sub, identity_id, match.get("name"), org_id=org,
+                           provider=ch, platform_seat=False)
     return {"id": identity_id, "channel": ch, "is_default": True}
 
 

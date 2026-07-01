@@ -159,19 +159,23 @@ def make_routes(
         # BYO = clé propre (user/groupe/ORG), pas la clé plateforme — via le seam
         # de résolution (mode), PAS un check user-only qui ratait une clé d'org.
         byo = access.credential_mode_for(sub, "unipile") in access.BYO_MODES
-        # org « porteur » du compte = org actif, SAUF en BYO (clé propre, pas de
-        # plafond org).
-        org_id = None if byo else org_store.get_active_org(sub)
+        # Scope membre (ADR 0033 B4) : le binding est rattaché à l'org de CONTEXTE
+        # (consultation dashboard incluse) quel que soit le mode de clé. Le plafond
+        # de sièges, lui, ne vaut qu'en mode plateforme (platform_seat).
+        org_id = access.current_org(sub)
+        if org_id is None:
+            return json_error(request, 400, "no_org_context")
+        platform_seat = not byo
         # Gate OPTION (couche 3, docs/connector-model.md) : seam unique
         # `access.has_option` = comp admin (user|org). BYO (clé perso) = l'user gère
         # sa propre instance Unipile → pas de gate. Sinon l'option de messagerie
         # hébergée doit avoir été accordée à l'org par un admin (plus de paiement).
         if not byo and not access.has_option(sub, "unipile"):
             return json_error(request, 402, "unipile_option_required")
-        # Plafond anti-dérapage : chaque compte connecté consomme un siège sur la clé
-        # plateforme Unipile. On bloque une NOUVELLE connexion au-delà du plafond (un
-        # user qui a déjà un compte peut reconnecter = remplacement).
-        if org_id is not None and db.get_unipile_account(sub, provider) is None:
+        # Plafond anti-dérapage : chaque compte HÉBERGÉ consomme un siège sur la clé
+        # plateforme Unipile (les BYO ne comptent pas). On bloque une NOUVELLE connexion
+        # au-delà du plafond (un user qui a déjà un compte peut reconnecter = remplacement).
+        if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
             limit = db.get_org_unipile_limit(org_id)
             if limit is None:
                 limit = _unipile_default_limit()
@@ -193,7 +197,7 @@ def make_routes(
         public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
         dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
         nonce = secrets.token_urlsafe(24)
-        db.create_unipile_pending(nonce, sub, org_id, provider)
+        db.create_unipile_pending(nonce, sub, org_id, provider, platform_seat=platform_seat)
         ch = provider.lower()
         try:
             url = await asyncio.to_thread(
@@ -234,8 +238,12 @@ def make_routes(
         if status == "CREATION_SUCCESS" and name and account_id:
             pend = db.resolve_unipile_pending(name)
             if pend:
-                db.set_unipile_account(pend["sub"], account_id, org_id=pend.get("org_id"),
-                                       provider=pend.get("provider", "LINKEDIN"))
+                # Filet : un pending émis AVANT le deploy B4 (BYO) porte org_id NULL
+                # → org maison du sub (le binding doit toujours avoir une org).
+                org_id = pend.get("org_id") or org_store.get_active_org(pend["sub"])
+                db.set_unipile_account(pend["sub"], account_id, org_id=org_id,
+                                       provider=pend.get("provider", "LINKEDIN"),
+                                       platform_seat=bool(pend.get("platform_seat")))
                 logger.info("unipile webhook: bound sub=%s account_id=%s org=%s",
                             pend["sub"], account_id, pend.get("org_id"))
             else:
@@ -259,7 +267,7 @@ def make_routes(
         if err:
             return err
         provider = str(request.query_params.get("channel") or "linkedin").upper()
-        db.clear_unipile_account(sub, provider)
+        db.clear_unipile_account(sub, access.current_org(sub), provider)
         return json_response(request, {"ok": True})
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:

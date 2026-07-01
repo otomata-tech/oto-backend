@@ -73,8 +73,9 @@ def test_credentials_for_applies_project_pin(monkeypatch):
     from oto_mcp import google_oauth
     seen = {}
     monkeypatch.setattr(access, "project_pinned_identity", lambda connector: "pinned@x.co")
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(google_oauth.db, "get_google_oauth",
-                        lambda sub, account=None: seen.update(account=account) or None)
+                        lambda sub, org, account=None: seen.update(account=account) or None)
     with pytest.raises(RuntimeError):              # pas de compte → erreur actionnable
         google_oauth.credentials_for("u1")        # account non passé → pin du projet
     assert seen["account"] == "pinned@x.co"        # le compte épinglé a bien été ciblé
@@ -86,8 +87,9 @@ def test_credentials_for_explicit_account_wins(monkeypatch):
     # Un compte explicite passé par l'appelant prime sur le pin du projet (jamais lu).
     monkeypatch.setattr(access, "project_pinned_identity",
                         lambda connector: (_ for _ in ()).throw(AssertionError("ne doit pas être lu")))
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(google_oauth.db, "get_google_oauth",
-                        lambda sub, account=None: seen.update(account=account) or None)
+                        lambda sub, org, account=None: seen.update(account=account) or None)
     with pytest.raises(RuntimeError):
         google_oauth.credentials_for("u1", account="explicit@x.co")
     assert seen["account"] == "explicit@x.co"
@@ -97,8 +99,9 @@ def test_credentials_for_no_project_keeps_default(monkeypatch):
     from oto_mcp import google_oauth
     seen = {}
     monkeypatch.setattr(access, "project_pinned_identity", lambda connector: None)  # pas de projet/pin
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(google_oauth.db, "get_google_oauth",
-                        lambda sub, account=None: seen.update(account=account) or None)
+                        lambda sub, org, account=None: seen.update(account=account) or None)
     with pytest.raises(RuntimeError):
         google_oauth.credentials_for("u1")
     assert seen["account"] is None                 # repli sur le défaut user (is_default)

@@ -107,9 +107,12 @@ def test_backfill_member_scope_routes_families(monkeypatch):
         # non-oauth avec maison → MIGRE
         {"entity_id": "u1", "connector": "pennylane", "account": "",
          "secret_enc": "enc-ok", "meta": {}, "set_by": "u1"},
-        # famille oauth (google) → INTOUCHÉE (B3)
+        # google (oauth mais PAS un mount) → MIGRE depuis B3, account préservé
         {"entity_id": "u1", "connector": "google", "account": "a@b.c",
-         "secret_enc": "enc-goog", "meta": {}, "set_by": "u1"},
+         "secret_enc": "enc-goog", "meta": {"is_default": True}, "set_by": "u1"},
+        # mount oauth fédéré (memento) → INTOUCHÉ (barreau ultérieur)
+        {"entity_id": "u1", "connector": "memento", "account": "",
+         "secret_enc": "enc-memento", "meta": {}, "set_by": "u1"},
         # indéchiffrable (InvalidTag pré-rotation) → SKIP, laissée en place
         {"entity_id": "u1", "connector": "serpapi", "account": "",
          "secret_enc": "enc-bad", "meta": {}, "set_by": "u1"},
@@ -138,17 +141,19 @@ def test_backfill_member_scope_routes_families(monkeypatch):
                         lambda sub: 5 if sub == "u1" else None)
 
     counts = credentials_store.backfill_member_scope()
-    assert counts == {"migrated": 1, "skipped": 2}
-    assert upserts == [("member", "5:u1", "pennylane", "", "clear:enc-ok")]
-    assert deletes == [("user", "u1", "pennylane", "")]
+    assert counts == {"migrated": 2, "skipped": 2}
+    assert upserts == [("member", "5:u1", "pennylane", "", "clear:enc-ok"),
+                       ("member", "5:u1", "google", "a@b.c", "clear:enc-goog")]
+    assert deletes == [("user", "u1", "pennylane", ""),
+                       ("user", "u1", "google", "a@b.c")]
 
 
 # --- 4. tripwire : plus d'écriture au scope 'user' hors famille oauth -------------
 
 _OAUTH_FAMILY_FILES = {
-    # Flux OAuth dédiés — SEULS écrivains légitimes du scope ('user', sub)
-    # jusqu'aux barreaux B3/B4 d'ADR 0033.
-    "google.py", "memento_oauth.py", "atlassian_oauth.py", "folk_oauth.py",
+    # Mounts OAuth fédérés — SEULS écrivains légitimes du scope ('user', sub)
+    # restants (barreau ultérieur d'ADR 0033). Google est passé au scope membre en B3.
+    "memento_oauth.py", "atlassian_oauth.py", "folk_oauth.py",
 }
 
 
@@ -166,3 +171,47 @@ def test_no_user_scope_credential_writes_outside_oauth_family():
     assert not offenders, (
         f"écriture credential au scope 'user' (org-agnostique, ADR 0033) hors "
         f"famille oauth : {offenders} — utiliser le scope MEMBER (sub, org)")
+
+
+# --- 5. B3/B4 : google + unipile au scope membre ----------------------------------
+
+def test_google_state_carries_org(monkeypatch):
+    # L'org du DÉMARRAGE voyage dans le state HMAC jusqu'au callback (qui vient de
+    # Google, sans headers de consultation) — roundtrip + rejet des vieux formats.
+    monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "test-secret")
+    from oto_mcp import google_oauth
+    state = google_oauth.make_state("u1", 42)
+    assert google_oauth.verify_state(state) == ("u1", 42)
+    # un state sans org (format pré-B3) est refusé, pas interprété org-agnostique
+    import base64, hashlib, hmac as hm, json as js
+    payload = js.dumps({"sub": "u1", "ts": 10**10}, separators=(",", ":")).encode()
+    sig = hm.new(b"test-secret", payload, hashlib.sha256).digest()
+    legacy = (base64.urlsafe_b64encode(payload).rstrip(b"=").decode() + "." +
+              base64.urlsafe_b64encode(sig).rstrip(b"=").decode())
+    assert google_oauth.verify_state(legacy) is None
+
+
+def test_google_db_scoped_by_member_entity(monkeypatch):
+    # Le grain coffre des comptes Google = ('member', '{org}:{sub}') — l'org de
+    # contexte borne la liste ; org None (défensif) → aucun compte, jamais un repli.
+    from oto_mcp.db import google as db_google
+    calls = []
+    monkeypatch.setattr(
+        credentials_store, "list_accounts",
+        lambda et, eid, con: calls.append((et, eid)) or [])
+    assert db_google.list_google_accounts("u1", 7) == []
+    assert calls == [("member", "7:u1")]
+    assert db_google.list_google_accounts("u1", None) == []   # pas d'appel coffre
+    assert calls == [("member", "7:u1")]
+    assert db_google.get_google_oauth("u1", None) is None
+
+
+def test_unipile_db_guards_org_none():
+    # Les getters unipile sans org de contexte ne résolvent RIEN (jamais de repli
+    # org-agnostique) — et n'ouvrent aucune connexion DB (pas de DATABASE_URL ici).
+    from oto_mcp.db import unipile as db_unipile
+    assert db_unipile.get_unipile_account_id("u1", None) is None
+    assert db_unipile.get_unipile_account("u1", None) is None
+    assert db_unipile.get_unipile_feed_synced_at("u1", None) is None
+    with pytest.raises(ValueError):
+        db_unipile.set_unipile_account("u1", "ACC", org_id=None)

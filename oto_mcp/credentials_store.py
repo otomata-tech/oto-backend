@@ -436,9 +436,11 @@ def backfill_member_scope() -> dict:
     for r in rows:
         sub, connector, account = r["entity_id"], r["connector"], r["account"]
         con = connectors.REGISTRY.get(connector)
-        # Famille oauth (google + mounts) : flux dédiés encore scope 'user' (B3/B4).
-        # Connecteur hors registre (legacy) : on ne migre pas ce qu'on ne connaît pas.
-        if con is None or con.secret_kind == "oauth":
+        # Mounts oauth (memento/atlassian/folkmcp) : flux fédérés encore scope 'user'
+        # (barreau ultérieur — la fédération memento est systématique per-compte).
+        # Google, lui, migre depuis B3 (db/google.py au scope membre). Connecteur
+        # hors registre (legacy) : on ne migre pas ce qu'on ne connaît pas.
+        if con is None or (con.secret_kind == "oauth" and connector != "google"):
             continue
         home = org_store.get_active_org(sub)
         if home is None:

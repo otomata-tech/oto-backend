@@ -187,6 +187,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         credentials_store.backfill_member_scope()
     except Exception as e:
         logger.warning("backfill_member_scope at _build_mcp failed: %s", e)
+    # ADR 0033 B4 : unipile_accounts au grain (sub, org, provider) — org de contexte
+    # NOT NULL + platform_seat + PK composite. Même fenêtre (org maison garantie).
+    try:
+        db.backfill_unipile_member_scope()
+    except Exception as e:
+        logger.warning("backfill_unipile_member_scope at _build_mcp failed: %s", e)
     # Seed des blocs plateforme A/B (#50) s'ils n'existent pas (idempotent).
     try:
         instructions.seed_platform_blocks()

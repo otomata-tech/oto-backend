@@ -468,11 +468,15 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     provider TEXT NOT NULL DEFAULT 'LINKEDIN',
     account_id TEXT NOT NULL,
     account_name TEXT,
-    -- org dont l'abonnement Unipile (la clé) porte ce compte = org actif au connect.
-    -- Source de vérité pour COMPTER et FACTURER par org (revendeur/passthrough).
-    org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL,
+    -- org de CONTEXTE du binding (scope membre, ADR 0033 B4) : le compte n'est
+    -- joignable que depuis cette org. Un même canal peut être connecté dans
+    -- N orgs (PK composite).
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    -- le compte consomme un siège de la clé PLATEFORME (comptage/facturation
+    -- par org — revendeur/passthrough). FALSE en BYO (l'user paie son instance).
+    platform_seat BOOLEAN NOT NULL DEFAULT FALSE,
     connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, provider)
+    PRIMARY KEY (sub, org_id, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id);
 
@@ -484,8 +488,9 @@ CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id);
 CREATE TABLE IF NOT EXISTS unipile_pending (
     nonce TEXT PRIMARY KEY,
     sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
-    org_id BIGINT,                       -- org actif au connect (porté au compte)
+    org_id BIGINT,                       -- org de contexte au connect (porté au compte)
     provider TEXT NOT NULL DEFAULT 'LINKEDIN',  -- canal demandé (B1, multi-canal)
+    platform_seat BOOLEAN NOT NULL DEFAULT FALSE,  -- siège clé plateforme (ADR 0033 B4)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

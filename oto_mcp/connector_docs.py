@@ -405,6 +405,13 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
             "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand)"
         )),
+        DocSection(kind="usage", title="codes consolidés (legi)", body_md=(
+            "les 22 codes français avec versions historiques : citer la loi exacte, à la bonne date, avec lien légifrance.\n"
+            "- `fr_loi_article(code=\"CT\", num=\"L1242-2\", date=…)` — le texte en vigueur à la date demandée (défaut aujourd'hui)\n"
+            "- `fr_loi_versions(code, num)` — la timeline des rédactions d'un article\n"
+            "- `fr_loi_search(query=…, code=…)` — retrouver l'article quand on connaît le concept, pas le numéro\n"
+            "- `fr_loi_codes()` — les alias couverts (CT, CC, CP, CSS, CGI…)"
+        )),
     ),
     "hithorizons": (
         DocSection(kind="prerequisite", title="clé api hithorizons", body_md=(

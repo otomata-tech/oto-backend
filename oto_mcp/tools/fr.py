@@ -504,6 +504,67 @@ def register(mcp: FastMCP) -> None:
         from .. import fod_ccn
         return fod_ccn.conventions(idcc=idcc, query=query, limit=limit)
 
+    # --- Codes consolidés (LEGI, via service FOD) ---
+    # 22 codes français AVEC versions historiques : l'article en vigueur à une
+    # date donnée (une décision de 1992 cite l'art. 1128 CC → texte d'époque).
+
+    @mcp.tool()
+    def fr_loi_article(code: str, num: str, date: Optional[str] = None) -> dict:
+        """Consolidated text of a French code article, as in force at a given
+        date. THE tool for citing law: exact text + verifiable Légifrance URL.
+
+        Args:
+            code: Short alias — CT (travail), CC (civil), CP (pénal), CSS
+                (sécurité sociale), CCOM, CGI, CPI… (fr_loi_codes lists all 22)
+                — or a raw LEGITEXT id.
+            num: Article number, ex "L1242-2", "1128", "R4228-20".
+            date: YYYY-MM-DD — version in force AT THAT DATE (default: today).
+                Use the date of the document citing the article: a 1992 ruling
+                cites the 1992 wording, not today's.
+        """
+        from .. import fod_loi
+        return fod_loi.article(code, num, date)
+
+    @mcp.tool()
+    def fr_loi_versions(code: str, num: str) -> dict:
+        """Full version timeline of a code article (every rewriting with dates
+        and états). Use to see WHEN an article changed before picking a date
+        for fr_loi_article.
+
+        Args:
+            code: Short alias (CT, CC…) or LEGITEXT id.
+            num: Article number.
+        """
+        from .. import fod_loi
+        return fod_loi.versions(code, num)
+
+    @mcp.tool()
+    def fr_loi_search(
+        query: str,
+        code: Optional[str] = None,
+        en_vigueur: bool = True,
+        limit: int = 20,
+    ) -> dict:
+        """Full-text search across French consolidated codes (LEGI). Find the
+        article when you know the concept but not the number ("période d'essai
+        CDD", "clause de non-concurrence").
+
+        Args:
+            query: Full-text query (websearch syntax, french stemming).
+            code: Restrict to one code (alias CT/CC/… or LEGITEXT).
+            en_vigueur: Only versions in force today (default True).
+            limit: Max results (default 20, max 50).
+        """
+        from .. import fod_loi
+        return fod_loi.search(query, code=code, en_vigueur=en_vigueur, limit=limit)
+
+    @mcp.tool()
+    def fr_loi_codes() -> dict:
+        """List the 22 French consolidated codes covered (alias → LEGITEXT +
+        label). Discovery helper for fr_loi_article/fr_loi_search."""
+        from .. import fod_loi
+        return fod_loi.codes()
+
     # --- Index égalité F-H (Egapro, open data) -------------------------------
 
     @mcp.tool()

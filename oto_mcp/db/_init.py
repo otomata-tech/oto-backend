@@ -66,6 +66,14 @@ def init_db() -> None:
               AND p.owner_type = 'org' AND oi.slug = pl.target_ref
               AND pl.target_ref !~ '^[0-9]+$'
         """)
+        # ADR 0032 §4 amendé (#57) : un projet peut lier N fois le même connecteur, chaque
+        # binding distingué par une IDENTITÉ → une ligne par binding. Colonne `identity_ref`
+        # (NULL = binding par défaut, rétro-compat), clé élargie NULLS NOT DISTINCT (PG15+ :
+        # deux NULL = même binding par défaut, un seul autorisé).
+        conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS identity_ref TEXT")
+        conn.execute("ALTER TABLE project_links DROP CONSTRAINT IF EXISTS project_links_project_id_target_type_target_ref_key")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_project_links_binding "
+                     "ON project_links (project_id, target_type, target_ref, identity_ref) NULLS NOT DISTINCT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
         conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")

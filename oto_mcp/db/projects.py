@@ -121,30 +121,34 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,
                      label: Optional[str] = None, role: Optional[str] = None,
-                     config: Optional[dict] = None) -> None:
-    """Lie une entité (tableau/procédure/connecteur/base) au projet. Idempotent :
-    re-lier met à jour le label ; le `role` et le `config` (surcharge contextuelle
-    préfaite, ADR 0032 §4) ne sont écrasés que s'ils sont fournis (un re-link pour
-    changer le seul label ne perd ni la description de rôle ni la config déjà posées).
-    `config` absent à la création → `{}`."""
+                     config: Optional[dict] = None, identity_ref: Optional[str] = None) -> None:
+    """Lie une entité (tableau/procédure/connecteur/base) au projet. `identity_ref`
+    (ADR 0032 §4 amendé, #57) = un BINDING distinct par identité — NULL = binding par
+    défaut (un connecteur peut être lié N fois, une identité par binding). Idempotent
+    par binding : re-lier met à jour le label ; `role`/`config` (surcharge préfaite)
+    ne sont écrasés que s'ils sont fournis. `config` absent à la création → `{}`."""
     cfg = json.dumps(config) if config is not None else None
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO project_links (project_id, target_type, target_ref, label, role, config) "
-            "VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
-            "ON CONFLICT (project_id, target_type, target_ref) DO UPDATE SET "
+            "INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, config) "
+            "VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
+            "ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
             "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
             "config = COALESCE(%s::jsonb, project_links.config)",
-            (project_id, target_type, target_ref, label, role, cfg, cfg),
+            (project_id, target_type, target_ref, identity_ref, label, role, cfg, cfg),
         )
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
 
 
-def remove_project_link(project_id: int, target_type: str, target_ref: str) -> int:
+def remove_project_link(project_id: int, target_type: str, target_ref: str,
+                        identity_ref: Optional[str] = None) -> int:
+    """Délie un binding. `identity_ref` NULL (défaut) = le binding par défaut ;
+    `IS NOT DISTINCT FROM` pour matcher NULL proprement (ADR 0032 §4 amendé, #57)."""
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM project_links WHERE project_id = %s AND target_type = %s AND target_ref = %s",
-            (project_id, target_type, target_ref),
+            "DELETE FROM project_links WHERE project_id = %s AND target_type = %s "
+            "AND target_ref = %s AND identity_ref IS NOT DISTINCT FROM %s",
+            (project_id, target_type, target_ref, identity_ref),
         )
         return cur.rowcount
 
@@ -155,13 +159,13 @@ def list_project_links(project_id: int) -> list[dict]:
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT pl.target_type, pl.target_ref, pl.label, pl.role, pl.config, pl.created_at, "
+            "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.config, pl.created_at, "
             "       EXISTS(SELECT 1 FROM project_links o "
             "              WHERE o.target_type = pl.target_type "
             "                AND o.target_ref = pl.target_ref "
             "                AND o.project_id <> pl.project_id) AS cross_project "
             "FROM project_links pl WHERE pl.project_id = %s "
-            "ORDER BY pl.target_type, pl.label NULLS LAST, pl.target_ref",
+            "ORDER BY pl.target_type, pl.label NULLS LAST, pl.target_ref, pl.identity_ref NULLS FIRST",
             (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]

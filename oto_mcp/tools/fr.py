@@ -565,6 +565,54 @@ def register(mcp: FastMCP) -> None:
         from .. import fod_loi
         return fod_loi.codes()
 
+    # --- Jurisprudence (6 fonds DILA, via service FOD) ---
+    # Cass (publiés + inédits), cours d'appel, CE/CAA/TA, Conseil constit, CNIL.
+    # Tri pertinence × autorité (constit > Cass/CE > CAA/CA > TA/CNIL).
+
+    @mcp.tool()
+    def fr_juris_search(
+        query: str,
+        fond: Optional[str] = None,
+        juridiction: Optional[str] = None,
+        date_min: Optional[str] = None,
+        date_max: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict:
+        """Search French case law (jurisprudence) full text — how courts
+        actually ruled. Unified over 6 DILA collections, ranked by FTS
+        relevance × court authority.
+
+        Args:
+            query: Full-text query (websearch syntax, french stemming), ex
+                "requalification CDD d'usage intermittent".
+            fond: Restrict to one collection — "cass" (Cour de cassation,
+                published) | "inca" (cassation, unpublished) | "capp" (cours
+                d'appel) | "jade" (administrative: CE/CAA/TA) | "constit"
+                (Conseil constitutionnel) | "cnil".
+            juridiction: Court name filter (ILIKE), ex "cassation",
+                "appel de Paris", "Conseil d'État".
+            date_min / date_max: Decision date bounds (YYYY-MM-DD).
+            limit: Max results (default 20, max 50).
+
+        Returns {count, decisions: [{id, titre, juridiction, date_dec,
+        solution, extrait, source_url, …}]}. Full text via fr_juris_get(id).
+        """
+        from .. import fod_juris
+        return fod_juris.search(query, fond=fond, juridiction=juridiction,
+                                date_min=date_min, date_max=date_max, limit=limit)
+
+    @mcp.tool()
+    def fr_juris_get(decision_id: str) -> dict:
+        """Full text of a French court decision, with metadata (juridiction,
+        formation, solution, ECLI) and a verifiable Légifrance source_url.
+
+        Args:
+            decision_id: Id returned by fr_juris_search (JURITEXT…, CETATEXT…,
+                CONSTEXT…, CNILTEXT…).
+        """
+        from .. import fod_juris
+        return fod_juris.decision(decision_id)
+
     # --- Index égalité F-H (Egapro, open data) -------------------------------
 
     @mcp.tool()

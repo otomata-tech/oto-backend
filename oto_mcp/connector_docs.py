@@ -412,6 +412,12 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_loi_search(query=…, code=…)` — retrouver l'article quand on connaît le concept, pas le numéro\n"
             "- `fr_loi_codes()` — les alias couverts (CT, CC, CP, CSS, CGI…)"
         )),
+        DocSection(kind="usage", title="jurisprudence (6 fonds dila)", body_md=(
+            "comment les juges tranchent : cassation (publiés + inédits), cours d'appel, CE/CAA/TA, conseil constitutionnel, cnil. tri pertinence × autorité.\n"
+            "- `fr_juris_search(query=…, fond=…, juridiction=…, date_min=…)` — recherche unifiée plein-texte\n"
+            "- `fr_juris_get(decision_id)` — texte intégral d'une décision + lien légifrance\n"
+            "- workflow type : `fr_juris_search` → repérer l'arrêt de principe → `fr_juris_get` → citer avec `fr_loi_article` (les textes visés, à la date de la décision)"
+        )),
     ),
     "hithorizons": (
         DocSection(kind="prerequisite", title="clé api hithorizons", body_md=(

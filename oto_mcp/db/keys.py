@@ -18,13 +18,17 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from ._conn import KEY_PROVIDERS, _connect
+from ._conn import KEY_PROVIDERS, CREDENTIAL_PROVIDERS, _connect
 from .users import list_users, upsert_user
 
 
 def _check_provider(provider: str) -> None:
-    if provider not in KEY_PROVIDERS:
-        raise ValueError(f"Unknown provider {provider!r} (allowed: {KEY_PROVIDERS})")
+    # Accepte tout provider pouvant détenir un credential : keyed (clé API), byo
+    # multi-champs, ET sessions navigateur cookie (brevo/crunchbase/pennylaneged, qui
+    # persistent leur Context Browserbase via ce chemin). KEY_PROVIDERS seul (keyed) est
+    # trop étroit → rejetait la persistance de session (« Unknown provider 'pennylaneged' »).
+    if provider not in CREDENTIAL_PROVIDERS:
+        raise ValueError(f"Unknown provider {provider!r} (allowed: {sorted(CREDENTIAL_PROVIDERS)})")
 
 
 # Scope MEMBRE (ADR 0033) : la clé per-user est keyée (sub, org) — « ma clé dans

@@ -788,6 +788,15 @@ for _c_obj in _REGISTRY_LIST:
 # --- dérivations (remplacent les 4 listes en dur + quotas + env-names) -------
 
 KEY_PROVIDERS: tuple = tuple(c.name for c in _REGISTRY_LIST if c.keyed)
+# Providers pouvant DÉTENIR un credential per-membre dans le coffre — garde-fou d'écriture
+# `db._check_provider`. Plus large que KEY_PROVIDERS (keyed seul) : inclut les **sessions
+# navigateur** (secret_kind="cookie" : brevo/crunchbase/pennylaneged, qui persistent le
+# Context Browserbase) et les connecteurs **byo multi-champs**. Sans ça, la persistance
+# d'une session (ADR 0026/0033, `_persist`→`set_member_api_key`) levait « Unknown provider ».
+CREDENTIAL_PROVIDERS: frozenset = frozenset(
+    c.name for c in _REGISTRY_LIST
+    if c.keyed or c.credential_fields or c.secret_kind != "none"
+)
 ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.org_shareable)
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)

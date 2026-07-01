@@ -11,6 +11,7 @@ from .providers import (  # noqa: F401  (ré-export rétrocompat, ADR 0010)
     Connector,
     REGISTRY,
     KEY_PROVIDERS,
+    CREDENTIAL_PROVIDERS,
     ORG_SHAREABLE_PROVIDERS,
     QUOTA_DEFAULTS,
     DEFAULT_BUNDLE,

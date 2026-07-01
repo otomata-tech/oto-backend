@@ -44,6 +44,9 @@ def _str_dict_row(cursor):
 # Providers supportés pour les user keys. DÉRIVÉ du registre source unique
 # (`connectors.py`) — ne plus éditer ici, déclarer le connecteur dans le registre.
 KEY_PROVIDERS = connectors.KEY_PROVIDERS
+# Ensemble plus large des providers pouvant détenir un credential (keyed + sessions
+# cookie + byo multi-champs) — garde-fou d'écriture `keys._check_provider`.
+CREDENTIAL_PROVIDERS = connectors.CREDENTIAL_PROVIDERS
 
 
 _pool: Optional[ConnectionPool] = None

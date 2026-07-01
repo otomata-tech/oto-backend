@@ -142,9 +142,26 @@ def register(mcp: FastMCP) -> None:
         return _client().get_supplier_invoices(max_pages=max_pages)
 
     @mcp.tool()
-    def pennylane_transactions(max_pages: Optional[int] = None) -> list:
-        """Transactions bancaires (paginé ; max_pages limite le volume)."""
-        return _client().get_transactions(max_pages=max_pages)
+    def pennylane_transactions(max_pages: Optional[int] = None,
+                               period_start: Optional[str] = None,
+                               period_end: Optional[str] = None,
+                               only_outstanding: bool = False,
+                               per_page: int = 100) -> list:
+        """Transactions bancaires. ⚠️ Sans levier, TOUT l'historique revient
+        (des centaines de transactions → dépasse la limite de tokens) : réduire
+        le volume à la source avec les filtres, optionnels.
+
+        Args:
+            max_pages: limite le nombre de pages ramenées.
+            period_start / period_end: bornes de date YYYY-MM-DD (filtre côté
+                serveur Pennylane).
+            only_outstanding: True → seulement les transactions non soldées
+                (outstanding_balance ≠ 0), ex. pour un rapprochement bancaire.
+            per_page: taille de page (≤100) — affine la granularité de max_pages.
+        """
+        return _client().get_transactions(
+            max_pages=max_pages, period_start=period_start, period_end=period_end,
+            only_outstanding=only_outstanding, per_page=per_page)
 
     @mcp.tool()
     def pennylane_categories() -> list:

@@ -199,9 +199,13 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     prov = channel.upper()
 
     @mcp.tool(name=f"{cl}_list_chats",
-              description=f"Liste les conversations {channel} (messagerie) via Unipile.")
-    def _list_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
-        return unipile_client(prov).list_chats(limit=limit, cursor=cursor)
+              description=f"Liste les conversations {channel} (messagerie) via Unipile. "
+                          "Paginé (limit + cursor) ; chaque fil 1-à-1 est enrichi du nom "
+                          "de l'interlocuteur (attendee_name), with_names=False le coupe.")
+    def _list_chats(limit: int = 20, cursor: Optional[str] = None,
+                    with_names: bool = True) -> dict:
+        return unipile_client(prov).list_chats(limit=limit, cursor=cursor,
+                                               with_attendee_names=with_names)
 
     @mcp.tool(name=f"{cl}_read_chat",
               description=f"Lit les messages d'une conversation {channel} via Unipile "
@@ -281,9 +285,17 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().get_company(identifier)
 
     @mcp.tool()
-    def unipile_chats(limit: int = 20, cursor: Optional[str] = None) -> dict:
-        """Liste les conversations LinkedIn (messagerie) via Unipile."""
-        return unipile_client().list_chats(limit=limit, cursor=cursor)
+    def unipile_chats(limit: int = 20, cursor: Optional[str] = None,
+                      with_names: bool = True) -> dict:
+        """Liste les conversations LinkedIn (messagerie) via Unipile. Paginé
+        (`limit` + `cursor`).
+
+        Chaque fil 1-à-1 est enrichi de `attendee_name`/`attendee_headline`/
+        `attendee_profile_url` (résolus en batch — le `name` brut des fils 1-à-1
+        est null et `attendee_provider_id` est opaque). `with_names=False` coupe
+        cet enrichissement (payload brut, un appel API en moins)."""
+        return unipile_client().list_chats(limit=limit, cursor=cursor,
+                                           with_attendee_names=with_names)
 
     @mcp.tool()
     def unipile_read_chat(chat_id: str, limit: int = 30) -> dict:
@@ -321,10 +333,13 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().list_relations(cursor=cursor, limit=limit)
 
     @mcp.tool()
-    def unipile_invitations(direction: str = "received") -> dict:
+    def unipile_invitations(direction: str = "received", limit: int = 50,
+                            cursor: Optional[str] = None) -> dict:
         """Liste les invitations de connexion LinkedIn. `direction`='received'
-        (reçues, à accepter) ou 'sent' (envoyées, en attente)."""
-        return unipile_client().list_invitations(direction)
+        (reçues, à accepter) ou 'sent' (envoyées, en attente). Paginé : `limit`
+        (défaut 50 — sans borne le backlog entier dépasse la limite de tokens)
+        + `cursor` pour la page suivante."""
+        return unipile_client().list_invitations(direction, limit=limit, cursor=cursor)
 
     @mcp.tool()
     def unipile_send_invitation(provider_id: str,

@@ -270,6 +270,24 @@ d'option par org que LinkedIn (comp admin `access.has_option` ; plus de paiement
 > **sièges clé plateforme** `GET /api/admin/unipile/seats` (super_admin, `db.unipile_account_owners`) :
 > réconcilie les comptes de l'instance partagée ↔ leur owner oto (flag **orphelin**).
 
+> **Compte partagé autorisé (otomata-private#55).** Le **propriétaire** d'un compte
+> Unipile accorde à un **membre nommé** (d'une org commune, anti-IDOR `users_share_org`)
+> le droit d'**opérer son compte** sur un canal — la **SEULE exception** au no-fallback
+> anti-usurpation (#5). Table `connector_account_grants` (PK `(owner_sub, provider,
+> grantee_sub)`, patron ADR 0025, `granted_by`/`granted_at` ; l'`account_id` stocké =
+> snapshot d'audit, la résolution relit le handle **LIVE** → owner déconnecté = grant
+> inerte). Le grantee bascule via le **sélecteur d'identité** (le compte accordé
+> apparaît « compte de X » ; le select pose le **pointeur** `unipile_operated_accounts`,
+> il n'écrase JAMAIS sa ligne `unipile_accounts`) ou un **pin projet** (garde étendue
+> aux comptes accordés). Résolution : `connector_identities.resolve_operated_account_id`
+> — pointeur **revalidé contre les grants vivants À CHAQUE appel** (révocation =
+> effet immédiat) ; pointeur révoqué = **erreur explicite, jamais de repli** sur le
+> compte propre. Capacité `capabilities/connectors_account_grants.py`
+> (`oto_{list,grant,revoke}_account_*`, REST `/api/me/connector-accounts/*` ; autz
+> `SUB_ONLY`, owner := ctx.sub par construction — pas d'escalade org_admin). ⚠️ La clé
+> du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
+> BYO perso ≠ celle du grantee → 404 Unipile surfacé).
+
 ## Monitoring des appels MCP
 
 `ToolCallLogger` (lib otomata-calllog) journalise chaque appel dans `tool_calls`

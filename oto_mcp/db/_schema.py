@@ -481,6 +481,40 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Grant « opérer mon compte » (otomata-private#55, patron ADR 0025) : le PROPRIÉTAIRE
+-- d'un compte Unipile accorde à un membre nommé (d'une org commune) le droit d'opérer
+-- son compte sur UN canal. Deny-by-default, révocable, audité (granted_by/granted_at).
+-- SEULE exception au no-fallback anti-usurpation (oto-backend#5) — revalidée à CHAQUE
+-- appel dans la résolution (révocation = effet immédiat). PK sans account_id : le grant
+-- porte sur LE CANAL du owner ; la résolution relit le handle LIVE via JOIN
+-- unipile_accounts (owner déconnecté ⇒ grant inerte ; reconnexion ⇒ le grant suit).
+-- `account_id` = snapshot du handle AU GRANT (audit/affichage seulement).
+CREATE TABLE IF NOT EXISTS connector_account_grants (
+    owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    provider TEXT NOT NULL,              -- canal DB (LINKEDIN/WHATSAPP/…)
+    account_id TEXT NOT NULL,
+    grantee_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    granted_by TEXT NOT NULL,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_sub, provider, grantee_sub)
+);
+CREATE INDEX IF NOT EXISTS idx_account_grants_grantee
+    ON connector_account_grants(grantee_sub, provider);
+
+-- Pointeur « identité opérée » du grantee : (sub, provider) → compte qu'il OPÈRE,
+-- DISTINCT de sa ligne de connexion unipile_accounts (qui reste SON compte : org_id
+-- de facturation, vue admin seats, disconnect). Posé par select_identity d'un compte
+-- accordé, effacé par le retour-à-soi. Jamais un droit : revalidé contre
+-- connector_account_grants à chaque appel (backstop dur).
+CREATE TABLE IF NOT EXISTS unipile_operated_accounts (
+    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    owner_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    selected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, provider)
+);
+
 -- Palier organization (= périmètre / store serveur). Une org possède des
 -- credentials propres (coffre `connector_credentials`, entity_type='org') et
 -- des opérateurs (org_members). Source de vérité de l'appartenance = ces tables, résolues par

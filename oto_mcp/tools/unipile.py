@@ -164,17 +164,32 @@ def unipile_client(provider: str = "LINKEDIN"):
     connecté pour ce canal, le client oto-core retomberait sur le 1er compte de
     l'abonnement → **usurpation cross-user** (audit sécu 2026-06-18). On exige le
     credential per-user, sinon McpError actionnable. Réutilisé par tools/whatsapp.py.
+
+    SEULE exception (#55) : un compte ACCORDÉ par son propriétaire
+    (`connector_account_grants`, revalidé à CHAQUE appel — révocation immédiate),
+    résolu par `connector_identities.resolve_operated_account_id`. Limitation : si
+    le owner est sur une AUTRE clé Unipile que le grantee (BYO perso ≠ clé
+    partagée), l'API Unipile répondra 404 sur l'account_id — erreur surfacée telle
+    quelle (la clé résolue est indépendante du compte).
     """
     from oto.tools.unipile import UnipileClient
+    from .. import connector_identities
     rc = access.resolve_credential("unipile", want="auto")
     sub = access.current_user_sub_or_raise()
-    account_id = db.get_unipile_account_id(sub, provider)
+    try:
+        account_id = connector_identities.resolve_operated_account_id(sub, provider)
+    except ValueError as e:  # pointeur opéré révoqué/déconnecté → erreur explicite
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     # Pin projet (#57) : si le projet actif épingle un compte unipile, il prime sur le
     # défaut per-canal — MAIS seulement s'il appartient à CE user (anti-usurpation, cf.
-    # note sécu ci-dessus) ET au canal demandé. Sinon on garde le défaut (fail-soft).
+    # note sécu ci-dessus) OU lui est accordé par son propriétaire (#55, grant vivant
+    # re-checké à cet appel), ET au canal demandé. Sinon on garde le défaut (fail-soft).
     pinned = access.project_pinned_identity("unipile")
-    if pinned and any(a.get("account_id") == pinned and a.get("provider") == provider
-                      for a in db.list_unipile_accounts(sub)):
+    if pinned and (
+        any(a.get("account_id") == pinned and a.get("provider") == provider
+            for a in db.list_unipile_accounts(sub))
+        or pinned in db.granted_accounts_for(sub, provider)
+    ):
         account_id = pinned
     if not account_id:
         raise McpError(ErrorData(

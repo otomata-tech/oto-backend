@@ -56,6 +56,16 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_instructions ALTER COLUMN id SET DEFAULT nextval('org_instructions_id_seq')")
         conn.execute("ALTER TABLE org_instructions ALTER COLUMN id SET NOT NULL")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instructions_id ON org_instructions(id)")
+        # B3 : migrer les liens projet→procédure de slug vers l'id de doctrine (org-owned ;
+        # les projets user-owned gardent le slug, résolu à la lecture côté front). Idempotent
+        # (guard `!~ '^[0-9]+$'` = pas déjà un id ; JOIN = seulement si la doctrine existe).
+        conn.execute("""
+            UPDATE project_links pl SET target_ref = oi.id::text
+            FROM projects p JOIN org_instructions oi ON oi.org_id = p.owner_id::bigint
+            WHERE pl.project_id = p.id AND pl.target_type = 'procedure'
+              AND p.owner_type = 'org' AND oi.slug = pl.target_ref
+              AND pl.target_ref !~ '^[0-9]+$'
+        """)
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
         conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")

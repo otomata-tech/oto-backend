@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, ownership, roles, session_org
+from .. import db, org_store, ownership, roles, session_org
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -76,6 +76,16 @@ def _view(row: dict) -> dict:
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
         "archived_at": row.get("archived_at"),
     }
+
+
+def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
+    """Réf de procédure (ADR 0032) → l'ID stable de la doctrine. Accepte déjà un id
+    (chiffres) ou un slug (résolu dans l'org du projet) ; fallback = laisser tel quel
+    (doctrine introuvable / hors org → pas de casse, résolu à la lecture côté front)."""
+    if not ref or ref.isdigit() or org_id is None:
+        return ref
+    inst = org_store.get_instruction(int(org_id), ref)
+    return str(inst["id"]) if inst and inst.get("id") is not None else ref
 
 
 def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
@@ -167,13 +177,20 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
         _require(inp.target_type and inp.target_ref, "missing_target",
                  "`target_type` et `target_ref` requis.")
+        # ADR 0032 « stop using slug » : une procédure est référencée par l'ID STABLE de
+        # la doctrine. On accepte un slug (naturel côté agent) OU un id et on stocke l'id
+        # (idem à l'unlink pour matcher les lignes migrées).
+        target_ref = inp.target_ref
+        if inp.target_type == "procedure":
+            proj_org = int(row["owner_id"]) if row.get("owner_type") == "org" else ctx.org_id
+            target_ref = _procedure_ref_to_id(proj_org, target_ref)
         if inp.op == "link":
-            db.add_project_link(int(inp.project_id), inp.target_type, inp.target_ref,
+            db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
                                 inp.label, role=inp.role, config=inp.config)
         else:
-            db.remove_project_link(int(inp.project_id), inp.target_type, inp.target_ref)
+            db.remove_project_link(int(inp.project_id), inp.target_type, target_ref)
         db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
-                                f"{inp.target_type}:{inp.label or inp.target_ref}")
+                                f"{inp.target_type}:{inp.label or target_ref}")
         return {"ok": True, "id": inp.project_id,
                 "links": db.list_project_links(int(inp.project_id))}
 

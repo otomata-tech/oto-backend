@@ -85,6 +85,30 @@ def list_projects_for_owners(owners: list[tuple[str, str]], *,
         return [dict(r) for r in rows]
 
 
+def list_projects_granted_to(principals: list[tuple[str, str]]) -> list[dict]:
+    """Projets PARTAGÉS aux principals donnés (`resource_grants`, ADR 0030) — la
+    lentille « livré à mon org / à moi » (#52). Chaque row porte en plus la
+    `permission` du meilleur grant. Exclut les archivés."""
+    if not principals:
+        return []
+    ptypes = [p[0] for p in principals]
+    pids = [p[1] for p in principals]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join('p.' + c.strip() for c in _PROJECT_COLS.split(','))}, "
+            "       MAX(g.permission) AS permission "
+            "FROM resource_grants g "
+            "JOIN projects p ON p.id = g.resource_id::bigint "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON g.principal_type = pr.t AND g.principal_id = pr.i "
+            "WHERE g.resource_type = 'project' AND p.archived_at IS NULL "
+            f"GROUP BY {', '.join('p.' + c.strip() for c in _PROJECT_COLS.split(','))} "
+            "ORDER BY p.updated_at DESC",
+            (ptypes, pids),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_all_projects(*, include_archived: bool = False) -> list[dict]:
     """Tous les projets (vue opérateur plateforme — gouvernance, pas de contenu)."""
     sql = f"SELECT {_PROJECT_COLS} FROM projects "
@@ -195,6 +219,20 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
             (project_id, target_type, target_ref, identity_ref, label, role, cfg, cfg),
         )
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+
+
+def update_project_link_ref(project_id: int, target_type: str,
+                            old_ref: str, new_ref: str) -> int:
+    """Re-pointe un lien vers une autre entité (même type). Sert la cascade de
+    livraison (#52) : une procédure COPIÉE dans l'org cible re-pointe le lien sur
+    la copie. Renvoie le nb de bindings re-pointés."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE project_links SET target_ref = %s "
+            "WHERE project_id = %s AND target_type = %s AND target_ref = %s",
+            (new_ref, project_id, target_type, old_ref),
+        )
+        return cur.rowcount
 
 
 def remove_project_link(project_id: int, target_type: str, target_ref: str,

@@ -35,19 +35,109 @@ log = logging.getLogger("oto_mcp.tools.remote")
 
 
 def register(mcp: FastMCP) -> None:
-    # Découverte data-driven : un remote existe ssi une org a posé un credential
-    # avec `meta.base_url`. Figé au boot (comme les mounts) — un nouveau remote
-    # apparaît au prochain restart. Dégradation propre si le coffre/DB est indispo
+    # Bridge UNIVERSEL (ADR 0034) : namespace fixe `bridge`, credential = champs
+    # standard du connecteur `bridge` du registre (base_url/token/label, cascade
+    # d'org via resolve_credential_fields). Enregistré inconditionnellement — la
+    # visibilité suit le régime commun (activation × masque user), l'exécution
+    # lève proprement sans credential.
+    _register_bridge(mcp)
+
+    # LEGACY (ADR 0003/0011, retrait prévu ADR 0034 B4) — découverte data-driven :
+    # un remote existe ssi une org a posé un credential avec `meta.base_url`. Figé
+    # au boot (comme les mounts). Dégradation propre si le coffre/DB est indispo
     # au boot (pas de crash du serveur — register_all n'est pas wrappé ici).
     try:
         namespaces = credentials_store.list_remote_namespaces()
     except Exception as e:
         log.warning("remote: discovery échouée (%s) → 0 connecteur remote", e)
         return
+    # jamais de collision avec le namespace fixe du bridge universel
+    namespaces -= {"bridge"}
     if not namespaces:
         return
     for ns in sorted(namespaces):
         _register_one(mcp, ns)
+
+
+def _bridge_credential() -> tuple[str, str]:
+    """Résout `(base_url, token)` du connecteur `bridge` UNIVERSEL (ADR 0034) —
+    champs standard du coffre (cascade membre > groupe > org), plus de `meta`.
+    Lève une McpError actionnable si l'org n'a pas configuré son pont."""
+    sub = current_user_sub_from_token()
+    if sub is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message="Connecteur bridge indisponible en stdio local (credential d'org requis).",
+        ))
+    try:
+        f = access.resolve_credential_fields("bridge")
+    except Exception:
+        f = {}
+    base_url = (f.get("base_url") or "").strip().rstrip("/")
+    token = (f.get("token") or "").strip()
+    if not base_url or not token:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(
+                "Connecteur bridge non configuré pour ton org : pose `base_url` "
+                "(l'endpoint de ton service) + `token` (M2M) sur la carte Bridge du dashboard."
+            ),
+        ))
+    return base_url, token
+
+
+def _universal_bridge_get(route: str, params: dict | None = None) -> dict:
+    """Forward vers le pont de l'org (bridge universel). Même contrat HTTP que le
+    legacy `_bridge_get` (bearer M2M + X-Oto-Sub d'audit, erreurs actionnables)."""
+    sub = current_user_sub_from_token()
+    base_url, token = _bridge_credential()
+    r = requests.get(
+        f"{base_url}{route}",
+        params=params,
+        headers={"Authorization": f"Bearer {token}", "X-Oto-Sub": sub or ""},
+        timeout=TIMEOUT,
+    )
+    if r.status_code == 401:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=("Bridge : token M2M refusé (rotaté ?). Re-pose le credential "
+                     "sur la carte Bridge du dashboard de ton org."),
+        ))
+    if not r.ok:
+        detail = ""
+        try:
+            detail = r.json().get("detail", "")
+        except Exception:
+            pass
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Bridge : HTTP {r.status_code}{' — ' + detail if detail else ''}",
+        ))
+    return r.json()
+
+
+def _register_bridge(mcp: FastMCP) -> None:
+    @mcp.tool(
+        name="bridge_describe",
+        description=(
+            "Ton bridge (service distant de ton org, connecteur `bridge`) — surface "
+            "disponible : routes forwardables + doc. À appeler d'abord pour découvrir "
+            "les paths utilisables par bridge_call."
+        ),
+    )
+    def bridge_describe() -> dict:
+        return _universal_bridge_get("/describe")
+
+    @mcp.tool(
+        name="bridge_call",
+        description=(
+            "Ton bridge (service distant de ton org) — appel LECTURE SEULE forwardé. "
+            "`path` = route du système distant (voir bridge_describe). Le service "
+            "distant borne les paths autorisés."
+        ),
+    )
+    def bridge_call(path: str) -> dict:
+        return _universal_bridge_get("/call", {"path": path})
 
 
 def _bridge_get(ns: str, route: str, params: dict | None = None) -> dict:

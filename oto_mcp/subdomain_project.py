@@ -300,7 +300,7 @@ class HostDispatch:
 # Let's Encrypt : un tiers qui martèle `random.mcp.oto.cx` ne déclenche aucun cert).
 # Route NON authentifiée (appelée par Caddy en localhost), montée avant le gate JWT.
 def make_routes():
-    from starlette.responses import PlainTextResponse
+    from starlette.responses import JSONResponse, PlainTextResponse
     from starlette.routing import Route
 
     async def _tls_check(request):
@@ -308,4 +308,27 @@ def make_routes():
         return (PlainTextResponse("ok") if resolve_project(domain) is not None
                 else PlainTextResponse("not published", status_code=404))
 
-    return [Route("/api/mcp/tls-check", _tls_check, methods=["GET"])]
+    async def _public_mcp_projects(request):
+        """Annuaire PUBLIC des endpoints MCP anonymes (consommé par oto-websites,
+        cross-origin → CORS *). Sans auth, sans donnée sensible (projets déjà publics)."""
+        from . import db
+        out = []
+        try:
+            for p in db.list_published_mcp_projects():
+                slug = p.get("mcp_slug")
+                if not slug:
+                    continue
+                out.append({"slug": slug, "name": p.get("name"),
+                            "brief": (p.get("brief_md") or "")[:400],
+                            "tools": list(p.get("mcp_tools") or []),
+                            "url": f"https://{slug}.mcp.oto.cx"})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("public mcp-projects list failed: %s", e)
+        return JSONResponse({"projects": out},
+                            headers={"Access-Control-Allow-Origin": "*",
+                                     "Cache-Control": "public, max-age=120"})
+
+    return [
+        Route("/api/mcp/tls-check", _tls_check, methods=["GET"]),
+        Route("/api/public/mcp-projects", _public_mcp_projects, methods=["GET"]),
+    ]

@@ -171,6 +171,18 @@ def get_project_by_mcp_slug(slug: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def list_published_mcp_projects() -> list[dict]:
+    """Projets publiés en endpoint MCP **anonyme** (annuaire public oto-websites).
+    Exclut les endpoints `org` (authentifiés, hors galerie publique) et les archivés."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects "
+            "WHERE mcp_access = 'anonymous' AND mcp_slug IS NOT NULL AND archived_at IS NULL "
+            "ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                                 access: str, tools: list[str]) -> None:
     """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug

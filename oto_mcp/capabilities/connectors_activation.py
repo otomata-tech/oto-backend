@@ -24,21 +24,17 @@ from .registry import CAPABILITIES
 
 _ID = {"id": "org_id"}     # placeholder {id} → champ Input org_id
 
-# Couche 3 (abonnement, ADR 0024) : connecteur → option payante (add-on Stripe).
+# Couche 3 (option de connecteur, ADR 0024) : connecteur → option débloquable.
 # Aujourd'hui seul unipile (option « messagerie hébergée »). Map curée — pas de
-# champ générique au registre tant qu'il n'y a qu'un add-on.
+# champ générique au registre tant qu'il n'y a qu'une option.
 _PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
-_SUBSCRIBED_STATUSES = ("active", "trialing", "past_due")
 
 
 def _org_subscribed(org_id: int, option: str) -> bool:
-    """L'org a-t-elle l'add-on payant `option` ? comp admin OU abonnement Stripe
-    actif. Best-effort (ne fait jamais échouer la lecture de la liste)."""
+    """L'org a-t-elle l'option `option` débloquée (comp admin) ? Best-effort (ne fait
+    jamais échouer la lecture de la liste)."""
     try:
-        if db.has_option_comp("org", str(org_id), option):
-            return True
-        s = db.get_org_subscription(org_id, option)
-        return bool(s and s.get("status") in _SUBSCRIBED_STATUSES)
+        return db.has_option_comp("org", str(org_id), option)
     except Exception:
         return False
 

@@ -210,7 +210,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "connecte tes comptes (LinkedIn, WhatsApp, Telegram, Instagram, Messenger, X) en **auth hébergée "
             "[Unipile](https://www.unipile.com)** depuis le dashboard oto — pas de cookie à coller ni d'extension. "
             "la session tourne chez Unipile (vrai Chrome + proxy résidentiel), ce qui évite les blocages d'empreinte.\n"
-            "- abonnement **par canal** (un canal = un abonnement), géré au niveau de ton org"
+            "- option **messagerie hébergée** activée par l'admin de ton org (ou ta propre clé Unipile en BYO)"
         )),
         DocSection(kind="usage", title="prospection linkedin + messagerie multi-canal", body_md=(
             "recherche, scrape et messagerie LinkedIn (et messagerie WhatsApp/Telegram/Instagram/Messenger/X), tu agis comme toi-même.\n"

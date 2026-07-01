@@ -27,8 +27,8 @@ Around the connectors, oto-mcp provides the platform plumbing:
   per-user keys, per-org/group shared secrets, and platform keys with quotas.
 - **Orgs, groups & roles** — `member < admin < super_admin`, org/department hierarchy,
   cascading key resolution (`user_key > group > org > platform_grant`).
-- **Per-user tool visibility**, presets, billing (Stripe call credits + subscriptions),
-  call monitoring, org doctrines/skills, and MCP federation (mount / remote bridge).
+- **Per-user tool visibility**, presets, call monitoring, org doctrines/skills, and
+  MCP federation (mount / remote bridge).
 
 ## Architecture
 
@@ -38,7 +38,7 @@ oto_mcp/
 ├── tools/             # one module per connector, each exposing register(mcp)
 ├── connectors.py      # the connector registry — single source of truth
 ├── capabilities/      # capabilities shared across MCP + REST faces (ADR 0009)
-├── api_routes*.py     # REST /api/* (account, settings, orgs, admin, billing, datastore…)
+├── api_routes*.py     # REST /api/* (account, settings, orgs, admin, datastore…)
 ├── access.py          # roles, resolve_api_key, quotas, key-resolution cascade
 ├── credentials_store.py / crypto.py  # the encrypted vault
 ├── db.py              # PostgreSQL (psycopg pool) — per-user state
@@ -76,7 +76,7 @@ systemd service. Full procedure in [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 ## Docs
 
 In-depth docs live under [`docs/`](docs/): `connector-vault.md` (the central
-architecture), `roles-and-resolution.md`, `auth-logto.md`, `rest-api.md`, `billing.md`,
+architecture), `roles-and-resolution.md`, `auth-logto.md`, `rest-api.md`,
 `datastore.md`, `groups-and-roles.md`, `federation.md`, `doctrines.md`, `monitoring.md`,
 `usage-loop.md`.
 

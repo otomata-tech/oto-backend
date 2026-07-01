@@ -99,7 +99,7 @@ def current_org(sub: str | None) -> Optional[int]:
     résolution d'org (ADR 0023, amende 0015).
 
     Point de passage de TOUT ce qui scope une action sur l'org (credentials,
-    visibilité, entitlements, redaction, billing). Aujourd'hui (barreau R0) =
+    visibilité, entitlements, redaction). Aujourd'hui (barreau R0) =
     l'org persistée (`org_store.get_active_org`, qui devient l'« org maison »).
 
     Résout `org_de_session ?? org_de_consultation ?? org_maison` (ADR 0023) :
@@ -131,8 +131,6 @@ def current_org(sub: str | None) -> Optional[int]:
     return org_store.get_active_org(sub)
 
 
-_SUBSCRIBED_STATUSES = ("active", "trialing", "past_due")
-
 # Sentinelle « param non fourni » — distingue « org=None » (perso, valeur légitime)
 # de « pas d'org explicite → résous via current_org ». Sert à calculer l'état d'un
 # TIERS (fiche admin) contre SON org persistée, sans laisser fuiter le contexte
@@ -142,21 +140,18 @@ _UNSET: object = object()
 
 
 def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) -> bool:
-    """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option
-    payante `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
-    débloquée si l'UNE des trois : comp admin sur l'USER, comp admin sur l'ORG active,
-    ou abonnement Stripe de l'ORG active. Ne JAMAIS lire les sources en direct ailleurs
-    (un nouveau chemin passe par ici). `org` explicite (≠ _UNSET) = calcul pour un tiers
-    contre une org donnée (fiche admin), sans current_org (anti-fuite de contexte)."""
+    """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option de
+    connecteur `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
+    débloquée par un **comp admin** sur l'USER OU sur l'ORG active (plus de paiement :
+    le modèle billing/Stripe a été retiré, la gouvernance de l'option est purement admin).
+    Ne JAMAIS lire les sources en direct ailleurs (un nouveau chemin passe par ici).
+    `org` explicite (≠ _UNSET) = calcul pour un tiers contre une org donnée (fiche admin),
+    sans current_org (anti-fuite de contexte)."""
     if db.has_option_comp("user", sub, option):
         return True
     org = current_org(sub) if org is _UNSET else org
-    if org is not None:
-        if db.has_option_comp("org", str(org), option):
-            return True
-        s = db.get_org_subscription(org, option)
-        if s and s.get("status") in _SUBSCRIBED_STATUSES:
-            return True
+    if org is not None and db.has_option_comp("org", str(org), option):
+        return True
     return False
 
 

@@ -1,4 +1,4 @@
-"""Comptes Unipile/messagerie, abonnements Stripe par org, options comp, pending hosted-auth.
+"""Comptes Unipile/messagerie, options comp (admin), pending hosted-auth.
 
 Extrait de l'ex-monolithe `db.py` (barreau final). Fonctions de domaine — la
 plomberie est dans `_conn`. Ré-exporté par `db/__init__`.
@@ -25,7 +25,7 @@ from .users import upsert_user
 def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None,
                         org_id: Optional[int] = None, provider: str = "LINKEDIN") -> None:
     """Associe (upsert) le compte Unipile `account_id` à `(sub, provider)` (B3,
-    multi-canal). `org_id` = org dont l'abonnement porte ce compte (compté + facturé)."""
+    multi-canal). `org_id` = org à laquelle ce compte est rattaché (ventilation par org)."""
     upsert_user(sub)
     with _connect() as conn:
         conn.execute(
@@ -80,7 +80,7 @@ def get_unipile_account(sub: str, provider: str = "LINKEDIN") -> Optional[dict]:
 def list_unipile_accounts(sub: str) -> list[dict]:
     """Tous les comptes Unipile connectés du user, tous canaux confondus
     (`[{provider, account_id, account_name, org_id, connected_at}]`) — pour le dashboard.
-    `org_id` = l'org dont l'abonnement porte le compte (ventilation par org, fiche admin)."""
+    `org_id` = l'org à laquelle le compte est rattaché (ventilation par org, fiche admin)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT provider, account_id, account_name, org_id, connected_at FROM unipile_accounts "
@@ -96,8 +96,8 @@ def clear_unipile_account(sub: str, provider: str = "LINKEDIN") -> None:
 
 
 def count_unipile_accounts_for_org(org_id: int) -> int:
-    """Nombre de comptes LinkedIn connectés portés par l'abonnement de cet org
-    (base du plafond anti-dérapage + de la facturation par compte)."""
+    """Nombre de comptes LinkedIn connectés rattachés à cet org
+    (base du plafond anti-dérapage sur les comptes hébergés)."""
     with _connect() as conn:
         return conn.execute(
             "SELECT COUNT(*) AS n FROM unipile_accounts WHERE org_id = %s", (org_id,)
@@ -106,7 +106,7 @@ def count_unipile_accounts_for_org(org_id: int) -> int:
 
 def list_unipile_accounts_by_org() -> list[dict]:
     """`[{org_id, provider, account_id, sub}]` de tous les comptes rattachés à un org
-    (org_id non NULL) — itéré par la facturation récurrente."""
+    (org_id non NULL)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT org_id, provider, account_id, sub FROM unipile_accounts WHERE org_id IS NOT NULL"
@@ -146,53 +146,9 @@ def set_org_unipile_limit(org_id: int, limit: Optional[int]) -> None:
         )
 
 
-def get_org_subscription(org_id: int, product: str) -> Optional[dict]:
-    """Miroir local de l'abonnement Stripe `product` de l'org (status/quantity/ids)
-    ou None. Lu pour le gate d'activation (sans appel Stripe par requête)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT org_id, product, stripe_customer_id, stripe_subscription_id, "
-            "status, quantity, updated_at FROM org_subscriptions "
-            "WHERE org_id = %s AND product = %s", (org_id, product)
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def upsert_org_subscription(org_id: int, product: str, *, status: str,
-                            stripe_customer_id: Optional[str] = None,
-                            stripe_subscription_id: Optional[str] = None,
-                            quantity: Optional[int] = None) -> None:
-    """Upsert le miroir d'abonnement (appelé par les webhooks Stripe). Les champs
-    ids/quantity laissés à None ne sont pas écrasés s'ils existent déjà."""
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO org_subscriptions "
-            "(org_id, product, status, stripe_customer_id, stripe_subscription_id, quantity, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, 0), NOW()) "
-            "ON CONFLICT (org_id, product) DO UPDATE SET "
-            "status = EXCLUDED.status, "
-            "stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, org_subscriptions.stripe_customer_id), "
-            "stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, org_subscriptions.stripe_subscription_id), "
-            "quantity = COALESCE(%s, org_subscriptions.quantity), updated_at = NOW()",
-            (org_id, product, status, stripe_customer_id, stripe_subscription_id,
-             quantity, quantity),
-        )
-
-
-def get_org_by_subscription_id(stripe_subscription_id: str) -> Optional[dict]:
-    """Retrouve `{org_id, product}` depuis l'id d'abonnement Stripe (webhooks dont
-    le metadata serait absent)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT org_id, product FROM org_subscriptions WHERE stripe_subscription_id = %s",
-            (stripe_subscription_id,)
-        ).fetchone()
-    return dict(row) if row else None
-
-
 def set_option_comp(entity_type: str, entity_id: str, option: str,
                     *, granted_by: Optional[str] = None) -> None:
-    """Offre (comp gratuit) une option payante à une entité user|org. Idempotent."""
+    """Offre (comp gratuit) une option de connecteur à une entité user|org. Idempotent."""
     with _connect() as conn:
         conn.execute(
             "INSERT INTO option_comps (entity_type, entity_id, option, granted_by) "

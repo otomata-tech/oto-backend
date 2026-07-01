@@ -204,7 +204,7 @@ def init_db() -> None:
                          (json.dumps(_grouped), _row["id"]))
         # Archivage (soft-delete) d'une org : masquée de tous les listings, réversible
         # (NULL = active). Pas de hard-delete — les FK (membres, credentials, usage,
-        # billing, invitations, groupes) restent intactes pour audit/restauration.
+        # invitations, groupes) restent intactes pour audit/restauration.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
         # Org PERSO (suppression du perso) : `personal_of` = sub dont c'est l'espace
         # privé mono-membre (NULL = org partagée). Unicité : 1 org perso par user.

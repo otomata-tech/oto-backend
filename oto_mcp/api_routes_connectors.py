@@ -28,7 +28,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from mcp.shared.exceptions import McpError
 
-from . import access, billing, connector_activation, db, org_store, providers
+from . import access, connector_activation, db, org_store, providers
 
 logger = logging.getLogger(__name__)
 
@@ -159,18 +159,18 @@ def make_routes(
         # BYO = clé propre (user/groupe/ORG), pas la clé plateforme — via le seam
         # de résolution (mode), PAS un check user-only qui ratait une clé d'org.
         byo = access.credential_mode_for(sub, "unipile") in access.BYO_MODES
-        # org « porteur » du compte = org actif, SAUF en BYO (abonnement propre, pas
-        # de plafond org).
+        # org « porteur » du compte = org actif, SAUF en BYO (clé propre, pas de
+        # plafond org).
         org_id = None if byo else org_store.get_active_org(sub)
-        # Gate ABONNEMENT (couche 3, docs/connector-model.md) : seam unique
-        # `access.has_option` = abonnement Stripe de l'org OU comp admin (user|org).
-        # BYO (clé perso) = l'user paie Unipile en direct → pas de gate. Sur ce 402,
-        # le dashboard lance le checkout Stripe.
+        # Gate OPTION (couche 3, docs/connector-model.md) : seam unique
+        # `access.has_option` = comp admin (user|org). BYO (clé perso) = l'user gère
+        # sa propre instance Unipile → pas de gate. Sinon l'option de messagerie
+        # hébergée doit avoir été accordée à l'org par un admin (plus de paiement).
         if not byo and not access.has_option(sub, "unipile"):
-            return json_error(request, 402, "unipile_subscription_required")
-        # Plafond anti-dérapage : chaque compte connecté coûte ~5 €/mois sur la
-        # facture Unipile de l'org. On bloque une NOUVELLE connexion au-delà du
-        # plafond (un user qui a déjà un compte peut reconnecter = remplacement).
+            return json_error(request, 402, "unipile_option_required")
+        # Plafond anti-dérapage : chaque compte connecté consomme un siège sur la clé
+        # plateforme Unipile. On bloque une NOUVELLE connexion au-delà du plafond (un
+        # user qui a déjà un compte peut reconnecter = remplacement).
         if org_id is not None and db.get_unipile_account(sub, provider) is None:
             limit = db.get_org_unipile_limit(org_id)
             if limit is None:
@@ -238,9 +238,6 @@ def make_routes(
                                        provider=pend.get("provider", "LINKEDIN"))
                 logger.info("unipile webhook: bound sub=%s account_id=%s org=%s",
                             pend["sub"], account_id, pend.get("org_id"))
-                # Aligne la quantité de l'abonnement Stripe sur le nb de sièges.
-                if pend.get("org_id"):
-                    await asyncio.to_thread(billing.sync_unipile_seats, pend["org_id"])
             else:
                 logger.warning("unipile webhook: nonce inconnu/expiré name=%s", name)
         elif status and status != "CREATION_SUCCESS":
@@ -255,36 +252,14 @@ def make_routes(
         from .tools import unipile
         return json_response(request, unipile.status_for(sub))
 
-    async def unipile_subscribe(request: Request) -> JSONResponse:
-        """Démarre l'abonnement « option LinkedIn » (€15/mois/siège) de l'org active.
-        Renvoie `{checkout_url}` (Stripe `mode=subscription`). Quantité initiale =
-        nb de comptes déjà connectés (≥1). Le webhook marque l'org active au paiement."""
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        org_id = org_store.get_active_org(sub)
-        if org_id is None:
-            return json_error(request, 400, "no_active_org")
-        qty = max(1, db.count_unipile_accounts_for_org(org_id))
-        try:
-            res = await asyncio.to_thread(
-                billing.create_unipile_subscription_checkout, org_id, sub, qty)
-        except Exception as e:
-            return json_error(request, 502, f"unipile_subscribe_failed: {e}")
-        return json_response(request, res)
-
     async def unipile_disconnect(request: Request) -> JSONResponse:
         """Oublie l'association compte LinkedIn ↔ user (ne supprime pas le compte
-        chez Unipile, juste le mapping côté oto). Réaligne les sièges de l'abonnement."""
+        chez Unipile, juste le mapping côté oto)."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
         provider = str(request.query_params.get("channel") or "linkedin").upper()
-        had = db.get_unipile_account(sub, provider) is not None
         db.clear_unipile_account(sub, provider)
-        org_id = org_store.get_active_org(sub)
-        if had and org_id is not None:
-            await asyncio.to_thread(billing.sync_unipile_seats, org_id)
         return json_response(request, {"ok": True})
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:
@@ -340,8 +315,6 @@ def make_routes(
         Route("/api/admin/connectors/activation", options_handler, methods=["OPTIONS"]),
         Route("/api/me/unipile/connect", unipile_connect, methods=["POST"]),
         Route("/api/me/unipile/connect", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/unipile/subscribe", unipile_subscribe, methods=["POST"]),
-        Route("/api/me/unipile/subscribe", options_handler, methods=["OPTIONS"]),
         Route("/api/unipile/webhook", unipile_webhook, methods=["POST"]),
         Route("/api/me/unipile", unipile_status, methods=["GET"]),
         Route("/api/me/unipile", unipile_disconnect, methods=["DELETE"]),

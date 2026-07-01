@@ -380,6 +380,20 @@ CREATE TABLE IF NOT EXISTS project_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_project_activity_project ON project_activity(project_id, created_at DESC);
 
+-- Partage PUBLIC CHIFFRÉ d'un projet (branche « public-project-sharing-encrypted »,
+-- ADR 0032 §3). Zero-knowledge : le serveur ne stocke QUE le ciphertext (snapshot
+-- brief + pages chiffré côté navigateur, AES-256-GCM) ; la clé vit dans le fragment
+-- de l'URL (`/p/p/<token>#<clé>`) et n'atteint JAMAIS le backend. Une part par projet
+-- (unique). `token` = identifiant public opaque ; retirer le partage = DELETE la ligne.
+CREATE TABLE IF NOT EXISTS project_public_shares (
+    token TEXT PRIMARY KEY,
+    project_id BIGINT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+    ciphertext TEXT NOT NULL,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Fichiers bruts d'un projet — carte « Autre document » (ADR 0032 §3). PDF/HTML/etc.
 -- stockés en Object Storage DURABLE+privé (media_store.upload_object → `s3_key`
 -- persistée, presigned à la lecture). `title`/`description` = la coquille légère

@@ -55,6 +55,9 @@ def seams(monkeypatch):
                         lambda sid, pid: rec["proj"].append((sid, pid)))
     monkeypatch.setattr(P.session_org, "clear_project_override",
                         lambda sid: rec["proj"].append((sid, None)))
+    # Partage public chiffré (ADR 0032 §3) : défaut = non partagé ; les tests dédiés
+    # surchargent get_project_public_share pour simuler une part active.
+    monkeypatch.setattr(P.db, "get_project_public_share", lambda pid: None)
     return rec
 
 
@@ -186,6 +189,20 @@ def test_get_includes_links(seams):
     assert out["id"] == 7
     assert out["links"][0]["role"] == "vivier de leads"
     assert out["links"][0]["cross_project"] is False
+
+
+def test_get_not_public_by_default(seams):
+    out = P._project(CTX, P.ProjectInput(op="get", project_id=7))
+    assert out["public_shared"] is False and out["public_shared_at"] is None
+
+
+def test_get_reflects_public_share(seams, monkeypatch):
+    # Une part publique CHIFFRÉE active → get l'expose (présence + horodatage, jamais la clé).
+    monkeypatch.setattr(P.db, "get_project_public_share",
+                        lambda pid: {"token": "tok", "updated_at": "2026-07-01"})
+    out = P._project(CTX, P.ProjectInput(op="get", project_id=7))
+    assert out["public_shared"] is True and out["public_shared_at"] == "2026-07-01"
+    assert "token" not in out   # le token public n'est pas exposé par le get (lien = dashboard)
 
 
 def test_link(seams):

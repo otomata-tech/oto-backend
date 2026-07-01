@@ -120,8 +120,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "get":
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+        # Part publique CHIFFRÉE (ADR 0032 §3) : le serveur ne connaît que sa présence
+        # + son horodatage, JAMAIS la clé (côté navigateur). La (re)publication passe
+        # par la route REST dédiée (le ciphertext vient du front, pas de l'agent).
+        share = db.get_project_public_share(int(inp.project_id))
         return {**_view(row),
                 "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
+                "public_shared": bool(share),
+                "public_shared_at": share.get("updated_at") if share else None,
                 "links": db.list_project_links(int(inp.project_id))}
 
     if inp.op == "activity":

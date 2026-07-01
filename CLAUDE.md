@@ -70,9 +70,30 @@ Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 ## Rôles + résolution de clé API
 
 3 paliers `member < admin < super_admin` (accès admin UI). Résolution de clé par
-appel : `user_key > group_secret > org_secret > platform_grant` (chemin platform
-gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
+appel : `clé membre (sub, org) > group_secret > org_secret > platform_grant` (chemin
+platform gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
 grants/quota, platform keys, providers byo-only).
+
+> **Scope MEMBRE (ADR 0033, 2026-07-02).** Plus de credential per-user org-agnostique :
+> la clé BYO d'un membre est keyée **(sub, org)** — coffre `entity_type='member'`,
+> `entity_id="{org}:{sub}"` (AAD dérivé → liée crypto à son org). Posée dans l'org A,
+> elle ne résout PAS depuis l'org B (fini « ta clé perso te suit partout et écrase la
+> clé d'org »). L'org de scope = seam `current_org` (0023), à la pose (`/api/settings/
+> api-keys`, sessions browser) comme à la résolution ; helpers `db.{get,has,set,clear}_
+> member_api_key(sub, org_id, provider)` — la couche db ne lit JAMAIS `current_org`
+> elle-même. Valeurs de contrat inchangées (`mode="user"`, `user_key_configured`) —
+> seule la sémantique change. **B3 (google)** : comptes Google multi-comptes scopés
+> (sub, org) — `db/google.py` en entité member, l'org du DÉMARRAGE du flow OAuth voyage
+> dans le **state HMAC** jusqu'au callback (qui vient de Google, sans headers de
+> consultation). **B4 (unipile)** : `unipile_accounts` au grain **(sub, org_id, provider)**
+> — `org_id` = org de CONTEXTE du binding (la facturation des sièges plateforme a sa
+> colonne `platform_seat` ; les BYO ne comptent pas dans le plafond) ; migration PK
+> one-shot `db.backfill_unipile_member_scope()` (⚠️ le cycle de vie du PK lui appartient,
+> pas à `_init.py`). **Seuls les mounts oauth fédérés** (memento/atlassian/folkmcp)
+> restent scope `('user', sub)` ; tripwire `test_member_credential_scope.py` interdit
+> toute autre écriture scope user. Migration coffre = `credentials_store.
+> backfill_member_scope()` au boot (re-chiffrement — l'AAD change, pas d'UPDATE ;
+> destination = org maison ; ligne indéchiffrable laissée inerte).
 
 **Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
 
@@ -100,8 +121,25 @@ connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
   une page `app` puis exécute un `fetch(base+path)` **same-origin** (la session vivante
   porte les cookies). `base`/`app` sont **propres au connecteur** (le substrat n'en
   hardcode aucun). Creds plateforme env `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`.
-- **Connecteurs sur le substrat** (tous deux : Live View `*_connect_start`/`*_connect_status`,
-  Context au coffre, family dérivée=`api`, plus aucun browser local) :
+- **Connexion = depuis le DASHBOARD** (voie produit, pas MCP) : bouton « Connecter »
+  → Live View Browserbase **en iframe** ; l'user se logue ; « vérifier » persiste le
+  Context. Servie en REST `POST /api/me/connectors/{name}/session/{start,finalize}`
+  ET en MCP (`<name>_connect_start`/`_connect_status`) par **un seul corps de logique**
+  (`browser_session.py`, seam : `start()` générique + `finalize()` avec **verify
+  par-connecteur enregistré** — brevo=cookie `auth`, crunchbase=sonde API ; les tools
+  MCP ne sont que de minces délégations). ⚠️ **Un connecteur browser-session s'enregistre
+  avec une `login_url`** (`browser_session.register(name, verify, login_url=…)`) : `start()`
+  amène la session **sur cette page** avant d'afficher la Live View (best-effort). Sans elle,
+  la Live View reste sur `about:blank` (l'user ne sait pas où se loguer — vécu pennylaneged
+  2026-07-01). **Sécu** : la session émise est liée au `sub`
+  (`_PENDING`, anti-IDOR — `finalize` refuse un Context tiers) et **aucune exception
+  brute n'est renvoyée** (l'URL CDP porte `?apiKey=…` → loggué, message propre). L'état
+  (`configured` + `session_set_at`) sort dans `me.providers[name]` via `status_for`
+  (les connecteurs `secret_kind="cookie"`) — ADR 0026 avait retiré `me.crunchbase` sans
+  jamais câbler ce relais (UX cassée bout-en-bout, corrigé 2026-06-30). Déconnexion =
+  DELETE générique `/api/settings/api-keys/{name}` (byo_user, plus de route dédiée).
+- **Connecteurs sur le substrat** (tous deux : Live View ci-dessus, Context au coffre,
+  family dérivée=`api`, plus aucun browser local) :
   - **`brevo`** (`tools/brevo.py`) — automations marketing via l'API privée
     `workflow-apis.brevo.com/v1` (cookie `auth` httpOnly). **Prouvé 200** le 2026-06-24.
   - **`crunchbase`** (`tools/crunchbase.py`) — fiches société/personne via l'API privée
@@ -180,7 +218,15 @@ d'escalade admin sur du perso) et **`can_govern`** (GOUVERNANCE = owner ∪ esca
 `roles.py` : transférer/lister/partager **sans lire**). La lecture opérateur du contenu
 perso reste le **view-as audité** (ADR 0023). `DatastorePg._resolve` passe par
 `can_access` ; le share/transfert/delete par `can_govern` (un super_admin/org_admin
-gouverne donc un datastore tiers). **org-owned activé** : `data_create_namespace` /
+gouverne donc un datastore tiers). ⚠️ **Scoping des LISTES de contenu** : une liste de
+ressources possédées (datastore `list_namespaces`, projets `op=list`) scope sur
+**`ownership.active_owner(current_org)`** (= l'org active, le pendant `ownership` de
+`current_org`/ADR 0023), **JAMAIS** sur `accessor_scope().owner_pairs()` (= union de
+TOUTES les orgs de l'acteur, réservé au plan **gouvernance** `oto_resource list` +
+découverte/modèles). Les confondre = fuite cross-org *fail-open* (le superset montre
+plus que le contexte chargé) — vécu 2026-06-30 (projets/datastore d'une autre org
+visibles dans le dashboard). Garde-fou : `tests/test_owner_scope_tripwire.py` fige les
+call-sites `owner_pairs()`. **org-owned activé** : `data_create_namespace` /
 `POST /api/datastore/namespaces` acceptent un `owner` (classeur d'équipe). Capacité
 générique **`oto_resource`** (`capabilities/resources.py`, op `list/get/transfer/share/
 unshare`, autz combinateur `RESOURCE_GOVERN`) = chemin de gouvernance MCP+REST + alimente
@@ -238,8 +284,10 @@ d'Unipile est channel-agnostic ; chaque tool résout l'`account_id` du canal pou
 user (no-fallback, `tools/unipile.unipile_client(provider)`).
 
 Connexion = hosted-auth Unipile (dashboard, `?channel=whatsapp|telegram|instagram`),
-`account_id` per-user dans `unipile_accounts` (PK `(sub, provider)`). Même gate
-d'option par org que LinkedIn (comp admin `access.has_option` ; plus de paiement).
+`account_id` per-membre dans `unipile_accounts` (PK `(sub, org_id, provider)` — scope
+membre ADR 0033 B4 : le binding vaut dans l'org de contexte, un canal se connecte par
+org). Même gate d'option par org que LinkedIn (comp admin `access.has_option` ; plus
+de paiement).
 
 > **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
 > (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`

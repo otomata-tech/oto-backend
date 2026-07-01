@@ -1,3 +1,21 @@
+---
+title: Connector vault — registre + coffre chiffré + résolution
+type: reference
+description: >-
+  Architecture centrale des credentials oto-backend : registre source unique connectors.py
+  (dataclass Connector, 3 axes disponibilité/visibilité/credential, schéma multi-champs
+  secret_fields dérivé), coffre chiffré unique connector_credentials (table 4-col PK
+  entity_type/entity_id/connector/account, AES-256-GCM obligatoire via crypto.py,
+  master key en Scaleway Secret Manager), et résolution access.py (resolve_api_key,
+  resolve_credential_fields, resolve_mount_token, status_for, granted_namespaces_for).
+  Inclut le packing multi-champs, Google multi-compte, LinkedIn/Crunchbase en coffre,
+  et le modèle de connecteur remote (ADR 0003, pilote = un connecteur remote client). À consulter pour
+  tout ajout de connecteur, débogage de credential, ou compréhension du chiffrement.
+adr:
+  - "0003"
+  - "0011"
+---
+
 # Connector vault — registre + coffre chiffré + résolution
 
 Substrat unique des connecteurs, credentials et accès d'oto-mcp. Déployé en prod (2026-06).
@@ -41,7 +59,7 @@ Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiff
 
 ## Résolution + accès (`access.py`)
 
-`resolve_api_key(provider) -> (api_key, is_platform)` : (1) user key (`get_user_api_key`→coffre) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. `resolve_remote_credential(provider)` = résolution du bridge d'un connecteur **remote** (`mm`) : `(meta.base_url, secret=token M2M)` du credential de l'org active, raise si absent, **jamais de fallback SOPS serveur**.
+`resolve_api_key(provider) -> (api_key, is_platform)` : (1) clé membre scopée (sub, org de contexte) (`get_member_api_key`→coffre, entity `member`/`{org}:{sub}`, ADR 0033) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. `resolve_remote_credential(provider)` = résolution du bridge d'un connecteur **remote** (`mm`) : `(meta.base_url, secret=token M2M)` du credential de l'org active, raise si absent, **jamais de fallback SOPS serveur**.
 `resolve_credential_fields(provider) -> dict` : credential **multi-champs byo_user** (ex. `silae` : client_id/client_secret/subscription_key) — lit le coffre + `unpack_secret`. **byo-only, pas de platform key ni quota** (le credential EST le grant). Pour les clients in-process s'instanciant avec plusieurs secrets.
 `resolve_mount_token(provider)` : token per-user d'un MCP fédéré `kind="mount"` (OAuth memento, ou base64 basic_auth planity), injecté en bearer par le proxy.
 `status_for` = miroir exact (modes user/org/platform/over_quota/forbidden) — boucle aussi sur les byo_user à `secret_fields` hors `KEY_PROVIDERS` (planity, silae : `user`/`forbidden`). `granted_namespaces_for`/`require_namespace` = gate des namespaces grant-only (deny-by-default), source unique consommée par middleware + meta-tools + REST.

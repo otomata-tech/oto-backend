@@ -19,6 +19,13 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from ._conn import _connect
+from .datastore import (
+    create_datastore_namespace,
+    datastore_insert_row,
+    datastore_list_rows,
+    get_datastore_namespace_by_id,
+    set_datastore_schema,
+)
 from .users import upsert_user
 
 
@@ -155,10 +162,24 @@ def remove_project_link(project_id: int, target_type: str, target_ref: str,
         return cur.rowcount
 
 
+def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
+    """Attache le NOM du namespace à chaque lien `tableau` (résolu depuis l'id porté par
+    `target_ref`). Pur (mutation en place), testable sans DB. Un ref non numérique / un
+    namespace disparu → pas de clé `namespace` (le lien reste, best-effort)."""
+    for l in links:
+        if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit():
+            nm = name_by_id.get(int(l["target_ref"]))
+            if nm is not None:
+                l["namespace"] = nm
+
+
 def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
-    modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander)."""
+    modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
+    Les liens `tableau` sont enrichis du **nom** de leur namespace (`namespace`) : l'agent
+    adresse « le tableau de ce projet » (par rôle/label) → nom réel pour `data_*`, sans
+    nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.config, pl.created_at, "
@@ -179,6 +200,14 @@ def list_project_links(project_id: int) -> list[dict]:
             if d.get("target_type") == "connecteur" and d.get("identity_ref"):
                 d["config"] = {**(d.get("config") or {}), "identity_id": d["identity_ref"]}
             out.append(d)
+        # Résolution des noms de namespace des tableaux, en UNE requête (même connexion).
+        ids = [int(l["target_ref"]) for l in out
+               if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()]
+        if ids:
+            nrows = conn.execute(
+                "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
+            ).fetchall()
+            _apply_tableau_names(out, {r["id"]: r["namespace"] for r in nrows})
         return out
 
 
@@ -477,14 +506,50 @@ def set_project_file_public(file_id: int, public: bool,
 
 
 # --- Copie profonde d'un projet (« modèle », ADR 0032 §7 B5a) -----------------
+def _provision_tableau(owner_type: str, owner_id: str, src_ref: str, *,
+                       seed: bool) -> Optional[str]:
+    """Matérialise un namespace datastore FRAIS pour l'instance de projet (ADR 0032 §6,
+    amendement 2026-07-01) : nouveau namespace possédé par `(owner_type, owner_id)`, même
+    **schéma** que la source (le vivier repart isolé), nom dérivé du nom source rendu unique.
+    `seed=True` copie aussi les **rows** d'amorce (mode `seeded`) ; sinon vivier vide (`empty`).
+    Retourne le `target_ref` du nouveau namespace (son id en str), ou `None` si la source est
+    introuvable / le ref malformé → l'appelant garde le pointeur d'origine (dégradation sûre)."""
+    try:
+        src_ns_id = int(src_ref)
+    except (TypeError, ValueError):
+        return None
+    src_ns = get_datastore_namespace_by_id(src_ns_id)
+    if src_ns is None:
+        return None
+    base = src_ns["namespace"]
+    new_id: Optional[int] = None
+    candidate = base
+    for i in range(1, 100):   # dérive un nom unique chez le nouveau propriétaire
+        try:
+            new_id = create_datastore_namespace(owner_type, owner_id, candidate)
+            break
+        except ValueError:
+            candidate = f"{base}-{i}"
+    if new_id is None:
+        return None
+    if src_ns.get("schema"):
+        set_datastore_schema(new_id, src_ns["schema"])
+    if seed:
+        for r in datastore_list_rows(src_ns_id, limit=None):
+            datastore_insert_row(new_id, r["row_id"], r.get("data") or {})
+    return str(new_id)
+
+
 def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str,
                       copied_by: Optional[str] = None) -> int:
     """Copie un projet en un NOUVEAU projet possédé par `(owner_type, owner_id)` :
     brief + arbre des docs (hiérarchie préservée) + liens (label/role/config) +
-    fichiers bruts (copie S3, repartis PRIVÉS). La donnée datastore n'est PAS
-    dupliquée — les liens `tableau` restent des pointeurs (réutilisation par
-    référence, ADR §6) ; l'agent arbitre doublon vs réutilisation. La copie n'est
-    jamais un modèle elle-même (`is_template=false` par défaut). Retourne le nouvel id."""
+    fichiers bruts (copie S3, repartis PRIVÉS). Un lien `tableau` est par défaut un
+    **pointeur** vers le même namespace (réutilisation par référence, `config.provision`
+    absent/`shared`) ; en mode **`empty`/`seeded`** (ADR §6) il est **provisionné** — un
+    namespace FRAIS (même schéma, rows optionnelles) pour que chaque instance ait son
+    vivier isolé. La copie n'est jamais un modèle elle-même (`is_template=false` par
+    défaut). Retourne le nouvel id."""
     from .. import media_store
 
     src = get_project_by_id(src_id)
@@ -523,8 +588,19 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
         remaining = still
 
     # Liens typés : label + role + config préservés (le « pourquoi » suit l'entité).
+    # Un lien `tableau` en mode « provisionné » (config.provision ∈ {empty, seeded}, ADR
+    # 0032 §6) NE recopie PAS le pointeur : il matérialise un namespace FRAIS (même schéma,
+    # rows si seeded) possédé par la copie, et le lien pointe dessus → vivier isolé par
+    # instance. `config.provision` reste sur le lien copié : re-copier re-provisionne.
     for link in list_project_links(src_id):
-        add_project_link(new_id, link["target_type"], link["target_ref"],
+        target_ref = link["target_ref"]
+        if link["target_type"] == "tableau":
+            mode = (link.get("config") or {}).get("provision")
+            if mode in ("empty", "seeded"):
+                target_ref = _provision_tableau(
+                    owner_type, owner_id, target_ref, seed=(mode == "seeded")
+                ) or target_ref
+        add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None)
 

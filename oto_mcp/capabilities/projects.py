@@ -42,7 +42,7 @@ class ProjectInput(BaseModel):
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id | page URL (memento)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
-    config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref)
+    config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
 
 
@@ -232,7 +232,10 @@ CAPABILITIES += [
             "get (project + its links) / update (name, brief_md, is_template = publish/unpublish "
             "as a copyable model) / copy (deep-copy a project you can read — its own or a model "
             "— into a NEW project in your active org: brief + doc tree + links + raw files; "
-            "datastore rows are NOT duplicated, tableau links stay pointers; pass project_id "
+            "a tableau link stays a POINTER to the same namespace by default (config.provision "
+            "absent/`shared`), but with config.provision=`empty`|`seeded` it is PROVISIONED — a "
+            "FRESH namespace (same schema, rows only if `seeded`) so each copy gets its own "
+            "isolated table (e.g. a campaign template's lead pool); pass project_id "
             "= source + name = target) / handoff (a copy-paste « resume in Claude » blob "
             "that pre-writes oto_use_project for this project) / archive / link & unlink "
             "(attach an entity: "
@@ -242,10 +245,14 @@ CAPABILITIES += [
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "
-            "agreements by the mutuelle theme'). Re-linking without role/config preserves the "
+            "agreements by the mutuelle theme'); for a tableau: {provision?: shared|empty|seeded} "
+            "= how a project copy treats it (empty/seeded = each copy gets its own fresh table). "
+            "Re-linking without role/config preserves the "
             "existing ones. get/link return each link's role + config + a derived "
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
-            "edits / ask). Share & transfer go through oto_resource (resource_type='project')."
+            "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
+            "project's table by that name with the data_* tools (never hardcode a namespace). "
+            "Share & transfer go through oto_resource (resource_type='project')."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

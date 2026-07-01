@@ -37,6 +37,31 @@ def _wire(monkeypatch, *, src):
     monkeypatch.setattr(PJ, "log_project_activity",
                         lambda pid, sub, action, detail=None: created["activity"].append((pid, action, detail)))
     monkeypatch.setattr(MS, "copy_object", lambda src_key, prefix, owner_id: f"{prefix}/{owner_id}/copied/{src_key.split('/')[-1]}")
+
+    # Seams datastore (provisioning tableau, ADR 0032 §6) — store en mémoire.
+    ns_store = {n["id"]: n for n in src.get("namespaces", [])}
+    ns_rows = src.get("ns_rows", {})
+    counter["ns"] = 500
+    provisioned = created["provisioned_ns"] = []
+    created["schemas_set"] = []
+    created["rows_inserted"] = []
+
+    def create_namespace(ot, oid, name):
+        if any(p["key"] == (ot, oid, name) for p in provisioned):
+            raise ValueError("exists")          # simule l'unicité (owner, name)
+        counter["ns"] += 1
+        provisioned.append({"id": counter["ns"], "key": (ot, oid, name),
+                            "owner": (ot, oid), "name": name})
+        return counter["ns"]
+
+    monkeypatch.setattr(PJ, "get_datastore_namespace_by_id", lambda nid: ns_store.get(nid))
+    monkeypatch.setattr(PJ, "create_datastore_namespace", create_namespace)
+    monkeypatch.setattr(PJ, "set_datastore_schema",
+                        lambda nid, schema: created["schemas_set"].append((nid, schema)))
+    monkeypatch.setattr(PJ, "datastore_list_rows",
+                        lambda nid, limit=None: list(ns_rows.get(nid, [])))
+    monkeypatch.setattr(PJ, "datastore_insert_row",
+                        lambda nid, row_id, data: created["rows_inserted"].append((nid, row_id, data)))
     return created
 
 
@@ -77,6 +102,71 @@ def test_duplicate_preserves_links(monkeypatch):
     PJ.duplicate_project(7, "Copie", "org", "42")
     assert created["links"] == [
         (101, "connecteur", "fr", "Entreprises", "données société", {"identity_id": "acc_1"})]
+
+
+def test_duplicate_provisions_empty_tableau(monkeypatch):
+    # Template de campagne : le vivier est provisionné FRAIS à la copie (§6, mode empty).
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Vivier",
+              "role": "leads", "config": {"provision": "empty"}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "namespaces": [{"id": 5, "namespace": "vivier",
+                           "schema": {"fields": [{"key": "name"}]}}],
+           "ns_rows": {5: [{"row_id": "r1", "data": {"name": "A"}}]}}
+    created = _wire(monkeypatch, src=src)
+    PJ.duplicate_project(7, "Campagne 1", "org", "42")
+    # Namespace frais possédé par la copie (org 42), nom dérivé du source.
+    assert len(created["provisioned_ns"]) == 1
+    new_ns = created["provisioned_ns"][0]
+    assert new_ns["owner"] == ("org", "42") and new_ns["name"] == "vivier"
+    # Schéma cloné, rows NON copiées (mode empty).
+    assert created["schemas_set"] == [(new_ns["id"], {"fields": [{"key": "name"}]})]
+    assert created["rows_inserted"] == []
+    # Le lien pointe sur le NOUVEAU namespace, pas la source "5" ; config.provision préservé.
+    assert created["links"] == [
+        (101, "tableau", str(new_ns["id"]), "Vivier", "leads", {"provision": "empty"})]
+
+
+def test_duplicate_seeds_tableau(monkeypatch):
+    # Mode seeded : schéma ET rows d'amorce recopiés dans le namespace frais.
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Réf",
+              "role": None, "config": {"provision": "seeded"}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "namespaces": [{"id": 5, "namespace": "ref", "schema": {"fields": []}}],
+           "ns_rows": {5: [{"row_id": "r1", "data": {"k": 1}},
+                           {"row_id": "r2", "data": {"k": 2}}]}}
+    created = _wire(monkeypatch, src=src)
+    PJ.duplicate_project(7, "Copie", "org", "42")
+    new_ns = created["provisioned_ns"][0]
+    assert created["rows_inserted"] == [
+        (new_ns["id"], "r1", {"k": 1}), (new_ns["id"], "r2", {"k": 2})]
+    assert created["links"][0][2] == str(new_ns["id"])   # target_ref rewrité
+
+
+def test_duplicate_shared_tableau_stays_pointer(monkeypatch):
+    # Défaut (provision absent) : le lien reste un pointeur vers le MÊME namespace.
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Commun",
+              "role": None, "config": {}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "namespaces": [{"id": 5, "namespace": "suppression", "schema": None}]}
+    created = _wire(monkeypatch, src=src)
+    PJ.duplicate_project(7, "Copie", "org", "42")
+    assert created["provisioned_ns"] == []               # rien de provisionné
+    assert created["links"] == [(101, "tableau", "5", "Commun", None, None)]
+
+
+def test_apply_tableau_names_resolves_by_id():
+    # Adressage par rôle (ADR 0032 §6) : un lien tableau porte le NOM de son namespace.
+    links = [
+        {"target_type": "tableau", "target_ref": "6"},        # résolu
+        {"target_type": "tableau", "target_ref": "nope"},     # ref non numérique → ignoré
+        {"target_type": "tableau", "target_ref": "99"},       # namespace disparu → pas de clé
+        {"target_type": "connecteur", "target_ref": "6"},     # pas un tableau → ignoré
+    ]
+    PJ._apply_tableau_names(links, {6: "vivier-6"})
+    assert links[0]["namespace"] == "vivier-6"
+    assert "namespace" not in links[1]
+    assert "namespace" not in links[2]
+    assert "namespace" not in links[3]
 
 
 def test_duplicate_copies_files_via_s3(monkeypatch):

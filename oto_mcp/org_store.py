@@ -193,6 +193,15 @@ def archive_org(org_id: int) -> bool:
             )
             if (cur.rowcount or 0) == 0:
                 return False
+            # Une org archivée est invisible à `get_personal_org` (filtre
+            # `archived_at IS NULL`) : elle doit AUSSI libérer le slot perso
+            # (`uq_orgs_personal_of`, partiel `personal_of IS NOT NULL` mais PAS
+            # sur l'archivage) — sinon elle occupe le slot d'un user sans être
+            # trouvable → `ensure_personal_org` recrée en boucle une org qui
+            # échoue sur l'UPDATE personal_of (UniqueViolation) à chaque boot.
+            conn.execute(
+                "UPDATE orgs SET personal_of = NULL WHERE id = %s", (org_id,)
+            )
             stranded = conn.execute(
                 "SELECT sub FROM org_members WHERE org_id = %s AND is_active", (org_id,)
             ).fetchall()
@@ -550,6 +559,17 @@ def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[s
     lui) — un user multi-org garde ses orgs partagées intactes, on lui crée une perso
     fraîche."""
     with _connect() as conn:
+        # Auto-soin (couvre les DEUX branches, reclaim ET create) : une org perso
+        # ARCHIVÉE détient encore le slot unique `uq_orgs_personal_of` tout en étant
+        # invisible à `get_personal_org` (filtre `archived_at IS NULL`) → la relâcher
+        # AVANT tout marquage, sinon UniqueViolation en boucle à chaque boot (vécu
+        # 2026-07-01 : perso archivée → orgs orphelines recréées, une par boot ; la
+        # collision frappait aussi bien la branche reclaim que la branche create).
+        conn.execute(
+            "UPDATE orgs SET personal_of = NULL "
+            "WHERE personal_of = %s AND archived_at IS NOT NULL",
+            (sub,),
+        )
         row = conn.execute(
             """
             SELECT o.id FROM orgs o

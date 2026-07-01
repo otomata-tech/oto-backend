@@ -67,6 +67,39 @@ def test_creates_fresh_when_no_reclaim(monkeypatch):
     assert rec["create"] == [("Alice", "u1")] and rec["member"] == [(42, "u1", "org_admin")]
 
 
+class _RecConn:
+    """Enregistre le SQL exécuté (branche create : pas de reclaim)."""
+    def __init__(self):
+        self.sql = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql.append((" ".join(sql.split()), params))
+        return type("R", (), {"fetchone": lambda s: None})()
+
+
+def test_create_releases_archived_personal_slot(monkeypatch):
+    """Régression 2026-07-01 : une org perso ARCHIVÉE détient encore le slot
+    unique `personal_of` → le create branch doit le libérer AVANT de marquer la
+    nouvelle, sinon UniqueViolation en boucle à chaque boot."""
+    conn = _RecConn()
+    monkeypatch.setattr(org_store, "_connect", lambda: conn)
+    monkeypatch.setattr(org_store, "create_org", lambda name, created_by=None: 42)
+    monkeypatch.setattr(org_store, "add_org_member", lambda oid, sub, org_role="org_member": None)
+    monkeypatch.setattr(org_store, "seed_for_org", lambda *a, **k: None, raising=False)
+    org_store._reclaim_or_create_personal("u1", "a@x.co", "Alice")
+    updates = [s for s in conn.sql if s[0].startswith("UPDATE orgs SET personal_of")]
+    # 1) libération du slot archivé (par sub), 2) marquage de la nouvelle (par id)
+    assert updates[0] == ("UPDATE orgs SET personal_of = NULL WHERE personal_of = %s "
+                          "AND archived_at IS NOT NULL", ("u1",))
+    assert updates[1] == ("UPDATE orgs SET personal_of = %s WHERE id = %s", ("u1", 42))
+
+
 # ── backfill : migration des ressources user-owned ──────────────────────────
 class _Users:
     def __init__(self, rows):

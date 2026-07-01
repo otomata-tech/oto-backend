@@ -60,34 +60,55 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def folk_search(
         entity: str, filters: Optional[dict] = None, max_results: int = 100,
+        group_id: Optional[str] = None, object_type: str = "deals",
     ) -> dict:
         """Search Folk records. Fetches ALL matching pages — always pass filters on
         a large workspace.
 
         Args:
-            entity: "person" or "company".
+            entity: "person", "company" or "deal".
             filters: Field → value, matched with `like` (e.g. {"fullName": "Dupont",
                 "emails": "@otomata.tech"} for people, {"name": "Otomata"} for companies).
             max_results: Truncate the response (default 100).
+            group_id: REQUIRED for `deal` only (the group whose deals to search).
+            object_type: collection name (default "deals"), `deal` only.
         """
         c = _client()
         if entity == "person":
             items = c.list_people(**(filters or {}))
         elif entity == "company":
             items = c.list_companies(**(filters or {}))
+        elif entity == "deal":
+            if not group_id:
+                raise _bad("group_id requis pour entity='deal'.")
+            items = c.list_deals(group_id, object_type=object_type, **(filters or {}))
         else:
-            raise _bad("entity doit être 'person' ou 'company'.")
+            raise _bad("entity doit être 'person', 'company' ou 'deal'.")
         return {"entity": entity, "count": len(items), "results": items[:max_results]}
 
     @mcp.tool()
-    def folk_get(entity: str, id: str) -> dict:
-        """Fetch a Folk record by ID (full record). `entity` = "person" or "company"."""
+    def folk_get(
+        entity: str, id: str,
+        group_id: Optional[str] = None, object_type: str = "deals",
+    ) -> dict:
+        """Fetch a Folk record by ID (full record).
+
+        Args:
+            entity: "person", "company" or "deal".
+            id: the record ID (the deal_id for a deal).
+            group_id: REQUIRED for `deal` only (the group where the deal lives).
+            object_type: collection name (default "deals"), `deal` only.
+        """
         c = _client()
         if entity == "person":
             return c.get_person(id)
         if entity == "company":
             return c.get_company(id)
-        raise _bad("entity doit être 'person' ou 'company'.")
+        if entity == "deal":
+            if not group_id:
+                raise _bad("group_id requis pour entity='deal'.")
+            return c.get_deal(group_id, id, object_type=object_type)
+        raise _bad("entity doit être 'person', 'company' ou 'deal'.")
 
     @mcp.tool()
     def folk_update(
@@ -124,14 +145,28 @@ def register(mcp: FastMCP) -> None:
         raise _bad("entity doit être 'person', 'company' ou 'deal'.")
 
     @mcp.tool()
-    def folk_delete(entity: str, id: str) -> dict:
-        """Delete a Folk record. Irreversible. `entity` = "person" or "company"."""
+    def folk_delete(
+        entity: str, id: str,
+        group_id: Optional[str] = None, object_type: str = "deals",
+    ) -> dict:
+        """Delete a Folk record. Irreversible.
+
+        Args:
+            entity: "person", "company" or "deal".
+            id: the record ID (the deal_id for a deal).
+            group_id: REQUIRED for `deal` only (the group where the deal lives).
+            object_type: collection name (default "deals"), `deal` only.
+        """
         c = _client()
         if entity == "person":
             return c.delete_person(id)
         if entity == "company":
             return c.delete_company(id)
-        raise _bad("entity doit être 'person' ou 'company'.")
+        if entity == "deal":
+            if not group_id:
+                raise _bad("group_id requis pour entity='deal'.")
+            return c.delete_deal(group_id, id, object_type=object_type)
+        raise _bad("entity doit être 'person', 'company' ou 'deal'.")
 
     # --- créations (typées : les champs guident le modèle) ------------------
 
@@ -263,6 +298,54 @@ def register(mcp: FastMCP) -> None:
         return _client().create_reminder(
             entity_id, name, recurrence_rule=recurrence_rule, visibility=visibility,
         )
+
+    @mcp.tool()
+    def folk_get_reminder(reminder_id: str) -> dict:
+        """Fetch a Folk reminder by ID (full record). `reminder_id` = rmd_…."""
+        return _client().get_reminder(reminder_id)
+
+    @mcp.tool()
+    def folk_update_reminder(
+        reminder_id: str,
+        name: Optional[str] = None,
+        recurrence_rule: Optional[str] = None,
+        visibility: Optional[str] = None,
+    ) -> dict:
+        """Edit an existing Folk reminder (PATCH — only the given fields change).
+
+        Args:
+            reminder_id: the reminder ID (rmd_…).
+            recurrence_rule: iCal RRULE (e.g. "DTSTART:20260701T090000Z\\nRRULE:FREQ=WEEKLY").
+            visibility: "public" (whole workspace) or "private".
+        """
+        fields: dict = {}
+        if name is not None:
+            fields["name"] = name
+        if recurrence_rule is not None:
+            fields["recurrenceRule"] = recurrence_rule
+        if visibility is not None:
+            fields["visibility"] = visibility
+        if not fields:
+            raise _bad("rien à mettre à jour : passe name, recurrence_rule et/ou visibility.")
+        return _client().update_reminder(reminder_id, **fields)
+
+    @mcp.tool()
+    def folk_delete_reminder(reminder_id: str) -> dict:
+        """Delete a Folk reminder. Irreversible. `reminder_id` = rmd_…."""
+        return _client().delete_reminder(reminder_id)
+
+    # --- users (membres du workspace, lecture seule) ------------------------
+
+    @mcp.tool()
+    def folk_list_users() -> dict:
+        """List the workspace users (members) — useful to resolve owners/assignees."""
+        return {"users": _client().list_users()}
+
+    @mcp.tool()
+    def folk_get_user(user_id: str = "me") -> dict:
+        """Fetch a workspace user by ID. `user_id="me"` (default) returns the
+        authenticated user — call it to attribute an action to the current user."""
+        return _client().get_user(user_id)
 
     # --- lists (énumération par collection) ---------------------------------
 

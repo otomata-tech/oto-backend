@@ -186,6 +186,9 @@ def register(mcp: FastMCP) -> None:
             if transport == "resend" and not (org_id and org_store.has_org_secret(org_id, "resend")):
                 raise _err("Transport Resend sans clé d'org : pose-la via "
                            "`oto_set_org_secret(provider=\"resend\")` avant de programmer.")
+            if transport == "scaleway" and not (org_id and org_store.has_org_secret(org_id, "scaleway")):
+                raise _err("Transport Scaleway TEM sans clé d'org : pose-la via "
+                           "`oto_set_org_secret(provider=\"scaleway\")` avant de programmer.")
             sched_id = db.enqueue_scheduled_email(
                 org_id=org_id, created_by=sub, to_email=to, subject=subject, body_html=html,
                 from_email=route["from_email"], from_name=route["from_name"],
@@ -201,6 +204,15 @@ def register(mcp: FastMCP) -> None:
             api_key, _key_is_platform = access.resolve_api_key("resend")  # cascade user > org ; lève si absente
             ok = mailer.send_via_resend(to, subject, html, api_key=api_key,
                                         from_email=from_hdr, reply_to=rt)
+        elif transport == "scaleway":
+            f = access.resolve_credential_fields("scaleway")  # cascade → clé de l'org
+            if not f.get("secret_key") or not f.get("project_id"):
+                raise _err("Connecteur Scaleway TEM non configuré pour ton org : pose "
+                           "`secret_key` + `project_id` (clé de TON compte Scaleway TEM).")
+            ok = mailer.send_via_scaleway_tem(
+                to, subject, html, secret_key=f["secret_key"], project_id=f["project_id"],
+                region=f.get("region") or "fr-par",
+                from_email=route["from_email"], from_name=route["from_name"], reply_to=rt)
         else:
             ok = mailer.send_composed_email(
                 to, subject, body, cta_text=cta_text, cta_url=cta_url, reply_to=rt,
@@ -208,6 +220,8 @@ def register(mcp: FastMCP) -> None:
 
         if not ok:
             hint = ("clé Resend invalide/absente" if transport == "resend"
+                    else "clé/projet Scaleway TEM absent, ou domaine du `from` non vérifié "
+                         "dans ton compte Scaleway" if transport == "scaleway"
                     else "mailer indisponible, ou domaine du `from` hors allowlist "
                          "`MAILER_FROM_DOMAINS` (demande l'ajout à un super_admin)")
             raise _err(f"Envoi échoué ({hint}). Rien n'a été envoyé.", code=INTERNAL_ERROR)

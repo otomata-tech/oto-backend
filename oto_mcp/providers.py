@@ -239,7 +239,7 @@ _CATEGORY_BY_CONNECTOR = {
     "foncier": "Data FR", "sante": "Data FR", "frenchtech": "Data FR", "gr": "Data GR",
     "reddit": "Web",
     "infosec": "Infosec",
-    "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
+    "pennylane": "Finance", "pennylaneged": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
     "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
     "atlassian": "Métier",
@@ -290,7 +290,7 @@ _PUBLISHER_BY_CONNECTOR = {
 _LOGO_DOMAIN_BY_CONNECTOR = {
     "serper": "serper.dev", "hunter": "hunter.io", "kaspr": "kaspr.io",
     "fullenrich": "fullenrich.com", "lemlist": "lemlist.com", "folk": "folk.app",
-    "unipile": "unipile.com", "pennylane": "pennylane.com", "gocardless": "gocardless.com",
+    "unipile": "unipile.com", "pennylane": "pennylane.com", "pennylaneged": "pennylane.com", "gocardless": "gocardless.com",
     "silae": "silae.fr", "attio": "attio.com", "crunchbase": "crunchbase.com",
     "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
@@ -421,17 +421,22 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, default_hidden=True,
        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
-    # scaleway : email hébergé Otomata (Scaleway TEM via mailer.oto.zone). Clé PLATEFORME
-    # (pas de clé d'org, secret_kind="none") → grant-only (availability="platform_granted"),
-    # réservé aux orgs explicitement accordées (Otomata = otomata.tech, déjà dans l'allowlist
-    # MAILER_FROM_DOMAINS). Ouvrir à d'autres orgs exige la vérification de domaine par org
-    # (cf. issue B — domaine = objet d'ORG). Config (expéditeurs + fenêtre calme) dans le
-    # panneau email de la carte connecteur ORG ; email_send (spine) route sender→connecteur→transport.
-    _c("scaleway", ["scaleway"], availability="platform_granted", secret_kind="none",
+    # scaleway : email transactionnel via le compte Scaleway TEM DE L'ORG (BYO, comme resend).
+    # L'org amène sa clé (secret_key + project_id) ; l'API TEM n'envoie que depuis les domaines
+    # VÉRIFIÉS dans le compte Scaleway de l'org → propriété du domaine garantie par Scaleway,
+    # zéro logique domaine côté oto, plus d'override/activation (connecteur normal self-serve).
+    # Config (expéditeurs + fenêtre calme) dans le panneau email de la carte connecteur ORG ;
+    # email_send (spine) route sender→connecteur→transport.
+    _c("scaleway", ["scaleway"], auth_modes={"byo_org"}, secret_kind="fields",
        in_default_bundle=False, default_hidden=True,
-       label="Email hébergé (Scaleway TEM)",
-       help="envoi d'email via le service Otomata (domaine vérifié)",
-       publisher="Otomata"),
+       label="Scaleway TEM (email)",
+       help="envoi d'email transactionnel via ton compte Scaleway TEM (domaine vérifié chez Scaleway)",
+       publisher="Scaleway", href="https://www.scaleway.com/en/transactional-email-tem/",
+       credential_fields=(
+           CredentialField("secret_key", "Clé secrète Scaleway (X-Auth-Token)", secret=True, reveal=True),
+           CredentialField("project_id", "Project ID Scaleway", secret=False, reveal=True),
+           CredentialField("region", "Région TEM (déf. fr-par)", secret=False, reveal=True),
+       )),
 
     # --- byo_user à credential multi-champs (hors resolve_api_key) -----------
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets
@@ -552,6 +557,18 @@ _REGISTRY_LIST = [
        secret_kind="cookie", in_default_bundle=False, default_hidden=True,
        label="Brevo (automation)", help="automations marketing (session Browserbase)",
        publisher="Brevo", href="https://app.brevo.com/automation/automations"),
+    # pennylaneged : GED (bac documentaire) Pennylane via l'API PRIVÉE de la SPA
+    # (`app.pennylane.com/companies/{cid}/dms`, cookie + CSRF tournant). DISTINCT du
+    # connecteur keyé `pennylane` (API publique) : credential = session navigateur,
+    # pas une clé API → l'API publique ne porte aucun scope DMS. Exécution =
+    # **Browserbase** : l'user se logue 1× via Live View (`pennylaneged_connect_start`),
+    # sa session persiste dans un Context = le credential per-user (coffre). Upload =
+    # control plane ici (URL S3 présignée) + PUT des octets EN LOCAL (RGPD, issue #31).
+    # Expérimental (API interne RE) : hors bundle + masqué, self-activable.
+    _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user"}, personal_session=True,
+       secret_kind="cookie", in_default_bundle=False, default_hidden=True,
+       label="Pennylane GED", help="bac documentaire Pennylane (session Browserbase)",
+       publisher="Pennylane", href="https://app.pennylane.com"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
     # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),
     # pas un connecteur Google — chargé explicitement dans register_all, non gaté
@@ -756,7 +773,7 @@ DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_def
 # Connecteurs d'envoi d'email → transport effectif. Un expéditeur appartient à un
 # connecteur (sa config vit dans orgs.email_settings keyé par connecteur) ; le
 # transport en DÉRIVE. `email_send` (spine) route sender→connecteur→transport.
-EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "mailer", "resend": "resend"}
+EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "scaleway", "resend": "resend"}
 DEFAULT_HIDDEN_NAMESPACES: frozenset = frozenset(
     ns for c in _REGISTRY_LIST if c.default_hidden for ns in c.namespaces
 )

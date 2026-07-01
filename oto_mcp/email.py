@@ -78,6 +78,46 @@ def send_via_resend(to: str, subject: str, html: str, *, api_key: str,
         return False
 
 
+def send_via_scaleway_tem(to: str, subject: str, html: str, *, secret_key: str,
+                          project_id: str, from_email: str, from_name: str | None = None,
+                          region: str = "fr-par", reply_to: str | None = None) -> bool:
+    """Envoi direct via l'API Scaleway TEM, avec la clé BYO de l'org (secret_key +
+    project_id). `from_email` = adresse sur un domaine VÉRIFIÉ dans le compte Scaleway
+    de l'org — l'API TEM refuse les domaines non vérifiés (propriété du domaine garantie
+    par Scaleway, zéro logique domaine côté oto). Best-effort (False si échec), même
+    contrat que `send_via_resend`. PAS de résolution de secret côté serveur."""
+    if not secret_key or not project_id or not from_email:
+        return False
+    region = region or "fr-par"
+    try:
+        import httpx
+        frm: dict = {"email": from_email}
+        if from_name:
+            frm["name"] = from_name
+        payload: dict = {
+            "from": frm,
+            "to": [{"email": to}],
+            "subject": subject,
+            "html": html,
+            "project_id": project_id,
+        }
+        if reply_to:
+            payload["additional_headers"] = [{"key": "Reply-To", "value": reply_to}]
+        r = httpx.post(
+            f"https://api.scaleway.com/transactional-email/v1alpha1/regions/{region}/emails",
+            headers={"X-Auth-Token": secret_key},
+            json=payload,
+            timeout=10.0,
+        )
+        if r.status_code in (200, 201):
+            return True
+        log.warning("scaleway tem → %s %s", r.status_code, r.text[:200])
+        return False
+    except Exception as e:  # réseau, import, domaine non vérifié → best-effort
+        log.warning("scaleway tem email to %s not sent (%s)", to, e)
+        return False
+
+
 _BTN = ('display:inline-block;background:#2c2112;color:#fefcf5;text-decoration:none;'
         'padding:10px 20px;border-radius:999px;font-weight:600')
 _WRAP = 'font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2c2112'

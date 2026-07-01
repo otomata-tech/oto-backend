@@ -105,6 +105,17 @@ def _send_one(row: dict) -> None:
                 return
             ok = email.send_via_resend(row["to_email"], row["subject"], row["body_html"],
                                        api_key=key, from_email=from_hdr, reply_to=reply_to)
+        elif transport == "scaleway":
+            raw = credentials_store.get_credential("org", str(row["org_id"]), "scaleway")
+            f = credentials_store.unpack_secret("scaleway", raw) if raw else {}
+            if not f.get("secret_key") or not f.get("project_id"):
+                db.mark_scheduled_failed(row["id"], "credential Scaleway TEM absent/incomplet pour l'org")
+                return
+            ok = email.send_via_scaleway_tem(
+                row["to_email"], row["subject"], row["body_html"],
+                secret_key=f["secret_key"], project_id=f["project_id"],
+                region=f.get("region") or "fr-par",
+                from_email=row.get("from_email"), from_name=row.get("from_name"), reply_to=reply_to)
         else:
             ok = email._send(row["to_email"], row["subject"], row["body_html"],
                              reply_to=reply_to, from_email=from_hdr)

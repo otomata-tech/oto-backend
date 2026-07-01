@@ -617,6 +617,9 @@ def resolve_mount_token(provider: str) -> str:
     elif provider == "atlassian":
         from . import atlassian_oauth
         token = atlassian_oauth.access_token_for(sub)
+    elif provider == "folkmcp":
+        from . import folk_oauth
+        token = folk_oauth.access_token_for(sub)
     else:
         token = credentials_store.get_credential("user", sub, provider)
     if token:

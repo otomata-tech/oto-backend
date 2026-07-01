@@ -476,6 +476,20 @@ _REGISTRY_LIST = [
        auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Atlassian",
        help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com"),
+    # folkmcp : MCP OFFICIEL de Folk (kind=mount, #85), COEXISTANT avec le
+    # connecteur natif `folk` (clé API REST). Namespace distinct `folkmcp` → les
+    # tools montés deviennent `folkmcp_folk_*`, pas de collision avec `folk_*`.
+    # AS = Stytch (app.folk.app/oauth/authorize + api.stytch.folk.app), client
+    # PUBLIC + DCR + PKCE, flow web per-user dans folk_oauth.py. Le MCP Folk s'auth
+    # UNIQUEMENT par OAuth (pas de clé). Inerte tant que `folkmcp` n'est pas dans
+    # OTO_MCP_MOUNTS_ENABLED (défaut = memento seul). Coexistence gérée par la
+    # visibilité per-user (ADR 0011/0031) : un user voit soit `folk`, soit `folkmcp`.
+    _c("folkmcp", ["folkmcp"], kind="mount",
+       mount_url="https://mcp.folk.app/mcp",
+       auth_modes={"byo_user"}, secret_kind="oauth",
+       in_default_bundle=False, label="Folk (MCP)",
+       help="CRM Folk via son MCP officiel (fédéré, OAuth per-user)",
+       href="https://folk.app"),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
     # (planity-mcp.oto.zone) monté via proxy FastMCP ; credential per-user =
     # base64("email:password") du compte Planity de l'user, injecté par requête

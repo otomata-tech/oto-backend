@@ -189,6 +189,15 @@ def resolve_project(host: str) -> Optional[dict]:
         return None
 
 
+def _root_to_mcp(scope: dict) -> dict:
+    """Réécrit le chemin RACINE `/` (ou vide) vers `/mcp` — le MCP d'un sous-domaine
+    dédié est servi à la racine. Copie le scope (jamais de mutation partagée). Les
+    chemins propres (OAuth, well-known, /mcp) ne matchent pas `/` → renvoyés tels quels."""
+    if scope.get("path") in ("", "/"):
+        return {**scope, "path": "/mcp", "raw_path": b"/mcp"}
+    return scope
+
+
 # ── App ASGI racine : dispatch par Host (anonyme vs authentifié) ─────────────
 class HostDispatch:
     """App ASGI racine. Compose les lifespans des DEUX instances FastMCP (chacune a
@@ -246,7 +255,11 @@ class HostDispatch:
             if sid:
                 _store_ctx(sid, ctx)
             try:
-                return await self.anon(scope, receive, send)
+                # Sur un sous-domaine DÉDIÉ, le MCP est servi à la RACINE : claude.ai/
+                # Mistral POSTent l'initialize sur l'URL nue (`…mcp.oto.cx`, sans `/mcp`)
+                # → on réécrit `/`→`/mcp`. Les routes OAuth/well-known (chemins propres)
+                # ne sont pas `/` → intactes ; `/mcp` explicite marche toujours.
+                return await self.anon(_root_to_mcp(scope), receive, send)
             finally:
                 _CTX.reset(tok)
 

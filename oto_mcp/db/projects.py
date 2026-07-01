@@ -142,14 +142,16 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
 
 def remove_project_link(project_id: int, target_type: str, target_ref: str,
                         identity_ref: Optional[str] = None) -> int:
-    """Délie un binding. `identity_ref` NULL (défaut) = le binding par défaut ;
-    `IS NOT DISTINCT FROM` pour matcher NULL proprement (ADR 0032 §4 amendé, #57)."""
+    """Délie (ADR 0032 §4 amendé, #57). `identity_ref` fourni → CE binding précis ;
+    `identity_ref` None → **tous** les bindings de l'entité (délier « le connecteur »
+    entièrement, quel que soit le nombre d'identités)."""
+    where = "project_id = %s AND target_type = %s AND target_ref = %s"
+    params: list = [project_id, target_type, target_ref]
+    if identity_ref is not None:
+        where += " AND identity_ref IS NOT DISTINCT FROM %s"
+        params.append(identity_ref)
     with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM project_links WHERE project_id = %s AND target_type = %s "
-            "AND target_ref = %s AND identity_ref IS NOT DISTINCT FROM %s",
-            (project_id, target_type, target_ref, identity_ref),
-        )
+        cur = conn.execute(f"DELETE FROM project_links WHERE {where}", params)
         return cur.rowcount
 
 

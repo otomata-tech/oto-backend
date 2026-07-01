@@ -42,7 +42,8 @@ class ProjectInput(BaseModel):
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id | page URL (memento)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
-    config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?}
+    config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref)
+    identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -184,11 +185,16 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         if inp.target_type == "procedure":
             proj_org = int(row["owner_id"]) if row.get("owner_type") == "org" else ctx.org_id
             target_ref = _procedure_ref_to_id(proj_org, target_ref)
+        # `identity_ref` explicite (#57) = multi-binding d'un connecteur (front B4). Absent
+        # ⇒ None : chemin legacy (identité encore dans config.identity_id, binding par
+        # défaut) INCHANGÉ ; unlink None ⇒ tous les bindings du connecteur.
         if inp.op == "link":
             db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
-                                inp.label, role=inp.role, config=inp.config)
+                                inp.label, role=inp.role, config=inp.config,
+                                identity_ref=inp.identity_ref)
         else:
-            db.remove_project_link(int(inp.project_id), inp.target_type, target_ref)
+            db.remove_project_link(int(inp.project_id), inp.target_type, target_ref,
+                                   identity_ref=inp.identity_ref)
         db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
                                 f"{inp.target_type}:{inp.label or target_ref}")
         return {"ok": True, "id": inp.project_id,

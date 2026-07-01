@@ -33,9 +33,9 @@ def seams(monkeypatch):
     rec["link"] = []
     rec["unlink"] = []
     monkeypatch.setattr(P.db, "add_project_link",
-                        lambda pid, tt, tr, label=None, role=None, config=None: rec["link"].append((pid, tt, tr, label, role, config)))
+                        lambda pid, tt, tr, label=None, role=None, config=None, identity_ref=None: rec["link"].append((pid, tt, tr, label, role, config, identity_ref)))
     monkeypatch.setattr(P.db, "remove_project_link",
-                        lambda pid, tt, tr: rec["unlink"].append((pid, tt, tr)) or 1)
+                        lambda pid, tt, tr, identity_ref=None: rec["unlink"].append((pid, tt, tr, identity_ref)) or 1)
     monkeypatch.setattr(P.db, "list_project_links",
                         lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
                                       "role": "vivier de leads", "config": {}, "cross_project": False}])
@@ -208,7 +208,7 @@ def test_get_reflects_public_share(seams, monkeypatch):
 def test_link(seams):
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7,
                                          target_type="tableau", target_ref="7", label="Leads"))
-    assert seams["link"] == [(7, "tableau", "7", "Leads", None, None)]
+    assert seams["link"] == [(7, "tableau", "7", "Leads", None, None, None)]
     assert out["ok"] is True and out["links"]
 
 
@@ -216,7 +216,7 @@ def test_link_with_role(seams):
     P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base",
                                    target_ref="kb1", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence", None)]
+    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence", None, None)]
 
 
 def test_link_connector_with_config(seams):
@@ -224,7 +224,7 @@ def test_link_connector_with_config(seams):
     cfg = {"identity_id": "acc_1", "instructions_md": "filtrer les accords par thème mutuelle"}
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
                                          target_ref="fr", label="Entreprises FR", config=cfg))
-    assert seams["link"] == [(7, "connecteur", "fr", "Entreprises FR", None, cfg)]
+    assert seams["link"] == [(7, "connecteur", "fr", "Entreprises FR", None, cfg, None)]
     assert out["ok"] is True
 
 
@@ -255,7 +255,7 @@ def test_link_forbidden_without_write(seams, monkeypatch):
 
 def test_unlink(seams):
     P._project(CTX, P.ProjectInput(op="unlink", project_id=7, target_type="tableau", target_ref="7"))
-    assert seams["unlink"] == [(7, "tableau", "7")]
+    assert seams["unlink"] == [(7, "tableau", "7", None)]
 
 
 def test_activity(seams):

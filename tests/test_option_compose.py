@@ -37,7 +37,8 @@ def calls(monkeypatch):
                         lambda sub, kid: rec["revoke_user"].append((sub, kid)))
     monkeypatch.setattr(ua.db, "revoke_org_platform_key",
                         lambda oid, kid: rec["revoke_org"].append((oid, kid)))
-    monkeypatch.setattr(ua.db, "has_user_api_key", lambda sub, prov: False)
+    monkeypatch.setattr(ua.db, "has_member_api_key", lambda sub, org, prov: False)
+    monkeypatch.setattr(ua.org_store, "get_active_org", lambda sub: 1)
     monkeypatch.setattr(ua.org_store, "has_org_secret", lambda oid, prov: False)
     return rec
 
@@ -71,7 +72,7 @@ def test_byo_option_is_inert(calls, monkeypatch):
     monkeypatch.setattr(ua.connectors, "connector_for_provider",
                         lambda p: _con({"byo_user", "platform"}))
     monkeypatch.setattr(ua.db, "list_platform_keys", lambda p: [{"id": 7}])
-    monkeypatch.setattr(ua.db, "has_user_api_key", lambda sub, prov: True)
+    monkeypatch.setattr(ua.db, "has_member_api_key", lambda sub, org, prov: True)
     out = ua._set_option(CTX, ua.OptionInput(entity_type="user", entity_id="u1",
                                              option="unipile", on=True))
     assert out["platform_key"]["byo_inert"] is True

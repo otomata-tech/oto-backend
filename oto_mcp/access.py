@@ -379,14 +379,21 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     # (département/user). Avant toute résolution → couvre keyed/fields/BYO.
     require_connector_access(provider, sub)
 
-    user_key = db.get_user_api_key(sub, provider)
-    if user_key:
-        return ResolvedCredential(provider, user_key, False, "user", "user", sub)
+    # Scope MEMBRE (ADR 0033) : « ma clé » n'existe QUE dans l'org de contexte —
+    # posée dans l'org A, elle ne résout pas depuis l'org B. L'org est résolue via
+    # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
+    # le premier palier : plus aucun credential per-user org-agnostique.
+    active_org = current_org(sub)
+    member_key = db.get_member_api_key(sub, active_org, provider)
+    if member_key:
+        return ResolvedCredential(provider, member_key, False, "user",
+                                  credentials_store.MEMBER,
+                                  credentials_store.member_id(active_org, sub))
 
     # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
     # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
     # (-> None) → strictement identique à avant pour tout user flat.
-    # Cascade : user_key > group_secret > org_secret > platform_grant.
+    # Cascade : clé membre > group_secret > org_secret > platform_grant.
     if provider in ORG_SHAREABLE_PROVIDERS:
         active_group = current_group(sub)
         if active_group is not None:
@@ -394,7 +401,6 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
             if grp_key:
                 return ResolvedCredential(provider, grp_key, False, "group",
                                           "group", str(active_group))
-        active_org = current_org(sub)
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
             if org_key:
@@ -422,10 +428,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     grant = db.get_active_grant(sub, provider) if platform_eligible else None
     # Fallback : clé plateforme partagée à l'ORG active (couche 2, grant org-level).
     # Après le grant per-user (plus spécifique). Quota métré per-membre comme le user-grant.
-    if not grant and platform_eligible:
-        org = current_org(sub)
-        if org is not None:
-            grant = db.get_active_org_grant(org, provider)
+    if not grant and platform_eligible and active_org is not None:
+        grant = db.get_active_org_grant(active_org, provider)
     # Free-tier (ADR 0031) : clé plateforme OUVERTE sans grant pour les connecteurs
     # `platform_key_open`, avec quota gratuit par user (`default_quota`). N'est atteint
     # qu'en l'absence de toute clé BYO (cascade user>groupe>org>grant épuisée) — en BYO
@@ -556,10 +560,10 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
 
     Pris pour `sub` EXPLICITE → utilisable hors contexte MCP (route REST connect).
     Les tools MCP, eux, passent par `resolve_api_key("unipile")` (idiome keyed)."""
-    key = db.get_user_api_key(sub, "unipile")
+    active_org = current_org(sub)
+    key = db.get_member_api_key(sub, active_org, "unipile")
     if key:
         return key
-    active_org = current_org(sub)
     if active_org is not None:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
@@ -584,10 +588,12 @@ def credential_mode_for(sub: str, provider: str, *,
     l'UI. « BYO » (clé propre, pas la plateforme) = mode ∈ {user, group, org}.
     `org`/`group` explicites (≠ _UNSET) = calcul pour un TIERS contre son propre
     contexte (fiche admin), sans current_org/current_group (anti-fuite du requérant)."""
-    if db.has_user_api_key(sub, provider):
-        return "user"
     o = current_org(sub) if org is _UNSET else org
     g = current_group(sub) if group is _UNSET else group
+    # Scope membre (ADR 0033) : la clé propre se cherche dans l'org de contexte —
+    # pour un tiers (org explicite), dans SON org, jamais celle du requérant.
+    if db.has_member_api_key(sub, o, provider):
+        return "user"
     if provider in ORG_SHAREABLE_PROVIDERS:
         if g is not None and group_store.has_group_secret(g, provider):
             return "group"
@@ -688,7 +694,13 @@ def resolve_mount_token(provider: str) -> str:
         from . import folk_oauth
         token = folk_oauth.access_token_for(sub)
     else:
-        token = credentials_store.get_credential("user", sub, provider)
+        # Mount non-oauth (basic_auth, ex. planity) : credential posé via la carte
+        # api-keys → scope membre (ADR 0033), comme sa pose.
+        org = current_org(sub)
+        token = (credentials_store.get_credential(
+                     credentials_store.MEMBER,
+                     credentials_store.member_id(org, sub), provider)
+                 if org is not None else None)
     if token:
         return token
     raise McpError(ErrorData(
@@ -731,7 +743,8 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for provider in db.KEY_PROVIDERS:
         shareable = provider in ORG_SHAREABLE_PROVIDERS
         # PRÉSENCE seulement (pas de déchiffrement sur le chemin /api/me).
-        user_has = db.has_user_api_key(sub, provider)
+        # Scope membre (ADR 0033) : la clé propre est celle posée dans CETTE org.
+        user_has = db.has_member_api_key(sub, active_org, provider)
         group_has = (
             group_store.has_group_secret(active_group, provider)
             if active_group is not None and shareable else False
@@ -781,7 +794,7 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
         if (c.name in out["providers"] or not c.secret_fields
                 or "byo_user" not in c.auth_modes):
             continue
-        has = db.has_user_api_key(sub, c.name)
+        has = db.has_member_api_key(sub, active_org, c.name)
         out["providers"][c.name] = {
             "mode": "user" if has else "forbidden",
             "user_key_configured": has,
@@ -800,7 +813,10 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for c in connectors.REGISTRY.values():
         if c.name in out["providers"] or c.secret_kind != "cookie":
             continue
-        st = credentials_store.credential_status("user", sub, c.name)
+        st = (credentials_store.credential_status(
+                  credentials_store.MEMBER,
+                  credentials_store.member_id(active_org, sub), c.name)
+              if active_org is not None else None)
         out["providers"][c.name] = {
             "mode": "user" if st else "forbidden",
             "user_key_configured": st is not None,

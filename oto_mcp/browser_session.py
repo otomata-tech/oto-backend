@@ -103,7 +103,15 @@ def start(sub: str, connector: str | None = None) -> dict:
 
 def _persist(sub: str, connector: str, context_id: str, session_id: str) -> None:
     browserbase.release_session(session_id)        # libère → persiste le Context
-    db.set_user_api_key(sub, connector, context_id)
+    # Scope MEMBRE (ADR 0033) : la session navigateur est un credential comme un
+    # autre — posée dans l'org de contexte, elle ne suit pas l'user dans ses autres
+    # orgs. Import lazy (access importe db comme ce module — pas de cycle, mais on
+    # reste hors du top-level par symétrie avec les autres seams).
+    from . import access
+    org_id = access.current_org(sub)
+    if org_id is None:
+        raise SessionError("aucune org de contexte — reconnecte-toi et réessaie.")
+    db.set_member_api_key(sub, org_id, connector, context_id)
 
 
 async def finalize(sub: str, connector: str, context_id: str, session_id: str) -> bool:

@@ -51,7 +51,7 @@ def test_split_secret_config_unknown_field_treated_secret():
 def _wire(monkeypatch, *, user=None, group=None, org=None, meta=None,
           active_group=7, active_org=42):
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
-    monkeypatch.setattr(access.db, "get_user_api_key", lambda sub, prov: user)
+    monkeypatch.setattr(access.db, "get_member_api_key", lambda sub, org, prov: user)
     monkeypatch.setattr(access, "current_group", lambda sub: active_group)
     monkeypatch.setattr(access, "current_org", lambda sub: active_org)
     monkeypatch.setattr(access.group_store, "get_group_secret", lambda gid, prov: group)
@@ -82,7 +82,7 @@ def test_resolve_credential_config_from_meta_dsn(monkeypatch):
 
 def test_resolve_credential_platform_has_no_config(monkeypatch):
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
-    monkeypatch.setattr(access.db, "get_user_api_key", lambda s, p: None)
+    monkeypatch.setattr(access.db, "get_member_api_key", lambda s, o, p: None)
     monkeypatch.setattr(access, "current_group", lambda s: None)
     monkeypatch.setattr(access, "current_org", lambda s: None)
     monkeypatch.setattr(access.db, "get_active_grant",

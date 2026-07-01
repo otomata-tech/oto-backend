@@ -1060,7 +1060,7 @@ def get_instruction(org_id: int, slug: str, version: Optional[int] = None) -> Op
     with _connect() as conn:
         if version is None:
             row = conn.execute(
-                "SELECT org_id, slug, title, description, body_md, version, set_by, "
+                "SELECT id, org_id, slug, title, description, body_md, version, set_by, "
                 "created_at, updated_at FROM org_instructions "
                 "WHERE org_id = %s AND slug = %s",
                 (org_id, slug),
@@ -1082,7 +1082,7 @@ def list_instructions(org_id: int, include_base: bool = False) -> list[dict]:
     params: tuple = (org_id,) if include_base else (org_id, BASE_SLUG)
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT slug, title, description, version, updated_at "
+            f"SELECT id, slug, title, description, version, updated_at "
             f"FROM org_instructions WHERE {where} ORDER BY slug",
             params,
         ).fetchall()
@@ -1111,7 +1111,7 @@ def search_instructions(org_id: int, query: str, include_base: bool = False) -> 
     head: tuple = (org_id,) if include_base else (org_id, BASE_SLUG)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT slug, title, description, body_md, version, updated_at "
+            "SELECT id, slug, title, description, body_md, version, updated_at "
             "FROM org_instructions WHERE org_id = %s " + base_filter +
             "AND (title ILIKE %s OR description ILIKE %s OR body_md ILIKE %s) "
             "ORDER BY (title ILIKE %s) DESC, (description ILIKE %s) DESC, updated_at DESC",

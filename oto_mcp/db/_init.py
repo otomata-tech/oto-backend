@@ -46,6 +46,16 @@ def init_db() -> None:
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).
         conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS public_token TEXT")
+        # ADR 0032 (« stop using slug ») : id surrogate stable + globalement unique pour
+        # les doctrines. `org_instructions` garde (org_id, slug) comme clé naturelle
+        # interne ; l'`id` devient l'identité PUBLIQUE (URL, project_links, runs). Backfill
+        # des lignes existantes via une séquence (idempotent).
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS id BIGINT")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS org_instructions_id_seq OWNED BY org_instructions.id")
+        conn.execute("UPDATE org_instructions SET id = nextval('org_instructions_id_seq') WHERE id IS NULL")
+        conn.execute("ALTER TABLE org_instructions ALTER COLUMN id SET DEFAULT nextval('org_instructions_id_seq')")
+        conn.execute("ALTER TABLE org_instructions ALTER COLUMN id SET NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instructions_id ON org_instructions(id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
         # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
         conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")

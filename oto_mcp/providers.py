@@ -236,7 +236,7 @@ _CATEGORY_BY_CONNECTOR = {
     "folk": "Prospection", "crunchbase": "Prospection",
     "unipile": "Prospection", "topograph": "Prospection",
     "sirene": "Data FR", "culture": "Data FR",
-    "foncier": "Data FR", "sante": "Data FR", "gr": "Data GR",
+    "foncier": "Data FR", "sante": "Data FR", "frenchtech": "Data FR", "gr": "Data GR",
     "reddit": "Web",
     "infosec": "Infosec",
     "pennylane": "Finance", "gocardless": "Finance", "silae": "Finance",
@@ -277,6 +277,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "sirene": "INSEE", "culture": "Ministère de la Culture",
     "reddit": "Reddit",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
+    "frenchtech": "La French Tech (open data)",
     "infosec": "Otomata (OSINT)",
     # open-data GR → éditeur = la source publique
     "gr": "GEMI / VIES",
@@ -585,6 +586,8 @@ _REGISTRY_LIST = [
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
+    _c("frenchtech", ["frenchtech"], secret_kind="none", in_default_bundle=False,
+       label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
     # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).
     # Complète fr_* (identité légale) par l'empreinte numérique. Pas de scan intrusif.
     _c("infosec", ["infosec"], secret_kind="none", in_default_bundle=False,

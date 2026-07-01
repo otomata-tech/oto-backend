@@ -24,7 +24,7 @@ from .registry import CAPABILITIES
 RTYPE = "project"
 
 
-_LINK_TYPES = ("tableau", "procedure", "connecteur", "base")
+_LINK_TYPES = ("tableau", "procedure", "connecteur", "base", "page")
 
 
 class ProjectInput(BaseModel):
@@ -38,8 +38,8 @@ class ProjectInput(BaseModel):
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur", "base"]] = None
-    target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id
+    target_type: Optional[Literal["tableau", "procedure", "connecteur", "base", "page"]] = None
+    target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id | page URL (memento)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?}
@@ -217,7 +217,8 @@ CAPABILITIES += [
             "that pre-writes oto_use_project for this project) / archive / link & unlink "
             "(attach an entity: "
             "target_type tableau|procedure|"
-            "connecteur|base + target_ref = its id/slug/name, optional label + optional "
+            "connecteur|base|page + target_ref = its id/slug/name (for `page`: the Memento "
+            "page URL — you can pass it directly), optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "

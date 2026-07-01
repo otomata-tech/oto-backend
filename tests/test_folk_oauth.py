@@ -37,7 +37,7 @@ def test_pkce_and_resource_indicator():
 
 def test_redirect_uri_and_client_id():
     _, q = _auth_params()
-    assert q["redirect_uri"][0] == "https://mcp.oto.ninja/api/folk/oauth/callback"
+    assert q["redirect_uri"][0] == "https://mcp.oto.ninja/api/folkmcp/oauth/callback"
     assert q["client_id"][0] == "cid-test"
 
 

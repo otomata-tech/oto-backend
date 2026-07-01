@@ -1,10 +1,12 @@
 """Routes REST OAuth Folk — fédération du MCP officiel de Folk per-user (#85).
 
-Flow web (calqué sur api_routes_atlassian.py) :
-- `GET    /api/folk/oauth/start`    (auth Logto) → {auth_url} à ouvrir
-- `GET    /api/folk/oauth/callback` (no auth, Folk redirige) → exchange + persist
-- `GET    /api/folk/oauth/status`   (auth) → {connected, set_at}
-- `DELETE /api/folk/oauth`          (auth) → déconnecte
+Flow web (calqué sur api_routes_atlassian.py) — routes ancrées sur le NOM du
+connecteur `folkmcp` (le widget fédéré du dashboard appelle `/api/<name>/oauth/*`,
+name = `folkmcp`, comme memento/atlassian) :
+- `GET    /api/folkmcp/oauth/start`    (auth Logto) → {auth_url} à ouvrir
+- `GET    /api/folkmcp/oauth/callback` (no auth, Folk redirige) → exchange + persist
+- `GET    /api/folkmcp/oauth/status`   (auth) → {connected, set_at}
+- `DELETE /api/folkmcp/oauth`          (auth) → déconnecte
 
 Le token per-user est stocké dans le coffre (connector='folkmcp') ; le proxy de
 tools/mount.py l'injecte par requête (access.resolve_mount_token → refresh). Ne
@@ -71,11 +73,11 @@ def make_routes(
         return json_response(request, {"ok": True, "disconnected": folk_oauth.disconnect(sub)})
 
     return [
-        Route("/api/folk/oauth/start", start, methods=["GET"]),
-        Route("/api/folk/oauth/start", options_handler, methods=["OPTIONS"]),
-        Route("/api/folk/oauth/callback", callback, methods=["GET"]),
-        Route("/api/folk/oauth/status", status, methods=["GET"]),
-        Route("/api/folk/oauth/status", options_handler, methods=["OPTIONS"]),
-        Route("/api/folk/oauth", disconnect, methods=["DELETE"]),
-        Route("/api/folk/oauth", options_handler, methods=["OPTIONS"]),
+        Route("/api/folkmcp/oauth/start", start, methods=["GET"]),
+        Route("/api/folkmcp/oauth/start", options_handler, methods=["OPTIONS"]),
+        Route("/api/folkmcp/oauth/callback", callback, methods=["GET"]),
+        Route("/api/folkmcp/oauth/status", status, methods=["GET"]),
+        Route("/api/folkmcp/oauth/status", options_handler, methods=["OPTIONS"]),
+        Route("/api/folkmcp/oauth", disconnect, methods=["DELETE"]),
+        Route("/api/folkmcp/oauth", options_handler, methods=["OPTIONS"]),
     ]

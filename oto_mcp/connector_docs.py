@@ -57,7 +57,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "propres droits Folk.\n"
             "- distinct du connecteur `folk` natif (clé API partagée de l'org) : "
             "ici chaque personne connecte **son** compte\n"
-            "- url de callback : `https://mcp.oto.ninja/api/folk/oauth/callback`"
+            "- url de callback : `https://mcp.oto.ninja/api/folkmcp/oauth/callback`"
         )),
         DocSection(kind="usage", title="piloter ton CRM Folk", body_md=(
             "le MCP officiel de Folk (outils fédérés `folkmcp_*`) : cherche, crée et "

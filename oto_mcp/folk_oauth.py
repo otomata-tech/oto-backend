@@ -104,7 +104,7 @@ def _state_secret() -> bytes:
 
 def _redirect_uri() -> str:
     base = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
-    return f"{base}/api/folk/oauth/callback"
+    return f"{base}/api/folkmcp/oauth/callback"
 
 
 def build_auth_url(sub: str) -> str:

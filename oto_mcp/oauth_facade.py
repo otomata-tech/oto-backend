@@ -260,6 +260,49 @@ def _register_redirects(app_id: str, redirect_uris: list) -> None:
     _log.info("DCR: app %s — +%d redirect(s), cors=%s", app_id, len(new), cors)
 
 
+def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
+    """Enregistre (idempotent) une API resource Logto pour `indicator` (le resource
+    indicator = l'audience JWT, ex. `https://<slug>.mcp.oto.cx/mcp`). Sans ça, Logto
+    émet un token OPAQUE pour ce sous-domaine (≠ resource enregistrée) → `invalid_token`
+    (blocage historique #44). Best-effort côté appelant : lève si la Management API
+    échoue (l'appelant loggue et n'empêche pas la publication). Réutilise le M2M partagé."""
+    import requests
+    base, tok = _logto_base(), _mgmt_token()
+    h = {"Authorization": f"Bearer {tok}", "User-Agent": _UA, "Content-Type": "application/json"}
+    existing = requests.get(f"{base}/api/resources", headers=h, timeout=15)
+    existing.raise_for_status()
+    if any((r.get("indicator") == indicator) for r in existing.json()):
+        return
+    r = requests.post(
+        f"{base}/api/resources",
+        json={"name": name or indicator, "indicator": indicator},
+        headers=h, timeout=15,
+    )
+    r.raise_for_status()
+    _log.info("Logto API resource créée : %s", indicator)
+
+
+# ── PRM (RFC 9728) host-aware — la SEULE pièce de discovery à rendre host-aware ─
+# Le PRM annonce le `resource` (= l'audience que le client demandera à Logto). Sur le
+# sous-domaine d'un projet org publié, il DOIT annoncer le sous-domaine lui-même (sinon
+# claude.ai reçoit un token opaque, blocage #44). L'AS reste canonique (RFC 8707 :
+# resource indicator ≠ authorization server) → as_meta/oidc_meta INCHANGÉS.
+# Sécurité canonique : on construit le PRM via le MÊME modèle mcp lib que fastmcp, avec
+# les MÊMES paramètres pour le host canonique → sortie identique byte-à-byte ; on ne
+# diverge le `resource` que pour un sous-domaine org VÉRIFIÉ publié.
+def _prm_handler(public_url: str, resource_url: str):
+    from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
+    from mcp.shared.auth import ProtectedResourceMetadata
+    md = ProtectedResourceMetadata(
+        resource=AnyHttpUrl(resource_url),
+        authorization_servers=[AnyHttpUrl(public_url)],
+        # Mêmes valeurs que _build_auth (RemoteAuthProvider) → PRM canonique identique.
+        scopes_supported=["openid", "profile", "email", "offline_access"],
+        resource_name="oto MCP",
+    )
+    return ProtectedResourceMetadataHandler(md)
+
+
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
     public_url = public_url.rstrip("/")
 
@@ -268,6 +311,16 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
 
     async def oidc_meta(request: Request) -> JSONResponse:
         return JSONResponse(as_oidc_metadata(public_url))
+
+    async def prm(request: Request):
+        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+        # Sous-domaine d'un projet org PUBLIÉ → resource = ce sous-domaine ; sinon
+        # canonique (identique à fastmcp). valid_org_audience = motif + existence DB.
+        candidate = f"https://{host}/mcp"
+        from . import subdomain_project
+        resource_url = candidate if subdomain_project.valid_org_audience(candidate) \
+            else f"{public_url}/mcp"
+        return await _prm_handler(public_url, resource_url).handle(request)
 
     async def dcr(request: Request) -> JSONResponse:
         if request.method == "OPTIONS":
@@ -325,5 +378,9 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # (Mistral) ; un 404 ici peut casser leur résolution d'AS. Mêmes 2 variantes.
         Route("/.well-known/openid-configuration", oidc_meta, methods=["GET"]),
         Route("/.well-known/openid-configuration/mcp", oidc_meta, methods=["GET"]),
+        # PRM host-aware (RFC 9728) : shadow les routes fastmcp (insérées avant → priorité).
+        # Canonique = identique à fastmcp ; sous-domaine org publié = resource = le sous-domaine.
+        Route("/.well-known/oauth-protected-resource", prm, methods=["GET", "OPTIONS"]),
+        Route("/.well-known/oauth-protected-resource/mcp", prm, methods=["GET", "OPTIONS"]),
         Route("/oauth/register", dcr, methods=["POST", "OPTIONS"]),
     ]

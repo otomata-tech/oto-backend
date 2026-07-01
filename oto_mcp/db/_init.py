@@ -35,6 +35,12 @@ def init_db() -> None:
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
+        # ADR 0032 (amende #44) : publication d'un projet en endpoint MCP dédié
+        # `<mcp_slug>.mcp.oto.cx` — anonyme (toolset figé, sans login) ou authed per-org.
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_slug TEXT")
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_access TEXT NOT NULL DEFAULT 'off'")
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_tools TEXT[] NOT NULL DEFAULT '{}'")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_mcp_slug ON projects(mcp_slug) WHERE mcp_slug IS NOT NULL")
         # ADR 0032 §7 : l'onboarding n'est plus un mode spécial mais un projet « Découverte »
         # (semé à la création de l'org perso). On retire la machinerie d'accueil de la fiche
         # « situation avec oto » — il ne reste que le data model `profile`, relu à chaque session.

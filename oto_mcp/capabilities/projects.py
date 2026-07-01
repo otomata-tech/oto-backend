@@ -29,11 +29,16 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "base", "page")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "copy", "handoff", "link", "unlink", "activity"]
+                "copy", "handoff", "link", "unlink", "activity",
+                "publish_mcp", "unpublish_mcp"]
     project_id: Optional[int] = None
     name: Optional[str] = None
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
+    # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
+    mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$)
+    mcp_access: Optional[Literal["anonymous", "org"]] = None  # anonymous = sans login (toolset figé) ; org = JWT + org épinglée
+    mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
@@ -74,6 +79,12 @@ def _view(row: dict) -> dict:
         "id": row["id"], "name": row["name"], "brief_md": row.get("brief_md", ""),
         "owner_type": row["owner_type"], "owner_id": row["owner_id"],
         "is_template": bool(row.get("is_template")),
+        # Publication MCP (ADR 0032, amende #44) : présence + URL dérivée.
+        "mcp_slug": row.get("mcp_slug"),
+        "mcp_access": row.get("mcp_access") or "off",
+        "mcp_tools": list(row.get("mcp_tools") or []),
+        "mcp_url": (f"https://{row['mcp_slug']}.mcp.oto.cx/mcp"
+                    if row.get("mcp_slug") and (row.get("mcp_access") or "off") != "off" else None),
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
         "archived_at": row.get("archived_at"),
     }
@@ -87,6 +98,28 @@ def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
         return ref
     inst = org_store.get_instruction(int(org_id), ref)
     return str(inst["id"]) if inst and inst.get("id") is not None else ref
+
+
+def _mcp_publish_guard(row: dict, tools: list[str]) -> None:
+    """Garde de publication ANONYME (ADR 0032) : un endpoint sans login n'a pas
+    d'identité user → chaque tool exposé doit être résoluble SANS `sub`. Refuse un
+    preset contenant un tool spine/méta (`oto_*`, `data_*`… — sans connecteur, exige
+    une identité) ou un tool à credential non résoluble pour l'org propriétaire du
+    projet (`access.connector_resolvable_for_org`). Message actionnable listant les
+    fautifs (configure une clé d'org, ou retire-les)."""
+    from .. import access, providers
+    from ..tool_visibility import namespace_of
+    _require(row.get("owner_type") == "org", "not_org_owned",
+             "Un projet doit appartenir à une org pour être publié en MCP anonyme.", 400)
+    org_id = int(row["owner_id"])
+    bad = []
+    for t in tools:
+        con = providers.connector_for_namespace(namespace_of(t))
+        if con is None or not access.connector_resolvable_for_org(con.name, org_id):
+            bad.append(t)
+    _require(not bad, "unresolvable_tools",
+             "Preset anonyme : ces outils n'ont pas de credential résoluble pour l'org "
+             f"du projet (configure une clé d'org, ou retire-les) : {', '.join(sorted(bad))}", 400)
 
 
 def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
@@ -214,6 +247,49 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         return {"ok": True, "id": inp.project_id,
                 "links": db.list_project_links(int(inp.project_id))}
 
+    if inp.op in ("publish_mcp", "unpublish_mcp"):
+        # Publier un endpoint MCP = acte de gouvernance (URL publique au nom de l'org).
+        _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
+                 "Publier un endpoint MCP est réservé au propriétaire / admin.", 403)
+        if inp.op == "unpublish_mcp":
+            db.set_project_mcp_publication(int(inp.project_id), slug=None, access="off", tools=[])
+            db.log_project_activity(int(inp.project_id), sub, "project.unpublish_mcp", None)
+            return _view(db.get_project_by_id(int(inp.project_id)))
+        access_mode = inp.mcp_access or "anonymous"
+        _require(bool(inp.mcp_slug), "missing_slug", "`mcp_slug` requis.", 400)
+        tools = [t for t in (inp.mcp_tools or []) if t and t.strip()]
+        _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
+        if access_mode == "anonymous":
+            _mcp_publish_guard(row, tools)
+        try:
+            db.set_project_mcp_publication(int(inp.project_id), slug=inp.mcp_slug,
+                                           access=access_mode, tools=tools)
+        except ValueError as e:
+            code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
+            _require(False, code, str(e), 409 if code == "slug_taken" else 400)
+        # Endpoint AUTHED (#44) : enregistre l'API resource Logto (audience JWT) pour que
+        # Logto émette un JWT signé pour ce sous-domaine (sinon token opaque → invalid_token).
+        # Best-effort : un échec Management API n'empêche pas la publication (loggué).
+        resource_registered = None
+        if access_mode == "org":
+            try:
+                from .. import oauth_facade
+                oauth_facade.ensure_api_resource(
+                    f"https://{inp.mcp_slug}.mcp.oto.cx/mcp",
+                    name=f"oto MCP — {row.get('name') or inp.mcp_slug}")
+                resource_registered = True
+            except Exception:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).exception(
+                    "ensure_api_resource échoué pour %s", inp.mcp_slug)
+                resource_registered = False
+        db.log_project_activity(int(inp.project_id), sub, "project.publish_mcp",
+                                f"{access_mode}:{inp.mcp_slug}")
+        out = _view(db.get_project_by_id(int(inp.project_id)))
+        if resource_registered is not None:
+            out["logto_resource_registered"] = resource_registered
+        return out
+
     # archive
     _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
              "Archivage réservé au propriétaire / admin.", 403)
@@ -252,7 +328,13 @@ CAPABILITIES += [
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
             "project's table by that name with the data_* tools (never hardcode a namespace). "
-            "Share & transfer go through oto_resource (resource_type='project')."
+            "Share & transfer go through oto_resource (resource_type='project'). "
+            "publish_mcp (mcp_slug + mcp_access anonymous|org + mcp_tools = the fixed tool "
+            "allowlist) publishes the project as a dedicated MCP endpoint "
+            "`<mcp_slug>.mcp.oto.cx/mcp` — `anonymous` = no login, the toolset served under the "
+            "OWNER ORG's credentials (every tool must be credential-less or resolvable for the "
+            "org, else refused); `org` = Logto JWT + pins the org. unpublish_mcp removes it. "
+            "get returns mcp_slug/mcp_access/mcp_tools/mcp_url."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

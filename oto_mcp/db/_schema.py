@@ -279,6 +279,14 @@ CREATE TABLE IF NOT EXISTS projects (
     brief_md TEXT NOT NULL DEFAULT '',
     created_by TEXT,
     is_template BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Publication d'un projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032,
+    -- amende #44). `mcp_access` ∈ {off (défaut, non publié) | anonymous (aucun login,
+    -- toolset figé servi par la clé de l'org propriétaire) | org (JWT Logto, épingle
+    -- l'org)}. `mcp_tools` = allowlist figée du preset (les seuls tools exposés sur le
+    -- sous-domaine). `mcp_slug` UNIQUE = le label de sous-domaine (regex ^[a-z0-9-]{3,}$).
+    mcp_slug TEXT UNIQUE,
+    mcp_access TEXT NOT NULL DEFAULT 'off',
+    mcp_tools TEXT[] NOT NULL DEFAULT '{}',
     archived_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

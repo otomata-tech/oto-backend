@@ -31,7 +31,12 @@ from .users import upsert_user
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
-                 "is_template, archived_at, created_at, updated_at")
+                 "is_template, mcp_slug, mcp_access, mcp_tools, "
+                 "archived_at, created_at, updated_at")
+
+# Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
+_MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
+_MCP_ACCESS = ("off", "anonymous", "org")
 
 
 def create_project(owner_type: str, owner_id: str, name: str,
@@ -124,6 +129,51 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
     with _connect() as conn:
         conn.execute("UPDATE projects SET owner_type = %s, owner_id = %s, updated_at = NOW() "
                      "WHERE id = %s", (new_owner_type, new_owner_id, project_id))
+
+
+def get_project_by_mcp_slug(slug: str) -> Optional[dict]:
+    """Projet publié sur le sous-domaine `<slug>.mcp.oto.cx`, ou None. Ignore les
+    projets non publiés (`mcp_access='off'`) et archivés (deny-by-default en amont
+    du serveur MCP anonyme → jamais de fuite sur un slug retiré)."""
+    slug = (slug or "").strip().lower()
+    if not slug:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects "
+            "WHERE mcp_slug = %s AND mcp_access <> 'off' AND archived_at IS NULL",
+            (slug,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
+                                access: str, tools: list[str]) -> None:
+    """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug
+    (rend le sous-domaine inerte). Valide le format de slug et l'énumération d'accès —
+    la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité."""
+    if access not in _MCP_ACCESS:
+        raise ValueError(f"mcp_access invalide: {access!r} (attendu {_MCP_ACCESS})")
+    if access == "off":
+        slug = None
+    else:
+        slug = (slug or "").strip().lower()
+        if not _MCP_SLUG_RE.match(slug):
+            raise ValueError(
+                "mcp_slug invalide: 3+ caractères [a-z0-9-], sans tiret en bordure")
+    with _connect() as conn:
+        if slug is not None:
+            taken = conn.execute(
+                "SELECT id FROM projects WHERE mcp_slug = %s AND id <> %s",
+                (slug, project_id),
+            ).fetchone()
+            if taken:
+                raise ValueError(f"slug_taken: le sous-domaine « {slug} » est déjà pris")
+        conn.execute(
+            "UPDATE projects SET mcp_slug = %s, mcp_access = %s, mcp_tools = %s, "
+            "updated_at = NOW() WHERE id = %s",
+            (slug, access, list(tools or []), project_id),
+        )
 
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,

@@ -112,7 +112,10 @@ def current_org(sub: str | None) -> Optional[int]:
     Les deux premières ne coexistent jamais (session = MCP only, consultation =
     REST only). Garder ce seam étroit : candidat broker de credentials (ADR 0004)."""
     if sub is None:
-        return None
+        # Endpoint MCP ANONYME (`<slug>.mcp.oto.cx`, ADR 0032) : pas de sub, mais l'org
+        # PROPRIÉTAIRE du projet est le contexte de résolution (credentials/redaction).
+        from . import subdomain_project
+        return subdomain_project.current_anon_org()
     # Endpoint scopé par sous-domaine (« 1 oto par org ») : épingle l'org de la
     # connexion AVANT tout. Garde d'appartenance ici (sub connu) → un non-membre
     # est ignoré (repli maison, zéro fuite). Précédence ⇒ hard-lock : `oto_use_org`
@@ -328,6 +331,14 @@ def resolve_credential(provider: str, want: str = "auto",
     (un compte actif sans clé valide n'apparaissait nulle part). `emit_on_failure=False`
     pour les **sondes** qui avalent la McpError (ex. lookup de DSN), afin de ne pas
     fausser le signal. Cascade et sémantique : voir `_resolve_credential_impl`."""
+    if sub is None:
+        # Endpoint MCP ANONYME (ADR 0032) : pas de sub → résolution contre l'org
+        # propriétaire du projet (org secret > grant org > clé plateforme ouverte),
+        # sans quota per-sub (le rate-limit du sous-domaine borne l'abus).
+        from . import subdomain_project
+        anon = subdomain_project.current_anon_context()
+        if anon is not None:
+            return _resolve_credential_anon(provider, want, anon.org_id)
     sub = sub or current_user_sub_or_raise()
     try:
         return _resolve_credential_impl(provider, want, sub)
@@ -449,6 +460,43 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
+def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) -> ResolvedCredential:
+    """Résolution pour un endpoint MCP ANONYME (ADR 0032) : aucun `sub`, aucune session
+    per-user → cascade réduite `org_secret > grant plateforme d'org > clé plateforme
+    ouverte`, scopée sur l'org PROPRIÉTAIRE du projet. Pas de user_key/group (inexistants
+    sans identité), pas de quota per-sub (le rate-limit du sous-domaine borne l'abus).
+    Miroir org-only des paliers de `_resolve_credential_impl` — ce qui n'est pas résoluble
+    au niveau org (oauth/cookie per-user) lève une McpError actionnable, fail-closed."""
+    con = connectors.connector_for_provider(provider)
+    if con is None:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Provider inconnu: {provider}"))
+    if org_id is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"L'endpoint anonyme n'a pas d'org propriétaire pour résoudre "
+                     f"`{provider}` (projet sans org).")))
+    if provider in ORG_SHAREABLE_PROVIDERS:
+        org_key = org_store.get_org_secret(org_id, provider)
+        if org_key:
+            return ResolvedCredential(provider, org_key, False, "org", "org", str(org_id))
+    if want == "byo":
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
+    platform_eligible = "platform" in con.auth_modes
+    grant = db.get_active_org_grant(org_id, provider) if platform_eligible else None
+    if not grant and platform_eligible and con.platform_key_open:
+        pk = db.get_platform_api_key(provider)
+        if pk:
+            grant = {"api_key": pk["api_key"], "label": pk["label"]}
+    if not grant:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"L'endpoint anonyme ne peut pas résoudre `{provider}` : configure "
+                     f"une clé d'org, ou grant une clé plateforme à l'org du projet.")))
+    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+
+
 def resolve_api_key(provider: str) -> tuple[str, bool]:
     """Renvoie `(api_key, is_platform)` ou lève McpError actionnable. Vue mince
     sur `resolve_credential` (contrat inchangé pour les ~15 tools keyed)."""
@@ -556,6 +604,25 @@ def credential_mode_for(sub: str, provider: str, *,
     used = db.get_usage_today(sub, provider)
     limit = grant.get("daily_quota") or quota_for(provider)
     return "over_quota" if (limit and used >= limit) else "platform"
+
+
+def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
+    """Un connecteur peut-il être résolu pour une ORG **sans user identifié** ?
+    Vrai si : credential-less (`secret_kind='none'`), OU secret d'org configuré, OU
+    clé plateforme accordée à l'org. Sonde pour publier un endpoint MCP **anonyme**
+    (ADR 0032) servi par la clé de l'org propriétaire du projet : un endpoint sans
+    login n'a pas de `user_key`/session per-user → oauth/cookie sont exclus de fait
+    (pas de secret d'org pour eux). Miroir org-only de la cascade `resolve_credential`."""
+    con = connectors.connector_for_provider(provider)
+    if con is None:
+        return False
+    if con.secret_kind == "none":
+        return True
+    if provider in ORG_SHAREABLE_PROVIDERS and org_store.has_org_secret(org_id, provider):
+        return True
+    if "platform" in con.auth_modes and db.get_active_org_grant(org_id, provider):
+        return True
+    return False
 
 
 BYO_MODES = ("user", "group", "org")

@@ -135,6 +135,14 @@ def _client_ip(scope, headers: dict) -> str:
     return client[0] if client else "unknown"
 
 
+async def _send_html(send, body: str) -> None:
+    data = body.encode("utf-8")
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"text/html; charset=utf-8"),
+                            (b"cache-control", b"public, max-age=300")]})
+    await send({"type": "http.response.body", "body": data})
+
+
 async def _send_429(send) -> None:
     body = json.dumps({"error": "rate_limited",
                        "message": "Trop de requêtes sur cet endpoint anonyme. Réessaie plus tard."}).encode()
@@ -246,6 +254,15 @@ class HostDispatch:
         org_id = int(proj["owner_id"]) if proj.get("owner_type") == "org" else None
 
         if access_mode == "anonymous":
+            # Navigateur (GET, Accept: text/html) sur la RACINE → landing HTML publique :
+            # la MÊME URL sert la page de présentation ET le serveur MCP. Claude/Mistral
+            # (POST, ou Accept event-stream) tombent dans le chemin MCP ci-dessous.
+            if (scope.get("method") == "GET" and scope.get("path") in ("", "/")
+                    and b"text/html" in headers.get(b"accept", b"").lower()):
+                from . import anon_landing
+                return await _send_html(send, anon_landing.render(
+                    name=proj.get("name") or "", brief_md=proj.get("brief_md") or "",
+                    tools=list(proj.get("mcp_tools") or []), connect_url=f"https://{host}"))
             # Garde-fou anti-abus : token-bucket par (IP, projet) avant tout travail.
             if not _check_bucket((_client_ip(scope, headers), int(proj["id"])), time.monotonic()):
                 return await _send_429(send)

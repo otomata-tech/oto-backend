@@ -486,6 +486,22 @@ _REGISTRY_LIST = [
        label="Planity",
        help="agenda + caisse Planity (RDV, clients, CA, stats) — MCP fédéré",
        href="https://planity-mcp.oto.zone"),
+    # justicelibre : MCP fédéré (kind=mount) SANS auth — endpoint hébergé PUBLIC
+    # (justicelibre.org/mcp, Streamable HTTP, aucune clé ni compte ; MIT + Licence
+    # Ouverte Etalab 2.0). Droit français & européen : législation (LEGI/JORF/KALI)
+    # + jurisprudence (Cass/Judilibre, Conseil d'État, Conseil constitutionnel,
+    # CEDH, CJUE, CNIL). `auth_modes` VIDE = **mount no-auth** : tools/mount.py fetch
+    # le catalogue et forward SANS token per-user (chemin dédié, pas de
+    # resolve_mount_token). Opt-in par org : master OFF au registre d'activation, une
+    # org l'active via l'écran connector activation (le mount suit —
+    # `_db_activated_mounts`). Hors bundle par défaut.
+    _c("justicelibre", ["justicelibre"], kind="mount",
+       mount_url="https://justicelibre.org/mcp",
+       auth_modes=frozenset(), secret_kind="none", in_default_bundle=False,
+       label="JusticeLibre",
+       help="droit français & européen — législation + jurisprudence "
+            "(Légifrance/Judilibre/CE/CC/CEDH/CJUE), MCP fédéré, sources ouvertes",
+       href="https://justicelibre.org"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur

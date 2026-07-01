@@ -140,6 +140,15 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
     # ne doit JAMAIS crasher le register (sinon 502). [] = pas d'outils fédérés,
     # le reste d'oto intact ; un restart après stabilisation re-fetchera.
     try:
+        # Mount SANS auth (ex. justicelibre) : endpoint hébergé PUBLIC, aucun token
+        # ni user connecté requis → on liste directement au boot (le catalogue est
+        # product-level et anonyme). Chemin dédié, avant toute résolution de token.
+        if not connector.auth_modes:
+            async def _list_noauth():
+                client = Client(StreamableHttpTransport(connector.mount_url))
+                async with client:
+                    return await client.list_tools()
+            return _run_sync(asyncio.wait_for(_list_noauth(), CATALOG_TIMEOUT))
         # Voie durable (otomata#16) : catalogue via endpoint service (secret partagé),
         # sans token user. Si configuré (memento + env), on s'en tient là.
         svc = _service_catalog(connector)
@@ -174,6 +183,14 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
 def _make_factory(connector: connectors.Connector):
     """client_factory per-appel : token DU user courant, gating au call-time."""
     ns = connector.namespaces[0]
+
+    # Mount SANS auth (ex. justicelibre) : endpoint public, pas de credential
+    # per-user → forward direct, sans header Authorization ni gate de token. Le
+    # gating d'exposition reste porté par connector_activation (opt-in par org).
+    if not connector.auth_modes:
+        async def factory_noauth() -> Client:
+            return Client(StreamableHttpTransport(connector.mount_url))
+        return factory_noauth
 
     async def factory() -> Client:
         # Garde d'accès = la résolution du token : `resolve_mount_token` lève si le

@@ -8,6 +8,8 @@
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
 - `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
 - `GET /api/me/instructions` (doctrine de base meta + index) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — doctrine & instructions de l'**org active** (cf. §Doctrines). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par la SPA `account/` (section « doctrine »).
+- `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).
+- `GET /api/public/projects/{token}` — **sans auth** : renvoie `{ciphertext, updated_at}` du snapshot chiffré. Déchiffrement côté navigateur (route `/p/p/{token}#<clé>`). Pendant public de `GET /api/public/docs/{token}` (#4a).
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)

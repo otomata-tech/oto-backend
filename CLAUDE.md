@@ -216,6 +216,18 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 `/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
 (MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
 
+> **Partage public CHIFFRÉ d'un projet (ADR 0032 §3, zero-knowledge).** Un projet peut être
+> publié en lecture seule derrière un lien, avec le contenu **chiffré côté navigateur**
+> (AES-256-GCM, `oto-dashboard` `lib/crypto.ts`). Le backend ne stocke QUE le ciphertext
+> (`project_public_shares`, une part par projet, token opaque) — la clé vit dans le **fragment**
+> de l'URL (`/p/p/<token>#<clé>`) et n'atteint jamais le serveur → la plateforme ne peut pas lire
+> un projet partagé. **REST-only** (le ciphertext vient du front, l'agent MCP ne peut pas chiffrer
+> dans le navigateur → pas de binding MCP, esprit « secret jamais en argument MCP ») :
+> `POST|DELETE /api/me/projects/{id}/public-share` (autz `can_access write`) + lecture publique
+> sans auth `GET /api/public/projects/{token}`. Re-publier fait **tourner** le token+la clé
+> (ancien lien caduc). `oto_project(op=get)` expose `public_shared`/`public_shared_at` (présence
+> seule, jamais la clé). Pendant du partage public de doc rendu (#4a) mais **chiffré**.
+
 ## WhatsApp / Telegram / Instagram (messagerie via Unipile)
 
 Tools `whatsapp_*` / `telegram_*` / `instagram_*` (`list_chats`/`read_chat`/

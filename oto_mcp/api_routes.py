@@ -66,6 +66,12 @@ def _allowed_origins() -> list[str]:
     ]
 
 
+def _dashboard_base_url() -> str:
+    """Base publique du dashboard (routes publiques /p/…). Configurable par env,
+    défaut prod. Le front y appose son chemin + fragment de clé côté navigateur."""
+    return os.environ.get("OTO_DASHBOARD_BASE_URL", "https://dashboard.oto.ninja").rstrip("/")
+
+
 def _cors_headers(origin: str | None) -> dict[str, str]:
     if origin and origin in _allowed_origins():
         return {
@@ -712,6 +718,62 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 404, "not_found")
         return _json(request, {"title": doc["title"], "body_md": doc["body_md"],
                                "updated_at": doc.get("updated_at")})
+
+    async def project_public_share_set(request: Request) -> JSONResponse:
+        """Publie un projet en PARTAGE PUBLIC CHIFFRÉ (zero-knowledge, ADR 0032 §3).
+        Le navigateur chiffre le snapshot (brief + pages) avec une clé qu'il garde ;
+        on ne reçoit QUE le `ciphertext`. Renvoie le `token` public + l'URL de base du
+        dashboard (le front y appose le fragment de clé → `/p/p/<token>#<clé>`)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import ownership
+        pid = int(request.path_params["project_id"])
+        if not db.get_project_by_id(pid):
+            return _json_error(request, 404, "unknown_project")
+        if not ownership.can_access(sub, "project", str(pid), "write"):
+            return _json_error(request, 403, "forbidden")
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(request, 400, "invalid_json")
+        ciphertext = (body or {}).get("ciphertext") if isinstance(body, dict) else None
+        if not isinstance(ciphertext, str) or not ciphertext.strip():
+            return _json_error(request, 400, "missing_ciphertext")
+        # Garde-fou de volume (le snapshot chiffré est du texte base64 ; ~2 Mo suffisent
+        # très largement pour un brief + un arbre de pages). Anti-abus de la table.
+        if len(ciphertext) > 4_000_000:
+            return _json_error(request, 413, "ciphertext_too_large")
+        token = db.set_project_public_share(pid, ciphertext, created_by=sub)
+        db.log_project_activity(pid, sub, "project.public_share", "on")
+        return _json(request, {"ok": True, "token": token,
+                               "public_base_url": _dashboard_base_url()})
+
+    async def project_public_share_clear(request: Request) -> JSONResponse:
+        """Retire le partage public chiffré d'un projet (le lien devient introuvable)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        from . import ownership
+        pid = int(request.path_params["project_id"])
+        if not db.get_project_by_id(pid):
+            return _json_error(request, 404, "unknown_project")
+        if not ownership.can_access(sub, "project", str(pid), "write"):
+            return _json_error(request, 403, "forbidden")
+        db.clear_project_public_share(pid)
+        db.log_project_activity(pid, sub, "project.public_share", "off")
+        return _json(request, {"ok": True})
+
+    async def public_project(request: Request) -> JSONResponse:
+        """Lecture PUBLIQUE (sans auth) du snapshot CHIFFRÉ d'un projet par token.
+        Ne renvoie QUE le ciphertext : le déchiffrement se fait côté navigateur avec la
+        clé du fragment (`#…`), jamais transmise au serveur — zero-knowledge."""
+        token = request.path_params.get("token", "")
+        share = db.get_project_share_by_token(token) if token else None
+        if not share:
+            return _json_error(request, 404, "not_found")
+        return _json(request, {"ciphertext": share["ciphertext"],
+                               "updated_at": share.get("updated_at")})
 
     def _org_logo_gate(request: Request, sub: str):
         """Renvoie (org_id, err). 400 id invalide, 404 org inconnue, 403 non-admin."""
@@ -1381,6 +1443,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}/public", options_handler, methods=["OPTIONS"]),
         Route("/api/public/docs/{token}", public_doc, methods=["GET"]),
         Route("/api/public/docs/{token}", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/projects/{project_id:int}/public-share", project_public_share_set, methods=["POST"]),
+        Route("/api/me/projects/{project_id:int}/public-share", project_public_share_clear, methods=["DELETE"]),
+        Route("/api/me/projects/{project_id:int}/public-share", options_handler, methods=["OPTIONS"]),
+        Route("/api/public/projects/{token}", public_project, methods=["GET"]),
+        Route("/api/public/projects/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/orgs/{id}/logo", org_logo_save, methods=["POST"]),
         Route("/api/orgs/{id}/logo", org_logo_clear, methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),

@@ -214,6 +214,58 @@ def get_doc_by_public_token(token: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+# --- Partage PUBLIC CHIFFRÉ d'un projet (zero-knowledge, ADR 0032 §3) ---------
+# Le serveur ne voit QUE le ciphertext (snapshot brief+pages chiffré côté navigateur
+# en AES-256-GCM) ; la clé vit dans le fragment de l'URL et n'atteint jamais le
+# backend → « encrypted » au sens fort. Une part par projet (upsert sur project_id).
+
+def set_project_public_share(project_id: int, ciphertext: str,
+                             created_by: Optional[str] = None) -> str:
+    """Publie (ou re-publie) le snapshot chiffré d'un projet. Renvoie le `token`
+    public. Upsert par projet : re-publier remplace le ciphertext ET fait TOURNER
+    le token (l'ancien lien devient caduc — cohérent avec la rotation de clé côté
+    navigateur à chaque publication zero-knowledge)."""
+    token = secrets.token_urlsafe(16)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO project_public_shares (token, project_id, ciphertext, created_by) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (project_id) DO UPDATE SET token = EXCLUDED.token, "
+            "ciphertext = EXCLUDED.ciphertext, created_by = EXCLUDED.created_by, "
+            "updated_at = NOW()",
+            (token, project_id, ciphertext, created_by),
+        )
+    return token
+
+
+def clear_project_public_share(project_id: int) -> None:
+    """Retire le partage public d'un projet (le lien devient introuvable)."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM project_public_shares WHERE project_id = %s", (project_id,))
+
+
+def get_project_public_share(project_id: int) -> Optional[dict]:
+    """Méta de la part publique d'un projet pour le propriétaire (token + horodatage,
+    JAMAIS la clé — elle n'est pas côté serveur). None si non partagé."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT token, updated_at FROM project_public_shares WHERE project_id = %s",
+            (project_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_project_share_by_token(token: str) -> Optional[dict]:
+    """Lecture PUBLIQUE (sans auth) du ciphertext par token. Le déchiffrement se fait
+    côté navigateur avec la clé du fragment — le serveur ne peut pas lire le contenu."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ciphertext, updated_at FROM project_public_shares WHERE token = %s",
+            (token,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def list_docs_for_project(project_id: int) -> list[dict]:
     """Toutes les pages du projet (l'UI/agent reconstruit l'arbre via parent_id)."""
     with _connect() as conn:

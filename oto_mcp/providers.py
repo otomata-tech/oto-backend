@@ -165,7 +165,10 @@ class Connector:
         (planity=basic_auth→secret, memento=oauth→oauth)."""
         if self.hosted_auth:
             return "hosted"
-        if self.kind == "remote":
+        if self.kind == "remote" and not self.credential_fields:
+            # Bridge legacy (ADR 0003) : credential posé par grant d'org, pas de
+            # formulaire. Un bridge NOUVEAU modèle (ADR 0034) déclare ses
+            # credential_fields → formulaire self-serve standard (method=secret).
             return "remote"
         if self.secret_kind in ("oauth", "cookie", "none"):
             return self.secret_kind
@@ -750,6 +753,26 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, label="Zapier",
        help="automatisation — actions exposées (AI Actions) + exécution",
        href="https://actions.zapier.com"),
+
+    # --- bridge universel (ADR 0034, amende 0003/0011) ------------------------
+    # UN connecteur générique pour tout pont vers un middleware distant qui détient
+    # le credential métier (bridge ADR 0003). L'identité du service ponté vit dans
+    # la CONFIG d'org (base_url + label, privés) — jamais dans le namespace, donc
+    # montrable au catalogue sans nom client. oto ne stocke que l'endpoint + le
+    # token M2M. Tools bridge_describe/bridge_call (namespace fixe, barreau B2).
+    _c("bridge", ["bridge"], kind="remote", auth_modes={"byo_org"},
+       secret_kind="fields", in_default_bundle=False, default_hidden=True,
+       label="Bridge",
+       help="pont universel vers ton propre service distant (middleware) : le "
+            "service détient tes credentials métier, oto ne stocke que son URL "
+            "et un token d'accès",
+       credential_fields=(
+           CredentialField("base_url", "URL du bridge", secret=False, reveal=True,
+                           help="endpoint HTTPS de ton service (ex. https://bridge.acme.com)"),
+           CredentialField("token", "Token M2M", secret=True),
+           CredentialField("label", "Nom affiché", secret=False, reveal=True,
+                           help="ex. « Back-office Acme » — visible de ta seule org"),
+       )),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

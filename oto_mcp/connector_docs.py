@@ -49,6 +49,24 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- lis ou crée une page Confluence"
         )),
     ),
+    "folkmcp": (
+        DocSection(kind="prerequisite", title="connecter ton compte Folk (OAuth)", body_md=(
+            "connecteur **fédéré** : au premier usage, tu es redirigé vers "
+            "[Folk](https://folk.app) pour autoriser oto à agir sur ton workspace "
+            "(OAuth, pas de clé à copier). tu agis alors **en ton nom**, avec tes "
+            "propres droits Folk.\n"
+            "- distinct du connecteur `folk` natif (clé API partagée de l'org) : "
+            "ici chaque personne connecte **son** compte\n"
+            "- url de callback : `https://mcp.oto.ninja/api/folk/oauth/callback`"
+        )),
+        DocSection(kind="usage", title="piloter ton CRM Folk", body_md=(
+            "le MCP officiel de Folk (outils fédérés `folkmcp_*`) : cherche, crée et "
+            "mets à jour contacts, sociétés, deals et notes en langage naturel.\n"
+            "- « trouve la société Acme dans mon workspace »\n"
+            "- « crée un contact et rattache-le au groupe Fundraising »\n"
+            "- « fais avancer ce deal dans le pipeline »"
+        )),
+    ),
     "memento": (
         DocSection(kind="prerequisite", title="rien à faire — déjà connecté", body_md=(
             "memento est **provisionné automatiquement** à la création de ton compte oto "

@@ -75,6 +75,12 @@ class Connector:
     kind: str = "tools"
     # Endpoint MCP du serveur distant à monter (kind="mount" uniquement).
     mount_url: str | None = None
+    # Préfixe à retirer du NOM des tools distants avant le préfixe de namespace
+    # (kind="mount"). Évite la redondance quand le MCP distant préfixe déjà ses
+    # tools d'un mot proche du namespace oto — ex. folkmcp : distant `folk_*`
+    # monté `folkmcp_*` (strip="folk_") au lieu de `folkmcp_folk_*`. Le forward
+    # vers le distant garde le nom d'origine (ProxyTool). None = pas de strip.
+    mount_strip_prefix: str | None = None
     # Schéma de saisie EXPLICITE du credential (modèle générique multi-champs).
     # Vide → dérivé du secret_kind (cf. `secret_fields`). Renseigné pour les
     # credentials à >1 champ qui ne sont ni api_key ni basic_auth (ex. Silae :
@@ -302,6 +308,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        default_quota=0, in_default_bundle=True, in_default_preset=False,
        default_hidden=False, platform_key_open=False, label="", help="", href=None,
        publisher="", logo_url=None, kind="tools", mount_url=None,
+       mount_strip_prefix=None,
        credential_fields=(), modules=(), hosted_auth=False) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
@@ -311,7 +318,8 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         default_hidden=default_hidden, platform_key_open=platform_key_open,
         label=label or name.capitalize(), help=help, href=href,
         publisher=publisher, logo_url=logo_url, kind=kind,
-        mount_url=mount_url, credential_fields=tuple(credential_fields),
+        mount_url=mount_url, mount_strip_prefix=mount_strip_prefix,
+        credential_fields=tuple(credential_fields),
         modules=tuple(modules), hosted_auth=hosted_auth,
     )
 
@@ -477,15 +485,17 @@ _REGISTRY_LIST = [
        in_default_bundle=False, label="Atlassian",
        help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com"),
     # folkmcp : MCP OFFICIEL de Folk (kind=mount, #85), COEXISTANT avec le
-    # connecteur natif `folk` (clé API REST). Namespace distinct `folkmcp` → les
-    # tools montés deviennent `folkmcp_folk_*`, pas de collision avec `folk_*`.
+    # connecteur natif `folk` (clé API REST). Namespace distinct `folkmcp` ; le MCP
+    # distant préfixe déjà ses tools `folk_*` → `mount_strip_prefix="folk_"` évite
+    # le double `folkmcp_folk_*` : les tools montés sont `folkmcp_*` (le forward
+    # garde le nom d'origine). Pas de collision avec le natif `folk_*`.
     # AS = Stytch (app.folk.app/oauth/authorize + api.stytch.folk.app), client
     # PUBLIC + DCR + PKCE, flow web per-user dans folk_oauth.py. Le MCP Folk s'auth
     # UNIQUEMENT par OAuth (pas de clé). Inerte tant que `folkmcp` n'est pas dans
     # OTO_MCP_MOUNTS_ENABLED (défaut = memento seul). Coexistence gérée par la
     # visibilité per-user (ADR 0011/0031) : un user voit soit `folk`, soit `folkmcp`.
     _c("folkmcp", ["folkmcp"], kind="mount",
-       mount_url="https://mcp.folk.app/mcp",
+       mount_url="https://mcp.folk.app/mcp", mount_strip_prefix="folk_",
        auth_modes={"byo_user"}, secret_kind="oauth",
        in_default_bundle=False, label="Folk (MCP)",
        help="CRM Folk via son MCP officiel (fédéré, OAuth per-user)",

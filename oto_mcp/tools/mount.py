@@ -222,10 +222,14 @@ def _register_one(mcp: FastMCP, c: connectors.Connector) -> int:
         return 0
     factory = _make_factory(c)
     names: set[str] = set()
+    strip = c.mount_strip_prefix
     for t in catalog:
         # ProxyTool natif (vrai schéma) renommé <ns>_<nom> → namespace gouverné.
         # model_copy préserve le nom backend pour le forward (cf. ProxyTool).
-        fq = f"{ns}_{t.name}"
+        # `mount_strip_prefix` retire un préfixe redondant du nom distant (le
+        # forward garde t.name d'origine) — évite `folkmcp_folk_*`.
+        base = t.name[len(strip):] if strip and t.name.startswith(strip) else t.name
+        fq = f"{ns}_{base}"
         mcp.add_tool(ProxyTool.from_mcp_tool(factory, t).model_copy(update={"name": fq}))
         names.add(fq)
     _REGISTERED[c.name] = names

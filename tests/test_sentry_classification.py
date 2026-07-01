@@ -110,3 +110,29 @@ def test_before_send_drops_managed_errors():
     assert _before_send(ev, {"exc_info": (_Upstream, _Upstream(500), None)}) is ev
     assert _before_send(ev, {"exc_info": (KeyError, KeyError("x"), None)}) is ev
     assert _before_send(ev, None) is ev  # event REST sans exc_info → conservé
+
+
+def _validation_error():
+    """Construit une vraie ValidationError pydantic (args rejetés)."""
+    from pydantic import BaseModel, ValidationError
+
+    class _M(BaseModel):
+        x: int
+
+    try:
+        _M(x="pas un entier")
+    except ValidationError as e:
+        return e
+
+
+def test_pydantic_validation_error_is_expected():
+    # args rejetés (le LLM a passé de mauvais paramètres) = refus d'entrée, pas un bug
+    ve = _validation_error()
+    assert _is_expected_error(ve)
+    assert _before_send({"k": "v"}, {"exc_info": (type(ve), ve, None)}) is None
+    # chaînée (fastmcp emballe dans un ToolError) → toujours reconnue
+    wrapped = RuntimeError("Error calling tool")
+    wrapped.__cause__ = ve
+    assert _is_expected_error(wrapped)
+    # une vraie exception code reste reportée
+    assert not _is_expected_error(KeyError("sub"))

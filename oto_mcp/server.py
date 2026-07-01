@@ -314,6 +314,13 @@ def main():
         anon_mcp = mcp
         anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
         anon_app = anon_mcp.http_app()
+        # Shim OAuth ANONYME (ADR 0032) : claude.ai/Mistral exigent un flux OAuth pour un
+        # connecteur custom, même sans auth → sans ces routes, DCR 404 = « impossible de
+        # s'inscrire ». Le shim auto-approuve (zéro login) et délivre un token sans privilège
+        # (l'app anonyme /mcp ne le vérifie pas). Inséré avant le catch /mcp de FastMCP.
+        from . import anon_oauth
+        for route in reversed(anon_oauth.make_routes()):
+            anon_app.router.routes.insert(0, route)
 
         verifier = _build_verifier()
         mcp = _build_mcp(transport, verifier)

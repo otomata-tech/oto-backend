@@ -112,10 +112,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     if inp.op == "list":
         # Scopé à l'org active (seam `ownership.active_owner`) : charger une org ne
         # montre QUE ses projets (l'org est le contexte, ADR 0023). Un projet d'une
-        # autre org ne fuite plus.
+        # autre org ne fuite plus. S'y AJOUTENT les projets PARTAGÉS à cette org ou
+        # à moi (grant `resource_grants`, livraison #52) — marqués `shared` (l'owner
+        # reste l'org émettrice ; ce n'est pas une fuite, c'est un don d'accès).
         owner = ownership.active_owner(ctx.org_id)
         _require(owner is not None, "no_active_org", "Aucune org active.", 400)
-        return {"projects": [_view(r) for r in db.list_projects_for_owners([owner])]}
+        own = [_view(r) for r in db.list_projects_for_owners([owner])]
+        seen = {p["id"] for p in own}
+        shared = [{**_view(r), "shared": True, "permission": r.get("permission")}
+                  for r in db.list_projects_granted_to([owner, ("user", sub)])
+                  if r["id"] not in seen]
+        return {"projects": own + shared}
 
     if inp.op == "list_templates":
         # Modèles (is_template) lisibles par l'acteur — la bibliothèque copiable (B5a).

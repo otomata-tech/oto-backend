@@ -212,7 +212,23 @@ l'accès du projet — pas d'ownership propre), `project_activity` (journal best
 Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
 docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/transfert via
-**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`). UI : `oto-dashboard`
+**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
+
+> **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
+> `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
+> d'appartenance — on donne un accès) ; **`cascade=true`** sur share/transfer d'un projet
+> répercute le geste sur les `project_links` avec rapport par entité — **tableau** = même
+> geste (grant/transfert du namespace), **procédure** = grant `read` au partage (modèle
+> licence : oto garde le master) / **copie chez la cible + re-pointage du lien** au
+> transfert (`org_store.copy_instruction_to_org`, l'originale intacte), **connecteur** =
+> `recipient_credential` (le client branche SA clé ; la surcharge identité/instructions du
+> lien voyage avec le projet) ; docs/fichiers suivent d'office (héritage d'accès). Kind
+> **`doctrine`** enregistré sur la primitive ownership (owner **dérivé** d'`org_instructions.
+> org_id`, resource_id = id surrogate) → lecture cross-org **par id** `oto_get_doctrine(
+> doctrine_id=…)` / `GET /api/me/doctrines/{id}`, gatée `ownership.can_access`. Un projet
+> livré remonte chez le client dans `oto_project(op=list)` (flag `shared`+`permission`) ET
+> dans le bloc C du handshake (#50) — ouvrable en un message. Reste à cadrer : push des màj
+> post-livraison (re-share = re-grant idempotent, mais pas de notification). UI : `oto-dashboard`
 `/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
 (MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
 

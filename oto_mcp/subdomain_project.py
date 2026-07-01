@@ -262,3 +262,20 @@ class HostDispatch:
                 session_org.reset_subdomain_cv(tok)
 
         return await self.authed(scope, receive, send)
+
+
+# ── Garde-fou on-demand TLS (Caddy `ask`) ────────────────────────────────────
+# Caddy émet un cert on-demand pour `<slug>.mcp.oto.cx` UNIQUEMENT si ce endpoint
+# répond 200 → borne l'émission aux slugs de projets PUBLIÉS (anti-abus du rate-limit
+# Let's Encrypt : un tiers qui martèle `random.mcp.oto.cx` ne déclenche aucun cert).
+# Route NON authentifiée (appelée par Caddy en localhost), montée avant le gate JWT.
+def make_routes():
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    async def _tls_check(request):
+        domain = request.query_params.get("domain", "")
+        return (PlainTextResponse("ok") if resolve_project(domain) is not None
+                else PlainTextResponse("not published", status_code=404))
+
+    return [Route("/api/mcp/tls-check", _tls_check, methods=["GET"])]

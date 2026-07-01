@@ -330,6 +330,13 @@ def main():
                 app.router.routes.insert(0, route)
             logger.info("DCR facade active (claude app %s)", claude_app_id)
 
+        # Garde-fou on-demand TLS (ADR 0032) : Caddy appelle `/api/mcp/tls-check?domain=`
+        # avant d'émettre un cert `<slug>.mcp.oto.cx` → 200 seulement pour un projet publié.
+        # NON authentifié (appel localhost Caddy), inséré avant le gate JWT.
+        from . import subdomain_project as _subproj
+        for route in reversed(_subproj.make_routes()):
+            app.router.routes.insert(0, route)
+
         # View-as (ADR 0023) : middleware ASGI brut, n'intervient que sur /api/* avec
         # le header X-Oto-Org (pass-through total sinon → n'altère pas le streaming /mcp).
         app.add_middleware(api_routes.ViewAsMiddleware, verifier=verifier)

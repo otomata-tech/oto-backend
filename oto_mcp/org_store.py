@@ -181,7 +181,7 @@ def list_all_orgs() -> list[dict]:
 def archive_org(org_id: int) -> bool:
     """Archive (soft-delete) une org : masquée de tous les listings, réversible
     (DB : `UPDATE orgs SET archived_at = NULL`). Aucune FK touchée (membres,
-    credentials, usage, billing restent). Les membres qui l'avaient pour org
+    credentials, usage restent). Les membres qui l'avaient pour org
     active basculent sur leur plus ancienne org NON archivée restante (miroir
     `remove_org_member`) ; sans org restante → plus d'org active (= perso).
     False si l'org est inconnue ou déjà archivée."""

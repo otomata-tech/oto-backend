@@ -104,17 +104,18 @@ def _channels_from(accts_by_provider: dict) -> dict:
 
 
 def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
-    """État Unipile per-user : canaux connectés + abonnement + mode de clé.
+    """État Unipile per-user : canaux connectés + option débloquée + mode de clé.
     SOURCE UNIQUE consommée par `/api/me/unipile` (face user). BYO (clé propre
-    user/groupe/org) ⇒ subscribed (l'user paie en direct). `org`/`group` explicites =
-    état d'un TIERS contre son propre contexte, sans le contexte view-as/session du
-    requérant (anti-fuite, cf. access._UNSET)."""
+    user/groupe/org) ⇒ option ouverte (l'user gère sa propre instance). Sinon l'option
+    de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
+    `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
+    contexte view-as/session du requérant (anti-fuite, cf. access._UNSET)."""
     accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = byo or access.has_option(sub, "unipile", org=org)
     return {
-        "subscribed": subscribed,
+        "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
         "channels": _channels_from(accts),
@@ -123,8 +124,8 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
 
 def admin_status_by_org(sub: str, orgs: list) -> list:
     """État messagerie **par org** pour la fiche admin (un user peut être dans N orgs ;
-    l'option/abonnement est PAR ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
-    Pour chaque org : abonnement/mode calculés CONTRE CETTE org + canaux rattachés à elle
+    l'option est PAR ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
+    Pour chaque org : option/mode calculés CONTRE CETTE org + canaux rattachés à elle
     (`unipile_accounts.org_id`). Les comptes rattachés à une org hors de sa liste tombent
     dans un bloc « (hors de ses orgs) »."""
     accts = db.list_unipile_accounts(sub)
@@ -142,7 +143,6 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             "option_source": {
                 "user_comp": db.has_option_comp("user", sub, "unipile"),
                 "org_comp": db.has_option_comp("org", str(oid), "unipile"),
-                "org_subscription": db.get_org_subscription(oid, "unipile"),
             },
         })
     member = {o["org_id"] for o in orgs}

@@ -508,21 +508,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             home_group_name = hg["name"] if hg else None
         elif home_group is not None:
             home_group_name = active_group_name
-        # Billing (palier credits par org) : solde du wallet de l'org active.
-        # Best-effort — ne jamais 500 /api/me (chemin critique du front) sur un
-        # hoquet DB. None si pas d'org active (caller non facturé).
-        billing_block = None
-        if active_org is not None:
-            from . import credits_store
-            try:
-                b = credits_store.get_balance(active_org)
-                billing_block = {
-                    "balance": b["balance"],
-                    "low": b["low"],
-                    "base_granted": b["base_granted"],
-                }
-            except Exception:
-                billing_block = None
         return _json(request, {
             "sub": sub,
             "email": user.get("email"),
@@ -551,7 +536,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             # — alimente l'auto-prompt « connecter memento » du dashboard.
             "memento": memento_oauth.status_for(sub),
             "providers": status["providers"],
-            "billing": billing_block,
         })
 
     # Saisie de credential per-user, GÉNÉRIQUE (modèle multi-champs, ADR 0011) :
@@ -1394,27 +1378,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         _json, _json_error, options_handler,
     )
 
-    async def billing_webhook(request: Request) -> JSONResponse:
-        # Webhook Stripe : NON authentifié (Stripe l'appelle) mais signature-vérifié.
-        # Corps BRUT requis (la signature couvre les octets exacts) → jamais
-        # request.json() avant la vérif. Pas de CORS/OPTIONS (server-to-server).
-        payload = await request.body()
-        sig = request.headers.get("stripe-signature", "")
-        from . import billing
-        try:
-            event = billing.verify_and_parse(payload, sig)
-        except Exception:
-            return _json_error(request, 400, "invalid_signature")
-        try:
-            billing.handle_event(event)
-        except Exception:
-            logger.exception("billing webhook handling failed")
-            # 500 → Stripe rejoue ; l'idempotence (UNIQUE event id) évite le double-crédit.
-            return _json_error(request, 500, "webhook_error")
-        return _json(request, {"received": True})
-
     return [
-        Route("/api/billing/webhook", billing_webhook, methods=["POST"]),
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/connectors", connectors_catalog, methods=["GET"]),

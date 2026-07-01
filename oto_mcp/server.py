@@ -189,8 +189,6 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
 
     from .auth_hooks import current_user_sub_from_token
 
-    from . import credits_store
-
     async def _calllog_sink(row: dict) -> None:
         # Corrélation (ADR 0017) : stampe session_id (session mcp) + run_id (déroulé
         # de doctrine actif) AVANT l'insert. Best-effort — un contexte absent
@@ -212,10 +210,6 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas bloquer
         # l'event loop sur le chemin chaud de chaque tool call.
         await asyncio.to_thread(db.insert_tool_call, row)
-        # Débit best-effort du wallet de l'org active du caller (billing par appel).
-        # Soft enforcement : ce hook tourne APRÈS l'exécution du tool → ne peut jamais
-        # bloquer un appel ; debit_for_call avale toute erreur. No-op sans sub/org active.
-        await asyncio.to_thread(credits_store.debit_for_call, row.get("sub"))
 
     def _calllog_identity() -> dict:
         return {"sub": current_user_sub_from_token()}

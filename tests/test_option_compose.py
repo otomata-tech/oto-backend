@@ -1,4 +1,4 @@
-"""`_set_option` (ADR 0024) : « offrir l'option » compose la couche abonnement
+"""`_set_option` (ADR 0024) : « accorder l'option » compose la couche option
 (comp `has_option`) ET la couche clé (grant de clé plateforme) pour un connecteur
 en mode plateforme — sinon état mort (has_option=true sans clé → 404 au connect).
 

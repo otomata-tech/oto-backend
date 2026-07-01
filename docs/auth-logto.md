@@ -30,6 +30,5 @@ accessibles qu'avec un grant explicite (cf. `access.py`).
 Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 `OTO_MCP_ADMIN_SUB` (sub Logto admin = **otomata `eufbvubidpyp`**, canonique, pas
 le gmail dual-sub), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_*`
-(M2M dédié pour la façade DCR). Stripe (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`)
-et S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`) pour billing + avatars/logos.
-Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
+(M2M dédié pour la façade DCR). S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`)
+pour les avatars/logos. Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.

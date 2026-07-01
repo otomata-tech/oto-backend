@@ -722,54 +722,11 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);
 
--- Palier billing : porte-monnaie de credits d'appel PAR ORGANISATION.
--- balance = compteur entier de "call credits" restants ; peut devenir NÉGATIF
--- (soft enforcement : on ne bloque JAMAIS un appel, cf. credits_store). base_granted
--- = le stock gratuit unique (OTO_MCP_FREE_CALLS) a déjà été crédité (idempotence du
--- don de bienvenue). Le débit par appel n'écrit QUE cette table (cf. ledger ci-dessous).
-CREATE TABLE IF NOT EXISTS org_credits (
-    org_id BIGINT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
-    balance INTEGER NOT NULL DEFAULT 0,
-    base_granted BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Grand livre des mouvements MONÉTAIRES (un delta par top-up Stripe / don de base /
--- ajustement admin). Volontairement PAS de ligne par appel débité (volumétrie : le
--- détail par appel vit déjà dans tool_calls, prunée). reason : 'stripe' | 'base_grant'
--- | 'admin_adjust'. stripe_event_id = id d'event Stripe, UNIQUE → idempotence webhook.
-CREATE TABLE IF NOT EXISTS credit_transactions (
-    id BIGSERIAL PRIMARY KEY,
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    delta INTEGER NOT NULL,
-    reason TEXT NOT NULL,
-    stripe_event_id TEXT UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_credit_tx_org ON credit_transactions(org_id, created_at DESC);
-
--- Abonnements récurrents Stripe par org & par produit (ex. `unipile` = option
--- LinkedIn à €15/mois/siège). DISTINCT des credits d'appel (one-off) : ici c'est
--- du récurrent (mode=subscription). `status` reflète l'abonnement Stripe
--- (active/past_due/canceled…) → gate l'activation de l'option. `quantity` = nb de
--- sièges (comptes connectés). Source de vérité = Stripe, miroir local mis à jour
--- par les webhooks (et lu pour le gate sans appel Stripe par requête).
-CREATE TABLE IF NOT EXISTS org_subscriptions (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    product TEXT NOT NULL,
-    stripe_customer_id TEXT,
-    stripe_subscription_id TEXT,
-    status TEXT NOT NULL DEFAULT 'inactive',
-    quantity INTEGER NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, product)
-);
-
--- Comps d'options admin (gratuit) — contrepartie NON-Stripe d'`org_subscriptions` :
--- une option payante (ex. `unipile`) offerte à une entité user|org par un admin, sans
--- passer par l'abonnement Stripe. `access.has_option` débloque l'option si comp OU
--- abonnement Stripe (cf. docs/connector-model.md, couche 3). Entity-keyé (user|org).
+-- Comps d'options admin (gratuit) — débloque une option de connecteur (ex. `unipile`
+-- = messagerie hébergée) pour une entité user|org, accordée par un admin. `access.
+-- has_option` débloque l'option ssi un comp est posé (cf. docs/connector-model.md,
+-- couche 3). Entity-keyé (user|org). Plus de paiement : la gouvernance de l'option
+-- est purement admin (le modèle billing/Stripe a été retiré).
 CREATE TABLE IF NOT EXISTS option_comps (
     entity_type TEXT NOT NULL,        -- 'user' | 'org'
     entity_id   TEXT NOT NULL,        -- sub (user) ou org_id en texte (org)

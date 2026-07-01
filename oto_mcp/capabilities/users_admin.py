@@ -108,7 +108,7 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
                       if u.get("email") else None)
     orgs = org_store.list_orgs_for_user(target)
     # Messagerie Unipile PAR ORG (l'option est per-org ; un user peut être dans N orgs) :
-    # un bloc par org, abonnement/canaux calculés CONTRE cette org (jamais current_org).
+    # un bloc par org, option/canaux calculés CONTRE cette org (jamais current_org).
     from ..tools import unipile
     unipile_orgs = unipile.admin_status_by_org(target, orgs)
     return {
@@ -188,7 +188,7 @@ def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
 
 def _compose_platform_grant(ctx: ResolvedCtx, inp: OptionInput, eid: str) -> Optional[dict]:
     """Composition opérateur (ADR 0024) : « offrir l'option » ne doit pas laisser un
-    **état mort**. Comper l'abonnement (couche 3, `has_option`) sans donner la clé
+    **état mort**. Comper l'option (couche 3, `has_option`) sans donner la clé
     (couche 2) = `has_option`=true mais aucune clé à résoudre → 404 au `/connect`
     (bouton « Connecter » inerte). Pour un connecteur en mode **plateforme** (revente),
     on accorde donc AUSSI la clé plateforme — le grant = droit d'usage de la clé
@@ -217,7 +217,7 @@ def _compose_platform_grant(ctx: ResolvedCtx, inp: OptionInput, eid: str) -> Opt
     out = {"granted": True, "platform_key_id": key_id}
     if byo:
         # L'entité a sa propre clé (BYO) → en résolution sa clé prime sur la
-        # plateforme, et le gate d'abonnement est court-circuité : l'option ET le
+        # plateforme, et le gate d'option est court-circuité : l'option ET le
         # grant sont **inertes**. On le dit plutôt que de faire croire à un effet.
         out["byo_inert"] = True
     return out
@@ -291,9 +291,9 @@ CAPABILITIES += [
     Capability(
         key="platform.option.set", handler=_set_option, Input=OptionInput,
         authz=SUPER_ADMIN,
-        description="[super admin] Offer (on=true) or remove (on=false) a paid option as a FREE "
-                    "comp for a user or org (e.g. option='unipile'). Distinct from Stripe billing; "
-                    "read by access.has_option. entity_type='user'|'org', entity_id=sub|org_id. "
+        description="[super admin] Grant (on=true) or remove (on=false) a connector option as a FREE "
+                    "comp for a user or org (e.g. option='unipile'). Read by access.has_option "
+                    "(no billing — option governance is admin-only). entity_type='user'|'org', entity_id=sub|org_id. "
                     "For a platform-mode connector this ALSO grants/revokes its platform key (so "
                     "the option is actually usable, not a dead has_option without a key); the "
                     "`platform_key` field reports what happened (granted / no_platform_key / "

@@ -78,7 +78,7 @@ grants/quota, platform keys, providers byo-only).
 
 ## REST API (consommée par le dashboard / oto.ninja)
 
-Endpoints `/api/*` (compte, settings, orgs, admin, billing, datastore…), même
+Endpoints `/api/*` (compte, settings, orgs, admin, datastore…), même
 `JWTVerifier` que `/mcp`. **Inventaire : `docs/rest-api.md`**.
 
 ## Browser automation — substrat HÉBERGÉ Browserbase (ADR 0026)
@@ -239,7 +239,7 @@ user (no-fallback, `tools/unipile.unipile_client(provider)`).
 
 Connexion = hosted-auth Unipile (dashboard, `?channel=whatsapp|telegram|instagram`),
 `account_id` per-user dans `unipile_accounts` (PK `(sub, provider)`). Même gate
-d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
+d'option par org que LinkedIn (comp admin `access.has_option` ; plus de paiement).
 
 > **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
 > (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`
@@ -248,16 +248,16 @@ d'abonnement par org que LinkedIn (cf. §Billing, prix gradué 15/10/7).
 
 > **Mode plateforme unipile** (revente) : `auth_modes` inclut `platform` → la clé
 > Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
-> `access.unipile_api_key_for` a le fallback platform-grant. Le gate abonnement reste
-> par org (un grant donne la clé, ne bypasse pas le paiement). **« Offrir sans payer »
+> `access.unipile_api_key_for` a le fallback platform-grant. Le gate d'option reste
+> par org (un grant donne la clé, ne débloque pas l'option). **Débloquer l'option
 > = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
-> ⚠️ Les deux couches (clé=2, abonnement=3) sont **orthogonales en base** mais l'**action
-> admin les compose** (`capabilities/users_admin._set_option`, 2026-06-29) : `oto_admin_set_option`
+> ⚠️ Les deux couches (clé=2, option=3) sont **orthogonales en base** mais l'**action
+> admin les compose** (`capabilities/users_admin._set_option`) : `oto_admin_set_option`
 > `on=true` sur un connecteur en mode plateforme **grant aussi la clé plateforme** (sinon
 > `has_option`=true mais aucune clé → 404 au `/connect`, bouton « Connecter » inerte = état
 > mort), `on=false` la révoque ; le champ `platform_key` du retour rend l'effet explicite
 > (`granted`/`no_platform_key`/`byo_inert`/`revoked`). N'applique PAS à un connecteur keyed
-> non-abonnement (serpapi…) : lui se grant via la fiche admin (bouton « grant key » par
+> sans option (serpapi…) : lui se grant via la fiche admin (bouton « grant key » par
 > provider, auto-résout la clé unique) ou `oto_admin_key_grant` (par `key_id`).
 
 > **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
@@ -337,12 +337,6 @@ d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/f
 > `run_start`/`run_finish` y ajoutent la trace durable (best-effort, off-loop). Sert
 > l'anticipation du contexte injecté (instructions bloc C) + la boucle d'usage dashboard.
 
-## Billing — credits d'appel par org (paiement Stripe)
-
-Deux modèles **cumulables** : credits d'appel (1 appel = 1 credit, packs Stripe
-one-off) + **abonnements récurrents par option** (`mode=subscription`, ex. messagerie
-unipile, prix Stripe gradué). **Détail : `docs/billing.md`**.
-
 ## Email (envoi per-org, PAR CONNECTEUR)
 
 Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
@@ -400,7 +394,7 @@ Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`
 
 ## Org/équipe : session vs maison vs consultation (ADR 0023, amende 0015)
 
-Le pointeur unique « org active » est scindé en **3 notions**, résolues par le **seam unique `access.current_org(sub)`** (mirroir `access.current_group(sub)` pour l'équipe) = `session ?? consultation ?? maison`. **TOUTE résolution d'action passe par ce seam** (`resolve_api_key`, visibilité `session_visibility`, field-filters, billing, doctrine de groupe, `/api/me`, whoami, et l'injection `org_id` des règles d'autz `_authz`) — ne plus lire `org_store.get_active_org` en direct dans un chemin de résolution.
+Le pointeur unique « org active » est scindé en **3 notions**, résolues par le **seam unique `access.current_org(sub)`** (mirroir `access.current_group(sub)` pour l'équipe) = `session ?? consultation ?? maison`. **TOUTE résolution d'action passe par ce seam** (`resolve_api_key`, visibilité `session_visibility`, field-filters, doctrine de groupe, `/api/me`, whoami, et l'injection `org_id` des règles d'autz `_authz`) — ne plus lire `org_store.get_active_org` en direct dans un chemin de résolution.
 
 ⚠️ **Ce seam est scopé sur l'ACTEUR courant** : session/consultation sont stockées **par requête**, le `sub` ne sert qu'au repli `home_org`. Donc `current_org(autre_sub)` renvoie le contexte du **requérant**, pas du tiers — **NE JAMAIS** l'utiliser (ni `status_for`/`has_option`/`credential_mode_for` qui en dérivent) pour calculer l'état d'un **tiers** (écran admin). Passer son org/groupe **explicitement** via le kwarg `org`/`group` (sentinelle `access._UNSET` = défaut `current_org`, self inchangé), source = `org_store.get_active_org(target)`. Bug vécu 2026-06-24 (fiche admin montrant l'option de l'org du requérant). L'état d'un user est par ailleurs souvent **per-org** (∈ N orgs) → préférer une vue par org (cf. `tools/unipile.admin_status_by_org`).
 
@@ -656,10 +650,9 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 
 ## Docs
 
-- `docs/connector-model.md` — **carte d'ensemble** : les **3 couches** d'un connecteur (disponibilité / authentification / abonnement), la matrice des niveaux (user/groupe/org/plateforme), le vocabulaire canonique, le seam `access.has_option`. **À lire en premier** avant de toucher activation/clés/abonnement (les autres docs ci-dessous = le détail par couche).
+- `docs/connector-model.md` — **carte d'ensemble** : les **3 couches** d'un connecteur (disponibilité / authentification / option de connecteur), la matrice des niveaux (user/groupe/org/plateforme), le vocabulaire canonique, le seam `access.has_option`. **À lire en premier** avant de toucher activation/clés/options (les autres docs ci-dessous = le détail par couche).
 - `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffré unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM **obligatoire** (pas de plaintext), résolution + palier org. À lire avant de toucher credentials/registre/résolution.
 - `docs/roles-and-resolution.md` — rôles (3 paliers) + cascade de résolution de clé / grants / platform keys.
-- `docs/billing.md` — credits d'appel (packs) + abonnements récurrents par option (Stripe).
 - `docs/doctrines.md` — doctrine & skills d'org (oto_get_doctrine, versionnée).
 - `docs/auth-logto.md` — auth Logto ES384, discovery RFC 9728, façade DCR.
 - `docs/rest-api.md` — inventaire des endpoints REST `/api/*`.

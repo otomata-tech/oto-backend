@@ -111,6 +111,19 @@ connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
     `BROWSER_PROVIDERS` désormais vide, plus de `CrunchbaseClient` o-browser ni de Chrome
     sur la box). ⚠️ **Reste à smoke en live** (Browserbase + login crunchbase réel) :
     confirmer `field_ids`/`card_ids`/`collection_ids` et l'absence de header anti-CSRF.
+  - **`pennylaneged`** (`tools/pennylaneged.py`, issue otomata-private#31) — GED (DMS)
+    Pennylane via l'API interne de la SPA (`/companies/{cid}/dms/…`, CSRF tournant lu
+    in-page à chaque appel via `browserbase.run_page_eval` — l'eval générique, `run_fetch`
+    ne suffit pas). Upload = control plane seul (URL S3 présignée), les octets PUT **en
+    local** (RGPD). **GED cible (une par client)** : `company_id` optionnel sur tous les
+    tools, défaut = la société choisie via le **sélecteur d'identité générique** (ADR
+    0024) — backend enregistré par `connector_identities.register()` (patron
+    `browser_session`), identités = les sociétés du cabinet (`/crm/flow_companies`),
+    sélection validée anti-binding (tree 200 sur LA session) puis mémorisée au `meta` du
+    credential (`default_identity_id`/`default_identity_label`, exposés par `status_for`
+    → picker de la carte dashboard sans louer de session ; `identities` au catalogue).
+    ⚠️ **Reste à smoker en live** (login Pennylane réel + forme exacte de
+    `flow_companies`).
 - **Leçons empiriques (toujours valides)** : (1) un `httpx`/curl brut est **rejeté
   (403)** — transport obligatoirement **browser-driven** (`page.evaluate(fetch())`) ;
   (2) une session **ne se transplante pas** par export de cookie (le faux négatif « auth

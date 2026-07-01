@@ -109,6 +109,32 @@ def release_session(session_id: str) -> None:
 
 
 # --- exécution --------------------------------------------------------------
+async def run_page_eval(context_id: str, app: str, js: str, arg: Any = None) -> Any:
+    """Exécute un JS arbitraire (`page.evaluate(js, arg)`) depuis une page `app`
+    chargée dans une session éphémère du Context (la session vivante porte les
+    cookies). Variante générique de `run_fetch` pour les connecteurs dont l'API
+    privée exige plus qu'un fetch nu (headers/CSRF tournant : pennylaneged) —
+    le JS est propre au connecteur, le substrat n'en hardcode aucun.
+
+    ⚠️ Les fetch du JS doivent rester **same-origin** avec `app` pour porter la
+    session. Lève BrowserbaseError si la session ne s'ouvre pas."""
+    from patchright.async_api import async_playwright
+
+    sess = start_session(context_id)
+    sid = sess["id"]
+    try:
+        async with async_playwright() as p:
+            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
+            ctx = b.contexts[0] if b.contexts else await b.new_context()
+            pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
+            result = await pg.evaluate(js, arg)
+            await b.close()
+            return result
+    finally:
+        release_session(sid)
+
+
 async def run_fetch(context_id: str, method: str, api_path: str,
                     body: Optional[dict] = None, *, base: str, app: str) -> dict:
     """Exécute UN `fetch(base+api_path)` depuis une page chargée dans une session

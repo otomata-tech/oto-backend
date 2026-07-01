@@ -1,15 +1,22 @@
 """Sélecteur d'identité connectée (ADR 0024) — surface unifiée « lister / choisir
 une identité », backend PAR CONNECTEUR.
 
-Deux modèles de stockage coexistent derrière la même surface (on n'en force pas un
+Trois modèles de stockage coexistent derrière la même surface (on n'en force pas un
 seul — l'unification est au niveau surface, pas stockage) :
 - **Google** : N credentials du coffre (`account=email`), défaut = `meta.is_default`.
 - **Unipile** : 1 clé → N identités distantes (handles opaques renvoyés par l'API),
   choix per-canal dans `unipile_accounts`. **BYO-only** : sous clé plateforme (revente)
   on garde le hosted-auth qui crée un compte dédié (pas d'exposition cross-client).
+- **Backend déclaré par le connecteur** (`register()`, patron `browser_session`) :
+  la logique d'énumération vit dans SON module `tools/<name>.py` (ex. `pennylaneged` :
+  les sociétés du cabinet = les GED cibles), le défaut dans le `meta` du credential.
 
 Contrat commun `Identity` = `{id, label, status, is_default, channel}` (`channel` None
 hors multi-canal — fuite assumée : unipile est par-canal, Google par-service).
+
+⚠️ Un backend enregistré peut être **async** (ex. exécution Browserbase) :
+`list_identities`/`select_identity` renvoient alors un awaitable — les capacités
+(`capabilities/connectors_identities.py`) awaitent le résultat le cas échéant.
 """
 from __future__ import annotations
 
@@ -18,16 +25,27 @@ def supports(connector: str) -> bool:
     return connector in _LISTERS
 
 
-def list_identities(sub: str, connector: str) -> list[dict]:
+def register(connector: str, lister, selector) -> None:
+    """Déclare le backend d'identités d'un connecteur (appelé à l'import de son
+    module `tools/*`, comme `browser_session.register`). `lister(sub)` →
+    list[Identity] ; `selector(sub, identity_id)` → Identity (ValueError si l'id
+    n'est pas joignable par le credential — anti-binding). Sync ou async."""
+    _LISTERS[connector] = lister
+    _SELECTORS[connector] = selector
+
+
+def list_identities(sub: str, connector: str):
     """Identités joignables par le credential résolu du `sub` pour `connector`.
-    [] si non supporté (ou rien à choisir, ex. clé plateforme unipile)."""
+    [] si non supporté (ou rien à choisir, ex. clé plateforme unipile). Peut
+    renvoyer un awaitable (backend async enregistré via `register`)."""
     fn = _LISTERS.get(connector)
     return fn(sub) if fn else []
 
 
-def select_identity(sub: str, connector: str, identity_id: str) -> dict:
+def select_identity(sub: str, connector: str, identity_id: str):
     """Choisit l'identité `identity_id`. Lève `ValueError` si non supporté ou si
-    l'id n'existe pas pour ce credential (anti-binding arbitraire)."""
+    l'id n'existe pas pour ce credential (anti-binding arbitraire). Peut renvoyer
+    un awaitable (backend async enregistré via `register`)."""
     fn = _SELECTORS.get(connector)
     if not fn:
         raise ValueError(f"Le connecteur `{connector}` ne gère pas le choix de compte.")

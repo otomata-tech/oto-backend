@@ -903,6 +903,9 @@ def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, s
 
 def public_catalog() -> list[dict]:
     """Vue publique (GET /api/connectors) — sans secret, pour le frontend."""
+    # Lazy : le registre des backends d'identités se remplit à l'import des modules
+    # tools/* (register_all au boot) — on le lit à la demande, jamais à l'import.
+    from . import connector_identities
     return [
         {
             "name": c.name,
@@ -937,6 +940,10 @@ def public_catalog() -> list[dict]:
             # Free-tier (ADR 0031) : clé plateforme ouverte sans grant, quota gratuit
             # par user/jour. Le dashboard affiche un badge « gratuit : N/j » côté USER.
             "free_tier": {"daily_quota": c.default_quota} if c.platform_key_open else None,
+            # Sélecteur d'identité (ADR 0024) : le connecteur permet de choisir une
+            # identité/cible par défaut (pennylaneged : la société = SA GED). La
+            # carte USER en dérive son picker (google/unipile ont leur widget dédié).
+            "identities": connector_identities.supports(c.name),
         }
         for c in _REGISTRY_LIST
     ]

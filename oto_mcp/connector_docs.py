@@ -398,6 +398,13 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_stock_siege(siren)` / `fr_stock_etablissements(siren)` — siège ou tous les établissements d'une boîte\n"
             "- `fr_stock_search(naf=…, enseigne=…, departement=…)` — énumère tous les sites (ex. tous les « intermarché » d'un département)"
         )),
+        DocSection(kind="usage", title="conventions collectives (kali)", body_md=(
+            "le droit de la branche en texte intégral (stock kali/dila complet, ~290k articles) : minima, congés, primes, classifications. filtre idcc natif.\n"
+            "- `fr_ccn_conventions(idcc=… | query=…)` — résoudre une convention (« quelle est la 3090 ? », « conventions du spectacle »)\n"
+            "- `fr_ccn_search(query=…, idcc=…)` — recherche plein-texte dans les articles d'une branche (ou toutes)\n"
+            "- `fr_ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
+            "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand)"
+        )),
     ),
     "hithorizons": (
         DocSection(kind="prerequisite", title="clé api hithorizons", body_md=(

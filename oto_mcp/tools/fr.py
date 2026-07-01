@@ -437,6 +437,73 @@ def register(mcp: FastMCP) -> None:
         count). Discovery helper so you can pick `themes` for fr_accords_search."""
         return db.acco_themes()
 
+    # --- Conventions collectives (KALI, via service FOD) ---
+    # Stock DILA complet (~290k articles, ~1,4k conteneurs) indexé FTS french +
+    # filtre IDCC par france-opendata-service (#6). Complément de fr_accords_* :
+    # ACCO = accords d'ENTREPRISE (qui a négocié quoi), KALI = le DROIT de la
+    # BRANCHE (le texte applicable : minima, congés, primes, classifications).
+
+    @mcp.tool()
+    def fr_ccn_search(
+        query: str,
+        idcc: Optional[str] = None,
+        en_vigueur: bool = True,
+        limit: int = 20,
+        sort: str = "relevance",
+    ) -> dict:
+        """Search the full text of French collective agreements (conventions
+        collectives, KALI/DILA): articles, avenants, salary schedules, extension
+        orders.
+
+        Args:
+            query: Full-text query (websearch syntax: phrases in quotes, OR, -).
+                French stemming applied ("congés payés" matches "congé payé").
+            idcc: Restrict to one branch agreement (4-digit IDCC, ex "1285"
+                spectacle vivant public, "3090" spectacle vivant privé). Use
+                fr_ccn_conventions or fr_search(idcc=…) to resolve an IDCC.
+            en_vigueur: Only in-force article versions (default True — salary
+                schedules exist in many superseded versions).
+            limit: Max results (default 20, max 50).
+            sort: "relevance" (FTS rank, default) | "recent" (date d'effet
+                first — use for salary schedules where the latest avenant wins).
+
+        Returns {count, articles: [{id, num, texte_titre, idcc, convention,
+        extrait, source_url, …}]}. Fetch full text with fr_ccn_get(id).
+        """
+        from .. import fod_ccn
+        return fod_ccn.search(query, idcc=idcc, en_vigueur=en_vigueur,
+                              limit=limit, sort=sort)
+
+    @mcp.tool()
+    def fr_ccn_get(kali_id: str) -> dict:
+        """Full consolidated text of a collective-agreement article (KALIARTI…),
+        with its parent text (avenant/accord), convention (IDCC) and a
+        verifiable Légifrance source_url.
+
+        Args:
+            kali_id: DILA article id returned by fr_ccn_search (KALIARTI000…).
+        """
+        from .. import fod_ccn
+        return fod_ccn.article(kali_id)
+
+    @mcp.tool()
+    def fr_ccn_conventions(
+        idcc: Optional[str] = None,
+        query: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict:
+        """List French branch collective agreements (conventions collectives) by
+        exact IDCC or title substring. Resolve "which convention is 3090?" or
+        "conventions du spectacle" before searching articles.
+
+        Args:
+            idcc: Exact 4-digit IDCC.
+            query: Title substring (ILIKE), ex "spectacle vivant".
+            limit: Max results (default 20, max 100).
+        """
+        from .. import fod_ccn
+        return fod_ccn.conventions(idcc=idcc, query=query, limit=limit)
+
     # --- Index égalité F-H (Egapro, open data) -------------------------------
 
     @mcp.tool()

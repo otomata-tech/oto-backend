@@ -46,11 +46,12 @@ CATALOG_TIMEOUT = 20
 _REGISTERED: dict[str, set[str]] = {}
 
 
-# Fédération MCP systématique (otomata#16) : memento est monté **d'office** —
-# c'est la base de connaissance commune de l'écosystème, pas une intégration
-# client. Les autres mounts (ex. planity, client-spécifique) restent opt-in via
-# `OTO_MCP_MOUNTS_ENABLED`.
-_DEFAULT_ENABLED_MOUNTS = frozenset({"memento"})
+# Plus AUCUN mount monté d'office (memento retiré le 2026-07-02 — fédération en
+# sommeil, on ne s'en sert plus) : tous les mounts suivent le régime commun
+# « la DB gouverne l'exposition » (ADR 0010/0011) — activation au catalogue
+# (`connector_activation`) ou opt-in env `OTO_MCP_MOUNTS_ENABLED`. Le set reste
+# le levier pour re-défauter un mount si un jour il redevient systématique.
+_DEFAULT_ENABLED_MOUNTS: frozenset[str] = frozenset()
 
 
 def _db_activated_mounts() -> set[str]:
@@ -70,7 +71,7 @@ def _db_activated_mounts() -> set[str]:
 
 def _enabled_mounts() -> set[str]:
     """Mounts actifs = base (env) ∪ mounts activés en DB. `OTO_MCP_MOUNTS_ENABLED` :
-    - **non défini** → défaut systématique (`_DEFAULT_ENABLED_MOUNTS`, càd memento) ;
+    - **non défini** → défaut systématique (`_DEFAULT_ENABLED_MOUNTS`, vide aujourd'hui) ;
     - `*`           → tous les mounts déclarés (DB ignorée — c'est déjà tout) ;
     - `""` (vide)   → kill-switch ABSOLU (aucun, DB ignorée) ;
     - CSV           → ceux listés, PLUS les activés en DB.

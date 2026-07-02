@@ -273,13 +273,27 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
                 l["namespace"] = nm
 
 
+def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
+    """Attache le TITRE de la doctrine à chaque lien `procedure` (résolu depuis l'id
+    stable porté par `target_ref`, ADR 0032 « stop using slug ») — sans lui, un lien
+    posé sans `label` (agent) s'affiche comme un id nu. Pur (mutation en place). Ref
+    non numérique (slug legacy) / doctrine disparue → pas de clé `title`."""
+    for l in links:
+        if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit():
+            t = title_by_id.get(int(l["target_ref"]))
+            if t is not None:
+                l["title"] = t
+
+
 def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
     Les liens `tableau` sont enrichis du **nom** de leur namespace (`namespace`) : l'agent
     adresse « le tableau de ce projet » (par rôle/label) → nom réel pour `data_*`, sans
-    nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance)."""
+    nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance).
+    Les liens `procedure` sont enrichis du **titre** de leur doctrine (`title`), même
+    logique : `target_ref` est un id stable, un lien sans `label` doit rester lisible."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.config, pl.created_at, "
@@ -308,6 +322,14 @@ def list_project_links(project_id: int) -> list[dict]:
                 "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
             ).fetchall()
             _apply_tableau_names(out, {r["id"]: r["namespace"] for r in nrows})
+        # Idem pour les titres de doctrine des procédures (id stable, ADR 0032).
+        doc_ids = [int(l["target_ref"]) for l in out
+                   if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
+        if doc_ids:
+            drows = conn.execute(
+                "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
+            ).fetchall()
+            _apply_procedure_titles(out, {r["id"]: r["title"] for r in drows})
         return out
 
 

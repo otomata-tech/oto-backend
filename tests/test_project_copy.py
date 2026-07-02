@@ -169,6 +169,22 @@ def test_apply_tableau_names_resolves_by_id():
     assert "namespace" not in links[3]
 
 
+def test_apply_procedure_titles_resolves_by_id():
+    # Un lien procédure sans label doit rester lisible : `title` résolu depuis l'id
+    # stable de la doctrine (ADR 0032 « stop using slug »).
+    links = [
+        {"target_type": "procedure", "target_ref": "25"},       # résolu
+        {"target_type": "procedure", "target_ref": "recette"},  # slug legacy → ignoré
+        {"target_type": "procedure", "target_ref": "99"},       # doctrine disparue → pas de clé
+        {"target_type": "tableau", "target_ref": "25"},         # pas une procédure → ignoré
+    ]
+    PJ._apply_procedure_titles(links, {25: "Recette unitaire"})
+    assert links[0]["title"] == "Recette unitaire"
+    assert "title" not in links[1]
+    assert "title" not in links[2]
+    assert "title" not in links[3]
+
+
 def test_duplicate_copies_files_via_s3(monkeypatch):
     files = [{"id": 9, "s3_key": "project-files/7/abc/doc.pdf", "filename": "doc.pdf",
               "mime": "application/pdf", "size_bytes": 123, "title": "Doc", "description": "d",

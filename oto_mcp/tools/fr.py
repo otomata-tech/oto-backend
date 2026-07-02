@@ -437,6 +437,21 @@ def register(mcp: FastMCP) -> None:
         count). Discovery helper so you can pick `themes` for fr_accords_search."""
         return db.acco_themes()
 
+    @mcp.tool()
+    def fr_accords_text(acco_id: str) -> dict:
+        """Full text of a company agreement (accord d'entreprise) by its DILA
+        id — fetched on demand from Légifrance (the local ACCO index only has
+        metadata). Chain after fr_accords_search / fr_accords_get.
+
+        Args:
+            acco_id: DILA id (ACCOTEXT000…) from fr_accords_search results.
+
+        Returns metadata + `texte` (extracted from the filed docx; may be empty
+        when no integral version was published) + verifiable `source_url`.
+        """
+        from .. import fod_ccn
+        return fod_ccn.accords_text(acco_id)
+
     # --- Conventions collectives (KALI, via service FOD) ---
     # Stock DILA complet (~290k articles, ~1,4k conteneurs) indexé FTS french +
     # filtre IDCC par france-opendata-service (#6). Complément de fr_accords_* :

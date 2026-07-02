@@ -214,6 +214,13 @@ def init_db() -> None:
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS logo_url TEXT")
         # Description libre de l'org (self-service org_admin) — prose, pas un secret.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''")
+        # Profil d'org (2026-07-02) : donner du corps à l'entreprise. `domain` =
+        # domaine de marque (acme.com, normalisé org_store._normalize_domain) —
+        # sert AUSSI à dériver le logo via logo.dev quand aucun logo n'est uploadé
+        # (org_store.effective_logo_url, même CDN que le catalogue connecteurs).
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS domain TEXT")
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS industry TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT ''")
         # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
         # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")

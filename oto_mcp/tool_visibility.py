@@ -46,7 +46,13 @@ PROTECTED_TOOLS: frozenset[str] = frozenset(
      # emploi systématique (signaler un gap, encadrer un run) : un baseline/preset
      # qui les masque rend la doctrine inapplicable et le gap invisible. Jamais
      # désactivables ni masquables.
-     "feedback", "run_start", "run_finish"})
+     "feedback", "run_start", "run_finish",
+     # Famille projet (ADR 0032) — même raison : le bloc C injecte « Projets
+     # récents » et les instructions mandatent « travaille dans un projet »
+     # (oto_use_project). Vécu 2026-07-02 : la baseline POC de l'org movinmotion
+     # (21 tools métier) masquait oto_project → « Unknown tool » en boucle dans
+     # claude.ai dès qu'on bascule sur l'org.
+     "oto_project", "oto_use_project", "oto_clear_project"})
 
 
 def namespace_of(name: str) -> str:

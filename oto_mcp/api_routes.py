@@ -35,6 +35,7 @@ import time
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
@@ -118,7 +119,9 @@ async def _authenticate(
     # Pas de upsert_user ici : la FK CASCADE garantit que si la row user a
     # été supprimée, le token a été supprimé avec.
     if token.startswith("oto_"):
-        sub = db.verify_api_token(token)
+        # DB HORS de la loop (threadpool) : un blip DB ne doit jamais geler le
+        # serveur mono-loop entier (vécu 2026-07-02, py-spy : getconn wait ici).
+        sub = await run_in_threadpool(db.verify_api_token, token)
         if not sub:
             return None, _json_error(request, 401, "invalid_api_token")
         return _maybe_view_as(sub, apply_view_as), None
@@ -134,9 +137,12 @@ async def _authenticate(
     # (un vieux token de l'ancien tenant en drain → compte migré, sinon il re-créerait
     # le compte supprimé). Gaté env → no-op hors bascule.
     if os.environ.get("OTO_MCP_TENANT_MIGRATION_ISS"):
-        sub = db.resolve_sub(sub)
-    db.upsert_user(sub, email=access_token.claims.get("email"),
-                   name=access_token.claims.get("name"), iss=access_token.claims.get("iss"))
+        sub = await run_in_threadpool(db.resolve_sub, sub)
+    # upsert_user = DB à CHAQUE requête REST → threadpool (jamais dans la loop).
+    await run_in_threadpool(
+        lambda: db.upsert_user(sub, email=access_token.claims.get("email"),
+                               name=access_token.claims.get("name"),
+                               iss=access_token.claims.get("iss")))
     return _maybe_view_as(sub, apply_view_as), None
 
 
@@ -226,19 +232,19 @@ class ViewAsMiddleware:
             return await self.app(scope, receive, send)
         from . import access, db, group_store, roles, session_org
         if view_user:  # « voir en tant que » : opérateur plateforme + cible existe + LECTURE SEULE
-            if not access.is_platform_operator(sub):
+            if not await run_in_threadpool(access.is_platform_operator, sub):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
             if request.method != "GET":  # consultation = lecture seule, jamais d'écriture en son nom
                 return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
-            if view_user == sub or db.get_user(view_user) is None:
+            if view_user == sub or await run_in_threadpool(db.get_user, view_user) is None:
                 view_user = None  # cible = soi ou inconnue → pas de consultation (no-op)
         if view_group:  # équipe consultée → valide la lecture + DÉRIVE son org parente (invariant)
-            g = group_store.get_group(view_group)
-            if g is None or not roles.can_read_group(sub, view_group):
+            g = await run_in_threadpool(group_store.get_group, view_group)
+            if g is None or not await run_in_threadpool(roles.can_read_group, sub, view_group):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
             view_org = g["org_id"]
         elif view_org:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
-            if not roles.is_org_member(sub, view_org):
+            if not await run_in_threadpool(roles.is_org_member, sub, view_org):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
         usr_token = session_org.set_view_user(view_user) if view_user is not None else None
         org_token = session_org.set_view_org(view_org) if view_org is not None else None
@@ -477,7 +483,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if active_org is not None:
             o = org_store.get_org(active_org)
             active_org_name = o["name"] if o else None
-            active_org_logo_url = o.get("logo_url") if o else None
+            # Logo EFFECTIF (upload > dérivé logo.dev du domaine déclaré).
+            active_org_logo_url = org_store.effective_logo_url(o) if o else None
             org_role = org_store.get_org_role(active_org, sub)
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».

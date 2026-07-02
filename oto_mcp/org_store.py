@@ -24,6 +24,7 @@ _log = logging.getLogger(__name__)
 from . import credentials_store
 from . import connectors
 from . import db
+from . import logodev
 from .db import _connect, _hash_token, upsert_user
 
 
@@ -137,18 +138,49 @@ def create_org(name: str, created_by: Optional[str] = None) -> int:
 def get_org(org_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, name, description, created_by, created_at, logo_url FROM orgs WHERE id = %s",
+            "SELECT id, name, description, created_by, created_at, logo_url, "
+            "domain, industry, location FROM orgs WHERE id = %s",
             (org_id,),
         ).fetchone()
         return dict(row) if row else None
 
 
+# Domaine de marque d'une org : hostname nu, minuscule (acme.com). Tolère une
+# saisie en URL (schéma/chemin/`www.` retirés) ; lève sur une forme non-domaine
+# (pas de fallback silencieux). Le domaine vide efface (colonne NULL).
+_DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$")
+
+
+def normalize_domain(raw: str) -> Optional[str]:
+    d = (raw or "").strip().lower()
+    if not d:
+        return None
+    d = re.sub(r"^[a-z+]+://", "", d)          # https://acme.com/… → acme.com/…
+    d = d.split("/", 1)[0].split("?", 1)[0].rstrip(".")
+    if d.startswith("www."):
+        d = d[4:]
+    if not _DOMAIN_RE.match(d):
+        raise ValueError(f"domaine invalide : {raw!r}")
+    return d
+
+
+def effective_logo_url(org: dict) -> Optional[str]:
+    """Logo affiché pour une org : l'upload (`logo_url`, Object Storage) prime,
+    sinon dérivé du CDN logo.dev à partir du `domain` déclaré (même patron que
+    le catalogue connecteurs). None → monogramme côté UI."""
+    return org.get("logo_url") or logodev.logo_url(org.get("domain"))
+
+
 def update_org(org_id: int, name: Optional[str] = None,
-               description: Optional[str] = None) -> bool:
-    """Renomme / re-décrit une org. None = conserver le champ. False si absente.
+               description: Optional[str] = None,
+               domain: Optional[str] = None,
+               industry: Optional[str] = None,
+               location: Optional[str] = None) -> bool:
+    """Édite le profil d'une org. None = conserver le champ ; chaîne vide =
+    effacer (domain → NULL). False si absente.
 
     Miroir de `group_store.update_group` au grain org. Métadonnées en clair
-    (nom/prose), hors coffre."""
+    (nom/prose/domaine), hors coffre."""
     sets, params = [], []
     if name is not None:
         n = name.strip()
@@ -159,6 +191,15 @@ def update_org(org_id: int, name: Optional[str] = None,
     if description is not None:
         sets.append("description = %s")
         params.append(description.strip())
+    if domain is not None:
+        sets.append("domain = %s")
+        params.append(normalize_domain(domain))
+    if industry is not None:
+        sets.append("industry = %s")
+        params.append(industry.strip())
+    if location is not None:
+        sets.append("location = %s")
+        params.append(location.strip())
     if not sets:
         return get_org(org_id) is not None
     params.append(org_id)
@@ -172,7 +213,7 @@ def update_org(org_id: int, name: Optional[str] = None,
 def list_all_orgs() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, name, created_by, created_at, logo_url FROM orgs "
+            "SELECT id, name, created_by, created_at, logo_url, domain FROM orgs "
             "WHERE archived_at IS NULL ORDER BY created_at"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -531,7 +572,7 @@ def list_orgs_for_user(sub: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT m.org_id, o.name, o.logo_url, m.org_role, m.is_active, m.joined_at
+            SELECT m.org_id, o.name, o.logo_url, o.domain, m.org_role, m.is_active, m.joined_at
               FROM org_members m JOIN orgs o ON o.id = m.org_id
              WHERE m.sub = %s AND o.archived_at IS NULL ORDER BY m.joined_at ASC
             """,

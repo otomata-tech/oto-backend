@@ -403,7 +403,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_ccn_conventions(idcc=… | query=…)` — résoudre une convention (« quelle est la 3090 ? », « conventions du spectacle »)\n"
             "- `fr_ccn_search(query=…, idcc=…)` — recherche plein-texte dans les articles d'une branche (ou toutes)\n"
             "- `fr_ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
-            "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand)"
+            "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand), puis `fr_accords_text(acco_id)` pour lire l'accord lui-même (texte à la demande via légifrance)"
         )),
         DocSection(kind="usage", title="codes consolidés (legi)", body_md=(
             "les 22 codes français avec versions historiques : citer la loi exacte, à la bonne date, avec lien légifrance.\n"

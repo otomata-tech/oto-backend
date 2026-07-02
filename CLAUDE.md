@@ -538,10 +538,19 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 
 **Invariant groupe⊂org dérivé** : un override/consultation d'org **sans** groupe explicite ⇒ niveau org (jamais le `home_group` d'une autre org) ; toute bascule d'org de session retire l'override de groupe. `/api/me` expose `active_org`/`active_group` (effectifs) **et** `home_org`/`home_group` (défauts) distinctement. `oto_whoami` montre l'org effective + `scope: home|session`.
 
-## Doctrines & instructions d'org
+## Agent readme (cumulable) & procédures — ex-« doctrines & instructions d'org »
 
-Prose opératoire métier par org (skills à la Claude Code, slug + versionnée).
-**Détail : `docs/doctrines.md`**.
+Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **injectée à
+chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
+(`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
+slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
+`oto_get_doctrine`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
+dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
+({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
+(skill), chargée à la demande — les identifiants de code (`oto_get_doctrine`, tables,
+`docs/doctrines.md`) gardent le mot doctrine. Prose opératoire versionnée par org,
+**détail : `docs/doctrines.md`**.
 
 > **Livraison au LLM = injection, plus un appel d'outil (otomata-private#49 puis #50, amende ADR 0014).**
 > Le canal FIABLE de bootstrap = les `instructions` du `initialize` (FastMCP les relit par
@@ -554,7 +563,8 @@ Prose opératoire métier par org (skills à la Claude Code, slug + versionnée)
 >   l'org**, toujours injecté (seedé depuis la constante = fallback) ; le catalogue est appendé à la composition ;
 > - **bloc C « contexte dynamique »** par-(sub, org) — section de contexte résolu (org / équipe /
 >   connecteurs actifs / N derniers projets / derniers déroulés via `db.recent_runs` / fiche profil
->   « situation avec oto » de l'user) + doctrine de base de l'org (`claude_md`) avec substitution
+>   « situation avec oto » de l'user) + **agent readme cumulés** org → équipe active → user
+>   (`_format_org_readme`/`_format_group_readme`/`_format_user_readme`), chacun avec substitution
 >   `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
 >
 > Donc **ne plus prescrire « appelle `oto_get_doctrine()` au démarrage »** — la doctrine est injectée.

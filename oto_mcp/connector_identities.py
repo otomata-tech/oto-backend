@@ -12,7 +12,16 @@ seul — l'unification est au niveau surface, pas stockage) :
   les sociétés du cabinet = les GED cibles), le défaut dans le `meta` du credential.
 
 Contrat commun `Identity` = `{id, label, status, is_default, channel}` (`channel` None
-hors multi-canal — fuite assumée : unipile est par-canal, Google par-service).
+hors multi-canal — fuite assumée : unipile est par-canal, Google par-service). Champs
+additifs pour un compte PARTAGÉ (#55) : `granted=True` + `owner={sub,email,name}`.
+
+**Comptes accordés (otomata-private#55)** : un compte dont le propriétaire a accordé
+l'opération au user (`connector_account_grants`) apparaît dans la liste et peut être
+sélectionné — la sélection pose le pointeur `unipile_operated_accounts` (elle ne touche
+JAMAIS la ligne de connexion `unipile_accounts` du grantee). La validation du select
+d'un compte accordé = le grant lui-même (deny-by-default), pas `cli.list_accounts`
+(en revente le grantee n'a pas de clé BYO). Résolution à l'appel :
+`resolve_operated_account_id` (revalidée contre les grants vivants, backstop dur).
 
 ⚠️ Un backend enregistré peut être **async** (ex. exécution Browserbase) :
 `list_identities`/`select_identity` renvoient alors un awaitable — les capacités
@@ -70,6 +79,40 @@ def _google_select(sub: str, identity_id: str) -> dict:
 
 
 # --- Unipile : 1 clé → N identités distantes (BYO-only) ---------------------
+# + comptes ACCORDÉS par leur propriétaire (#55, tout mode — y compris revente).
+
+def resolve_operated_account_id(sub: str, provider: str) -> str | None:
+    """Compte Unipile opéré par `sub` sur ce canal (LE point de résolution #55).
+
+    Pointeur « identité opérée » posé → REVALIDÉ contre les grants VIVANTS à
+    chaque appel (révocation ou déconnexion du owner = effet immédiat, backstop
+    dur). Pointeur invalide → `ValueError` EXPLICITE, jamais de repli silencieux
+    sur le compte propre : l'agent croirait agir comme le owner et agirait comme
+    soi (un message parti sous la mauvaise identité est irréversible).
+    Pas de pointeur → compte connecté propre (ou None)."""
+    from . import access, db
+    op = db.get_operated_account(sub, provider)
+    if op:
+        if op["account_id"] in db.granted_accounts_for(sub, provider):
+            return op["account_id"]
+        raise ValueError(
+            f"Le compte {provider.title()} qui t'était accordé n'est plus opérable "
+            "(autorisation révoquée ou compte déconnecté par son propriétaire). "
+            "Resélectionne ton identité (oto_set_connector_identity ou "
+            "https://dashboard.oto.ninja/console/connectors).")
+    return db.get_unipile_account_id(sub, access.current_org(sub), provider)
+
+
+def _unipile_chosen(sub: str, provider: str) -> str | None:
+    """Compte effectivement opéré pour l'affichage `is_default` (pointeur valide
+    sinon compte propre) — version fail-soft de `resolve_operated_account_id`
+    (une liste d'identités ne doit pas lever sur un pointeur orphelin)."""
+    from . import access, db
+    op = db.get_operated_account(sub, provider)
+    if op and op["account_id"] in db.granted_accounts_for(sub, provider):
+        return op["account_id"]
+    return db.get_unipile_account_id(sub, access.current_org(sub), provider)
+
 
 def _unipile_client(sub: str):
     """(client, byo) — résout clé+DSN du credential BYO ; None si non-BYO/absent."""
@@ -82,48 +125,96 @@ def _unipile_client(sub: str):
 
 
 def _unipile_list(sub: str) -> list[dict]:
-    from . import access, db
-    cli = _unipile_client(sub)
-    if cli is None:
-        return []
-    try:
-        accounts = cli.list_accounts()
-    except Exception:
-        return []
-    org = access.current_org(sub)
+    from . import db
+    granted = [g for g in db.list_account_grants_to(sub) if g.get("active")]
     out = []
-    for a in accounts:
-        ch = (a.get("type") or "").upper() or None
-        chosen = db.get_unipile_account_id(sub, org, ch) if ch else None
-        sources = a.get("sources") or []
+    cli = _unipile_client(sub)
+    if cli is not None:  # BYO : les comptes de la clé (liste existante)
+        try:
+            accounts = cli.list_accounts()
+        except Exception:
+            accounts = []
+        for a in accounts:
+            ch = (a.get("type") or "").upper() or None
+            sources = a.get("sources") or []
+            out.append({
+                "id": a.get("id"),
+                "label": a.get("name"),
+                "status": (sources[0].get("status") if sources else None) or "ok",
+                "is_default": bool(ch) and a.get("id") == _unipile_chosen(sub, ch),
+                "channel": ch,
+            })
+    elif granted:
+        # Revente AVEC grants : les comptes PROPRES connectés, pour le retour-à-soi.
+        # Sans grant, liste vide comme avant (hosted-auth, rien à choisir).
+        for a in db.list_unipile_accounts(sub):
+            out.append({
+                "id": a["account_id"],
+                "label": a.get("account_name") or a["account_id"],
+                "status": "ok",
+                "is_default": a["account_id"] == _unipile_chosen(sub, a["provider"]),
+                "channel": a["provider"],
+            })
+    # Comptes ACCORDÉS (#55), tout mode. Une clé BYO partagée liste déjà le compte
+    # du owner → on ANNOTE l'entrée existante plutôt que de la dupliquer.
+    seen = {i["id"]: i for i in out}
+    for g in granted:
+        owner = {"sub": g["owner_sub"], "email": g.get("owner_email"),
+                 "name": g.get("owner_name")}
+        existing = seen.get(g["account_id"])
+        if existing is not None:
+            existing["granted"] = True
+            existing["owner"] = owner
+            continue
+        who = g.get("owner_name") or g.get("owner_email") or g["owner_sub"]
         out.append({
-            "id": a.get("id"),
-            "label": a.get("name"),
-            "status": (sources[0].get("status") if sources else None) or "ok",
-            "is_default": a.get("id") == chosen,
-            "channel": ch,
+            "id": g["account_id"],
+            "label": f"{g.get('account_name') or g['account_id']} — compte de {who}",
+            "status": "ok",
+            "is_default": g["account_id"] == _unipile_chosen(sub, g["provider"]),
+            "channel": g["provider"],
+            "granted": True,
+            "owner": owner,
         })
     return out
 
 
 def _unipile_select(sub: str, identity_id: str) -> dict:
     from . import db
+    # 1) Compte ACCORDÉ (#55) : pose le POINTEUR « identité opérée » — ne touche
+    #    JAMAIS la ligne de connexion `unipile_accounts` du grantee. La validation
+    #    = le grant vivant (deny-by-default), pas la clé.
+    g = next((r for r in db.list_account_grants_to(sub)
+              if r.get("active") and r["account_id"] == identity_id), None)
+    if g:
+        db.set_operated_account(sub, g["provider"], identity_id, g["owner_sub"])
+        return {"id": identity_id, "channel": g["provider"], "is_default": True,
+                "granted": True}
+    # 2) Retour à SOI (tout mode, y compris revente) : efface le pointeur du canal.
+    own = next((a for a in db.list_unipile_accounts(sub)
+                if a["account_id"] == identity_id), None)
+    if own:
+        db.clear_operated_account(sub, own["provider"])
+        return {"id": identity_id, "channel": own["provider"], "is_default": True}
+    # 3) Chemin BYO existant : choisir un compte de SA clé (bascule la connexion).
     cli = _unipile_client(sub)
     if cli is None:
         raise ValueError("Choix de compte indisponible (clé plateforme — passe par "
                          "la connexion hébergée).")
     match = next((a for a in cli.list_accounts() if a.get("id") == identity_id), None)
-    if match is None:  # anti-binding : l'id DOIT exister sur la clé
+    if match is None:  # anti-binding : l'id DOIT exister sur la clé (ou être accordé)
         raise ValueError(f"Compte Unipile inconnu sur cette clé : {identity_id}")
     ch = (match.get("type") or "LINKEDIN").upper()
     # Scope membre (ADR 0033 B4) : le binding vaut dans l'org de contexte. BYO →
     # pas un siège plateforme (platform_seat=False), cohérent avec unipile_connect.
+    # Bascule de connexion = retour-à-soi sur ce canal → efface le pointeur opéré (#55).
     from . import access
     org = access.current_org(sub)
     if org is None:
         raise ValueError("Aucune org de contexte — impossible de rattacher le compte.")
     db.set_unipile_account(sub, identity_id, match.get("name"), org_id=org,
                            provider=ch, platform_seat=False)
+    db.clear_operated_account(sub, ch)
     return {"id": identity_id, "channel": ch, "is_default": True}
 
 

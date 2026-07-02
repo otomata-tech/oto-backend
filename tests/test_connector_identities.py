@@ -61,6 +61,12 @@ def _wire_byo(monkeypatch, mode="org"):
                         lambda *a, **k: {"meta": {"dsn": "api6.unipile.com:13616"}})
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeUnipile)
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    # #55 : par défaut, pas de grant reçu ni de pointeur « identité opérée ».
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.clear_operated_account", lambda sub, prov: None)
 
 
 def test_unipile_list_byo(monkeypatch):
@@ -97,8 +103,11 @@ def test_unipile_select_unknown_id_raises(monkeypatch):
 
 
 def test_unipile_platform_no_selector(monkeypatch):
-    # clé plateforme (revente) → liste vide, sélection refusée (hosted-auth conservé).
+    # clé plateforme (revente) SANS grant → liste vide, sélection refusée
+    # (hosted-auth conservé, widget strictement inchangé).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [])
     assert connector_identities.list_identities("u1", "unipile") == []
     with pytest.raises(ValueError, match="plateforme"):
         connector_identities.select_identity("u1", "unipile", "A1")

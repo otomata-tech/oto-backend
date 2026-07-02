@@ -41,8 +41,9 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
+from . import auth_hooks
 from .tool_visibility import (
-    PROTECTED_TOOLS, is_default_hidden, namespace_of)
+    PROTECTED_TOOLS, is_default_hidden, is_testable, namespace_of)
 
 logger = logging.getLogger(__name__)
 
@@ -1238,6 +1239,104 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             db.add_user_enabled_tool(sub, name, org)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
+    async def _tool_by_name(name: str):
+        """Objet Tool FastMCP par nom (ou None). `run_middleware=False` : hors
+        session MCP (contexte REST) la chaîne de middleware n'a pas de Context."""
+        if mcp_instance is None:
+            return None
+        tools = await mcp_instance.list_tools(run_middleware=False)
+        for t in tools:
+            if t.name == name:
+                return t
+        return None
+
+    async def my_tool_detail(request: Request) -> JSONResponse:
+        """Fiche d'un outil : description complète + schémas d'entrée/sortie
+        (JSON Schema dérivé par FastMCP) + connecteur + état perso + testabilité.
+
+        Alimente le panneau « en savoir plus » de la fiche connecteur (dashboard) —
+        détail utile pour comprendre un outil (surtout open-data FOD) et, s'il est
+        testable, générer un formulaire de test."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        tool = await _tool_by_name(name)
+        if tool is None:
+            return _json_error(request, 404, f"unknown_tool:{name}")
+        ns = namespace_of(name)
+        conn = connectors.connector_for_namespace(ns)
+        disabled = set(db.list_user_disabled_tools(sub, access.current_org(sub) or 0))
+        federated = bool(conn and conn.kind == "mount")
+        return _json(request, {
+            "name": name,
+            "description": (tool.description or "").strip(),
+            "input_schema": getattr(tool, "parameters", None),
+            "output_schema": getattr(tool, "output_schema", None),
+            "namespace": ns,
+            "connector": ({"name": conn.name, "label": conn.label} if conn else None),
+            "source": "federated" if federated else "native",
+            "enabled": name not in disabled,
+            "protected": name in PROTECTED_TOOLS,
+            "default_hidden": is_default_hidden(name),
+            "testable": is_testable(name),
+        })
+
+    async def my_tool_call(request: Request) -> JSONResponse:
+        """Exécute un outil TESTABLE sous l'identité de l'appelant (bouton « tester »
+        du dashboard). Bornée aux connecteurs open-data en lecture seule
+        (`is_testable`) — jamais un outil à effet de bord. Les gates de call-time
+        (credential, RBAC connecteur, activation) s'appliquent normalement : le
+        sub-override REST fait résoudre la bonne identité (`resolve_api_key`/
+        `current_org`). L'erreur d'un outil est renvoyée EN DONNÉE (`ok:false`) —
+        voir ce que renvoie l'outil (y compris son erreur) EST le but du test."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        name = request.path_params["name"]
+        if not is_testable(name):
+            return _json_error(request, 403, f"not_testable:{name}")
+        tool = await _tool_by_name(name)
+        if tool is None:
+            return _json_error(request, 404, f"unknown_tool:{name}")
+        fn = getattr(tool, "fn", None)
+        if fn is None:
+            return _json_error(request, 400, f"not_callable:{name}")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        # Accepte {"arguments": {...}} ou l'objet d'arguments brut.
+        args = body.get("arguments") if isinstance(body, dict) and "arguments" in body else body
+        if not isinstance(args, dict):
+            args = {}
+
+        async def _invoke():
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(**args)
+            return await run_in_threadpool(lambda: fn(**args))
+
+        started = time.monotonic()
+        with auth_hooks.sub_override(sub):
+            try:
+                result = await asyncio.wait_for(_invoke(), timeout=45)
+            except asyncio.TimeoutError:
+                return _json(request, {"ok": False, "name": name,
+                                       "error": "timeout (>45s)"})
+            except TypeError as e:
+                # Mauvais arguments (param inconnu / manquant) : signal actionnable.
+                return _json_error(request, 400, f"bad_arguments:{e}")
+            except Exception as e:  # noqa: BLE001 — l'erreur d'outil est le résultat
+                return _json(request, {"ok": False, "name": name, "error": str(e)})
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Sérialisation défensive : un tool peut renvoyer un objet non-JSON.
+        try:
+            safe = json.loads(json.dumps(result, default=str, ensure_ascii=False))
+        except Exception:
+            safe = str(result)
+        return _json(request, {"ok": True, "name": name, "result": safe,
+                               "elapsed_ms": elapsed_ms})
+
     datastore_routes = api_routes_datastore.make_routes(
         verifier=verifier,
         authenticate=_authenticate,
@@ -1343,6 +1442,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
+        # Fiche + test d'un outil (dashboard) — suffixes distincts de `{name}` nu.
+        Route("/api/me/tools/{name}/detail", my_tool_detail, methods=["GET"]),
+        Route("/api/me/tools/{name}/detail", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/tools/{name}/call", my_tool_call, methods=["POST"]),
+        Route("/api/me/tools/{name}/call", options_handler, methods=["OPTIONS"]),
         # /api/me/instructions* — migré en capacités (ADR 0009, capabilities/orgs_instructions.py),
         # monté par capability_routes plus bas.
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),

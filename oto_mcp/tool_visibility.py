@@ -52,9 +52,28 @@ PROTECTED_TOOLS: frozenset[str] = frozenset(
      "oto_project", "oto_use_project", "oto_clear_project"})
 
 
+# Testables depuis le dashboard (bouton « tester » de la fiche connecteur) :
+# l'exécution est RÉELLE, déclenchée par un humain via REST → bornée aux
+# connecteurs open-data en LECTURE SEULE (aucun effet de bord, aucune mutation,
+# pas de credential BYO requis). Un « test » ne doit JAMAIS envoyer un email,
+# écrire une donnée ou poster un message. FOD (données publiques France) est le
+# cœur de cible. Étendre = ajouter un namespace read-only ici (source unique).
+TESTABLE_NAMESPACES: frozenset[str] = frozenset(
+    {"fr", "foncier", "urba", "sante", "frenchtech", "culture", "infosec"})
+
+
 def namespace_of(name: str) -> str:
     """Namespace d'un tool = préfixe avant le premier `_` (ex. `mm_company` → `mm`)."""
     return name.split("_", 1)[0]
+
+
+def is_testable(name: str) -> bool:
+    """Un tool est testable depuis le dashboard s'il appartient à un namespace
+    open-data en lecture seule (cf. TESTABLE_NAMESPACES). Les variantes `*_app`
+    (MCP Apps SEP-1865) renvoient un composant d'UI, pas du JSON → non testables."""
+    if name.endswith("_app"):
+        return False
+    return namespace_of(name) in TESTABLE_NAMESPACES
 
 
 def is_default_hidden(name: str) -> bool:

@@ -33,7 +33,7 @@ def seams(monkeypatch):
     rec["link"] = []
     rec["unlink"] = []
     monkeypatch.setattr(P.db, "add_project_link",
-                        lambda pid, tt, tr, label=None, role=None, config=None, identity_ref=None: rec["link"].append((pid, tt, tr, label, role, config, identity_ref)))
+                        lambda pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None: rec["link"].append((pid, tt, tr, label, role, config, identity_ref)))
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr, identity_ref=None: rec["unlink"].append((pid, tt, tr, identity_ref)) or 1)
     monkeypatch.setattr(P.db, "list_project_links",

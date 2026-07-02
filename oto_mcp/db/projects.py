@@ -214,22 +214,34 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,
                      label: Optional[str] = None, role: Optional[str] = None,
-                     config: Optional[dict] = None, identity_ref: Optional[str] = None) -> None:
+                     config: Optional[dict] = None, identity_ref: Optional[str] = None,
+                     slot: Optional[str] = None) -> None:
     """Lie une entité (tableau/procédure/connecteur/base) au projet. `identity_ref`
     (ADR 0032 §4 amendé, #57) = un BINDING distinct par identité — NULL = binding par
-    défaut (un connecteur peut être lié N fois, une identité par binding). Idempotent
-    par binding : re-lier met à jour le label ; `role`/`config` (surcharge préfaite)
-    ne sont écrasés que s'ils sont fournis. `config` absent à la création → `{}`."""
+    défaut (un connecteur peut être lié N fois, une identité par binding). `slot`
+    (ADR 0035 B2) = nom de slot bindé par ce lien, vocabulaire DU PROJET — unicité
+    (project_id, slot) ; un nom déjà bindé par un AUTRE lien lève
+    `ValueError('slot_taken: …')` (traduite en 409 actionnable par la capacité).
+    Idempotent par binding : re-lier met à jour le label ; `role`/`config`/`slot`
+    (surcharge préfaite) ne sont écrasés que s'ils sont fournis."""
     cfg = json.dumps(config) if config is not None else None
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, config) "
-            "VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
-            "ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
-            "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
-            "config = COALESCE(%s::jsonb, project_links.config)",
-            (project_id, target_type, target_ref, identity_ref, label, role, cfg, cfg),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, slot, config) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
+                "ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
+                "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
+                "slot = COALESCE(EXCLUDED.slot, project_links.slot), "
+                "config = COALESCE(%s::jsonb, project_links.config)",
+                (project_id, target_type, target_ref, identity_ref, label, role, slot, cfg, cfg),
+            )
+        except psycopg.errors.UniqueViolation as e:
+            # Seul l'index partiel (project_id, slot) peut violer ICI (la clé de binding
+            # est absorbée par ON CONFLICT) → message métier, jamais un 500.
+            raise ValueError(
+                f"slot_taken: le slot `{slot}` est déjà bindé par un autre lien de ce "
+                "projet — délie-le d'abord, ou choisis un autre nom.") from e
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
 
 
@@ -296,7 +308,7 @@ def list_project_links(project_id: int) -> list[dict]:
     logique : `target_ref` est un id stable, un lien sans `label` doit rester lisible."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.config, pl.created_at, "
+            "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.slot, pl.config, pl.created_at, "
             "       EXISTS(SELECT 1 FROM project_links o "
             "              WHERE o.target_type = pl.target_type "
             "                AND o.target_ref = pl.target_ref "
@@ -724,7 +736,8 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                 ) or target_ref
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
-                         config=link.get("config") or None)
+                         config=link.get("config") or None,
+                         slot=link.get("slot"))
 
     # Fichiers bruts : copie S3 server-side, la copie repart privée (public=false).
     for f in list_project_files(src_id):

@@ -49,6 +49,7 @@ class ProjectInput(BaseModel):
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
+    slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>)
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -248,9 +249,23 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 if len(existing) == 1 and existing[0].get("identity_ref") != identity_ref:
                     db.remove_project_link(int(inp.project_id), "connecteur", target_ref,
                                            identity_ref=existing[0].get("identity_ref"))
+        # ADR 0035 (B2) : nom de slot bindé par ce lien — validé (hygiène de clé) puis
+        # unicité (projet, slot) imposée par la DB (ValueError slot_taken → 409).
+        slot = None
+        if inp.op == "link" and inp.slot is not None:
+            from .. import slots as slots_mod
+            try:
+                slot = slots_mod.normalize_name(inp.slot)
+            except ValueError as e:
+                _require(False, "invalid_slot", str(e), 400)
         if inp.op == "link":
-            db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
-                                inp.label, role=inp.role, config=config, identity_ref=identity_ref)
+            try:
+                db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
+                                    inp.label, role=inp.role, config=config,
+                                    identity_ref=identity_ref, slot=slot)
+            except ValueError as e:
+                code = "slot_taken" if str(e).startswith("slot_taken") else "bad_link"
+                _require(False, code, str(e), 409 if code == "slot_taken" else 400)
         else:
             db.remove_project_link(int(inp.project_id), inp.target_type, target_ref,
                                    identity_ref=identity_ref)
@@ -337,8 +352,13 @@ CAPABILITIES += [
             "= which account to act as + prose instructions to apply (e.g. 'only filter "
             "agreements by the mutuelle theme'); for a tableau: {provision?: shared|empty|seeded} "
             "= how a project copy treats it (empty/seeded = each copy gets its own fresh table). "
-            "Re-linking without role/config preserves the "
-            "existing ones. get/link return each link's role + config + a derived "
+            "Optional `slot` = the SLOT NAME this link BINDS for the project (ADR 0035): "
+            "procedures declare required entities as slots and reference them <slot:name> "
+            "in their prose — the project maps each name to a concrete entity via its links. "
+            "Slot names are a PROJECT-wide vocabulary (unique per project → 409 slot_taken; "
+            "two linked procedures sharing `sortie` share the binding). "
+            "Re-linking without role/config/slot preserves the "
+            "existing ones. get/link return each link's role + slot + config + a derived "
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
             "project's table by that name with the data_* tools (never hardcode a namespace). "

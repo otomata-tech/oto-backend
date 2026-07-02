@@ -326,6 +326,9 @@ CREATE TABLE IF NOT EXISTS project_links (
     target_ref TEXT NOT NULL,
     label TEXT,
     role TEXT,
+    -- ADR 0035 (B2) : nom de slot BINDÉ par ce lien — vocabulaire DU PROJET (unicité
+    -- (project_id, slot) via index partiel, posé dans le bloc ALTER d'init_db).
+    slot TEXT,
     config JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(project_id, target_type, target_ref)

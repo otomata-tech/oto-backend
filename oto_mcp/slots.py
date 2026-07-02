@@ -36,6 +36,16 @@ _MAX_SLOTS = 32
 _MAX_DESC = 500
 
 
+def normalize_name(name: object) -> str:
+    """Normalise un NOM de slot (clé du binding projet, ADR 0035 B2) — lower/trim,
+    même hygiène que la déclaration. Lève `ValueError` actionnable si invalide."""
+    n = str(name or "").strip().lower()
+    if not _NAME_RE.match(n):
+        raise ValueError(
+            f"nom de slot invalide ({name!r}) — attendu [a-z0-9][a-z0-9_-]*, 64 car. max.")
+    return n
+
+
 def validate_slots(raw: object) -> list[dict]:
     """Valide et normalise une déclaration de slots. Lève `ValueError` avec un
     message ACTIONNABLE (structure, type inconnu, nom invalide/dupliqué) — les
@@ -52,10 +62,10 @@ def validate_slots(raw: object) -> list[dict]:
     for i, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ValueError(f"`slots[{i}]` doit être un objet {{name, type, description?}}.")
-        name = str(item.get("name") or "").strip().lower()
-        if not _NAME_RE.match(name):
-            raise ValueError(
-                f"`slots[{i}].name` invalide ({name!r}) — attendu [a-z0-9][a-z0-9_-]*, 64 car. max.")
+        try:
+            name = normalize_name(item.get("name"))
+        except ValueError as e:
+            raise ValueError(f"`slots[{i}].name` : {e}")
         if name in seen:
             raise ValueError(f"`slots` : nom `{name}` dupliqué (le nom est la clé du binding).")
         seen.add(name)

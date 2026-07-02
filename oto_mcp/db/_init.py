@@ -78,6 +78,12 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE doctrine_library ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
+        # (deux procédures liées partageant `sortie` partagent le binding). Unicité
+        # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).
+        conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS slot TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_project_links_slot "
+                     "ON project_links(project_id, slot) WHERE slot IS NOT NULL")
         # ADR 0032 §4 amendé (#57) : un projet peut lier N fois le même connecteur, chaque
         # binding distingué par une IDENTITÉ → une ligne par binding. Colonne `identity_ref`
         # (NULL = binding par défaut, rétro-compat), clé élargie NULLS NOT DISTINCT (PG15+ :

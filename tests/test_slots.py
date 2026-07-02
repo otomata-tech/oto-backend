@@ -172,3 +172,59 @@ def test_from_version_restores_slots(monkeypatch):
 def test_set_input_models_accept_slots():
     assert oi.InstrSetInput(slots=[{"name": "a", "type": "base"}]).slots
     assert oi.AdminInstrSetInput(org_id=1, slots=None).slots is None
+
+
+# ── B2 : binding nommé au link (oto_project op=link, slot = vocabulaire du projet) ──
+def test_normalize_name():
+    assert slots_mod.normalize_name("  Sortie ") == "sortie"
+    with pytest.raises(ValueError):
+        slots_mod.normalize_name("Bad Name")
+    with pytest.raises(ValueError):
+        slots_mod.normalize_name("")
+
+
+def _wire_link(monkeypatch, add=None):
+    from oto_mcp.capabilities import projects as P
+    row = {"id": 7, "owner_type": "org", "owner_id": "3", "name": "Proj", "brief_md": "",
+           "created_by": "u1", "archived_at": None, "created_at": "x", "updated_at": "x"}
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(row, id=pid))
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
+    monkeypatch.setattr(P.db, "list_project_links", lambda pid: [])
+    rec = {}
+
+    def _add(pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None):
+        if add:
+            add(slot)
+        rec["slot"] = slot
+
+    monkeypatch.setattr(P.db, "add_project_link", _add)
+    return P, rec
+
+
+def test_link_binds_normalized_slot(monkeypatch):
+    P, rec = _wire_link(monkeypatch)
+    out = P._project(ResolvedCtx(sub="u1", org_id=3),
+                     P.ProjectInput(op="link", project_id=7, target_type="tableau",
+                                    target_ref="9", slot=" Sortie "))
+    assert rec["slot"] == "sortie" and out["ok"] is True
+
+
+def test_link_invalid_slot_400(monkeypatch):
+    P, _ = _wire_link(monkeypatch)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=3),
+                   P.ProjectInput(op="link", project_id=7, target_type="tableau",
+                                  target_ref="9", slot="Bad Name"))
+    assert e.value.code == "invalid_slot"
+
+
+def test_link_slot_taken_409(monkeypatch):
+    def _boom(slot):
+        raise ValueError(f"slot_taken: le slot `{slot}` est déjà bindé…")
+    P, _ = _wire_link(monkeypatch, add=_boom)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=3),
+                   P.ProjectInput(op="link", project_id=7, target_type="tableau",
+                                  target_ref="9", slot="sortie"))
+    assert e.value.code == "slot_taken" and e.value.status == 409

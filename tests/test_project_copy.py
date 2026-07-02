@@ -29,7 +29,7 @@ def _wire(monkeypatch, *, src):
     monkeypatch.setattr(PJ, "create_doc", create_doc)
     monkeypatch.setattr(PJ, "list_project_links", lambda pid: list(src["links"]))
     monkeypatch.setattr(PJ, "add_project_link",
-                        lambda pid, tt, tr, label=None, role=None, config=None:
+                        lambda pid, tt, tr, label=None, role=None, config=None, slot=None:
                         created["links"].append((pid, tt, tr, label, role, config)))
     monkeypatch.setattr(PJ, "list_project_files", lambda pid: list(src["files"]))
     monkeypatch.setattr(PJ, "add_project_file",

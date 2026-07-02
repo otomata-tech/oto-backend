@@ -236,14 +236,11 @@ def access_token_for(sub: str) -> Optional[str]:
     return access_token
 
 
-async def list_workspaces(sub: str) -> Optional[dict]:
-    """Topologie read-only des KB memento du user (orientation dashboard).
-
-    Appelle l'outil `mem_workspaces` du MCP memento distant avec le token
-    per-user (même endpoint que la fédération `tools/mount.py`), renvoie la carte
-    brute {default, orgs[], shared[], pinned[]}. None si le user n'a pas connecté
-    memento. La curation reste sur me.mento.cc — on ne fait que lister.
-    """
+async def _call_memento_tool(sub: str, tool: str, args: dict) -> Optional[dict]:
+    """Appelle un outil `mem_*` du MCP memento distant avec le token per-user (même
+    endpoint que la fédération `tools/mount.py`). Renvoie le payload brut, ou None si
+    le user n'a pas connecté memento. La curation reste sur me.mento.cc — on ne fait
+    que lire/relayer pour le browse dashboard."""
     token = access_token_for(sub)
     if not token:
         return None
@@ -253,11 +250,43 @@ async def list_workspaces(sub: str) -> Optional[dict]:
     client = Client(StreamableHttpTransport(
         _MCP_RESOURCE, headers={"Authorization": f"Bearer {token}"}))
     async with client:
-        result = await client.call_tool("mem_workspaces", {})
+        result = await client.call_tool(tool, args)
     data = getattr(result, "data", None)
     if not isinstance(data, dict):
         data = json.loads(result.content[0].text)
     return data
+
+
+async def list_workspaces(sub: str) -> Optional[dict]:
+    """Topologie read-only des KB memento du user (orientation dashboard) : carte
+    brute {default, orgs[], shared[], pinned[]}. None si non connecté."""
+    return await _call_memento_tool(sub, "mem_workspaces", {})
+
+
+async def list_pages(sub: str, workspace: Optional[str] = None,
+                     cursor: Optional[str] = None, limit: int = 100) -> Optional[dict]:
+    """Énumère les DOCUMENTS (pages) d'une KB — énumération déterministe paginée
+    (keyset, `cursor` opaque à repasser tel quel). Renvoie {workspace, org, items[],
+    totalCount, hasMore, cursor} ; `workspace` omis = KB par défaut. None si non
+    connecté."""
+    args: dict = {"kind": "documents", "limit": limit}
+    if workspace:
+        args["workspace"] = workspace
+    if cursor:
+        args["cursor"] = cursor
+    return await _call_memento_tool(sub, "mem_list", args)
+
+
+async def get_document(sub: str, *, doc_id: Optional[str] = None,
+                       path: Optional[str] = None) -> Optional[dict]:
+    """Rend un document ENTIER (tous ses blocs ordonnés + sources/liens/commentaires
+    + `document.url` = lien viewer), par `id` ou par `path`. None si non connecté."""
+    args: dict = {}
+    if doc_id:
+        args["id"] = doc_id
+    if path:
+        args["path"] = path
+    return await _call_memento_tool(sub, "mem_document", args)
 
 
 def status_for(sub: str) -> dict:

@@ -5,6 +5,9 @@ Flow web (calqué sur les routes Google OAuth d'api_routes_datastore.py) :
 - `GET    /api/memento/oauth/callback` (no auth, Supabase redirige) → exchange + persist
 - `GET    /api/memento/oauth/status`   (auth) → {connected, set_at}
 - `DELETE /api/memento/oauth`          (auth) → déconnecte
+- `GET    /api/memento/workspaces`     (auth) → topologie des KB
+- `GET    /api/memento/pages`          (auth) → pages (documents) d'une KB (browse)
+- `GET    /api/memento/document`       (auth) → contenu d'une page (blocs)
 
 Le token per-user est stocké dans le coffre (connector='memento') ; le proxy
 de tools/mount.py l'injecte par requête (access.resolve_mount_token → refresh).
@@ -78,6 +81,32 @@ def make_routes(
             return json_response(request, {"connected": False, "orgs": [], "shared": [], "pinned": []})
         return json_response(request, {"connected": True, **data})
 
+    async def pages(request: Request) -> JSONResponse:
+        # Pages (documents) d'une KB — énumération paginée pour le browse dashboard.
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        ws = request.query_params.get("workspace") or None
+        cursor = request.query_params.get("cursor") or None
+        data = await memento_oauth.list_pages(sub, ws, cursor)
+        if data is None:
+            return json_response(request, {"connected": False, "items": []})
+        return json_response(request, {"connected": True, **data})
+
+    async def document(request: Request) -> JSONResponse:
+        # Contenu d'une page (blocs ordonnés + document.url) par id ou path.
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        doc_id = request.query_params.get("id") or None
+        path = request.query_params.get("path") or None
+        if not doc_id and not path:
+            return json_error(request, 400, "id_or_path_required")
+        data = await memento_oauth.get_document(sub, doc_id=doc_id, path=path)
+        if data is None:
+            return json_response(request, {"connected": False})
+        return json_response(request, {"connected": True, **data})
+
     return [
         Route("/api/memento/oauth/start", start, methods=["GET"]),
         Route("/api/memento/oauth/start", options_handler, methods=["OPTIONS"]),
@@ -88,4 +117,8 @@ def make_routes(
         Route("/api/memento/oauth", options_handler, methods=["OPTIONS"]),
         Route("/api/memento/workspaces", workspaces, methods=["GET"]),
         Route("/api/memento/workspaces", options_handler, methods=["OPTIONS"]),
+        Route("/api/memento/pages", pages, methods=["GET"]),
+        Route("/api/memento/pages", options_handler, methods=["OPTIONS"]),
+        Route("/api/memento/document", document, methods=["GET"]),
+        Route("/api/memento/document", options_handler, methods=["OPTIONS"]),
     ]

@@ -4,6 +4,8 @@ co-déclarée MCP + REST, per-membre (`SUB_ONLY`). Backend par-connecteur dans
 d'une clé BYO). Le dashboard pose dessus le picker (liste + défaut)."""
 from __future__ import annotations
 
+import inspect
+
 from pydantic import BaseModel
 
 from .. import connector_identities
@@ -20,17 +22,25 @@ class SetIdentityInput(BaseModel):
     identity_id: str                     # body — id renvoyé par connectors.identities
 
 
-def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
+# Handlers async : un backend d'identités enregistré (`connector_identities.register`)
+# peut être async (Browserbase — pennylaneged) ; les deux adaptateurs (MCP/REST)
+# awaitent les handlers awaitable, on relaie ici.
+async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
+    ids = connector_identities.list_identities(ctx.sub, inp.connector)
+    if inspect.isawaitable(ids):
+        ids = await ids
     return {
         "connector": inp.connector,
         "supported": connector_identities.supports(inp.connector),
-        "identities": connector_identities.list_identities(ctx.sub, inp.connector),
+        "identities": ids,
     }
 
 
-def _set_default(ctx: ResolvedCtx, inp: SetIdentityInput) -> dict:
+async def _set_default(ctx: ResolvedCtx, inp: SetIdentityInput) -> dict:
     try:
         res = connector_identities.select_identity(ctx.sub, inp.connector, inp.identity_id)
+        if inspect.isawaitable(res):
+            res = await res
     except ValueError as e:
         raise AuthzDenied(404, "unknown_identity", str(e))
     return {"connector": inp.connector, **res}

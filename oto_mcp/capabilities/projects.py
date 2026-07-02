@@ -24,7 +24,7 @@ from .registry import CAPABILITIES
 RTYPE = "project"
 
 
-_LINK_TYPES = ("tableau", "procedure", "connecteur", "base", "page")
+_LINK_TYPES = ("tableau", "procedure", "connecteur", "doc")
 
 
 class ProjectInput(BaseModel):
@@ -43,8 +43,8 @@ class ProjectInput(BaseModel):
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur", "base", "page"]] = None
-    target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | base id | page URL (memento)
+    target_type: Optional[Literal["tableau", "procedure", "connecteur", "doc"]] = None
+    target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | doc.id (page Documents)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
@@ -411,9 +411,9 @@ CAPABILITIES += [
             "= source + name = target) / handoff (a copy-paste « resume in Claude » blob "
             "that pre-writes oto_use_project for this project) / archive / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|"
-            "connecteur|base|page + target_ref = its id/slug/name (for `page`: the Memento "
-            "page URL — you can pass it directly), optional label + optional "
+            "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "
+            "(for `doc`: a Documents page id — attach a knowledge page from the org KB or "
+            "any readable project), optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "

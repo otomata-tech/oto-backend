@@ -253,10 +253,10 @@ def test_link(seams):
 
 
 def test_link_with_role(seams):
-    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base",
-                                   target_ref="kb1", label="Ton of voice",
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc",
+                                   target_ref="36", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "base", "kb1", "Ton of voice", "charte éditoriale de référence", None, None)]
+    assert seams["link"] == [(7, "doc", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
 
 
 def test_link_connector_with_config(seams):
@@ -300,7 +300,7 @@ def test_link_missing_target(seams):
 def test_link_forbidden_without_write(seams, monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="base", target_ref="kb1"))
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36"))
     assert e.value.code == "forbidden"
 
 

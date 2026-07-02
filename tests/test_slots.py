@@ -20,12 +20,12 @@ def test_validate_ok_normalizes():
     out = slots_mod.validate_slots([
         {"name": "Sortie", "type": "tableau", "description": "leads enrichis"},
         {"name": "crm", "type": "connecteur"},
-        {"name": "kb", "type": "base"},
+        {"name": "kb", "type": "doc"},
     ])
     assert out[0] == {"name": "sortie", "type": "tableau", "description": "leads enrichis"}
     # type=connecteur sans champ `connector` → le nom du slot désigne le connecteur
     assert out[1] == {"name": "crm", "type": "connecteur", "connector": "crm"}
-    assert out[2] == {"name": "kb", "type": "base"}
+    assert out[2] == {"name": "kb", "type": "doc"}
 
 
 def test_validate_explicit_connector():
@@ -43,7 +43,7 @@ def test_validate_none_and_empty():
     ([{"type": "tableau"}], "name"),                                   # nom manquant
     ([{"name": "Bad Name", "type": "tableau"}], "name"),               # espace interdit
     ([{"name": "a", "type": "feuille"}], "type"),                      # type inconnu
-    ([{"name": "a", "type": "tableau"}, {"name": "a", "type": "base"}], "dupliqué"),
+    ([{"name": "a", "type": "tableau"}, {"name": "a", "type": "doc"}], "dupliqué"),
     ([{"name": "a", "type": "tableau", "connector": "folk"}], "connecteur"),  # connector hors type
     ([{"name": "a", "type": "tableau", "foo": 1}], "inconnus"),        # champ inconnu
 ])
@@ -64,7 +64,7 @@ def test_slot_refs_dedup_order():
 # ── slots_check : vérification croisée non bloquante ─────────────────────────
 def test_check_unresolved_and_unreferenced():
     body = "Écrire dans <slot:sortie> et <slot:fantome>."
-    declared = [{"name": "sortie", "type": "tableau"}, {"name": "jamais", "type": "base"}]
+    declared = [{"name": "sortie", "type": "tableau"}, {"name": "jamais", "type": "doc"}]
     r = slots_mod.slots_check(body, declared)
     assert r["unresolved_slots"] == ["fantome"]
     assert r["unreferenced_slots"] == ["jamais"]
@@ -170,7 +170,7 @@ def test_from_version_restores_slots(monkeypatch):
 
 
 def test_set_input_models_accept_slots():
-    assert oi.InstrSetInput(slots=[{"name": "a", "type": "base"}]).slots
+    assert oi.InstrSetInput(slots=[{"name": "a", "type": "doc"}]).slots
     assert oi.AdminInstrSetInput(org_id=1, slots=None).slots is None
 
 

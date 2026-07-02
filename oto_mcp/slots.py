@@ -2,7 +2,7 @@
 de référence par nom dans la prose.
 
 Une procédure (`org_instructions`) déclare ses **entités à instance** (quel tableau,
-quel compte de connecteur, quelle base) sous forme de **slots typés nommés** dans la
+quel compte de connecteur, quelle page Documents) sous forme de **slots typés nommés** dans la
 colonne JSONB `slots` : `{name, type, description?, connector?}`. La prose les
 référence **par nom** via le marqueur `<slot:name>` (même famille que `<tool:slug>`
 d'ADR 0014) — l'agent sait toujours de quelle entité on parle, jamais un nom
@@ -23,8 +23,9 @@ from . import providers, tool_registry
 from .tool_visibility import namespace_of
 
 # Sous-ensemble À INSTANCE de la taxonomie project_links.target_type (ADR 0035
-# arbitrages) : `procedure`/`page` ne se bindent pas via un slot.
-SLOT_TYPES = ("tableau", "connecteur", "base")
+# arbitrages) : `procedure` ne se binde pas via un slot. `doc` = une page Documents
+# (ex-`base` memento, repointé sur Documents le 2026-07-03).
+SLOT_TYPES = ("tableau", "connecteur", "doc")
 
 # Nom de slot = clé du binding côté projet → même hygiène qu'un slug.
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")

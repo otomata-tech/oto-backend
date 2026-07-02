@@ -197,7 +197,8 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
       projets qui la référencent) ;
     - `connecteur` → rien à propager : le destinataire branche SON credential (la
       surcharge préfaite du lien — identité/instructions — voyage avec le projet) ;
-    - `base`/`page` → externe (memento), hors périmètre du geste.
+    - `doc` → page Documents = contenu interne à SON projet propriétaire (partager CE
+      projet la propage) ; hors périmètre du geste ici → `skipped`.
     Les docs/fichiers du projet suivent d'office (ils héritent de son accès).
     Ne lève jamais : chaque entité rapporte `status` (le geste principal a réussi)."""
     report: list[dict] = []

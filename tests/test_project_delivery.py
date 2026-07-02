@@ -24,7 +24,7 @@ LINKS = [
     {"target_type": "tableau", "target_ref": "12", "label": "hors périmètre"},
     {"target_type": "procedure", "target_ref": "77", "label": "process mutuelle"},
     {"target_type": "connecteur", "target_ref": "unipile", "label": None},
-    {"target_type": "page", "target_ref": "https://memento/x", "label": None},
+    {"target_type": "doc", "target_ref": "36", "label": None},
 ]
 
 
@@ -98,7 +98,7 @@ def test_share_cascade_carries_linked_entities(monkeypatch):
                                          "reason": "not_governed"}
     assert by_ref[("procedure", "77")]["permission"] == "read"
     assert by_ref[("connecteur", "unipile")]["status"] == "action_required"
-    assert by_ref[("page", "https://memento/x")]["status"] == "skipped"
+    assert by_ref[("doc", "36")]["status"] == "skipped"
 
 
 def test_share_without_cascade_touches_nothing_linked(monkeypatch):

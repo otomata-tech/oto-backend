@@ -678,6 +678,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   un `client_factory` awaité par FastMCP (`mount.factory`) reste async — « pas d'await » ne
   suffit pas, vérifier que c'est un handler, pas un callback. Bornes connexions PG posées au
   passage (`db._connect_options` : `idle_in_transaction_session_timeout` anti-zombie-lock).
+  **2ᵉ mode de gel identifié + corrigé (2026-07-02, py-spy en flagrant délit)** : du DB
+  sync dans un MIDDLEWARE de la loop (`_authenticate`, gate ViewAs) × un blip de la RDB
+  (SSL eof) → `pool.getconn()` attendait 30s en gelant le serveur ENTIER (2 downs).
+  Protections : `ConnectionPool(timeout=5)` (`OTO_MCP_DB_POOL_TIMEOUT`) + chemin d'auth
+  en `run_in_threadpool`. Observabilité posée : `loop_watch.py` (aiodebug — tout callback
+  bloquant ≥1s est nommé au journal, ≥10s → event Sentry), py-spy sur la box
+  (`py-spy dump --pid $(systemctl show -p MainPID --value oto-mcp)` PENDANT un gel),
+  moniteur Kuma timeout 30s (timeout=0 = aveugle aux gels). RDB upgradée pico→nano.
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_

@@ -565,9 +565,10 @@ def register(mcp: FastMCP) -> None:
         from .. import fod_loi
         return fod_loi.codes()
 
-    # --- Jurisprudence (6 fonds DILA, via service FOD) ---
-    # Cass (publiés + inédits), cours d'appel, CE/CAA/TA, Conseil constit, CNIL.
-    # Tri pertinence × autorité (constit > Cass/CE > CAA/CA > TA/CNIL).
+    # --- Jurisprudence (fonds DILA + CEDH/CJUE/live, via service FOD) ---
+    # Cass (publiés + inédits), cours d'appel, CE/CAA/TA (bulk + live), Conseil
+    # constit, CNIL, CEDH, CJUE, Judilibre. Tri pertinence × autorité
+    # (constit/CEDH/CJUE > Cass/CE > CAA/CA > TA/TJ/CNIL).
 
     @mcp.tool()
     def fr_juris_search(
@@ -577,29 +578,35 @@ def register(mcp: FastMCP) -> None:
         date_min: Optional[str] = None,
         date_max: Optional[str] = None,
         limit: int = 20,
+        expand: bool = True,
     ) -> dict:
-        """Search French case law (jurisprudence) full text — how courts
-        actually ruled. Unified over 6 DILA collections, ranked by FTS
-        relevance × court authority.
+        """Search French & European case law (jurisprudence) full text — how
+        courts actually ruled. Unified collections, ranked by FTS relevance ×
+        court authority, with legal-thesaurus query expansion.
 
         Args:
             query: Full-text query (websearch syntax, french stemming), ex
                 "requalification CDD d'usage intermittent".
             fond: Restrict to one collection — "cass" (Cour de cassation,
                 published) | "inca" (cassation, unpublished) | "capp" (cours
-                d'appel) | "jade" (administrative: CE/CAA/TA) | "constit"
-                (Conseil constitutionnel) | "cnil".
+                d'appel) | "jade" (administrative DILA: CE/CAA/TA) |
+                "jade_live" (administrative, portail live) | "constit"
+                (Conseil constitutionnel) | "cnil" | "cedh" (Cour EDH) |
+                "cjue" (CJUE/Tribunal UE) | "judilibre" (Cass/CA/TJ live).
             juridiction: Court name filter (ILIKE), ex "cassation",
                 "appel de Paris", "Conseil d'État".
             date_min / date_max: Decision date bounds (YYYY-MM-DD).
             limit: Max results (default 20, max 50).
+            expand: Legal-thesaurus synonym expansion (default True — set
+                False for strict literal matching).
 
         Returns {count, decisions: [{id, titre, juridiction, date_dec,
         solution, extrait, source_url, …}]}. Full text via fr_juris_get(id).
         """
         from .. import fod_juris
         return fod_juris.search(query, fond=fond, juridiction=juridiction,
-                                date_min=date_min, date_max=date_max, limit=limit)
+                                date_min=date_min, date_max=date_max,
+                                limit=limit, expand=expand)
 
     @mcp.tool()
     def fr_juris_get(decision_id: str) -> dict:

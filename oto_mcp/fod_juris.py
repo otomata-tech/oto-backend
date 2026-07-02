@@ -42,9 +42,9 @@ def _c() -> httpx.Client:
 def search(query: str, *, fond: Optional[str] = None,
            juridiction: Optional[str] = None,
            date_min: Optional[str] = None, date_max: Optional[str] = None,
-           limit: int = 20) -> dict[str, Any]:
-    """Recherche FTS unifiée, tri pertinence × autorité."""
-    params: dict[str, Any] = {"query": query, "limit": limit}
+           limit: int = 20, expand: bool = True) -> dict[str, Any]:
+    """Recherche FTS unifiée, tri pertinence × autorité (+ expansion thésaurus)."""
+    params: dict[str, Any] = {"query": query, "limit": limit, "expand": expand}
     for k, v in (("fond", fond), ("juridiction", juridiction),
                  ("date_min", date_min), ("date_max", date_max)):
         if v:

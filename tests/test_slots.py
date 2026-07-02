@@ -292,6 +292,74 @@ def test_ns_helper_passthrough_and_resolution(monkeypatch):
         ds._ns("slot:fantome")
 
 
+# ── B5 : liens vérifiés comme des refs (audit + complétude + suggestion) ────
+def test_unbound_slots_for():
+    from oto_mcp import project_audit
+    instr = {"slug": "p", "slots": [{"name": "sortie", "type": "tableau"},
+                                    {"name": "crm", "type": "connecteur", "connector": "folk"}]}
+    links = [{"target_type": "tableau", "slot": "sortie"}]
+    assert project_audit.unbound_slots_for(instr, links) == ["crm"]
+    assert project_audit.unbound_slots_for({"slots": []}, links) == []
+
+
+def test_audit_project(monkeypatch):
+    from oto_mcp import project_audit
+    import oto_mcp.org_store as org_store_mod
+    import oto_mcp.providers as providers_mod
+    import oto_mcp.db as db_mod
+
+    links = [
+        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads"},
+        {"target_type": "tableau", "target_ref": "99", "slot": None},              # mort
+        {"target_type": "procedure", "target_ref": "42"},                          # ok, slots bindés sauf crm
+        {"target_type": "procedure", "target_ref": "43"},                          # morte
+        {"target_type": "connecteur", "target_ref": "nexiste"},                    # mort
+    ]
+    monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
+                        lambda iid: ({"slug": "prospection",
+                                      "slots": [{"name": "sortie", "type": "tableau"},
+                                                {"name": "crm", "type": "connecteur"}]}
+                                     if iid == 42 else None))
+    monkeypatch.setattr(providers_mod, "REGISTRY", {"folk": object()})
+    monkeypatch.setattr(db_mod, "project_run_stats",
+                        lambda pid: {"runs": 3, "doctrines": ["autre-doctrine"]})
+
+    out = project_audit.audit_project(7, links)
+    assert {(d["target_type"], str(d["target_ref"])) for d in out["dead_links"]} == {
+        ("tableau", "99"), ("procedure", "43"), ("connecteur", "nexiste")}
+    assert out["unbound_slots"] == [{"procedure": "prospection", "ref": "42", "slots": ["crm"]}]
+    assert out["inert_procedures"] == ["prospection"]   # 3 runs, jamais déroulée
+
+    # Projet sans run : rien d'inerte (jeune projet = bruit, pas signal).
+    monkeypatch.setattr(db_mod, "project_run_stats", lambda pid: {"runs": 0, "doctrines": []})
+    assert project_audit.audit_project(7, links)["inert_procedures"] == []
+
+
+def test_link_procedure_unbound_warning(monkeypatch):
+    P, _ = _wire_link(monkeypatch)
+    import oto_mcp.org_store as org_store_mod
+    monkeypatch.setattr(P, "_procedure_ref_to_id", lambda org, ref: "42")
+    monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
+                        lambda iid: {"slug": "prospection",
+                                     "slots": [{"name": "sortie", "type": "tableau"}]})
+    out = P._project(ResolvedCtx(sub="u1", org_id=3),
+                     P.ProjectInput(op="link", project_id=7, target_type="procedure",
+                                    target_ref="prospection"))
+    assert out["unbound_slots"] == ["sortie"]
+    assert "slot='<name>'" in out["warning"] or "sortie" in out["warning"]
+
+
+def test_project_hint_suggests_link(monkeypatch):
+    monkeypatch.setattr(ds.access, "current_project", lambda: 7)
+    monkeypatch.setattr(ds.db, "list_project_links",
+                        lambda pid: [{"target_type": "tableau", "namespace": "leads"}])
+    assert ds._project_hint("leads") is None                    # lié → pas de bruit
+    hint = ds._project_hint("orphelin")
+    assert hint and "op=link" in hint and "#7" in hint
+    monkeypatch.setattr(ds.access, "current_project", lambda: None)
+    assert ds._project_hint("orphelin") is None                 # hors projet → silence
+
+
 # ── B4 : inventaire dérivé (oto_project op=inventory) ───────────────────────
 def test_inventory_derives_union(monkeypatch):
     from oto_mcp.capabilities import projects as P
@@ -308,6 +376,7 @@ def test_inventory_derives_union(monkeypatch):
     ])
     monkeypatch.setattr(P.db, "project_run_tools",
                         lambda pid: ["fr_search", "oto_use_project", "folk_create_person"])
+    monkeypatch.setattr(P.db, "project_run_stats", lambda pid: {"runs": 0, "doctrines": []})
 
     import oto_mcp.org_store as org_store_mod
     monkeypatch.setattr(org_store_mod, "get_instruction_by_id",

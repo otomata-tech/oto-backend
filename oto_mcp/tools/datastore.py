@@ -32,6 +32,28 @@ def _store_for(sub: str):
     return make_store(sub)
 
 
+def _project_hint(namespace: str) -> Optional[str]:
+    """Suggestion inverse run→lien (ADR 0035 B5) : écrire sous PROJET ACTIF dans un
+    namespace NON lié au projet ⇒ suggérer le lien — aujourd'hui c'est de la
+    discipline LLM (« pense à linker »), ici le substrat le rappelle au moment de
+    l'acte. Jamais bloquant, jamais d'auto-link (le lien est une décision).
+    Best-effort : toute erreur ⇒ None."""
+    try:
+        pid = access.current_project()
+        if pid is None:
+            return None
+        links = db.list_project_links(int(pid))
+        linked = {l.get("namespace") for l in links if l.get("target_type") == "tableau"}
+        if namespace in linked:
+            return None
+        return (f"ce tableau `{namespace}` n'est pas lié au projet actif (#{pid}) — "
+                f"si c'est une sortie du projet, lie-le : `oto_project op=link "
+                f"project_id={pid} target_type=tableau target_ref=<id du namespace> "
+                "(+ slot='<name>' s'il réalise un slot de procédure)`.")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _ns(namespace: str) -> str:
     """Adressage par SLOT (ADR 0035 B3) : `slot:<name>` = le tableau bindé sous ce
     nom par le PROJET ACTIF (`access.resolve_slot_tableau` — erreur actionnable si
@@ -147,8 +169,10 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
         store = _store_for(sub)
         try:
-            return store.append_row(namespace, row) if id is None \
+            out = store.append_row(namespace, row) if id is None \
                 else store.update_row(namespace, id, row)
+            hint = _project_hint(namespace)
+            return {**out, "project_hint": hint} if hint else out
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
         except NamespaceReadOnly:

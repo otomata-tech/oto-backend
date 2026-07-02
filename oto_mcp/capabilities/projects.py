@@ -236,11 +236,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             tools.append(t)
             connectors.add(con.name)
         connectors |= {l["target_ref"] for l in links if l["target_type"] == "connecteur"}
+        from .. import project_audit
         return {"id": inp.project_id, "tools": tools, "connectors": sorted(connectors),
                 "sources": {"procedures": procedures, "runs": run_tools,
                             "tableaux": [{"slot": l.get("slot"), "namespace": l.get("namespace"),
                                           "ref": l["target_ref"]}
-                                         for l in links if l["target_type"] == "tableau"]}}
+                                         for l in links if l["target_type"] == "tableau"]},
+                # B5 : liens vérifiés comme des refs — morts / slots non bindés / inertes.
+                "audit": project_audit.audit_project(int(inp.project_id), links)}
 
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -317,8 +320,26 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                                    identity_ref=identity_ref)
         db.log_project_activity(int(inp.project_id), sub, f"project.{inp.op}",
                                 f"{inp.target_type}:{inp.label or target_ref}")
-        return {"ok": True, "id": inp.project_id,
-                "links": db.list_project_links(int(inp.project_id))}
+        out = {"ok": True, "id": inp.project_id,
+               "links": db.list_project_links(int(inp.project_id))}
+        # B5 — complétude au link : lier une procédure dont des slots ne sont pas
+        # bindés ⇒ WARNING immédiat (non bloquant), le pendant des refs mortes 0014.
+        if inp.op == "link" and inp.target_type == "procedure":
+            try:
+                from .. import org_store, project_audit
+                instr = (org_store.get_instruction_by_id(int(target_ref))
+                         if str(target_ref).isdigit() else None)
+                missing = project_audit.unbound_slots_for(instr, out["links"]) if instr else []
+                if missing:
+                    out["unbound_slots"] = missing
+                    out["warning"] = (
+                        f"la procédure `{instr['slug']}` déclare des slots non bindés dans ce "
+                        f"projet : {', '.join(missing)} — binde chacun "
+                        f"(`oto_project op=link project_id={inp.project_id} target_type=… "
+                        "target_ref=… slot='<name>'`) avant de l'exécuter ici.")
+            except Exception:  # noqa: BLE001 — warning best-effort, le link a réussi
+                pass
+        return out
 
     if inp.op in ("publish_mcp", "unpublish_mcp"):
         # Publier un endpoint MCP = acte de gouvernance (URL publique au nom de l'org).

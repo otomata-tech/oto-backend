@@ -114,6 +114,19 @@ def project_run_tools(project_id: int, limit: int = 200) -> list[str]:
     return [r["tool"] for r in rows]
 
 
+def project_run_stats(project_id: int) -> dict:
+    """Nombre de runs d'un projet + slugs de doctrines déroulées (distincts) — sert
+    l'inertie de l'audit de liens (ADR 0035 B5 : procédure liée jamais déroulée)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT count(*) AS n, "
+            "array_agg(DISTINCT doctrine) FILTER (WHERE doctrine IS NOT NULL) AS doctrines "
+            "FROM runs WHERE project_id = %s",
+            (project_id,),
+        ).fetchone()
+    return {"runs": int(row["n"] or 0), "doctrines": list(row["doctrines"] or [])}
+
+
 def insert_usage_signal(
     *, sub: Optional[str], org_id: Optional[int], signal: str, kind: str,
     target: Optional[str], body: Optional[str], session_id: Optional[str],

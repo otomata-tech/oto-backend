@@ -1176,7 +1176,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
 
         return _json(request, {
             "tools": [
-                {"name": n, "enabled": n not in disabled}
+                {"name": n, "enabled": n not in disabled,
+                 "protected": n in PROTECTED_TOOLS}
                 for n in sorted(all_names)
             ],
         })
@@ -1203,6 +1204,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
+        if name in PROTECTED_TOOLS:
+            return _json_error(request, 400, f"protected_tool:{name}")
         org = org_store.get_active_org(sub) or 0
         db.add_user_disabled_tool(sub, name, org)
         db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override positif

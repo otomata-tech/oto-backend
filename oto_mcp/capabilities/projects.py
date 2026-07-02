@@ -311,7 +311,9 @@ CAPABILITIES += [
         description=(
             "Projects (organization layer, ADR 0030 owned resource). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
-            "(yours + your orgs') / list_templates (published MODEL projects you can copy) / "
+            "(ORG-SCOPED: the ACTIVE org's projects + projects shared with it or with you — "
+            "switch org with oto_use_org to see another org's; every response echoes the "
+            "effective org in `_org`) / list_templates (published MODEL projects you can copy) / "
             "get (project + its links) / update (name, brief_md, is_template = publish/unpublish "
             "as a copyable model) / copy (deep-copy a project you can read — its own or a model "
             "— into a NEW project in your active org: brief + doc tree + links + raw files; "

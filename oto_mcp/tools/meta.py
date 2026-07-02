@@ -96,10 +96,11 @@ def register(mcp: FastMCP) -> None:
                 code=INVALID_PARAMS,
                 message=f"Unknown tool `{name}`. Use oto_list_my_tools to see available names.",
             ))
-        if name.startswith("oto_") and name in {"oto_enable_tool", "oto_list_my_tools"}:
+        if name in PROTECTED_TOOLS:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message=f"`{name}` is required to manage your toolset — refusing to disable.",
+                message=f"`{name}` is protected (toolset management, context switching or "
+                        "usage loop) — refusing to disable.",
             ))
         org = _active_org(sub)
         db.add_user_disabled_tool(sub, name, org)

@@ -41,7 +41,12 @@ PROTECTED_TOOLS: frozenset[str] = frozenset(
      # d'org → lock-out, son client rappelle le tool en boucle → "Unknown tool".
      # Vécu Sentry 2026-06-30 (x50 sur 1 user après l'abolition du perso).
      "oto_use_org", "oto_clear_org", "oto_list_orgs",
-     "oto_use_group", "oto_clear_group"})
+     "oto_use_group", "oto_clear_group",
+     # Boucle d'usage (ADR 0017) — les instructions plateforme MANDATENT leur
+     # emploi systématique (signaler un gap, encadrer un run) : un baseline/preset
+     # qui les masque rend la doctrine inapplicable et le gap invisible. Jamais
+     # désactivables ni masquables.
+     "feedback", "run_start", "run_finish"})
 
 
 def namespace_of(name: str) -> str:

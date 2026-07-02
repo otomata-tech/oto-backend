@@ -24,6 +24,20 @@ from ._types import AuthzDenied, Capability, RawCtx, apply_flat_signature
 logger = logging.getLogger(__name__)
 
 
+def _org_echo(org_id: int) -> dict:
+    """Écho de l'org effective (`_org`) dans les payloads MCP org-sensibles.
+
+    Lève l'ambiguïté « sous quelle org ai-je agi ? » après un `oto_use_org` : le
+    client voit l'org résolue par le serveur à CHAQUE réponse, sans avoir à la
+    déduire. Best-effort (le nom peut manquer, jamais l'id)."""
+    try:
+        from .. import org_store
+        org = org_store.get_org(org_id)
+        return {"id": org_id, "name": (org or {}).get("name")}
+    except Exception:
+        return {"id": org_id}
+
+
 def _make_tool(cap: Capability):
     async def _tool(**kwargs):
         raw = RawCtx(sub=current_user_sub_from_token())
@@ -35,6 +49,8 @@ def _make_tool(cap: Capability):
                 result = await result
         except AuthzDenied as d:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code))
+        if isinstance(result, dict) and ctx.org_id is not None:
+            result.setdefault("_org", _org_echo(ctx.org_id))
         if cap.refresh_visibility and raw.sub:
             # Bascule de profil (org/groupe actif déjà commitée par le handler) →
             # re-pousse la denylist de la NOUVELLE org sur la session MCP courante,

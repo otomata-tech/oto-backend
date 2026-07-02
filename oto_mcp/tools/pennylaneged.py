@@ -28,12 +28,10 @@ S3 (jamais par Oto, jamais via MCP) ; puis `pennylaneged_finalize` (control plan
 crée l'entrée DMS depuis le `signed_id`. Les octets vont `local → S3 Pennylane`, leur
 destination de toute façon.
 
-**GED cible (une par client, ADR 0024)** — le cabinet gère N sociétés clientes,
-chacune avec SA GED. Chaque tool prend un `company_id` optionnel ; sans lui, la
-**société par défaut** choisie via le sélecteur d'identité générique s'applique
-(`oto_set_connector_identity("pennylaneged", <id>)` côté MCP, picker de la carte
-côté dashboard — backend enregistré dans `connector_identities`, défaut mémorisé
-dans le `meta` du credential : `default_identity_id`/`default_identity_label`).
+**GED cible (une par client)** — le cabinet gère N sociétés clientes, chacune
+avec SA GED. Chaque tool prend un `company_id` **obligatoire** : aucun défaut
+mémorisé, pour ne jamais risquer d'écrire dans la GED du mauvais client.
+`pennylaneged_companies` liste les sociétés pour résoudre le `company_id` cible.
 
 Statut : flux RE **validé manuellement** (18/06, compte test Fidens) ; **reste à
 smoker en live** sur le substrat Browserbase (CSRF in-page + longévité de session).
@@ -47,7 +45,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS, INTERNAL_ERROR
 
-from .. import access, browser_session, browserbase, connector_identities, credentials_store
+from .. import access, browser_session, browserbase
 from ..auth_hooks import current_user_sub_from_token
 
 # Origine de la SPA — toutes les routes internes (DMS, direct_uploads, crm) en
@@ -105,36 +103,6 @@ def _company_app(company_id: int) -> str:
     return f"{_ORIGIN}/companies/{int(company_id)}/dms/items"
 
 
-# --- GED cible (société par défaut, ADR 0024) --------------------------------
-# Satellites publics du `meta` du credential — noms GÉNÉRIQUES (exposés tels quels
-# par `status_for` → carte dashboard, sans appel Browserbase).
-_META_ID = "default_identity_id"
-_META_LABEL = "default_identity_label"
-
-
-def _default_company(sub: str) -> Optional[int]:
-    """`company_id` de la GED cible mémorisée (meta du credential), ou None."""
-    st = credentials_store.credential_status("user", sub, "pennylaneged")
-    raw = ((st or {}).get("meta") or {}).get(_META_ID)
-    try:
-        return int(raw) if raw is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _resolve_company(company_id: Optional[int]) -> int:
-    """`company_id` explicite, sinon la GED cible par défaut. Lève une McpError
-    actionnable si aucune cible ne résout (pas de fallback silencieux)."""
-    if company_id is not None:
-        return int(company_id)
-    cid = _default_company(_sub())
-    if cid is None:
-        raise _err("Aucune GED cible : passe `company_id`, ou choisis la société par "
-                   "défaut — `pennylaneged_companies` pour lister, puis "
-                   "`oto_set_connector_identity(connector='pennylaneged', "
-                   "identity_id='<id>')` (aussi réglable depuis le dashboard).")
-    return cid
-
 
 async def _call(app: str, path: str, method: str = "GET",
                 body: Optional[dict] = None) -> dict:
@@ -189,131 +157,6 @@ async def _verify_session(session_id: str) -> bool:
 browser_session.register("pennylaneged", _verify_session, login_url=f"{_ORIGIN}/")
 
 
-# --- Sélecteur d'identité (ADR 0024) : identité = société cliente = SA GED ----
-# JS multi-pages : énumère les sociétés du cabinet (`/crm/flow_companies`, paginé)
-# en UNE session Browserbase (1 session = 1 browser loué → jamais 1 par page).
-# Forme de réponse défensive (liste nue ou enveloppe — API interne non documentée).
-_COMPANIES_JS = """async ({max_pages}) => {
-    const headers = {"accept": "application/json", "x-requested-with": "XMLHttpRequest"};
-    const out = [];
-    for (let page = 1; page <= max_pages; page++) {
-        const r = await fetch(`/crm/flow_companies?page=${page}`,
-                              {credentials: "include", headers});
-        if (r.status !== 200) return {status: r.status, companies: out};
-        let d;
-        try { d = await r.json(); } catch (e) { return {status: 200, companies: out}; }
-        const batch = Array.isArray(d)
-            ? d : (d.companies || d.flow_companies || d.items || d.data || []);
-        if (!batch.length) break;
-        out.push(...batch);
-    }
-    return {status: 200, companies: out};
-}"""
-
-# JS de sélection : valide que la GED de `cid` est joignable par LA session
-# (anti-binding : fetch de son arbre DMS = 200), puis résout son nom (label)
-# en balayant flow_companies — le tout dans la MÊME session.
-_SELECT_JS = """async ({cid, max_pages}) => {
-    const headers = {"accept": "application/json", "x-requested-with": "XMLHttpRequest"};
-    const t = await fetch(`/companies/${cid}/dms/items/tree?item_type=DmsFolder`,
-                          {credentials: "include", headers});
-    if (t.status !== 200) return {status: t.status, label: null};
-    let label = null;
-    for (let page = 1; page <= max_pages; page++) {
-        const r = await fetch(`/crm/flow_companies?page=${page}`,
-                              {credentials: "include", headers});
-        if (r.status !== 200) break;
-        let d;
-        try { d = await r.json(); } catch (e) { break; }
-        const batch = Array.isArray(d)
-            ? d : (d.companies || d.flow_companies || d.items || d.data || []);
-        if (!batch.length) break;
-        const hit = batch.find(c => String(c.id) === String(cid));
-        if (hit) { label = hit.name || null; break; }
-    }
-    return {status: 200, label};
-}"""
-
-_MAX_COMPANY_PAGES = 25
-
-
-def _identity_context(sub: str) -> Optional[str]:
-    """Context Browserbase du `sub` (credential), None si GED non connectée —
-    résolution EXPLICITE par sub (les surfaces d'identité sont REST autant que MCP,
-    pas de contexte tool garanti)."""
-    try:
-        return access.resolve_credential("pennylaneged", want="byo", sub=sub,
-                                         emit_on_failure=False).key
-    except McpError:
-        return None
-
-
-async def _identities_list(sub: str) -> list[dict]:
-    """Les sociétés du cabinet joignables par la session = les GED cibles
-    éligibles. [] si non connecté / session morte (contrat `connector_identities` :
-    rien à choisir)."""
-    if not browserbase.is_configured():
-        return []
-    ctx_id = _identity_context(sub)
-    if not ctx_id:
-        return []
-    try:
-        res = await browserbase.run_page_eval(
-            ctx_id, f"{_ORIGIN}/", _COMPANIES_JS, {"max_pages": _MAX_COMPANY_PAGES})
-    except browserbase.BrowserbaseError:
-        return []
-    if (res or {}).get("status") != 200:
-        return []
-    chosen = _default_company(sub)
-    out = []
-    for c in res.get("companies") or []:
-        cid = c.get("id")
-        if cid is None:
-            continue
-        code = c.get("client_code")
-        name = c.get("name") or str(cid)
-        out.append({
-            "id": str(cid),
-            "label": f"{name} ({code})" if code else name,
-            "status": "ok",
-            "is_default": chosen is not None and str(cid) == str(chosen),
-            "channel": None,
-        })
-    return out
-
-
-async def _identities_select(sub: str, identity_id: str) -> dict:
-    """Mémorise la GED cible par défaut (meta du credential) APRÈS avoir vérifié
-    que sa GED répond à CETTE session (anti-binding). ValueError = refus propre
-    (traduit 404 par la capacité)."""
-    try:
-        cid = int(identity_id)
-    except (TypeError, ValueError):
-        raise ValueError(f"company_id invalide : {identity_id!r}")
-    ctx_id = _identity_context(sub)
-    if not ctx_id:
-        raise ValueError("Pennylane GED non connecté — connecte ta session d'abord.")
-    try:
-        res = await browserbase.run_page_eval(
-            ctx_id, _company_app(cid), _SELECT_JS,
-            {"cid": cid, "max_pages": _MAX_COMPANY_PAGES})
-    except browserbase.BrowserbaseError as e:
-        raise ValueError(f"Vérification impossible (navigateur distant) : {e}")
-    if (res or {}).get("status") != 200:
-        raise ValueError(f"GED inaccessible par ta session Pennylane : {identity_id}")
-    label = res.get("label")
-    if not credentials_store.update_meta("user", sub, "pennylaneged", "",
-                                         {_META_ID: str(cid), _META_LABEL: label}):
-        raise ValueError("Pennylane GED non connecté — connecte ta session d'abord.")
-    return {"id": str(cid), "label": label, "status": "ok",
-            "is_default": True, "channel": None}
-
-
-# Backend du sélecteur d'identité générique (surfaces `oto_connector_identities` /
-# `oto_set_connector_identity` + REST `/api/connectors/pennylaneged/identities`).
-connector_identities.register("pennylaneged", _identities_list, _identities_select)
-
-
 def register(mcp: FastMCP) -> None:
 
     # --- Onboarding (Live View) --------------------------------------------
@@ -362,10 +205,6 @@ def register(mcp: FastMCP) -> None:
         `name` et son `client_code`. Le SIREN n'est pas dans cette liste — pour
         désambiguïser un homonyme, croiser avec `/companies/{id}/context` (`reg_no`).
 
-        Pour ne plus repasser `company_id` à chaque appel, choisis une **GED cible
-        par défaut** : `oto_set_connector_identity(connector="pennylaneged",
-        identity_id="<id>")` (une par client — rebascule en changeant de client).
-
         Args:
             page: page de pagination (1-based).
         """
@@ -374,36 +213,35 @@ def register(mcp: FastMCP) -> None:
 
     # --- Arborescence / dossiers --------------------------------------------
     @mcp.tool()
-    async def pennylaneged_tree(company_id: Optional[int] = None,
+    async def pennylaneged_tree(company_id: int,
                                 item_type: str = "DmsFolder") -> dict:
         """Lit l'arborescence GED d'une société.
 
         Args:
-            company_id: id de la société (cf. `pennylaneged_companies`). Omis =
-                la **GED cible par défaut** (`oto_set_connector_identity`).
+            company_id: id de la société (cf. `pennylaneged_companies`).
             item_type: type d'items listés — `DmsFolder` (dossiers, défaut) ou `DmsFile`.
 
         Renvoie la liste brute des items `[{id, name, itemable_type, parent_id,
         folders_count, …}]` — utilise les `id`/`parent_id` pour cibler un `parent_id`
         de création ou un item à supprimer.
         """
-        cid = _resolve_company(company_id)
+        cid = int(company_id)
         qs = urlencode({"item_type": item_type})
         return await _call(_company_app(cid), f"/companies/{cid}/dms/items/tree?{qs}")
 
     @mcp.tool()
-    async def pennylaneged_create_folder(name: str, company_id: Optional[int] = None,
+    async def pennylaneged_create_folder(company_id: int, name: str,
                                          parent_id: Optional[int] = None) -> dict:
         """Crée un dossier dans la GED d'une société.
 
         Args:
             name: nom du dossier (sous sa forme finale — pas de rename séparé ensuite).
-            company_id: id de la société. Omis = la **GED cible par défaut**.
+            company_id: id de la société (cf. `pennylaneged_companies`).
             parent_id: id du dossier parent (None = racine de la GED).
 
         Renvoie le `DmsFolder` créé (dont son `id`, à réutiliser comme `parent_id`).
         """
-        cid = _resolve_company(company_id)
+        cid = int(company_id)
         item: dict = {"name": name}
         if parent_id is not None:
             item["parent_id"] = int(parent_id)
@@ -413,8 +251,8 @@ def register(mcp: FastMCP) -> None:
     # --- Upload (control plane ; octets PUT en LOCAL, jamais par Oto) --------
     @mcp.tool()
     async def pennylaneged_request_upload(
-        filename: str, content_type: str,
-        byte_size: int, checksum: str, company_id: Optional[int] = None,
+        company_id: int, filename: str, content_type: str,
+        byte_size: int, checksum: str,
     ) -> dict:
         """Étape 1/2 d'un upload GED — demande une **URL S3 présignée** (control plane).
 
@@ -432,9 +270,9 @@ def register(mcp: FastMCP) -> None:
             content_type: type MIME (ex. `application/pdf`).
             byte_size: taille du fichier en octets (calculée en local).
             checksum: MD5 du fichier encodé en base64 (calculé en local).
-            company_id: id de la société. Omis = la **GED cible par défaut**.
+            company_id: id de la société (cf. `pennylaneged_companies`).
         """
-        cid = _resolve_company(company_id)
+        cid = int(company_id)
         res = await _call(
             _company_app(cid),
             f"/companies/{cid}/direct_uploads", "POST",
@@ -450,8 +288,7 @@ def register(mcp: FastMCP) -> None:
                 "put_headers": direct.get("headers") or {}}
 
     @mcp.tool()
-    async def pennylaneged_finalize(name: str, signed_id: str,
-                                    company_id: Optional[int] = None,
+    async def pennylaneged_finalize(company_id: int, name: str, signed_id: str,
                                     parent_id: Optional[int] = None) -> dict:
         """Étape 2/2 d'un upload GED — crée l'entrée DMS depuis un `signed_id` (control plane).
 
@@ -462,13 +299,13 @@ def register(mcp: FastMCP) -> None:
         Args:
             name: nom final du fichier dans la GED.
             signed_id: `signed_id` renvoyé par `pennylaneged_request_upload`.
-            company_id: id de la société. Omis = la **GED cible par défaut** — DOIT
-                être la même société que celle du `pennylaneged_request_upload`.
+            company_id: id de la société — DOIT être la même que celle du
+                `pennylaneged_request_upload`.
             parent_id: id du dossier cible (None = racine).
 
         Renvoie le `DmsFile` créé.
         """
-        cid = _resolve_company(company_id)
+        cid = int(company_id)
         item: dict = {"name": name, "file": signed_id}
         if parent_id is not None:
             item["parent_id"] = int(parent_id)
@@ -476,7 +313,7 @@ def register(mcp: FastMCP) -> None:
                            {"dms_items": [item]})
 
     @mcp.tool()
-    async def pennylaneged_delete(item_id: int, company_id: Optional[int] = None) -> dict:
+    async def pennylaneged_delete(company_id: int, item_id: int) -> dict:
         """Supprime un item (dossier ou fichier) de la GED d'une société.
 
         ⚠️ Suppression — n'appeler qu'après confirmation. Un dossier supprimé emporte
@@ -484,8 +321,8 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             item_id: id de l'item DMS à supprimer (cf. `pennylaneged_tree`).
-            company_id: id de la société. Omis = la **GED cible par défaut**.
+            company_id: id de la société (cf. `pennylaneged_companies`).
         """
-        cid = _resolve_company(company_id)
+        cid = int(company_id)
         return await _call(_company_app(cid),
                            f"/companies/{cid}/dms/items/{int(item_id)}", "DELETE")

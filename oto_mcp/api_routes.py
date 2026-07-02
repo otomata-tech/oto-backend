@@ -477,7 +477,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if active_org is not None:
             o = org_store.get_org(active_org)
             active_org_name = o["name"] if o else None
-            active_org_logo_url = o.get("logo_url") if o else None
+            # Logo EFFECTIF (upload > dérivé logo.dev du domaine déclaré).
+            active_org_logo_url = org_store.effective_logo_url(o) if o else None
             org_role = org_store.get_org_role(active_org, sub)
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».

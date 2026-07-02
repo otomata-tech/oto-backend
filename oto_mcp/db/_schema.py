@@ -540,6 +540,9 @@ CREATE TABLE IF NOT EXISTS orgs (
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     logo_url TEXT,
+    domain TEXT,
+    industry TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
     default_tools TEXT[],
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

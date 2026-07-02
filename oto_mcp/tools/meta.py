@@ -120,8 +120,8 @@ def register(mcp: FastMCP) -> None:
         # accès à son credential. L'accès réel d'un connecteur sensible est gardé au
         # call-time, indépendamment de cette visibilité : `resolve_credential` →
         # `require_connector_access` (ADR 0025, réservation par département/membre) +
-        # le cran d'activation + `resolve_remote_credential` pour les bridges. Plus de
-        # garde « grant-only » ici (concept retiré : `is_grant_only` est mort).
+        # le cran d'activation + la résolution du credential bridge (ADR 0034). Plus
+        # de garde « grant-only » ici (concept retiré : `is_grant_only` est mort).
         org = _active_org(sub)
         db.remove_user_disabled_tool(sub, name, org)
         # Override positif requis pour rendre visible un masqué-par-défaut.

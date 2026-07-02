@@ -53,7 +53,7 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 - **adaptateur REST** : `api_routes`.
 - **runtime connecteurs** : `tools/*` (in-process) + `tools/remote` (forward bridges).
 
-**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_remote_credential` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
+**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_credential_fields` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
 
 ### Couche capacité (`oto_mcp/capabilities/`, ADR 0009)
 
@@ -635,20 +635,20 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   pas de seed. open-data/maison sans domaine → pas de logo, monogramme côté UI).
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
-- **Connecteur client-sensible = JAMAIS de code ici** : connecteur **remote** défini
-  par la DONNÉE (ADR 0003/0011) — un credential d'org avec `meta.base_url` (endpoint
-  du bridge) suffit, **zéro nom client au registre** (plus de `_c("mm")`). Découvert
-  au boot (`credentials_store.list_remote_namespaces`, gracieux si DB indispo), servi
-  par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`) ; le credential
-  d'org **EST** la condition de visibilité : un outil remote n'apparaît qu'à l'org
-  qui détient son credential remote (règle **dédiée credential-based** dans
-  `session_visibility`, `credentials_store.org_remote_namespaces`). Le bridge
-  distant détient le credential client (token M2M). Pilote :
-  un bridge back-office client (repo privé). Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
-  les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
-  → pages oto.ninja/tools) filtrent les `platform_granted`
-  (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13
-  (page marketing /tools/mm).
+- **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
+  **`bridge` universel** (ADR 0034, amende 0003/0011) — UNE entrée générique au
+  registre (`kind="remote"`), tools fixes `bridge_describe`/`bridge_call`
+  (`tools/remote.py`). L'identité du service ponté vit dans la **CONFIG d'org**
+  (champs standard `base_url`/`token`/`label`, `resolve_credential_fields`),
+  **jamais dans le namespace** → montrable au catalogue sans nom client (l'ex-fuite
+  /tools/mm venait du namespace-par-client). Le bridge distant détient le
+  credential métier (contrat ADR 0003 §4 inchangé : `/describe`+`/call`, bearer
+  M2M, lecture seule bornée côté bridge, audit `X-Oto-Sub`). Visibilité = régime
+  commun (activation × masque, `default_hidden` → self-activable) ; sans
+  credential, l'exécution lève proprement. Pilote : le bridge back-office
+  Movinmotion (repo privé), migré du legacy per-namespace `mm_*` le 2026-07-02
+  (découverte `meta.base_url`, règle de visibilité dédiée et
+  `resolve_remote_credential` retirés en B4).
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne

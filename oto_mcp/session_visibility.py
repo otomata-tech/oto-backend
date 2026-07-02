@@ -110,18 +110,9 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         }
     except Exception as e:
         logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
-    # Bridges remote (ADR 0003) : un outil remote n'apparaît qu'à l'org qui détient
-    # son credential (le credential d'org EST le grant — remplace le grant-only
-    # runtime, ADR 0031). Fail-OPEN : l'exécution reste gardée par
-    # resolve_remote_credential (un outil visible sans credential lève à l'appel).
-    try:
-        hidden_remote = credentials_store.list_remote_namespaces() - (
-            credentials_store.org_remote_namespaces(active_org)
-            if active_org is not None else set())
-        if hidden_remote:
-            to_hide |= {n for n in all_names if namespace_of(n) in hidden_remote}
-    except Exception as e:
-        logger.warning("remote visibility skipped for %s (fail-open): %s", sub, e)
+    # (La règle dédiée « bridges remote per-namespace » a été retirée — ADR 0034 B4 :
+    # le connecteur `bridge` universel suit le régime commun ci-dessus ; sans
+    # credential, l'exécution lève proprement.)
     # RBAC connecteur interne à l'org (ADR 0025) : un connecteur RESTREINT dans
     # l'org active est masqué pour un membre non autorisé (département/user). Le
     # backstop DUR est au call-time (`resolve_credential` → `require_connector_access`) ;

@@ -464,10 +464,10 @@ _REGISTRY_LIST = [
     _c("gocardless", ["gocardless"], availability="self_serve",
        auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
-    # (Aucune entrée remote au registre : un connecteur REMOTE (ADR 0003/0011) est
-    # défini par la DONNÉE — un credential d'org avec `meta.base_url` (l'endpoint du
-    # bridge). Zéro nom client en dur. Découvert au boot par tools/remote.py via
-    # credentials_store.list_remote_namespaces ; le credential d'org EST le grant.)
+    # (Ponts vers un service distant : voir l'entrée `bridge` universelle en fin
+    # de registre — ADR 0034. L'ex-modèle remote data-driven per-namespace,
+    # découvert de `meta.base_url` sans entrée au registre, a été retiré en B4 ;
+    # l'identité client vit dans la CONFIG d'org du bridge, jamais en dur.)
     # memento : MCP fédéré (otomata#16, kind=mount). MCP autonome distant
     # (mcp.mento.cc) monté via proxy FastMCP (tools/mount.py) ; credential
     # per-user = token OAuth Supabase (flow memento_oauth.py), injecté par

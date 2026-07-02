@@ -364,28 +364,8 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
         return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
-def list_remote_namespaces() -> set[str]:
-    """Namespaces des connecteurs REMOTE (ADR 0003) — dérivés de la DONNÉE, pas
-    d'un registre : tout credential d'org portant `meta.base_url` (= endpoint
-    d'un bridge). Aucun nom client en dur ; un connecteur remote existe ssi une
-    org a posé son credential. Consommé au boot par `tools/remote.py`."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT connector, meta FROM connector_credentials WHERE entity_type = 'org'"
-        ).fetchall()
-    return {r["connector"] for r in rows if (r["meta"] or {}).get("base_url")}
-
-
-def org_remote_namespaces(org_id) -> set[str]:
-    """Namespaces remote possédés par cette org (ses credentials avec `base_url`).
-    Le credential EST le grant : possession ⇒ visibilité (cf. la règle de masquage
-    remote de `session_visibility`, ADR 0031)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT connector, meta FROM connector_credentials WHERE entity_type = 'org' AND entity_id = %s",
-            (str(org_id),),
-        ).fetchall()
-    return {r["connector"] for r in rows if (r["meta"] or {}).get("base_url")}
+# (list_remote_namespaces / org_remote_namespaces retirés — ADR 0034 B4 : le
+# connecteur `bridge` universel remplace la découverte data-driven per-namespace.)
 
 
 def first_entity_with(entity_type: str, connector: str,

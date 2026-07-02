@@ -365,14 +365,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except Exception as e:
             return _json_error(request, 500, f"list_tools_failed:{e}")
         payload = []
-        from . import credentials_store
-        remote_ns = credentials_store.list_remote_namespaces()
+        # (Le filtre « bridges remote per-namespace » a été retiré — ADR 0034 B4 :
+        # le namespace `bridge` est générique, aucun nom client n'atteint l'autodoc.)
         for t in tools:
-            # Les bridges remote (connecteurs client-sensibles, ADR 0003) ne
-            # paraissent JAMAIS dans l'autodoc publique — elle alimente les pages
-            # marketing oto.ninja (confidentialité : aucun nom client exposé).
-            if namespace_of(t.name) in remote_ns:
-                continue
             # Tool object exposes name, description, parameters (input schema),
             # output_schema. Some attributes may be None depending on the type.
             payload.append({

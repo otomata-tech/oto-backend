@@ -634,40 +634,8 @@ def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
 BYO_MODES = ("user", "group", "org")
 
 
-def resolve_remote_credential(provider: str) -> tuple[str, str]:
-    """Résout `(base_url, token_m2m)` du **bridge** d'un connecteur remote
-    (ADR 0003) depuis le credential de l'org active du sub courant.
-
-    Le credential d'org d'un remote n'est PAS le secret du système client (il
-    vit dans le bridge, ex. un bridge back-office client) : c'est le moyen
-    d'appeler le bridge — `secret` = token M2M, `meta.base_url` = endpoint.
-    Lève une McpError actionnable si l'org active n'a pas ce credential —
-    **pas** de fallback SOPS côté serveur (cf. Phase 6). Remplace
-    `resolve_org_credential` (l'injection in-process de l'ex-tools/mm.py).
-    """
-    sub = current_user_sub_or_raise()
-    active_org = current_org(sub)
-    if active_org is not None:
-        cred = credentials_store.get_credential_with_meta("org", str(active_org), provider)
-        if cred and cred["secret"]:
-            base_url = (cred["meta"] or {}).get("base_url")
-            if not base_url:
-                raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=(
-                        f"Credential `{provider}` posé sans `base_url` dans meta — "
-                        f"re-poser via `oto_admin_set_org_secret` avec l'endpoint du bridge."
-                    ),
-                ))
-            return base_url.rstrip("/"), cred["secret"]
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(
-            f"Aucun credential `{provider}` sur ton org active. Un admin doit le "
-            f"poser sur l'org propriétaire (`oto_admin_set_org_secret`) et t'y "
-            f"rattacher."
-        ),
-    ))
+# (resolve_remote_credential retiré — ADR 0034 B4 : le connecteur `bridge`
+# universel se résout par les champs standard, cf. resolve_credential_fields.)
 
 
 def resolve_mount_token(provider: str) -> str:

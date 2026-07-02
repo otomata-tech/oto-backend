@@ -28,30 +28,27 @@ DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send", "fr_egapro_decla
 DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
-# plus se déverrouiller (lister/activer/appliquer un preset) — plus l'identité
-# `oto_whoami` et la fiche `oto_profile`, qui doivent rester atteignables au
-# démarrage d'un compte même sous un preset/baseline restrictif. Une baseline (org
-# ADR 0015 ou groupe ADR 0012) ne doit JAMAIS les masquer. SOURCE UNIQUE : meta.py
-# et api_routes en dérivent.
+# plus se déverrouiller (lister/activer un tool) — plus l'identité `oto_whoami`
+# et la fiche `oto_profile`, qui doivent rester atteignables au démarrage d'un
+# compte même sous une visibilité restrictive. SOURCE UNIQUE : meta.py et
+# api_routes en dérivent.
 PROTECTED_TOOLS: frozenset[str] = frozenset(
-    {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset", "oto_profile",
+    {"oto_list_my_tools", "oto_enable_tool", "oto_profile",
      "oto_whoami",
-     # Échappatoires de CONTEXTE — jamais masquables (baseline, preset ou
+     # Échappatoires de CONTEXTE — jamais masquables (ni toggle perso ni
      # default-hidden). Un user dont `oto_use_org` est caché ne peut plus changer
      # d'org → lock-out, son client rappelle le tool en boucle → "Unknown tool".
      # Vécu Sentry 2026-06-30 (x50 sur 1 user après l'abolition du perso).
      "oto_use_org", "oto_clear_org", "oto_list_orgs",
      "oto_use_group", "oto_clear_group",
      # Boucle d'usage (ADR 0017) — les instructions plateforme MANDATENT leur
-     # emploi systématique (signaler un gap, encadrer un run) : un baseline/preset
-     # qui les masque rend la doctrine inapplicable et le gap invisible. Jamais
+     # emploi systématique (signaler un gap, encadrer un run) : un toggle qui les
+     # masque rend la doctrine inapplicable et le gap invisible. Jamais
      # désactivables ni masquables.
      "feedback", "run_start", "run_finish",
      # Famille projet (ADR 0032) — même raison : le bloc C injecte « Projets
      # récents » et les instructions mandatent « travaille dans un projet »
-     # (oto_use_project). Vécu 2026-07-02 : la baseline POC de l'org movinmotion
-     # (21 tools métier) masquait oto_project → « Unknown tool » en boucle dans
-     # claude.ai dès qu'on bascule sur l'org.
+     # (oto_use_project).
      "oto_project", "oto_use_project", "oto_clear_project"})
 
 
@@ -68,24 +65,17 @@ def is_tool_visible(
     name: str,
     disabled: set[str],
     enabled_override: set[str],
-    group_baseline: "frozenset[str] | None" = None,
 ) -> bool:
     """Règle de visibilité effective pour un tool donné.
 
-    `group_baseline` (ADR 0012) = le preset de toolset que le chef du groupe ACTIF
-    a posé pour son équipe. None = pas de baseline (visibilité par défaut). Quand
-    une baseline existe, elle décide la visibilité par défaut des tools NORMAUX
-    (dans la baseline → visible, même un masqué-par-défaut ; hors baseline →
-    masqué) — mais les overrides perso priment."""
+    Override positif perso prime > désactivé perso > masqué-par-défaut > visible.
+    Les méta-tools protégés ne sont jamais masqués (anti-lockout)."""
     if name in PROTECTED_TOOLS:
-        return True  # anti-lockout : jamais masqué (ni baseline, ni default-hidden)
+        return True  # anti-lockout : jamais masqué (ni toggle perso, ni default-hidden)
     if name in enabled_override:
         return True
     if name in disabled:
         return False
-    if group_baseline is not None:
-        # La baseline du groupe gouverne la visibilité par défaut de l'équipe.
-        return name in group_baseline
     if is_default_hidden(name):
         return False
     return True
@@ -95,11 +85,10 @@ def effective_disabled(
     all_names: set[str],
     disabled: set[str],
     enabled_override: set[str],
-    group_baseline: "frozenset[str] | None" = None,
 ) -> set[str]:
     """Ensemble des tools à masquer pour cet user, parmi `all_names`."""
     return {
         n
         for n in all_names
-        if not is_tool_visible(n, disabled, enabled_override, group_baseline)
+        if not is_tool_visible(n, disabled, enabled_override)
     }

@@ -266,37 +266,12 @@ def archive_org(org_id: int) -> bool:
             return True
 
 
-# --- baseline de toolset de l'org (preset de visibilité, ADR 0015) ----------
-
-def get_org_default_tools(org_id: int) -> Optional[list[str]]:
-    """Preset par défaut de l'org (liste de noms de tools) = baseline de visibilité
-    pour ses membres, ou None si l'org n'en impose pas. `[]` ≠ None : baseline
-    « rien ». Miroir d'`org_groups.default_tools` (ADR 0012) hissé au niveau org."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT default_tools FROM orgs WHERE id = %s", (org_id,)
-        ).fetchone()
-    if not row:
-        return None
-    dt = row["default_tools"]
-    return list(dt) if dt is not None else None
-
-
-def set_org_default_tools(org_id: int, tools: Optional[list[str]]) -> bool:
-    """Pose (ou efface si None) la baseline de toolset de l'org. False si absente."""
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE orgs SET default_tools = %s WHERE id = %s",
-            (list(tools) if tools is not None else None, org_id),
-        )
-        return (cur.rowcount or 0) > 0
-
+# --- baseline de connecteurs proposés par l'org (ADR 0019) ------------------
 
 def get_org_default_connectors(org_id: int) -> Optional[list[str]]:
     """Baseline de connecteurs *proposés* par l'org (« org propose », ADR 0019) :
     liste de noms de connecteurs recommandés à ses membres, ou None si l'org n'en
-    impose pas. Consultatif — le membre reste libre de (dé)sélectionner. Miroir de
-    `default_tools` au grain connecteur."""
+    impose pas. Consultatif — le membre reste libre de (dé)sélectionner."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT default_connectors FROM orgs WHERE id = %s", (org_id,)

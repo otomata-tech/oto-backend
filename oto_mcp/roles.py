@@ -61,7 +61,7 @@ def is_org_member(sub: str, org_id: int) -> bool:
 # --- palier groupe (chef d'équipe / département) ----------------------------
 
 def can_admin_group(sub: str, group_id: int) -> bool:
-    """Peut ADMINISTRER le groupe (membres, secrets, doctrine, preset) ?
+    """Peut ADMINISTRER le groupe (membres, secrets, doctrine) ?
 
     Vrai pour le chef d'équipe (`group_admin` explicite) ET, par subsomption,
     pour l'org_admin du groupe parent et le platform_admin. Un org_admin n'a

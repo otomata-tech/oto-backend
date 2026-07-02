@@ -52,7 +52,6 @@ def _group_brief(g: dict, sub: str) -> dict:
         "id": g["id"], "group_id": g["id"], "org_id": g["org_id"],
         "name": g["name"], "description": g.get("description", ""),
         "member_count": len(members),
-        "has_preset": g.get("default_tools") is not None,
         "my_role": group_store.get_group_role(g["id"], sub),
     }
 
@@ -159,7 +158,6 @@ def _group_detail(ctx: ResolvedCtx, inp: GroupIdInput) -> dict:
                         "role": m["group_role"], "active": m["is_active"]})
     return {
         "group": _group_brief(g, ctx.sub),
-        "default_tools": list(g["default_tools"]) if g.get("default_tools") is not None else None,
         "members": members,
         "secrets": group_store.list_group_secrets(inp.group_id),
     }
@@ -202,10 +200,10 @@ CAPABILITIES += [
                      "ONLY. Also sets your active org to its parent. Ephemeral: it does "
                      "not change your home group or other conversations, and a new "
                      "conversation reverts to your home. The active group decides which "
-                     "group doctrine, toolset preset and shared secrets apply."),
+                     "group doctrine and shared secrets apply."),
         mcp="oto_use_group",
         rest=RestBinding("PUT", "/api/me/active-group"),
-        refresh_visibility=True,  # le groupe actif raffine la baseline de toolset (ADR 0012)
+        refresh_visibility=True,  # le groupe actif pose l'org active → visibilité par connecteur
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
@@ -226,7 +224,7 @@ CAPABILITIES += [
     Capability(
         key="group.get", handler=_group_detail, Input=GroupIdInput,
         authz=GROUP_MEMBER_OF("group_id"),
-        description="Group detail (members, shared secrets, toolset preset).",
+        description="Group detail (members, shared secrets).",
         rest=RestBinding("GET", "/api/groups/{id}", _GID),
     ),
     Capability(

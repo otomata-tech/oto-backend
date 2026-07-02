@@ -1238,119 +1238,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             db.add_user_enabled_tool(sub, name, org)
         return _json(request, {"ok": True, "name": name, "enabled": True})
 
-    # --- presets ------------------------------------------------------------
-
-    _PROTECTED_TOOLS = PROTECTED_TOOLS  # source unique (tool_visibility, anti-lockout)
-
-    async def _list_all_tool_names() -> set[str]:
-        if mcp_instance is None:
-            return set()
-        tools = await mcp_instance.list_tools(run_middleware=False)
-        return {t.name for t in tools}
-
-    async def my_presets_list(request: Request) -> JSONResponse:
-        """Liste les presets sauvés du user."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        presets = db.list_user_presets(sub, access.current_org(sub) or 0)
-        return _json(request, {
-            "presets": [
-                {
-                    "name": p["name"],
-                    "tool_count": len(p["enabled_tools"]),
-                    "updated_at": str(p["updated_at"]) if p["updated_at"] else None,
-                }
-                for p in presets
-            ],
-        })
-
-    async def my_preset_get(request: Request) -> JSONResponse:
-        """Récupère le détail d'un preset (liste exhaustive de enabled_tools)."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name, access.current_org(sub) or 0)
-        if not preset:
-            return _json(request, {"error": "not_found", "name": name}, status_code=404)
-        return _json(request, {
-            "name": preset["name"],
-            "enabled_tools": preset["enabled_tools"],
-            "updated_at": str(preset["updated_at"]) if preset["updated_at"] else None,
-        })
-
-    async def my_preset_save(request: Request) -> JSONResponse:
-        """Snapshot l'état courant sous ce nom, OU sauve une liste explicite
-        si le body contient `{"enabled_tools": [...]}`. Utile pour
-        provisionner un preset sans altérer l'état courant.
-        """
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        name = request.path_params["name"]
-        org = access.current_org(sub) or 0
-        all_names = await _list_all_tool_names()
-
-        explicit: list[str] | None = None
-        # Body optionnel — un POST sans body garde le comportement snapshot
-        try:
-            body = await request.json()
-            if isinstance(body, dict) and isinstance(body.get("enabled_tools"), list):
-                explicit = [str(t) for t in body["enabled_tools"]]
-        except Exception:
-            pass
-
-        if explicit is not None:
-            unknown = sorted(set(explicit) - all_names)
-            if unknown:
-                return _json(request, {
-                    "error": "unknown_tools",
-                    "unknown": unknown,
-                }, status_code=400)
-            enabled = sorted(set(explicit))
-        else:
-            disabled = set(db.list_user_disabled_tools(sub, org))
-            enabled = sorted(all_names - disabled)
-
-        db.save_user_preset(sub, name, enabled, org)
-        return _json(request, {"ok": True, "name": name, "enabled_count": len(enabled)})
-
-    async def my_preset_apply(request: Request) -> JSONResponse:
-        """Bascule user_disabled_tools selon le preset. Ne notifie pas les
-        sessions MCP en cours — elles verront le nouvel état au prochain
-        handshake (le hook on_initialize relit la DB).
-        """
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        name = request.path_params["name"]
-        org = access.current_org(sub) or 0
-        preset = db.get_user_preset(sub, name, org)
-        if not preset:
-            return _json(request, {"error": "not_found", "name": name}, status_code=404)
-        all_names = await _list_all_tool_names()
-        enabled = (set(preset["enabled_tools"]) | _PROTECTED_TOOLS) & all_names
-        disabled = sorted(all_names - enabled)
-        db.replace_user_disabled_tools(sub, disabled, org)
-        return _json(request, {
-            "ok": True,
-            "applied": name,
-            "enabled_count": len(enabled),
-            "disabled_count": len(disabled),
-        })
-
-    async def my_preset_delete(request: Request) -> JSONResponse:
-        """Supprime un preset par nom."""
-        sub, err = await _authenticate(request, verifier)
-        if err:
-            return err
-        name = request.path_params["name"]
-        deleted = db.delete_user_preset(sub, name, access.current_org(sub) or 0)
-        if not deleted:
-            return _json(request, {"error": "not_found", "name": name}, status_code=404)
-        return _json(request, {"ok": True, "name": name, "deleted": True})
-
     datastore_routes = api_routes_datastore.make_routes(
         verifier=verifier,
         authenticate=_authenticate,
@@ -1456,14 +1343,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/tools/{name}", my_tools_disable, methods=["POST"]),
         Route("/api/me/tools/{name}", my_tools_enable, methods=["DELETE"]),
         Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/presets", my_presets_list, methods=["GET"]),
-        Route("/api/me/presets", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/presets/{name}", my_preset_get, methods=["GET"]),
-        Route("/api/me/presets/{name}", my_preset_save, methods=["POST"]),
-        Route("/api/me/presets/{name}", my_preset_delete, methods=["DELETE"]),
-        Route("/api/me/presets/{name}", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/presets/{name}/apply", my_preset_apply, methods=["POST"]),
-        Route("/api/me/presets/{name}/apply", options_handler, methods=["OPTIONS"]),
         # /api/me/instructions* — migré en capacités (ADR 0009, capabilities/orgs_instructions.py),
         # monté par capability_routes plus bas.
         Route("/api/settings/api-keys/{provider}", api_key_get, methods=["GET"]),

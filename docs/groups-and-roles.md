@@ -1,3 +1,20 @@
+---
+title: Groupes (départements) & hiérarchie de droits unifiée
+type: explanation
+description: >-
+  Explique l'architecture des groupes (départements) dans oto-backend : hiérarchie
+  de droits centralisée dans roles.py (platform_admin ⊇ org_admin ⊇ group_admin ⊇
+  member, escalade descendante), les deux ressources gouvernées par délégation
+  (secrets partagés dans connector_credentials entity_type='group', doctrine/skills
+  org_group_instructions), et la cascade
+  de résolution user_key > secret groupe actif > secret org > grant plateforme (ADR 0012).
+  Détaille le schéma DB (org_groups, org_group_members avec index partiel one_active,
+  org_group_instructions), l'invariant groupe⊂org actif, et les surfaces MCP/REST
+  via capacités groups*.py. À lire pour comprendre la délégation d'accès par équipe.
+adr:
+  - "0012"
+---
+
 # Groupes (départements) & hiérarchie de droits unifiée
 
 > Statut : implémenté sur la branche `claude/group-principles-departments-k3qa6u`.
@@ -40,13 +57,12 @@ Ajouter un palier plus tard = un seul endroit à toucher.
 
 ## Ce qu'un groupe gouverne
 
-Un groupe ≠ juste un label : il **gouverne trois ressources** par **délégation de
+Un groupe ≠ juste un label : il **gouverne deux ressources** par **délégation de
 l'org** (le reste — entitlements de namespace gouverné — reste au niveau org).
 
 | Ressource | Stockage | Résolution |
 |-----------|----------|------------|
 | **Doctrine & skills** | `org_group_instructions` (+ revisions), en clair | `get_claude_md()` sert org **puis** groupe actif (complément) |
-| **Preset de toolset** | `org_groups.default_tools TEXT[]` (NULL = pas de baseline) | baseline de visibilité au handshake (middleware) |
 | **Secrets partagés** | coffre `connector_credentials` (entity_type='group') | cascade `resolve_api_key` |
 
 ### Cascade de résolution des secrets (ADR 0012)
@@ -58,20 +74,17 @@ user_key  >  secret du GROUPE actif  >  secret de l'ORG active  >  grant platefo
 Le secret de groupe est le plus spécifique. `is_platform=False` (coût fixe,
 jamais métré). Un user sans groupe/org actif → comportement **identique à avant**.
 
-### Preset de toolset (visibilité)
+### Visibilité des outils
 
-Le chef pose `default_tools` = la baseline visible par défaut pour l'équipe.
-Règle effective (`tool_visibility.is_tool_visible`, ordre de priorité) :
+Il n'y a plus de baseline de toolset de groupe/org (les presets de tools ont été
+retirés). La visibilité effective (`tool_visibility.is_tool_visible`, ordre de
+priorité) ne dépend que des défauts plateforme et des toggles perso :
 
-1. **grant-only** : barrière inchangée (entitlement) — la baseline ne révèle
-   JAMAIS un grant-only (**anti-escalade**, vérifié par test).
-2. override perso **positif** (`oto_enable_tool`) → visible.
-3. perso **désactivé** (`oto_disable_tool`) → masqué.
-4. **baseline de groupe** (si posée) : `dans la baseline → visible` (révèle même
-   un masqué-par-défaut), `hors baseline → masqué`.
+1. **grant-only** : barrière d'entitlement inchangée.
+2. **méta-tools protégés** (`PROTECTED_TOOLS`) → toujours visibles (anti-lockout).
+3. override perso **positif** (`oto_enable_tool`) → visible.
+4. perso **désactivé** (`oto_disable_tool`) → masqué.
 5. masqué-par-défaut → masqué ; sinon visible.
-
-Les préférences perso priment toujours sur la baseline (le membre garde la main).
 
 ## Groupe actif (mirroir de l'org active)
 
@@ -87,7 +100,7 @@ active.
 
 ## Schéma (db.py `_SCHEMA`)
 
-- `org_groups(id, org_id→orgs, name, description, default_tools TEXT[], created_by, created_at, UNIQUE(org_id,name))`
+- `org_groups(id, org_id→orgs, name, description, created_by, created_at, UNIQUE(org_id,name))`
 - `org_group_members(group_id→org_groups, sub, group_role, is_active, joined_at, PK(group_id,sub))`
   + index `idx_org_group_members_sub` + partiel unique `org_group_members_one_active`
 - `org_group_instructions(group_id, slug, …, version, PK(group_id,slug))` + `…_revisions`
@@ -108,8 +121,7 @@ groupe (hors FK) sont purgés explicitement par `delete_group`.
   `group.update`, `group.delete`.
 - **membres** (`groups_members.py`) : `group.member.{add,set_role,remove}`
   (`GROUP_ADMIN_OF`, garde « dernier chef », cible doit être membre de l'org).
-- **secrets + preset** (`groups_secrets.py`) : `group.secret.{set,delete}`,
-  `group.preset.set` (`tools=null` efface).
+- **secrets** (`groups_secrets.py`) : `group.secret.{set,delete}`.
 - **doctrine** (`groups_doctrine.py`) : `group.instruction.{list,get,set,delete,
   versions,revert}` — lecture = membre, écriture = chef. Édité par le dashboard
   via `REST /api/groups/{id}/instructions*`.
@@ -121,7 +133,7 @@ Ajoute `active_group`, `active_group_name`, `group_role` (effectif) ;
 
 ## Limites connues
 
-- Sessions MCP déjà ouvertes au moment d'un changement de groupe/preset via REST
+- Sessions MCP déjà ouvertes au moment d'un changement de groupe via REST
   ne sont pas notifiées live (même limite que la visibilité per-user : le hook
   `on_initialize` ne tape qu'à la naissance d'une session).
 - Pas de sous-groupes (groupes plats sous l'org) — décision produit v1.

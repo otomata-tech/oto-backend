@@ -233,11 +233,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS domain TEXT")
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS industry TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT ''")
-        # Baseline de toolset par org (ADR 0015) : preset de visibilité curé par
-        # l'org_admin, miroir d'org_groups.default_tools. NULL = pas de baseline.
-        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_tools TEXT[]")
-        # Baseline de connecteurs proposés par l'org (ADR 0019, B2) : miroir de
-        # default_tools au grain connecteur (« org propose »). NULL = pas de baseline.
+        # Baseline de toolset par org (ex-ADR 0015) RETIRÉE — les presets de tools
+        # ont été supprimés : drop de la colonne si présente (idempotent).
+        conn.execute("ALTER TABLE orgs DROP COLUMN IF EXISTS default_tools")
+        # Baseline de connecteurs proposés par l'org (ADR 0019, B2) : liste de
+        # connecteurs recommandés (« org propose »). NULL = pas de baseline.
         # Inerte tant que la capacité B7 ne la lit pas.
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS default_connectors TEXT[]")
         # Redaction de champs par org (FieldFilter) : politique par connecteur,
@@ -286,12 +286,11 @@ def init_db() -> None:
             "WHERE table_name = 'user_disabled_tools' AND column_name = 'org_id'"
         ).fetchone()
         if not _has_vis_orgid:
-            for _t in ("user_disabled_tools", "user_enabled_tools", "user_presets"):
+            for _t in ("user_disabled_tools", "user_enabled_tools"):
                 conn.execute(f"ALTER TABLE {_t} ADD COLUMN org_id BIGINT NOT NULL DEFAULT 0")
                 conn.execute(f"ALTER TABLE {_t} DROP CONSTRAINT IF EXISTS {_t}_pkey")
             conn.execute("ALTER TABLE user_disabled_tools ADD PRIMARY KEY (sub, org_id, tool_name)")
             conn.execute("ALTER TABLE user_enabled_tools ADD PRIMARY KEY (sub, org_id, tool_name)")
-            conn.execute("ALTER TABLE user_presets ADD PRIMARY KEY (sub, org_id, name)")
             conn.execute(
                 "INSERT INTO user_disabled_tools (sub, org_id, tool_name, disabled_at) "
                 "SELECT d.sub, m.org_id, d.tool_name, d.disabled_at FROM user_disabled_tools d "
@@ -302,17 +301,16 @@ def init_db() -> None:
                 "SELECT e.sub, m.org_id, e.tool_name, e.enabled_at FROM user_enabled_tools e "
                 "JOIN org_members m ON m.sub = e.sub AND m.is_active WHERE e.org_id = 0 "
                 "ON CONFLICT DO NOTHING")
-            conn.execute(
-                "INSERT INTO user_presets (sub, org_id, name, enabled_tools, created_at, updated_at) "
-                "SELECT p.sub, m.org_id, p.name, p.enabled_tools, p.created_at, p.updated_at "
-                "FROM user_presets p JOIN org_members m ON m.sub = p.sub AND m.is_active "
-                "WHERE p.org_id = 0 ON CONFLICT DO NOTHING")
         # Suppression du perso : les profils de visibilité `org_id=0` (perso/global)
         # ont été copiés vers l'org active ci-dessus et ne sont plus jamais relus
         # (`session_visibility` lit l'org active, toujours posée). Purge des orphelins
         # (idempotent : no-op une fois vide ; plus aucune écriture en org_id=0).
-        for _t in ("user_disabled_tools", "user_enabled_tools", "user_presets"):
+        for _t in ("user_disabled_tools", "user_enabled_tools"):
             conn.execute(f"DELETE FROM {_t} WHERE org_id = 0")
+        # Presets de tools (snapshots nommés) RETIRÉS : drop de la table si présente.
+        conn.execute("DROP TABLE IF EXISTS user_presets")
+        # Baseline de toolset d'équipe (ex-ADR 0012) RETIRÉE avec les presets : drop.
+        conn.execute("ALTER TABLE org_groups DROP COLUMN IF EXISTS default_tools")
         # Coffre chiffré : colonnes courantes (idempotent pour les DB créées avant).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS secret_enc TEXT")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")

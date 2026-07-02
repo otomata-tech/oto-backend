@@ -5,9 +5,8 @@ Miroir d'`org_store` au grain groupe. Les tables (`org_groups`,
 `db._SCHEMA` ; leurs requêtes vivent ici. Les secrets de groupe vivent dans le
 coffre chiffré `connector_credentials` (entity_type='group'), comme ceux d'org.
 
-Un groupe gouverne TROIS ressources par délégation de l'org (décision produit) :
+Un groupe gouverne DEUX ressources par délégation de l'org (décision produit) :
 - **doctrine** (org_group_instructions) — servie en complément de celle de l'org ;
-- **preset de toolset** (`org_groups.default_tools`) — baseline de visibilité ;
 - **secrets partagés** (coffre, entity_type='group') — résolus avant ceux de l'org.
 
 Sens unique (ADR 0004) : dépend de `db`/`org_store`/`credentials_store`/
@@ -44,7 +43,7 @@ def create_group(org_id: int, name: str, description: str = "",
 def get_group(group_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, org_id, name, description, default_tools, created_by, created_at "
+            "SELECT id, org_id, name, description, created_by, created_at "
             "FROM org_groups WHERE id = %s",
             (group_id,),
         ).fetchone()
@@ -55,7 +54,7 @@ def list_groups(org_id: int) -> list[dict]:
     """Tous les groupes d'une org (métadonnées, sans les membres)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, org_id, name, description, default_tools, created_by, created_at "
+            "SELECT id, org_id, name, description, created_by, created_at "
             "FROM org_groups WHERE org_id = %s ORDER BY name",
             (org_id,),
         ).fetchall()
@@ -230,28 +229,6 @@ def clear_active_group(sub: str) -> None:
             "UPDATE org_group_members SET is_active = FALSE WHERE sub = %s AND is_active",
             (sub,),
         )
-
-
-# --- preset de toolset du groupe (baseline de visibilité) -------------------
-
-def get_group_default_tools(group_id: int) -> Optional[list[str]]:
-    """Le preset par défaut du groupe (liste de noms de tools), ou None si le
-    groupe n'en impose pas. `[]` (liste vide) ≠ None : baseline « rien »."""
-    g = get_group(group_id)
-    if g is None:
-        return None
-    dt = g.get("default_tools")
-    return list(dt) if dt is not None else None
-
-
-def set_group_default_tools(group_id: int, tools: Optional[list[str]]) -> bool:
-    """Pose (ou efface si None) le preset par défaut du groupe. False si absent."""
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE org_groups SET default_tools = %s WHERE id = %s",
-            (list(tools) if tools is not None else None, group_id),
-        )
-        return (cur.rowcount or 0) > 0
 
 
 # --- secrets de groupe (coffre chiffré, entity_type='group') ----------------

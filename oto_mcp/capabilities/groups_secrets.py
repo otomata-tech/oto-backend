@@ -1,9 +1,8 @@
-"""Secrets partagés d'un groupe + preset de toolset (ADR 0012).
+"""Secrets partagés d'un groupe (ADR 0012).
 
 Autz = `GROUP_ADMIN_OF`. Les secrets de groupe utilisent la MÊME validation
 provider/base_url que les secrets d'org (`connectors.org_secret_meta`, source
-unique) et le même coffre chiffré (entity_type='group'). Le preset (`default_tools`)
-définit la baseline de visibilité de l'équipe — `None` l'efface.
+unique) et le même coffre chiffré (entity_type='group').
 """
 from __future__ import annotations
 
@@ -32,11 +31,6 @@ class DeleteGroupSecretInput(BaseModel):
     provider: str
 
 
-class SetPresetInput(BaseModel):
-    group_id: int
-    tools: Optional[list[str]] = None     # None efface la baseline ; [] = baseline vide
-
-
 def _set_secret(ctx: ResolvedCtx, inp: SetGroupSecretInput) -> dict:
     base_url = (inp.base_url or "").strip() or None
     meta, code = connectors.org_secret_meta(inp.provider, base_url)
@@ -56,12 +50,6 @@ def _delete_secret(ctx: ResolvedCtx, inp: DeleteGroupSecretInput) -> dict:
     return {"ok": True, "group_id": inp.group_id, "provider": inp.provider, "deleted": deleted}
 
 
-def _set_preset(ctx: ResolvedCtx, inp: SetPresetInput) -> dict:
-    group_store.set_group_default_tools(inp.group_id, inp.tools)
-    return {"ok": True, "group_id": inp.group_id,
-            "preset": None if inp.tools is None else len(inp.tools)}
-
-
 CAPABILITIES += [
     Capability(
         key="group.secret.set", handler=_set_secret, Input=SetGroupSecretInput,
@@ -78,14 +66,5 @@ CAPABILITIES += [
         authz=GROUP_ADMIN_OF("group_id"),
         description="Remove a group's shared secret for a provider.",
         rest=RestBinding("DELETE", "/api/groups/{id}/secrets/{provider}", _GID),
-    ),
-    Capability(
-        key="group.preset.set", handler=_set_preset, Input=SetPresetInput,
-        authz=GROUP_ADMIN_OF("group_id"),
-        description=("Set the group's default toolset preset (baseline visibility for "
-                     "the team). Pass tools=null to clear it. Never reveals grant-only "
-                     "tools (those stay entitlement-gated). Personal toggles still win."),
-        mcp="oto_set_group_preset",
-        rest=RestBinding("PUT", "/api/groups/{id}/preset", _GID),
     ),
 ]

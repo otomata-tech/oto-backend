@@ -20,7 +20,7 @@ import os
 from fastmcp.server.transforms.visibility import disable_components, reset_visibility
 
 from . import (access, connector_activation, connector_selection, connectors,
-               credentials_store, db, group_store, org_store)
+               credentials_store, db)
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
     effective_disabled,
@@ -40,7 +40,7 @@ _KNOWN_DEFAULT_HIDDEN: set[str] = set()
 # accepter une invitation + méta de visibilité (anti-lockout). Tout le reste est
 # masqué tant que le compte est en waitlist.
 ALPHA_GATE_ALLOWLIST: frozenset[str] = frozenset({
-    "oto_accept_invite", "oto_list_my_tools", "oto_enable_tool", "oto_apply_preset",
+    "oto_accept_invite", "oto_list_my_tools", "oto_enable_tool",
 })
 
 
@@ -57,33 +57,18 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     l'org active à CHAQUE appel → après `set_active_org`, recalcule pour la
     nouvelle org. `ctx` = `Context` fastmcp (pour `ctx.fastmcp.list_tools`)."""
     try:
-        # Les toggles/presets sont scopés par org → on lit ceux de l'org active.
+        # Les toggles perso sont scopés par org → on lit ceux de l'org active.
         active_org = access.current_org(sub)
         prof_org = active_org or 0
         disabled = set(db.list_user_disabled_tools(sub, prof_org))
         enabled_override = set(db.list_user_enabled_tools(sub, prof_org))
         is_admin = access.is_super_admin(sub)
-        # Baseline de toolset (preset de visibilité). Cascade ADR 0015/0012 :
-        # le GROUPE actif raffine l'ORG active. Le chef d'équipe a priorité ; à
-        # défaut, la baseline curée par l'org_admin pour ses membres. None = pas
-        # de baseline (visibilité par défaut, ex. profil perso sans org active).
-        group_baseline = None
-        active_group = access.current_group(sub)
-        if active_group is not None:
-            gt = group_store.get_group_default_tools(active_group)
-            if gt is not None:
-                group_baseline = frozenset(gt)
-        if group_baseline is None and active_org is not None:
-            ot = org_store.get_org_default_tools(active_org)
-            if ot is not None:
-                group_baseline = frozenset(ot)
     except Exception as e:
         # Sur erreur DB : repli neutre (rien de désactivé). La sécurité d'accès ne
         # dépend PAS de cette visibilité — elle est gardée au call-time (credential
         # + require_connector_access ADR 0025 + activation + remote credential).
         logger.warning("Cannot read tool visibility for %s: %s", sub, e)
         disabled, enabled_override, is_admin = set(), set(), False
-        group_baseline = None
         active_org, prof_org = None, 0
     try:
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
@@ -94,8 +79,7 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         # repli FAIL-CLOSED : disabled explicites + masqués-par-défaut connus
         # (sinon ils resteraient visibles, denylist incomplète).
         all_names = disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN
-    to_hide = effective_disabled(
-        all_names, disabled, enabled_override, group_baseline)
+    to_hide = effective_disabled(all_names, disabled, enabled_override)
     # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
     # l'org de la session — à chaud, per-org. Fail-OPEN (gouvernance d'exposition,
     # pas une barrière de sécurité ; le grant-only reste fail-closed ci-dessus).

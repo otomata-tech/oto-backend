@@ -99,7 +99,7 @@ def get_user(sub: str) -> Optional[dict]:
 _SUB_COLUMNS = [
     # données de l'user
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
-    ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"), ("user_presets", "sub"),
+    ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"),
     ("user_grants", "sub"), ("user_datastores", "sub"),
     ("datastore_shares", "owner_sub"), ("datastore_shares", "shared_with_sub"),
     ("org_members", "sub"), ("org_group_members", "sub"),

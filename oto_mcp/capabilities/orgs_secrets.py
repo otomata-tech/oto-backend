@@ -34,11 +34,6 @@ class DeleteSecretInput(BaseModel):
     provider: str
 
 
-class SetOrgPresetInput(BaseModel):
-    org_id: int
-    tools: Optional[list[str]] = None     # None efface la baseline ; [] = baseline vide
-
-
 def _set_secret(ctx: ResolvedCtx, inp: SetSecretInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
@@ -60,14 +55,6 @@ def _delete_secret(ctx: ResolvedCtx, inp: DeleteSecretInput) -> dict:
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider, "deleted": deleted}
 
 
-def _set_org_preset(ctx: ResolvedCtx, inp: SetOrgPresetInput) -> dict:
-    if not org_store.get_org(inp.org_id):
-        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    org_store.set_org_default_tools(inp.org_id, inp.tools)
-    return {"ok": True, "org_id": inp.org_id,
-            "preset": None if inp.tools is None else len(inp.tools)}
-
-
 CAPABILITIES += [
     Capability(
         # MCP retiré (2026-06-25) : pose de secret brut = dashboard-only. REST conservé.
@@ -86,16 +73,5 @@ CAPABILITIES += [
         description="Remove an org's shared secret for a provider.",
         rest=(RestBinding("DELETE", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("DELETE", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),
-    ),
-    Capability(
-        key="org.preset.set", handler=_set_org_preset, Input=SetOrgPresetInput,
-        authz=ORG_ADMIN_OF("org_id"),
-        description=("Set the org's default toolset preset (baseline visibility for its "
-                     "members — the focused toolset they see when this org is active). "
-                     "Pass tools=null to clear it. Never reveals grant-only tools "
-                     "(those stay entitlement-gated). Personal toggles still win. "
-                     "A group preset, if set, refines this within the group."),
-        mcp="oto_set_org_preset",
-        rest=RestBinding("PUT", "/api/orgs/{id}/preset", _ID),
     ),
 ]

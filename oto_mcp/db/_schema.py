@@ -148,16 +148,6 @@ CREATE TABLE IF NOT EXISTS user_enabled_tools (
     PRIMARY KEY (sub, org_id, tool_name)
 );
 
-CREATE TABLE IF NOT EXISTS user_presets (
-    sub TEXT NOT NULL,
-    org_id BIGINT NOT NULL DEFAULT 0,
-    name TEXT NOT NULL,
-    enabled_tools TEXT[] NOT NULL DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sub, org_id, name)
-);
-
 -- Fiche « situation avec oto » par utilisateur. `profile` = data model libre (qui est
 -- l'user, son métier, ses objectifs, connecteurs voulus, ton…) entretenu au fil de l'eau
 -- via `oto_profile` et relu à chaque session (injecté au handshake). Une ligne par sub,
@@ -558,7 +548,6 @@ CREATE TABLE IF NOT EXISTS orgs (
     domain TEXT,
     industry TEXT NOT NULL DEFAULT '',
     location TEXT NOT NULL DEFAULT '',
-    default_tools TEXT[],
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -704,20 +693,15 @@ CREATE INDEX IF NOT EXISTS idx_doctrine_library_category ON doctrine_library(cat
 -- groupe a un chef d'équipe (group_role='group_admin'). Modèle de droits
 -- hiérarchique unifié (platform_admin > org_admin > group_admin > member) :
 -- la résolution effective vit dans `roles.py`, l'appartenance dans ces tables.
--- Un groupe GOUVERNE trois ressources, par DÉLÉGATION de l'org : la doctrine
--- (org_group_instructions), un preset de toolset par défaut (default_tools), et
--- des secrets partagés (coffre `connector_credentials`, entity_type='group').
--- Source de vérité de l'appartenance = ces tables, résolues par `sub`.
+-- Un groupe GOUVERNE deux ressources, par DÉLÉGATION de l'org : la doctrine
+-- (org_group_instructions) et des secrets partagés (coffre
+-- `connector_credentials`, entity_type='group'). Source de vérité de
+-- l'appartenance = ces tables, résolues par `sub`.
 CREATE TABLE IF NOT EXISTS org_groups (
     id BIGSERIAL PRIMARY KEY,
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    -- Preset de toolset par défaut du groupe (le chef le pose pour son équipe).
-    -- NULL = pas de baseline (les membres gardent leur visibilité par défaut) ;
-    -- non-NULL (même []) = baseline : seuls ces tools sont visibles par défaut,
-    -- sauf override perso. N'élève JAMAIS un grant-only (anti-escalade).
-    default_tools TEXT[],
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (org_id, name)

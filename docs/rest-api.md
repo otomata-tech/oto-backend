@@ -1,3 +1,18 @@
+---
+title: REST API (consommée par oto.ninja /account)
+type: reference
+description: >-
+  Inventaire des endpoints REST /api/* de oto-backend : profil /api/me (billing,
+  onboarding, connecteurs), settings LinkedIn/API-keys/tools, doctrine org
+  /api/me/instructions*, palier org (CRUD orgs, membres, secrets, invitations,
+  entitlements namespace), admin users/grants/tokens/monitoring, billing Stripe,
+  bibliothèque publique de doctrines (doctrine_library, visibilité public/unlisted).
+  Détaille les règles CORS (oto.ninja, app.oto.ninja, dashboard.oto.ninja), l'autz
+  (même JWTVerifier ES384 que /mcp, audience mcp.oto.ninja), et les gotchas secrets
+  (jamais la clé en réponse, providers per-user refusés en org secrets). À charger
+  pour implémenter ou déboguer un endpoint REST ou comprendre le contrat front/back.
+---
+
 # REST API (consommée par oto.ninja /account)
 
 - `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
@@ -7,7 +22,6 @@
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
 - `POST|DELETE /api/settings/api-keys/{serper|hunter|sirene}` — user key
 - `GET /api/me/tools` + `POST|DELETE /api/me/tools/{name}` — toggle individuel d'un tool MCP
-- `GET /api/me/presets` + `GET|POST|DELETE /api/me/presets/{name}` + `POST /api/me/presets/{name}/apply` — presets nommés de toolset (cf. §Visibility)
 - `GET /api/me/instructions` (agent readme d'org meta + index des procédures) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — readme (`claude_md`) & procédures de l'**org active** (cf. §Doctrines). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par le dashboard (`/org` pour le readme, `/procedures` pour les procédures).
 - `GET|PUT /api/me/agent-readme` — **agent readme personnel** (niveau USER, `user_agent_readme`) : prose markdown injectée à chaque session, cumulée après les readme plateforme/org/équipe. `SUB_ONLY`, REST-only (édité sur `/account` ; corps vide = effacé).
 - `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).

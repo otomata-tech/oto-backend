@@ -75,14 +75,19 @@ def test_format_context_optional_lines():
 
 
 # ── composition de session ───────────────────────────────────────────────────
-def _wire_context(monkeypatch, *, doctrine_body="Doctrine de {{org}}."):
+def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
+                  group_readme=None, user_readme=""):
     monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)  # seeds
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     monkeypatch.setattr(org_store, "get_org", lambda oid: {"name": "Acme"})
     monkeypatch.setattr(db, "get_user", lambda sub: {"name": "Jean"})
     monkeypatch.setattr(roles, "effective_org_role", lambda sub, oid: "member")
-    monkeypatch.setattr(access, "current_group", lambda sub: None)
-    monkeypatch.setattr(group_store, "get_group", lambda gid: None)
+    monkeypatch.setattr(access, "current_group",
+                        lambda sub: 3 if group_readme is not None else None)
+    monkeypatch.setattr(group_store, "get_group",
+                        lambda gid: {"name": "Sales"} if group_readme is not None else None)
+    monkeypatch.setattr(group_store, "get_group_instruction",
+                        lambda gid, slug: {"body_md": group_readme or ""})
     monkeypatch.setattr(access, "status_for",
                         lambda sub: {"providers": {"folk": {"mode": "user"},
                                                    "x": {"mode": "forbidden"}}})
@@ -90,8 +95,10 @@ def _wire_context(monkeypatch, *, doctrine_body="Doctrine de {{org}}."):
     monkeypatch.setattr(db, "recent_runs", lambda sub, oid, limit=5: [])
     monkeypatch.setattr(db, "get_account_profile",
                         lambda sub: {"profile": {"role": "fondateur"}})
+    monkeypatch.setattr(db, "get_user_readme",
+                        lambda sub: {"body_md": user_readme, "updated_at": None})
     monkeypatch.setattr(org_store, "get_instruction",
-                        lambda oid, slug: {"body_md": doctrine_body})
+                        lambda oid, slug: {"body_md": org_readme})
 
 
 def test_compose_session_full(monkeypatch):
@@ -103,8 +110,23 @@ def test_compose_session_full(monkeypatch):
     assert "Connecteurs actifs : folk" in out               # forbidden exclu
     assert "Ce que tu sais de l'utilisateur" in out         # fiche profil injectée
     assert "Rôle : fondateur" in out
-    assert "## Doctrine de ton organisation (Acme)" in out  # bloc C doctrine
-    assert "Doctrine de Acme." in out                       # variable {{org}} substituée
+    assert "## README de ton organisation (Acme)" in out    # bloc C readme d'org
+    assert "Readme de Acme." in out                         # variable {{org}} substituée
+    assert "## README de ton équipe" not in out             # pas d'équipe active
+    assert "## README de ton utilisateur" not in out        # readme user vide → omis
+
+
+def test_compose_session_cumulates_group_and_user_readmes(monkeypatch):
+    # agent_readme cumulable : org → équipe active → user, dans cet ordre.
+    _wire_context(monkeypatch, group_readme="Consignes équipe {{équipe}}.",
+                  user_readme="Mes préférences perso.")
+    out = instr.compose_session("u1", 7)
+    i_org = out.index("## README de ton organisation (Acme)")
+    i_group = out.index("## README de ton équipe (Sales)")
+    i_user = out.index("## README de ton utilisateur")
+    assert i_org < i_group < i_user                         # du général au spécifique
+    assert "Consignes équipe Sales." in out                 # variables aussi substituées
+    assert "Mes préférences perso." in out
 
 
 def test_compose_session_catalog_always_present(monkeypatch):
@@ -123,14 +145,14 @@ def test_compose_session_no_org(monkeypatch):
     assert "## Ton contexte oto" not in out                 # pas d'org → pas de bloc C
 
 
-def test_compose_session_doctrine_fail_open(monkeypatch):
-    # Résolution du contexte qui casse → fallback doctrine seule, jamais d'exception.
+def test_compose_session_readme_fail_open(monkeypatch):
+    # Résolution du contexte qui casse → fallback readme d'org seul, jamais d'exception.
     _wire_context(monkeypatch)
     def boom(sub):
         raise RuntimeError("status down")
     monkeypatch.setattr(access, "status_for", boom)
     out = instr.compose_session("u1", 7)
-    assert "## Doctrine de ton organisation (Acme)" in out  # doctrine encore servie
+    assert "## README de ton organisation (Acme)" in out    # readme encore servi
 
 
 # ── middleware on_initialize ─────────────────────────────────────────────────

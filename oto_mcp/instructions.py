@@ -12,8 +12,11 @@ Refonte #50 (amende ADR 0014/0017) — l'artefact injecté est **composé de 2 b
   l'import).
 - **Bloc C — contexte dynamique** par-(sub, org) : section de contexte résolu (org /
   équipe / connecteurs actifs / N derniers projets / derniers déroulés / fiche
-  « situation avec oto » de l'user) + la **doctrine de base de l'org** (`claude_md`) avec
-  substitution des variables `{{org}}` / `{{user}}` / `{{équipe}}` / `{{connecteurs_actifs}}`.
+  « situation avec oto » de l'user) + les **agent README cumulés** du général au
+  spécifique — org (`org_instructions` slug `claude_md`) → équipe active
+  (`org_group_instructions` slug `claude_md`) → user (`user_agent_readme`) — chacun
+  avec substitution des variables `{{org}}` / `{{user}}` / `{{équipe}}` /
+  `{{connecteurs_actifs}}`. (Le niveau plateforme du concept = le bloc A.)
 
 L'onboarding n'est PAS un bloc : c'est un projet « Découverte » (ADR 0032 §7) semé à la
 création de l'org perso, qui remonte via la ligne « Projets récents » du bloc C.
@@ -46,10 +49,13 @@ _CATALOG_HEADER = (
     "org — leurs outils apparaissent une fois activées) :"
 )
 
-_DOCTRINE_HEADER = "## Doctrine de ton organisation"
+# En-têtes des agent README cumulés (bloc C), du général au spécifique.
+_README_ORG_HEADER = "## README de ton organisation"
+_README_GROUP_HEADER = "## README de ton équipe"
+_README_USER_HEADER = "## README de ton utilisateur"
 _CONTEXT_HEADER = "## Ton contexte oto"
 
-# Tokens de variable substitués dans la doctrine d'org (bloc C). Auto-contexte v1.
+# Tokens de variable substitués dans les agent README (bloc C). Auto-contexte v1.
 _VAR_TOKENS = ("{{org}}", "{{user}}", "{{équipe}}", "{{equipe}}", "{{connecteurs_actifs}}")
 
 
@@ -105,10 +111,12 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
             pass
 
     group_name = ""
+    group_id: int | None = None
     try:
         from . import group_store
         gid = access.current_group(sub) if sub else None
         if gid is not None:
+            group_id = gid
             group_name = ((group_store.get_group(gid) or {}).get("name") or "").strip()
     except Exception:
         pass
@@ -155,7 +163,7 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
 
     return {
         "org_name": org_name, "user_name": user_name, "role": role,
-        "group_name": group_name, "connectors": connectors,
+        "group_name": group_name, "group_id": group_id, "connectors": connectors,
         "projects": projects, "runs": runs, "profile": profile,
     }
 
@@ -226,43 +234,81 @@ def _format_profile(profile: dict) -> str:
 
 
 def _block_c(sub: str | None, org_id: int | None) -> str:
-    """Le bloc contexte dynamique : section de contexte résolu + doctrine de base de
-    l'org (avec variables). '' si pas d'org. Fail-open : doctrine simple sans contexte
-    si la résolution échoue."""
+    """Le bloc contexte dynamique : section de contexte résolu + agent README cumulés
+    (org → équipe → user, variables substituées). '' si pas d'org. Fail-open : README
+    d'org seul sans contexte si la résolution échoue."""
     if org_id is None:
         return ""
     try:
         ctx = _resolve_context(sub, org_id)
     except Exception:
-        logger.warning("résolution du contexte org=%s échouée (fail-open doctrine)",
+        logger.warning("résolution du contexte org=%s échouée (fail-open readme)",
                        org_id, exc_info=True)
-        return _doctrine_only(org_id)
+        return _org_readme_only(org_id)
 
     sections = [_format_context(ctx)]
-    doctrine = _format_doctrine(org_id, ctx)
-    if doctrine:
-        sections.append(doctrine)
+    for part in (_format_org_readme(org_id, ctx),
+                 _format_group_readme(ctx),
+                 _format_user_readme(sub, ctx)):
+        if part:
+            sections.append(part)
     return "\n\n".join(sections)
 
 
-def _format_doctrine(org_id: int, ctx: dict) -> str:
-    """La doctrine de base de l'org (`claude_md`), variables substituées, sous son
-    en-tête. '' si absente/vide."""
+def _format_org_readme(org_id: int, ctx: dict) -> str:
+    """L'agent README de l'org (`org_instructions` slug `claude_md`), variables
+    substituées, sous son en-tête. '' si absent/vide."""
     try:
         from . import org_store
         instr = org_store.get_instruction(org_id, org_store.BASE_SLUG)
         body = ((instr or {}).get("body_md") or "").strip()
     except Exception:
-        logger.warning("lecture doctrine org=%s échouée (fail-open)", org_id, exc_info=True)
+        logger.warning("lecture readme org=%s échouée (fail-open)", org_id, exc_info=True)
         return ""
     if not body:
         return ""
-    return f"{_DOCTRINE_HEADER} ({ctx['org_name']})\n\n{_apply_vars(body, ctx)}"
+    return f"{_README_ORG_HEADER} ({ctx['org_name']})\n\n{_apply_vars(body, ctx)}"
 
 
-def _doctrine_only(org_id: int) -> str:
-    """Fallback : la doctrine seule (sans section de contexte, sans variables), si la
-    résolution du contexte a échoué mais qu'on peut encore lire la doctrine."""
+def _format_group_readme(ctx: dict) -> str:
+    """L'agent README de l'équipe ACTIVE (`org_group_instructions` slug `claude_md`),
+    variables substituées — cumulé APRÈS celui de l'org (complément du chef d'équipe).
+    '' si pas d'équipe active / absent / vide."""
+    gid = ctx.get("group_id")
+    if gid is None:
+        return ""
+    try:
+        from . import group_store, org_store
+        instr = group_store.get_group_instruction(gid, org_store.BASE_SLUG)
+        body = ((instr or {}).get("body_md") or "").strip()
+    except Exception:
+        logger.warning("lecture readme groupe=%s échouée (fail-open)", gid, exc_info=True)
+        return ""
+    if not body:
+        return ""
+    name = f" ({ctx['group_name']})" if ctx.get("group_name") else ""
+    return f"{_README_GROUP_HEADER}{name}\n\n{_apply_vars(body, ctx)}"
+
+
+def _format_user_readme(sub: str | None, ctx: dict) -> str:
+    """L'agent README PERSONNEL de l'user (`user_agent_readme`), variables substituées
+    — le plus spécifique, cumulé en dernier. '' si absent/vide."""
+    if not sub:
+        return ""
+    try:
+        from . import db
+        body = (db.get_user_readme(sub).get("body_md") or "").strip()
+    except Exception:
+        logger.warning("lecture readme user=%s échouée (fail-open)", sub, exc_info=True)
+        return ""
+    if not body:
+        return ""
+    return f"{_README_USER_HEADER}\n\n{_apply_vars(body, ctx)}"
+
+
+def _org_readme_only(org_id: int) -> str:
+    """Fallback : le README d'org seul (sans section de contexte, sans variables), si
+    la résolution du contexte a échoué mais qu'on peut encore le lire."""
     try:
         from . import org_store
         instr = org_store.get_instruction(org_id, org_store.BASE_SLUG)
@@ -272,7 +318,7 @@ def _doctrine_only(org_id: int) -> str:
         name = (org_store.get_org(org_id) or {}).get("name") or f"#{org_id}"
     except Exception:
         return ""
-    return f"{_DOCTRINE_HEADER} ({name})\n\n{body}"
+    return f"{_README_ORG_HEADER} ({name})\n\n{body}"
 
 
 # --- Composition ------------------------------------------------------------

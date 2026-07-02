@@ -169,6 +169,18 @@ CREATE TABLE IF NOT EXISTS user_account_profile (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Agent README PERSONNEL de l'utilisateur : prose markdown libre injectée à chaque
+-- session (bloc C), CUMULÉE après les README d'org et d'équipe (plateforme > org >
+-- équipe > user, du général au spécifique). Édité depuis le dashboard (/account).
+-- En CLAIR (prose, pas un credential). ≠ user_account_profile (data model structuré
+-- entretenu par l'agent) : ici c'est la voix de l'utilisateur, verbatim.
+CREATE TABLE IF NOT EXISTS user_agent_readme (
+    sub TEXT PRIMARY KEY,
+    body_md TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS platform_keys (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,

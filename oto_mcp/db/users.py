@@ -181,10 +181,12 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
              "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )
-        # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
-        #    l'ancien (garde l'historique d'onboarding). DELETE d'abord → pas de conflit PK.
+        # 2. user_account_profile + user_agent_readme (PK sub) : retirer le frais du new
+        #    PUIS repointer l'ancien (garde l'historique). DELETE d'abord → pas de conflit PK.
         conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
         conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s", (new_sub, old_sub))
+        conn.execute("DELETE FROM user_agent_readme WHERE sub=%s", (new_sub,))
+        conn.execute("UPDATE user_agent_readme SET sub=%s WHERE sub=%s", (new_sub, old_sub))
         # 3. repointer toutes les colonnes sub.
         for table, col in _SUB_COLUMNS:
             conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
@@ -372,6 +374,37 @@ def get_account_profile(sub: str) -> dict:
         except Exception:
             profile = {}
     return {"profile": profile or {}, "updated_at": row["updated_at"]}
+
+
+def get_user_readme(sub: str) -> dict:
+    """Agent README personnel de l'user : {body_md, updated_at}. Jamais None —
+    un sub sans ligne renvoie l'état vide. Lecture seule (ne crée pas la ligne)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT body_md, updated_at FROM user_agent_readme WHERE sub = %s",
+            (sub,),
+        ).fetchone()
+    if not row:
+        return {"body_md": "", "updated_at": None}
+    return {"body_md": row["body_md"] or "", "updated_at": row["updated_at"]}
+
+
+def set_user_readme(sub: str, body_md: str) -> dict:
+    """Pose l'agent README personnel (upsert ; corps vide = README effacé, la ligne
+    reste). Renvoie l'état résultant."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_agent_readme (sub, body_md, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (sub) DO UPDATE SET
+                body_md = EXCLUDED.body_md,
+                updated_at = NOW()
+            """,
+            (sub, body_md or ""),
+        )
+    return get_user_readme(sub)
 
 
 def update_account_profile(sub: str, fields: Optional[dict] = None) -> dict:

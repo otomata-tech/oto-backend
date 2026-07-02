@@ -382,24 +382,31 @@ def main():
         if os.environ.get("OTO_BOAMP_REFRESH_ENABLED", "1") != "0":
             from . import boamp_refresh
             _bg_loops.append(boamp_refresh.run_boamp_refresh_loop)
-        if _bg_loops:
-            import contextlib
-            _prev_lifespan = app.router.lifespan_context
+        import contextlib
+        _prev_lifespan = app.router.lifespan_context
 
-            @contextlib.asynccontextmanager
-            async def _lifespan(app_):
-                tasks = [asyncio.create_task(f()) for f in _bg_loops]
-                try:
-                    async with _prev_lifespan(app_):
-                        yield
-                finally:
-                    for t in tasks:
-                        t.cancel()
-                    for t in tasks:
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await t
+        @contextlib.asynccontextmanager
+        async def _lifespan(app_):
+            # Réchauffe le registre d'outils HORS de tout contexte de session
+            # (visibilité non filtrée) → le manifeste `referenced_tools` reflète le
+            # registre boot, pas la visibilité de la session courante (#75).
+            from . import tool_registry
+            try:
+                await tool_registry.warm_registry(mcp)
+            except Exception as e:
+                logger.warning("warm_registry at boot failed: %s", e)
+            tasks = [asyncio.create_task(f()) for f in _bg_loops]
+            try:
+                async with _prev_lifespan(app_):
+                    yield
+            finally:
+                for t in tasks:
+                    t.cancel()
+                for t in tasks:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await t
 
-            app.router.lifespan_context = _lifespan
+        app.router.lifespan_context = _lifespan
 
         # App racine : dispatch par Host (ADR 0032). `<slug>.mcp.oto.cx` publié anonyme →
         # instance anonyme ; publié `org` → authentifiée + org épinglée ; sinon (canonique /

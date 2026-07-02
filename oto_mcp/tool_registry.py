@@ -71,14 +71,45 @@ def _entry(tool) -> dict:
     return e
 
 
-async def build_registry(mcp_instance=None) -> dict[str, dict]:
-    """Map nom → entrée pour tous les tools exposés.
-    `mcp_instance` omise = l'instance liée au boot (`bind`)."""
+# Registre boot mis en cache, réchauffé au DÉMARRAGE hors de tout contexte de
+# session (`warm_registry`, appelé au lifespan). Le manifeste « referenced_tools »
+# doit répondre « cet outil existe-t-il dans le produit ? » (fait BOOT), jamais
+# « m'est-il visible dans CETTE session ? » : `list_tools(run_middleware=False)`
+# saute le middleware mais applique QUAND MÊME `apply_session_transforms` (fastmcp) ;
+# l'appeler depuis un handler de session polluait donc le manifeste (faux
+# `status=missing` sur un outil masqué par la session, ex. `bridge_*` post-
+# `oto_use_org` — otomata-private#75). Le cache coupe cette contamination.
+_REGISTRY: dict[str, dict] | None = None
+
+
+async def _build_registry_live(mcp_instance=None) -> dict[str, dict]:
+    """Construit la map nom → entrée à la volée. ⚠️ Si appelée DANS un contexte de
+    session, la visibilité de session filtre le résultat (cf. `_REGISTRY`)."""
     mcp_instance = mcp_instance or _INSTANCE
     if mcp_instance is None:
         return {}
     tools = await mcp_instance.list_tools(run_middleware=False)
     return {t.name: _entry(t) for t in tools}
+
+
+async def warm_registry(mcp_instance=None) -> dict[str, dict]:
+    """Construit et met en cache le registre boot. À appeler au DÉMARRAGE, hors de
+    tout contexte de session (lifespan) → `apply_session_transforms` ne trouve
+    aucune règle de visibilité et renvoie le registre complet. Idempotent."""
+    global _REGISTRY
+    reg = await _build_registry_live(mcp_instance)
+    if reg:
+        _REGISTRY = reg
+    return _REGISTRY or {}
+
+
+async def build_registry(mcp_instance=None) -> dict[str, dict]:
+    """Map nom → entrée pour tous les tools boot. Sert le cache réchauffé au
+    démarrage (immunisé à la visibilité de session, #75) ; à défaut (tests, cache
+    non réchauffé) construit à la volée."""
+    if _REGISTRY is not None:
+        return _REGISTRY
+    return await _build_registry_live(mcp_instance)
 
 
 def resolve_refs(names: list[str], registry: dict[str, dict]) -> list[dict]:

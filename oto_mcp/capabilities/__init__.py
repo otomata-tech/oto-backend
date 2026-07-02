@@ -19,7 +19,7 @@ from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, p
 # Sous-palier groupe (ADR 0012) — départements/équipes + chef d'équipe.
 from . import groups  # noqa: F401 — group.create/list/list_mine/use/clear/get/update/delete
 from . import groups_members  # noqa: F401 — group.member.{add,set_role,remove}
-from . import groups_secrets  # noqa: F401 — group.secret.{set,delete} + group.preset.set
+from . import groups_secrets  # noqa: F401 — group.secret.{set,delete}
 from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,delete,versions,revert}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
 from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) + projections
@@ -52,6 +52,8 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Agent README personnel (niveau USER du concept agent_readme, cumulable).
 from . import agent_readme  # noqa: F401 — me.agent_readme.{get,set} (GET/PUT /api/me/agent-readme)
+# Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).
+from . import profile  # noqa: F401 — me.profile.{get,set} (GET/PUT /api/me/profile)
 # Blocs d'instructions plateforme A/B (#50) — édition admin plateforme.
 from . import platform_instructions  # noqa: F401 — platform.instructions (oto_admin_platform_instructions)
 # Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).

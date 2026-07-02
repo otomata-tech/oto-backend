@@ -404,7 +404,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             # clé plateforme réservé (ex. scaleway) est tenu hors des orgs non
             # autorisées par son activation (master OFF + override org ON), plus par
             # un grant de namespace (retiré, ADR 0031).
-            exposed = connector_activation.exposed_connectors(org_store.get_active_org(sub))
+            # Org de CONTEXTE (seam ADR 0023 : consultation X-Oto-Org > maison) —
+            # le catalogue suit l'org consultée au dashboard, comme status_for.
+            exposed = connector_activation.exposed_connectors(access.current_org(sub))
             cat = [c for c in cat if c["name"] in exposed]
         return _json(request, {"connectors": cat})
 
@@ -1168,7 +1170,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             tools = await mcp_instance.list_tools(run_middleware=False)
             all_names = {t.name for t in tools}
 
-        disabled = set(db.list_user_disabled_tools(sub, org_store.get_active_org(sub) or 0))
+        disabled = set(db.list_user_disabled_tools(sub, access.current_org(sub) or 0))
         # Le middleware retire déjà les disabled de `list_tools` selon le sub
         # courant (celui de la requête REST = même token). On ré-ajoute donc
         # les disabled pour avoir la vue complète.
@@ -1206,7 +1208,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         name = request.path_params["name"]
         if name in PROTECTED_TOOLS:
             return _json_error(request, 400, f"protected_tool:{name}")
-        org = org_store.get_active_org(sub) or 0
+        org = access.current_org(sub) or 0
         db.add_user_disabled_tool(sub, name, org)
         db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override positif
         return _json(request, {"ok": True, "name": name, "enabled": False})
@@ -1222,7 +1224,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
+        org = access.current_org(sub) or 0
         db.remove_user_disabled_tool(sub, name, org)
         # Override positif requis pour rendre visible un masqué-par-défaut.
         if is_default_hidden(name):
@@ -1244,7 +1246,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        presets = db.list_user_presets(sub, org_store.get_active_org(sub) or 0)
+        presets = db.list_user_presets(sub, access.current_org(sub) or 0)
         return _json(request, {
             "presets": [
                 {
@@ -1262,7 +1264,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        preset = db.get_user_preset(sub, name, org_store.get_active_org(sub) or 0)
+        preset = db.get_user_preset(sub, name, access.current_org(sub) or 0)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {
@@ -1280,7 +1282,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
+        org = access.current_org(sub) or 0
         all_names = await _list_all_tool_names()
 
         explicit: list[str] | None = None
@@ -1316,7 +1318,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        org = org_store.get_active_org(sub) or 0
+        org = access.current_org(sub) or 0
         preset = db.get_user_preset(sub, name, org)
         if not preset:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
@@ -1337,7 +1339,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if err:
             return err
         name = request.path_params["name"]
-        deleted = db.delete_user_preset(sub, name, org_store.get_active_org(sub) or 0)
+        deleted = db.delete_user_preset(sub, name, access.current_org(sub) or 0)
         if not deleted:
             return _json(request, {"error": "not_found", "name": name}, status_code=404)
         return _json(request, {"ok": True, "name": name, "deleted": True})

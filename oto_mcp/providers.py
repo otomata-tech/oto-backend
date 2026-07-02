@@ -165,7 +165,10 @@ class Connector:
         (planity=basic_auth→secret, memento=oauth→oauth)."""
         if self.hosted_auth:
             return "hosted"
-        if self.kind == "remote":
+        if self.kind == "remote" and not self.credential_fields:
+            # Bridge legacy (ADR 0003) : credential posé par grant d'org, pas de
+            # formulaire. Un bridge NOUVEAU modèle (ADR 0034) déclare ses
+            # credential_fields → formulaire self-serve standard (method=secret).
             return "remote"
         if self.secret_kind in ("oauth", "cookie", "none"):
             return self.secret_kind
@@ -461,10 +464,10 @@ _REGISTRY_LIST = [
     _c("gocardless", ["gocardless"], availability="self_serve",
        auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key", in_default_bundle=False,
        label="GoCardless", help="prélèvements SEPA (lecture)"),
-    # (Aucune entrée remote au registre : un connecteur REMOTE (ADR 0003/0011) est
-    # défini par la DONNÉE — un credential d'org avec `meta.base_url` (l'endpoint du
-    # bridge). Zéro nom client en dur. Découvert au boot par tools/remote.py via
-    # credentials_store.list_remote_namespaces ; le credential d'org EST le grant.)
+    # (Ponts vers un service distant : voir l'entrée `bridge` universelle en fin
+    # de registre — ADR 0034. L'ex-modèle remote data-driven per-namespace,
+    # découvert de `meta.base_url` sans entrée au registre, a été retiré en B4 ;
+    # l'identité client vit dans la CONFIG d'org du bridge, jamais en dur.)
     # memento : MCP fédéré (otomata#16, kind=mount). MCP autonome distant
     # (mcp.mento.cc) monté via proxy FastMCP (tools/mount.py) ; credential
     # per-user = token OAuth Supabase (flow memento_oauth.py), injecté par
@@ -750,6 +753,26 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, label="Zapier",
        help="automatisation — actions exposées (AI Actions) + exécution",
        href="https://actions.zapier.com"),
+
+    # --- bridge universel (ADR 0034, amende 0003/0011) ------------------------
+    # UN connecteur générique pour tout pont vers un middleware distant qui détient
+    # le credential métier (bridge ADR 0003). L'identité du service ponté vit dans
+    # la CONFIG d'org (base_url + label, privés) — jamais dans le namespace, donc
+    # montrable au catalogue sans nom client. oto ne stocke que l'endpoint + le
+    # token M2M. Tools bridge_describe/bridge_call (namespace fixe, barreau B2).
+    _c("bridge", ["bridge"], kind="remote", auth_modes={"byo_org"},
+       secret_kind="fields", in_default_bundle=False, default_hidden=True,
+       label="Bridge",
+       help="pont universel vers ton propre service distant (middleware) : le "
+            "service détient tes credentials métier, oto ne stocke que son URL "
+            "et un token d'accès",
+       credential_fields=(
+           CredentialField("base_url", "URL du bridge", secret=False, reveal=True,
+                           help="endpoint HTTPS de ton service (ex. https://bridge.acme.com)"),
+           CredentialField("token", "Token M2M", secret=True),
+           CredentialField("label", "Nom affiché", secret=False, reveal=True,
+                           help="ex. « Back-office Acme » — visible de ta seule org"),
+       )),
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}
@@ -765,6 +788,15 @@ for _c_obj in _REGISTRY_LIST:
 # --- dérivations (remplacent les 4 listes en dur + quotas + env-names) -------
 
 KEY_PROVIDERS: tuple = tuple(c.name for c in _REGISTRY_LIST if c.keyed)
+# Providers pouvant DÉTENIR un credential per-membre dans le coffre — garde-fou d'écriture
+# `db._check_provider`. Plus large que KEY_PROVIDERS (keyed seul) : inclut les **sessions
+# navigateur** (secret_kind="cookie" : brevo/crunchbase/pennylaneged, qui persistent le
+# Context Browserbase) et les connecteurs **byo multi-champs**. Sans ça, la persistance
+# d'une session (ADR 0026/0033, `_persist`→`set_member_api_key`) levait « Unknown provider ».
+CREDENTIAL_PROVIDERS: frozenset = frozenset(
+    c.name for c in _REGISTRY_LIST
+    if c.keyed or c.credential_fields or c.secret_kind != "none"
+)
 ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.org_shareable)
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
 DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)

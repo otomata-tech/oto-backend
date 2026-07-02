@@ -110,18 +110,9 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         }
     except Exception as e:
         logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
-    # Bridges remote (ADR 0003) : un outil remote n'apparaît qu'à l'org qui détient
-    # son credential (le credential d'org EST le grant — remplace le grant-only
-    # runtime, ADR 0031). Fail-OPEN : l'exécution reste gardée par
-    # resolve_remote_credential (un outil visible sans credential lève à l'appel).
-    try:
-        hidden_remote = credentials_store.list_remote_namespaces() - (
-            credentials_store.org_remote_namespaces(active_org)
-            if active_org is not None else set())
-        if hidden_remote:
-            to_hide |= {n for n in all_names if namespace_of(n) in hidden_remote}
-    except Exception as e:
-        logger.warning("remote visibility skipped for %s (fail-open): %s", sub, e)
+    # (La règle dédiée « bridges remote per-namespace » a été retirée — ADR 0034 B4 :
+    # le connecteur `bridge` universel suit le régime commun ci-dessus ; sans
+    # credential, l'exécution lève proprement.)
     # RBAC connecteur interne à l'org (ADR 0025) : un connecteur RESTREINT dans
     # l'org active est masqué pour un membre non autorisé (département/user). Le
     # backstop DUR est au call-time (`resolve_credential` → `require_connector_access`) ;
@@ -161,6 +152,24 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
                 and ((_st := _sel.get(c.name)) == connector_selection.PAUSED
                      or (_strict and _st is None))
             }
+            # Un connecteur explicitement sélectionné 'active' DÉMASQUE ses outils
+            # masqués-par-défaut : le choix marketplace explicite (ADR 0019) prime sur
+            # l'anti-encombrement legacy `default_hidden` (ADR 0011) — redondant/
+            # contradictoire en régime de sélection (`not_selected` déclutre déjà). Sans
+            # ça, poser une carte sur « active » n'affiche rien pour un connecteur
+            # default_hidden (pennylaneged/brevo). On respecte un toggle-off perso
+            # explicite (`disabled`) et on ne retouche jamais paused/not-selected
+            # (masqués au-dessus, jamais dans `_active_sel`).
+            _active_sel = {
+                name for name, st in _sel.items() if st == connector_selection.ACTIVE
+            }
+            if _active_sel:
+                to_hide -= {
+                    n for n in all_names
+                    if is_default_hidden(n) and n not in disabled
+                    and (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                    and c.name in _active_sel
+                }
         except Exception as e:
             logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
     # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.

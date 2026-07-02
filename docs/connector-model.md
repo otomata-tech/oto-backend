@@ -62,12 +62,21 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 `access.resolve_api_key(provider)` — cascade, **la plus spécifique gagne** :
 
 ```
-clé perso (BYO user)  >  secret groupe (BYO groupe)  >  secret org (BYO org)  >  clé PLATEFORME (partagée)
+clé MEMBRE (BYO, scopée (sub, org))  >  secret groupe  >  secret org  >  clé PLATEFORME (partagée)
 ```
+
+> **Scope membre (ADR 0033).** Il n'y a **plus de clé « perso » org-agnostique** : la clé
+> BYO d'un membre est keyée **(sub, org de contexte)** — coffre `entity_type='member'`,
+> `entity_id="{org}:{sub}"`. Posée dans l'org A, elle ne résout PAS depuis l'org B (avant,
+> elle suivait l'user partout et écrasait même la clé d'org). Vaut pour les clés API
+> keyed/fields, les sessions browser (Contexts Browserbase), les comptes **Google**
+> (l'org du start OAuth voyage dans le state) et les bindings **unipile**
+> (`unipile_accounts` PK `(sub, org_id, provider)`). Seuls les **mounts oauth fédérés**
+> (memento/atlassian/folkmcp) restent `entity_type='user'`.
 
 Deux notions à ne **pas** confondre :
 - **BYO** (*bring your own*) : l'entité **pose SA propre clé**, stockée chiffrée dans
-  `connector_credentials` (`entity_type` user|group|org). Possible aux **3 niveaux**.
+  `connector_credentials` (`entity_type` member|group|org). Possible aux **3 niveaux**.
 - **Partage de la clé PLATEFORME** : Otomata détient **une** clé (`platform_keys`), et on
   **prête son usage** (métré, **jamais révélée/copiée**) via un **grant**. ⚠️ Aujourd'hui le
   grant de clé plateforme est **per-USER uniquement** (`user_grants`, `access.get_active_grant`).

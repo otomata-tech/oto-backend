@@ -210,7 +210,9 @@ def _compose_platform_grant(ctx: ResolvedCtx, inp: OptionInput, eid: str) -> Opt
     key_id = keys[0]["id"]
     if inp.entity_type == "user":
         db.grant_platform_key(eid, key_id, granted_by=ctx.sub)
-        byo = db.has_user_api_key(eid, inp.option)
+        # État d'un TIERS → son org maison, jamais current_org du requérant
+        # (seam acteur-scopé ADR 0023 ; scope membre ADR 0033).
+        byo = db.has_member_api_key(eid, org_store.get_active_org(eid), inp.option)
     else:
         db.grant_org_platform_key(int(eid), key_id, granted_by=ctx.sub)
         byo = org_store.has_org_secret(int(eid), inp.option)

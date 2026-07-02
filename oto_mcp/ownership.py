@@ -221,3 +221,30 @@ register_kind(
     "project",
     ResourceKind(owner_getter=_project_owner, reparent=_project_reparent),
 )
+
+
+# --- Kind `doctrine` (épic « couverture des autres types », prérequis #52) ----
+# Une doctrine est TOUJOURS un objet d'org : son owner DÉRIVE d'`org_instructions.
+# org_id` (pas de colonnes owner_* — « derive don't duplicate »). resource_id =
+# l'id surrogate stable (ADR 0032 « stop using slug »). Le partage (grant read à
+# une org cliente) rend la doctrine lisible cross-org par id via oto_get_doctrine.
+
+def _doctrine_owner(rid: str) -> Optional[tuple[str, str]]:
+    if not str(rid).isdigit():   # relique : des liens legacy portent encore un slug
+        return None
+    row = org_store.get_instruction_by_id(int(rid))
+    if row is None:
+        return None
+    return ("org", str(row["org_id"]))
+
+
+def _doctrine_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> None:
+    if new_owner_type != "org":
+        raise ValueError("une doctrine est un objet d'org — transfert vers une org uniquement")
+    org_store.reparent_instruction(int(rid), int(new_owner_id))
+
+
+register_kind(
+    "doctrine",
+    ResourceKind(owner_getter=_doctrine_owner, reparent=_doctrine_reparent),
+)

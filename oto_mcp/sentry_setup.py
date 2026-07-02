@@ -33,6 +33,7 @@ import sentry_sdk
 from fastmcp.server.middleware import Middleware
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+from pydantic import ValidationError
 
 from .auth_hooks import current_user_sub_from_token
 
@@ -93,13 +94,34 @@ def _is_user_input_error(exc) -> bool:
     return False
 
 
+def _is_arg_validation_error(exc) -> bool:
+    """True si l'exception (ou sa chaîne) est une `ValidationError` pydantic.
+
+    Un `ValidationError` = **arguments rejetés** : soit la validation d'args du tool
+    par fastmcp (le LLM a passé de mauvais paramètres, ex. `2 validation errors for
+    call[serper_web_search]`), soit un `Input` model de capacité (ADR 0009) qui EST la
+    voie de validation d'entrée. C'est un refus d'entrée structuré, pas un bug backend
+    — pendant natif du `McpError` INVALID_PARAMS pour les args mal formés.
+    """
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, ValidationError):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 def _is_expected_error(exc) -> bool:
-    """Erreur gérée, à ne PAS reporter : 4xx amont OU refus d'entrée/config user.
+    """Erreur gérée, à ne PAS reporter : 4xx amont OU refus d'entrée/config user OU
+    args rejetés (ValidationError).
 
     Les vraies exceptions code (5xx, KeyError, Runtimeable inattendu — y compris
     `credential indéchiffrable`/InvalidTag, une corruption réelle) restent reportées.
     """
-    return _is_managed_connector_error(exc) or _is_user_input_error(exc)
+    return (_is_managed_connector_error(exc)
+            or _is_user_input_error(exc)
+            or _is_arg_validation_error(exc))
 
 
 def _before_send(event, hint):

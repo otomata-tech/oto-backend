@@ -160,14 +160,23 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
                      connector.name, len(svc))
             return svc
         # Fallback historique : token OAuth d'un user connecté (compte désigné admin).
+        token = None
         sub = credentials_store.first_entity_with(
             "user", connector.name, prefer=os.environ.get("OTO_MCP_ADMIN_SUB"))
-        if not sub:
-            log.info("mount %s : aucun user connecté → catalogue non chargé "
-                     "(restart après le 1er connect)", connector.name)
-            return []
-        token = _catalog_token(connector, sub)
+        if sub:
+            token = _catalog_token(connector, sub)
+        else:
+            # Mount non-oauth (basic_auth, ex. planity) : credential au scope
+            # MEMBRE depuis ADR 0033 (entity_id = "org:sub") — le catalogue étant
+            # partagé, n'importe quel credential connecté fait l'affaire.
+            eid = credentials_store.first_entity_with(
+                credentials_store.MEMBER, connector.name)
+            if eid:
+                token = credentials_store.get_credential(
+                    credentials_store.MEMBER, eid, connector.name)
         if not token:
+            log.info("mount %s : aucun credential connecté → catalogue non chargé "
+                     "(restart après le 1er connect)", connector.name)
             return []
 
         async def _list():

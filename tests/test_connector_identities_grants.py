@@ -16,11 +16,12 @@ _GRANT = {
 def _wire_platform(monkeypatch, *, grants, own=None):
     """Mode revente (clé plateforme, pas de sélecteur BYO) + grants reçus stubés."""
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr(access, "current_org", lambda sub: 3)
     monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: grants)
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: own or [])
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
     monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
-    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, prov: None)
 
 
 def test_list_platform_mode_includes_granted_with_owner_label(monkeypatch):
@@ -99,12 +100,13 @@ def test_resolver_pointer_revoked_raises(monkeypatch):
                         lambda sub, prov: {"account_id": "OWNER_ACC", "owner_sub": "owner"})
     monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.get_unipile_account_id",
-                        lambda sub, prov: pytest.fail("pas de repli silencieux"))
+                        lambda sub, org, prov: pytest.fail("pas de repli silencieux"))
     with pytest.raises(ValueError, match="plus opérable"):
         connector_identities.resolve_operated_account_id("grantee", "LINKEDIN")
 
 
 def test_resolver_no_pointer_returns_own(monkeypatch):
+    monkeypatch.setattr(access, "current_org", lambda sub: 3)
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, prov: "MY_ACC")
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, prov: "MY_ACC")
     assert connector_identities.resolve_operated_account_id("grantee", "LINKEDIN") == "MY_ACC"

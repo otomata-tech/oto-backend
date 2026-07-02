@@ -112,7 +112,10 @@ def current_org(sub: str | None) -> Optional[int]:
     Les deux premières ne coexistent jamais (session = MCP only, consultation =
     REST only). Garder ce seam étroit : candidat broker de credentials (ADR 0004)."""
     if sub is None:
-        return None
+        # Endpoint MCP ANONYME (`<slug>.mcp.oto.cx`, ADR 0032) : pas de sub, mais l'org
+        # PROPRIÉTAIRE du projet est le contexte de résolution (credentials/redaction).
+        from . import subdomain_project
+        return subdomain_project.current_anon_org()
     # Endpoint scopé par sous-domaine (« 1 oto par org ») : épingle l'org de la
     # connexion AVANT tout. Garde d'appartenance ici (sub connu) → un non-membre
     # est ignoré (repli maison, zéro fuite). Précédence ⇒ hard-lock : `oto_use_org`
@@ -328,6 +331,14 @@ def resolve_credential(provider: str, want: str = "auto",
     (un compte actif sans clé valide n'apparaissait nulle part). `emit_on_failure=False`
     pour les **sondes** qui avalent la McpError (ex. lookup de DSN), afin de ne pas
     fausser le signal. Cascade et sémantique : voir `_resolve_credential_impl`."""
+    if sub is None:
+        # Endpoint MCP ANONYME (ADR 0032) : pas de sub → résolution contre l'org
+        # propriétaire du projet (org secret > grant org > clé plateforme ouverte),
+        # sans quota per-sub (le rate-limit du sous-domaine borne l'abus).
+        from . import subdomain_project
+        anon = subdomain_project.current_anon_context()
+        if anon is not None:
+            return _resolve_credential_anon(provider, want, anon.org_id)
     sub = sub or current_user_sub_or_raise()
     try:
         return _resolve_credential_impl(provider, want, sub)
@@ -368,14 +379,21 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     # (département/user). Avant toute résolution → couvre keyed/fields/BYO.
     require_connector_access(provider, sub)
 
-    user_key = db.get_user_api_key(sub, provider)
-    if user_key:
-        return ResolvedCredential(provider, user_key, False, "user", "user", sub)
+    # Scope MEMBRE (ADR 0033) : « ma clé » n'existe QUE dans l'org de contexte —
+    # posée dans l'org A, elle ne résout pas depuis l'org B. L'org est résolue via
+    # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
+    # le premier palier : plus aucun credential per-user org-agnostique.
+    active_org = current_org(sub)
+    member_key = db.get_member_api_key(sub, active_org, provider)
+    if member_key:
+        return ResolvedCredential(provider, member_key, False, "user",
+                                  credentials_store.MEMBER,
+                                  credentials_store.member_id(active_org, sub))
 
     # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
     # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
     # (-> None) → strictement identique à avant pour tout user flat.
-    # Cascade : user_key > group_secret > org_secret > platform_grant.
+    # Cascade : clé membre > group_secret > org_secret > platform_grant.
     if provider in ORG_SHAREABLE_PROVIDERS:
         active_group = current_group(sub)
         if active_group is not None:
@@ -383,7 +401,6 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
             if grp_key:
                 return ResolvedCredential(provider, grp_key, False, "group",
                                           "group", str(active_group))
-        active_org = current_org(sub)
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
             if org_key:
@@ -411,10 +428,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     grant = db.get_active_grant(sub, provider) if platform_eligible else None
     # Fallback : clé plateforme partagée à l'ORG active (couche 2, grant org-level).
     # Après le grant per-user (plus spécifique). Quota métré per-membre comme le user-grant.
-    if not grant and platform_eligible:
-        org = current_org(sub)
-        if org is not None:
-            grant = db.get_active_org_grant(org, provider)
+    if not grant and platform_eligible and active_org is not None:
+        grant = db.get_active_org_grant(active_org, provider)
     # Free-tier (ADR 0031) : clé plateforme OUVERTE sans grant pour les connecteurs
     # `platform_key_open`, avec quota gratuit par user (`default_quota`). N'est atteint
     # qu'en l'absence de toute clé BYO (cascade user>groupe>org>grant épuisée) — en BYO
@@ -446,6 +461,43 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
             ),
         ))
 
+    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+
+
+def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) -> ResolvedCredential:
+    """Résolution pour un endpoint MCP ANONYME (ADR 0032) : aucun `sub`, aucune session
+    per-user → cascade réduite `org_secret > grant plateforme d'org > clé plateforme
+    ouverte`, scopée sur l'org PROPRIÉTAIRE du projet. Pas de user_key/group (inexistants
+    sans identité), pas de quota per-sub (le rate-limit du sous-domaine borne l'abus).
+    Miroir org-only des paliers de `_resolve_credential_impl` — ce qui n'est pas résoluble
+    au niveau org (oauth/cookie per-user) lève une McpError actionnable, fail-closed."""
+    con = connectors.connector_for_provider(provider)
+    if con is None:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Provider inconnu: {provider}"))
+    if org_id is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"L'endpoint anonyme n'a pas d'org propriétaire pour résoudre "
+                     f"`{provider}` (projet sans org).")))
+    if provider in ORG_SHAREABLE_PROVIDERS:
+        org_key = org_store.get_org_secret(org_id, provider)
+        if org_key:
+            return ResolvedCredential(provider, org_key, False, "org", "org", str(org_id))
+    if want == "byo":
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
+    platform_eligible = "platform" in con.auth_modes
+    grant = db.get_active_org_grant(org_id, provider) if platform_eligible else None
+    if not grant and platform_eligible and con.platform_key_open:
+        pk = db.get_platform_api_key(provider)
+        if pk:
+            grant = {"api_key": pk["api_key"], "label": pk["label"]}
+    if not grant:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"L'endpoint anonyme ne peut pas résoudre `{provider}` : configure "
+                     f"une clé d'org, ou grant une clé plateforme à l'org du projet.")))
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
@@ -508,10 +560,10 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
 
     Pris pour `sub` EXPLICITE → utilisable hors contexte MCP (route REST connect).
     Les tools MCP, eux, passent par `resolve_api_key("unipile")` (idiome keyed)."""
-    key = db.get_user_api_key(sub, "unipile")
+    active_org = current_org(sub)
+    key = db.get_member_api_key(sub, active_org, "unipile")
     if key:
         return key
-    active_org = current_org(sub)
     if active_org is not None:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
@@ -536,10 +588,12 @@ def credential_mode_for(sub: str, provider: str, *,
     l'UI. « BYO » (clé propre, pas la plateforme) = mode ∈ {user, group, org}.
     `org`/`group` explicites (≠ _UNSET) = calcul pour un TIERS contre son propre
     contexte (fiche admin), sans current_org/current_group (anti-fuite du requérant)."""
-    if db.has_user_api_key(sub, provider):
-        return "user"
     o = current_org(sub) if org is _UNSET else org
     g = current_group(sub) if group is _UNSET else group
+    # Scope membre (ADR 0033) : la clé propre se cherche dans l'org de contexte —
+    # pour un tiers (org explicite), dans SON org, jamais celle du requérant.
+    if db.has_member_api_key(sub, o, provider):
+        return "user"
     if provider in ORG_SHAREABLE_PROVIDERS:
         if g is not None and group_store.has_group_secret(g, provider):
             return "group"
@@ -558,43 +612,30 @@ def credential_mode_for(sub: str, provider: str, *,
     return "over_quota" if (limit and used >= limit) else "platform"
 
 
+def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
+    """Un connecteur peut-il être résolu pour une ORG **sans user identifié** ?
+    Vrai si : credential-less (`secret_kind='none'`), OU secret d'org configuré, OU
+    clé plateforme accordée à l'org. Sonde pour publier un endpoint MCP **anonyme**
+    (ADR 0032) servi par la clé de l'org propriétaire du projet : un endpoint sans
+    login n'a pas de `user_key`/session per-user → oauth/cookie sont exclus de fait
+    (pas de secret d'org pour eux). Miroir org-only de la cascade `resolve_credential`."""
+    con = connectors.connector_for_provider(provider)
+    if con is None:
+        return False
+    if con.secret_kind == "none":
+        return True
+    if provider in ORG_SHAREABLE_PROVIDERS and org_store.has_org_secret(org_id, provider):
+        return True
+    if "platform" in con.auth_modes and db.get_active_org_grant(org_id, provider):
+        return True
+    return False
+
+
 BYO_MODES = ("user", "group", "org")
 
 
-def resolve_remote_credential(provider: str) -> tuple[str, str]:
-    """Résout `(base_url, token_m2m)` du **bridge** d'un connecteur remote
-    (ADR 0003) depuis le credential de l'org active du sub courant.
-
-    Le credential d'org d'un remote n'est PAS le secret du système client (il
-    vit dans le bridge, ex. un bridge back-office client) : c'est le moyen
-    d'appeler le bridge — `secret` = token M2M, `meta.base_url` = endpoint.
-    Lève une McpError actionnable si l'org active n'a pas ce credential —
-    **pas** de fallback SOPS côté serveur (cf. Phase 6). Remplace
-    `resolve_org_credential` (l'injection in-process de l'ex-tools/mm.py).
-    """
-    sub = current_user_sub_or_raise()
-    active_org = current_org(sub)
-    if active_org is not None:
-        cred = credentials_store.get_credential_with_meta("org", str(active_org), provider)
-        if cred and cred["secret"]:
-            base_url = (cred["meta"] or {}).get("base_url")
-            if not base_url:
-                raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=(
-                        f"Credential `{provider}` posé sans `base_url` dans meta — "
-                        f"re-poser via `oto_admin_set_org_secret` avec l'endpoint du bridge."
-                    ),
-                ))
-            return base_url.rstrip("/"), cred["secret"]
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(
-            f"Aucun credential `{provider}` sur ton org active. Un admin doit le "
-            f"poser sur l'org propriétaire (`oto_admin_set_org_secret`) et t'y "
-            f"rattacher."
-        ),
-    ))
+# (resolve_remote_credential retiré — ADR 0034 B4 : le connecteur `bridge`
+# universel se résout par les champs standard, cf. resolve_credential_fields.)
 
 
 def resolve_mount_token(provider: str) -> str:
@@ -621,7 +662,13 @@ def resolve_mount_token(provider: str) -> str:
         from . import folk_oauth
         token = folk_oauth.access_token_for(sub)
     else:
-        token = credentials_store.get_credential("user", sub, provider)
+        # Mount non-oauth (basic_auth, ex. planity) : credential posé via la carte
+        # api-keys → scope membre (ADR 0033), comme sa pose.
+        org = current_org(sub)
+        token = (credentials_store.get_credential(
+                     credentials_store.MEMBER,
+                     credentials_store.member_id(org, sub), provider)
+                 if org is not None else None)
     if token:
         return token
     raise McpError(ErrorData(
@@ -664,7 +711,8 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for provider in db.KEY_PROVIDERS:
         shareable = provider in ORG_SHAREABLE_PROVIDERS
         # PRÉSENCE seulement (pas de déchiffrement sur le chemin /api/me).
-        user_has = db.has_user_api_key(sub, provider)
+        # Scope membre (ADR 0033) : la clé propre est celle posée dans CETTE org.
+        user_has = db.has_member_api_key(sub, active_org, provider)
         group_has = (
             group_store.has_group_secret(active_group, provider)
             if active_group is not None and shareable else False
@@ -714,7 +762,7 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
         if (c.name in out["providers"] or not c.secret_fields
                 or "byo_user" not in c.auth_modes):
             continue
-        has = db.has_user_api_key(sub, c.name)
+        has = db.has_member_api_key(sub, active_org, c.name)
         out["providers"][c.name] = {
             "mode": "user" if has else "forbidden",
             "user_key_configured": has,
@@ -733,7 +781,10 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for c in connectors.REGISTRY.values():
         if c.name in out["providers"] or c.secret_kind != "cookie":
             continue
-        st = credentials_store.credential_status("user", sub, c.name)
+        st = (credentials_store.credential_status(
+                  credentials_store.MEMBER,
+                  credentials_store.member_id(active_org, sub), c.name)
+              if active_org is not None else None)
         out["providers"][c.name] = {
             "mode": "user" if st else "forbidden",
             "user_key_configured": st is not None,

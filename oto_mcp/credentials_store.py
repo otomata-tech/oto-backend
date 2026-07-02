@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 USER = "user"
 ORG = "org"
+# Scope MEMBRE (ADR 0033) : le credential per-user est scopé (sub, org) — « ma clé
+# dans CETTE org », plus de BYO org-agnostique. `entity_type='user'` ne survit que
+# pour la famille oauth (google + mounts memento/atlassian/folkmcp, flux dédiés) en
+# attendant leurs barreaux (B3/B4).
+MEMBER = "member"
+
+
+def member_id(org_id: int, sub: str) -> str:
+    """`entity_id` du scope membre : le couple (org, sub) encodé — l'AAD en dérive,
+    donc un credential membre est cryptographiquement lié à son org."""
+    return f"{org_id}:{sub}"
 
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
@@ -353,28 +364,8 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
         return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
-def list_remote_namespaces() -> set[str]:
-    """Namespaces des connecteurs REMOTE (ADR 0003) — dérivés de la DONNÉE, pas
-    d'un registre : tout credential d'org portant `meta.base_url` (= endpoint
-    d'un bridge). Aucun nom client en dur ; un connecteur remote existe ssi une
-    org a posé son credential. Consommé au boot par `tools/remote.py`."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT connector, meta FROM connector_credentials WHERE entity_type = 'org'"
-        ).fetchall()
-    return {r["connector"] for r in rows if (r["meta"] or {}).get("base_url")}
-
-
-def org_remote_namespaces(org_id) -> set[str]:
-    """Namespaces remote possédés par cette org (ses credentials avec `base_url`).
-    Le credential EST le grant : possession ⇒ visibilité (cf. la règle de masquage
-    remote de `session_visibility`, ADR 0031)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT connector, meta FROM connector_credentials WHERE entity_type = 'org' AND entity_id = %s",
-            (str(org_id),),
-        ).fetchall()
-    return {r["connector"] for r in rows if (r["meta"] or {}).get("base_url")}
+# (list_remote_namespaces / org_remote_namespaces retirés — ADR 0034 B4 : le
+# connecteur `bridge` universel remplace la découverte data-driven per-namespace.)
 
 
 def first_entity_with(entity_type: str, connector: str,
@@ -402,3 +393,55 @@ def first_entity_with(entity_type: str, connector: str,
             (entity_type, connector),
         ).fetchone()
         return row["entity_id"] if row else None
+
+
+def backfill_member_scope() -> dict:
+    """One-shot idempotent (boot, ADR 0033) : chaque credential per-user hors famille
+    oauth passe du scope `('user', sub)` au scope `('member', '{home_org}:{sub}')`.
+
+    L'AAD contient `entity_type:entity_id` → on ne peut PAS UPDATE la ligne : on
+    déchiffre avec l'ancien AAD et on ré-écrit via `_upsert` (nouveau AAD), en
+    préservant `meta`/`set_by` (le `set_at` est rafraîchi — acceptable, c'est la
+    date de (re)pose). Ligne migrée = ligne supprimée. Une ligne indéchiffrable
+    (InvalidTag pré-rotation, crypto désactivée) est LAISSÉE en place et loggée :
+    plus rien ne lit le scope 'user' pour ces connecteurs → elle est inerte, pas
+    dangereuse. No-op aux boots suivants (le WHERE se vide)."""
+    from . import org_store  # lazy — org_store importe credentials_store (cycle)
+    counts = {"migrated": 0, "skipped": 0}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id, connector, account, secret_enc, meta, set_by "
+            "FROM connector_credentials WHERE entity_type = %s", (USER,),
+        ).fetchall()
+    for r in rows:
+        sub, connector, account = r["entity_id"], r["connector"], r["account"]
+        con = connectors.REGISTRY.get(connector)
+        # Mounts oauth (memento/atlassian/folkmcp) : flux fédérés encore scope 'user'
+        # (barreau ultérieur — la fédération memento est systématique per-compte).
+        # Google, lui, migre depuis B3 (db/google.py au scope membre). Connecteur
+        # hors registre (legacy) : on ne migre pas ce qu'on ne connaît pas.
+        if con is None or (con.secret_kind == "oauth" and connector != "google"):
+            continue
+        home = org_store.get_active_org(sub)
+        if home is None:
+            logger.warning("backfill_member_scope: pas d'org maison pour %s (%s) — skip",
+                           sub, connector)
+            counts["skipped"] += 1
+            continue
+        try:
+            secret = crypto.decrypt(r["secret_enc"], _aad(USER, sub, connector, account))
+        except Exception:
+            logger.warning("backfill_member_scope: %s/%s (account=%r) indéchiffrable — "
+                           "laissé en scope user (inerte)", sub, connector, account,
+                           exc_info=True)
+            counts["skipped"] += 1
+            continue
+        meta = r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}")
+        with _connect() as conn:
+            _upsert(conn, MEMBER, member_id(home, sub), connector, account,
+                    secret, r["set_by"] or sub, meta)
+            _delete(conn, USER, sub, connector, account)
+        counts["migrated"] += 1
+    if counts["migrated"] or counts["skipped"]:
+        logger.info("backfill_member_scope: %s", counts)
+    return counts

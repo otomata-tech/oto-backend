@@ -26,7 +26,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import AnyHttpUrl
 
 from . import api_routes, db, instructions
-from .config import require_env
+from .config import require_env, mcp_audience_alts
 from .tools import register_all
 
 logger = logging.getLogger("oto_mcp")
@@ -40,13 +40,37 @@ class _IatGatedVerifier(JWTVerifier):
     reçoivent un 401 + WWW-Authenticate et re-lancent l'OAuth dance.
     """
 
-    def __init__(self, *args, min_iat: int = 0, fallback: "JWTVerifier | None" = None, **kwargs) -> None:
+    def __init__(self, *args, min_iat: int = 0, fallback: "JWTVerifier | None" = None,
+                 expected_audience: "str | None" = None,
+                 alt_audiences: "frozenset[str]" = frozenset(), **kwargs) -> None:
+        # Le parent est construit SANS check d'audience (`audience=None`) : on valide
+        # l'audience nous-mêmes (canonique OU sous-domaine org publié, ADR 0032 §barreau 4).
         super().__init__(*args, **kwargs)
         self._min_iat = min_iat
         # Fenêtre de bascule tenant (A2/B1) : accepte aussi les tokens d'un 2e
         # issuer (auth.oto.ninja) le temps que tout le monde migre. Non posé =
         # mono-issuer, comportement inchangé.
         self._fallback = fallback
+        self._expected_audience = expected_audience
+        # Audiences canoniques SECONDAIRES (coexistence multi-domaine, ex. mcp.oto.cx).
+        # Vide = no-op → mcp.oto.ninja inchangé.
+        self._alt_audiences = alt_audiences
+
+    def _audience_ok(self, claims) -> bool:
+        """Canonique (`MCP_AUDIENCE`, DB-INDÉPENDANT → l'auth canonique ne casse jamais)
+        OU resource indicator d'un endpoint org publié (`<slug>.mcp.oto.cx/mcp`, motif +
+        existence en DB, fail-closed). Pas d'audience attendue configurée → pas de check."""
+        if not self._expected_audience:
+            return True
+        aud = (claims or {}).get("aud")
+        auds = aud if isinstance(aud, list) else [aud]
+        if self._expected_audience in auds:
+            return True
+        alt = getattr(self, "_alt_audiences", frozenset())
+        if alt and any(a in alt for a in auds):
+            return True
+        from . import subdomain_project
+        return any(subdomain_project.valid_org_audience(a) for a in auds)
 
     async def verify_token(self, token):
         result = await super().verify_token(token)
@@ -55,10 +79,16 @@ class _IatGatedVerifier(JWTVerifier):
                 result = await self._fallback.verify_token(token)
             except Exception:
                 result = None
-        if result and getattr(result, "claims", None) and self._min_iat > 0:
-            iat = result.claims.get("iat") or 0
+        if not result:
+            return None
+        claims = getattr(result, "claims", None) or {}
+        if not self._audience_ok(claims):
+            logger.info("audience reject aud=%r", claims.get("aud"))
+            return None
+        if self._min_iat > 0:
+            iat = claims.get("iat") or 0
             if iat < self._min_iat:
-                logger.info(f"iat-gate reject sub={result.claims.get('sub')} iat={iat} < min_iat={self._min_iat}")
+                logger.info(f"iat-gate reject sub={claims.get('sub')} iat={iat} < min_iat={self._min_iat}")
                 return None
         return result
 
@@ -76,17 +106,21 @@ def _build_verifier() -> JWTVerifier:
     alt = os.environ.get("LOGTO_ENDPOINT_ALT", "").strip().rstrip("/")
     if alt:
         alt_issuer = f"{alt}/oidc"
+        # audience=None : la validation d'audience est faite par _IatGatedVerifier
+        # (canonique OU sous-domaine org), unifiée sur le résultat primaire/fallback.
         fallback = JWTVerifier(
             jwks_uri=f"{alt_issuer}/jwks", issuer=alt_issuer,
-            audience=audience, algorithm="ES384",
+            audience=None, algorithm="ES384",
         )
     return _IatGatedVerifier(
         jwks_uri=f"{issuer}/jwks",
         issuer=issuer,
-        audience=audience,
+        audience=None,
         algorithm="ES384",
         min_iat=min_iat,
         fallback=fallback,
+        expected_audience=audience,
+        alt_audiences=mcp_audience_alts(),
     )
 
 
@@ -145,6 +179,20 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         org_store.backfill_personal_orgs()
     except Exception as e:
         logger.warning("backfill_personal_orgs at _build_mcp failed: %s", e)
+    # ADR 0033 : credentials per-user (hors oauth) → scope membre (sub, org maison).
+    # Re-chiffrement (l'AAD change) — APRÈS backfill_personal_orgs (org maison garantie).
+    # One-shot idempotent, no-op aux boots suivants.
+    try:
+        from . import credentials_store
+        credentials_store.backfill_member_scope()
+    except Exception as e:
+        logger.warning("backfill_member_scope at _build_mcp failed: %s", e)
+    # ADR 0033 B4 : unipile_accounts au grain (sub, org, provider) — org de contexte
+    # NOT NULL + platform_seat + PK composite. Même fenêtre (org maison garantie).
+    try:
+        db.backfill_unipile_member_scope()
+    except Exception as e:
+        logger.warning("backfill_unipile_member_scope at _build_mcp failed: %s", e)
     # Seed des blocs plateforme A/B (#50) s'ils n'existent pas (idempotent).
     try:
         instructions.seed_platform_blocks()
@@ -254,6 +302,26 @@ def main():
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "9103"))
 
+        # Instance MCP ANONYME (ADR 0032, `<slug>.mcp.oto.cx`) : sans auth, visibilité =
+        # allowlist figée du preset de projet. On RÉUTILISE l'instance no-auth DÉJÀ
+        # construite au niveau module (`mcp = _build_mcp("noauth")` en haut) au lieu d'en
+        # construire une 3ᵉ : un _build_mcp de plus (register_all + mounts + init_db/
+        # backfill/seed) DOUBLAIT le temps de boot (~53 s) et dépassait la fenêtre du
+        # healthcheck du deploy → KO + rollback avant que uvicorn ne bind (vécu 2026-07-01).
+        # `mcp` pointe encore ici sur l'instance no-auth ; on la capture AVANT de le
+        # réassigner à l'authentifiée (tool_registry.bind finit donc lié à l'authentifiée).
+        from .anon_visibility import AnonymousVisibilityMiddleware
+        anon_mcp = mcp
+        anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
+        anon_app = anon_mcp.http_app()
+        # Shim OAuth ANONYME (ADR 0032) : claude.ai/Mistral exigent un flux OAuth pour un
+        # connecteur custom, même sans auth → sans ces routes, DCR 404 = « impossible de
+        # s'inscrire ». Le shim auto-approuve (zéro login) et délivre un token sans privilège
+        # (l'app anonyme /mcp ne le vérifie pas). Inséré avant le catch /mcp de FastMCP.
+        from . import anon_oauth
+        for route in reversed(anon_oauth.make_routes()):
+            anon_app.router.routes.insert(0, route)
+
         verifier = _build_verifier()
         mcp = _build_mcp(transport, verifier)
 
@@ -274,6 +342,13 @@ def main():
                     require_env("OTO_MCP_PUBLIC_URL"), claude_app_id)):
                 app.router.routes.insert(0, route)
             logger.info("DCR facade active (claude app %s)", claude_app_id)
+
+        # Garde-fou on-demand TLS (ADR 0032) : Caddy appelle `/api/mcp/tls-check?domain=`
+        # avant d'émettre un cert `<slug>.mcp.oto.cx` → 200 seulement pour un projet publié.
+        # NON authentifié (appel localhost Caddy), inséré avant le gate JWT.
+        from . import subdomain_project as _subproj
+        for route in reversed(_subproj.make_routes()):
+            app.router.routes.insert(0, route)
 
         # View-as (ADR 0023) : middleware ASGI brut, n'intervient que sur /api/* avec
         # le header X-Oto-Org (pass-through total sinon → n'altère pas le streaming /mcp).
@@ -320,10 +395,16 @@ def main():
 
             app.router.lifespan_context = _lifespan
 
+        # App racine : dispatch par Host (ADR 0032). `<slug>.mcp.oto.cx` publié anonyme →
+        # instance anonyme ; publié `org` → authentifiée + org épinglée ; sinon (canonique /
+        # slug inconnu) → authentifiée. Compose les lifespans des deux instances FastMCP.
+        from . import subdomain_project
+        root_app = subdomain_project.HostDispatch(app, anon_app)
+
         import uvicorn
-        logger.info("HTTP MCP server on %s:%d", host, port)
+        logger.info("HTTP MCP server on %s:%d (+ anonymous <slug>.mcp.oto.cx)", host, port)
         uvicorn.run(
-            app,
+            root_app,
             host=host,
             port=port,
             log_level=os.environ.get("LOG_LEVEL", "info").lower(),

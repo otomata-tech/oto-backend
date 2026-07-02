@@ -17,7 +17,7 @@ def _wire(monkeypatch, *, users=None, share=True, connected="OWNER_ACC"):
                         lambda email: next((u for u in users.values()
                                             if u.get("email") == email), None))
     monkeypatch.setattr(cap.db, "users_share_org", lambda a, b: share)
-    monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, prov: connected)
+    monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, org, prov: connected)
 
 
 def test_grant_ok_by_sub(monkeypatch):

@@ -30,7 +30,9 @@ class ResourceInput(BaseModel):
     new_owner_email: Optional[str] = None   # transfer → un utilisateur
     new_owner_org: Optional[int] = None     # transfer → une de SES orgs (ADR 0030, owner_type='org')
     email: Optional[str] = None             # share / unshare (principal user)
+    org_id: Optional[int] = None            # share / unshare (principal ORG — livraison client, #52)
     permission: Literal["read", "write"] = "write"  # share
+    cascade: bool = False                   # share/transfer d'un PROJET : embarquer ses entités liées (#52)
 
 
 def _check_type(resource_type: str) -> None:
@@ -80,6 +82,20 @@ def _enrich_project(row: dict) -> dict:
     }
 
 
+def _enrich_doctrine(row: dict) -> dict:
+    return {
+        "resource_type": "doctrine",
+        "resource_id": str(row["id"]),
+        "slug": row["slug"],
+        "title": row.get("title"),
+        "owner_type": "org",
+        "owner_id": str(row["org_id"]),
+        "owner_label": _owner_label("org", str(row["org_id"])),
+        "version": row.get("version"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
 # Dispatch par type de ressource pour list/get (transfer/share/unshare sont déjà
 # génériques via le seam `ownership`). Étendre = une entrée ici.
 # Lambdas (pas des références directes) → `db.X` est résolu au call-time (testable,
@@ -96,6 +112,15 @@ _OPS: dict[str, dict] = {
         "list_for_owners": lambda owners: db.list_projects_for_owners(owners),
         "get_by_id": lambda i: db.get_project_by_id(i),
         "enrich": _enrich_project,
+    },
+    # Doctrine = objet d'ORG (owner dérivé d'org_id, jamais user/group) → list_for_owners
+    # ne retient que les paires ('org', id).
+    "doctrine": {
+        "list_all": lambda: org_store.list_all_instructions(),
+        "list_for_owners": lambda owners: org_store.list_instructions_for_orgs(
+            [int(i) for (t, i) in owners if t == "org"]),
+        "get_by_id": lambda i: org_store.get_instruction_by_id(i),
+        "enrich": _enrich_doctrine,
     },
 }
 
@@ -117,6 +142,86 @@ def _resolve_recipient(email: Optional[str]) -> dict:
     if not u:
         raise AuthzDenied(404, "unknown_user", f"aucun utilisateur oto avec l'email {email}")
     return u
+
+
+def _share_principal(inp: ResourceInput) -> tuple[str, str, Optional[str]]:
+    """Principal d'un share/unshare : une ORG (`org_id` — livraison client, #52 ;
+    pas d'exigence d'appartenance : on DONNE un accès, on ne s'en prend pas un)
+    OU un user (`email`). Renvoie (principal_type, principal_id, label)."""
+    if inp.org_id is not None:
+        o = org_store.get_org(int(inp.org_id))
+        if not o:
+            raise AuthzDenied(404, "unknown_org", f"org #{inp.org_id} inconnue.")
+        return "org", str(inp.org_id), o.get("name")
+    u = _resolve_recipient(inp.email)
+    return "user", u["sub"], u.get("email")
+
+
+def _cascade_project(sub: str, project_id: int, op: str, *,
+                     principal: Optional[tuple[str, str]] = None,
+                     permission: str = "read",
+                     new_owner: Optional[tuple[str, str]] = None) -> list[dict]:
+    """Livraison d'un projet COMPLET (#52) : répercute le geste (share/transfer) sur
+    les entités liées (`project_links`). Par entité gouvernée par l'acteur :
+    - `tableau`  → même geste (grant au même principal / transfert au même owner) ;
+    - `procedure`→ share = grant READ sur la doctrine (lisible cross-org par id via
+      oto_get_doctrine) ; transfer vers une org = COPIE de la doctrine chez la cible
+      + re-pointage du lien (l'originale reste chez la source — zéro casse des autres
+      projets qui la référencent) ;
+    - `connecteur` → rien à propager : le destinataire branche SON credential (la
+      surcharge préfaite du lien — identité/instructions — voyage avec le projet) ;
+    - `base`/`page` → externe (memento), hors périmètre du geste.
+    Les docs/fichiers du projet suivent d'office (ils héritent de son accès).
+    Ne lève jamais : chaque entité rapporte `status` (le geste principal a réussi)."""
+    report: list[dict] = []
+    for link in db.list_project_links(project_id):
+        t, ref = link.get("target_type"), str(link.get("target_ref") or "")
+        entry = {"target_type": t, "target_ref": ref, "label": link.get("label")}
+        try:
+            if t == "tableau" and ref.isdigit():
+                if not ownership.can_govern(sub, "datastore_namespace", ref):
+                    entry["status"] = "skipped"
+                    entry["reason"] = "not_governed"
+                elif op == "share":
+                    ownership.grant("datastore_namespace", ref, principal[0], principal[1],
+                                    permission, granted_by=sub)
+                    entry["status"] = "shared"
+                    entry["permission"] = permission
+                else:
+                    ownership.transfer("datastore_namespace", ref, new_owner[0], new_owner[1])
+                    entry["status"] = "transferred"
+            elif t == "procedure" and ref.isdigit():
+                if not ownership.can_govern(sub, "doctrine", ref):
+                    entry["status"] = "skipped"
+                    entry["reason"] = "not_governed"
+                elif op == "share":
+                    # READ toujours : le partagé consomme la procédure, il n'édite pas
+                    # le master (modèle licence — oto garde la main et pousse les màj).
+                    ownership.grant("doctrine", ref, principal[0], principal[1],
+                                    "read", granted_by=sub)
+                    entry["status"] = "shared"
+                    entry["permission"] = "read"
+                elif new_owner[0] == "org":
+                    copy = org_store.copy_instruction_to_org(int(ref), int(new_owner[1]),
+                                                             set_by=sub)
+                    db.update_project_link_ref(project_id, "procedure", ref, str(copy["id"]))
+                    entry["status"] = "copied"
+                    entry["new_ref"] = str(copy["id"])
+                    entry["slug"] = copy["slug"]
+                else:
+                    entry["status"] = "skipped"
+                    entry["reason"] = "doctrine_needs_org_owner"
+            elif t == "connecteur":
+                entry["status"] = "action_required"
+                entry["reason"] = "recipient_credential"   # le client branche SA clé (ADR 0022/0024)
+            else:
+                entry["status"] = "skipped"
+                entry["reason"] = "external_or_unresolved"
+        except Exception as e:   # une entité ratée ne casse pas la livraison
+            entry["status"] = "failed"
+            entry["reason"] = str(e)
+        report.append(entry)
+    return report
 
 
 def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
@@ -167,20 +272,42 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
             ownership.transfer(inp.resource_type, rid, new_owner_type, new_owner_id)
         except ValueError as e:
             raise AuthzDenied(409, "transfer_failed", str(e))
-        return {"ok": True, "resource_id": rid, "new_owner": new_owner_label}
+        out = {"ok": True, "resource_id": rid, "new_owner": new_owner_label}
+        if inp.cascade and inp.resource_type == "project":
+            out["cascade"] = _cascade_project(ctx.sub, int(rid), "transfer",
+                                              new_owner=(new_owner_type, new_owner_id))
+            db.log_project_activity(int(rid), ctx.sub, "project.deliver",
+                                    f"transfer → {new_owner_label}")
+        return out
 
     if inp.op == "share":
-        recipient = _resolve_recipient(inp.email)
-        ownership.grant(inp.resource_type, rid, "user", recipient["sub"],
+        ptype, pid, plabel = _share_principal(inp)
+        ownership.grant(inp.resource_type, rid, ptype, pid,
                         inp.permission, granted_by=ctx.sub)
-        return {"ok": True, "resource_id": rid, "shared_with": recipient.get("email"),
-                "permission": inp.permission}
+        out = {"ok": True, "resource_id": rid, "shared_with": plabel,
+               "principal_type": ptype, "permission": inp.permission}
+        if inp.cascade and inp.resource_type == "project":
+            out["cascade"] = _cascade_project(ctx.sub, int(rid), "share",
+                                              principal=(ptype, pid),
+                                              permission=inp.permission)
+            db.log_project_activity(int(rid), ctx.sub, "project.deliver",
+                                    f"share → {plabel}")
+        return out
 
     # unshare
-    recipient = _resolve_recipient(inp.email)
-    removed = ownership.revoke(inp.resource_type, rid, "user", recipient["sub"])
-    return {"ok": True, "resource_id": rid, "unshared_with": recipient.get("email"),
-            "removed": removed}
+    ptype, pid, plabel = _share_principal(inp)
+    removed = ownership.revoke(inp.resource_type, rid, ptype, pid)
+    out = {"ok": True, "resource_id": rid, "unshared_with": plabel, "removed": removed}
+    if inp.cascade and inp.resource_type == "project":
+        revoked = []
+        for link in db.list_project_links(int(rid)):
+            t, ref = link.get("target_type"), str(link.get("target_ref") or "")
+            rt = {"tableau": "datastore_namespace", "procedure": "doctrine"}.get(t)
+            if rt and ref.isdigit() and ownership.can_govern(ctx.sub, rt, ref):
+                if ownership.revoke(rt, ref, ptype, pid):
+                    revoked.append({"target_type": t, "target_ref": ref})
+        out["cascade"] = revoked
+    return out
 
 
 CAPABILITIES += [
@@ -194,8 +321,17 @@ CAPABILITIES += [
             "op=list: resources you govern (platform admins see all); op=get: owner + "
             "shares + metadata; op=transfer: hand ownership to a user (`new_owner_email`) "
             "OR to one of YOUR orgs (`new_owner_org`, you must be a member); the previous "
-            "owner keeps write access; op=share/unshare: grant/revoke access to "
-            "`email` (`permission` read|write). resource_type ∈ {datastore_namespace, project}. "
+            "owner keeps write access; op=share/unshare: grant/revoke access to a user "
+            "(`email`) OR to a whole org (`org_id` — client delivery, no membership "
+            "required) with `permission` read|write. resource_type ∈ {datastore_namespace, "
+            "project, doctrine}. DELIVER A FULL PROJECT (#52): share/transfer a project "
+            "with cascade=true to carry its linked entities in one gesture — linked "
+            "tableaux get the same share/transfer, linked procedures are share-granted "
+            "read (readable cross-org via oto_get_doctrine doctrine_id) or COPIED into "
+            "the target org on transfer (link re-pointed, source untouched), connector "
+            "links report `recipient_credential` (the recipient plugs their own key; the "
+            "project's pre-made identity/instructions overrides travel with it); docs & "
+            "files follow automatically. Returns a per-entity cascade report. "
             "Owner OR org/platform admin governing it; never exposes row content."
         ),
         mcp="oto_resource",

@@ -95,15 +95,31 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def make_state(sub: str) -> str:
-    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, ts}."""
-    payload = json.dumps({"sub": sub, "ts": int(time.time())}, separators=(",", ":")).encode()
+def _ctx_org(sub: str) -> int:
+    """Org de contexte (seam `current_org`, ADR 0023) — le scope MEMBRE des comptes
+    Google (ADR 0033 B3). Lève une erreur actionnable plutôt qu'un scope silencieux."""
+    from . import access  # lazy : évite tout cycle d'import au boot
+    org = access.current_org(sub)
+    if org is None:
+        raise RuntimeError(
+            "Aucune org de contexte — impossible de scoper le compte Google. "
+            "Reconnecte-toi et réessaie.")
+    return org
+
+
+def make_state(sub: str, org_id: int) -> str:
+    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, org, ts}.
+    L'org du DÉMARRAGE voyage jusqu'au callback (qui vient de Google, sans les
+    headers de consultation) : le compte est scopé à l'org où l'user a cliqué
+    « connecter » (ADR 0033 B3)."""
+    payload = json.dumps({"sub": sub, "org": org_id, "ts": int(time.time())},
+                         separators=(",", ":")).encode()
     sig = hmac.new(_state_secret(), payload, hashlib.sha256).digest()
     return f"{_b64url(payload)}.{_b64url(sig)}"
 
 
-def verify_state(state: str) -> Optional[str]:
-    """Renvoie le sub si state valide et non expiré, sinon None."""
+def verify_state(state: str) -> Optional[tuple[str, int]]:
+    """Renvoie (sub, org_id) si state valide et non expiré, sinon None."""
     if not state or "." not in state:
         return None
     p_b64, sig_b64 = state.split(".", 1)
@@ -121,12 +137,15 @@ def verify_state(state: str) -> Optional[str]:
         return None
     if int(time.time()) - int(data.get("ts", 0)) > _STATE_TTL:
         return None
-    sub = data.get("sub")
-    return sub if isinstance(sub, str) else None
+    sub, org = data.get("sub"), data.get("org")
+    if not isinstance(sub, str) or not isinstance(org, int):
+        return None
+    return sub, org
 
 
 def build_auth_url(sub: str) -> str:
     from urllib.parse import urlencode
+    org_id = _ctx_org(sub)
     params = {
         "client_id": _client_id(),
         "redirect_uri": _redirect_uri(),
@@ -136,7 +155,7 @@ def build_auth_url(sub: str) -> str:
         # consent → force refresh_token ; select_account → laisse l'user choisir
         # quel compte Google connecter (clé du multi-compte).
         "prompt": "consent select_account",
-        "state": make_state(sub),
+        "state": make_state(sub, org_id),
         "include_granted_scopes": "true",
     }
     return f"{_AUTH_URL}?{urlencode(params)}"
@@ -182,8 +201,9 @@ def _fetch_email(access_token: str) -> str:
     return email
 
 
-def persist_token(sub: str, token_response: dict) -> str:
-    """Persiste les tokens et renvoie l'email du compte Google connecté."""
+def persist_token(sub: str, org_id: int, token_response: dict) -> str:
+    """Persiste les tokens (scope membre : l'org vient du state, capturée au
+    démarrage du flow) et renvoie l'email du compte Google connecté."""
     refresh_token = token_response.get("refresh_token")
     if not refresh_token:
         # `build_auth_url` impose `prompt=consent` + `access_type=offline`,
@@ -200,6 +220,7 @@ def persist_token(sub: str, token_response: dict) -> str:
     email = _fetch_email(access_token)
     db.set_google_oauth(
         sub,
+        org_id,
         google_email=email,
         refresh_token=refresh_token,
         scopes=scopes,
@@ -238,7 +259,8 @@ def credentials_for(sub: str, account: Optional[str] = None):
     if account is None:
         from . import access  # lazy : évite tout cycle d'import au boot
         account = access.project_pinned_identity("google")
-    row = db.get_google_oauth(sub, account=account)
+    org_id = _ctx_org(sub)
+    row = db.get_google_oauth(sub, org_id, account=account)
     if not row:
         suffix = f" pour {account}" if account else ""
         raise RuntimeError(
@@ -265,7 +287,7 @@ def credentials_for(sub: str, account: Optional[str] = None):
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
-        db.update_google_access_token(sub, row.get("google_email"), access_token, new_exp)
+        db.update_google_access_token(sub, org_id, row.get("google_email"), access_token, new_exp)
 
     return Credentials(
         token=access_token,
@@ -278,8 +300,9 @@ def credentials_for(sub: str, account: Optional[str] = None):
 
 
 def list_accounts(sub: str) -> list[dict]:
-    """Liste les comptes Google connectés du user (email, défaut, scopes)."""
-    return db.list_google_accounts(sub)
+    """Comptes Google connectés du user DANS l'org de contexte (email, défaut, scopes)."""
+    from . import access  # lazy
+    return db.list_google_accounts(sub, access.current_org(sub))
 
 
 def revoke(sub: str, account: Optional[str] = None) -> None:
@@ -289,8 +312,9 @@ def revoke(sub: str, account: Optional[str] = None) -> None:
     """
     import requests
 
+    org_id = _ctx_org(sub)
     if account is None:
-        rows = db.list_google_accounts(sub)
+        rows = db.list_google_accounts(sub, org_id)
         targets = [r.get("google_email") for r in rows]
     else:
         targets = [account]
@@ -300,7 +324,7 @@ def revoke(sub: str, account: Optional[str] = None) -> None:
         # (ligne chiffrée avec une master key périmée → InvalidTag) ne doit PAS
         # empêcher la suppression. Le contrat de revoke = supprimer en DB.
         try:
-            row = db.get_google_oauth(sub, account=email)
+            row = db.get_google_oauth(sub, org_id, account=email)
         except Exception:
             row = None
         if row and row.get("refresh_token"):
@@ -312,4 +336,4 @@ def revoke(sub: str, account: Optional[str] = None) -> None:
                 )
             except Exception:
                 pass  # on supprime quand même en DB
-    db.delete_google_oauth(sub, account=account)
+    db.delete_google_oauth(sub, org_id, account=account)

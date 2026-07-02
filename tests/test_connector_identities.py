@@ -24,6 +24,7 @@ class _FakeUnipile:
 # --- Google -----------------------------------------------------------------
 
 def test_google_list_and_select(monkeypatch):
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr("oto_mcp.google_oauth.list_accounts",
                         lambda sub: [{"google_email": "a@x.io", "is_default": True},
                                      {"google_email": "b@x.io", "is_default": False}])
@@ -33,13 +34,14 @@ def test_google_list_and_select(monkeypatch):
 
     called = {}
     monkeypatch.setattr("oto_mcp.db.set_default_google_account",
-                        lambda sub, acc: called.update(acc=acc) or True)
+                        lambda sub, org, acc: called.update(acc=acc, org=org) or True)
     connector_identities.select_identity("u1", "google", "b@x.io")
     assert called["acc"] == "b@x.io"
 
 
 def test_google_select_unknown_raises(monkeypatch):
-    monkeypatch.setattr("oto_mcp.db.set_default_google_account", lambda sub, acc: False)
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    monkeypatch.setattr("oto_mcp.db.set_default_google_account", lambda sub, org, acc: False)
     with pytest.raises(ValueError):
         connector_identities.select_identity("u1", "google", "ghost@x.io")
 
@@ -55,6 +57,7 @@ def _wire_byo(monkeypatch, mode="org"):
     monkeypatch.setattr(access.credentials_store, "get_credential_with_meta",
                         lambda *a, **k: {"meta": {"dsn": "api6.unipile.com:13616"}})
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeUnipile)
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     # #55 : par défaut, pas de grant reçu ni de pointeur « identité opérée ».
     monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
@@ -65,7 +68,7 @@ def _wire_byo(monkeypatch, mode="org"):
 
 def test_unipile_list_byo(monkeypatch):
     _wire_byo(monkeypatch)
-    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, ch: "A2")
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, ch: "A2")
     ids = connector_identities.list_identities("u1", "unipile")
     assert {i["id"] for i in ids} == {"A1", "A2"}
     a2 = next(i for i in ids if i["id"] == "A2")
@@ -76,12 +79,16 @@ def test_unipile_select_valid(monkeypatch):
     _wire_byo(monkeypatch)
     saved = {}
     monkeypatch.setattr("oto_mcp.db.set_unipile_account",
-                        lambda sub, aid, name, org_id=None, provider="LINKEDIN":
-                        saved.update(aid=aid, name=name, provider=provider, org_id=org_id))
+                        lambda sub, aid, name, org_id=None, provider="LINKEDIN",
+                               platform_seat=False:
+                        saved.update(aid=aid, name=name, provider=provider,
+                                     org_id=org_id, platform_seat=platform_seat))
     res = connector_identities.select_identity("u1", "unipile", "A1")
     assert res["id"] == "A1" and res["channel"] == "LINKEDIN"
+    # Scope membre (ADR 0033 B4) : le binding est rattaché à l'org de contexte,
+    # BYO = pas un siège plateforme.
     assert saved == {"aid": "A1", "name": "Alexandra El Hachem",
-                     "provider": "LINKEDIN", "org_id": None}
+                     "provider": "LINKEDIN", "org_id": 39, "platform_seat": False}
 
 
 def test_unipile_select_unknown_id_raises(monkeypatch):

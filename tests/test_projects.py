@@ -58,6 +58,10 @@ def seams(monkeypatch):
     # Partage public chiffré (ADR 0032 §3) : défaut = non partagé ; les tests dédiés
     # surchargent get_project_public_share pour simuler une part active.
     monkeypatch.setattr(P.db, "get_project_public_share", lambda pid: None)
+    # Projets LIVRÉS (#52) : défaut = aucun ; les tests dédiés surchargent.
+    rec["granted"] = []
+    monkeypatch.setattr(P.db, "list_projects_granted_to",
+                        lambda principals: rec["granted"].append(principals) or [])
     return rec
 
 
@@ -106,6 +110,22 @@ def test_list_without_active_org_rejected(seams):
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="list"))      # CTX.org_id = None
     assert e.value.code == "no_active_org"
+
+
+def test_list_includes_projects_delivered_to_org(seams, monkeypatch):
+    # Un projet PARTAGÉ à l'org active (livraison #52) apparaît dans la liste,
+    # marqué `shared` + permission ; un doublon owner∩grant n'apparaît qu'une fois.
+    delivered = dict(ROW, id=51, name="Livré", owner_type="org", owner_id="1",
+                     permission="read")
+    monkeypatch.setattr(P.db, "list_projects_granted_to",
+                        lambda principals: [delivered, dict(ROW, id=7, permission="write")])
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="list"))
+    ids = [p["id"] for p in out["projects"]]
+    assert ids == [7, 51]                                # 7 possédé prime, pas de doublon
+    livre = next(p for p in out["projects"] if p["id"] == 51)
+    assert livre["shared"] is True and livre["permission"] == "read"
+    assert livre["owner_id"] == "1"                      # l'owner reste l'org émettrice
 
 
 def test_get_forbidden(seams, monkeypatch):

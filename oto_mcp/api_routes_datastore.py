@@ -90,12 +90,13 @@ def make_routes(
         state = request.query_params.get("state")
         if not code or not state:
             return json_error(request, 400, "missing_code_or_state")
-        sub = google_oauth.verify_state(state)
-        if not sub:
+        parsed = google_oauth.verify_state(state)
+        if not parsed:
             return json_error(request, 400, "invalid_state")
+        sub, org_id = parsed
         try:
             tokens = google_oauth.exchange_code(code)
-            google_oauth.persist_token(sub, tokens)
+            google_oauth.persist_token(sub, org_id, tokens)
         except Exception as e:
             return json_error(request, 502, f"oauth_exchange_failed: {e}")
         # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
@@ -146,7 +147,8 @@ def make_routes(
         account = account.strip()
         if not account:
             return json_error(request, 400, "missing_account")
-        if not db.set_default_google_account(sub, account):
+        org_id = access.current_org(sub)
+        if org_id is None or not db.set_default_google_account(sub, org_id, account):
             return json_error(request, 404, "unknown_account")
         return json_response(request, {"ok": True, "default": account})
 

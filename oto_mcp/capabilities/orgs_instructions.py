@@ -46,6 +46,7 @@ class EmptyInput(BaseModel):
 
 class DoctrineGetInput(BaseModel):
     slug: Optional[str] = None
+    doctrine_id: Optional[int] = None   # lecture par ID STABLE (ADR 0032) — y compris une doctrine PARTAGÉE à ton org (grant read, livraison #52)
     scope: str = "org"
     version: Optional[int] = None
     with_history: bool = False
@@ -144,6 +145,31 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
     slug = inp.slug
     scope = inp.scope
     version = inp.version
+
+    # Lecture par ID STABLE (ADR 0032 « stop using slug ») — le chemin des liens de
+    # projet ET des doctrines PARTAGÉES cross-org (grant read via oto_resource, #52) :
+    # l'accès passe par le seam ownership (membre de l'org propriétaire ∪ grants),
+    # pas par l'org active.
+    doctrine_id = getattr(inp, "doctrine_id", None)
+    if doctrine_id is not None:
+        from .. import ownership   # import paresseux (miroir _authz, zéro cycle au boot)
+        instr = org_store.get_instruction_by_id(int(doctrine_id))
+        if not instr:
+            raise AuthzDenied(404, "unknown_doctrine",
+                              f"Aucune doctrine #{doctrine_id}.")
+        if not ownership.can_access(ctx.sub, "doctrine", str(doctrine_id), "read"):
+            raise AuthzDenied(403, "forbidden", "Accès refusé à cette doctrine.")
+        if version is not None:
+            versioned = org_store.get_instruction(instr["org_id"], instr["slug"], version)
+            if not versioned:
+                raise AuthzDenied(404, "unknown_doctrine",
+                                  f"Doctrine #{doctrine_id} : pas de version {version}.")
+            instr = {**versioned, "id": instr["id"]}
+        return {"org_id": instr["org_id"], "doctrine_id": int(doctrine_id),
+                "scope": "org", "slug": instr["slug"], "title": instr["title"],
+                "description": instr["description"], "version": instr["version"],
+                "body_md": instr["body_md"],
+                "referenced_tools": await tool_registry.manifest_for(instr["body_md"])}
 
     if slug is None:
         # Début de session : doctrine de base + index (vide gracieux si pas d'org).
@@ -337,8 +363,13 @@ CAPABILITIES += [
                      "`slug` to load ONE named skill's full markdown (list skills with "
                      "oto_list_doctrines). No-arg returns base + index, e.g. to refresh "
                      "after switching org with oto_use_org. `scope=group` targets your "
-                     "active department."),
+                     "active department. `doctrine_id` loads a doctrine by its STABLE id "
+                     "(project procedure links) — including one SHARED to you/your org "
+                     "by another org (delivered project)."),
         mcp=_DOCTRINE_GET_TOOL,
+        # Face REST par ID stable : résolution des liens `procedure` d'un projet côté
+        # dashboard — y compris un projet LIVRÉ (doctrine d'une autre org, grant read).
+        rest=RestBinding("GET", "/api/me/doctrines/{doctrine_id}"),
     ),
     Capability(
         key="org.doctrine.list", handler=_list_doctrines, Input=DoctrineListInput,

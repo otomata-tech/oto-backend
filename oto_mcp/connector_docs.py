@@ -398,6 +398,26 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_stock_siege(siren)` / `fr_stock_etablissements(siren)` — siège ou tous les établissements d'une boîte\n"
             "- `fr_stock_search(naf=…, enseigne=…, departement=…)` — énumère tous les sites (ex. tous les « intermarché » d'un département)"
         )),
+        DocSection(kind="usage", title="conventions collectives (kali)", body_md=(
+            "le droit de la branche en texte intégral (stock kali/dila complet, ~290k articles) : minima, congés, primes, classifications. filtre idcc natif.\n"
+            "- `fr_ccn_conventions(idcc=… | query=…)` — résoudre une convention (« quelle est la 3090 ? », « conventions du spectacle »)\n"
+            "- `fr_ccn_search(query=…, idcc=…)` — recherche plein-texte dans les articles d'une branche (ou toutes)\n"
+            "- `fr_ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
+            "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand)"
+        )),
+        DocSection(kind="usage", title="codes consolidés (legi)", body_md=(
+            "les 22 codes français avec versions historiques : citer la loi exacte, à la bonne date, avec lien légifrance.\n"
+            "- `fr_loi_article(code=\"CT\", num=\"L1242-2\", date=…)` — le texte en vigueur à la date demandée (défaut aujourd'hui)\n"
+            "- `fr_loi_versions(code, num)` — la timeline des rédactions d'un article\n"
+            "- `fr_loi_search(query=…, code=…)` — retrouver l'article quand on connaît le concept, pas le numéro\n"
+            "- `fr_loi_codes()` — les alias couverts (CT, CC, CP, CSS, CGI…)"
+        )),
+        DocSection(kind="usage", title="jurisprudence (6 fonds dila)", body_md=(
+            "comment les juges tranchent : cassation (publiés + inédits), cours d'appel, CE/CAA/TA, conseil constitutionnel, cnil. tri pertinence × autorité.\n"
+            "- `fr_juris_search(query=…, fond=…, juridiction=…, date_min=…)` — recherche unifiée plein-texte\n"
+            "- `fr_juris_get(decision_id)` — texte intégral d'une décision + lien légifrance\n"
+            "- workflow type : `fr_juris_search` → repérer l'arrêt de principe → `fr_juris_get` → citer avec `fr_loi_article` (les textes visés, à la date de la décision)"
+        )),
     ),
     "hithorizons": (
         DocSection(kind="prerequisite", title="clé api hithorizons", body_md=(

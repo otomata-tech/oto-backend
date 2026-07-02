@@ -31,7 +31,12 @@ from .users import upsert_user
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
-                 "is_template, archived_at, created_at, updated_at")
+                 "is_template, mcp_slug, mcp_access, mcp_tools, "
+                 "archived_at, created_at, updated_at")
+
+# Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
+_MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
+_MCP_ACCESS = ("off", "anonymous", "org")
 
 
 def create_project(owner_type: str, owner_id: str, name: str,
@@ -77,6 +82,30 @@ def list_projects_for_owners(owners: list[tuple[str, str]], *,
     sql += "ORDER BY p.updated_at DESC"
     with _connect() as conn:
         rows = conn.execute(sql, (otypes, oids)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_projects_granted_to(principals: list[tuple[str, str]]) -> list[dict]:
+    """Projets PARTAGÉS aux principals donnés (`resource_grants`, ADR 0030) — la
+    lentille « livré à mon org / à moi » (#52). Chaque row porte en plus la
+    `permission` du meilleur grant. Exclut les archivés."""
+    if not principals:
+        return []
+    ptypes = [p[0] for p in principals]
+    pids = [p[1] for p in principals]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join('p.' + c.strip() for c in _PROJECT_COLS.split(','))}, "
+            "       MAX(g.permission) AS permission "
+            "FROM resource_grants g "
+            "JOIN projects p ON p.id = g.resource_id::bigint "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON g.principal_type = pr.t AND g.principal_id = pr.i "
+            "WHERE g.resource_type = 'project' AND p.archived_at IS NULL "
+            f"GROUP BY {', '.join('p.' + c.strip() for c in _PROJECT_COLS.split(','))} "
+            "ORDER BY p.updated_at DESC",
+            (ptypes, pids),
+        ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -126,6 +155,63 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str) ->
                      "WHERE id = %s", (new_owner_type, new_owner_id, project_id))
 
 
+def get_project_by_mcp_slug(slug: str) -> Optional[dict]:
+    """Projet publié sur le sous-domaine `<slug>.mcp.oto.cx`, ou None. Ignore les
+    projets non publiés (`mcp_access='off'`) et archivés (deny-by-default en amont
+    du serveur MCP anonyme → jamais de fuite sur un slug retiré)."""
+    slug = (slug or "").strip().lower()
+    if not slug:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects "
+            "WHERE mcp_slug = %s AND mcp_access <> 'off' AND archived_at IS NULL",
+            (slug,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_published_mcp_projects() -> list[dict]:
+    """Projets publiés en endpoint MCP **anonyme** (annuaire public oto-websites).
+    Exclut les endpoints `org` (authentifiés, hors galerie publique) et les archivés."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects "
+            "WHERE mcp_access = 'anonymous' AND mcp_slug IS NOT NULL AND archived_at IS NULL "
+            "ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
+                                access: str, tools: list[str]) -> None:
+    """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug
+    (rend le sous-domaine inerte). Valide le format de slug et l'énumération d'accès —
+    la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité."""
+    if access not in _MCP_ACCESS:
+        raise ValueError(f"mcp_access invalide: {access!r} (attendu {_MCP_ACCESS})")
+    if access == "off":
+        slug = None
+    else:
+        slug = (slug or "").strip().lower()
+        if not _MCP_SLUG_RE.match(slug):
+            raise ValueError(
+                "mcp_slug invalide: 3+ caractères [a-z0-9-], sans tiret en bordure")
+    with _connect() as conn:
+        if slug is not None:
+            taken = conn.execute(
+                "SELECT id FROM projects WHERE mcp_slug = %s AND id <> %s",
+                (slug, project_id),
+            ).fetchone()
+            if taken:
+                raise ValueError(f"slug_taken: le sous-domaine « {slug} » est déjà pris")
+        conn.execute(
+            "UPDATE projects SET mcp_slug = %s, mcp_access = %s, mcp_tools = %s, "
+            "updated_at = NOW() WHERE id = %s",
+            (slug, access, list(tools or []), project_id),
+        )
+
+
 def add_project_link(project_id: int, target_type: str, target_ref: str,
                      label: Optional[str] = None, role: Optional[str] = None,
                      config: Optional[dict] = None, identity_ref: Optional[str] = None) -> None:
@@ -145,6 +231,20 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
             (project_id, target_type, target_ref, identity_ref, label, role, cfg, cfg),
         )
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+
+
+def update_project_link_ref(project_id: int, target_type: str,
+                            old_ref: str, new_ref: str) -> int:
+    """Re-pointe un lien vers une autre entité (même type). Sert la cascade de
+    livraison (#52) : une procédure COPIÉE dans l'org cible re-pointe le lien sur
+    la copie. Renvoie le nb de bindings re-pointés."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE project_links SET target_ref = %s "
+            "WHERE project_id = %s AND target_type = %s AND target_ref = %s",
+            (new_ref, project_id, target_type, old_ref),
+        )
+        return cur.rowcount
 
 
 def remove_project_link(project_id: int, target_type: str, target_ref: str,

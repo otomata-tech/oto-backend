@@ -35,7 +35,13 @@ DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 # et api_routes en dérivent.
 PROTECTED_TOOLS: frozenset[str] = frozenset(
     {"oto_list_my_tools", "oto_enable_tool", "oto_apply_preset", "oto_profile",
-     "oto_whoami"})
+     "oto_whoami",
+     # Échappatoires de CONTEXTE — jamais masquables (baseline, preset ou
+     # default-hidden). Un user dont `oto_use_org` est caché ne peut plus changer
+     # d'org → lock-out, son client rappelle le tool en boucle → "Unknown tool".
+     # Vécu Sentry 2026-06-30 (x50 sur 1 user après l'abolition du perso).
+     "oto_use_org", "oto_clear_org", "oto_list_orgs",
+     "oto_use_group", "oto_clear_group"})
 
 
 def namespace_of(name: str) -> str:

@@ -21,8 +21,13 @@ def test_method_derivation_matches_kind_and_secret_kind():
         if c.hosted_auth:
             # flux hébergé tiers (unipile) — prime sur le credential sous-jacent.
             assert m == "hosted", c.name
-        elif c.kind == "remote":
+        elif c.kind == "remote" and not c.credential_fields:
+            # bridge legacy (ADR 0003) : credential posé par grant, pas de formulaire
             assert m == "remote", c.name
+        elif c.kind == "remote":
+            # bridge nouveau modèle (ADR 0034) : credential_fields déclarés →
+            # formulaire self-serve standard
+            assert m == "secret", c.name
         elif c.secret_kind in ("oauth", "cookie", "none"):
             assert m == c.secret_kind, c.name
         else:

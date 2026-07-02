@@ -127,6 +127,12 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
     projects: list[str] = []
     try:
         rows = db.list_projects_for_owners([("org", str(org_id))])
+        # + les projets LIVRÉS à cette org (partagés via resource_grants, #52) — c'est
+        # l'exposition au handshake : le client ouvre le projet livré en un message.
+        seen = {r.get("id") for r in rows}
+        principals = [("org", str(org_id))] + ([("user", sub)] if sub else [])
+        rows += [r for r in db.list_projects_granted_to(principals)
+                 if r.get("id") not in seen]
         projects = [r.get("name") or f"#{r.get('id')}" for r in rows[:5]]
     except Exception:
         pass

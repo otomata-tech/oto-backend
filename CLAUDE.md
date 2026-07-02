@@ -53,7 +53,7 @@ oto-mcp porte aujourd'hui 4 métiers ; ils sont des **couches à frontière à s
 - **adaptateur REST** : `api_routes`.
 - **runtime connecteurs** : `tools/*` (in-process) + `tools/remote` (forward bridges).
 
-**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_remote_credential` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
+**Règle** : adaptateurs + runtime → dépendent du backend-core, **jamais l'inverse** ; et ils l'appellent **par interface** (`access.resolve_*`), pas par accès table croisé — pour qu'un seam puisse devenir un service (broker de credentials) sans réécriture. ✅ Le seam **résolution** (le candidat broker) est consolidé dans `access` : `resolve_api_key` / `resolve_credential_fields` / `resolve_crunchbase_session`. C'est la frontière qui doit rester nette (elle peut devenir un service). `tools/meta` (visibilité) et `tools/datastore` (partage) appellent `db` en direct, et **c'est OK** : par le principe ADR 0004 (« pas de discipline d'interface sans force ») ils ne sont pas des candidats-services → pas de reroute dogmatique.
 
 ### Couche capacité (`oto_mcp/capabilities/`, ADR 0009)
 
@@ -67,12 +67,40 @@ JWT Logto **ES384** (défaut RS256 = tout rejeté), discovery RFC 9728 sur 401,
 façade DCR self-service (`oauth_facade.py`) pour les clients sans DCR (Claude/ChatGPT/
 Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 
+> **Coexistence multi-domaine (2026-07-02)** : `https://mcp.oto.cx/mcp` sert le MCP
+> en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (liste d'audiences
+> canoniques secondaires, vide = no-op), resource Logto dédiée, PRM Host-aware
+> (`config.mcp_audience_alt_hosts`). Le 401 `WWW-Authenticate` pointe la PRM
+> canonique .ninja (fastmcp `base_url`, non Host-aware) — fonctionne car l'audience
+> canonique est acceptée sur .cx. DNS mcp.oto.cx = grey+ACME direct box.
+
 ## Rôles + résolution de clé API
 
 3 paliers `member < admin < super_admin` (accès admin UI). Résolution de clé par
-appel : `user_key > group_secret > org_secret > platform_grant` (chemin platform
-gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
+appel : `clé membre (sub, org) > group_secret > org_secret > platform_grant` (chemin
+platform gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
 grants/quota, platform keys, providers byo-only).
+
+> **Scope MEMBRE (ADR 0033, 2026-07-02).** Plus de credential per-user org-agnostique :
+> la clé BYO d'un membre est keyée **(sub, org)** — coffre `entity_type='member'`,
+> `entity_id="{org}:{sub}"` (AAD dérivé → liée crypto à son org). Posée dans l'org A,
+> elle ne résout PAS depuis l'org B (fini « ta clé perso te suit partout et écrase la
+> clé d'org »). L'org de scope = seam `current_org` (0023), à la pose (`/api/settings/
+> api-keys`, sessions browser) comme à la résolution ; helpers `db.{get,has,set,clear}_
+> member_api_key(sub, org_id, provider)` — la couche db ne lit JAMAIS `current_org`
+> elle-même. Valeurs de contrat inchangées (`mode="user"`, `user_key_configured`) —
+> seule la sémantique change. **B3 (google)** : comptes Google multi-comptes scopés
+> (sub, org) — `db/google.py` en entité member, l'org du DÉMARRAGE du flow OAuth voyage
+> dans le **state HMAC** jusqu'au callback (qui vient de Google, sans headers de
+> consultation). **B4 (unipile)** : `unipile_accounts` au grain **(sub, org_id, provider)**
+> — `org_id` = org de CONTEXTE du binding (la facturation des sièges plateforme a sa
+> colonne `platform_seat` ; les BYO ne comptent pas dans le plafond) ; migration PK
+> one-shot `db.backfill_unipile_member_scope()` (⚠️ le cycle de vie du PK lui appartient,
+> pas à `_init.py`). **Seuls les mounts oauth fédérés** (memento/atlassian/folkmcp)
+> restent scope `('user', sub)` ; tripwire `test_member_credential_scope.py` interdit
+> toute autre écriture scope user. Migration coffre = `credentials_store.
+> backfill_member_scope()` au boot (re-chiffrement — l'AAD change, pas d'UPDATE ;
+> destination = org maison ; ligne indéchiffrable laissée inerte).
 
 **Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
 
@@ -100,8 +128,25 @@ connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
   une page `app` puis exécute un `fetch(base+path)` **same-origin** (la session vivante
   porte les cookies). `base`/`app` sont **propres au connecteur** (le substrat n'en
   hardcode aucun). Creds plateforme env `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`.
-- **Connecteurs sur le substrat** (tous deux : Live View `*_connect_start`/`*_connect_status`,
-  Context au coffre, family dérivée=`api`, plus aucun browser local) :
+- **Connexion = depuis le DASHBOARD** (voie produit, pas MCP) : bouton « Connecter »
+  → Live View Browserbase **en iframe** ; l'user se logue ; « vérifier » persiste le
+  Context. Servie en REST `POST /api/me/connectors/{name}/session/{start,finalize}`
+  ET en MCP (`<name>_connect_start`/`_connect_status`) par **un seul corps de logique**
+  (`browser_session.py`, seam : `start()` générique + `finalize()` avec **verify
+  par-connecteur enregistré** — brevo=cookie `auth`, crunchbase=sonde API ; les tools
+  MCP ne sont que de minces délégations). ⚠️ **Un connecteur browser-session s'enregistre
+  avec une `login_url`** (`browser_session.register(name, verify, login_url=…)`) : `start()`
+  amène la session **sur cette page** avant d'afficher la Live View (best-effort). Sans elle,
+  la Live View reste sur `about:blank` (l'user ne sait pas où se loguer — vécu pennylaneged
+  2026-07-01). **Sécu** : la session émise est liée au `sub`
+  (`_PENDING`, anti-IDOR — `finalize` refuse un Context tiers) et **aucune exception
+  brute n'est renvoyée** (l'URL CDP porte `?apiKey=…` → loggué, message propre). L'état
+  (`configured` + `session_set_at`) sort dans `me.providers[name]` via `status_for`
+  (les connecteurs `secret_kind="cookie"`) — ADR 0026 avait retiré `me.crunchbase` sans
+  jamais câbler ce relais (UX cassée bout-en-bout, corrigé 2026-06-30). Déconnexion =
+  DELETE générique `/api/settings/api-keys/{name}` (byo_user, plus de route dédiée).
+- **Connecteurs sur le substrat** (tous deux : Live View ci-dessus, Context au coffre,
+  family dérivée=`api`, plus aucun browser local) :
   - **`brevo`** (`tools/brevo.py`) — automations marketing via l'API privée
     `workflow-apis.brevo.com/v1` (cookie `auth` httpOnly). **Prouvé 200** le 2026-06-24.
   - **`crunchbase`** (`tools/crunchbase.py`) — fiches société/personne via l'API privée
@@ -180,7 +225,15 @@ d'escalade admin sur du perso) et **`can_govern`** (GOUVERNANCE = owner ∪ esca
 `roles.py` : transférer/lister/partager **sans lire**). La lecture opérateur du contenu
 perso reste le **view-as audité** (ADR 0023). `DatastorePg._resolve` passe par
 `can_access` ; le share/transfert/delete par `can_govern` (un super_admin/org_admin
-gouverne donc un datastore tiers). **org-owned activé** : `data_create_namespace` /
+gouverne donc un datastore tiers). ⚠️ **Scoping des LISTES de contenu** : une liste de
+ressources possédées (datastore `list_namespaces`, projets `op=list`) scope sur
+**`ownership.active_owner(current_org)`** (= l'org active, le pendant `ownership` de
+`current_org`/ADR 0023), **JAMAIS** sur `accessor_scope().owner_pairs()` (= union de
+TOUTES les orgs de l'acteur, réservé au plan **gouvernance** `oto_resource list` +
+découverte/modèles). Les confondre = fuite cross-org *fail-open* (le superset montre
+plus que le contexte chargé) — vécu 2026-06-30 (projets/datastore d'une autre org
+visibles dans le dashboard). Garde-fou : `tests/test_owner_scope_tripwire.py` fige les
+call-sites `owner_pairs()`. **org-owned activé** : `data_create_namespace` /
 `POST /api/datastore/namespaces` acceptent un `owner` (classeur d'équipe). Capacité
 générique **`oto_resource`** (`capabilities/resources.py`, op `list/get/transfer/share/
 unshare`, autz combinateur `RESOURCE_GOVERN`) = chemin de gouvernance MCP+REST + alimente
@@ -212,7 +265,23 @@ l'accès du projet — pas d'ownership propre), `project_activity` (journal best
 Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
 docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/transfert via
-**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`). UI : `oto-dashboard`
+**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
+
+> **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
+> `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
+> d'appartenance — on donne un accès) ; **`cascade=true`** sur share/transfer d'un projet
+> répercute le geste sur les `project_links` avec rapport par entité — **tableau** = même
+> geste (grant/transfert du namespace), **procédure** = grant `read` au partage (modèle
+> licence : oto garde le master) / **copie chez la cible + re-pointage du lien** au
+> transfert (`org_store.copy_instruction_to_org`, l'originale intacte), **connecteur** =
+> `recipient_credential` (le client branche SA clé ; la surcharge identité/instructions du
+> lien voyage avec le projet) ; docs/fichiers suivent d'office (héritage d'accès). Kind
+> **`doctrine`** enregistré sur la primitive ownership (owner **dérivé** d'`org_instructions.
+> org_id`, resource_id = id surrogate) → lecture cross-org **par id** `oto_get_doctrine(
+> doctrine_id=…)` / `GET /api/me/doctrines/{id}`, gatée `ownership.can_access`. Un projet
+> livré remonte chez le client dans `oto_project(op=list)` (flag `shared`+`permission`) ET
+> dans le bloc C du handshake (#50) — ouvrable en un message. Reste à cadrer : push des màj
+> post-livraison (re-share = re-grant idempotent, mais pas de notification). UI : `oto-dashboard`
 `/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
 (MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
 
@@ -228,6 +297,33 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > (ancien lien caduc). `oto_project(op=get)` expose `public_shared`/`public_shared_at` (présence
 > seule, jamais la clé). Pendant du partage public de doc rendu (#4a) mais **chiffré**.
 
+> **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
+> se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de
+> l'ADR 0032 §7). Colonnes `projects.mcp_slug`/`mcp_access`(`off|anonymous|org`)/`mcp_tools[]` ;
+> capacité `oto_project` op **`publish_mcp`/`unpublish_mcp`** (autz `can_govern`) ; **garde de
+> publication** : un preset `anonymous` n'accepte que des tools **credential-less** (`secret_kind=none`)
+> ou dont le connecteur a une clé résoluble pour l'org propriétaire. **Deux modes** :
+> - **`anonymous`** (sans login, contourne 100 % du blocage Logto #44) : allowlist **figée = `mcp_tools`**
+>   (fail-closed, aucun autre tool visible), credential résolu via l'**org propriétaire** du projet
+>   (`access.current_org(None)`→org du projet, `_resolve_credential_anon` : org_secret > grant > clé
+>   plateforme, **sans quota**), rate-limité (token-bucket in-memory par IP+projet).
+> - **`org`** : JWT Logto, **épingle l'org** ; le sous-domaine est enregistré comme **resource Logto**
+>   (`oauth_facade.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
+>
+> **Host-routing** (`subdomain_project.HostDispatch`, monté `root_app` dans `server.main`) : une **2ᵉ app
+> FastMCP sans auth** (`anon_mcp = mcp`, **réutilise l'instance no-auth module-level** — ne PAS en
+> re-build une 3ᵉ, doublait register_all/mounts/init_db → boot timeout) sert les sous-domaines anonymes ;
+> tout le reste → app authentifiée **inchangée**. **Même URL, 2 publics** : navigateur (`GET`+`Accept:
+> text/html`) → **landing HTML** rendue **live depuis la ligne projet** (`anon_landing.render`, name/brief_md/
+> mcp_tools) ; Claude/Mistral (`POST`) → MCP (rewrite path `/`→`/mcp`, `_root_to_mcp` — Claude tape la racine).
+> Fichiers : `subdomain_project.py` (routing + rate-limit + `/api/mcp/tls-check` + `/api/public/mcp-projects`),
+> `anon_visibility.py` (allowlist fail-closed), `anon_oauth.py` (shim OAuth **auto-approve**, `.well-known/*`
+> + `/register` + `/authorize`→302 sans login + `/token`→`anon-…`), `anon_landing.py` (HTML charté).
+> **Infra** : **wildcard** `*.mcp.oto.cx` (CF-proxied) + Caddy **on-demand TLS** gaté par `/api/mcp/tls-check`
+> (200 uniquement pour un slug **publié** → borne l'émission de certs). `publish_mcp` est la **seule** action
+> par projet — **zéro DNS** à chaque publication. **Surface web** : annuaire public **oto.ninja/apps**
+> (`web/AppsView.vue`) via `GET /api/public/mcp-projects` (CORS `*`, liste les projets `anonymous` publiés).
+
 ## WhatsApp / Telegram / Instagram (messagerie via Unipile)
 
 Tools `whatsapp_*` / `telegram_*` / `instagram_*` (`list_chats`/`read_chat`/
@@ -238,8 +334,10 @@ d'Unipile est channel-agnostic ; chaque tool résout l'`account_id` du canal pou
 user (no-fallback, `tools/unipile.unipile_client(provider)`).
 
 Connexion = hosted-auth Unipile (dashboard, `?channel=whatsapp|telegram|instagram`),
-`account_id` per-user dans `unipile_accounts` (PK `(sub, provider)`). Même gate
-d'option par org que LinkedIn (comp admin `access.has_option` ; plus de paiement).
+`account_id` per-membre dans `unipile_accounts` (PK `(sub, org_id, provider)` — scope
+membre ADR 0033 B4 : le binding vaut dans l'org de contexte, un canal se connecte par
+org). Même gate d'option par org que LinkedIn (comp admin `access.has_option` ; plus
+de paiement).
 
 > **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
 > (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`
@@ -359,11 +457,15 @@ d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/f
 
 Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
 celle d'un connecteur, pas une page à part). **Deux connecteurs** (`providers.py`) :
-`scaleway` (hébergé Otomata via Scaleway TEM = service `otomata-auth-mailer`, clé
-**plateforme**, `secret_kind=none`, **réservé à Otomata via l'activation**
-(master OFF + override org Otomata ON)) + `resend` (BYOK, `auth_modes={byo_org}`). **Le transport
-DÉRIVE du connecteur** : `providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:mailer,
-resend:resend}` (pas de champ transport sur l'expéditeur).
+`scaleway` (**BYO-org depuis le 2026-07-01** : `auth_modes={byo_org}`,
+`secret_kind="fields"` — `secret_key`+`project_id`+`region` du compte Scaleway TEM
+de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem`, plus de
+service mailer ni de clé plateforme ; master ON **sûr** car la propriété du domaine
+est garantie PAR Scaleway — l'API refuse un `from` dont le domaine n'est pas vérifié
+dans le compte de l'org, ce qui rend #64 caduque) + `resend` (BYOK,
+`auth_modes={byo_org}`). **Le transport DÉRIVE du connecteur** :
+`providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:scaleway, resend:resend}` (pas de
+champ transport sur l'expéditeur).
 
 - `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
   `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
@@ -381,11 +483,11 @@ resend:resend}` (pas de champ transport sur l'expéditeur).
   (pure, testée) + boucle asyncio démarrée via le lifespan (`server.py`), batch isolé
   en `asyncio.to_thread` (ne bloque pas l'event loop) ; table `scheduled_emails`
   (claim `FOR UPDATE SKIP LOCKED`, retry ×3). Gestion : `oto_list/cancel_scheduled_emails`.
-- **Vérif de domaine d'envoi = différée (issue #64)** : le domaine est un **objet
-  d'ORG** (pas du connecteur — réutilisable signature/identité), table future
-  `org_email_domains` + vérif DNS via Scaleway TEM. Tant qu'absente : scaleway reste
-  réservé à Otomata via l'activation (otomata.tech dans `MAILER_FROM_DOMAINS`) ; resend ouvert à
-  toute org (Resend garde la porte du domaine).
+- **Vérif de domaine d'envoi = déléguée au provider** (les deux connecteurs sont
+  BYO) : Scaleway TEM comme Resend refusent un `from` hors domaine vérifié dans le
+  compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).
+  Otomata (org 2) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
+  vault `SCW_TEM_*`).
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
 > `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**
@@ -562,20 +664,20 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   pas de seed. open-data/maison sans domaine → pas de logo, monogramme côté UI).
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
-- **Connecteur client-sensible = JAMAIS de code ici** : connecteur **remote** défini
-  par la DONNÉE (ADR 0003/0011) — un credential d'org avec `meta.base_url` (endpoint
-  du bridge) suffit, **zéro nom client au registre** (plus de `_c("mm")`). Découvert
-  au boot (`credentials_store.list_remote_namespaces`, gracieux si DB indispo), servi
-  par le générique `tools/remote.py` (`<ns>_describe`/`<ns>_call`) ; le credential
-  d'org **EST** la condition de visibilité : un outil remote n'apparaît qu'à l'org
-  qui détient son credential remote (règle **dédiée credential-based** dans
-  `session_visibility`, `credentials_store.org_remote_namespaces`). Le bridge
-  distant détient le credential client (token M2M). Pilote :
-  un bridge back-office client (repo privé). Cf. ADR 0003. **Et JAMAIS dans une surface anonyme** :
-  les catalogues publics (`/api/connectors` sans bearer, `/api/mcp/catalog`
-  → pages oto.ninja/tools) filtrent les `platform_granted`
-  (deny-by-default, miroir de la face MCP) — fuite vécue 2026-06-13
-  (page marketing /tools/mm).
+- **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
+  **`bridge` universel** (ADR 0034, amende 0003/0011) — UNE entrée générique au
+  registre (`kind="remote"`), tools fixes `bridge_describe`/`bridge_call`
+  (`tools/remote.py`). L'identité du service ponté vit dans la **CONFIG d'org**
+  (champs standard `base_url`/`token`/`label`, `resolve_credential_fields`),
+  **jamais dans le namespace** → montrable au catalogue sans nom client (l'ex-fuite
+  /tools/mm venait du namespace-par-client). Le bridge distant détient le
+  credential métier (contrat ADR 0003 §4 inchangé : `/describe`+`/call`, bearer
+  M2M, lecture seule bornée côté bridge, audit `X-Oto-Sub`). Visibilité = régime
+  commun (activation × masque, `default_hidden` → self-activable) ; sans
+  credential, l'exécution lève proprement. Pilote : le bridge back-office
+  Movinmotion (repo privé), migré du legacy per-namespace `mm_*` le 2026-07-02
+  (découverte `meta.base_url`, règle de visibilité dédiée et
+  `resolve_remote_credential` retirés en B4).
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne

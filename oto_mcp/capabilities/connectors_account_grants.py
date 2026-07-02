@@ -66,7 +66,9 @@ def _list(ctx: ResolvedCtx, inp: AccountGrantsListInput) -> dict:
 def _grant(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
     provider = _provider_for(inp.channel)
     user = _resolve_grantee(ctx, inp.grantee)
-    account_id = db.get_unipile_account_id(ctx.sub, provider)
+    # Scope membre (ADR 0033) : le compte du propriétaire vit dans SON org de
+    # contexte — `ctx.org_id` est injecté par SUB_ONLY (= access.current_org).
+    account_id = db.get_unipile_account_id(ctx.sub, ctx.org_id, provider)
     if not account_id:
         raise AuthzDenied(404, "channel_not_connected",
                           f"Tu n'as pas de compte {inp.channel} connecté — connecte-le "

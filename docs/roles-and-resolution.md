@@ -1,3 +1,20 @@
+---
+title: Rôles + résolution de clé API
+type: reference
+description: >-
+  Référence des 3 paliers de rôles plateforme oto-backend (member < admin < super_admin,
+  définis dans access.py/roles.py, bootstrap via OTO_MCP_ADMIN_SUB) et de la cascade
+  de résolution de clé API par appel : clé membre BYO scopée (sub, org) [ADR 0033] > grant explicite user_grants
+  (quota daily) > McpError actionnable. Détaille les platform_keys en DB uniquement
+  (plus de SOPS, rotation via oto_admin_set_platform_key), le gate auth_modes pour
+  les providers platform-éligibles (serper/hunter/sirene/kaspr), les providers byo-only
+  (attio/lemlist/pennylane), le cas Slack (token xoxp per-user), et le débranchement
+  SOPS (OTO_CONFIG_DISABLE_SOPS=1 en prod). À consulter pour diagnostiquer un accès
+  refusé, ajouter un grant, ou comprendre qui peut quoi sur la plateforme.
+adr:
+  - "0016"
+---
+
 # Rôles + résolution de clé API
 
 > ⚠️ Le **stockage** des credentials est le **coffre chiffré unique `connector_credentials`** (cf. `docs/connector-vault.md`). Les colonnes legacy `users.<provider>_api_key`/`org_secrets`/`user_google_oauth` ont été **purgées** (DROP, 2026-06-11) ; chiffrement **obligatoire** (plus de plaintext). La résolution ci-dessous reste valide dans sa cascade, lit le coffre via `credentials_store`.
@@ -37,7 +54,7 @@ bootstrap SOPS/env au boot, oto-mcp#12). Poser/roter une clé = surface admin :
 REST `POST /api/admin/platform-keys` ou meta-tool `oto_admin_set_platform_key`
 (rotation = re-poser même provider+label ; label historique servi par
 `resolve_api_key` = `env`). Poser ≠ granter : l'admin accorde l'accès au cas
-par cas. Modèle : user key (prio, no quota) OU platform key + grant + quota OU
+par cas. Modèle : clé membre (sub, org de contexte — ADR 0033, prio, no quota) OU platform key + grant + quota OU
 erreur. **Seuls les providers `platform`-éligibles au registre (`auth_modes`
 inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
 plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur

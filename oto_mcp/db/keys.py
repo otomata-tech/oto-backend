@@ -18,41 +18,60 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from ._conn import KEY_PROVIDERS, _connect
+from ._conn import KEY_PROVIDERS, CREDENTIAL_PROVIDERS, _connect
 from .users import list_users, upsert_user
 
 
 def _check_provider(provider: str) -> None:
-    if provider not in KEY_PROVIDERS:
-        raise ValueError(f"Unknown provider {provider!r} (allowed: {KEY_PROVIDERS})")
+    # Accepte tout provider pouvant détenir un credential : keyed (clé API), byo
+    # multi-champs, ET sessions navigateur cookie (brevo/crunchbase/pennylaneged, qui
+    # persistent leur Context Browserbase via ce chemin). KEY_PROVIDERS seul (keyed) est
+    # trop étroit → rejetait la persistance de session (« Unknown provider 'pennylaneged' »).
+    if provider not in CREDENTIAL_PROVIDERS:
+        raise ValueError(f"Unknown provider {provider!r} (allowed: {sorted(CREDENTIAL_PROVIDERS)})")
 
 
-def set_user_api_key(sub: str, provider: str, key: str) -> None:
+# Scope MEMBRE (ADR 0033) : la clé per-user est keyée (sub, org) — « ma clé dans
+# CETTE org ». L'org est TOUJOURS passée par l'appelant (access/api_routes résolvent
+# le contexte via le seam `current_org` ; la couche db ne le lit jamais elle-même).
+# `org_id=None` (défensif, contexte org introuvable) → pas de clé, jamais un repli
+# org-agnostique : c'était le trou que 0033 ferme.
+
+def set_member_api_key(sub: str, org_id: int, provider: str, key: str) -> None:
     _check_provider(provider)
     upsert_user(sub)
     # Coffre chiffré, source unique. Import lazy (db ne doit pas importer
     # credentials_store au niveau module — cycle).
     from .. import credentials_store
-    credentials_store.set_credential("user", sub, provider, key, set_by=sub)
+    credentials_store.set_credential(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub),
+        provider, key, set_by=sub)
 
 
-def clear_user_api_key(sub: str, provider: str) -> None:
+def clear_member_api_key(sub: str, org_id: int, provider: str) -> None:
     _check_provider(provider)
     from .. import credentials_store
-    credentials_store.clear_credential("user", sub, provider)
+    credentials_store.clear_credential(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
 
 
-def get_user_api_key(sub: str, provider: str) -> Optional[str]:
+def get_member_api_key(sub: str, org_id: Optional[int], provider: str) -> Optional[str]:
     # Lit le coffre `connector_credentials` (déchiffre — chemin de RÉSOLUTION).
     # Import lazy (anti-cycle) ; require_keyed dans le store.
+    if org_id is None:
+        return None
     from .. import credentials_store
-    return credentials_store.get_credential("user", sub, provider)
+    return credentials_store.get_credential(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
 
 
-def has_user_api_key(sub: str, provider: str) -> bool:
-    """Présence d'une clé perso SANS la déchiffrer (status_for / /api/me)."""
+def has_member_api_key(sub: str, org_id: Optional[int], provider: str) -> bool:
+    """Présence de la clé du membre dans CETTE org, SANS déchiffrer (status_for)."""
+    if org_id is None:
+        return False
     from .. import credentials_store
-    return credentials_store.has_credential("user", sub, provider)
+    return credentials_store.has_credential(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
 
 
 def _pk_aad(provider: str, label: str) -> str:

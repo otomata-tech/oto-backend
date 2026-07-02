@@ -193,6 +193,15 @@ def archive_org(org_id: int) -> bool:
             )
             if (cur.rowcount or 0) == 0:
                 return False
+            # Une org archivée est invisible à `get_personal_org` (filtre
+            # `archived_at IS NULL`) : elle doit AUSSI libérer le slot perso
+            # (`uq_orgs_personal_of`, partiel `personal_of IS NOT NULL` mais PAS
+            # sur l'archivage) — sinon elle occupe le slot d'un user sans être
+            # trouvable → `ensure_personal_org` recrée en boucle une org qui
+            # échoue sur l'UPDATE personal_of (UniqueViolation) à chaque boot.
+            conn.execute(
+                "UPDATE orgs SET personal_of = NULL WHERE id = %s", (org_id,)
+            )
             stranded = conn.execute(
                 "SELECT sub FROM org_members WHERE org_id = %s AND is_active", (org_id,)
             ).fetchall()
@@ -550,6 +559,17 @@ def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[s
     lui) — un user multi-org garde ses orgs partagées intactes, on lui crée une perso
     fraîche."""
     with _connect() as conn:
+        # Auto-soin (couvre les DEUX branches, reclaim ET create) : une org perso
+        # ARCHIVÉE détient encore le slot unique `uq_orgs_personal_of` tout en étant
+        # invisible à `get_personal_org` (filtre `archived_at IS NULL`) → la relâcher
+        # AVANT tout marquage, sinon UniqueViolation en boucle à chaque boot (vécu
+        # 2026-07-01 : perso archivée → orgs orphelines recréées, une par boot ; la
+        # collision frappait aussi bien la branche reclaim que la branche create).
+        conn.execute(
+            "UPDATE orgs SET personal_of = NULL "
+            "WHERE personal_of = %s AND archived_at IS NOT NULL",
+            (sub,),
+        )
         row = conn.execute(
             """
             SELECT o.id FROM orgs o
@@ -1195,6 +1215,113 @@ def delete_instruction(org_id: int, slug: str) -> bool:
                 (org_id, slug),
             )
     return removed
+
+
+# --- doctrine = ressource possédée (ADR 0030, épic « couverture des autres types »,
+# livraison de projet #52) : l'identité PUBLIQUE d'une doctrine est son `id` surrogate
+# (ADR 0032 « stop using slug ») ; son propriétaire DÉRIVE de `org_id` (pas de colonne
+# owner_* : une doctrine est toujours un objet d'org). Ces fonctions alimentent le kind
+# `doctrine` d'`ownership.py` + la cascade de livraison d'un projet (`oto_resource`).
+
+def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
+    """Une instruction par son id surrogate (identité publique). None si absente."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, org_id, slug, title, description, body_md, version, set_by, "
+            "created_at, updated_at FROM org_instructions WHERE id = %s",
+            (instruction_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _free_instruction_slug(conn, org_id: int, slug: str) -> str:
+    """Slug libre dans `org_id` : le slug tel quel, sinon suffixé (-2, -3…). On ne
+    remplace JAMAIS une doctrine existante de l'org cible (livraison non destructive)."""
+    candidate = slug
+    for i in range(2, 100):
+        row = conn.execute(
+            "SELECT 1 FROM org_instructions WHERE org_id = %s AND slug = %s",
+            (org_id, candidate),
+        ).fetchone()
+        if row is None:
+            return candidate
+        candidate = f"{slug}-{i}"
+    raise ValueError(f"aucun slug libre dérivé de `{slug}` dans l'org {org_id}")
+
+
+def copy_instruction_to_org(instruction_id: int, dest_org_id: int,
+                            set_by: Optional[str] = None) -> dict:
+    """Copie une doctrine dans une AUTRE org (livraison par transfert de projet, #52) :
+    nouvelle doctrine v1 chez la cible (slug suffixé si pris — jamais d'écrasement),
+    l'originale reste intacte chez la source. Renvoie {id, slug, org_id} de la copie."""
+    src = get_instruction_by_id(instruction_id)
+    if src is None:
+        raise ValueError(f"doctrine #{instruction_id} introuvable")
+    with _connect() as conn:
+        dest_slug = _free_instruction_slug(conn, dest_org_id, src["slug"])
+    set_instruction(dest_org_id, dest_slug, src["body_md"],
+                    title=src.get("title"), description=src.get("description"),
+                    set_by=set_by)
+    created = get_instruction(dest_org_id, dest_slug)
+    return {"id": created["id"], "slug": dest_slug, "org_id": dest_org_id}
+
+
+def reparent_instruction(instruction_id: int, new_org_id: int) -> str:
+    """Déplace une doctrine vers une autre org (transfert d'ownership ADR 0030, id
+    surrogate stable). Slug suffixé si pris chez la cible ; l'historique suit quand
+    il ne collisionne pas (sinon il reste chez la source — append-only, pas de perte).
+    Renvoie le slug final chez la cible."""
+    src = get_instruction_by_id(instruction_id)
+    if src is None:
+        raise ValueError(f"doctrine #{instruction_id} introuvable")
+    if int(src["org_id"]) == int(new_org_id):
+        return src["slug"]
+    with _connect() as conn:
+        dest_slug = _free_instruction_slug(conn, new_org_id, src["slug"])
+        conn.execute(
+            "UPDATE org_instructions SET org_id = %s, slug = %s, updated_at = NOW() "
+            "WHERE id = %s",
+            (new_org_id, dest_slug, instruction_id),
+        )
+    # L'historique suit dans un second temps (hors transaction principale) : une
+    # collision de revisions chez la cible ne doit pas annuler le transfert — il
+    # reste alors chez la source (append-only, rien n'est perdu).
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE org_instruction_revisions SET org_id = %s, slug = %s "
+                "WHERE org_id = %s AND slug = %s",
+                (new_org_id, dest_slug, src["org_id"], src["slug"]),
+            )
+    except Exception:
+        _log.warning("reparent_instruction: historique laissé chez la source "
+                     "(collision revisions, doctrine #%s)", instruction_id)
+    return dest_slug
+
+
+def list_instructions_for_orgs(org_ids: list[int]) -> list[dict]:
+    """Doctrines (hors base) des orgs données — plan GOUVERNANCE (métadonnées + org_id,
+    sans body). Alimente `oto_resource(op=list, resource_type='doctrine')`."""
+    if not org_ids:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, org_id, slug, title, description, version, updated_at "
+            "FROM org_instructions WHERE org_id = ANY(%s) AND slug <> %s ORDER BY org_id, slug",
+            (org_ids, BASE_SLUG),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_all_instructions() -> list[dict]:
+    """Toutes les doctrines nommées (vue opérateur plateforme — gouvernance)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, org_id, slug, title, description, version, updated_at "
+            "FROM org_instructions WHERE slug <> %s ORDER BY org_id, slug",
+            (BASE_SLUG,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- bibliothèque publique de doctrines (marketplace, table doctrine_library) ---

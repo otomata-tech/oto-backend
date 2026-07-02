@@ -35,6 +35,12 @@ def init_db() -> None:
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
+        # ADR 0032 (amende #44) : publication d'un projet en endpoint MCP dédié
+        # `<mcp_slug>.mcp.oto.cx` — anonyme (toolset figé, sans login) ou authed per-org.
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_slug TEXT")
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_access TEXT NOT NULL DEFAULT 'off'")
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_tools TEXT[] NOT NULL DEFAULT '{}'")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_mcp_slug ON projects(mcp_slug) WHERE mcp_slug IS NOT NULL")
         # ADR 0032 §7 : l'onboarding n'est plus un mode spécial mais un projet « Découverte »
         # (semé à la création de l'org perso). On retire la machinerie d'accueil de la fiche
         # « situation avec oto » — il ne reste que le data model `profile`, relu à chaque session.
@@ -112,8 +118,11 @@ def init_db() -> None:
         # Multi-canal Unipile : un account_id par (sub, provider). Migration de la
         # PK sub → (sub, provider) ; les lignes existantes prennent 'LINKEDIN' (DEFAULT).
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
-        conn.execute("ALTER TABLE unipile_accounts DROP CONSTRAINT IF EXISTS unipile_accounts_pkey")
-        conn.execute("ALTER TABLE unipile_accounts ADD PRIMARY KEY (sub, provider)")
+        # ⚠️ Le cycle de vie du PK d'unipile_accounts appartient à
+        # db.backfill_unipile_member_scope() (ADR 0033 B4) — l'ex re-pose
+        # inconditionnelle du PK (sub, provider) écraserait la migration.
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS platform_seat BOOLEAN NOT NULL DEFAULT FALSE")
+        conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS platform_seat BOOLEAN NOT NULL DEFAULT FALSE")
         # Horodatage du dernier sync du feed (miroir home, datastore linkedin-feed) :
         # gouverne la fraîcheur du cache (TTL) côté unipile_feed. NULL = jamais sync.
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS feed_synced_at TIMESTAMPTZ")

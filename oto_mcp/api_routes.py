@@ -365,14 +365,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except Exception as e:
             return _json_error(request, 500, f"list_tools_failed:{e}")
         payload = []
-        from . import credentials_store
-        remote_ns = credentials_store.list_remote_namespaces()
+        # (Le filtre « bridges remote per-namespace » a été retiré — ADR 0034 B4 :
+        # le namespace `bridge` est générique, aucun nom client n'atteint l'autodoc.)
         for t in tools:
-            # Les bridges remote (connecteurs client-sensibles, ADR 0003) ne
-            # paraissent JAMAIS dans l'autodoc publique — elle alimente les pages
-            # marketing oto.ninja (confidentialité : aucun nom client exposé).
-            if namespace_of(t.name) in remote_ns:
-                continue
             # Tool object exposes name, description, parameters (input schema),
             # output_schema. Some attributes may be None depending on the type.
             payload.append({
@@ -844,9 +839,17 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             fields[f.name] = val
         from . import credentials_store
         db.upsert_user(sub)
+        # Scope MEMBRE (ADR 0033) : la clé est posée DANS l'org de contexte (org
+        # consultée au dashboard via X-Oto-Org, sinon maison) — plus de credential
+        # per-user org-agnostique. Poser en consultant movinmotion = scoper movinmotion.
+        org_id = access.current_org(sub)
+        if org_id is None:
+            return _json_error(request, 400, "no_org_context")
         secret = credentials_store.pack_secret(provider, fields)
-        credentials_store.set_credential("user", sub, provider, secret, set_by=sub)
-        return _json(request, {"ok": True, "provider": provider})
+        credentials_store.set_credential(
+            credentials_store.MEMBER, credentials_store.member_id(org_id, sub),
+            provider, secret, set_by=sub)
+        return _json(request, {"ok": True, "provider": provider, "org_id": org_id})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -861,7 +864,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if c is None or not connectors.is_byo_user(provider):
             return _json_error(request, 404, "unknown_provider")
         from . import credentials_store
-        credentials_store.clear_credential("user", sub, provider)
+        org_id = access.current_org(sub)
+        if org_id is None:
+            return _json_error(request, 400, "no_org_context")
+        credentials_store.clear_credential(
+            credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
         return _json(request, {"ok": True, "provider": provider})
 
     # --- Connexion par session navigateur (brevo, crunchbase) — la VOIE PRODUIT :
@@ -878,7 +885,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not browser_session.is_session_connector(name):
             return _json_error(request, 404, "not_a_session_connector")
         try:
-            out = await asyncio.to_thread(browser_session.start, sub)
+            out = await asyncio.to_thread(browser_session.start, sub, name)
         except browser_session.SessionError as e:
             return _json_error(request, 503, "browserbase_unavailable", str(e))
         return _json(request, out)
@@ -914,7 +921,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if c is None:
             return _json_error(request, 404, "unknown_provider")
         from . import credentials_store
-        secret = credentials_store.get_credential("user", sub, provider)
+        org_id = access.current_org(sub)
+        secret = (credentials_store.get_credential(
+                      credentials_store.MEMBER,
+                      credentials_store.member_id(org_id, sub), provider)
+                  if org_id is not None else None)
         if not secret:
             return _json_error(request, 404, "not_configured")
         # GÉNÉRIQUE : on dépack et on ne renvoie que les champs `reveal` (l'api_key,

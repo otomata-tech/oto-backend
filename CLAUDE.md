@@ -81,26 +81,11 @@ appel : `clé membre (sub, org) > group_secret > org_secret > platform_grant` (c
 platform gaté sur `auth_modes`). **Détail : `docs/roles-and-resolution.md`** (paliers,
 grants/quota, platform keys, providers byo-only).
 
-> **Scope MEMBRE (ADR 0033, 2026-07-02).** Plus de credential per-user org-agnostique :
-> la clé BYO d'un membre est keyée **(sub, org)** — coffre `entity_type='member'`,
-> `entity_id="{org}:{sub}"` (AAD dérivé → liée crypto à son org). Posée dans l'org A,
-> elle ne résout PAS depuis l'org B (fini « ta clé perso te suit partout et écrase la
-> clé d'org »). L'org de scope = seam `current_org` (0023), à la pose (`/api/settings/
-> api-keys`, sessions browser) comme à la résolution ; helpers `db.{get,has,set,clear}_
-> member_api_key(sub, org_id, provider)` — la couche db ne lit JAMAIS `current_org`
-> elle-même. Valeurs de contrat inchangées (`mode="user"`, `user_key_configured`) —
-> seule la sémantique change. **B3 (google)** : comptes Google multi-comptes scopés
-> (sub, org) — `db/google.py` en entité member, l'org du DÉMARRAGE du flow OAuth voyage
-> dans le **state HMAC** jusqu'au callback (qui vient de Google, sans headers de
-> consultation). **B4 (unipile)** : `unipile_accounts` au grain **(sub, org_id, provider)**
-> — `org_id` = org de CONTEXTE du binding (la facturation des sièges plateforme a sa
-> colonne `platform_seat` ; les BYO ne comptent pas dans le plafond) ; migration PK
-> one-shot `db.backfill_unipile_member_scope()` (⚠️ le cycle de vie du PK lui appartient,
-> pas à `_init.py`). **Seuls les mounts oauth fédérés** (memento/atlassian/folkmcp)
-> restent scope `('user', sub)` ; tripwire `test_member_credential_scope.py` interdit
-> toute autre écriture scope user. Migration coffre = `credentials_store.
-> backfill_member_scope()` au boot (re-chiffrement — l'AAD change, pas d'UPDATE ;
-> destination = org maison ; ligne indéchiffrable laissée inerte).
+> **Scope MEMBRE (ADR 0033)** : plus de credential per-user org-agnostique — la clé
+> BYO est keyée `(sub, org)` (coffre `entity_type='member'`, AAD lié à l'org ; google
+> + unipile inclus, seuls les mounts oauth fédérés restent scope user). L'org de scope
+> = seam `current_org`, à la pose comme à la résolution.
+> **Détail (helpers db, state HMAC google, migration) : `docs/roles-and-resolution.md` §Scope MEMBRE**.
 
 **Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
 
@@ -109,94 +94,15 @@ grants/quota, platform keys, providers byo-only).
 Endpoints `/api/*` (compte, settings, orgs, admin, datastore…), même
 `JWTVerifier` que `/mcp`. **Inventaire : `docs/rest-api.md`**.
 
-## Browser automation — substrat HÉBERGÉ Browserbase (ADR 0026)
+## Browser automation & LinkedIn — substrat hébergé Browserbase (ADR 0026)
 
-⚠️ **Plus de browser in-process sur la box, plus de délégation à un conteneur
-o-browser-full** (`OBROWSER_URL`/`RemoteBrowser` = 0 référence — jamais portée). Le
-harnais browser server-side = **service navigateur HÉBERGÉ Browserbase**
-(`oto_mcp/browserbase.py`, seam à sens unique ADR 0004), réutilisable par tout
-connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
-
-- **LinkedIn** : `tools/linkedin.py` **supprimé** — passe par **Unipile** (hébergé,
-  connecteur `unipile`). Le browser LinkedIn local ne survit que dans oto-cli
-  (fallback) et oto-core (`oto.tools.browser.linkedin/`).
-- **Substrat `browserbase.py`** : Chrome HÉBERGÉ (off-box → anti-OOM) + **Context**
-  per-user (profil persistant = la session loguée, = le credential coffre) + **Live
-  View** pour le login interactif (l'user gère SSO/captcha/2FA — pas d'export de
-  cookie, la session naît native, zéro `li_at` kill). Exécution = `run_fetch(ctx,
-  method, path, body, *, base, app)` : ouvre une session éphémère sur le Context, charge
-  une page `app` puis exécute un `fetch(base+path)` **same-origin** (la session vivante
-  porte les cookies). `base`/`app` sont **propres au connecteur** (le substrat n'en
-  hardcode aucun). Creds plateforme env `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID`.
-- **Connexion = depuis le DASHBOARD** (voie produit, pas MCP) : bouton « Connecter »
-  → Live View Browserbase **en iframe** ; l'user se logue ; « vérifier » persiste le
-  Context. Servie en REST `POST /api/me/connectors/{name}/session/{start,finalize}`
-  ET en MCP (`<name>_connect_start`/`_connect_status`) par **un seul corps de logique**
-  (`browser_session.py`, seam : `start()` générique + `finalize()` avec **verify
-  par-connecteur enregistré** — brevo=cookie `auth`, crunchbase=sonde API ; les tools
-  MCP ne sont que de minces délégations). ⚠️ **Un connecteur browser-session s'enregistre
-  avec une `login_url`** (`browser_session.register(name, verify, login_url=…)`) : `start()`
-  amène la session **sur cette page** avant d'afficher la Live View (best-effort). Sans elle,
-  la Live View reste sur `about:blank` (l'user ne sait pas où se loguer — vécu pennylaneged
-  2026-07-01). **Sécu** : la session émise est liée au `sub`
-  (`_PENDING`, anti-IDOR — `finalize` refuse un Context tiers) et **aucune exception
-  brute n'est renvoyée** (l'URL CDP porte `?apiKey=…` → loggué, message propre). L'état
-  (`configured` + `session_set_at`) sort dans `me.providers[name]` via `status_for`
-  (les connecteurs `secret_kind="cookie"`) — ADR 0026 avait retiré `me.crunchbase` sans
-  jamais câbler ce relais (UX cassée bout-en-bout, corrigé 2026-06-30). Déconnexion =
-  DELETE générique `/api/settings/api-keys/{name}` (byo_user, plus de route dédiée).
-- **Connecteurs sur le substrat** (tous deux : Live View ci-dessus, Context au coffre,
-  family dérivée=`api`, plus aucun browser local) :
-  - **`brevo`** (`tools/brevo.py`) — automations marketing via l'API privée
-    `workflow-apis.brevo.com/v1` (cookie `auth` httpOnly). **Prouvé 200** le 2026-06-24.
-  - **`crunchbase`** (`tools/crunchbase.py`) — fiches société/personne via l'API privée
-    du frontend `www.crunchbase.com/v4/data` (schéma v4 sans `user_key` ; lookup
-    `entities/organizations|people/{slug}` + cards `founders`/`raised_funding_rounds`,
-    recherche via `autocompletes`). **Migré du scraping DOM in-process** (ADR 0026,
-    `BROWSER_PROVIDERS` désormais vide, plus de `CrunchbaseClient` o-browser ni de Chrome
-    sur la box). ⚠️ **Reste à smoke en live** (Browserbase + login crunchbase réel) :
-    confirmer `field_ids`/`card_ids`/`collection_ids` et l'absence de header anti-CSRF.
-  - **`pennylaneged`** (`tools/pennylaneged.py`, issue otomata-private#31) — GED (DMS)
-    Pennylane via l'API interne de la SPA (`/companies/{cid}/dms/…`, CSRF tournant lu
-    in-page à chaque appel via `browserbase.run_page_eval` — l'eval générique, `run_fetch`
-    ne suffit pas). Upload = control plane seul (URL S3 présignée), les octets PUT **en
-    local** (RGPD). **GED cible (une par client)** : `company_id` optionnel sur tous les
-    tools, défaut = la société choisie via le **sélecteur d'identité générique** (ADR
-    0024) — backend enregistré par `connector_identities.register()` (patron
-    `browser_session`), identités = les sociétés du cabinet (`/crm/flow_companies`),
-    sélection validée anti-binding (tree 200 sur LA session) puis mémorisée au `meta` du
-    credential (`default_identity_id`/`default_identity_label`, exposés par `status_for`
-    → picker de la carte dashboard sans louer de session ; `identities` au catalogue).
-    ⚠️ **Reste à smoker en live** (login Pennylane réel + forme exacte de
-    `flow_companies`).
-- **Leçons empiriques (toujours valides)** : (1) un `httpx`/curl brut est **rejeté
-  (403)** — transport obligatoirement **browser-driven** (`page.evaluate(fetch())`) ;
-  (2) une session **ne se transplante pas** par export de cookie (le faux négatif « auth
-  cookie missing » venait d'une extraction sur **profil déconnecté**) → login-en-place
-  via Live View ; (3) capter/vérifier sur une session **vivante** (fetch sanity = 200).
-
-## LinkedIn cookies
-
-⚠️ **Isolation de session (constaté 2026-06-04, issue #5 ouverte)** : injecter le
-cookie `li_at` d'un user **côté serveur** (IP datacenter ≠ son IP) **déconnecte sa
-propre session LinkedIn** (LinkedIn invalide/rotate le `li_at` partagé). Le vrai
-Chrome règle l'empreinte TLS mais PAS ce partage de session. → l'outreach par un
-user réel doit passer par une **session dédiée** (profil/VNC côté serveur, ou CLI
-local sur son device), pas par son cookie injecté côté serveur. ✅ Le scraping
-serveur est désormais **profil-only** (fallback cookie **supprimé**) et délégué au
-conteneur (voir §Browser automation). #5 reste ouvert pour le pairing/CLI local.
-
-Le couple `(li_at, user_agent)` est stocké par `sub` en PG. Le UA
-matche le browser d'origine (capturé via `navigator.userAgent` au moment du
-save) — sinon LinkedIn flag rapidement les sessions cookie/UA mismatch.
-
-Si le user n'a rien configuré, les tools `linkedin_*` lèvent une `McpError`
-qui pointe vers `https://app.oto.ninja/`.
-
-Pour les non-tech : extension Chrome Oto Companion (repo `oto-app/extension/`,
-MV3) qui capture le couple `(li_at, user_agent)` et le push automatiquement
-via `POST /api/settings/linkedin` (auth Logto PKCE). Auto-resync via
-`chrome.cookies.onChanged` quand LinkedIn rotate la session.
+Plus AUCUN browser sur la box : les connecteurs d'**API privée cookie-bound**
+(`brevo`, `crunchbase`, `pennylaneged`) passent par **Browserbase** (Chrome hébergé,
+Context per-user = la session loguée au coffre, Live View pour le login interactif,
+`run_fetch` same-origin). Connexion = dashboard (`browser_session.py`, un seul corps
+REST+MCP, `login_url` obligatoire au register). LinkedIn = **Unipile** (tools/linkedin
+supprimé) ; l'injection de cookie `li_at` côté serveur déconnecte l'user (#5).
+**Détail (substrat, connecteurs, sécu, leçons empiriques) : `docs/browser-automation.md`**.
 
 ## SIRENE stock (DuckDB sur parquet INSEE — lu depuis S3/httpfs)
 
@@ -227,177 +133,32 @@ per-user (Gmail/Tasks, multi-compte) câblé ici. **Détail : `docs/datastore.md
 
 ## Propriété de ressource — primitive `ownership` (ADR 0030)
 
-Le datastore n'est **plus scopé par `sub`** : il est le **pilote** de la primitive
-d'ownership générique. `ownership.py` est le **seam unique** : une ressource
-`(resource_type, resource_id)` est possédée par `(owner_type∈{user,group,org},
-owner_id)` (colonnes sur la ressource — pour le datastore : `user_datastores.owner_*`,
-`resource_id = id::text`, **stable au renommage**) ; le partage cross-type vit dans
-**`resource_grants`** (deny-by-default, remplace `datastore_shares`). Deux plans, jamais
-confondus : **`can_access`** (CONTENU = owner-match ∪ grant ; *privacy by default* — pas
-d'escalade admin sur du perso) et **`can_govern`** (GOUVERNANCE = owner ∪ escalade
-`roles.py` : transférer/lister/partager **sans lire**). La lecture opérateur du contenu
-perso reste le **view-as audité** (ADR 0023). `DatastorePg._resolve` passe par
-`can_access` ; le share/transfert/delete par `can_govern` (un super_admin/org_admin
-gouverne donc un datastore tiers). ⚠️ **Scoping des LISTES de contenu** : une liste de
-ressources possédées (datastore `list_namespaces`, projets `op=list`) scope sur
-**`ownership.active_owner(current_org)`** (= l'org active, le pendant `ownership` de
-`current_org`/ADR 0023), **JAMAIS** sur `accessor_scope().owner_pairs()` (= union de
-TOUTES les orgs de l'acteur, réservé au plan **gouvernance** `oto_resource list` +
-découverte/modèles). Les confondre = fuite cross-org *fail-open* (le superset montre
-plus que le contexte chargé) — vécu 2026-06-30 (projets/datastore d'une autre org
-visibles dans le dashboard). Garde-fou : `tests/test_owner_scope_tripwire.py` fige les
-call-sites `owner_pairs()`. **org-owned activé** : `data_create_namespace` /
-`POST /api/datastore/namespaces` acceptent un `owner` (classeur d'équipe). Capacité
-générique **`oto_resource`** (`capabilities/resources.py`, op `list/get/transfer/share/
-unshare`, autz combinateur `RESOURCE_GOVERN`) = chemin de gouvernance MCP+REST + alimente
-l'object-browser admin. Catalogue du registre : **`GET /api/admin/capabilities`**
-(`capabilities_catalog.py`, `PLATFORM_ADMIN`, JSON Schema dérivé des Input pydantic) →
-UI admin **dérivée**. ⚠️ **Migration en cours** : `user_datastores.sub` + colonnes Sheets
-sont des reliques nullable, **DROP différé** (Phase H) après cutover prod vérifié.
+`ownership.py` = seam unique : ressource possédée par `(owner_type∈{user,group,org},
+owner_id)` + partages `resource_grants` (deny-by-default). **Deux plans jamais
+confondus** : `can_access` (contenu, privacy by default) vs `can_govern` (gouvernance,
+escalade roles.py). ⚠️ **Une LISTE de contenu scope sur `active_owner(current_org)`,
+JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
+`test_owner_scope_tripwire.py`). Plus de « perso » : tout user a une org perso dédiée
+(`orgs.personal_of`), défauts de création = org active.
+**Détail (datastore pilote, oto_resource, migration, abolition du perso) : `docs/ownership.md`**.
 
-> **Suppression du « perso » (2026-06-30, amende ADR 0015/0023/0030).** Plus d'état
-> **org-less** (`org_id=0` / `current_org`=None) : **tout user est TOUJOURS dans une org**.
-> Chaque user a une **org perso dédiée** (`orgs.personal_of=sub`, privée mono-membre) —
-> `org_store.ensure_personal_org` (créée au 1er insert d'`upsert_user` + au boot par
-> `backfill_personal_orgs`, **reclaim sûr** : ne marque une org existante comme perso que
-> si c'est la SEULE org du user, créée par lui ; sinon org fraîche → multi-org intact, zéro
-> fuite). Les ressources `owner_type='user'` ont **migré** vers l'org perso ; les **défauts
-> de création** (datastore/projet) vont dans l'**org active** (`current_org`, toujours posé).
-> Plus de retour-perso (`clear_active_org` retiré ; `oto_clear_org` REST → org perso, MCP →
-> maison). Filets gardés : `ownership` accepte encore `owner_type='user'` **en lecture**
-> (reliquat) ; `session_visibility` `prof_org = active_org or 0` (défensif). `org_id=0`
-> purgé des profils de visibilité.
+## Projet — couche d'organisation (ADR 0030/0032)
 
-## Projet — couche d'organisation (ADR 0030, modèle produit 2026-06-27)
+Conteneur de travail **possédé** : brief + liens typés (`project_links` : tableau/
+procédure/connecteur/base) + docs en arbre. Capacités `oto_project`/`oto_doc` ;
+partage/transfert via `oto_resource`. S'y greffent : **livraison client cascade**
+(#52), **partage public chiffré zero-knowledge** (`/p/p/<token>#clé`), **endpoint MCP
+dédié par projet** (`<slug>.mcp.oto.cx`, modes anonymous/org, landing HTML, annuaire
+oto.ninja/apps). **Détail : `docs/projects.md`**.
 
-Conteneur de travail **possédé** (owned resource ADR 0030) : un but + ses entités. Tables
-`projects` (owner_type/owner_id, `brief_md` = doc d'entrée, soft-delete `archived_at`),
-`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,base}` + `target_ref`
-+ label, pas de FK cross-store), `docs` (pages markdown **en arbre** `parent_id`, héritent de
-l'accès du projet — pas d'ownership propre), `project_activity` (journal best-effort).
-Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
-update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
-docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/transfert via
-**`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
+## Messagerie & LinkedIn (Unipile)
 
-> **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
-> `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
-> d'appartenance — on donne un accès) ; **`cascade=true`** sur share/transfer d'un projet
-> répercute le geste sur les `project_links` avec rapport par entité — **tableau** = même
-> geste (grant/transfert du namespace), **procédure** = grant `read` au partage (modèle
-> licence : oto garde le master) / **copie chez la cible + re-pointage du lien** au
-> transfert (`org_store.copy_instruction_to_org`, l'originale intacte), **connecteur** =
-> `recipient_credential` (le client branche SA clé ; la surcharge identité/instructions du
-> lien voyage avec le projet) ; docs/fichiers suivent d'office (héritage d'accès). Kind
-> **`doctrine`** enregistré sur la primitive ownership (owner **dérivé** d'`org_instructions.
-> org_id`, resource_id = id surrogate) → lecture cross-org **par id** `oto_get_doctrine(
-> doctrine_id=…)` / `GET /api/me/doctrines/{id}`, gatée `ownership.can_access`. Un projet
-> livré remonte chez le client dans `oto_project(op=list)` (flag `shared`+`permission`) ET
-> dans le bloc C du handshake (#50) — ouvrable en un message. Reste à cadrer : push des màj
-> post-livraison (re-share = re-grant idempotent, mais pas de notification). UI : `oto-dashboard`
-`/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
-(MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
-
-> **Partage public CHIFFRÉ d'un projet (ADR 0032 §3, zero-knowledge).** Un projet peut être
-> publié en lecture seule derrière un lien, avec le contenu **chiffré côté navigateur**
-> (AES-256-GCM, `oto-dashboard` `lib/crypto.ts`). Le backend ne stocke QUE le ciphertext
-> (`project_public_shares`, une part par projet, token opaque) — la clé vit dans le **fragment**
-> de l'URL (`/p/p/<token>#<clé>`) et n'atteint jamais le serveur → la plateforme ne peut pas lire
-> un projet partagé. **REST-only** (le ciphertext vient du front, l'agent MCP ne peut pas chiffrer
-> dans le navigateur → pas de binding MCP, esprit « secret jamais en argument MCP ») :
-> `POST|DELETE /api/me/projects/{id}/public-share` (autz `can_access write`) + lecture publique
-> sans auth `GET /api/public/projects/{token}`. Re-publier fait **tourner** le token+la clé
-> (ancien lien caduc). `oto_project(op=get)` expose `public_shared`/`public_shared_at` (présence
-> seule, jamais la clé). Pendant du partage public de doc rendu (#4a) mais **chiffré**.
-
-> **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
-> se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de
-> l'ADR 0032 §7). Colonnes `projects.mcp_slug`/`mcp_access`(`off|anonymous|org`)/`mcp_tools[]` ;
-> capacité `oto_project` op **`publish_mcp`/`unpublish_mcp`** (autz `can_govern`) ; **garde de
-> publication** : un preset `anonymous` n'accepte que des tools **credential-less** (`secret_kind=none`)
-> ou dont le connecteur a une clé résoluble pour l'org propriétaire. **Deux modes** :
-> - **`anonymous`** (sans login, contourne 100 % du blocage Logto #44) : allowlist **figée = `mcp_tools`**
->   (fail-closed, aucun autre tool visible), credential résolu via l'**org propriétaire** du projet
->   (`access.current_org(None)`→org du projet, `_resolve_credential_anon` : org_secret > grant > clé
->   plateforme, **sans quota**), rate-limité (token-bucket in-memory par IP+projet).
-> - **`org`** : JWT Logto, **épingle l'org** ; le sous-domaine est enregistré comme **resource Logto**
->   (`oauth_facade.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
->
-> **Host-routing** (`subdomain_project.HostDispatch`, monté `root_app` dans `server.main`) : une **2ᵉ app
-> FastMCP sans auth** (`anon_mcp = mcp`, **réutilise l'instance no-auth module-level** — ne PAS en
-> re-build une 3ᵉ, doublait register_all/mounts/init_db → boot timeout) sert les sous-domaines anonymes ;
-> tout le reste → app authentifiée **inchangée**. **Même URL, 2 publics** : navigateur (`GET`+`Accept:
-> text/html`) → **landing HTML** rendue **live depuis la ligne projet** (`anon_landing.render`, name/brief_md/
-> mcp_tools) ; Claude/Mistral (`POST`) → MCP (rewrite path `/`→`/mcp`, `_root_to_mcp` — Claude tape la racine).
-> Fichiers : `subdomain_project.py` (routing + rate-limit + `/api/mcp/tls-check` + `/api/public/mcp-projects`),
-> `anon_visibility.py` (allowlist fail-closed), `anon_oauth.py` (shim OAuth **auto-approve**, `.well-known/*`
-> + `/register` + `/authorize`→302 sans login + `/token`→`anon-…`), `anon_landing.py` (HTML charté).
-> **Infra** : **wildcard** `*.mcp.oto.cx` (CF-proxied) + Caddy **on-demand TLS** gaté par `/api/mcp/tls-check`
-> (200 uniquement pour un slug **publié** → borne l'émission de certs). `publish_mcp` est la **seule** action
-> par projet — **zéro DNS** à chaque publication. **Surface web** : annuaire public **oto.ninja/apps**
-> (`web/AppsView.vue`) via `GET /api/public/mcp-projects` (CORS `*`, liste les projets `anonymous` publiés).
-
-## WhatsApp / Telegram / Instagram (messagerie via Unipile)
-
-Tools `whatsapp_*` / `telegram_*` / `instagram_*` (`list_chats`/`read_chat`/
-`send_message`) = messagerie **hébergée Unipile**, sous le connecteur `unipile`
-(`modules`/namespaces = `unipile, whatsapp, telegram, instagram`). Générés par la
-factory `tools/unipile.register_messaging_tools(mcp, channel)` — l'API `/chats`
-d'Unipile est channel-agnostic ; chaque tool résout l'`account_id` du canal pour le
-user (no-fallback, `tools/unipile.unipile_client(provider)`).
-
-Connexion = hosted-auth Unipile (dashboard, `?channel=whatsapp|telegram|instagram`),
-`account_id` per-membre dans `unipile_accounts` (PK `(sub, org_id, provider)` — scope
-membre ADR 0033 B4 : le binding vaut dans l'org de contexte, un canal se connecte par
-org). Même gate d'option par org que LinkedIn (comp admin `access.has_option` ; plus
-de paiement).
-
-> **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
-> (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`
-> supprimés). L'engine Baileys survit dans **oto-core** (`oto/tools/whatsapp/` + Node)
-> + la **CLI `oto whatsapp`** (fallback).
-
-> **Mode plateforme unipile** (revente) : `auth_modes` inclut `platform` → la clé
-> Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
-> `access.unipile_api_key_for` a le fallback platform-grant. Le gate d'option reste
-> par org (un grant donne la clé, ne débloque pas l'option). **Débloquer l'option
-> = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
-> ⚠️ Les deux couches (clé=2, option=3) sont **orthogonales en base** mais l'**action
-> admin les compose** (`capabilities/users_admin._set_option`) : `oto_admin_set_option`
-> `on=true` sur un connecteur en mode plateforme **grant aussi la clé plateforme** (sinon
-> `has_option`=true mais aucune clé → 404 au `/connect`, bouton « Connecter » inerte = état
-> mort), `on=false` la révoque ; le champ `platform_key` du retour rend l'effet explicite
-> (`granted`/`no_platform_key`/`byo_inert`/`revoked`). N'applique PAS à un connecteur keyed
-> sans option (serpapi…) : lui se grant via la fiche admin (bouton « grant key » par
-> provider, auto-résout la clé unique) ou `oto_admin_key_grant` (par `key_id`).
-
-> **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
-> à SON sous-domaine `api<NN>.unipile.com:port` ; le DSN vit dans le `meta` du credential
-> et voyage avec la clé via `resolve_credential` (défaut env `UNIPILE_DSN`=api25, instance
-> plateforme). Une clé BYO porte N comptes → capacités génériques **`connectors.identities`/
-> `set_default_identity`** (REST `/api/connectors/{c}/identities[/default]`, registre
-> `connector_identities.py` ; unipile = `list_accounts` sur clé+DSN, **valide id∈liste**
-> anti-binding, **BYO-only** — en revente la liste est vide, hosted-auth conservé). Vue admin
-> **sièges clé plateforme** `GET /api/admin/unipile/seats` (super_admin, `db.unipile_account_owners`) :
-> réconcilie les comptes de l'instance partagée ↔ leur owner oto (flag **orphelin**).
-
-> **Compte partagé autorisé (otomata-private#55).** Le **propriétaire** d'un compte
-> Unipile accorde à un **membre nommé** (d'une org commune, anti-IDOR `users_share_org`)
-> le droit d'**opérer son compte** sur un canal — la **SEULE exception** au no-fallback
-> anti-usurpation (#5). Table `connector_account_grants` (PK `(owner_sub, provider,
-> grantee_sub)`, patron ADR 0025, `granted_by`/`granted_at` ; l'`account_id` stocké =
-> snapshot d'audit, la résolution relit le handle **LIVE** → owner déconnecté = grant
-> inerte). Le grantee bascule via le **sélecteur d'identité** (le compte accordé
-> apparaît « compte de X » ; le select pose le **pointeur** `unipile_operated_accounts`,
-> il n'écrase JAMAIS sa ligne `unipile_accounts`) ou un **pin projet** (garde étendue
-> aux comptes accordés). Résolution : `connector_identities.resolve_operated_account_id`
-> — pointeur **revalidé contre les grants vivants À CHAQUE appel** (révocation =
-> effet immédiat) ; pointeur révoqué = **erreur explicite, jamais de repli** sur le
-> compte propre. Capacité `capabilities/connectors_account_grants.py`
-> (`oto_{list,grant,revoke}_account_*`, REST `/api/me/connector-accounts/*` ; autz
-> `SUB_ONLY`, owner := ctx.sub par construction — pas d'escalade org_admin). ⚠️ La clé
-> du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
-> BYO perso ≠ celle du grantee → 404 Unipile surfacé).
+Tools `whatsapp_*`/`telegram_*`/`instagram_*` + `unipile_*` = **Unipile hébergé**
+(factory channel-agnostic, `account_id` per-membre `(sub, org_id, provider)` ADR 0033,
+no-fallback anti-usurpation). Mode plateforme (clé partagée + grant + option comp),
+DSN par credential, sélecteur d'identité, **comptes partagés autorisés** (#55, grants
+revalidés à chaque appel, jamais de repli silencieux).
+**Détail : `docs/unipile.md`**.
 
 ## Monitoring des appels MCP
 
@@ -466,48 +227,13 @@ d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/f
 > `run_start`/`run_finish` y ajoutent la trace durable (best-effort, off-loop). Sert
 > l'anticipation du contexte injecté (instructions bloc C) + la boucle d'usage dashboard.
 
-## Email (envoi per-org, PAR CONNECTEUR)
+## Email (envoi per-org, par connecteur)
 
-Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
-celle d'un connecteur, pas une page à part). **Deux connecteurs** (`providers.py`) :
-`scaleway` (**BYO-org depuis le 2026-07-01** : `auth_modes={byo_org}`,
-`secret_kind="fields"` — `secret_key`+`project_id`+`region` du compte Scaleway TEM
-de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem`, plus de
-service mailer ni de clé plateforme ; master ON **sûr** car la propriété du domaine
-est garantie PAR Scaleway — l'API refuse un `from` dont le domaine n'est pas vérifié
-dans le compte de l'org, ce qui rend #64 caduque) + `resend` (BYOK,
-`auth_modes={byo_org}`). **Le transport DÉRIVE du connecteur** :
-`providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:scaleway, resend:resend}` (pas de
-champ transport sur l'expéditeur).
-
-- `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
-  `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
-  déclarée ; super_admin pour le repli marque `oto@otomata.tech`). `email.py` =
-  `send_composed_email` (mailer.oto.zone, env `OTO_MAILER_SEND_BEARER`) +
-  `send_via_resend` (httpx direct, clé org). `scaleway`/`resend` = providers
-  credential/config-only (`tools/{scaleway,resend}.py` = `register()` no-op).
-- **Config = `orgs.email_settings` JSONB keyé PAR CONNECTEUR** :
-  `{<connector>:{senders:[{email,name?,reply_to?}], quiet_hours?}}` (calqué sur
-  `field_filters`). `org_store.get/set_org_email_settings(org, connector)`,
-  `resolve_sender(org, from)→(sender, connector)`, `org_email_quiet_hours`. Capacité
-  `orgs_email_settings` : GET bundle + `PUT /api/orgs/{id}/email-settings/{connector}`.
-- **Envoi différé** : params `send_at`/`force_now` + garde-fou **quiet hours par
-  connecteur** (défaut Europe/Paris 20h–8h). `scheduler.py` : `compute_scheduled_at`
-  (pure, testée) + boucle asyncio démarrée via le lifespan (`server.py`), batch isolé
-  en `asyncio.to_thread` (ne bloque pas l'event loop) ; table `scheduled_emails`
-  (claim `FOR UPDATE SKIP LOCKED`, retry ×3). Gestion : `oto_list/cancel_scheduled_emails`.
-- **Vérif de domaine d'envoi = déléguée au provider** (les deux connecteurs sont
-  BYO) : Scaleway TEM comme Resend refusent un `from` hors domaine vérifié dans le
-  compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).
-  Otomata (org 2) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
-  vault `SCW_TEM_*`).
-
-> **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
-> `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**
-> (master ON, ou forcé par l'override d'org), comme la surface USER
-> (`_visible_catalog`). Master-OFF non accordé → invisible (fin du levier inerte
-> « coupé par la plateforme »). Filtre sur le **cap master**, pas sur `effective`
-> (un override OFF d'org doit rester réactivable).
+Deux connecteurs **BYO-org** : `scaleway` (API TEM directe, fields — domaine garanti
+par Scaleway) + `resend` (BYOK). `email_send` = spine qui route
+`sender→connecteur→transport` (`EMAIL_CONNECTOR_TRANSPORT`) ; config
+`orgs.email_settings` par connecteur (senders + quiet hours) ; envoi différé
+(`scheduler.py`, quiet hours 20h–8h défaut). **Détail : `docs/email.md`**.
 
 ## Visibility per-user
 
@@ -676,30 +402,12 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. ⚠️ **Aucune CI de test sur
   les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main) → un test
   rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
-- **PERF — un handler de tool fait du I/O bloquant ⟹ il est `def` SYNC, jamais `async def`.**
-  Le serveur est **mono-event-loop** (`uvicorn.run(app)`, pas de `workers=`). FastMCP route
-  un `def` sync en **threadpool** (`call_sync_fn_in_threadpool`) mais exécute un `async def`
-  **dans la boucle**. Nos connecteurs appellent des libs **synchrones** (`requests` via
-  france_opendata, DuckDB, clients HTTP sync) → un `async def` **sans `await`** gèle TOUTE la
-  boucle le temps de l'appel (vécu 2026-06-25 : `/health` à 110 s, p95 `fr_stock_search` 218 s ;
-  fix `async`→`def` sur `fr.py`/`fr_stock.py` → `/health` ~0,1 s). Règle : un handler `tools/*.py`
-  qui n'`await` rien doit être `def`. Ne garder `async def` que s'il `await` réellement (httpx
-  async, etc.). NE PAS ajouter de workers uvicorn (état de session streamable_http en mémoire).
-  **Lot connecteurs bouclé le 2026-06-29** (361 handlers convertis ; cause re-vue = un flot
-  de `serper_scrape` gelant la boucle, `/.well-known` à 1,4–10,5 s sur une box à 0,2 de load).
-  **CI-enforcé** : `tests/test_no_blocking_async_handlers.py` casse si un `@mcp.tool` async
-  n'`await` rien dans son **propre scope** (AST own-scope, auto-maintenu, pas de whitelist) ;
-  un `client_factory` awaité par FastMCP (`mount.factory`) reste async — « pas d'await » ne
-  suffit pas, vérifier que c'est un handler, pas un callback. Bornes connexions PG posées au
-  passage (`db._connect_options` : `idle_in_transaction_session_timeout` anti-zombie-lock).
-  **2ᵉ mode de gel identifié + corrigé (2026-07-02, py-spy en flagrant délit)** : du DB
-  sync dans un MIDDLEWARE de la loop (`_authenticate`, gate ViewAs) × un blip de la RDB
-  (SSL eof) → `pool.getconn()` attendait 30s en gelant le serveur ENTIER (2 downs).
-  Protections : `ConnectionPool(timeout=5)` (`OTO_MCP_DB_POOL_TIMEOUT`) + chemin d'auth
-  en `run_in_threadpool`. Observabilité posée : `loop_watch.py` (aiodebug — tout callback
-  bloquant ≥1s est nommé au journal, ≥10s → event Sentry), py-spy sur la box
-  (`py-spy dump --pid $(systemctl show -p MainPID --value oto-mcp)` PENDANT un gel),
-  moniteur Kuma timeout 30s (timeout=0 = aveugle aux gels). RDB upgradée pico→nano.
+- **PERF — le serveur est MONO-LOOP : aucun I/O bloquant dans la boucle.** Un handler
+  de tool qui n'`await` rien doit être `def` sync (threadpool) ; du DB sync dans un
+  middleware = même règle (`run_in_threadpool`). Deux modes de gel vécus + garde-fous
+  CI (`test_no_blocking_async_handlers`), pool borné (`timeout=5`), observabilité
+  (loop_watch/aiodebug, py-spy box, Kuma timeout 30s).
+  **Détail (incidents, recettes de diagnostic) : `docs/event-loop-perf.md`**.
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connector_activation.py` (master global ± override org, deny-by-default).
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_
@@ -796,19 +504,10 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
 "'
 
-# ⚠️ Déchiffrer un credential ad-hoc (crypto.decrypt / _reveal / credential_status) :
-# `OTO_MCP_MASTER_KEY` n'est PAS dans .env — start-encrypted.sh la fetch au boot
-# depuis Scaleway Secret Manager. Un script qui ne source que .env voit
-# `encryption_enabled()=False` → tous les déchiffrements lèvent RuntimeError (FAUX
-# négatif, ≠ InvalidTag). Pour reproduire le runtime, répliquer le fetch :
-#   set -a; . .env; . /etc/oto-mcp/scw.env; set +a
-#   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
-#     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")
-#   export OTO_MCP_MASTER_KEY=$(echo "$RESP" | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["data"]).decode())')
-# Vécu 2026-06-22 (triage Sentry InvalidTag : 1 ligne memento corrompue, écrite
-# avec une clé ≠ courante — les autres lignes déchiffraient → pas un souci de clé ;
-# fix = purge → re-OAuth). `status_for` doit utiliser `credential_status` (présence
-# sans déchiffrer), jamais `get_credential_with_meta`, pour ne pas 500 /api/me.
+# ⚠️ Déchiffrer un credential ad-hoc : OTO_MCP_MASTER_KEY n'est PAS dans .env
+# (fetchée au boot depuis Secret Manager) → recette complète + pièges (RuntimeError
+# ≠ InvalidTag ; status_for = credential_status, jamais get_credential_with_meta) :
+# docs/connector-vault.md §Déchiffrer un credential ad-hoc.
 ```
 
 ## Infra
@@ -830,4 +529,10 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/monitoring.md` — monitoring des appels MCP (tool_call_log + surface admin).
 - `docs/datastore.md` — datastore spine PG (`data_*`) + OAuth Google per-user (setup GCP, scopes).
 - `docs/groups-and-roles.md` — groupes/départements & hiérarchie de droits (ADR 0012).
+- `docs/browser-automation.md` — substrat Browserbase (Context/Live View/run_fetch), connecteurs brevo/crunchbase/pennylaneged, LinkedIn isolation de session.
+- `docs/projects.md` — projet (liens typés, docs), livraison client cascade, partage public chiffré, endpoint MCP par projet (`<slug>.mcp.oto.cx`).
+- `docs/unipile.md` — messagerie hébergée : mode plateforme, DSN, sélecteur d'identité, comptes partagés (#55).
+- `docs/ownership.md` — primitive de ressource possédée (can_access/can_govern, tripwire owner_pairs, abolition du perso).
+- `docs/email.md` — envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours.
+- `docs/event-loop-perf.md` — les 2 modes de gel mono-loop + protections + recettes py-spy/aiodebug.
 - `docs/redaction.md` — **rédaction de champs** : middleware unique (FieldRedactionMiddleware), rien par défaut + templates 1-clic, **schéma OBSERVÉ** (capture passive `connector_schemas` — passthrough d'API tierces → on observe au lieu de déclarer), dry-run preview, moteur `FieldFilter` (oto-core).

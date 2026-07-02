@@ -77,3 +77,26 @@ Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,
 `attio_*`, `pennylane_*`, `slack_*`…) appellent `resolve_api_key(provider)`.
 LinkedIn et WhatsApp ne sont pas concernés (cookie/session per-user) ; le
 datastore non plus (spine PG, aucun credential — ADR 0016).
+
+## Scope MEMBRE (ADR 0033, 2026-07-02)
+
+> **Scope MEMBRE (ADR 0033, 2026-07-02).** Plus de credential per-user org-agnostique :
+> la clé BYO d'un membre est keyée **(sub, org)** — coffre `entity_type='member'`,
+> `entity_id="{org}:{sub}"` (AAD dérivé → liée crypto à son org). Posée dans l'org A,
+> elle ne résout PAS depuis l'org B (fini « ta clé perso te suit partout et écrase la
+> clé d'org »). L'org de scope = seam `current_org` (0023), à la pose (`/api/settings/
+> api-keys`, sessions browser) comme à la résolution ; helpers `db.{get,has,set,clear}_
+> member_api_key(sub, org_id, provider)` — la couche db ne lit JAMAIS `current_org`
+> elle-même. Valeurs de contrat inchangées (`mode="user"`, `user_key_configured`) —
+> seule la sémantique change. **B3 (google)** : comptes Google multi-comptes scopés
+> (sub, org) — `db/google.py` en entité member, l'org du DÉMARRAGE du flow OAuth voyage
+> dans le **state HMAC** jusqu'au callback (qui vient de Google, sans headers de
+> consultation). **B4 (unipile)** : `unipile_accounts` au grain **(sub, org_id, provider)**
+> — `org_id` = org de CONTEXTE du binding (la facturation des sièges plateforme a sa
+> colonne `platform_seat` ; les BYO ne comptent pas dans le plafond) ; migration PK
+> one-shot `db.backfill_unipile_member_scope()` (⚠️ le cycle de vie du PK lui appartient,
+> pas à `_init.py`). **Seuls les mounts oauth fédérés** (memento/atlassian/folkmcp)
+> restent scope `('user', sub)` ; tripwire `test_member_credential_scope.py` interdit
+> toute autre écriture scope user. Migration coffre = `credentials_store.
+> backfill_member_scope()` au boot (re-chiffrement — l'AAD change, pas d'UPDATE ;
+> destination = org maison ; ligne indéchiffrable laissée inerte).

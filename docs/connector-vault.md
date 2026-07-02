@@ -52,7 +52,7 @@ Store = `credentials_store.py` (calqué `org_store.py`, réutilise `db._connect`
 
 ## Chiffrement au repos — `crypto.py`
 
-Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiffrent toujours ; `crypto.encrypt`/`decrypt` lèvent si master key absente — pas de stockage ni lecture plaintext). Master key **hors-DB** (env `OTO_MCP_MASTER_KEY`, hex64 ou base64-32o ; en prod fetchée de Scaleway Secret Manager au boot, cible KMS unwrap, cf. `../docs/adr/0002`). AAD = `connector_credentials:{entity_type}:{entity_id}:{connector}[:{account}]` (anti-transplant ; segment account omis si vide → compat ascendante mono-compte). Envelope = `key_ref(1o)‖nonce(12o)‖ct`.
+Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiffrent toujours ; `crypto.encrypt`/`decrypt` lèvent si master key absente — pas de stockage ni lecture plaintext). Master key **hors-DB** (env `OTO_MCP_MASTER_KEY`, hex64 ou base64-32o ; en prod fetchée de Scaleway Secret Manager au boot, cible KMS unwrap, cf. `ADR 0002 (meta privé otomata-private/docs/adr)`). AAD = `connector_credentials:{entity_type}:{entity_id}:{connector}[:{account}]` (anti-transplant ; segment account omis si vide → compat ascendante mono-compte). Envelope = `key_ref(1o)‖nonce(12o)‖ct`.
 - Déchiffrement **JIT** dans `resolve_api_key`/`get_credential` uniquement, jamais loggé ; `status_for` lit la présence (`has_credential`/`credential_status`), ne déchiffre pas. Échec de déchiffrement = LÈVE (pas de fallback silencieux).
 - `platform_keys` : secret dans `api_key_enc` (même pattern, AAD `platform_keys:{provider}:{label}`).
 - Dump Postgres = **ciphertext only**. Pas de rotation de clé (key_ref réservé). Perte de master key = perte totale → Secret Manager versionné + escrow.
@@ -80,3 +80,21 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 ## Validation
 
 Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetable (docker)** + revue adversariale par phase. Migrations idempotentes au boot (`init_db` : ALTER additifs, PK 4-col, backfills, encrypt-existing, drop-plaintext gaté).
+
+## Déchiffrer un credential ad-hoc sur la box (ops)
+
+```bash
+# ⚠️ Déchiffrer un credential ad-hoc (crypto.decrypt / _reveal / credential_status) :
+# `OTO_MCP_MASTER_KEY` n'est PAS dans .env — start-encrypted.sh la fetch au boot
+# depuis Scaleway Secret Manager. Un script qui ne source que .env voit
+# `encryption_enabled()=False` → tous les déchiffrements lèvent RuntimeError (FAUX
+# négatif, ≠ InvalidTag). Pour reproduire le runtime, répliquer le fetch :
+#   set -a; . .env; . /etc/oto-mcp/scw.env; set +a
+#   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
+#     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")
+#   export OTO_MCP_MASTER_KEY=$(echo "$RESP" | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["data"]).decode())')
+# Vécu 2026-06-22 (triage Sentry InvalidTag : 1 ligne memento corrompue, écrite
+# avec une clé ≠ courante — les autres lignes déchiffraient → pas un souci de clé ;
+# fix = purge → re-OAuth). `status_for` doit utiliser `credential_status` (présence
+# sans déchiffrer), jamais `get_credential_with_meta`, pour ne pas 500 /api/me.
+```

@@ -67,6 +67,13 @@ JWT Logto **ES384** (défaut RS256 = tout rejeté), discovery RFC 9728 sur 401,
 façade DCR self-service (`oauth_facade.py`) pour les clients sans DCR (Claude/ChatGPT/
 Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 
+> **Coexistence multi-domaine (2026-07-02)** : `https://mcp.oto.cx/mcp` sert le MCP
+> en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (liste d'audiences
+> canoniques secondaires, vide = no-op), resource Logto dédiée, PRM Host-aware
+> (`config.mcp_audience_alt_hosts`). Le 401 `WWW-Authenticate` pointe la PRM
+> canonique .ninja (fastmcp `base_url`, non Host-aware) — fonctionne car l'audience
+> canonique est acceptée sur .cx. DNS mcp.oto.cx = grey+ACME direct box.
+
 ## Rôles + résolution de clé API
 
 3 paliers `member < admin < super_admin` (accès admin UI). Résolution de clé par
@@ -432,11 +439,15 @@ d'agent (`feedback`, signal=tool_feedback|gap) + runs / déroulés (`run_start/f
 
 Envoi d'email modélisé **par connecteur** (la config/gestion email s'exprime comme
 celle d'un connecteur, pas une page à part). **Deux connecteurs** (`providers.py`) :
-`scaleway` (hébergé Otomata via Scaleway TEM = service `otomata-auth-mailer`, clé
-**plateforme**, `secret_kind=none`, **réservé à Otomata via l'activation**
-(master OFF + override org Otomata ON)) + `resend` (BYOK, `auth_modes={byo_org}`). **Le transport
-DÉRIVE du connecteur** : `providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:mailer,
-resend:resend}` (pas de champ transport sur l'expéditeur).
+`scaleway` (**BYO-org depuis le 2026-07-01** : `auth_modes={byo_org}`,
+`secret_kind="fields"` — `secret_key`+`project_id`+`region` du compte Scaleway TEM
+de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem`, plus de
+service mailer ni de clé plateforme ; master ON **sûr** car la propriété du domaine
+est garantie PAR Scaleway — l'API refuse un `from` dont le domaine n'est pas vérifié
+dans le compte de l'org, ce qui rend #64 caduque) + `resend` (BYOK,
+`auth_modes={byo_org}`). **Le transport DÉRIVE du connecteur** :
+`providers.EMAIL_CONNECTOR_TRANSPORT={scaleway:scaleway, resend:resend}` (pas de
+champ transport sur l'expéditeur).
 
 - `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
   `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
@@ -454,11 +465,11 @@ resend:resend}` (pas de champ transport sur l'expéditeur).
   (pure, testée) + boucle asyncio démarrée via le lifespan (`server.py`), batch isolé
   en `asyncio.to_thread` (ne bloque pas l'event loop) ; table `scheduled_emails`
   (claim `FOR UPDATE SKIP LOCKED`, retry ×3). Gestion : `oto_list/cancel_scheduled_emails`.
-- **Vérif de domaine d'envoi = différée (issue #64)** : le domaine est un **objet
-  d'ORG** (pas du connecteur — réutilisable signature/identité), table future
-  `org_email_domains` + vérif DNS via Scaleway TEM. Tant qu'absente : scaleway reste
-  réservé à Otomata via l'activation (otomata.tech dans `MAILER_FROM_DOMAINS`) ; resend ouvert à
-  toute org (Resend garde la porte du domaine).
+- **Vérif de domaine d'envoi = déléguée au provider** (les deux connecteurs sont
+  BYO) : Scaleway TEM comme Resend refusent un `from` hors domaine vérifié dans le
+  compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).
+  Otomata (org 2) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
+  vault `SCW_TEM_*`).
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
 > `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**

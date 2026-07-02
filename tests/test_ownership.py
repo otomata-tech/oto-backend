@@ -91,6 +91,36 @@ def test_org_owned_outsider_denied(monkeypatch):
     assert not ownership.can_govern("x", RT, RID)
 
 
+def test_group_grant_read_honored(monkeypatch):
+    # Partage à une ÉQUIPE : un membre du groupe (scope group_ids) lit via le grant,
+    # n'écrit pas (read), ne gouverne pas.
+    _wire(monkeypatch, owner=("user", "alice"), grant=("group", "5", "read"), group_ids=(5,))
+    assert ownership.can_access("bob", RT, RID, "read")
+    assert not ownership.can_access("bob", RT, RID, "write")
+    assert not ownership.can_govern("bob", RT, RID)
+
+
+def test_group_grant_write(monkeypatch):
+    _wire(monkeypatch, owner=("user", "alice"), grant=("group", "5", "write"), group_ids=(5,))
+    assert ownership.can_access("bob", RT, RID, "write")
+
+
+def test_group_grant_non_member_denied(monkeypatch):
+    # Le grant vise le groupe 5 ; un acteur hors de ce groupe ne matche aucun principal.
+    _wire(monkeypatch, owner=("user", "alice"), grant=("group", "5", "write"), group_ids=(6,))
+    assert not ownership.can_access("eve", RT, RID, "read")
+
+
+def test_group_owned_member_reads_admin_governs(monkeypatch):
+    # Ressource POSSÉDÉE par un groupe (namespace d'équipe REST) : membre = contenu,
+    # chef d'équipe = gouvernance.
+    _wire(monkeypatch, owner=("group", "5"), group_read_of={5})
+    assert ownership.can_access("m", RT, RID, "write")
+    assert not ownership.can_govern("m", RT, RID)
+    _wire(monkeypatch, owner=("group", "5"), group_admin_of={5})
+    assert ownership.can_govern("chef", RT, RID)
+
+
 def test_transfer_reparents_and_keeps_previous_owner_write(monkeypatch):
     calls = {}
     _wire(monkeypatch, owner=("user", "alice"))

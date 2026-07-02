@@ -17,7 +17,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import access, db, org_store, ownership, roles
+from .. import access, db, group_store, org_store, ownership, roles
 from ._authz import RESOURCE_GOVERN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -31,6 +31,7 @@ class ResourceInput(BaseModel):
     new_owner_org: Optional[int] = None     # transfer → une de SES orgs (ADR 0030, owner_type='org')
     email: Optional[str] = None             # share / unshare (principal user)
     org_id: Optional[int] = None            # share / unshare (principal ORG — livraison client, #52)
+    group_id: Optional[int] = None          # share / unshare (principal ÉQUIPE — groupe d'une org dont tu es membre)
     permission: Literal["read", "write"] = "write"  # share
     cascade: bool = False                   # share/transfer d'un PROJET : embarquer ses entités liées (#52)
 
@@ -42,7 +43,8 @@ def _check_type(resource_type: str) -> None:
 
 
 def _owner_label(owner_type: str, owner_id: str) -> Optional[str]:
-    """Libellé lisible du propriétaire (email pour un user, nom pour une org)."""
+    """Libellé lisible d'un owner OU d'un principal de grant (email pour un user,
+    nom pour une org/un groupe)."""
     if owner_type == "user":
         u = db.get_user(owner_id)
         return u.get("email") if u else None
@@ -52,6 +54,12 @@ def _owner_label(owner_type: str, owner_id: str) -> Optional[str]:
         except (TypeError, ValueError):
             return None
         return o.get("name") if o else None
+    if owner_type == "group":
+        try:
+            g = group_store.get_group(int(owner_id))
+        except (TypeError, ValueError):
+            return None
+        return g.get("name") if g else None
     return None
 
 
@@ -126,9 +134,14 @@ _OPS: dict[str, dict] = {
 
 
 def _grants_view(resource_type: str, resource_id: str) -> list[dict]:
+    def _label(g: dict) -> Optional[str]:
+        # user → email (déjà joint) ; org/group → nom résolu (le front affiche `label`,
+        # jamais un principal_id brut).
+        return g.get("email") or _owner_label(g.get("principal_type") or "",
+                                              g.get("principal_id") or "")
     return [
         {"principal_type": g.get("principal_type"), "principal_id": g.get("principal_id"),
-         "email": g.get("email"), "permission": g.get("permission"),
+         "email": g.get("email"), "label": _label(g), "permission": g.get("permission"),
          "granted_at": g.get("granted_at")}
         for g in ownership.list_grants(resource_type, resource_id)
     ]
@@ -144,10 +157,23 @@ def _resolve_recipient(email: Optional[str]) -> dict:
     return u
 
 
-def _share_principal(inp: ResourceInput) -> tuple[str, str, Optional[str]]:
-    """Principal d'un share/unshare : une ORG (`org_id` — livraison client, #52 ;
-    pas d'exigence d'appartenance : on DONNE un accès, on ne s'en prend pas un)
-    OU un user (`email`). Renvoie (principal_type, principal_id, label)."""
+def _share_principal(sub: str, inp: ResourceInput, *, strict: bool = True) -> tuple[str, str, Optional[str]]:
+    """Principal d'un share/unshare : une ÉQUIPE (`group_id` — groupe d'une org dont
+    l'ACTEUR est membre : granularité interne, jamais cross-org), une ORG (`org_id` —
+    livraison client, #52 ; pas d'exigence d'appartenance : on DONNE un accès, on ne
+    s'en prend pas un) OU un user (`email`). Renvoie (principal_type, principal_id,
+    label). `strict=False` (unshare) : tolère un groupe supprimé et saute le check
+    d'appartenance — on doit pouvoir révoquer un grant orphelin."""
+    if inp.group_id is not None:
+        g = group_store.get_group(int(inp.group_id))
+        if g is None:
+            if strict:
+                raise AuthzDenied(404, "unknown_group", f"groupe #{inp.group_id} inconnu.")
+            return "group", str(inp.group_id), f"groupe #{inp.group_id}"
+        if strict and not roles.is_org_member(sub, int(g["org_id"])):
+            raise AuthzDenied(403, "group_not_visible",
+                              "un grant d'équipe cible un groupe d'une org dont tu es membre.")
+        return "group", str(inp.group_id), g.get("name")
     if inp.org_id is not None:
         o = org_store.get_org(int(inp.org_id))
         if not o:
@@ -163,7 +189,8 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
                      new_owner: Optional[tuple[str, str]] = None) -> list[dict]:
     """Livraison d'un projet COMPLET (#52) : répercute le geste (share/transfer) sur
     les entités liées (`project_links`). Par entité gouvernée par l'acteur :
-    - `tableau`  → même geste (grant au même principal / transfert au même owner) ;
+    - `tableau`  → même geste (grant au même principal — user/org/groupe, `can_access`
+      honore les trois via `AccessorScope.principal_pairs` / transfert au même owner) ;
     - `procedure`→ share = grant READ sur la doctrine (lisible cross-org par id via
       oto_get_doctrine) ; transfer vers une org = COPIE de la doctrine chez la cible
       + re-pointage du lien (l'originale reste chez la source — zéro casse des autres
@@ -237,6 +264,8 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
             scope = ownership.accessor_scope(ctx.sub)
             governed = [("user", ctx.sub)]
             governed += [("org", str(o)) for o in scope.org_ids if roles.is_org_admin(ctx.sub, o)]
+            governed += [("group", str(g)) for g in scope.group_ids
+                         if roles.can_admin_group(ctx.sub, g)]
             rows = ops["list_for_owners"](governed)
         return {"resource_type": inp.resource_type,
                 "resources": [ops["enrich"](r) for r in rows]}
@@ -281,7 +310,7 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "share":
-        ptype, pid, plabel = _share_principal(inp)
+        ptype, pid, plabel = _share_principal(ctx.sub, inp)
         ownership.grant(inp.resource_type, rid, ptype, pid,
                         inp.permission, granted_by=ctx.sub)
         out = {"ok": True, "resource_id": rid, "shared_with": plabel,
@@ -295,7 +324,7 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     # unshare
-    ptype, pid, plabel = _share_principal(inp)
+    ptype, pid, plabel = _share_principal(ctx.sub, inp, strict=False)
     removed = ownership.revoke(inp.resource_type, rid, ptype, pid)
     out = {"ok": True, "resource_id": rid, "unshared_with": plabel, "removed": removed}
     if inp.cascade and inp.resource_type == "project":
@@ -322,8 +351,9 @@ CAPABILITIES += [
             "shares + metadata; op=transfer: hand ownership to a user (`new_owner_email`) "
             "OR to one of YOUR orgs (`new_owner_org`, you must be a member); the previous "
             "owner keeps write access; op=share/unshare: grant/revoke access to a user "
-            "(`email`) OR to a whole org (`org_id` — client delivery, no membership "
-            "required) with `permission` read|write. resource_type ∈ {datastore_namespace, "
+            "(`email`), to a TEAM (`group_id` — a group of an org you belong to; its "
+            "members get access) OR to a whole org (`org_id` — client delivery, no "
+            "membership required) with `permission` read|write. resource_type ∈ {datastore_namespace, "
             "project, doctrine}. DELIVER A FULL PROJECT (#52): share/transfer a project "
             "with cascade=true to carry its linked entities in one gesture — linked "
             "tableaux get the same share/transfer, linked procedures are share-granted "

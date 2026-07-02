@@ -145,19 +145,21 @@ class DatastorePg:
 
     def list_namespaces(self) -> list[dict]:
         """Namespaces visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
-        possédés par l'org active + accordés à elle (grant d'org/groupe actif). Un
-        namespace possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant
-        user, cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
+        possédés par l'org active + accordés à elle ou à MES équipes dans cette org
+        (grants d'org/groupe — tous mes groupes de l'org active, pas seulement le
+        groupe actif : un partage d'équipe doit se voir sans basculer). Un namespace
+        possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant user,
+        cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
         2026-07-01). Dédupliqués par id (priorité possédé). L'agent garde l'accès par
         nom (`can_access` inchangé) même si le namespace n'est pas listé ici."""
-        from . import access
+        from . import access, group_store
         owner = ownership.active_owner(access.current_org(self.sub))
         if owner is None:
             return []
         org = int(owner[1])
-        grp = access.current_group(self.sub)
         org_ids = [org]
-        group_ids = [grp] if grp is not None else []
+        group_ids = [int(g["group_id"])
+                     for g in group_store.list_groups_for_user(self.sub, org)]
         out: dict[int, dict] = {}
         for n in db.list_datastore_namespaces_for_owners([owner]):
             out[int(n["id"])] = self._entry(n, shared=False)

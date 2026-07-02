@@ -62,6 +62,10 @@ def seams(monkeypatch):
     rec["granted"] = []
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: rec["granted"].append(principals) or [])
+    # Équipes de l'acteur dans l'org active (lentille « partagés à mon équipe ») :
+    # défaut = aucune ; les tests dédiés surchargent.
+    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [])
     return rec
 
 
@@ -126,6 +130,22 @@ def test_list_includes_projects_delivered_to_org(seams, monkeypatch):
     livre = next(p for p in out["projects"] if p["id"] == 51)
     assert livre["shared"] is True and livre["permission"] == "read"
     assert livre["owner_id"] == "1"                      # l'owner reste l'org émettrice
+
+
+def test_list_includes_projects_shared_to_my_team(seams, monkeypatch):
+    # Un projet partagé à une ÉQUIPE de l'acteur (grant principal_type='group')
+    # apparaît dans la liste de tous ses membres — les principals interrogés
+    # incluent les groupes du sub DANS L'ORG ACTIVE seulement (pas de cross-org).
+    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [{"group_id": 5, "org_id": org_id, "name": "sales"}])
+    team = dict(ROW, id=61, name="Équipe", owner_type="org", owner_id="99",
+                permission="write")
+    monkeypatch.setattr(P.db, "list_projects_granted_to",
+                        lambda principals: [team] if ("group", "5") in principals else [])
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="list"))
+    shared = next(p for p in out["projects"] if p["id"] == 61)
+    assert shared["shared"] is True and shared["permission"] == "write"
 
 
 def test_get_forbidden(seams, monkeypatch):

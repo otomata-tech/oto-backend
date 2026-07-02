@@ -18,6 +18,10 @@ dependencies = [
     # LOCAL) : on a donc retiré l'extra `browser` d'oto-core, qui ne servait qu'à tirer
     # patchright transitivement (via o-browser). Le CLI local, lui, garde oto-core[browser].
     "patchright>=0.1.0",
+    # Détection des callbacks qui bloquent l'event loop (gel du serveur mono-loop,
+    # vécu 2026-07-02) — la détection native asyncio-debug sans son overhead ;
+    # consommé par oto_mcp/loop_watch.py (warn journal ≥1s, event Sentry ≥10s).
+    "aiodebug>=2.3.0",
     "starlette>=0.37",
     "uvicorn>=0.30",
     "pydantic>=2.0",

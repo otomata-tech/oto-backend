@@ -291,6 +291,12 @@ def main():
     from .sentry_setup import init_sentry
     init_sentry()
 
+    # Surveillance des gels d'event loop (serveur mono-loop) : chaque callback
+    # bloquant ≥1s est attribué dans le journal, ≥10s → event Sentry. AVANT le
+    # démarrage de la loop (patch global de Handle._run). Cf. loop_watch.
+    from . import loop_watch
+    loop_watch.enable()
+
     # stdio retiré (2026-06-13) : oto-mcp ne se sert plus qu'en streamable_http
     # (toujours authentifié Logto). Conséquence voulue — plus de chemin local
     # sans login → la couche capacité (ADR 0009) peut supposer un sub résolu,

@@ -115,6 +115,38 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "namespace": namespace}
 
     @mcp.tool()
+    def data_rename_namespace(namespace: str, new_name: str) -> dict:
+        """Rename a namespace. Only the name changes — the id, URL/deeplink and shares
+        stay stable (grants are keyed by id). Governance right required (owner, or the
+        org/platform admin governing it). The new name must be free for the same owner.
+
+        Use this to lift a name collision (e.g. two `reconcile_log` across orgs) before
+        transferring/consolidating: rename one side, then transfer with `oto_resource`.
+
+        Args:
+            namespace: current namespace (or `slot:<name>` under the active project).
+            new_name: the new kebab-case name (must be unique for the owner).
+        """
+        sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
+        if not new_name or not new_name.strip():
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="new_name requis"))
+        if new_name.strip().lower().startswith(access.SLOT_PREFIX):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="`slot:` est réservé à l'adressage — choisis un nom réel."))
+        store = _store_for(sub)
+        try:
+            return store.rename_namespace(namespace, new_name)
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        except NamespaceForbidden:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"tu n'as pas le droit de renommer `{namespace}`"))
+        except NamespaceExists as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+
+    @mcp.tool()
     def data_set_schema(namespace: str, schema: Optional[dict] = None) -> dict:
         """Declare (or clear with schema=null) a namespace's TYPED schema (ADR 0032 §6).
 

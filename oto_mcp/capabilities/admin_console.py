@@ -18,6 +18,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from .. import db
 from . import access_admin, orgs_admin, orgs_members, orgs_reads, users_admin
 from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
@@ -108,17 +109,28 @@ def _access(ctx: ResolvedCtx, inp: AccessAdminInput) -> dict:
     return access_admin._reject_access(ctx, access_admin.RejectAccessInput(sub=sub))
 
 
-# ── oto_admin_key_grant : grant / revoke · scope user|org (DROITS, pas de secret) ─
+# ── oto_admin_key_grant : list / grant / revoke · scope user|org (DROITS, pas de secret) ─
 class KeyGrantInput(BaseModel):
-    op: Literal["grant", "revoke"]
-    scope: Literal["user", "org"]
+    op: Literal["list", "grant", "revoke"]
+    scope: Optional[Literal["user", "org"]] = None  # grant/revoke seulement
     target: Optional[str] = None      # scope=user : email ou sub
     org_id: Optional[int] = None      # scope=org
     key_id: Optional[int] = None
+    provider: Optional[str] = None    # op=list : filtre optionnel
     daily_quota: Optional[int] = None  # grant (optionnel)
 
 
 def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
+    if inp.op == "list":
+        # Inventaire des clés plateforme posées (quels vendors oto contracte). Le
+        # SECRET n'est JAMAIS renvoyé — on ne montre que l'identité de la clé.
+        keys = [
+            {"key_id": k["id"], "provider": k["provider"], "label": k.get("label"),
+             "created_at": k.get("created_at")}
+            for k in db.list_platform_keys(inp.provider)
+        ]
+        return {"keys": keys, "count": len(keys)}
+    scope = _need(inp.scope, "missing_scope", "`scope` (user|org) requis pour grant/revoke.")
     key_id = _need(inp.key_id, "missing_key", "`key_id` (clé plateforme) requis.")
     if inp.scope == "user":
         target = _need(inp.target, "missing_target", "scope=user : `target` requis.")
@@ -172,10 +184,12 @@ CAPABILITIES += [
     ),
     Capability(
         key="admin.key_grant", handler=_key_grant, Input=KeyGrantInput,
-        authz=SUPER_ADMIN,
-        description=("Grant/revoke a platform key (by `key_id`) as a RIGHT (never reveals the key). "
-                     "op=grant|revoke · scope=user (`target` email|sub) | org (`org_id`); grant takes "
-                     "optional `daily_quota`. To POSE a raw key/secret, use the dashboard."),
+        authz=ADMIN_BY_OP({"list": PLATFORM_ADMIN, "grant": SUPER_ADMIN, "revoke": SUPER_ADMIN}),
+        description=("Platform keys as a RIGHT — never reveals the secret. "
+                     "op=list (which vendors oto contracts: key_id, provider, label; optional "
+                     "`provider` filter; platform admin) / grant|revoke (by `key_id`, super admin) · "
+                     "scope=user (`target` email|sub) | org (`org_id`); grant takes optional "
+                     "`daily_quota`. To POSE a raw key/secret, use the dashboard."),
         mcp="oto_admin_key_grant",
     ),
 ]

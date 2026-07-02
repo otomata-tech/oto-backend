@@ -206,6 +206,32 @@ def register(mcp: FastMCP) -> None:
         return inv if inv else {"found": False}
 
     @mcp.tool()
+    def pennylane_create_invoice(
+        customer_id: int,
+        date: str,
+        deadline: str,
+        lines: list,
+        external_reference: Optional[str] = None,
+    ) -> dict:
+        """Crée une facture de vente client en **brouillon** dans Pennylane.
+
+        Toujours créée en brouillon : finaliser ensuite avec
+        `pennylane_finalize_invoice` (puis `pennylane_send_invoice`) APRÈS validation
+        humaine explicite. Le client doit exister (créer/compléter au préalable ;
+        `pennylane_update_customer` pour l'e-mail/les coordonnées).
+
+        Args:
+            customer_id: ID du client Pennylane.
+            date: date d'émission (YYYY-MM-DD).
+            deadline: date d'échéance (YYYY-MM-DD).
+            lines: lignes [{product_id, quantity, label?, raw_currency_unit_price?, unit?, vat_rate?}].
+            external_reference: référence externe (anti-doublon / trace de la source).
+        """
+        return _client().create_customer_invoice(
+            customer_id=customer_id, date=date, deadline=deadline, lines=lines,
+            external_reference=external_reference, draft=True)
+
+    @mcp.tool()
     def pennylane_create_credit_note(
         customer_id: int,
         date: str,

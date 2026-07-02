@@ -89,6 +89,12 @@ def _get_pool() -> ConnectionPool:
             max_size=int(os.environ.get("OTO_MCP_DB_POOL_MAX", "8")),
             kwargs={"row_factory": _str_dict_row, "options": _connect_options()},
             open=True,
+            # Attente MAX d'une connexion (défaut psycopg_pool : 30s !). Pendant un
+            # blip DB (SSL eof, saturation), le pool se vide et `getconn` ATTEND —
+            # depuis un chemin sync dans l'event loop (ex. _authenticate), c'est le
+            # serveur ENTIER qui gèle. 5s ⇒ PoolTimeout → 500 propre, pas un down.
+            # Vécu 2026-07-02 (2 gels, py-spy : getconn wait sous _authenticate).
+            timeout=float(os.environ.get("OTO_MCP_DB_POOL_TIMEOUT", "5") or "5"),
         )
     return _pool
 

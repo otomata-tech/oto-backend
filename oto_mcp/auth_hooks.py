@@ -9,12 +9,39 @@ vrai Logto, et reste sans effet tant que l'env n'est pas posée.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
-from typing import Optional
+from typing import Iterator, Optional
+
+# Override d'identité pour la face REST (contextvar, par requête). La face MCP lit
+# le sub du token via `get_access_token()` (contextvar posé par FastMCP) ; en REST
+# ce contextvar n'existe pas. Quand un handler REST veut INVOQUER un tool sous
+# l'identité de l'appelant (ex. « tester un outil » depuis le dashboard), il pose
+# ce sub-override → `resolve_api_key`/`current_org`/… résolvent la bonne identité
+# et les gates de call-time (credential, RBAC connecteur) restent intacts. Copié
+# dans le threadpool avec le contexte (anyio `to_thread` propage les contextvars).
+_sub_override: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_rest_sub_override", default=None)
+
+
+@contextlib.contextmanager
+def sub_override(sub: Optional[str]) -> Iterator[None]:
+    """Fixe l'identité (`sub`) courante le temps d'un bloc — face REST uniquement.
+
+    Ne touche PAS la face MCP (qui lit toujours le token). Réentrant (reset propre)."""
+    token = _sub_override.set(sub)
+    try:
+        yield
+    finally:
+        _sub_override.reset(token)
 
 
 def current_user_sub_from_token() -> Optional[str]:
-    """Sub de l'utilisateur courant depuis le bearer JWT MCP."""
+    """Sub de l'utilisateur courant depuis le bearer JWT MCP (ou l'override REST)."""
+    override = _sub_override.get()
+    if override:
+        return override
     try:
         from fastmcp.server.dependencies import get_access_token  # type: ignore
         token = get_access_token()

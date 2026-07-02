@@ -98,6 +98,22 @@ def recent_runs(sub: str, org_id: Optional[int], limit: int = 5) -> list[dict]:
     return list(rows)
 
 
+def project_run_tools(project_id: int, limit: int = 200) -> list[str]:
+    """Outils réellement APPELÉS par les runs d'un projet — la part « usage observé »
+    de l'inventaire dérivé (ADR 0035 B4 : surface d'un projet = refs des procédures
+    liées ∪ slots×bindings ∪ runs). Distincts, plus fréquents d'abord ; brut (spine/
+    méta inclus — le consommateur cure)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT tc.tool, count(*) AS n FROM tool_calls tc "
+            "JOIN runs r ON r.run_id = tc.run_id "
+            "WHERE r.project_id = %s AND tc.kind = 'mcp' "
+            "GROUP BY tc.tool ORDER BY n DESC, tc.tool LIMIT %s",
+            (project_id, limit),
+        ).fetchall()
+    return [r["tool"] for r in rows]
+
+
 def insert_usage_signal(
     *, sub: Optional[str], org_id: Optional[int], signal: str, kind: str,
     target: Optional[str], body: Optional[str], session_id: Optional[str],

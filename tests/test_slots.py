@@ -290,3 +290,45 @@ def test_ns_helper_passthrough_and_resolution(monkeypatch):
     assert ds._ns("  SLOT:sortie ") == "leads_q3"      # préfixe insensible à la casse
     with pytest.raises(McpError):
         ds._ns("slot:fantome")
+
+
+# ── B4 : inventaire dérivé (oto_project op=inventory) ───────────────────────
+def test_inventory_derives_union(monkeypatch):
+    from oto_mcp.capabilities import projects as P
+
+    row = {"id": 7, "owner_type": "org", "owner_id": "3", "name": "Proj", "brief_md": "",
+           "created_by": "u1", "archived_at": None, "created_at": "x", "updated_at": "x"}
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(row, id=pid))
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.db, "list_project_links", lambda pid: [
+        {"target_type": "procedure", "target_ref": "42"},
+        {"target_type": "procedure", "target_ref": "morte"},        # slug legacy → non résolue
+        {"target_type": "connecteur", "target_ref": "unipile"},
+        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads_q3"},
+    ])
+    monkeypatch.setattr(P.db, "project_run_tools",
+                        lambda pid: ["fr_search", "oto_use_project", "folk_create_person"])
+
+    import oto_mcp.org_store as org_store_mod
+    monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
+                        lambda iid: {"slug": "prospection", "body_md":
+                                     "Chercher via <tool:fr_search> puis <tool:folk_create_person> "
+                                     "vers <slot:sortie>.",
+                                     "slots": [{"name": "crm", "type": "connecteur", "connector": "folk"},
+                                               {"name": "sortie", "type": "tableau"}]})
+
+    class _Con:
+        def __init__(self, name):
+            self.name = name
+    import oto_mcp.providers as providers_mod
+    monkeypatch.setattr(providers_mod, "connector_for_namespace",
+                        lambda ns: {"fr": _Con("sirene"), "folk": _Con("folk")}.get(ns))
+
+    out = P._project(ResolvedCtx(sub="u1", org_id=3), P.ProjectInput(op="inventory", project_id=7))
+    # Union : refs des procédures d'abord, puis runs ; oto_use_project (spine) écarté.
+    assert out["tools"] == ["fr_search", "folk_create_person"]
+    # Connecteurs : slots connecteur ∪ liens ∪ dérivés des tools.
+    assert out["connectors"] == ["folk", "sirene", "unipile"]
+    procs = out["sources"]["procedures"]
+    assert {p["ref"]: p["resolved"] for p in procs} == {"42": True, "morte": False}
+    assert out["sources"]["tableaux"] == [{"slot": "sortie", "namespace": "leads_q3", "ref": "9"}]

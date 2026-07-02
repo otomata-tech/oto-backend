@@ -29,7 +29,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "base", "page")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "copy", "handoff", "link", "unlink", "activity",
+                "copy", "handoff", "link", "unlink", "activity", "inventory",
                 "publish_mcp", "unpublish_mcp"]
     project_id: Optional[int] = None
     name: Optional[str] = None
@@ -195,6 +195,52 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # « Reprendre dans Claude » (B5b) : blob copier-coller qui charge ce projet.
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         return {"id": inp.project_id, "markdown": _handoff_md(row)}
+
+    if inp.op == "inventory":
+        # Inventaire DÉRIVÉ du projet (ADR 0035 B4) — jamais déclaré : surface d'outils
+        # = refs <tool:> des procédures liées ∪ usage observé des runs (0017), plus les
+        # connecteurs (liens ∪ slots connecteur des procédures). Sert le préremplissage
+        # de publish_mcp (l'humain cure) + le manifeste dashboard.
+        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+        from .. import org_store, providers, tool_registry
+        from ..tool_visibility import namespace_of
+        links = db.list_project_links(int(inp.project_id))
+        procedures, proc_tools, slot_connectors = [], [], set()
+        for l in links:
+            if l["target_type"] != "procedure":
+                continue
+            ref = str(l["target_ref"])
+            instr = org_store.get_instruction_by_id(int(ref)) if ref.isdigit() else None
+            if not instr:
+                procedures.append({"ref": ref, "resolved": False})
+                continue
+            refs = tool_registry.ref_names(instr.get("body_md") or "")
+            slots = instr.get("slots") or []
+            procedures.append({"ref": ref, "slug": instr["slug"], "resolved": True,
+                               "tools": refs, "slots": slots})
+            proc_tools += refs
+            slot_connectors |= {s.get("connector") or s["name"] for s in slots
+                                if s.get("type") == "connecteur"}
+        run_tools = db.project_run_tools(int(inp.project_id))
+        # Union suggérée : refs des procédures d'abord (l'intention), puis l'usage ;
+        # les tools spine/méta (sans connecteur au registre : oto_*, run_*, data_*…)
+        # sont écartés de la suggestion (non publiables), les sources restent brutes.
+        seen, tools, connectors = set(), [], set(slot_connectors)
+        for t in proc_tools + run_tools:
+            if t in seen:
+                continue
+            seen.add(t)
+            con = providers.connector_for_namespace(namespace_of(t))
+            if con is None:
+                continue
+            tools.append(t)
+            connectors.add(con.name)
+        connectors |= {l["target_ref"] for l in links if l["target_type"] == "connecteur"}
+        return {"id": inp.project_id, "tools": tools, "connectors": sorted(connectors),
+                "sources": {"procedures": procedures, "runs": run_tools,
+                            "tableaux": [{"slot": l.get("slot"), "namespace": l.get("namespace"),
+                                          "ref": l["target_ref"]}
+                                         for l in links if l["target_type"] == "tableau"]}}
 
     if inp.op == "update":
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -363,6 +409,9 @@ CAPABILITIES += [
             "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
             "project's table by that name with the data_* tools (never hardcode a namespace). "
             "Share & transfer go through oto_resource (resource_type='project'). "
+            "inventory = the project's DERIVED surface (union of the linked procedures' "
+            "<tool:> refs + tools actually used by the project's runs, plus connectors "
+            "from links & declared slots) — never retype a tool list: derive, then curate. "
             "publish_mcp (mcp_slug + mcp_access anonymous|org + mcp_tools = the fixed tool "
             "allowlist) publishes the project as a dedicated MCP endpoint "
             "`<mcp_slug>.mcp.oto.cx/mcp` — `anonymous` = no login, the toolset served under the "

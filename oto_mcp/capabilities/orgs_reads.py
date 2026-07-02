@@ -46,7 +46,8 @@ def _list_my_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
             active = o["org_id"]
         orgs.append({  # superset REST(id/member_count/my_role) + MCP(org_id/role/active)
             "id": o["org_id"], "org_id": o["org_id"], "name": o["name"],
-            "logo_url": o.get("logo_url"),
+            # logo EFFECTIF : upload sinon dérivé logo.dev du domaine déclaré.
+            "logo_url": org_store.effective_logo_url(o),
             "member_count": len(org_store.list_org_members(o["org_id"])),
             "my_role": o["org_role"], "role": o["org_role"], "active": o["is_active"],
         })
@@ -55,7 +56,8 @@ def _list_my_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
 
 def _list_all_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return {"orgs": [
-        {**o, "member_count": len(org_store.list_org_members(o["id"]))}
+        {**o, "logo_url": org_store.effective_logo_url(o),
+         "member_count": len(org_store.list_org_members(o["id"]))}
         for o in org_store.list_all_orgs()
     ]}
 
@@ -66,8 +68,15 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         from ._types import AuthzDenied
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     my_role = org_store.get_org_role(inp.org_id, ctx.sub)
-    brief = {"id": org["id"], "name": org["name"], "logo_url": org.get("logo_url"),
+    # `logo_url` = EFFECTIF (upload > logo.dev du domaine) ; `logo_custom` dit
+    # au front si un upload existe (gate du bouton « remove logo »).
+    brief = {"id": org["id"], "name": org["name"],
+             "logo_url": org_store.effective_logo_url(org),
+             "logo_custom": bool(org.get("logo_url")),
              "description": org.get("description") or "",
+             "domain": org.get("domain"),
+             "industry": org.get("industry") or "",
+             "location": org.get("location") or "",
              "member_count": len(org_store.list_org_members(org["id"]))}
     if my_role is not None:
         brief["my_role"] = my_role

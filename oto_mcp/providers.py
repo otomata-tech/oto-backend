@@ -132,6 +132,12 @@ class Connector:
         return DOC_SECTIONS.get(self.name, ())
 
     @property
+    def description(self) -> str:
+        """Description user-facing 2-3 phrases (CURÉE, `_DESCRIPTION_BY_CONNECTOR`).
+        Vide si non rédigée — le front retombe alors sur `help`."""
+        return _DESCRIPTION_BY_CONNECTOR.get(self.name, "")
+
+    @property
     def publisher_name(self) -> str:
         """Éditeur affiché au catalogue — override champ si renseigné, sinon la
         map curée `_PUBLISHER_BY_CONNECTOR`, sinon "Otomata" (connecteur maison)."""
@@ -286,10 +292,57 @@ _PUBLISHER_BY_CONNECTOR = {
     "gr": "GEMI / VIES",
 }
 
+# Description user-facing (2-3 phrases) par connecteur — CURÉE, affichée sur la
+# carte catalogue du dashboard (le front retombe sur `help` si absente). Décrire
+# ce que le connecteur couvre concrètement, pas de superlatifs. Premier lot =
+# les données France (le différenciateur du catalogue) ; compléter au fil de l'eau.
+_DESCRIPTION_BY_CONNECTOR = {
+    "sirene": (
+        "Les données d'entreprise françaises unifiées : recherche multicritère, "
+        "fiche agrégée (identité + bilans INPI + événements BODACC), dirigeants, "
+        "marchés publics BOAMP, accords collectifs, conventions collectives, "
+        "législation et jurisprudence. Inclut le stock SIRENE complet "
+        "(~43 M d'établissements) pour le batch : sièges, établissements, "
+        "recherche NAF/commune."
+    ),
+    "culture": (
+        "Les entreprises du spectacle vivant, en open data du Ministère de la "
+        "Culture : recherche multicritère, fiches détaillées, statistiques "
+        "sectorielles et export."
+    ),
+    "foncier": (
+        "Le foncier et l'immobilier français en open data : géocodage BAN, "
+        "parcelles cadastrales, bâti, transactions DVF (prix au m², comparables "
+        "par adresse), risques et ICPE, DPE, consommation électrique et "
+        "productible solaire."
+    ),
+    "urba": (
+        "L'urbanisme réglementaire en open data : zonage PLU/GPU et règlements, "
+        "risques naturels, argiles, QPV et proximité, EPFIF, socio-démographie "
+        "communale."
+    ),
+    "sante": (
+        "Les établissements de santé et médico-sociaux français : répertoire "
+        "FINESS complet et évaluations ESSMS de la HAS, avec recherche "
+        "multicritère."
+    ),
+    "frenchtech": (
+        "L'écosystème d'une capitale French Tech (défaut Aix-Marseille) : "
+        "annuaire des startups, structures et prestataires, événements, appels "
+        "à projets, financements et French Tech Central."
+    ),
+    "infosec": (
+        "L'empreinte numérique d'un domaine, en reconnaissance passive : "
+        "WHOIS/RDAP, DNS, posture e-mail (SPF/DMARC), sous-domaines via "
+        "Certificate Transparency, TLS et headers de sécurité."
+    ),
+}
+
 # Domaine de marque curé par connecteur → le CDN logo.dev en dérive l'URL du logo
 # (cf. `logo_url_for`). Domaine RACINE (pas les `app.*` ni sous-domaines MCP). Les
-# connecteurs absents (open-data/État `culture`/`foncier`/`sante`) n'ont pas de
-# marque produit → pas de logo → monogramme côté UI.
+# connecteurs absents n'ont pas de marque produit → pas de logo → monogramme côté
+# UI. Les sources d'État (`culture`/`foncier`/`urba`/`frenchtech`) résolvent vers
+# la Marianne via leur domaine .gouv.fr — identité visuelle commune « Data FR ».
 _LOGO_DOMAIN_BY_CONNECTOR = {
     "serper": "serper.dev", "hunter": "hunter.io", "kaspr": "kaspr.io",
     "fullenrich": "fullenrich.com", "lemlist": "lemlist.com", "folk": "folk.app",
@@ -299,6 +352,9 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
     "atlassian": "atlassian.com",
     "sirene": "insee.fr",
+    "culture": "culture.gouv.fr", "foncier": "data.gouv.fr",
+    "urba": "geoportail-urbanisme.gouv.fr", "sante": "has-sante.fr",
+    "frenchtech": "lafrenchtech.com",
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com", "brightdata": "brightdata.com", "cloro": "cloro.dev",
@@ -943,6 +999,9 @@ def public_catalog() -> list[dict]:
             "name": c.name,
             "label": c.label,
             "help": c.help,
+            # Description curée 2-3 phrases (carte catalogue) — "" si non rédigée,
+            # le front retombe sur `help`.
+            "description": c.description,
             # Doc « how-to » user-facing (prérequis/setup/usage), markdown par section.
             "doc_sections": [
                 {"kind": s.kind, "title": s.title, "body_md": s.body_md}

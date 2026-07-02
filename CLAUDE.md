@@ -302,19 +302,26 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 > éditeur dashboard `/platform/instructions`. Transparence : `/api/me/agent-context` rend le même
 > artefact composé. **Reste (#54)** : anticipation **pilotée** (message proactif amorcé par l'admin).
 
-> **Slots de procédure (ADR 0035, B1 — canari no-op).** Une procédure déclare ses **entités
+> **Slots de procédure (ADR 0035, B1–B3 déployés).** Une procédure déclare ses **entités
 > à instance** (quel tableau, quel compte de connecteur, quelle base) en **JSON propre** :
 > colonne `org_instructions.slots` JSONB (`{name, type ∈ tableau|connecteur|base,
 > description?, connector?}`), la prose les référence **par nom** via `<slot:name>` (même
 > famille que `<tool:slug>` 0014 ; le binding nom→instance vit dans le PROJET,
-> `project_links` — jamais dans la procédure). Module `slots.py` = source unique
-> (validation dure `validate_slots` + check croisé non bloquant `slots_check` : refs mortes,
-> slots jamais cités, cohérence connecteurs déclarés ↔ refs `<tool:>`, suggestion quand un
-> connecteur à identités est référencé sans slot). Câblé : `oto_set_doctrine`/`PUT
-> /api/me/instructions/{slug}` (param `slots`, warnings en réponse), lectures (`get` expose
-> `slots`), transport revisions + revert + `copy_instruction_to_org` + publish/fork
-> bibliothèque. **Aucun effet runtime** (pas de résolution ni d'enforcement — B3, épic
-> otomata-private#59). Grandfathering : une procédure sans slots s'exécute comme avant.
+> `project_links.slot` — vocabulaire DU projet, unicité `(project_id, slot)` → 409
+> `slot_taken` au link). Module `slots.py` = source unique (validation dure
+> `validate_slots`/`normalize_name` + check croisé non bloquant `slots_check` : refs
+> mortes, slots jamais cités, cohérence connecteurs déclarés ↔ refs `<tool:>`, suggestion
+> quand un connecteur à identités est référencé sans slot). Écriture : `oto_set_doctrine`/
+> `PUT /api/me/instructions/{slug}` (param `slots`, warnings en réponse) ; transport
+> revisions + revert + `copy_instruction_to_org` + publish/fork bibliothèque +
+> `duplicate_project`. **Runtime (B3)** : les tools `data_*` acceptent
+> `namespace='slot:<name>'` → `access.resolve_slot_tableau` résout contre les bindings du
+> **projet actif** ; pas de projet / slot non bindé / binding pendouillant = **McpError
+> actionnable, jamais de fallback** (bracelet serveur 0023) ; `data_create_namespace`
+> refuse le préfixe (un slot binde un tableau existant). Bloc A : §« Slots » (⚠️ prose
+> seedée en DB — une évolution du texte passe par `oto_admin_platform_instructions`, pas
+> seulement la constante). Grandfathering : procédure sans slots / nom nu = inchangés.
+> Restent B4 (inventaire dérivé) + B5 (vérifications) — épic otomata-private#59.
 
 ## Groupes (départements) & hiérarchie de droits (ADR 0012)
 

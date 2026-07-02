@@ -228,3 +228,65 @@ def test_link_slot_taken_409(monkeypatch):
                    P.ProjectInput(op="link", project_id=7, target_type="tableau",
                                   target_ref="9", slot="sortie"))
     assert e.value.code == "slot_taken" and e.value.status == 409
+
+
+# ── B3 : résolveur runtime `slot:<name>` (enforcement serveur, jamais de fallback) ──
+from mcp.shared.exceptions import McpError  # noqa: E402
+
+from oto_mcp import access  # noqa: E402
+from oto_mcp.tools import datastore as ds  # noqa: E402
+
+_LINKS = [
+    {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads_q3"},
+    {"target_type": "tableau", "target_ref": "12", "slot": "source", "namespace": "pool_pme"},
+    {"target_type": "connecteur", "target_ref": "folk", "slot": None},
+]
+
+
+def _wire_resolve(monkeypatch, project=7, links=_LINKS):
+    monkeypatch.setattr(access, "current_project", lambda: project)
+    monkeypatch.setattr(access.db, "list_project_links", lambda pid: list(links))
+
+
+def test_resolve_slot_ok(monkeypatch):
+    _wire_resolve(monkeypatch)
+    assert access.resolve_slot_tableau("sortie") == "leads_q3"
+    assert access.resolve_slot_tableau(" Sortie ") == "leads_q3"   # normalisé
+
+
+def test_resolve_slot_no_project_actionable(monkeypatch):
+    _wire_resolve(monkeypatch, project=None)
+    with pytest.raises(McpError) as e:
+        access.resolve_slot_tableau("sortie")
+    assert "oto_use_project" in str(e.value)   # la marche à suivre, pas un refus sec
+
+
+def test_resolve_slot_unbound_lists_bound(monkeypatch):
+    _wire_resolve(monkeypatch)
+    with pytest.raises(McpError) as e:
+        access.resolve_slot_tableau("fantome")
+    msg = str(e.value)
+    assert "sortie" in msg and "source" in msg and "op=link" in msg
+
+
+def test_resolve_slot_dangling(monkeypatch):
+    _wire_resolve(monkeypatch, links=[{"target_type": "tableau", "target_ref": "99",
+                                       "slot": "sortie"}])   # pas de namespace résolu
+    with pytest.raises(McpError) as e:
+        access.resolve_slot_tableau("sortie")
+    assert "ne résout plus" in str(e.value)
+
+
+def test_resolve_slot_invalid_name(monkeypatch):
+    _wire_resolve(monkeypatch)
+    with pytest.raises(McpError):
+        access.resolve_slot_tableau("Bad Name")
+
+
+def test_ns_helper_passthrough_and_resolution(monkeypatch):
+    _wire_resolve(monkeypatch)
+    assert ds._ns("timetrack") == "timetrack"          # nom nu : zéro magie
+    assert ds._ns("slot:sortie") == "leads_q3"
+    assert ds._ns("  SLOT:sortie ") == "leads_q3"      # préfixe insensible à la casse
+    with pytest.raises(McpError):
+        ds._ns("slot:fantome")

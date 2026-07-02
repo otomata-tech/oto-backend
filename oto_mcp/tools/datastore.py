@@ -32,6 +32,16 @@ def _store_for(sub: str):
     return make_store(sub)
 
 
+def _ns(namespace: str) -> str:
+    """Adressage par SLOT (ADR 0035 B3) : `slot:<name>` = le tableau bindé sous ce
+    nom par le PROJET ACTIF (`access.resolve_slot_tableau` — erreur actionnable si
+    pas de projet actif / slot non bindé / binding pendouillant, JAMAIS de fallback).
+    Un nom nu passe inchangé (zéro magie sur les noms littéraux)."""
+    if isinstance(namespace, str) and namespace.strip().lower().startswith(access.SLOT_PREFIX):
+        return access.resolve_slot_tableau(namespace.strip()[len(access.SLOT_PREFIX):])
+    return namespace
+
+
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
@@ -51,6 +61,12 @@ def register(mcp: FastMCP) -> None:
         sub = access.current_user_sub_or_raise()
         if not namespace or not namespace.strip():
             raise McpError(ErrorData(code=INVALID_PARAMS, message="namespace requis"))
+        if namespace.strip().lower().startswith(access.SLOT_PREFIX):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=("un slot binde un tableau EXISTANT — crée le namespace avec son "
+                         "nom réel, puis binde-le au projet "
+                         "(`oto_project op=link target_type=tableau … slot='<name>'`).")))
         store = _store_for(sub)
         try:
             return store.create_namespace(namespace.strip())
@@ -65,6 +81,7 @@ def register(mcp: FastMCP) -> None:
         """Delete a namespace and all its rows (irreversible). Owner (or org/platform
         admin governing it) only."""
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         store = _store_for(sub)
         try:
             store.delete_namespace(namespace)
@@ -90,6 +107,7 @@ def register(mcp: FastMCP) -> None:
             schema: the schema object, or null to clear it.
         """
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         store = _store_for(sub)
         try:
             return store.set_schema(namespace, schema)
@@ -112,13 +130,19 @@ def register(mcp: FastMCP) -> None:
         auto-created. New JSON KEYS within an existing namespace, however, do
         auto-create their columns.
 
+        `namespace` also accepts `slot:<name>` = the table BOUND under that slot
+        name by the ACTIVE project (procedures reference tables as <slot:name>;
+        the project maps the name via its links). Requires an active project +
+        the binding — otherwise an actionable error, never a fallback.
+
         Args:
-            namespace: target namespace (must already exist).
+            namespace: target namespace (must already exist), or `slot:<name>`.
             row: row content as a dict (strings/numbers/bools/objects/arrays,
                 JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`.
         """
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         if not isinstance(row, dict):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
         store = _store_for(sub)
@@ -141,13 +165,15 @@ def register(mcp: FastMCP) -> None:
         rows (optional exact-match `filter`, `limit`).
 
         Args:
-            namespace: target namespace.
+            namespace: target namespace, or `slot:<name>` = the table bound under
+                that slot name by the ACTIVE project (actionable error if unbound).
             id: `_id` of one row ; omit = list rows.
             filter: dict `{column: value}` exact match (list mode only),
                 e.g. `{"project": "roundtable"}`.
             limit: max rows (default 100, list mode only).
         """
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         store = _store_for(sub)
         try:
             if id is not None:
@@ -161,8 +187,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_delete_row(namespace: str, id: str) -> dict:
-        """Delete a row by `_id`."""
+        """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         store = _store_for(sub)
         try:
             store.delete_row(namespace, id)
@@ -176,8 +203,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_url(namespace: str) -> dict:
-        """Return the dashboard URL of a namespace (for the user to open/edit in browser)."""
+        """Return the dashboard URL of a namespace (for the user to open/edit in
+        browser). `namespace` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         store = _store_for(sub)
         try:
             return {"url": store.get_url(namespace)}
@@ -198,6 +227,7 @@ def register(mcp: FastMCP) -> None:
             remove: True = revoke access instead of granting it.
         """
         sub = access.current_user_sub_or_raise()
+        namespace = _ns(namespace)
         recipient = db.get_user_by_email(email)
         if not recipient:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
@@ -303,6 +333,8 @@ def register(mcp: FastMCP) -> None:
                 (hidden by default).
         """
         sub = access.current_user_sub_or_raise()
+        if namespace:
+            namespace = _ns(namespace)
         store = _store_for(sub)
 
         if not namespace:

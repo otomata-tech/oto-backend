@@ -219,6 +219,54 @@ def project_pinned_identity(connector: str, project_id: Optional[int] = None) ->
     return None
 
 
+# Préfixe d'adressage par slot (ADR 0035 B3) : `slot:<name>` dans un argument
+# `namespace` des tools data_* = « le tableau bindé sous ce nom par le projet actif ».
+SLOT_PREFIX = "slot:"
+
+
+def resolve_slot_tableau(name: str) -> str:
+    """Résout un slot `tableau` contre les bindings du projet ACTIF (ADR 0035 B3) →
+    le NOM réel du namespace. **Enforcement serveur, jamais de fallback** : pas de
+    projet actif, slot non bindé, ou binding pendouillant (namespace disparu) ⇒
+    `McpError` ACTIONNABLE — on n'interprète jamais `slot:x` comme un nom littéral
+    et on ne « prend jamais le premier tableau venu »."""
+    from . import slots as slots_mod
+    try:
+        name = slots_mod.normalize_name(name)
+    except ValueError as e:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"slot invalide : {e}"))
+    pid = current_project()
+    if pid is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"`slot:{name}` exige un PROJET ACTIF (le binding nom→instance vit "
+                     "dans le projet, ADR 0035). Active-le avec `oto_use_project(<id>)` "
+                     "(liste : `oto_project op=list`) — ou crée un projet et binde le slot "
+                     f"(`oto_project op=link target_type=tableau … slot='{name}'`), ou "
+                     "passe un `namespace` explicite.")))
+    links = db.list_project_links(int(pid))
+    match = [l for l in links
+             if l.get("target_type") == "tableau" and l.get("slot") == name]
+    if not match:
+        bound = sorted(l["slot"] for l in links
+                       if l.get("target_type") == "tableau" and l.get("slot"))
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"le projet actif (#{pid}) ne binde aucun slot tableau `{name}`. "
+                     + (f"Slots bindés : {', '.join(bound)}. " if bound else
+                        "Aucun slot tableau bindé dans ce projet. ")
+                     + f"Binde-le : `oto_project op=link project_id={pid} "
+                       f"target_type=tableau target_ref=<id> slot='{name}'`.")))
+    ns = match[0].get("namespace")
+    if not ns:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"le slot `{name}` du projet #{pid} pointe un tableau qui ne résout "
+                     f"plus (ref `{match[0].get('target_ref')}`) — re-binde-le sur un "
+                     "namespace existant (`oto_project op=link`).")))
+    return ns
+
+
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
     """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si
     `provider` est RESTREINT dans l'org active du `sub` et que `sub` n'y est pas

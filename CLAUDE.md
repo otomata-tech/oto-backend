@@ -604,8 +604,12 @@ valoir `group`. **Détails : `docs/groups-and-roles.md`.**
 ## Fédération MCP & comptes (otomata#16)
 
 Deux mécanismes : **mount** (MCP distant fédéré, token OAuth per-user, pilote
-memento — systématique) vs **remote** (bridge data-driven ADR 0003, token M2M d'org,
-pilote = un connecteur remote client). **Détail : `docs/federation.md`**.
+memento) vs **remote** (bridge data-driven ADR 0003, token M2M d'org, pilote = un
+connecteur remote client). **Plus aucun mount monté d'office** (memento sorti de
+`_DEFAULT_ENABLED_MOUNTS` le 2026-07-02 — fédération en sommeil, masters
+memento/atlassian/justicelibre OFF en prod) : un mount suit le régime commun
+d'activation (DB `connector_activation` ∪ env `OTO_MCP_MOUNTS_ENABLED`).
+**Détail : `docs/federation.md`**.
 
 ## MCP Apps — UI rendue (SEP-1865)
 

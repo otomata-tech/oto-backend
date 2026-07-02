@@ -88,21 +88,36 @@ class DatastorePg:
 
     def __init__(self, sub: str):
         self.sub = sub
-        self._scope_cache: Optional[ownership.AccessorScope] = None
+        self._active_scope_cache: Optional[tuple[list[int], list[int]]] = None
 
     # --- résolution namespace -> ns_id ---------------------------------------
 
-    def _scope(self) -> ownership.AccessorScope:
-        if self._scope_cache is None:
-            self._scope_cache = ownership.accessor_scope(self.sub)
-        return self._scope_cache
+    def _active_scope(self) -> tuple[list[int], list[int]]:
+        """Contexte de l'ORG ACTIVE (ADR 0023) : `([org active], [mes groupes dans cette
+        org])`. La résolution par NOM scope là-dessus — comme `list_namespaces` — de sorte
+        qu'un namespace d'une AUTRE de mes orgs ne se résout plus hors de son org (fuite
+        cross-org, symétrique au fix projets). L'ownership PERSO (`owner=user`) et les
+        grants perso (`principal user`) suivent l'acteur : ils n'appartiennent à aucune
+        org, donc ne sont pas une fuite d'org — `resolve_datastore_ns` les garde via `sub`."""
+        if self._active_scope_cache is None:
+            from . import access, group_store
+            oid = access.current_org(self.sub)
+            if oid is None:
+                self._active_scope_cache = ([], [])
+            else:
+                org = int(oid)
+                groups = [int(g["group_id"])
+                          for g in group_store.list_groups_for_user(self.sub, org)]
+                self._active_scope_cache = ([org], groups)
+        return self._active_scope_cache
 
     def _resolve(self, namespace: str, *, write: bool = False) -> int:
-        """ns_id d'un namespace VISIBLE par l'acteur (possédé perso/org, ou accordé).
-        `write=True` exige le droit d'écriture via `ownership.can_access`."""
-        scope = self._scope()
+        """ns_id d'un namespace VISIBLE DANS L'ORG ACTIVE (possédé par elle, perso, ou
+        accordé à son contexte). `write=True` exige le droit d'écriture via
+        `ownership.can_access`."""
+        org_ids, group_ids = self._active_scope()
         ns = db.resolve_datastore_ns(
-            namespace, sub=self.sub, org_ids=scope.org_ids, group_ids=scope.group_ids)
+            namespace, sub=self.sub, org_ids=org_ids, group_ids=group_ids)
         if not ns:
             raise NamespaceNotFound(namespace)
         ns_id = int(ns["id"])
@@ -150,8 +165,9 @@ class DatastorePg:
         groupe actif : un partage d'équipe doit se voir sans basculer). Un namespace
         possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant user,
         cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
-        2026-07-01). Dédupliqués par id (priorité possédé). L'agent garde l'accès par
-        nom (`can_access` inchangé) même si le namespace n'est pas listé ici."""
+        2026-07-01). Dédupliqués par id (priorité possédé). La résolution PAR NOM
+        (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
+        namespace d'une autre org ne se résout plus hors de son org non plus."""
         from . import access, group_store
         owner = ownership.active_owner(access.current_org(self.sub))
         if owner is None:
@@ -241,7 +257,7 @@ class DatastorePg:
         except NamespaceNotFound:
             _ot, _oid = self._default_owner()
             db.create_datastore_namespace(_ot, _oid, namespace)
-            self._scope_cache = None  # le nouveau ns doit être visible à la résolution
+            self._active_scope_cache = None  # invalide le cache (le ns créé est dans l'org active)
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)

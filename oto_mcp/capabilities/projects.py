@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, group_store, org_store, ownership, roles, session_org
+from .. import db, org_store, ownership, roles, session_org
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -91,6 +91,26 @@ def _view(row: dict) -> dict:
     }
 
 
+def _require_active_org_visible(ctx: ResolvedCtx, row: dict) -> None:
+    """Gate de CONTEXTE (ADR 0023) des accès par-id. Sans lui, une URL directe
+    `/projects/<id>` (ou `oto_use_project`) atteint un projet d'une AUTRE de mes orgs —
+    fuite hors contexte. Délègue la visibilité à `ownership.visible_in_org` (primitive
+    partagée) ; ajoute un message ACTIONNABLE (bascule d'org) si l'acteur y a accès par
+    une autre org, 404 non-disclosant sinon (ne révèle pas l'existence)."""
+    if ownership.visible_in_org(ctx.sub, ctx.org_id, RTYPE, str(row["id"])):
+        return
+    rid = str(row["id"])
+    if ownership.can_access(ctx.sub, RTYPE, rid, "read"):
+        owner = ownership.owner_of(RTYPE, rid)
+        oname = (org_store.get_org(int(owner[1])) or {}).get("name") \
+            if owner and owner[0] == "org" else None
+        hint = (f" Il appartient à l'org « {oname} » — bascule dessus (`oto_use_org`) "
+                "pour l'ouvrir." if oname else "")
+        raise AuthzDenied(403, "wrong_org_context",
+                          f"Projet #{rid} hors de l'org active.{hint}")
+    raise AuthzDenied(404, "unknown_project", f"Projet #{rid} inconnu.")
+
+
 def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
     """Réf de procédure (ADR 0032) → l'ID stable de la doctrine. Accepte déjà un id
     (chiffres) ou un slug (résolu dans l'org du projet) ; fallback = laisser tel quel
@@ -155,9 +175,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(owner is not None, "no_active_org", "Aucune org active.", 400)
         own = [_view(r) for r in db.list_projects_for_owners([owner])]
         seen = {p["id"] for p in own}
-        principals = [owner, ("user", sub)]
-        principals += [("group", str(g["group_id"]))
-                       for g in group_store.list_groups_for_user(sub, ctx.org_id)]
+        principals = ownership.active_org_principals(ctx.sub, ctx.org_id)
         shared = [{**_view(r), "shared": True, "permission": r.get("permission")}
                   for r in db.list_projects_granted_to(principals)
                   if r["id"] not in seen]
@@ -175,8 +193,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     row = db.get_project_by_id(int(inp.project_id))
     _require(row is not None, "unknown_project", f"Projet #{inp.project_id} inconnu.", 404)
 
+    # Gate de CONTEXTE d'org (ADR 0023) — UNE fois pour toutes les ops par-id : un projet
+    # n'est atteignable (lecture comme mutation) que DANS l'org qui le possède, jamais
+    # depuis une AUTRE de mes orgs. Le pendant par-id du scoping de `op=list`. SEUL `copy`
+    # y échappe : copier un MODÈLE (ou un projet lisible) cross-org est une feature (B5a).
+    if inp.op != "copy":
+        _require_active_org_visible(ctx, row)
+
     if inp.op == "get":
-        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         # Part publique CHIFFRÉE (ADR 0032 §3) : le serveur ne connaît que sa présence
         # + son horodatage, JAMAIS la clé (côté navigateur). La (re)publication passe
         # par la route REST dédiée (le ciphertext vient du front, pas de l'agent).
@@ -188,12 +212,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 "links": db.list_project_links(int(inp.project_id))}
 
     if inp.op == "activity":
-        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         return {"id": inp.project_id, "activity": db.list_project_activity(int(inp.project_id))}
 
     if inp.op == "handoff":
         # « Reprendre dans Claude » (B5b) : blob copier-coller qui charge ce projet.
-        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         return {"id": inp.project_id, "markdown": _handoff_md(row)}
 
     if inp.op == "inventory":
@@ -201,7 +223,6 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # = refs <tool:> des procédures liées ∪ usage observé des runs (0017), plus les
         # connecteurs (liens ∪ slots connecteur des procédures). Sert le préremplissage
         # de publish_mcp (l'humain cure) + le manifeste dashboard.
-        _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         from .. import org_store, providers, tool_registry
         from ..tool_visibility import namespace_of
         links = db.list_project_links(int(inp.project_id))
@@ -467,7 +488,7 @@ def _use_project(ctx: ResolvedCtx, inp: UseProjectInput) -> dict:
     rid = str(inp.project_id)
     row = db.get_project_by_id(inp.project_id)
     _require(row is not None, "unknown_project", f"Projet #{inp.project_id} inconnu.", 404)
-    _require(ownership.can_access(ctx.sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
+    _require_active_org_visible(ctx, row)
     sid = session_org.current_session_id()
     _require(sid is not None, "no_session",
              "oto_use_project ne s'utilise que dans une conversation MCP.", 400)

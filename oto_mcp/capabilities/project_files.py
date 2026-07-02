@@ -12,7 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from .. import db, media_store, ownership
+from .. import db, media_store
+from . import projects as _projects
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
@@ -24,10 +25,12 @@ class ProjectFilesInput(BaseModel):
 
 
 def _project_files(ctx: ResolvedCtx, inp: ProjectFilesInput) -> dict:
-    if db.get_project_by_id(inp.project_id) is None:
+    row = db.get_project_by_id(inp.project_id)
+    if row is None:
         raise AuthzDenied(404, "unknown_project", f"Projet #{inp.project_id} inconnu.")
-    if not ownership.can_access(ctx.sub, "project", str(inp.project_id), "read"):
-        raise AuthzDenied(403, "forbidden", "Accès refusé.")
+    # Même gate de contexte d'org que `oto_project op=get` (ADR 0023) : les docs d'un
+    # projet ne sont lisibles que DANS l'org du projet, pas depuis une autre de mes orgs.
+    _projects._require_active_org_visible(ctx, row)
     files = []
     for r in db.list_project_files(inp.project_id):
         key = r.pop("s3_key", None)

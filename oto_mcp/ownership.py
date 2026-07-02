@@ -64,6 +64,37 @@ def active_owner(org_id: Optional[int]) -> Optional[tuple[str, str]]:
     return None if org_id is None else ("org", str(org_id))
 
 
+def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
+    """Principals du CONTEXTE de l'org active sous lesquels une ressource est visible
+    ici : l'org active, l'acteur, et ses groupes DANS cette org. Source unique du
+    scoping par-contexte (ADR 0023), partagée par les listes et `visible_in_org`."""
+    owner = active_owner(org_id)
+    if owner is None:
+        return []
+    return [owner, ("user", sub)] + [
+        ("group", str(g["group_id"]))
+        for g in group_store.list_groups_for_user(sub, org_id)]
+
+
+def visible_in_org(sub: str, org_id: Optional[int],
+                   resource_type: str, resource_id: str) -> bool:
+    """Une ressource possédée est-elle visible DANS le contexte de l'org `org_id` ?
+    Possédée par cette org OU partagée à un principal du contexte — le pendant PAR-ID
+    du scoping de liste (`active_owner`). `can_access` (union de TOUTES les orgs de
+    l'acteur) est trop large pour une lecture/ouverture contextuelle : il laisse
+    atteindre une ressource d'une AUTRE de mes orgs, hors contexte (fuite cross-org,
+    cf. l'incident projet). À utiliser pour toute lecture/action par-id scopée à l'org
+    active ; `can_access` reste le plan CONTENU (découverte/partage cross-org)."""
+    owner = active_owner(org_id)
+    if owner is None:
+        return False
+    o = owner_of(resource_type, resource_id)
+    if o is not None and (str(o[0]), str(o[1])) == owner:
+        return True
+    return any(db.get_resource_grant(resource_type, resource_id, pt, pid) is not None
+               for pt, pid in active_org_principals(sub, org_id))
+
+
 # --- Registre des types de ressource ----------------------------------------
 
 @dataclass(frozen=True)

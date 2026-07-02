@@ -128,8 +128,9 @@ def list_datastore_namespaces_granted_to(
     Volontairement **PAS** les grants `principal_type='user'` : un partage *en propre*
     (cross-org, ex. un namespace de ton org perso partagé à ton compte) ne doit pas
     polluer la vue Données de CHAQUE org — l'org est le contexte (ADR 0023, scope décidé
-    avec l'utilisateur le 2026-07-01). L'agent garde l'accès par nom (`can_access`
-    inchangé). `sub` ne sert plus qu'à exclure les reliques perso possédées (gérées à part)."""
+    avec l'utilisateur le 2026-07-01). La résolution par nom (`resolve_datastore_ns`) est
+    elle aussi scopée à l'org active côté appelant (2026-07-03). `sub` ne sert plus qu'à
+    exclure les reliques perso possédées (gérées à part)."""
     org_txt = [str(o) for o in org_ids]
     grp_txt = [str(g) for g in group_ids]
     with _connect() as conn:

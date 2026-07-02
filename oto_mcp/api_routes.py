@@ -164,6 +164,19 @@ def _json(request: Request, payload: dict, status: int = 200) -> JSONResponse:
     )
 
 
+def _project_org_context_error(request: Request, sub: str, pid: int):
+    """Gate de CONTEXTE d'org (ADR 0023) des routes projet par-id : le projet doit être
+    visible dans l'org de CONSULTATION (`access.current_org`), pas seulement accessible
+    à l'acteur via une AUTRE de ses orgs (fuite cross-org — cf. l'incident projet). Le
+    pendant REST du gate de la capacité `oto_project`. Renvoie une 404 non-disclosante
+    si hors contexte, sinon None. Les routes d'ÉCRITURE gardent en plus leur check de
+    permission `can_access(write)`."""
+    from . import ownership
+    if ownership.visible_in_org(sub, access.current_org(sub), "project", str(pid)):
+        return None
+    return _json_error(request, 404, "unknown_project")
+
+
 # ── View-as (ADR 0023) : consultation d'une org dans le dashboard ───────────
 def _parse_view_org(request: Request) -> int | None:
     """Org de consultation (header `X-Oto-Org`). None = pas de header ; 0 = perso ;
@@ -609,12 +622,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         sub, err = await _authenticate(request, verifier)
         if err:
             return err
-        from . import ownership
         pid = int(request.path_params["project_id"])
         if not db.get_project_by_id(pid):
             return _json_error(request, 404, "unknown_project")
-        if not ownership.can_access(sub, "project", str(pid), "read"):
-            return _json_error(request, 403, "forbidden")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         return _json(request, {"files": [_signed(r) for r in db.list_project_files(pid)]})
 
     async def project_files_upload(request: Request) -> JSONResponse:
@@ -625,6 +637,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         pid = int(request.path_params["project_id"])
         if not db.get_project_by_id(pid):
             return _json_error(request, 404, "unknown_project")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         if not ownership.can_access(sub, "project", str(pid), "write"):
             return _json_error(request, 403, "forbidden")
         try:
@@ -659,6 +673,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         existing = db.get_project_file(file_id)
         if not existing or existing["project_id"] != pid:
             return _json_error(request, 404, "unknown_file")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         if not ownership.can_access(sub, "project", str(pid), "write"):
             return _json_error(request, 403, "forbidden")
         db.delete_project_file(file_id)
@@ -679,6 +695,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         existing = db.get_project_file(file_id)
         if not existing or existing["project_id"] != pid:
             return _json_error(request, 404, "unknown_file")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         if not ownership.can_access(sub, "project", str(pid), "write"):
             return _json_error(request, 403, "forbidden")
         try:
@@ -719,6 +737,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         pid = int(request.path_params["project_id"])
         if not db.get_project_by_id(pid):
             return _json_error(request, 404, "unknown_project")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         if not ownership.can_access(sub, "project", str(pid), "write"):
             return _json_error(request, 403, "forbidden")
         try:
@@ -746,6 +766,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         pid = int(request.path_params["project_id"])
         if not db.get_project_by_id(pid):
             return _json_error(request, 404, "unknown_project")
+        if (e := _project_org_context_error(request, sub, pid)):
+            return e
         if not ownership.can_access(sub, "project", str(pid), "write"):
             return _json_error(request, 403, "forbidden")
         db.clear_project_public_share(pid)

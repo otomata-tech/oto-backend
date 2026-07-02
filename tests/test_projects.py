@@ -9,8 +9,12 @@ import pytest
 from oto_mcp.capabilities import projects as P
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
-CTX = ResolvedCtx(sub="u1", org_id=None)
-ROW = {"id": 7, "owner_type": "user", "owner_id": "u1", "name": "Proj", "brief_md": "b",
+# Contexte par défaut = org active 99, propriétaire du projet ROW (modèle post-perso :
+# un projet est TOUJOURS org-owned, et n'est lisible que DANS le contexte de son org,
+# ADR 0023). `CTX_NOORG` sert les cas « pas d'org active » (create/list/copy rejetés).
+CTX = ResolvedCtx(sub="u1", org_id=99)
+CTX_NOORG = ResolvedCtx(sub="u1", org_id=None)
+ROW = {"id": 7, "owner_type": "org", "owner_id": "99", "name": "Proj", "brief_md": "b",
        "created_by": "u1", "archived_at": None, "created_at": "2026-06-30", "updated_at": "2026-06-30"}
 
 
@@ -58,13 +62,16 @@ def seams(monkeypatch):
     # Partage public chiffré (ADR 0032 §3) : défaut = non partagé ; les tests dédiés
     # surchargent get_project_public_share pour simuler une part active.
     monkeypatch.setattr(P.db, "get_project_public_share", lambda pid: None)
+    # Gate de contexte d'org (ADR 0023) : pas de grant par défaut → visibilité dérivée
+    # de l'owner-match seul. Les tests dédiés surchargent (partage à un principal).
+    monkeypatch.setattr(P.db, "get_resource_grant", lambda *a, **k: None)
     # Projets LIVRÉS (#52) : défaut = aucun ; les tests dédiés surchargent.
     rec["granted"] = []
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: rec["granted"].append(principals) or [])
     # Équipes de l'acteur dans l'org active (lentille « partagés à mon équipe ») :
     # défaut = aucune ; les tests dédiés surchargent.
-    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+    monkeypatch.setattr(P.ownership.group_store, "list_groups_for_user",
                         lambda sub, org_id=None: [])
     return rec
 
@@ -79,7 +86,7 @@ def test_create_defaults_to_active_org(seams):
 
 def test_create_without_active_org_rejected(seams):
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="create", name="X"))      # CTX.org_id = None
+        P._project(CTX_NOORG, P.ProjectInput(op="create", name="X"))   # pas d'org active
     assert e.value.code == "no_active_org"
 
 
@@ -112,7 +119,7 @@ def test_list_scoped_to_active_org(seams):
 
 def test_list_without_active_org_rejected(seams):
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="list"))      # CTX.org_id = None
+        P._project(CTX_NOORG, P.ProjectInput(op="list"))   # pas d'org active
     assert e.value.code == "no_active_org"
 
 
@@ -136,7 +143,7 @@ def test_list_includes_projects_shared_to_my_team(seams, monkeypatch):
     # Un projet partagé à une ÉQUIPE de l'acteur (grant principal_type='group')
     # apparaît dans la liste de tous ses membres — les principals interrogés
     # incluent les groupes du sub DANS L'ORG ACTIVE seulement (pas de cross-org).
-    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+    monkeypatch.setattr(P.ownership.group_store, "list_groups_for_user",
                         lambda sub, org_id=None: [{"group_id": 5, "org_id": org_id, "name": "sales"}])
     team = dict(ROW, id=61, name="Équipe", owner_type="org", owner_id="99",
                 permission="write")
@@ -148,11 +155,30 @@ def test_list_includes_projects_shared_to_my_team(seams, monkeypatch):
     assert shared["shared"] is True and shared["permission"] == "write"
 
 
-def test_get_forbidden(seams, monkeypatch):
+def test_get_other_org_hidden_returns_404(seams, monkeypatch):
+    # Projet d'une AUTRE org, sans aucun accès : invisible en contexte, 404 non-disclosant
+    # (on ne révèle même pas son existence).
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="get", project_id=7))
-    assert e.value.code == "forbidden" and e.value.status == 403
+    assert e.value.code == "unknown_project" and e.value.status == 404
+
+
+def test_get_cross_org_member_blocked_with_switch_hint(seams, monkeypatch):
+    # RÉGRESSION (fuite signalée) : projet d'une org DONT je suis membre, ouvert alors que
+    # l'org active est une AUTRE org → bloqué EN CONTEXTE (ADR 0023), message actionnable
+    # (bascule d'org). Avant le fix, `get` par-id renvoyait le projet (fuite cross-org).
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Ferme Solaire"})
+    ctx = ResolvedCtx(sub="u1", org_id=44)   # org active ≠ 83 (propriétaire)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ctx, P.ProjectInput(op="get", project_id=7))
+    assert e.value.code == "wrong_org_context" and e.value.status == 403
+    assert "Ferme Solaire" in e.value.message and "oto_use_org" in e.value.message
 
 
 def test_get_unknown(seams):
@@ -208,7 +234,7 @@ def test_copy_requires_name(seams):
 
 def test_copy_requires_active_org(seams):
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="copy", project_id=7, name="X"))   # CTX.org_id=None
+        P._project(CTX_NOORG, P.ProjectInput(op="copy", project_id=7, name="X"))   # pas d'org active
     assert e.value.code == "no_active_org"
 
 
@@ -331,11 +357,13 @@ def test_handoff_op(seams):
     assert out["id"] == 7 and "oto_use_project(7)" in out["markdown"]
 
 
-def test_handoff_forbidden(seams, monkeypatch):
+def test_handoff_other_org_hidden(seams, monkeypatch):
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="handoff", project_id=7))
-    assert e.value.code == "forbidden"
+    assert e.value.code == "unknown_project"
 
 
 def test_capability_registered():
@@ -360,11 +388,16 @@ def test_use_project_unknown(seams):
     assert seams["proj"] == []          # rien posé sur un projet inconnu
 
 
-def test_use_project_forbidden(seams, monkeypatch):
+def test_use_project_other_org_hidden(seams, monkeypatch):
+    # oto_use_project ne peut activer qu'un projet visible dans l'org active (même gate
+    # que get) : un projet d'une autre org sans accès → 404, rien posé en session.
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
         P._use_project(CTX, P.UseProjectInput(project_id=7))
-    assert e.value.code == "forbidden" and e.value.status == 403
+    assert e.value.code == "unknown_project" and e.value.status == 404
+    assert seams["proj"] == []
 
 
 def test_use_project_requires_session(seams, monkeypatch):

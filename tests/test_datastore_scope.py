@@ -8,6 +8,8 @@ tripwire `test_owner_scope_tripwire.py`. Pendant datastore du test projets
 
 On monkeypatche les seams (access/group_store/db/ownership), pas de DB.
 """
+import pytest
+
 import oto_mcp.datastore as D
 from oto_mcp import access, group_store
 
@@ -75,3 +77,33 @@ def test_list_namespaces_no_active_org_is_empty(monkeypatch):
     _wire(monkeypatch, rec, org=None)
     assert D.make_store("u1").list_namespaces() == []
     assert "groups_for" not in rec and "granted_to" not in rec
+
+
+def test_resolve_by_name_scopes_to_active_org(monkeypatch):
+    # RÉGRESSION (fuite cross-org, symétrique au fix projets) : la résolution PAR NOM
+    # scope sur l'org active — `resolve_datastore_ns` reçoit [org active] + mes groupes
+    # DE CETTE ORG, jamais l'union de toutes mes orgs (`accessor_scope`). Un namespace
+    # d'une AUTRE de mes orgs (introuvable dans ce scope) lève NamespaceNotFound.
+    rec = {}
+    monkeypatch.setattr(access, "current_org", lambda sub: 44)
+    monkeypatch.setattr(group_store, "list_groups_for_user",
+                        lambda sub, org_id: [{"group_id": 7, "org_id": org_id, "name": "x"}])
+
+    def fake_resolve(namespace, *, sub, org_ids, group_ids):
+        rec["args"] = (namespace, sub, org_ids, group_ids)
+        return None    # possédé par une autre org → hors de [44] → introuvable
+
+    monkeypatch.setattr(D.db, "resolve_datastore_ns", fake_resolve)
+    with pytest.raises(D.NamespaceNotFound):
+        D.make_store("u1").resolve_ns_id("leads")
+    assert rec["args"] == ("leads", "u1", [44], [7])   # org active seule, pas l'union
+
+
+def test_resolve_finds_active_org_namespace(monkeypatch):
+    # Un namespace possédé par l'org active se résout bien (org_ids = [org active]).
+    monkeypatch.setattr(access, "current_org", lambda sub: 99)
+    monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org_id: [])
+    monkeypatch.setattr(
+        D.db, "resolve_datastore_ns",
+        lambda namespace, *, sub, org_ids, group_ids: {"id": 1} if org_ids == [99] else None)
+    assert D.make_store("u1").resolve_ns_id("leads") == 1

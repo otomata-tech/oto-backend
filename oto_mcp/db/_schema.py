@@ -638,6 +638,10 @@ CREATE TABLE IF NOT EXISTS org_instructions (
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     body_md TEXT NOT NULL,
+    -- ADR 0035 : slots = entités requises déclarées ({name, type, description?,
+    -- connector?}), référencées par nom dans la prose (<slot:name>). Le binding
+    -- nom→instance vit dans le projet (project_links), jamais ici.
+    slots JSONB NOT NULL DEFAULT '[]'::jsonb,
     version INTEGER NOT NULL DEFAULT 1,
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -654,6 +658,7 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     body_md TEXT NOT NULL,
+    slots JSONB NOT NULL DEFAULT '[]'::jsonb,
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, slug, version)
@@ -671,6 +676,7 @@ CREATE TABLE IF NOT EXISTS doctrine_library (
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     body_md TEXT NOT NULL,
+    slots JSONB NOT NULL DEFAULT '[]'::jsonb, -- ADR 0035 : voyage avec la doctrine au publish/fork
     author_kind TEXT NOT NULL,                -- 'otomata' | 'org' (validé en code)
     author_org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL,
     author_display TEXT NOT NULL DEFAULT '',

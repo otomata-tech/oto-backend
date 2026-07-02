@@ -576,6 +576,20 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 > éditeur dashboard `/platform/instructions`. Transparence : `/api/me/agent-context` rend le même
 > artefact composé. **Reste (#54)** : anticipation **pilotée** (message proactif amorcé par l'admin).
 
+> **Slots de procédure (ADR 0035, B1 — canari no-op).** Une procédure déclare ses **entités
+> à instance** (quel tableau, quel compte de connecteur, quelle base) en **JSON propre** :
+> colonne `org_instructions.slots` JSONB (`{name, type ∈ tableau|connecteur|base,
+> description?, connector?}`), la prose les référence **par nom** via `<slot:name>` (même
+> famille que `<tool:slug>` 0014 ; le binding nom→instance vit dans le PROJET,
+> `project_links` — jamais dans la procédure). Module `slots.py` = source unique
+> (validation dure `validate_slots` + check croisé non bloquant `slots_check` : refs mortes,
+> slots jamais cités, cohérence connecteurs déclarés ↔ refs `<tool:>`, suggestion quand un
+> connecteur à identités est référencé sans slot). Câblé : `oto_set_doctrine`/`PUT
+> /api/me/instructions/{slug}` (param `slots`, warnings en réponse), lectures (`get` expose
+> `slots`), transport revisions + revert + `copy_instruction_to_org` + publish/fork
+> bibliothèque. **Aucun effet runtime** (pas de résolution ni d'enforcement — B3, épic
+> otomata-private#59). Grandfathering : une procédure sans slots s'exécute comme avant.
+
 ## Groupes (départements) & hiérarchie de droits (ADR 0012)
 
 Une org se subdivise en **groupes** (départements/équipes) avec un **chef

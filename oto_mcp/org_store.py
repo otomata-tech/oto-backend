@@ -1121,14 +1121,14 @@ def get_instruction(org_id: int, slug: str, version: Optional[int] = None) -> Op
     with _connect() as conn:
         if version is None:
             row = conn.execute(
-                "SELECT id, org_id, slug, title, description, body_md, version, set_by, "
+                "SELECT id, org_id, slug, title, description, body_md, slots, version, set_by, "
                 "created_at, updated_at FROM org_instructions "
                 "WHERE org_id = %s AND slug = %s",
                 (org_id, slug),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT org_id, slug, title, description, body_md, version, set_by, "
+                "SELECT org_id, slug, title, description, body_md, slots, version, set_by, "
                 "created_at FROM org_instruction_revisions "
                 "WHERE org_id = %s AND slug = %s AND version = %s",
                 (org_id, slug, version),
@@ -1187,10 +1187,12 @@ def search_instructions(org_id: int, query: str, include_base: bool = False) -> 
 
 
 def set_instruction(org_id: int, slug: str, body_md: str, title: Optional[str] = None,
-                    description: Optional[str] = None, set_by: Optional[str] = None) -> int:
+                    description: Optional[str] = None, set_by: Optional[str] = None,
+                    slots: Optional[list] = None) -> int:
     """Crée/met à jour une instruction ; renvoie la NOUVELLE version et archive un
-    snapshot. `title`/`description` None = conserver l'existant ('' à la création).
-    Sérialisé par (org, slug) via verrou advisory (mirroir add_org_member)."""
+    snapshot. `title`/`description`/`slots` None = conserver l'existant ('' / [] à
+    la création). `slots` = entités requises déclarées (ADR 0035, validées en amont
+    par `slots.validate_slots`). Sérialisé par (org, slug) via verrou advisory."""
     slug = normalize_slug(slug)
     if not slug:
         raise ValueError("slug requis")
@@ -1200,32 +1202,35 @@ def set_instruction(org_id: int, slug: str, body_md: str, title: Optional[str] =
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"oi:{org_id}:{slug}",))
             cur = conn.execute(
-                "SELECT version, title, description FROM org_instructions "
+                "SELECT version, title, description, slots FROM org_instructions "
                 "WHERE org_id = %s AND slug = %s",
                 (org_id, slug),
             ).fetchone()
             new_version = (cur["version"] + 1) if cur else 1
             new_title = title if title is not None else (cur["title"] if cur else "")
             new_desc = description if description is not None else (cur["description"] if cur else "")
+            new_slots = json.dumps(slots if slots is not None
+                                   else ((cur["slots"] if cur else None) or []))
             conn.execute(
                 """
                 INSERT INTO org_instructions
-                    (org_id, slug, title, description, body_md, version, set_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    (org_id, slug, title, description, body_md, slots, version, set_by, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (org_id, slug) DO UPDATE SET
                     title = EXCLUDED.title, description = EXCLUDED.description,
-                    body_md = EXCLUDED.body_md, version = EXCLUDED.version,
+                    body_md = EXCLUDED.body_md, slots = EXCLUDED.slots,
+                    version = EXCLUDED.version,
                     set_by = EXCLUDED.set_by, updated_at = NOW()
                 """,
-                (org_id, slug, new_title, new_desc, body_md, new_version, set_by),
+                (org_id, slug, new_title, new_desc, body_md, new_slots, new_version, set_by),
             )
             conn.execute(
                 """
                 INSERT INTO org_instruction_revisions
-                    (org_id, slug, version, title, description, body_md, set_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (org_id, slug, version, title, description, body_md, slots, set_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (org_id, slug, new_version, new_title, new_desc, body_md, set_by),
+                (org_id, slug, new_version, new_title, new_desc, body_md, new_slots, set_by),
             )
             return new_version
 
@@ -1268,7 +1273,7 @@ def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
     """Une instruction par son id surrogate (identité publique). None si absente."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, org_id, slug, title, description, body_md, version, set_by, "
+            "SELECT id, org_id, slug, title, description, body_md, slots, version, set_by, "
             "created_at, updated_at FROM org_instructions WHERE id = %s",
             (instruction_id,),
         ).fetchone()
@@ -1302,7 +1307,7 @@ def copy_instruction_to_org(instruction_id: int, dest_org_id: int,
         dest_slug = _free_instruction_slug(conn, dest_org_id, src["slug"])
     set_instruction(dest_org_id, dest_slug, src["body_md"],
                     title=src.get("title"), description=src.get("description"),
-                    set_by=set_by)
+                    set_by=set_by, slots=src.get("slots") or [])
     created = get_instruction(dest_org_id, dest_slug)
     return {"id": created["id"], "slug": dest_slug, "org_id": dest_org_id}
 
@@ -1374,7 +1379,7 @@ def list_all_instructions() -> list[dict]:
 # 'unlisted' (servi seulement par slug exact à un appelant authentifié).
 
 _LIBRARY_COLS = (
-    "id, slug, title, description, body_md, author_kind, author_org_id, "
+    "id, slug, title, description, body_md, slots, author_kind, author_org_id, "
     "author_display, category, tags, visibility, source_org_id, source_slug, "
     "forked_from, version, published_by, created_at, updated_at"
 )
@@ -1390,7 +1395,8 @@ def publish_doctrine(*, slug: str, title: str = "", description: str = "",
                      tags: Optional[list] = None, visibility: str = "public",
                      source_org_id: Optional[int] = None, source_slug: Optional[str] = None,
                      forked_from: Optional[int] = None,
-                     published_by: Optional[str] = None) -> dict:
+                     published_by: Optional[str] = None,
+                     slots: Optional[list] = None) -> dict:
     """Publie (ou re-publie) une doctrine dans la bibliothèque. Upsert par `slug` :
     re-publier le même slug incrémente `version` et remplace le corps. Sérialisé
     par slug via verrou advisory. Renvoie la row publiée (avec body)."""
@@ -1414,13 +1420,14 @@ def publish_doctrine(*, slug: str, title: str = "", description: str = "",
             row = conn.execute(
                 f"""
                 INSERT INTO doctrine_library
-                    (slug, title, description, body_md, author_kind, author_org_id,
+                    (slug, title, description, body_md, slots, author_kind, author_org_id,
                      author_display, category, tags, visibility, source_org_id,
                      source_slug, forked_from, version, published_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (slug) DO UPDATE SET
                     title = EXCLUDED.title, description = EXCLUDED.description,
-                    body_md = EXCLUDED.body_md, author_kind = EXCLUDED.author_kind,
+                    body_md = EXCLUDED.body_md, slots = EXCLUDED.slots,
+                    author_kind = EXCLUDED.author_kind,
                     author_org_id = EXCLUDED.author_org_id,
                     author_display = EXCLUDED.author_display,
                     category = EXCLUDED.category, tags = EXCLUDED.tags,
@@ -1431,7 +1438,8 @@ def publish_doctrine(*, slug: str, title: str = "", description: str = "",
                     published_by = EXCLUDED.published_by, updated_at = NOW()
                 RETURNING {_LIBRARY_COLS}
                 """,
-                (slug, title, description, body_md, author_kind, author_org_id,
+                (slug, title, description, body_md, json.dumps(slots or []),
+                 author_kind, author_org_id,
                  author_display, category, tags, visibility, source_org_id,
                  source_slug, forked_from, new_version, published_by),
             ).fetchone()
@@ -1516,6 +1524,7 @@ def fork_into_org(*, entry_id: int, org_id: int, new_slug: Optional[str] = None,
     version = set_instruction(
         org_id, slug, entry["body_md"], title=entry.get("title") or "",
         description=entry.get("description") or "", set_by=set_by,
+        slots=entry.get("slots") or [],
     )
     return {
         "org_id": org_id, "slug": slug, "version": version,

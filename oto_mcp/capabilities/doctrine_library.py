@@ -106,7 +106,7 @@ def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
         body_md=src["body_md"], author_kind=kind, author_org_id=author_org_id,
         author_display=display, category=inp.category or "", tags=inp.tags or [],
         visibility=inp.visibility, source_org_id=ctx.org_id, source_slug=inp.slug,
-        published_by=ctx.sub,
+        published_by=ctx.sub, slots=src.get("slots") or [],
     )
     return {"published": True, "id": row["id"], "slug": row["slug"],
             "version": row["version"], "visibility": row["visibility"]}

@@ -24,7 +24,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import access, db, group_store, org_store, roles, tool_registry
+from .. import access, db, group_store, org_store, roles, slots as slots_mod, tool_registry
 from ._authz import ORG_ADMIN, ORG_ADMIN_OF, ORG_MEMBER, ORG_MEMBER_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -72,6 +72,9 @@ class InstrSetInput(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     from_version: Optional[int] = None
+    # ADR 0035 : entités requises déclarées [{name, type: tableau|connecteur|base,
+    # description?, connector?}] — référencées <slot:name> dans la prose. None = conserver.
+    slots: Optional[list] = None
 
 
 class RevertInput(BaseModel):
@@ -101,6 +104,7 @@ class AdminInstrSetInput(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     from_version: Optional[int] = None
+    slots: Optional[list] = None
 
 
 class AdminSlugInput(BaseModel):
@@ -168,7 +172,7 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
         return {"org_id": instr["org_id"], "doctrine_id": int(doctrine_id),
                 "scope": "org", "slug": instr["slug"], "title": instr["title"],
                 "description": instr["description"], "version": instr["version"],
-                "body_md": instr["body_md"],
+                "body_md": instr["body_md"], "slots": instr.get("slots") or [],
                 "referenced_tools": await tool_registry.manifest_for(instr["body_md"])}
 
     if slug is None:
@@ -220,7 +224,7 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
                           + ". Vois `oto_list_doctrines`.")
     out = {**scope_ref, "scope": scope, "slug": instr["slug"], "title": instr["title"],
            "description": instr["description"], "version": instr["version"],
-           "body_md": instr["body_md"],
+           "body_md": instr["body_md"], "slots": instr.get("slots") or [],
            "referenced_tools": await tool_registry.manifest_for(instr["body_md"])}
     pi = _project_instance(member_mode)
     if pi:
@@ -254,17 +258,25 @@ def _list_doctrines(ctx: ResolvedCtx, inp) -> dict:
 
 async def _set_instruction(ctx: ResolvedCtx, inp) -> dict:
     """Crée/met à jour une instruction (incrémente la version + archive un snapshot).
-    `from_version` = restaure une version passée comme nouvelle (revert MCP)."""
+    `from_version` = restaure une version passée comme nouvelle (revert MCP) — corps,
+    métadonnées ET slots. `slots` (ADR 0035) : None = conserver l'existant."""
     org_id = ctx.org_id
     norm = org_store.normalize_slug(inp.slug) if inp.slug else _BASE
     if not norm:
         raise AuthzDenied(400, "invalid_slug", "slug invalide (attendu [a-z0-9_-]).")
     body_md, title, description = inp.body_md, inp.title, inp.description
+    slots_in = getattr(inp, "slots", None)
     if inp.from_version is not None:
         old = org_store.get_instruction(org_id, norm, inp.from_version)
         if not old:
             raise AuthzDenied(404, "unknown_version", f"Pas de version {inp.from_version} pour `{norm}`.")
         body_md, title, description = old["body_md"], old["title"], old["description"]
+        slots_in = old.get("slots") or []
+    if slots_in is not None:
+        try:
+            slots_in = slots_mod.validate_slots(slots_in)
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_slots", str(e))
     body_md = (body_md or "").strip()
     if not body_md:
         raise AuthzDenied(400, "body_md_required", "body_md vide (ou fournis `from_version`).")
@@ -272,13 +284,22 @@ async def _set_instruction(ctx: ResolvedCtx, inp) -> dict:
     if len(body_md.encode()) > 64 * 1024:
         raise AuthzDenied(400, "body_too_large", "body_md > 64 KB.")
     if norm == _BASE:
-        version = org_store.set_instruction(org_id, _BASE, body_md, set_by=ctx.sub)
+        version = org_store.set_instruction(org_id, _BASE, body_md, set_by=ctx.sub,
+                                            slots=slots_in)
     else:
         version = org_store.set_instruction(org_id, norm, body_md, title=title,
-                                            description=description, set_by=ctx.sub)
+                                            description=description, set_by=ctx.sub,
+                                            slots=slots_in)
+    # Slots EFFECTIFS après écriture (None = conservés → relire la row) pour le
+    # check croisé <slot:name> ↔ déclaration (ADR 0035, non bloquant comme 0014).
+    effective_slots = slots_in
+    if effective_slots is None:
+        cur = org_store.get_instruction(org_id, norm)
+        effective_slots = (cur or {}).get("slots") or []
     return {"ok": True, "org_id": org_id, "slug": norm, "version": version, "set": True,
             **({"reverted_from": inp.from_version} if inp.from_version is not None else {}),
-            **await tool_registry.write_check(body_md)}
+            **await tool_registry.write_check(body_md),
+            **slots_mod.slots_check(body_md, effective_slots)}
 
 
 def _delete_instruction(ctx: ResolvedCtx, inp) -> dict:
@@ -321,7 +342,8 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
         raise AuthzDenied(404, "not_found", f"Instruction `{org_store.normalize_slug(inp.slug)}` absente.")
     return {
         "slug": instr["slug"], "title": instr["title"], "description": instr["description"],
-        "version": instr["version"], "body_md": instr["body_md"], "set_by": instr.get("set_by"),
+        "version": instr["version"], "body_md": instr["body_md"],
+        "slots": instr.get("slots") or [], "set_by": instr.get("set_by"),
         "created_at": instr.get("created_at"), "updated_at": instr.get("updated_at"),
     }
 
@@ -337,7 +359,8 @@ def _instruction_revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
     if not old:
         raise AuthzDenied(404, "not_found", f"Pas de version {inp.version} pour `{slug}`.")
     version = org_store.set_instruction(ctx.org_id, slug, old["body_md"], title=old["title"],
-                                        description=old["description"], set_by=ctx.sub)
+                                        description=old["description"], set_by=ctx.sub,
+                                        slots=old.get("slots") or [])
     return {"ok": True, "slug": slug, "version": version, "reverted_from": inp.version}
 
 
@@ -404,7 +427,12 @@ CAPABILITIES += [
         authz=ORG_ADMIN,
         description=("Write your org's doctrine (org_admin). Each write bumps the version "
                      "and archives a snapshot. slug omitted = base doctrine; given = a named "
-                     "skill. `from_version` restores a past version as a new one (revert)."),
+                     "skill. `from_version` restores a past version as a new one (revert). "
+                     "`slots` = the procedure's REQUIRED ENTITIES [{name, type: tableau|"
+                     "connecteur|base, description?, connector?}] — reference them BY NAME "
+                     "in the prose as <slot:name> (never a hardcoded instance: the project "
+                     "binds name→instance). Response returns cross-check warnings "
+                     "(unresolved/unreferenced slots, suggestions)."),
         mcp="oto_set_doctrine",
         rest=RestBinding("PUT", "/api/me/instructions/{slug}"),
     ),

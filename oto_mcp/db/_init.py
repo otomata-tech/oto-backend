@@ -72,6 +72,12 @@ def init_db() -> None:
               AND p.owner_type = 'org' AND oi.slug = pl.target_ref
               AND pl.target_ref !~ '^[0-9]+$'
         """)
+        # ADR 0035 (B1) : slots de procédure — déclaration d'entités requises (JSON propre),
+        # référencées par nom dans la prose (<slot:name>). Transportée par revisions +
+        # copy/fork/publish. Canari no-op : aucune résolution runtime avant B3.
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        conn.execute("ALTER TABLE doctrine_library ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         # ADR 0032 §4 amendé (#57) : un projet peut lier N fois le même connecteur, chaque
         # binding distingué par une IDENTITÉ → une ligne par binding. Colonne `identity_ref`
         # (NULL = binding par défaut, rétro-compat), clé élargie NULLS NOT DISTINCT (PG15+ :

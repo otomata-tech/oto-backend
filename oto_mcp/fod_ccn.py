@@ -62,6 +62,13 @@ def article(kali_id: str) -> dict[str, Any]:
     return r.json()
 
 
+def accords_text(acco_id: str) -> dict[str, Any]:
+    """Texte intégral d'un accord d'entreprise (ACCOTEXT…) — proxy Légifrance du FOD."""
+    r = _c().get(f"/api/accords/text/{acco_id}")
+    r.raise_for_status()
+    return r.json()
+
+
 def conventions(*, idcc: Optional[str] = None, query: Optional[str] = None,
                 limit: int = 20) -> dict[str, Any]:
     """Conventions (conteneurs KALI) par IDCC exact ou substring de titre."""

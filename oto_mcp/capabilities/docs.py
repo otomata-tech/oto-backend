@@ -28,10 +28,11 @@ def _public_doc_url(token: str) -> str:
 
 
 class DocInput(BaseModel):
-    op: Literal["create", "list", "get", "update", "delete", "move", "revisions",
+    op: Literal["create", "list", "search", "get", "update", "delete", "move", "revisions",
                 "request_change", "list_changes", "resolve_change", "set_public"]
-    project_id: Optional[int] = None   # create / list
+    project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move / request_change / list_changes
+    query: Optional[str] = None        # search : termes recherchés dans titre + corps
     parent_id: Optional[int] = None    # create / move (None = 1er niveau sous le projet)
     title: Optional[str] = None
     body_md: Optional[str] = None
@@ -82,6 +83,13 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         _require(_can(sub, inp.project_id, "read"), "forbidden", "Accès refusé.", 403)
         return {"project_id": inp.project_id,
                 "docs": [_view(d) for d in db.list_docs_for_project(int(inp.project_id))]}
+
+    if inp.op == "search":
+        _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
+        _require(inp.query and inp.query.strip(), "missing_query", "`query` requis.")
+        _require(_can(sub, inp.project_id, "read"), "forbidden", "Accès refusé.", 403)
+        return {"project_id": inp.project_id, "query": inp.query.strip(),
+                "results": db.search_docs_in_project(int(inp.project_id), inp.query.strip())}
 
     # ops par doc_id (résolvent le projet pour l'autz)
     _require(inp.doc_id is not None, "missing_doc", "`doc_id` requis.")
@@ -173,14 +181,20 @@ CAPABILITIES += [
         key="me.doc", handler=_doc, Input=DocInput, authz=SUB_ONLY,
         description=(
             "Docs (markdown pages tree inside a project; inherit the project's access). "
+            "**This is also the org KNOWLEDGE BASE**: resolve it with oto_kb → project_id, "
+            "then read/search/write reference pages here (the dashboard « Documents » zone). "
+            "Prefer it over the web for org facts (processes, context, conventions), and "
+            "CAPTURE durable, sourced facts here (kind=source/note) as you learn them. "
             "op=create (project_id, title; optional parent_id/body_md/kind) / list "
-            "(project_id → all pages, build the tree via parent_id) / get / update "
-            "(title/body_md/kind ; snapshots the prior version) / revisions (doc_id → "
-            "version history, newest first) / request_change (read-only users propose a "
-            "new body_md/title + message) / list_changes (owner: pending requests) / "
-            "resolve_change (request_id + accept: true applies it, false rejects) / set_public "
-            "(public: true → shareable public read-only link, false → private ; returns public_url) / delete "
-            "(cascades its subtree) / move (parent_id, null=top-level). kind ∈ doc|note|source."
+            "(project_id → all pages, build the tree via parent_id) / search (project_id + "
+            "query → full-text hits {id,title,kind,snippet}: LOCATE a page, then get its "
+            "content) / get / update (title/body_md/kind ; snapshots the prior version) / "
+            "revisions (doc_id → version history, newest first) / request_change (read-only "
+            "users propose a new body_md/title + message) / list_changes (owner: pending "
+            "requests) / resolve_change (request_id + accept: true applies it, false rejects) "
+            "/ set_public (public: true → shareable public read-only link, false → private ; "
+            "returns public_url) / delete (cascades its subtree) / move (parent_id, "
+            "null=top-level). kind ∈ doc|note|source."
         ),
         mcp="oto_doc",
         rest=RestBinding("POST", "/api/me/docs"),

@@ -454,6 +454,28 @@ def list_docs_for_project(project_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def search_docs_in_project(project_id: int, query: str, *, limit: int = 20) -> list[dict]:
+    """Recherche plein-texte dans les pages d'un projet (titre + corps). Full-text PG
+    (config `simple` = language-agnostic FR/EN, pas de stemming trompeur) ∪ ILIKE (matchs
+    partiels que tsquery rate), matchs de TITRE remontés d'abord. Renvoie des lignes
+    compactes {id, title, kind, snippet, updated_at} — pour LOCALISER une page, puis
+    `oto_doc(op=get)` pour son contenu. Substrat de recherche de la KB d'org (Documents)."""
+    q = f"%{query}%"
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, project_id, title, kind, updated_at, "
+            "ts_headline('simple', coalesce(body_md,''), plainto_tsquery('simple', %s), "
+            "'MaxWords=30,MinWords=12,ShortWord=2,HighlightAll=false') AS snippet "
+            "FROM docs WHERE project_id = %s AND ("
+            "  title ILIKE %s OR body_md ILIKE %s"
+            "  OR to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(body_md,'')) "
+            "     @@ plainto_tsquery('simple', %s)) "
+            "ORDER BY (title ILIKE %s) DESC, updated_at DESC LIMIT %s",
+            (query, project_id, q, q, query, q, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def update_doc(doc_id: int, *, title: Optional[str] = None,
                body_md: Optional[str] = None, kind: Optional[str] = None,
                edited_by: Optional[str] = None) -> None:

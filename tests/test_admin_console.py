@@ -97,3 +97,22 @@ def test_key_grant_routes(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         ac._key_grant(CTX, ac.KeyGrantInput(op="grant", scope="user", target="x"))
     assert e.value.code == "missing_key"
+
+
+def test_key_grant_list_never_reveals_secret(monkeypatch):
+    monkeypatch.setattr(ac.db, "list_platform_keys", lambda provider=None: [
+        {"id": 918, "provider": "apollo", "label": "otomata-apollo",
+         "api_key": "SECRET-should-not-leak", "created_at": "2026-07-03 00:00:00"},
+    ])
+    out = ac._key_grant(CTX, ac.KeyGrantInput(op="list"))
+    assert out["count"] == 1
+    key = out["keys"][0]
+    assert key == {"key_id": 918, "provider": "apollo", "label": "otomata-apollo",
+                   "created_at": "2026-07-03 00:00:00"}
+    assert "api_key" not in key  # le secret ne transite JAMAIS dans le contexte LLM
+
+
+def test_key_grant_missing_scope(monkeypatch):
+    with pytest.raises(AuthzDenied) as e:
+        ac._key_grant(CTX, ac.KeyGrantInput(op="grant", key_id=3))
+    assert e.value.code == "missing_scope"

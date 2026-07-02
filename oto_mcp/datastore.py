@@ -214,6 +214,22 @@ class DatastorePg:
             raise NamespaceForbidden(namespace)
         db.delete_datastore_namespace_by_id(ns_id)  # rows + grants partent avec
 
+    def rename_namespace(self, namespace: str, new_name: str) -> dict:
+        """Renomme un namespace (l'id/URL/grants restent stables, keyés par id — cf.
+        `db.rename_datastore_namespace_by_id`). Exige le droit de GOUVERNANCE, comme la
+        suppression. Le nouveau nom doit être libre chez le même propriétaire (sinon
+        `NamespaceExists`) — c'est ce qui lève la collision cross-org du gap #71 avant
+        un transfert/merge."""
+        ns_id = self._resolve(namespace)
+        if not ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)):
+            raise NamespaceForbidden(namespace)
+        new_name = (new_name or "").strip()
+        try:
+            db.rename_datastore_namespace_by_id(ns_id, new_name)
+        except ValueError as e:
+            raise NamespaceExists(str(e))
+        return {"id": ns_id, "namespace": new_name, "url": _ns_url(new_name)}
+
     def resolve_ns_id(self, namespace: str) -> int:
         """ns_id d'un namespace visible par l'acteur (lève `NamespaceNotFound`).
         Surface publique pour les chemins de gouvernance (partage/transfert)."""

@@ -152,6 +152,24 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
                 and ((_st := _sel.get(c.name)) == connector_selection.PAUSED
                      or (_strict and _st is None))
             }
+            # Un connecteur explicitement sélectionné 'active' DÉMASQUE ses outils
+            # masqués-par-défaut : le choix marketplace explicite (ADR 0019) prime sur
+            # l'anti-encombrement legacy `default_hidden` (ADR 0011) — redondant/
+            # contradictoire en régime de sélection (`not_selected` déclutre déjà). Sans
+            # ça, poser une carte sur « active » n'affiche rien pour un connecteur
+            # default_hidden (pennylaneged/brevo). On respecte un toggle-off perso
+            # explicite (`disabled`) et on ne retouche jamais paused/not-selected
+            # (masqués au-dessus, jamais dans `_active_sel`).
+            _active_sel = {
+                name for name, st in _sel.items() if st == connector_selection.ACTIVE
+            }
+            if _active_sel:
+                to_hide -= {
+                    n for n in all_names
+                    if is_default_hidden(n) and n not in disabled
+                    and (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                    and c.name in _active_sel
+                }
         except Exception as e:
             logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
     # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.

@@ -10,7 +10,9 @@ dependencies = [
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
     # on tague oto-core et on bump CE pin par PR. Bump = éditer le tag ici ; rollback
     # = revert ce commit (ramène aussi le bon oto-core). Cf. ADR 0020 (deploy/canari).
-    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.11.0",
+    # v1.12.0 = client du connecteur `http` générique (oto.tools.http : moteur
+    # d'auth multi-mode + forward + garde SSRF, ADR 0037).
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.12.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

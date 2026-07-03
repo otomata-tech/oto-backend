@@ -115,9 +115,12 @@ CAPABILITIES += [
         description=(
             "Switch the organization you act under, FOR THIS CONVERSATION ONLY "
             "(by id or name). The active org decides which shared secrets, tools "
-            "and data scope your calls. Ephemeral: it does NOT change your home "
-            "org or any other conversation, and a new conversation starts back "
-            "on your home org. Set the org once per conversation when needed."
+            "and data scope your calls. Ephemeral: does NOT change your home org "
+            "or other conversations. ⚠️ BEST-EFFORT — this switch may NOT persist "
+            "across your following calls (the session is renewed per call). For "
+            "RELIABLE scoping, pass `org=<id>` DIRECTLY on each org-scoped call "
+            "(oto_my_connectors, catalog, secrets… all accept it) instead of "
+            "relying on this switch. Use `org=` when the org matters."
         ),
         mcp="oto_use_org",
         rest=RestBinding("PUT", "/api/me/active-org"),

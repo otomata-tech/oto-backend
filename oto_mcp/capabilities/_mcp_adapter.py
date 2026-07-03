@@ -50,7 +50,14 @@ def _make_tool(cap: Capability):
         except AuthzDenied as d:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code))
         if isinstance(result, dict) and ctx.org_id is not None:
-            result.setdefault("_org", _org_echo(ctx.org_id))
+            # Org EFFECTIVE APRÈS le handler : un `oto_use_org` vient peut-être de
+            # basculer l'override de session → `ctx.org_id`, résolu à l'autz AVANT le
+            # handler, est périmé et échoerait l'org d'AVANT le switch (#110 : réponse
+            # `{active_org: 83, _org: {id: 2}}`). On relit `current_org` post-handler ;
+            # repli sur `ctx.org_id` si non résoluble (perso/clear).
+            from .. import access
+            eff = access.current_org(raw.sub) if raw.sub else None
+            result.setdefault("_org", _org_echo(eff if eff is not None else ctx.org_id))
         if cap.refresh_visibility and raw.sub:
             # Bascule de profil (org/groupe actif déjà commitée par le handler) →
             # re-pousse la denylist de la NOUVELLE org sur la session MCP courante,

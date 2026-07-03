@@ -75,10 +75,29 @@ def test_share_to_unknown_org_404(monkeypatch):
 def test_share_to_user_still_works(monkeypatch):
     calls = _wire(monkeypatch)
     monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "sharer@x.co"})
+    monkeypatch.setattr(R.db, "get_project_by_id", lambda pid: {"name": "Campagne mutuelle"})
+    sent = {}
+    monkeypatch.setattr(R.email, "send_resource_shared_email",
+                        lambda to, **kw: sent.update({"to": to, **kw}) or True)
     out = R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
                                             resource_id="7", email="jb@x.co"))
     assert ("project", "7", "user", "u2", "write") in calls["grants"]
     assert out["principal_type"] == "user"
+    # Le bénéficiaire user est notifié par email (best-effort, une seule fois).
+    assert out["notified"] is True
+    assert sent["to"] == "jb@x.co" and sent["type_label"] == "projet"
+    assert sent["name"] == "Campagne mutuelle" and sent["permission"] == "write"
+
+
+def test_share_to_org_does_not_email(monkeypatch):
+    """Partage à une ORG : pas de notif user (qui reçoit reste à trancher, #77)."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.email, "send_resource_shared_email",
+                        lambda *a, **k: pytest.fail("ne doit pas notifier une org"))
+    out = R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                            resource_id="7", org_id=35))
+    assert out["principal_type"] == "org" and "notified" not in out
 
 
 # ── cascade au PARTAGE (modèle licence : oto garde l'ownership) ──────────────

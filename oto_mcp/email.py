@@ -163,6 +163,27 @@ def send_access_granted_email(to: str, app_url: str) -> bool:
     return _send(to, subject, html)
 
 
+def send_resource_shared_email(to: str, *, type_label: str, name: str | None,
+                               permission: str, app_url: str,
+                               sharer: str | None = None) -> bool:
+    """Email à un utilisateur avec qui on vient de PARTAGER une ressource (projet,
+    datastore, doctrine). Best-effort (False si non envoyé) — un échec ne casse
+    jamais le partage. Voix funnel : FR, vouvoiement + minuscules."""
+    droit = "en lecture" if permission == "read" else "en écriture"
+    titre = f"{type_label} « {name} »" if name else f"un {type_label}"
+    who = f"{_esc(sharer)} a partagé" if sharer else "on a partagé"
+    subject = (f"{name} — {type_label} partagé avec vous sur oto" if name
+               else f"un {type_label} partagé avec vous sur oto")
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>{who} avec vous {_esc(titre)} ({droit}) sur oto.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">ouvrir dans oto</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
 def send_alpha_invite_email(to: str, invite_url: str,
                             inviter: str | None = None) -> bool:
     """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon.

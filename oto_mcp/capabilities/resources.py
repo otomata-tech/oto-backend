@@ -13,14 +13,18 @@ la lecture du contenu d'une ressource perso reste l'exception auditée view-as
 """
 from __future__ import annotations
 
+import logging
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import access, db, group_store, org_store, ownership, roles
+from .. import access, db, email, group_store, org_store, ownership, roles
 from ._authz import RESOURCE_GOVERN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
+
+log = logging.getLogger(__name__)
 
 
 class ResourceInput(BaseModel):
@@ -61,6 +65,44 @@ def _owner_label(owner_type: str, owner_id: str) -> Optional[str]:
             return None
         return g.get("name") if g else None
     return None
+
+
+_TYPE_LABELS = {"project": "projet", "datastore_namespace": "datastore",
+                "doctrine": "doctrine"}
+
+
+def _resource_name(resource_type: str, rid: str) -> Optional[str]:
+    """Nom lisible d'une ressource pour une notification. Best-effort → None."""
+    try:
+        if resource_type == "project":
+            r = db.get_project_by_id(int(rid))
+            return r.get("name") if r else None
+        if resource_type == "datastore_namespace":
+            r = db.get_datastore_namespace_by_id(int(rid))
+            return r.get("namespace") if r else None
+        if resource_type == "doctrine":
+            r = org_store.get_instruction_by_id(int(rid))
+            return (r.get("title") or r.get("slug")) if r else None
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _notify_share(sharer_sub: str, resource_type: str, rid: str,
+                  to_email: str, permission: str) -> bool:
+    """Prévient par email l'utilisateur avec qui on vient de partager (best-effort,
+    tracé — une notif ne casse JAMAIS le partage). Ne notifie que les principals
+    `user` : pour une org/un groupe destinataire, « qui reçoit » reste à trancher
+    (oto-backend#77)."""
+    try:
+        return email.send_resource_shared_email(
+            to_email, type_label=_TYPE_LABELS.get(resource_type, "ressource"),
+            name=_resource_name(resource_type, rid), permission=permission,
+            app_url=os.environ.get("OTO_APP_URL", "https://dashboard.oto.ninja").rstrip("/"),
+            sharer=_owner_label("user", sharer_sub))
+    except Exception as e:  # best-effort
+        log.warning("notify_share(%s %s → %s) failed: %s", resource_type, rid, to_email, e)
+        return False
 
 
 def _enrich_datastore(row: dict) -> dict:
@@ -322,6 +364,11 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
                                               permission=inp.permission)
             db.log_project_activity(int(rid), ctx.sub, "project.deliver",
                                     f"share → {plabel}")
+        # Notifier le bénéficiaire (best-effort). UNE fois, au niveau capability —
+        # jamais dans `ownership.grant` (un share en cascade y déclencherait N mails).
+        if ptype == "user" and plabel:
+            out["notified"] = _notify_share(ctx.sub, inp.resource_type, rid,
+                                            plabel, inp.permission)
         return out
 
     # unshare

@@ -36,7 +36,8 @@ import time
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
+                                  Response, StreamingResponse)
 
 from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
@@ -725,6 +726,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 404, "not_found")
         return _json(request, {"title": doc["title"], "body_md": doc["body_md"],
                                "updated_at": doc.get("updated_at")})
+
+    async def public_doc_view(request: Request) -> Response:
+        """Page de partage PUBLIQUE d'un doc — route `/p/d/<token>`, **server-rendered**
+        pour être lisible par un agent (WebFetch sans JS) autant que par un navigateur.
+        Négocie sur `Accept` : `application/json` → JSON, `text/markdown` → markdown brut,
+        sinon HTML autoporté (`public_doc_page`). PAS d'auth, lecture seule."""
+        from . import public_doc_page
+        token = request.path_params.get("token", "")
+        doc = db.get_doc_by_public_token(token) if token else None
+        accept = request.headers.get("accept", "").lower()
+        wants_json = "application/json" in accept
+        if not doc:
+            if wants_json:
+                return _json_error(request, 404, "not_found")
+            return HTMLResponse(public_doc_page.render_missing(), status_code=404)
+        title, body_md = doc["title"], doc.get("body_md") or ""
+        if wants_json:
+            return _json(request, {"title": title, "body_md": body_md,
+                                   "updated_at": doc.get("updated_at")})
+        if "text/markdown" in accept:
+            md = f"# {title}\n\n{body_md}" if title else body_md
+            return PlainTextResponse(md, media_type="text/markdown; charset=utf-8",
+                                     headers={"Cache-Control": "public, max-age=300"})
+        html_page = public_doc_page.render(title=title, body_md=body_md,
+                                           updated_at=doc.get("updated_at"))
+        return HTMLResponse(html_page, headers={"Cache-Control": "public, max-age=300"})
 
     async def project_public_share_set(request: Request) -> JSONResponse:
         """Publie un projet en PARTAGE PUBLIC CHIFFRÉ (zero-knowledge, ADR 0032 §3).
@@ -1452,6 +1479,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}/public", options_handler, methods=["OPTIONS"]),
         Route("/api/public/docs/{token}", public_doc, methods=["GET"]),
         Route("/api/public/docs/{token}", options_handler, methods=["OPTIONS"]),
+        # Page de partage publique server-rendered (lisible par un agent, ADR gap
+        # « pages SPA non lisibles »). Servie sous dashboard.oto.ninja via Caddy.
+        Route("/p/d/{token}", public_doc_view, methods=["GET"]),
         Route("/api/me/projects/{project_id:int}/public-share", project_public_share_set, methods=["POST"]),
         Route("/api/me/projects/{project_id:int}/public-share", project_public_share_clear, methods=["DELETE"]),
         Route("/api/me/projects/{project_id:int}/public-share", options_handler, methods=["OPTIONS"]),

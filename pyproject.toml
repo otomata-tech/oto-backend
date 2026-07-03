@@ -37,6 +37,10 @@ dependencies = [
     # déclare ici pour qu'il soit installé par le `pip install -e .` du deploy
     # (oto-mcp#17 : crash 'No module named markdown' en prod).
     "markdown>=3.5",
+    # Rendu markdown→HTML SÛR (html=False) des pages de partage server-rendered
+    # (public_doc_page.py, /p/d/<token>). Aujourd'hui tiré transitivement (rich) ;
+    # déclaré direct car on en dépend au runtime d'une route publique.
+    "markdown-it-py>=3.0",
     "otomata-calllog>=0.1.1",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",

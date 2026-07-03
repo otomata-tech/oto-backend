@@ -204,7 +204,7 @@ class Connector:
             "cardinality": "multi_account" if self.auth_multi_account else "single",
             "fields": [
                 {"name": f.name, "label": f.label, "secret": f.secret,
-                 "required": f.required}
+                 "required": f.required, "help": f.help}
                 for f in self.secret_fields
             ],
         }
@@ -740,20 +740,26 @@ _REGISTRY_LIST = [
        in_default_bundle=False, label="Zoho CRM",
        help="CRM Zoho (CRUD modules, notes)", href="https://crm.zoho.com",
        credential_fields=(
-           CredentialField("client_id", "Client ID", secret=True),
-           CredentialField("client_secret", "Client Secret", secret=True),
-           CredentialField("refresh_token", "Refresh Token", secret=True),
+           CredentialField("client_id", "Client ID", secret=True,
+                           help="1000.XXXXXXXX… (self-client)"),
+           CredentialField("client_secret", "Client Secret", secret=True,
+                           help="secret du self-client"),
+           CredentialField("refresh_token", "Refresh Token", secret=True,
+                           help="1000.xxxxx.yyyyy"),
            CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
-                           secret=False, reveal=True),
+                           secret=False, reveal=True, help="eu"),
        )),
     _c("zohodesk", ["zohodesk"], auth_modes={"byo_user"}, secret_kind="fields",
        in_default_bundle=False, label="Zoho Desk",
        help="support Zoho Desk (tickets, threads, contacts)",
        href="https://desk.zoho.com", credential_fields=(
-           CredentialField("client_id", "Client ID", secret=True),
-           CredentialField("client_secret", "Client Secret", secret=True),
-           CredentialField("refresh_token", "Refresh Token", secret=True),
-           CredentialField("org_id", "Org ID", secret=False),
+           CredentialField("client_id", "Client ID", secret=True,
+                           help="1000.XXXXXXXX… (self-client)"),
+           CredentialField("client_secret", "Client Secret", secret=True,
+                           help="secret du self-client"),
+           CredentialField("refresh_token", "Refresh Token", secret=True,
+                           help="1000.xxxxx.yyyyy"),
+           CredentialField("org_id", "Org ID", secret=False, help="ex. 800123456"),
        )),
     _c("zohoanalytics", ["zohoanalytics"], auth_modes={"byo_user", "byo_org"},
        secret_kind="fields", in_default_bundle=False, label="Zoho Analytics",
@@ -1065,7 +1071,7 @@ def public_catalog() -> list[dict]:
             # juste la forme (name/label/secret).
             "credential_fields": [
                 {"name": f.name, "label": f.label, "secret": f.secret,
-                 "required": f.required}
+                 "required": f.required, "help": f.help}
                 for f in c.secret_fields
             ],
             # Free-tier (ADR 0031) : clé plateforme ouverte sans grant, quota gratuit

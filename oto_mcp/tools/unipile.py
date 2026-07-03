@@ -350,7 +350,14 @@ def register(mcp: FastMCP) -> None:
     def unipile_relations(cursor: Optional[str] = None,
                                 limit: Optional[int] = None) -> dict:
         """Liste tes relations LinkedIn de 1er degré (N1) via Unipile — pour
-        cibler/exporter ton réseau direct. Paginé (`cursor`)."""
+        cibler/exporter ton réseau direct. Paginé (`cursor`).
+
+        ⚠️ Pagination NON fiable pour un export EXHAUSTIF : le `cursor` encode un
+        offset volatil (doublons dans l'espace d'offset, total surestimé) et une
+        page `limit=100` rend 90-100 items, pas 100. Pour charger tout un réseau :
+        dédupliquer par `member_id` (JAMAIS l'offset), garder ≤8 pages en parallèle
+        (au-delà : 502 en cascade), prouver le tarissement par 2 passes décalées.
+        Doctrine dédiée : `bulk-load-reseau`."""
         return unipile_client().list_relations(cursor=cursor, limit=limit)
 
     @mcp.tool()

@@ -6,9 +6,11 @@ ici oto détient le secret de l'API cible (coffre AES chiffré, byo_org) et tape
 l'API **directement**. L'org configure sur la carte HTTP : `base_url`, `auth_mode`
 (bearer/header/query/basic/oauth2/none) + le(s) secret(s) du mode.
 
-Adaptateur mince (ADR 0037) : le moteur (auth + forward + garde SSRF) vit dans
-oto-core (`oto.tools.http`) ; ici on résout le credential d'org et on traduit les
-erreurs en McpError. Lecture seule (GET). Étant un tool MCP ordinaire, le résultat
+Adaptateur mince (ADR 0037) : le moteur (auth + forward) vit dans oto-core
+(`oto.tools.http`) ; ici on résout le credential d'org et on traduit les erreurs
+en McpError. Lecture seule (GET). C'est un « nœud HTTP » (webhook sortant) : la
+protection SSRF est un contrôle d'egress réseau au niveau plateforme, pas du code
+par-connecteur (comme Zapier/Make/n8n). Étant un tool MCP ordinaire, le résultat
 repasse par la rédaction de champs (FieldRedactionMiddleware) comme tout connecteur.
 """
 from __future__ import annotations

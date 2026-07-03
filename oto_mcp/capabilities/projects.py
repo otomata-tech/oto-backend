@@ -219,12 +219,18 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # Part publique CHIFFRÉE (ADR 0032 §3) : le serveur ne connaît que sa présence
         # + son horodatage, JAMAIS la clé (côté navigateur). La (re)publication passe
         # par la route REST dédiée (le ciphertext vient du front, pas de l'agent).
+        from .. import project_audit
         share = db.get_project_public_share(int(inp.project_id))
+        links = db.list_project_links(int(inp.project_id))
         return {**_view(row),
                 "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
                 "public_shared": bool(share),
                 "public_shared_at": share.get("updated_at") if share else None,
-                "links": db.list_project_links(int(inp.project_id))}
+                "links": links,
+                # B5 : liens vérifiés comme des refs — le lien mort remonte à l'agent
+                # qui LIT le projet (brief), pas seulement à op=inventory (curation).
+                # `links` réutilisé : pas de double chargement.
+                "audit": project_audit.audit_project(int(inp.project_id), links)}
 
     if inp.op == "activity":
         return {"id": inp.project_id, "activity": db.list_project_activity(int(inp.project_id))}
@@ -449,7 +455,9 @@ CAPABILITIES += [
             "(ORG-SCOPED: the ACTIVE org's projects + projects shared with it or with you — "
             "switch org with oto_use_org to see another org's; every response echoes the "
             "effective org in `_org`) / list_templates (published MODEL projects you can copy) / "
-            "get (project + its links) / update (name, brief_md, is_template = publish/unpublish "
+            "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
+            "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "
+            "update (name, brief_md, is_template = publish/unpublish "
             "as a copyable model) / copy (deep-copy a project you can read — its own or a model "
             "— into a NEW project in your active org: brief + doc tree + links + raw files; "
             "a tableau link stays a POINTER to the same namespace by default (config.provision "

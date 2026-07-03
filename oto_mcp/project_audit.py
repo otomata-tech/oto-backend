@@ -10,7 +10,8 @@ tous NON bloquants (dérivation pure, best-effort) :
 - **inert_procedures** : le projet a des runs mais une procédure liée n'a JAMAIS
   été déroulée (`runs.doctrine`) — un lien qui ne sert peut-être à rien.
 
-Consommé par `oto_project op=inventory` (+ le warning de complétude au `link`).
+Consommé par `oto_project op=get` (l'agent qui LIT le projet voit ses liens morts)
+et `op=inventory` (curation), + le warning de complétude au `link`.
 """
 from __future__ import annotations
 

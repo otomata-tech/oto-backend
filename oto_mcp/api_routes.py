@@ -934,17 +934,38 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "missing_credentials")
         from . import credentials_store
         db.upsert_user(sub)
+        account = (body.get("account") or "").strip()
         # Scope MEMBRE (ADR 0033) : la clé est posée DANS l'org de contexte (org
         # consultée au dashboard via X-Oto-Org, sinon maison) — plus de credential
         # per-user org-agnostique. Poser en consultant movinmotion = scoper movinmotion.
         org_id = access.current_org(sub)
         if org_id is None:
             return _json_error(request, 400, "no_org_context")
+        eid = credentials_store.member_id(org_id, sub)
+        # Multi-compte (« 2 Zoho ») : cohérence des comptes de CE membre pour le
+        # connecteur. '' (mono legacy) et comptes nommés ne doivent pas coexister
+        # (sinon la désambiguïsation à la résolution voit un '' impossible à désigner).
+        if c.auth_multi_account:
+            existing = [r["account"] for r in
+                        credentials_store.list_accounts(credentials_store.MEMBER, eid, provider)]
+            if account:
+                # Backfill lazy : au 1er compte NOMMÉ, la ligne '' migre vers un label
+                # (« principal », suffixé si déjà pris ou = à l'account posé).
+                if "" in existing:
+                    taken, target, i = set(existing) | {account}, "principal", 2
+                    while target in taken:
+                        target, i = f"principal-{i}", i + 1
+                    credentials_store.rename_account(
+                        credentials_store.MEMBER, eid, provider, "", target)
+            elif any(a for a in existing):
+                return _json_error(
+                    request, 409, "account_required",
+                    "Ce connecteur a déjà des comptes nommés — précise `account`.")
         secret = credentials_store.pack_secret(provider, fields)
         credentials_store.set_credential(
-            credentials_store.MEMBER, credentials_store.member_id(org_id, sub),
-            provider, secret, set_by=sub)
-        return _json(request, {"ok": True, "provider": provider, "org_id": org_id})
+            credentials_store.MEMBER, eid, provider, secret, set_by=sub, account=account)
+        return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
+                               "account": account})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -962,9 +983,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         org_id = access.current_org(sub)
         if org_id is None:
             return _json_error(request, 400, "no_org_context")
+        # Multi-compte : `?account=` cible un compte précis ('' = mono legacy).
+        account = (request.query_params.get("account") or "").strip()
         credentials_store.clear_credential(
-            credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
-        return _json(request, {"ok": True, "provider": provider})
+            credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
+            account=account)
+        return _json(request, {"ok": True, "provider": provider, "account": account})
 
     # --- Connexion par session navigateur (brevo, crunchbase) — la VOIE PRODUIT :
     # le bouton « Connecter » du dashboard ouvre une Live View Browserbase en iframe,

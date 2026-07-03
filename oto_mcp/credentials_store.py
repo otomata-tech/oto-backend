@@ -371,6 +371,23 @@ def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None
         return _delete(c, entity_type, entity_id, connector, account)
 
 
+def rename_account(entity_type: str, entity_id: str, connector: str,
+                   old_account: str, new_account: str) -> bool:
+    """Renomme le segment `account` d'un credential. Re-chiffre (l'AAD lie le
+    ciphertext à son compte → un simple UPDATE du champ casserait le déchiffrement).
+    Sert au backfill de la ligne mono-compte '' vers un label nommé au passage au
+    multi-compte (« principal »). Atomique (upsert new + delete old, même transaction).
+    False si la ligne source est absente."""
+    row = get_credential_with_meta(entity_type, entity_id, connector, old_account)
+    if row is None:
+        return False
+    with _connect() as c:
+        _upsert(c, entity_type, entity_id, connector, new_account, row["secret"],
+                None, row.get("meta"))
+        _delete(c, entity_type, entity_id, connector, old_account)
+    return True
+
+
 def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
     """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé) ni les
     bearers de `meta` (filtré par `_public_meta`), mais AVEC les satellites non-secrets

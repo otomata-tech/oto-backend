@@ -13,6 +13,23 @@ update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`c
 docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/transfert via
 **`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
 
+> **Push out-of-bande de gros contenu par un agent (issue #105).** Écrire un GROS contenu
+> via `oto_doc(body_md=…)`/multipart le fait transiter INLINE par le contexte du LLM (coût
+> tokens + troncature/paraphrase sur du verbatim). **`oto_upload_url(target)`** (capacité
+> `me.upload_url`, MCP-only) rend une **URL signée** à usage unique + TTL court (15 min) sur
+> laquelle l'agent PUT le contenu **hors-bande** (`curl --data-binary @fichier`) ; le backend
+> matérialise dans la cible (`PUT /api/upload/<token>`) et renvoie un accusé léger (id +
+> longueur), **jamais le body**. Le jeton (`upload_tokens.py`) est **stateless** — HMAC
+> signant `{typ:upload, jti, sub, org, target, exp}` (secret `OTO_MCP_OAUTH_STATE_SECRET`) —
+> et **scelle la cible** (jamais acceptée d'un param client à la réception : verrou IDOR) ;
+> l'autz d'écriture est **réappliquée** à la réception (`ownership.can_access(project, write)`)
+> et l'usage unique est garanti par la table `upload_tokens_used` (`db.consume_upload_token`,
+> consommée AVANT matérialisation → anti-rejeu). Cibles : `target='doc'` (op create/update
+> d'une page Documents) et `target='project_file'` (fichier brut « Autre document » — comble
+> le gap upload multipart dashboard-only : un agent peut déposer un PDF/CSV, plafond
+> `OTO_MCP_UPLOAD_MAX_BYTES`, déf. 25 Mo). L'upload multipart humain (`POST /api/me/projects/
+> {id}/files`) reste la voie dashboard.
+
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
 > d'appartenance — on donne un accès) ; **`cascade=true`** sur share/transfer d'un projet

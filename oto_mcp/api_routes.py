@@ -717,6 +717,36 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                                 f"{existing.get('title') or existing.get('filename')}:{make_public}")
         return _json(request, {"ok": True, "file": _signed(row)})
 
+    async def upload_receive(request: Request) -> JSONResponse:
+        """Réception d'un upload signé (issue #105) : PAS de JWT — le jeton signé DANS
+        l'URL fait foi (scellé sub/org/cible, TTL, usage unique). L'agent y PUT le
+        contenu brut hors-bande (`curl --data-binary @fichier`) ; on matérialise dans
+        la cible en RÉAPPLIQUANT son autz. Accusé léger, jamais le body."""
+        from . import upload_tokens
+        payload = upload_tokens.verify(request.path_params.get("token", ""))
+        if payload is None:
+            return _json_error(request, 401, "invalid_or_expired_token")
+        sub, target = payload["sub"], payload["target"]
+        # Autz réappliquée (le jeton ne fait pas foi seul). DB sync → threadpool.
+        try:
+            await run_in_threadpool(upload_tokens.check_target_access, sub, target)
+        except upload_tokens.UploadError as e:
+            return _json_error(request, e.status, e.code)
+        data = await request.body()
+        if not data:
+            return _json_error(request, 400, "empty_body")
+        if len(data) > upload_tokens.max_bytes():
+            return _json_error(request, 413, "content_too_large")
+        # Usage unique : consommer AVANT de matérialiser (anti-rejeu / double-écriture).
+        if not await run_in_threadpool(db.consume_upload_token, payload["jti"]):
+            return _json_error(request, 409, "token_already_used")
+        ct = request.headers.get("content-type")
+        try:
+            result = await run_in_threadpool(upload_tokens.materialize, sub, target, data, ct)
+        except upload_tokens.UploadError as e:
+            return _json_error(request, e.status, e.code)
+        return _json(request, result)
+
     async def public_doc(request: Request) -> JSONResponse:
         """Lecture publique d'un doc partagé par token (gap #4a) — PAS d'auth,
         lecture seule. Le dashboard rend le markdown sur sa route publique /p/d/<token>."""
@@ -1479,6 +1509,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/projects/{project_id:int}/files/{file_id:int}/public", options_handler, methods=["OPTIONS"]),
         Route("/api/public/docs/{token}", public_doc, methods=["GET"]),
         Route("/api/public/docs/{token}", options_handler, methods=["OPTIONS"]),
+        # Réception d'un upload signé out-of-bande (#105) — jeton dans l'URL, pas de JWT.
+        Route("/api/upload/{token}", upload_receive, methods=["PUT"]),
+        Route("/api/upload/{token}", options_handler, methods=["OPTIONS"]),
         # Page de partage publique server-rendered (lisible par un agent, ADR gap
         # « pages SPA non lisibles »). Servie sous dashboard.oto.ninja via Caddy.
         Route("/p/d/{token}", public_doc_view, methods=["GET"]),

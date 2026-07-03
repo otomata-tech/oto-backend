@@ -61,5 +61,6 @@ from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/p
 from . import project_files  # noqa: F401 — me.project_files (oto_project_files, MCP-only, ADR 0032 §3)
 from . import kb  # noqa: F401 — me.kb (oto_kb : base de connaissance d'org = zone Documents, remplace Memento)
 from . import docs  # noqa: F401 — me.doc (oto_doc, POST /api/me/docs) — pages d'un projet
+from . import uploads  # noqa: F401 — me.upload_url (oto_upload_url) — push out-of-bande de gros contenu (#105)
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

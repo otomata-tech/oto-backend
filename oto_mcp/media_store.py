@@ -199,14 +199,17 @@ def delete_by_url(url: str) -> None:
 # persiste la CLÉ (pas une URL signée qui expire) et on signe à la demande.
 
 def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
-                  filename: str | None = None) -> str:
+                  filename: str | None = None, *, max_bytes: int | None = None) -> str:
     """Stocke un blob DURABLE (hors `tmp/`, pas d'ACL public) et renvoie sa **clé**
     S3 (à persister). L'URL d'accès se génère à la lecture via `presign_get`. Clé
-    par hash de contenu → ré-upload identique idempotent."""
+    par hash de contenu → ré-upload identique idempotent. `max_bytes` (optionnel)
+    surcharge le plafond image par défaut (2 Mo) — un document brut peut être plus
+    gros (upload out-of-bande d'un agent, issue #105)."""
     if not data:
         raise MediaError(400, "missing_file", "Contenu vide.")
-    if len(data) > _max_bytes():
-        raise MediaError(413, "file_too_large", f"Fichier > {_max_bytes()} octets.")
+    limit = max_bytes if max_bytes is not None else _max_bytes()
+    if len(data) > limit:
+        raise MediaError(413, "file_too_large", f"Fichier > {limit} octets.")
     digest = hashlib.sha256(data).hexdigest()[:32]
     name = quote(filename or "file", safe="")
     key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"

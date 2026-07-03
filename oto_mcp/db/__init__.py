@@ -28,6 +28,7 @@ from . import (
     datastore,
     projects,
     tokens,
+    upload_tokens,
     opendata,
 )
 
@@ -37,7 +38,7 @@ from . import (
 _MODULES = (
     _conn, _schema, _init, users, unipile, connector_grants, keys, usage,
     platform_instructions, visibility, emails, google, datastore, projects,
-    tokens, opendata,
+    tokens, upload_tokens, opendata,
 )
 _g = globals()
 for _mod in _MODULES:

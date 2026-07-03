@@ -461,6 +461,16 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 
+-- Jetons d'upload signés à USAGE UNIQUE (issue oto-backend#105). Un `oto_upload_url`
+-- rend une URL signée HMAC (payload scellé sub/org/cible + TTL) sur laquelle un agent
+-- PUT du contenu volumineux hors-bande. Le jeton lui-même est STATELESS ; on ne
+-- persiste que le `jti` déjà consommé, pour interdire le rejeu. TTL court → purge
+-- opportuniste des lignes anciennes à chaque consommation.
+CREATE TABLE IF NOT EXISTS upload_tokens_used (
+    jti TEXT PRIMARY KEY,
+    used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Unipile : mapping per-user du compte LinkedIn connecté sous l'abonnement
 -- Unipile (B3). La CLÉ Unipile est partagée (org secret) ; chaque user connecte
 -- SON LinkedIn par hosted-auth → un `account_id` distinct sous la même clé. Ce

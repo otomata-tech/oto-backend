@@ -246,7 +246,7 @@ BROWSER_PROVIDERS = frozenset()
 # Connecteurs dont le credential est MULTI-COMPTE — N grants liés à une même
 # entité (ADR 0024). Aujourd'hui seul Google (N comptes OAuth) ; les autres
 # sessions/oauth (crunchbase, memento…) restent mono-compte par entité.
-MULTI_ACCOUNT_PROVIDERS = frozenset({"google"})
+MULTI_ACCOUNT_PROVIDERS = frozenset({"google", "zoho"})
 
 # Catégorie d'usage (domaine) par connecteur — CURÉE (pas dérivable), tunable.
 _CATEGORY_BY_CONNECTOR = {

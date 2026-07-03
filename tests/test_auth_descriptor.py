@@ -51,9 +51,10 @@ def test_hosted_is_unipile_only():
     assert hosted == {"unipile"}, hosted
 
 
-def test_multi_account_is_google_only():
+def test_multi_account_providers():
+    # google (OAuth N comptes) + zoho (self-clients keyed multi-compte, « 2 Zoho »).
     multi = {c.name for c in _REGISTRY_LIST if c.auth_multi_account}
-    assert multi == {"google"}, multi
+    assert multi == {"google", "zoho"}, multi
 
 
 def test_catalog_exposes_auth():

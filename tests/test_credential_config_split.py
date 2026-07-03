@@ -51,7 +51,11 @@ def test_split_secret_config_unknown_field_treated_secret():
 def _wire(monkeypatch, *, user=None, group=None, org=None, meta=None,
           active_group=7, active_org=42):
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
-    monkeypatch.setattr(access.db, "get_member_api_key", lambda sub, org, prov: user)
+    # `account=''` : zoho est multi-compte (chemin qui passe le compte) ; unipile mono
+    # (3 args) — le défaut couvre les deux. list_accounts vide ⇒ account='' (legacy).
+    monkeypatch.setattr(access.db, "get_member_api_key",
+                        lambda sub, org, prov, account="": user)
+    monkeypatch.setattr(access.credentials_store, "list_accounts", lambda *a, **k: [])
     monkeypatch.setattr(access, "current_group", lambda sub: active_group)
     monkeypatch.setattr(access, "current_org", lambda sub: active_org)
     monkeypatch.setattr(access.group_store, "get_group_secret", lambda gid, prov: group)

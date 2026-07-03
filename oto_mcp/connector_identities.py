@@ -218,5 +218,62 @@ def _unipile_select(sub: str, identity_id: str) -> dict:
     return {"id": identity_id, "channel": ch, "is_default": True}
 
 
+# --- Backend keyed GÉNÉRIQUE : N credentials du coffre (account=label libre) ---
+# Pour tout connecteur multi-compte (providers.MULTI_ACCOUNT_PROVIDERS) SANS backend
+# spécifique (google en a un) : les comptes = les lignes du coffre au scope MEMBRE de
+# l'org de contexte, le défaut = `meta.is_default`. Ex. « 2 Zoho » (self-clients FR/US).
+
+def _keyed_list(sub: str, connector: str) -> list[dict]:
+    from . import access, credentials_store
+    org = access.current_org(sub)
+    if org is None:
+        return []
+    eid = credentials_store.member_id(org, sub)
+    out = []
+    for row in credentials_store.list_accounts(credentials_store.MEMBER, eid, connector):
+        acct = row["account"]
+        meta = row.get("meta") or {}
+        out.append({
+            "id": acct,
+            "label": meta.get("label") or acct or "(défaut)",
+            "status": "ok",
+            "is_default": bool(meta.get("is_default")),
+            "channel": None,
+        })
+    return out
+
+
+def _keyed_select(sub: str, connector: str, identity_id: str) -> dict:
+    from . import access, credentials_store
+    org = access.current_org(sub)
+    if org is None:
+        raise ValueError("Aucune org de contexte — impossible de choisir un compte.")
+    eid = credentials_store.member_id(org, sub)
+    accounts = [r["account"] for r in
+                credentials_store.list_accounts(credentials_store.MEMBER, eid, connector)]
+    if identity_id not in accounts:
+        raise ValueError(f"Compte `{identity_id}` inconnu pour {connector}.")
+    # Défaut UNIQUE : pose is_default sur la ligne choisie, le retire des autres.
+    for acct in accounts:
+        credentials_store.update_meta(credentials_store.MEMBER, eid, connector, acct,
+                                      {"is_default": acct == identity_id})
+    return {"id": identity_id, "label": identity_id, "is_default": True, "channel": None}
+
+
 _LISTERS = {"google": _google_list, "unipile": _unipile_list}
 _SELECTORS = {"google": _google_select, "unipile": _unipile_select}
+
+
+def _register_keyed_multi_account() -> None:
+    """Enregistre le backend keyed générique pour tout connecteur multi-compte
+    (providers.MULTI_ACCOUNT_PROVIDERS) qui n'a pas déjà un backend spécifique
+    (google). Closures liant le nom du connecteur (défaut d'arg = capture par valeur)."""
+    from . import providers
+    for name in providers.MULTI_ACCOUNT_PROVIDERS:
+        if name in _LISTERS:
+            continue
+        _LISTERS[name] = lambda sub, c=name: _keyed_list(sub, c)
+        _SELECTORS[name] = lambda sub, iid, c=name: _keyed_select(sub, c, iid)
+
+
+_register_keyed_multi_account()

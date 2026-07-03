@@ -12,6 +12,8 @@ les **liens** vers tableaux/procédures/connecteurs/bases, et le **Doc arboresce
 """
 from __future__ import annotations
 
+import re
+import secrets
 from typing import Literal, Optional
 
 from pydantic import BaseModel
@@ -36,8 +38,8 @@ class ProjectInput(BaseModel):
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
-    mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$)
-    mcp_access: Optional[Literal["anonymous", "org"]] = None  # anonymous = sans login (toolset figé) ; org = JWT + org épinglée
+    mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$) ; en `secret`, sert de préfixe optionnel (un suffixe aléatoire est ajouté serveur)
+    mcp_access: Optional[Literal["anonymous", "secret", "org"]] = None  # anonymous = sans login + listé ; secret = sans login, non listé, slug non devinable ; org = JWT + org épinglée
     mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
@@ -121,26 +123,39 @@ def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
     return str(inst["id"]) if inst and inst.get("id") is not None else ref
 
 
-def _mcp_publish_guard(row: dict, tools: list[str]) -> None:
-    """Garde de publication ANONYME (ADR 0032) : un endpoint sans login n'a pas
-    d'identité user → chaque tool exposé doit être résoluble SANS `sub`. Refuse un
-    preset contenant un tool spine/méta (`oto_*`, `data_*`… — sans connecteur, exige
-    une identité) ou un tool à credential non résoluble pour l'org propriétaire du
-    projet (`access.connector_resolvable_for_org`). Message actionnable listant les
-    fautifs (configure une clé d'org, ou retire-les)."""
+def _mcp_unresolvable_tools(row: dict, tools: list[str]) -> list[str]:
+    """Sonde de publication SANS LOGIN (anonymous/secret, ADR 0032) : un endpoint sans
+    login n'a pas d'identité user → un tool n'est servi que s'il est résoluble SANS `sub`.
+    Renvoie la liste des tools **non résolubles** pour l'org propriétaire : tool spine/méta
+    (`oto_*`, `data_*`… — sans connecteur, exige une identité) ou credential absent
+    (`access.connector_resolvable_for_org`). **Non bloquant** (choix produit) : on publie
+    quand même, ces tools sont exposés mais **échouent proprement à l'appel** (McpError, pas
+    de fallback) ; la liste remonte en warning pour que l'humain configure une clé d'org ou
+    retire les outils."""
     from .. import access, providers
     from ..tool_visibility import namespace_of
-    _require(row.get("owner_type") == "org", "not_org_owned",
-             "Un projet doit appartenir à une org pour être publié en MCP anonyme.", 400)
+    if row.get("owner_type") != "org":
+        return list(tools)  # pas d'org propriétaire → rien ne résout
     org_id = int(row["owner_id"])
     bad = []
     for t in tools:
         con = providers.connector_for_namespace(namespace_of(t))
         if con is None or not access.connector_resolvable_for_org(con.name, org_id):
             bad.append(t)
-    _require(not bad, "unresolvable_tools",
-             "Preset anonyme : ces outils n'ont pas de credential résoluble pour l'org "
-             f"du projet (configure une clé d'org, ou retire-les) : {', '.join(sorted(bad))}", 400)
+    return sorted(bad)
+
+
+def _gen_secret_slug(base: Optional[str]) -> str:
+    """Slug NON DEVINABLE pour un endpoint `secret` (URL secrète). Un préfixe optionnel
+    lisible (issu du slug saisi, réduit à `[a-z0-9-]`) aide à identifier l'endpoint ; le
+    suffixe aléatoire garantit l'imprévisibilité. C'est le SEUL secret d'accès du mode
+    `secret` (URL-as-capability, endpoint servant sous les credentials de l'org) → 128 bits
+    d'entropie, dimensionné contre le bruteforce en ligne (le préfixe, dérivé du nom, est
+    devinable : l'entropie doit tenir dans le suffixe seul). `token_hex` reste dans
+    `[a-f0-9]` ⊂ charset `_MCP_SLUG_RE` (`token_urlsafe` introduirait `A-Z_-`, rejeté)."""
+    prefix = re.sub(r"[^a-z0-9]+", "-", (base or "").strip().lower()).strip("-")[:24]
+    token = secrets.token_hex(16)  # 32 chars hex = 128 bits
+    return f"{prefix}-{token}" if prefix else f"mcp-{token}"
 
 
 def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
@@ -371,13 +386,23 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             db.log_project_activity(int(inp.project_id), sub, "project.unpublish_mcp", None)
             return _view(db.get_project_by_id(int(inp.project_id)))
         access_mode = inp.mcp_access or "anonymous"
-        _require(bool(inp.mcp_slug), "missing_slug", "`mcp_slug` requis.", 400)
         tools = [t for t in (inp.mcp_tools or []) if t and t.strip()]
         _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
-        if access_mode == "anonymous":
-            _mcp_publish_guard(row, tools)
+        # Slug effectif : `secret` → non devinable, généré serveur (préfixe optionnel issu
+        # du slug saisi) ; on RÉUTILISE le slug existant si l'endpoint est déjà secret
+        # (re-publier ne doit pas casser l'URL déjà distribuée). anonymous/org : slug saisi requis.
+        if access_mode == "secret":
+            slug = (row.get("mcp_slug") if row.get("mcp_access") == "secret" and row.get("mcp_slug")
+                    else _gen_secret_slug(inp.mcp_slug))
+        else:
+            _require(bool(inp.mcp_slug), "missing_slug", "`mcp_slug` requis.", 400)
+            slug = inp.mcp_slug
+        # Sonde credential-less NON bloquante (anonymous/secret) : on publie, les tools non
+        # résolubles sont exposés mais échouent proprement à l'appel — la liste remonte en warning.
+        unresolvable = (_mcp_unresolvable_tools(row, tools)
+                        if access_mode in ("anonymous", "secret") else [])
         try:
-            db.set_project_mcp_publication(int(inp.project_id), slug=inp.mcp_slug,
+            db.set_project_mcp_publication(int(inp.project_id), slug=slug,
                                            access=access_mode, tools=tools)
         except ValueError as e:
             code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
@@ -390,19 +415,21 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             try:
                 from .. import oauth_facade
                 oauth_facade.ensure_api_resource(
-                    f"https://{inp.mcp_slug}.mcp.oto.cx/mcp",
-                    name=f"oto MCP — {row.get('name') or inp.mcp_slug}")
+                    f"https://{slug}.mcp.oto.cx/mcp",
+                    name=f"oto MCP — {row.get('name') or slug}")
                 resource_registered = True
             except Exception:  # noqa: BLE001
                 import logging
                 logging.getLogger(__name__).exception(
-                    "ensure_api_resource échoué pour %s", inp.mcp_slug)
+                    "ensure_api_resource échoué pour %s", slug)
                 resource_registered = False
         db.log_project_activity(int(inp.project_id), sub, "project.publish_mcp",
-                                f"{access_mode}:{inp.mcp_slug}")
+                                f"{access_mode}:{slug}")
         out = _view(db.get_project_by_id(int(inp.project_id)))
         if resource_registered is not None:
             out["logto_resource_registered"] = resource_registered
+        if unresolvable:
+            out["mcp_unresolvable_tools"] = unresolvable
         return out
 
     # archive
@@ -454,12 +481,16 @@ CAPABILITIES += [
             "inventory = the project's DERIVED surface (union of the linked procedures' "
             "<tool:> refs + tools actually used by the project's runs, plus connectors "
             "from links & declared slots) — never retype a tool list: derive, then curate. "
-            "publish_mcp (mcp_slug + mcp_access anonymous|org + mcp_tools = the fixed tool "
-            "allowlist) publishes the project as a dedicated MCP endpoint "
-            "`<mcp_slug>.mcp.oto.cx/mcp` — `anonymous` = no login, the toolset served under the "
-            "OWNER ORG's credentials (every tool must be credential-less or resolvable for the "
-            "org, else refused); `org` = Logto JWT + pins the org. unpublish_mcp removes it. "
-            "get returns mcp_slug/mcp_access/mcp_tools/mcp_url."
+            "publish_mcp (mcp_slug + mcp_access anonymous|secret|org + mcp_tools = the fixed "
+            "tool allowlist) publishes the project as a dedicated MCP endpoint "
+            "`<mcp_slug>.mcp.oto.cx/mcp`, the toolset served under the OWNER ORG's credentials — "
+            "`anonymous` = no login + LISTED in the public directory; `secret` = no login but "
+            "UNLISTED, the slug is server-generated & unguessable (a secret URL; mcp_slug is an "
+            "optional readable prefix); `org` = Logto JWT + pins the org. For anonymous/secret, "
+            "tools that aren't credential-less or resolvable for the org are published anyway but "
+            "FAIL cleanly at call time — they come back in `mcp_unresolvable_tools` (configure an "
+            "org key or drop them). unpublish_mcp removes it. get returns "
+            "mcp_slug/mcp_access/mcp_tools/mcp_url."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

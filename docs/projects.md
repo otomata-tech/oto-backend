@@ -45,14 +45,23 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 
 > **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
 > se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de
-> l'ADR 0032 §7). Colonnes `projects.mcp_slug`/`mcp_access`(`off|anonymous|org`)/`mcp_tools[]` ;
-> capacité `oto_project` op **`publish_mcp`/`unpublish_mcp`** (autz `can_govern`) ; **garde de
-> publication** : un preset `anonymous` n'accepte que des tools **credential-less** (`secret_kind=none`)
-> ou dont le connecteur a une clé résoluble pour l'org propriétaire. **Deux modes** :
-> - **`anonymous`** (sans login, contourne 100 % du blocage Logto #44) : allowlist **figée = `mcp_tools`**
->   (fail-closed, aucun autre tool visible), credential résolu via l'**org propriétaire** du projet
->   (`access.current_org(None)`→org du projet, `_resolve_credential_anon` : org_secret > grant > clé
->   plateforme, **sans quota**), rate-limité (token-bucket in-memory par IP+projet).
+> l'ADR 0032 §7). Colonnes `projects.mcp_slug`/`mcp_access`(`off|anonymous|secret|org`)/`mcp_tools[]` ;
+> capacité `oto_project` op **`publish_mcp`/`unpublish_mcp`** (autz `can_govern`) ; **sonde de
+> publication NON bloquante** (`_mcp_unresolvable_tools`) : pour un preset sans login, les tools
+> **non credential-less** (`secret_kind≠none`) ou dont le connecteur n'a pas de clé résoluble pour
+> l'org propriétaire sont **publiés quand même** mais **échouent proprement à l'appel** (McpError,
+> pas de fallback) — la liste remonte en warning `mcp_unresolvable_tools` (choix produit : permettre,
+> pas refuser). **Trois modes** :
+> - **`anonymous`** (sans login + **listé** dans l'annuaire, contourne 100 % du blocage Logto #44) :
+>   allowlist **figée = `mcp_tools`** (fail-closed, aucun autre tool visible), credential résolu via
+>   l'**org propriétaire** du projet (`access.current_org(None)`→org du projet, `_resolve_credential_anon` :
+>   org_secret > grant > clé plateforme, **sans quota**), rate-limité (token-bucket in-memory par IP+projet).
+> - **`secret`** : **identique à `anonymous` côté serving** (même 2ᵉ instance FastMCP sans auth, même
+>   résolution de credential, même allowlist), mais **non listé** dans l'annuaire (`list_published_mcp_projects`
+>   ne rend que `= 'anonymous'`) et **slug non devinable généré serveur** (`_gen_secret_slug` : préfixe
+>   optionnel issu du slug saisi + suffixe `secrets.token_hex(6)`) → une **URL secrète**. Re-publier réutilise
+>   le slug existant (ne casse pas l'URL déjà distribuée). Le dispatch traite `anonymous`/`secret` sur le même
+>   chemin (`access_mode in ("anonymous","secret")`).
 > - **`org`** : JWT Logto, **épingle l'org** ; le sous-domaine est enregistré comme **resource Logto**
 >   (`oauth_facade.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
 >

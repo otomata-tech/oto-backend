@@ -145,11 +145,14 @@ JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
 ## Projet — couche d'organisation (ADR 0030/0032)
 
 Conteneur de travail **possédé** : brief + liens typés (`project_links` : tableau/
-procédure/connecteur/base) + docs en arbre. Capacités `oto_project`/`oto_doc` ;
+procédure/connecteur/**doc** — `doc` = une page Documents attachée, ex-memento
+base/page retirés le 2026-07-03) + docs en arbre. Capacités `oto_project`/`oto_doc` ;
 partage/transfert via `oto_resource`. S'y greffent : **livraison client cascade**
 (#52), **partage public chiffré zero-knowledge** (`/p/p/<token>#clé`), **endpoint MCP
-dédié par projet** (`<slug>.mcp.oto.cx`, modes anonymous/org, landing HTML, annuaire
-oto.ninja/apps). **Détail : `docs/projects.md`**.
+dédié par projet** (`<slug>.mcp.oto.cx`, modes **anonymous** (sans login + listé) /
+**secret** (sans login, non listé, slug non devinable généré serveur = URL secrète) /
+**org** (authentifié) ; sonde credential-less **non bloquante** → `mcp_unresolvable_tools`
+en warning ; landing HTML, annuaire oto.ninja/apps). **Détail : `docs/projects.md`**.
 
 ## Messagerie & LinkedIn (Unipile)
 
@@ -301,8 +304,8 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 > artefact composé. **Reste (#54)** : anticipation **pilotée** (message proactif amorcé par l'admin).
 
 > **Slots de procédure (ADR 0035, B1–B3 déployés).** Une procédure déclare ses **entités
-> à instance** (quel tableau, quel compte de connecteur, quelle base) en **JSON propre** :
-> colonne `org_instructions.slots` JSONB (`{name, type ∈ tableau|connecteur|base,
+> à instance** (quel tableau, quel compte de connecteur, quelle page Documents) en **JSON propre** :
+> colonne `org_instructions.slots` JSONB (`{name, type ∈ tableau|connecteur|doc,
 > description?, connector?}`), la prose les référence **par nom** via `<slot:name>` (même
 > famille que `<tool:slug>` 0014 ; le binding nom→instance vit dans le PROJET,
 > `project_links.slot` — vocabulaire DU projet, unicité `(project_id, slot)` → 409

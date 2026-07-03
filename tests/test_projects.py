@@ -430,3 +430,62 @@ def test_use_clear_project_registered():
     clear = next((c for c in CAPABILITIES if c.key == "me.clear_project"), None)
     assert use is not None and use.mcp == "oto_use_project" and use.rest is None
     assert clear is not None and clear.mcp == "oto_clear_project" and clear.rest is None
+
+
+# ── Publication MCP : mode `secret` + sonde credential-less NON bloquante ──────
+def _patch_publish(monkeypatch, rec, unresolvable):
+    """Câble les seams propres à publish_mcp : record de la pose + sonde contrôlée."""
+    monkeypatch.setattr(P.db, "set_project_mcp_publication",
+                        lambda pid, slug, access, tools: rec.setdefault("pub", []).append((pid, slug, access, tools)))
+    monkeypatch.setattr(P, "_mcp_unresolvable_tools", lambda row, tools: list(unresolvable))
+
+
+def test_publish_mcp_secret_generates_unguessable_slug(seams, monkeypatch):
+    from oto_mcp.db.projects import _MCP_SLUG_RE
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    out = P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7,
+                                         mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
+    (pid, slug, access, tools), = rec["pub"]
+    assert access == "secret" and pid == 7
+    # slug NON saisi → généré, non devinable, valide (préfixe par défaut `mcp-`).
+    assert slug.startswith("mcp-") and _MCP_SLUG_RE.match(slug)
+    assert out["mcp_access"] == "off"  # ROW mocké n'a pas de mcp_access → _view défaut ; pas d'erreur
+
+
+def test_publish_mcp_secret_prefixes_from_typed_slug(seams, monkeypatch):
+    from oto_mcp.db.projects import _MCP_SLUG_RE
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="Ma Base!!",
+                                   mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
+    (_, slug, _, _), = rec["pub"]
+    assert slug.startswith("ma-base-") and _MCP_SLUG_RE.match(slug)
+
+
+def test_publish_mcp_unresolvable_is_non_blocking(seams, monkeypatch):
+    """Un outil non résoluble sans login NE bloque plus la publication (400 retiré) :
+    on publie, la liste remonte en warning `mcp_unresolvable_tools`."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=["data_write"])
+    out = P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="ft-pub",
+                                         mcp_access="anonymous", mcp_tools=["data_write", "frenchtech_evenements"]))
+    assert rec["pub"], "la publication doit avoir eu lieu malgré l'outil non résoluble"
+    assert out["mcp_unresolvable_tools"] == ["data_write"]
+
+
+def test_publish_mcp_org_requires_slug(seams, monkeypatch):
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    with pytest.raises(AuthzDenied) as ei:
+        P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7,
+                                       mcp_access="org", mcp_tools=["frenchtech_evenements"]))
+    assert ei.value.code == "missing_slug"
+
+
+def test_gen_secret_slug_is_valid_and_unique():
+    from oto_mcp.db.projects import _MCP_SLUG_RE
+    a = P._gen_secret_slug(None)
+    b = P._gen_secret_slug(None)
+    assert a != b and _MCP_SLUG_RE.match(a) and _MCP_SLUG_RE.match(b)
+    assert _MCP_SLUG_RE.match(P._gen_secret_slug("French Tech Marseille"))

@@ -36,7 +36,9 @@ _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
 
 # Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
 _MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
-_MCP_ACCESS = ("off", "anonymous", "org")
+# anonymous = sans login + LISTÉ (annuaire public) ; secret = sans login mais NON listé,
+# slug non devinable (URL secrète, généré serveur) ; org = JWT Logto + org épinglée.
+_MCP_ACCESS = ("off", "anonymous", "secret", "org")
 
 
 def create_project(owner_type: str, owner_id: str, name: str,
@@ -172,8 +174,9 @@ def get_project_by_mcp_slug(slug: str) -> Optional[dict]:
 
 
 def list_published_mcp_projects() -> list[dict]:
-    """Projets publiés en endpoint MCP **anonyme** (annuaire public oto-websites).
-    Exclut les endpoints `org` (authentifiés, hors galerie publique) et les archivés."""
+    """Projets publiés en endpoint MCP **anonyme ET listé** (annuaire public oto-websites).
+    Exclut les endpoints `org` (authentifiés) **et `secret`** (sans login mais non listés,
+    par construction hors galerie — le filtre `= 'anonymous'` les écarte) + les archivés."""
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT {_PROJECT_COLS} FROM projects "

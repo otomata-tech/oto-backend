@@ -1,12 +1,16 @@
 """Endpoint MCP par PROJET — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).
 
-Un projet publié (`mcp_access ∈ {anonymous, org}`, cf. `db.set_project_mcp_publication`)
-est servi sur un sous-domaine dédié. Deux postures :
+Un projet publié (`mcp_access ∈ {anonymous, secret, org}`, cf. `db.set_project_mcp_publication`)
+est servi sur un sous-domaine dédié. Trois postures :
 
 - **anonymous** — AUCUN login. Le sous-domaine est servi par une **2ᵉ instance FastMCP
   sans auth** ; la visibilité y fige l'**allowlist** du preset (`AnonymousVisibilityMiddleware`)
   et la résolution de credential tape l'org **propriétaire** du projet (pas de `sub` —
-  cf. `access._resolve_credential_anon`). Contourne 100 % du blocage OAuth de #44.
+  cf. `access._resolve_credential_anon`). Contourne 100 % du blocage OAuth de #44. LISTÉ
+  dans l'annuaire public (`db.list_published_mcp_projects`).
+- **secret** — identique à `anonymous` côté serving (même instance, même résolution), mais
+  **non listé** dans l'annuaire et **slug non devinable** (généré serveur) : une URL secrète.
+  Les deux propriétés vivent côté publication → transparent pour ce dispatch.
 - **org** — JWT Logto + **épingle l'org** (comme `subdomain_org`, garde d'appartenance en
   aval par `access.current_org`). Servi par l'instance authentifiée canonique.
 
@@ -253,7 +257,10 @@ class HostDispatch:
         access_mode = proj.get("mcp_access")
         org_id = int(proj["owner_id"]) if proj.get("owner_type") == "org" else None
 
-        if access_mode == "anonymous":
+        if access_mode in ("anonymous", "secret"):
+            # `secret` = même chemin sans login que `anonymous` (aucun sub, credential de
+            # l'org propriétaire) ; il n'en diffère QUE par l'annuaire (non listé) et un slug
+            # non devinable — deux propriétés portées côté publication, transparentes ici.
             # Navigateur (GET, Accept: text/html) sur la RACINE → landing HTML publique :
             # la MÊME URL sert la page de présentation ET le serveur MCP. Claude/Mistral
             # (POST, ou Accept event-stream) tombent dans le chemin MCP ci-dessous.

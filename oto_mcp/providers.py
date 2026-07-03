@@ -1079,7 +1079,7 @@ def public_catalog() -> list[dict]:
     """Vue publique (GET /api/connectors) — sans secret, pour le frontend."""
     # Lazy : le registre des backends d'identités se remplit à l'import des modules
     # tools/* (register_all au boot) — on le lit à la demande, jamais à l'import.
-    from . import connector_identities
+    from . import connector_identities, connector_verify
     return [
         {
             "name": c.name,
@@ -1122,6 +1122,10 @@ def public_catalog() -> list[dict]:
             # identité/cible par défaut (pennylaneged : la société = SA GED). La
             # carte USER en dérive son picker (google/unipile ont leur widget dédié).
             "identities": connector_identities.supports(c.name),
+            # Sonde de credential (framework « tester la connexion ») : le connecteur a
+            # enregistré un `verify` sans effet de bord (zoho…). La carte affiche alors
+            # un bouton « tester la connexion » à côté de l'état « clé posée ».
+            "verifiable": connector_verify.supports(c.name),
         }
         for c in _REGISTRY_LIST
     ]

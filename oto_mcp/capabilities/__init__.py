@@ -30,6 +30,7 @@ from . import doctrine_library  # noqa: F401 — library.{list,get,publish,fork,
 # Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
 from . import connectors_selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 from . import connectors_identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
+from . import connectors_verify  # noqa: F401 — connectors.verify (oto_verify_connector : sonde de credential)
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.

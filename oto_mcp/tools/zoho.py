@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, connector_verify
 
 
 # Zoho héberge par data center régional ; le self-client (client_id/secret) ET le
@@ -49,7 +49,42 @@ def _resolve_dc_domains(data_center: Optional[str]) -> tuple[str, str]:
     return _DC_DOMAINS[dc]
 
 
+def _zoho_error_hint(exc: Exception) -> str:
+    """Traduit l'erreur OAuth Zoho brute en message actionnable pour la sonde."""
+    low = str(exc).lower()
+    if "invalid_client" in low or "invalid_client_secret" in low:
+        return ("client_id / client_secret ou data center incorrect — le self-client "
+                "Zoho est lié à sa région, vérifie le champ « data center ».")
+    if "invalid_code" in low or "invalid_grant" in low or "invalid_oauthtoken" in low:
+        return "refresh token périmé ou révoqué — régénère-le dans la console Zoho."
+    return f"échec de connexion Zoho : {exc}"
+
+
+def _verify(fields: dict) -> None:
+    """Sonde SANS effet de bord : refresh du token OAuth = valide client_id +
+    client_secret + refresh_token + data_center d'un coup (le cache token est en
+    mémoire, aucune écriture). Lève un message actionnable sur échec ; `_resolve_dc_domains`
+    lève déjà une `McpError` claire si la région manque/est inconnue."""
+    from oto.tools.zoho.client import ZohoClient
+
+    api_domain, accounts_url = _resolve_dc_domains(fields.get("data_center"))
+    client = ZohoClient(
+        client_id=fields.get("client_id"),
+        client_secret=fields.get("client_secret"),
+        refresh_token=fields.get("refresh_token"),
+        api_domain=api_domain,
+        accounts_url=accounts_url,
+    )
+    try:
+        client._get_access_token()
+    except McpError:
+        raise
+    except Exception as e:  # noqa: BLE001 — le message provider EST le retour de la sonde
+        raise ValueError(_zoho_error_hint(e)) from e
+
+
 def register(mcp: FastMCP) -> None:
+    connector_verify.register("zoho", _verify)
     from oto.tools.zoho.client import ZohoClient
 
     def _client() -> ZohoClient:

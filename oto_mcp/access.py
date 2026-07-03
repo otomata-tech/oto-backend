@@ -223,6 +223,11 @@ def current_project() -> Optional[int]:
     du précédent. Le sub est résolu ici (chemin MCP de l'acteur courant) plutôt que
     passé en argument : tous les appelants sont ce même acteur. Sub non identifiable
     (stdio/tests, hors surface authentifiée) ⇒ bracelet honoré tel quel."""
+    # Axe d'appel `project=` (modèle sans état de session, #108) : déjà gardé
+    # (can_access) à la pose par le middleware → rendu tel quel, prime sur le bracelet.
+    call = session_org.current_call_project()
+    if call is not None:
+        return call
     pid = session_org.current_project_override()
     if pid is None:
         return None
@@ -281,7 +286,8 @@ def resolve_slot_tableau(name: str) -> str:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"`slot:{name}` exige un PROJET ACTIF (le binding nom→instance vit "
-                     "dans le projet, ADR 0035). Active-le avec `oto_use_project(<id>)` "
+                     "dans le projet, ADR 0035). Passe `project=<id>` sur CET appel "
+                     "(sans état, recommandé) ou active le bracelet `oto_use_project(<id>)` "
                      "(liste : `oto_project op=list`) — ou crée un projet et binde le slot "
                      f"(`oto_project op=link target_type=tableau … slot='{name}'`), ou "
                      "passe un `namespace` explicite.")))

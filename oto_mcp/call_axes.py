@@ -11,7 +11,7 @@ Mécanisme (zéro modification des fonctions de tools) :
   1. `on_list_tools` (middleware) advertise l'axe dans le schéma des tools CONCERNÉS
      (sélectif, dérivé du registre) → claude.ai sait l'envoyer (les schémas sont en
      `additionalProperties:false`, un axe non déclaré serait refusé côté client) ;
-  2. `on_call_tool` (middleware) lit l'axe des args BRUTS, pose la ContextVar, et
+  2. `on_call_tool` (middleware) lit l'axe des args BRUTS, pose la/les ContextVar(s), et
      **retire l'axe des arguments** avant le dispatch → la fonction du tool, qui ne le
      déclare pas, valide clean ;
   3. les **seams de résolution existants** lisent la ContextVar (`resolve_credential`
@@ -27,7 +27,12 @@ import copy
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
+from starlette.concurrency import run_in_threadpool
+
 from . import providers, session_org
+from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import namespace_of
 
 # Entrée d'annulation d'un axe posé : (fonction de reset, token ContextVar).
@@ -38,13 +43,44 @@ UndoEntry = tuple[Callable[[object], None], object]
 class CallAxis:
     """Un axe-contexte injectable sur les tools plats. `schema` = fragment JSON-Schema
     de la propriété (optionnelle) ajoutée. `applies(name)` décide, tool par tool, si
-    l'axe est advertisé/lu. `pin(value)` garde/pose la ContextVar et renvoie l'entrée
-    d'annulation (ou None si l'axe est inerte pour cette valeur)."""
+    l'axe est advertisé/lu. `pin(value)` garde/pose la/les ContextVar(s) et renvoie la
+    LISTE d'entrées d'annulation (vide si l'axe est inerte pour cette valeur ; plusieurs
+    si l'axe co-pose — ex. project= pose projet + org dérivée)."""
     param: str
     schema: dict
     applies: Callable[[str], bool]
-    pin: Callable[[object], Awaitable[Optional[UndoEntry]]]
+    pin: Callable[[object], Awaitable[list[UndoEntry]]]
 
+
+# ── Helpers partagés (aussi utilisés par le middleware pour `org=`) ───────────
+
+def require_axis_int(value: object, axis: str) -> int:
+    """Convertit un axe-contexte d'appel en id entier ou lève un McpError actionnable."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Paramètre `{axis}` invalide : {value!r} (attendu un id)."))
+
+
+def require_axis_sub(axis: str) -> str:
+    """sub authentifié courant, requis pour garder un axe-contexte ; McpError sinon
+    (un axe piloté par un tenant n'a aucun sens sans identité — vaut aussi pour
+    l'endpoint MCP anonyme, cf. #108)."""
+    sub = None
+    try:
+        sub = current_user_sub_from_token()
+    except Exception:
+        pass
+    if not sub:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Le paramètre `{axis}` requiert une session authentifiée."))
+    return sub
+
+
+# ── Axe account= (connecteurs multi-compte) ──────────────────────────────────
 
 def _is_multi_account_tool(name: str) -> bool:
     """Le tool appartient-il à un connecteur MULTI-COMPTE (coffre à N comptes,
@@ -55,14 +91,14 @@ def _is_multi_account_tool(name: str) -> bool:
     return con is not None and con.auth_multi_account
 
 
-async def _pin_account(value: object) -> Optional[UndoEntry]:
+async def _pin_account(value: object) -> list[UndoEntry]:
     """Épingle le compte de connecteur de l'appel courant. Pas de garde DB ici : le
     compte n'est qu'un LABEL, la garde vit à la résolution (`resolve_credential` lève
     une McpError actionnable si ce compte n'existe pas au palier membre — jamais de
     repli muet vers un autre compte). None/'' ⇒ inerte (mono-compte legacy)."""
     if value is None or value == "":
-        return None
-    return (session_org.reset_call_account, session_org.set_call_account(str(value)))
+        return []
+    return [(session_org.reset_call_account, session_org.set_call_account(str(value)))]
 
 
 ACCOUNT = CallAxis(
@@ -81,9 +117,87 @@ ACCOUNT = CallAxis(
 )
 
 
-# Axes exposés sur les tools plats. `project=`/`run_id=` s'ajouteront ici (mêmes 3
-# mécanismes) au fil des barreaux suivants.
-AXES: tuple[CallAxis, ...] = (ACCOUNT,)
+# ── Axe project= (slots de tableau — enforcement serveur ADR 0035) ────────────
+
+def _is_slot_aware_tool(name: str) -> bool:
+    """Le tool résout-il un `slot:<name>` contre le projet actif ? Les tools `data_*`
+    (namespace `data`, ADR 0035 B3) — `resolve_slot_tableau` LÈVE sans projet actif
+    (enforcement dur, jamais de fallback) → c'est le cas où la perte du bracelet de
+    session casse un flux. L'épinglage d'IDENTITÉ connecteur par projet reste fail-soft
+    (repli sur le défaut user) → hors périmètre de l'axe pour l'instant."""
+    return namespace_of(name) == "data"
+
+
+def _resolve_project_org_guarded(sub: str, pid: int, subdomain_org: Optional[int]) -> Optional[int]:
+    """Garde d'accès + dérivation de l'org propriétaire du projet (chemin DB sync,
+    appelé en threadpool). Lève une McpError actionnable si l'acteur n'a pas accès en
+    lecture (privacy-by-default ADR 0030 — jamais is_org_member), si le projet n'existe
+    pas, ou s'il échappe au lock de sous-domaine. L'org dérivée est co-posée pour que
+    credentials/redaction/datastore résolvent sous l'org du projet."""
+    from . import group_store, org_store, ownership
+    if not ownership.can_access(sub, "project", str(pid), "read"):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Projet #{pid} inaccessible (tu n'y as pas accès en lecture, ou il "
+                     "n'existe pas). Liste tes projets avec `oto_project op=list`.")))
+    owner = ownership.owner_of("project", str(pid))
+    if owner is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS, message=f"Projet #{pid} introuvable."))
+    owner_type, owner_id = owner
+    if owner_type == "org":
+        org = int(owner_id)
+    elif owner_type == "group":
+        g = group_store.get_group(int(owner_id))
+        org = g.get("org_id") if g else None
+    elif owner_type == "user":
+        # Projet perso : l'org co-posée est l'org PERSO du PROPRIÉTAIRE (jamais
+        # int(sub) — le sub n'est pas un id d'org).
+        org = org_store.get_personal_org(owner_id)
+    else:
+        org = None
+    if subdomain_org is not None and org is not None and org != subdomain_org:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Le projet #{pid} appartient à une autre org que celle de ce "
+                     "endpoint (verrou de sous-domaine) — impossible de l'activer ici.")))
+    return org
+
+
+async def _pin_project(value: object) -> list[UndoEntry]:
+    """Épingle le projet de l'appel + co-pose l'org dérivée. Rejette l'anonyme AVANT
+    toute pose. Garde `can_access` en threadpool (DB sur le chemin inbound chaud)."""
+    if value is None:
+        return []
+    pid = require_axis_int(value, "project")
+    sub = require_axis_sub("project")
+    cand = session_org.current_subdomain_candidate()
+    org = await run_in_threadpool(_resolve_project_org_guarded, sub, pid, cand)
+    undo: list[UndoEntry] = []
+    if org is not None:
+        undo.append((session_org.reset_call_org, session_org.set_call_org(org)))
+    undo.append((session_org.reset_call_project, session_org.set_call_project(pid)))
+    return undo
+
+
+PROJECT = CallAxis(
+    param="project",
+    schema={
+        "type": "integer",
+        "title": "Project",
+        "description": (
+            "Projet à activer pour CET appel (id, cf. `oto_project op=list`). Résout les "
+            "`slot:<nom>` de `namespace` contre les bindings du projet et scope l'action "
+            "sur son org. Alternative sans état au bracelet `oto_use_project`."
+        ),
+    },
+    applies=_is_slot_aware_tool,
+    pin=_pin_project,
+)
+
+
+# Axes exposés sur les tools plats. `run_id=` s'ajoutera ici (mêmes 3 mécanismes).
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT)
 
 
 def axes_for(name: str) -> list[CallAxis]:

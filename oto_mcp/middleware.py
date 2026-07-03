@@ -220,9 +220,7 @@ class CallContextMiddleware(Middleware):
             # existants (resolve_credential…) lisent la ContextVar.
             for axis in call_axes.axes_for(name):
                 if axis.param in args:
-                    entry = await axis.pin(args.pop(axis.param))
-                    if entry is not None:
-                        undo.append(entry)
+                    undo.extend(await axis.pin(args.pop(axis.param)))
             return await call_next(context)
         finally:
             for reset, tok in reversed(undo):
@@ -230,8 +228,8 @@ class CallContextMiddleware(Middleware):
 
     @staticmethod
     async def _pin_org(org):
-        org_id = _require_axis_int(org, "org")
-        sub = _require_axis_sub("org")
+        org_id = call_axes.require_axis_int(org, "org")
+        sub = call_axes.require_axis_sub("org")
         from . import roles
         # Garde d'appartenance en threadpool : `org=` est repassé à CHAQUE appel
         # (modèle sans état de session) → is_org_member = requête PG sync sur le chemin
@@ -242,29 +240,3 @@ class CallContextMiddleware(Middleware):
                 message=f"Paramètre `org`={org_id} refusé : tu n'es pas membre de cette "
                         f"org (ou elle n'existe pas). Vérifie avec oto_list_orgs."))
         return session_org.set_call_org(org_id)
-
-
-def _require_axis_int(value, axis: str) -> int:
-    """Convertit un axe-contexte d'appel en id entier ou lève un McpError actionnable."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=f"Paramètre `{axis}` invalide : {value!r} (attendu un id)."))
-
-
-def _require_axis_sub(axis: str) -> str:
-    """sub authentifié courant, requis pour garder un axe-contexte ; McpError sinon
-    (un axe piloté par un tenant n'a aucun sens sans identité — vaut aussi pour
-    l'endpoint MCP anonyme, cf. #108)."""
-    sub = None
-    try:
-        sub = current_user_sub_from_token()
-    except Exception:
-        pass
-    if not sub:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=f"Le paramètre `{axis}` requiert une session authentifiée."))
-    return sub

@@ -18,10 +18,14 @@ def test_account_axis_applies_to_multi_account_tools():
     assert call_axes.axes_for("calendar_events")
 
 
+def _params(name):
+    return {a.param for a in call_axes.axes_for(name)}
+
+
 def test_account_axis_excludes_single_and_spine():
     for name in ("folk_search", "serper_web_search", "pennylane_company",
                  "unipile_search", "oto_create_org", "oto_whoami", "data_write"):
-        assert call_axes.axes_for(name) == [], name
+        assert "account" not in _params(name), name
 
 
 def test_inject_schema_adds_optional_account_property():

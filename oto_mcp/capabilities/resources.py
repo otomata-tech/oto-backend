@@ -88,20 +88,26 @@ def _resource_name(resource_type: str, rid: str) -> Optional[str]:
     return None
 
 
-def _notify_share(sharer_sub: str, resource_type: str, rid: str,
-                  to_email: str, permission: str) -> bool:
-    """Prévient par email l'utilisateur avec qui on vient de partager (best-effort,
-    tracé — une notif ne casse JAMAIS le partage). Ne notifie que les principals
-    `user` : pour une org/un groupe destinataire, « qui reçoit » reste à trancher
-    (oto-backend#77)."""
+def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
+                  *, event: str, permission: Optional[str] = None) -> bool:
+    """Prévient par email l'utilisateur qui vient de recevoir un accès (`event`
+    ='share') ou la propriété (`event`='transfer') d'une ressource. Best-effort,
+    tracé — ne casse JAMAIS l'action métier. Ne notifie que les principals `user` :
+    pour une org/un groupe destinataire, « qui reçoit » reste à trancher (#77)."""
     try:
+        app_url = os.environ.get("OTO_APP_URL", "https://dashboard.oto.ninja").rstrip("/")
+        sharer = _owner_label("user", sharer_sub)
+        name = _resource_name(resource_type, rid)
+        type_label = _TYPE_LABELS.get(resource_type, "ressource")
+        if event == "transfer":
+            return email.send_resource_transferred_email(
+                to_email, type_label=type_label, name=name, app_url=app_url, sharer=sharer)
         return email.send_resource_shared_email(
-            to_email, type_label=_TYPE_LABELS.get(resource_type, "ressource"),
-            name=_resource_name(resource_type, rid), permission=permission,
-            app_url=os.environ.get("OTO_APP_URL", "https://dashboard.oto.ninja").rstrip("/"),
-            sharer=_owner_label("user", sharer_sub))
+            to_email, type_label=type_label, name=name, permission=permission,
+            app_url=app_url, sharer=sharer)
     except Exception as e:  # best-effort
-        log.warning("notify_share(%s %s → %s) failed: %s", resource_type, rid, to_email, e)
+        log.warning("notify(%s %s %s → %s) failed: %s",
+                    event, resource_type, rid, to_email, e)
         return False
 
 
@@ -350,6 +356,10 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
                                               new_owner=(new_owner_type, new_owner_id))
             db.log_project_activity(int(rid), ctx.sub, "project.deliver",
                                     f"transfer → {new_owner_label}")
+        # Notifier le nouveau propriétaire user (best-effort). Cf. _notify_grant.
+        if new_owner_type == "user" and new_owner_label:
+            out["notified"] = _notify_grant(ctx.sub, inp.resource_type, rid,
+                                            new_owner_label, event="transfer")
         return out
 
     if inp.op == "share":
@@ -367,8 +377,8 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         # Notifier le bénéficiaire (best-effort). UNE fois, au niveau capability —
         # jamais dans `ownership.grant` (un share en cascade y déclencherait N mails).
         if ptype == "user" and plabel:
-            out["notified"] = _notify_share(ctx.sub, inp.resource_type, rid,
-                                            plabel, inp.permission)
+            out["notified"] = _notify_grant(ctx.sub, inp.resource_type, rid, plabel,
+                                            event="share", permission=inp.permission)
         return out
 
     # unshare

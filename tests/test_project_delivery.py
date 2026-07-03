@@ -90,6 +90,20 @@ def test_share_to_user_still_works(monkeypatch):
     assert sent["name"] == "Campagne mutuelle" and sent["permission"] == "write"
 
 
+def test_transfer_to_user_emails_new_owner(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "sharer@x.co"})
+    monkeypatch.setattr(R.db, "get_project_by_id", lambda pid: {"name": "Campagne mutuelle"})
+    sent = {}
+    monkeypatch.setattr(R.email, "send_resource_transferred_email",
+                        lambda to, **kw: sent.update({"to": to, **kw}) or True)
+    out = R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
+                                            resource_id="7", new_owner_email="jb@x.co"))
+    assert out["new_owner"] == "jb@x.co" and out["notified"] is True
+    assert sent["to"] == "jb@x.co" and sent["name"] == "Campagne mutuelle"
+
+
 def test_share_to_org_does_not_email(monkeypatch):
     """Partage à une ORG : pas de notif user (qui reçoit reste à trancher, #77)."""
     _wire(monkeypatch)

@@ -184,6 +184,25 @@ def send_resource_shared_email(to: str, *, type_label: str, name: str | None,
     return _send(to, subject, html)
 
 
+def send_resource_transferred_email(to: str, *, type_label: str, name: str | None,
+                                    app_url: str, sharer: str | None = None) -> bool:
+    """Email à un utilisateur à qui on vient de TRANSFÉRER la propriété d'une
+    ressource (ADR 0030). Best-effort. Voix funnel : FR, vouvoiement + minuscules."""
+    titre = f"{type_label} « {name} »" if name else f"un {type_label}"
+    who = f"{_esc(sharer)} vous a transféré" if sharer else "on vous a transféré"
+    subject = (f"{name} — {type_label} transféré à vous sur oto" if name
+               else f"un {type_label} transféré à vous sur oto")
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>{who} la propriété de <strong>{_esc(titre)}</strong> sur oto — '
+        f'vous en êtes désormais propriétaire.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">ouvrir dans oto</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
 def send_alpha_invite_email(to: str, invite_url: str,
                             inviter: str | None = None) -> bool:
     """Email d'invitation à l'alpha de Oto (referral). True si envoyé, False sinon.

@@ -230,13 +230,28 @@ class CallContextMiddleware(Middleware):
     async def _pin_org(org):
         org_id = call_axes.require_axis_int(org, "org")
         sub = call_axes.require_axis_sub("org")
-        from . import roles
-        # Garde d'appartenance en threadpool : `org=` est repassé à CHAQUE appel
-        # (modèle sans état de session) → is_org_member = requête PG sync sur le chemin
-        # inbound le plus chaud, à SORTIR de l'event loop mono (perf, otomata-private).
-        if not await run_in_threadpool(roles.is_org_member, sub, org_id):
+        from . import org_store
+        # MÊME garde que `oto_use_org` (`resolve_org_for_user`) → l'axe `org=` est honoré
+        # EXACTEMENT quand la bascule l'est (cohérence stricte : plus de divergence
+        # is_org_member qui escaladait le super_admin sur une org non-membre). DB en
+        # threadpool (`org=` repassé à chaque appel, chemin inbound chaud, mono-loop).
+        # Toute erreur DB devient un McpError PROPRE + loggé (ce middleware est
+        # outermost → sinon l'exception est opaque ET invisible à Sentry, vécu prod
+        # 2026-07-04 sur oto_my_connectors(org=)).
+        try:
+            resolved = await run_in_threadpool(
+                org_store.resolve_org_for_user, sub, str(org_id))
+        except ValueError:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message=f"Paramètre `org`={org_id} refusé : tu n'es pas membre de cette "
-                        f"org (ou elle n'existe pas). Vérifie avec oto_list_orgs."))
-        return session_org.set_call_org(org_id)
+                message=f"Paramètre `org`={org_id} refusé : tu n'es membre d'aucune "
+                        f"org #{org_id}. Vérifie avec oto_list_orgs."))
+        except McpError:
+            raise
+        except Exception:
+            logger.exception("garde `org=` a levé pour sub=%s org=%s", sub, org_id)
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Impossible de vérifier ton accès à l'org #{org_id} "
+                        f"(erreur interne). Réessaie."))
+        return session_org.set_call_org(resolved)

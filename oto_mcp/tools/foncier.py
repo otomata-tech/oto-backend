@@ -7,9 +7,10 @@ immobilière par comparables. Tous les clients viennent de `france-opendata`
 (open data, pas de clé).
 
 ADR 0010 (namespaces cohérents) : `foncier_icpe` (Géorisques) et les `foncier_*`
-DVF étaient auparavant dispersés sous `fr` / `dvf` — regroupés ici. Sit@del
-(permis) n'est pas exposé : sa source est un CSV national ~276 Mo non requêtable
-(pré-fetch + cache requis, hors tool MCP) — le client lib reste disponible.
+DVF étaient auparavant dispersés sous `fr` / `dvf` — regroupés ici. `foncier_permis_search`
+(Sit@del) interroge l'API DiDo `/rows` **en live** (filtre serveur commune/dept/année) —
+le pendant requêtable du productible solaire ; l'ingestion de masse via CSV national
+(276 Mo) reste réservée aux consommateurs qui croisent les sources (cf. GR), hors oto.
 
 Connecteur open-data : pas de credential. Exposé seulement si activé en DB
 (cran d'activation, ADR 0010) — register_all gate sur `connector_activation`.
@@ -47,8 +48,10 @@ def register(mcp: FastMCP) -> None:
         DvfClient,
         EnedisClient,
         PvgisClient,
+        SitadelClient,
     )
     from france_opendata.georisques import GeorisquesClient
+    from france_opendata.sitadel import DIDO_PAGE_SIZES
 
     ban = BanClient()
     cadastre = ApiCartoClient()
@@ -58,6 +61,7 @@ def register(mcp: FastMCP) -> None:
     dvf = DvfClient()
     dpe = DpeClient()
     georisques = GeorisquesClient()
+    sitadel = SitadelClient()
 
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
 
@@ -125,6 +129,65 @@ def register(mcp: FastMCP) -> None:
         or business assumptions. Null if inputs invalid or PVGIS unavailable.
         """
         return pvgis.productible(lat, lon, kwc)
+
+    # --- permis d'urbanisme (Sit@del / SDES, API DiDo live) ------------------
+
+    def _snap_page_size(limit: int) -> int:
+        """Cale `limit` sur une taille de page DiDo autorisée (10/20/50/100)."""
+        return next((s for s in DIDO_PAGE_SIZES if s >= limit), DIDO_PAGE_SIZES[-1])
+
+    @mcp.tool()
+    def foncier_permis_search(
+        code_commune: Optional[str] = None,
+        dept: Optional[str] = None,
+        kind: str = "logements",
+        annee_min: Optional[int] = None,
+        annee_max: Optional[int] = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> dict:
+        """Building/urbanism permits (Sit@del, SDES) for a commune or department, live.
+
+        Live query on the DiDo API (server-side filter) — no bulk download. National
+        register of urban-planning authorizations (PC/PA/DP) since 2013, monthly refresh.
+        Scope is REQUIRED (`code_commune` or `dept`) — a national scan is huge.
+
+        Three files, pick with `kind`:
+          - "logements": permits creating housing (developer/promoteur core).
+          - "locaux": non-residential premises (offices, retail, industry, warehouses —
+            the big-roof PV / commercial prospecting file; carries `destination_libelle`
+            and `sp_finale_estimee_m2`).
+          - "amenager": land-development permits (subdivisions, large layouts).
+
+        Each permit is normalized: identity (num_dau, type, etat), commune/dept, deposit
+        year, real dates, applicant (demandeur: SIREN/SIRET/denomination/APE — ~35 %
+        empty by GDPR for natural persons, this is the diffusion rule not a data gap),
+        terrain address + cadastral parcels, surfaces.
+
+        Args:
+            code_commune: INSEE commune code (e.g. "75056"). Exact match.
+            dept: INSEE department code (e.g. "59", "2A"). Use for a whole department.
+            kind: "logements" (default) | "locaux" | "amenager".
+            annee_min / annee_max: deposit-year bounds (inclusive).
+            page: 1-based page.
+            limit: max permits per page (snapped to 10/20/50/100, cap 100). `total` in
+                the result is the full server-side count — page through for more.
+        """
+        if not code_commune and not dept:
+            raise ValueError("Renseigner `code_commune` ou `dept` (un scan national est proscrit).")
+        page_size = _snap_page_size(max(1, limit))
+        res = sitadel.search(
+            kind,
+            communes=code_commune or None,
+            dept=dept or None,
+            an_min=annee_min,
+            an_max=annee_max,
+            page=page,
+            page_size=page_size,
+        )
+        res["permis"] = res["permis"][:limit]
+        res["kind"] = kind
+        return res
 
     # --- consommation électrique par adresse (Enedis) ------------------------
 

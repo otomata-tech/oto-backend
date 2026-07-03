@@ -490,10 +490,11 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     if active_org is not None:
         if _is_multi_account(provider):
             # Multi-compte (coffre à N comptes, ex. « 2 Zoho ») : sélection du compte =
-            # account explicite > épinglage projet > compte unique auto > McpError
-            # (jamais de repli muet vers un autre compte/l'org/la plateforme —
-            # anti-usurpation). '' = mono-compte legacy (aucune ligne nommée).
-            eff = account if account is not None else project_pinned_identity(provider)
+            # account explicite (param) > axe d'appel `account=` (#108) > épinglage
+            # projet > compte unique auto > McpError (jamais de repli muet vers un autre
+            # compte/l'org/la plateforme — anti-usurpation). '' = mono-compte legacy.
+            eff = (account if account is not None
+                   else session_org.current_call_account() or project_pinned_identity(provider))
             if eff is None:
                 accts = credentials_store.list_accounts(
                     credentials_store.MEMBER, credentials_store.member_id(active_org, sub), provider)

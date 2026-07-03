@@ -8,7 +8,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from starlette.concurrency import run_in_threadpool
 
-from . import redaction, session_org
+from . import call_axes, redaction, session_org
 from .auth_hooks import current_user_sub_from_token
 from .session_visibility import apply_session_visibility
 from .tool_visibility import namespace_of
@@ -188,17 +188,41 @@ class CallContextMiddleware(Middleware):
     def __init__(self, reserved_org_tools):
         self._org = frozenset(reserved_org_tools)
 
+    async def on_list_tools(self, context, call_next):
+        """Advertise les axes-contexte plats (`account=`, …) dans le schéma des tools
+        CONCERNÉS (sélectif, `call_axes.axes_for`) → claude.ai sait les envoyer. Sans
+        ça, `additionalProperties:false` ferait rejeter l'axe côté client. Les tools
+        de capacité (`org=`) sont schématisés par `_mcp_adapter`, pas ici."""
+        tools = await call_next(context)
+        out = []
+        for t in tools:
+            axes = call_axes.axes_for(t.name)
+            if axes:
+                t = t.model_copy(update={
+                    "parameters": call_axes.inject_schema(t.parameters, axes)})
+            out.append(t)
+        return out
+
     async def on_call_tool(self, context, call_next):
         name = getattr(context.message, "name", "") or ""
         args = getattr(context.message, "arguments", None) or {}
         # Pose chaque axe-contexte fourni pour CE tool, en collectant sa fonction de
         # reset AU MOMENT de la pose → reset LIFO dans le `finally` même si une pose
-        # ultérieure lève (les tokens déjà posés sont toujours nettoyés). Les axes
-        # project/group/run/account sont câblés dans les barreaux suivants (R3-R5).
+        # ultérieure lève (les tokens déjà posés sont toujours nettoyés).
         undo: list = []
         try:
+            # `org=` (tools de capacité) : posé ici, retiré des kwargs par `_make_tool`.
             if name in self._org and args.get("org") is not None:
                 undo.append((session_org.reset_call_org, await self._pin_org(args["org"])))
+            # Axes plats (`account=`, … — connecteurs/data) : lus des args BRUTS, posés,
+            # puis RETIRÉS des arguments avant le dispatch (la fonction du tool ne les
+            # déclare pas → elle validerait en erreur sinon). Les seams de résolution
+            # existants (resolve_credential…) lisent la ContextVar.
+            for axis in call_axes.axes_for(name):
+                if axis.param in args:
+                    entry = await axis.pin(args.pop(axis.param))
+                    if entry is not None:
+                        undo.append(entry)
             return await call_next(context)
         finally:
             for reset, tok in reversed(undo):

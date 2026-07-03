@@ -94,15 +94,14 @@ def make_routes(
         return json_response(request, {"connected": True, **data})
 
     async def document(request: Request) -> JSONResponse:
-        # Contenu d'une page (blocs ordonnés + document.url) par id ou path.
+        # Contenu d'une page par id (memento v3 : plus de lookup par path).
         sub, err = await authenticate(request, verifier)
         if err:
             return err
         doc_id = request.query_params.get("id") or None
-        path = request.query_params.get("path") or None
-        if not doc_id and not path:
-            return json_error(request, 400, "id_or_path_required")
-        data = await memento_oauth.get_document(sub, doc_id=doc_id, path=path)
+        if not doc_id:
+            return json_error(request, 400, "id_required")
+        data = await memento_oauth.get_document(sub, doc_id=doc_id)
         if data is None:
             return json_response(request, {"connected": False})
         return json_response(request, {"connected": True, **data})

@@ -237,10 +237,11 @@ def access_token_for(sub: str) -> Optional[str]:
 
 
 async def _call_memento_tool(sub: str, tool: str, args: dict) -> Optional[dict]:
-    """Appelle un outil `mem_*` du MCP memento distant avec le token per-user (même
-    endpoint que la fédération `tools/mount.py`). Renvoie le payload brut, ou None si
-    le user n'a pas connecté memento. La curation reste sur me.mento.cc — on ne fait
-    que lire/relayer pour le browse dashboard."""
+    """Appelle un verbe du MCP memento v3 (`load`/`list`/`get`/`admin`…, sans préfixe
+    `mem_` depuis le cutover v3) avec le token per-user (même endpoint que la
+    fédération `tools/mount.py`). Renvoie le payload brut, ou None si le user n'a pas
+    connecté memento. La curation reste sur me.mento.cc — on ne fait que lire/relayer
+    pour le browse dashboard."""
     token = access_token_for(sub)
     if not token:
         return None
@@ -257,36 +258,79 @@ async def _call_memento_tool(sub: str, tool: str, args: dict) -> Optional[dict]:
     return data
 
 
+_VIEWER_BASE = "https://me.mento.cc"
+
+
 async def list_workspaces(sub: str) -> Optional[dict]:
-    """Topologie read-only des KB memento du user (orientation dashboard) : carte
-    brute {default, orgs[], shared[], pinned[]}. None si non connecté."""
-    return await _call_memento_tool(sub, "mem_workspaces", {})
+    """Topologie read-only des KB memento du user (orientation dashboard), traduite
+    du modèle v3 (`admin(action=orgs)`, 1 org = 1 base) vers la carte que le
+    dashboard consomme : {default, orgs[{org, name, myRole, personal, workspaces[]}],
+    shared[], pinned[]} — le `slug` d'un workspace = l'UUID de base v3, repassé tel
+    quel à list_pages. None si non connecté."""
+    data = await _call_memento_tool(sub, "admin", {"action": "orgs"})
+    if data is None:
+        return None
+    default: Optional[str] = None
+    orgs = []
+    for o in data.get("orgs", []):
+        base = o.get("base")
+        workspaces = []
+        if base:
+            workspaces.append({
+                "slug": base["id"], "name": base["name"], "summary": "",
+                "visibility": "org", "myRole": o.get("myRole"),
+            })
+            if o.get("personal"):
+                default = base["id"]
+        orgs.append({"org": o.get("slug"), "name": o.get("name"),
+                     "myRole": o.get("myRole"), "personal": bool(o.get("personal")),
+                     "workspaces": workspaces})
+    return {"default": default, "orgs": orgs, "shared": [], "pinned": []}
 
 
 async def list_pages(sub: str, workspace: Optional[str] = None,
                      cursor: Optional[str] = None, limit: int = 100) -> Optional[dict]:
-    """Énumère les DOCUMENTS (pages) d'une KB — énumération déterministe paginée
-    (keyset, `cursor` opaque à repasser tel quel). Renvoie {workspace, org, items[],
-    totalCount, hasMore, cursor} ; `workspace` omis = KB par défaut. None si non
-    connecté."""
-    args: dict = {"kind": "documents", "limit": limit}
+    """Énumère les pages d'une base v3 (`list(kind=pages)`, curseur opaque à repasser
+    tel quel). `workspace` = UUID de base (omis = la seule base accessible — memento
+    lève s'il y en a plusieurs). Renvoie {workspace, items[], totalCount, hasMore,
+    cursor}. None si non connecté."""
+    args: dict = {"kind": "pages", "limit": limit}
     if workspace:
-        args["workspace"] = workspace
+        args["base"] = workspace
     if cursor:
         args["cursor"] = cursor
-    return await _call_memento_tool(sub, "mem_list", args)
+    data = await _call_memento_tool(sub, "list", args)
+    if data is None:
+        return None
+    items = [{
+        "id": it.get("id"),
+        "title": it.get("title") or "(sans titre)",
+        "docPath": it.get("description") or "",
+        "status": "ACTIVE",  # v3 ne liste que les pages actives
+        "updatedAt": it.get("updated_at"),
+    } for it in data.get("items", [])]
+    return {"workspace": workspace, "items": items,
+            "totalCount": data.get("totalCount"),
+            "hasMore": data.get("cursor") is not None,
+            "cursor": data.get("cursor")}
 
 
-async def get_document(sub: str, *, doc_id: Optional[str] = None,
-                       path: Optional[str] = None) -> Optional[dict]:
-    """Rend un document ENTIER (tous ses blocs ordonnés + sources/liens/commentaires
-    + `document.url` = lien viewer), par `id` ou par `path`. None si non connecté."""
-    args: dict = {}
-    if doc_id:
-        args["id"] = doc_id
-    if path:
-        args["path"] = path
-    return await _call_memento_tool(sub, "mem_document", args)
+async def get_document(sub: str, *, doc_id: str) -> Optional[dict]:
+    """Rend une page v3 entière (`get(id, kind=page)`) sous la forme document que le
+    dashboard consomme : {document: {id, title, url, blocks[]}} — v3 porte un body
+    markdown unique (plus de blocs), rendu comme un bloc unique. Lookup par id
+    seulement (le `path` v2 n'existe plus). None si non connecté."""
+    page = await _call_memento_tool(sub, "get", {"id": doc_id, "kind": "page"})
+    if page is None:
+        return None
+    body = page.get("body") or page.get("description") or ""
+    return {"document": {
+        "id": page.get("id"),
+        "title": page.get("title"),
+        "url": f"{_VIEWER_BASE}/v3/page/{page.get('id')}",
+        "blocks": ([{"id": f"{page.get('id')}:body", "type": "markdown",
+                     "content": body}] if body else []),
+    }}
 
 
 def status_for(sub: str) -> dict:

@@ -53,6 +53,18 @@ Surfaces :
   `tools/foncier.py` (`foncier_*_app`).
 - REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard.
 
+**Batch write + clé métier (2026-07-03).** `data_write` accepte un LOT `rows` (list[dict])
+écrit en un appel — importer un dataset sans faire transiter chaque ligne par le contexte
+du LLM. Un namespace peut déclarer une **clé métier** au schéma (`schema.key`, ex.
+`"email"`/`"siren"` ; cf. `data_set_schema`) : le batch fait alors un **UPSERT (merge)** sur
+cette clé au lieu de dupliquer (param `key` explicite prioritaire) — les rows sans clé sont
+appendées. Renvoie `{inserted, updated, count, key, ids}`. Cœur : `store.write_rows` →
+`_write_rows_to_ns(ns_id, rows, key)` (keyé par ns_id → réutilisable **hors contexte d'org**)
++ `db.datastore_find_row_id_by_key` (lookup dédup JSONB paramétré). Pour du **volumineux**,
+préférer `oto_upload_url(target='datastore')` (push NDJSON/CSV out-of-bande → même batch-upsert ;
+ns_id scellé au mint, autz réappliquée via `ownership.can_access(datastore_namespace, write)`).
+Cf. `docs/projects.md` §push out-of-bande (issue #105).
+
 Auth :
 - MCP tools : Logto JWT comme les autres tools.
 - REST `/api/datastore/*` : Logto JWT **ou** API token long-lived (préfixe

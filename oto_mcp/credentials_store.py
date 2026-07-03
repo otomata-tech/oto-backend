@@ -13,10 +13,27 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from . import connectors, crypto
 from .db import _connect
+
+_WHITESPACE = re.compile(r"\s+")
+
+
+def clean_field_value(field, raw):
+    """Normalise une valeur de champ credential saisie (formulaire dashboard OU REST).
+    Retire TOUS les whitespace (espaces, tabs, retours-ligne d'un copier-coller
+    foireux) pour les champs où ils n'ont aucun sens — clés, tokens, ids :
+    `field.whitespace_significant` False (défaut). Un champ où l'espace compte (mot de
+    passe) n'est que strippé aux bords. Non-string renvoyé tel quel. SOURCE UNIQUE du
+    nettoyage → les deux chemins de pose (user + org/groupe) en bénéficient."""
+    if not isinstance(raw, str):
+        return raw
+    if getattr(field, "whitespace_significant", False):
+        return raw.strip()
+    return _WHITESPACE.sub("", raw)
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +157,7 @@ def secret_from_input(
         provided = fields or {}
         packed: dict[str, str] = {}
         for f in sfields:
-            raw = provided.get(f.name)
-            val = raw.strip() if isinstance(raw, str) else raw
+            val = clean_field_value(f, provided.get(f.name))
             if not val:
                 if f.required:
                     raise ValueError("missing_credentials")

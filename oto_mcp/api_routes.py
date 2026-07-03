@@ -891,10 +891,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # (connecteur « ET/OU » type slack) peut être omis, mais il faut au moins
         # un champ posé au total. Le packing (raw/base64/json) est encapsulé dans
         # credentials_store.pack_secret.
+        from . import credentials_store
         fields: dict[str, str] = {}
         for f in c.secret_fields:
-            raw = body.get(f.name)
-            val = raw.strip() if isinstance(raw, str) else raw
+            val = credentials_store.clean_field_value(f, body.get(f.name))
             if not val:
                 if f.required:
                     return _json_error(request, 400, "missing_credentials")

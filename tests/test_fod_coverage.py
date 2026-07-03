@@ -26,9 +26,14 @@ import pytest
 # contrat : un module qu'on choisit de ne pas exposer se justifie ici, un oubli
 # n'a pas de raison à donner → il casse le test).
 FOD_NOT_EXPOSED = {
-    "sitadel": "permis de construire = CSV national ~276 Mo non requêtable à "
-               "l'unité ; pré-fetch+cache requis = projet « stock », hors tool "
-               "MCP (décision documentée dans tools/foncier.py)",
+    "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
+                 "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
+                 "via le service FOD (fr_juris_*, oto_mcp/fod_juris.py → HTTP), pas "
+                 "le client lib direct",
+    "legifrance": "client Légifrance/PISTE (codes consolidés, texte d'accords) = "
+                  "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
+                  "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
+                  "pas le client lib direct",
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

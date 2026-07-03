@@ -29,7 +29,12 @@ def test_capability_tools_have_flat_schema():
             s = _schema(tool)
             assert s is not None, cap.mcp
             props = set(s.get("properties", {}).keys())
-            assert props == set(cap.Input.model_fields.keys()), cap.mcp  # plat
+            expected = set(cap.Input.model_fields.keys())
+            # Axe-contexte `org=` (jeton d'appel, modèle sans état de session #108/#112)
+            # injecté à plat sur les caps org-scopées qui ne déclarent pas déjà un `org`.
+            if _mcp_adapter._org_param_reserved(cap):
+                expected.add("org")
+            assert props == expected, cap.mcp                            # plat
             assert "$defs" not in s, cap.mcp                              # pas imbriqué
 
     asyncio.run(go())

@@ -272,6 +272,16 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .middleware import FieldRedactionMiddleware
     instance.add_middleware(FieldRedactionMiddleware())
 
+    # Contexte d'appel (`org=`, modèle sans état de session, #108/#112). ENCORE APRÈS
+    # la rédaction → outermost : pose la ContextVar `_CALL_ORG` AVANT toute la chaîne et
+    # la reset APRÈS, pour que le handler ET les hooks post-tool (rédaction, calllog) lisent
+    # la MÊME org que l'appel. Garde d'appartenance au point d'entrée. Ensemble des tools
+    # à `org=` réservé dérivé du registre de capacités (inerte pour les autres).
+    from .middleware import CallContextMiddleware
+    instance.add_middleware(
+        CallContextMiddleware(_mcp_adapter.reserved_org_tool_names(_cap_registry.CAPABILITIES))
+    )
+
     return instance
 
 

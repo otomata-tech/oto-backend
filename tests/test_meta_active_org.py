@@ -7,7 +7,7 @@ bascule `oto_use_org`, désync UX silencieuse.
 """
 import pytest
 
-from oto_mcp import org_store, session_org
+from oto_mcp import org_store, roles, session_org
 from oto_mcp.tools.meta import _active_org
 
 
@@ -19,9 +19,18 @@ def _home_is_99(monkeypatch):
 
 
 def test_session_override_wins_over_home(monkeypatch):
-    # oto_use_org a posé une org de session 7 → les toggles se scopent sur 7.
+    # oto_use_org a posé une org de session 7, et le sub EST membre de 7 → gagne.
     monkeypatch.setattr(session_org, "current_override", lambda: (True, 7))
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
     assert _active_org("u") == 7
+
+
+def test_session_override_ignored_when_not_member(monkeypatch):
+    # Override vers 7 mais le sub N'est PAS membre (Mcp-Session-Id réutilisé par un
+    # autre compte, cf. #108) → l'override est ignoré à la résolution, repli maison (99).
+    monkeypatch.setattr(session_org, "current_override", lambda: (True, 7))
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    assert _active_org("u") == 99
 
 
 def test_falls_back_to_home_without_override():

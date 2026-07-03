@@ -125,9 +125,24 @@ def current_org(sub: str | None) -> Optional[int]:
         from . import roles
         if roles.is_org_member(sub, cand):
             return cand
+    # Jeton explicite de l'appel (`org=`, modèle sans état de session) : posé par
+    # l'adaptateur capacité APRÈS validation d'appartenance → rendu tel quel. Prime
+    # sur l'override de session (qui, lui, ne survit pas au stateless claude.ai).
+    call = session_org.current_call_org()
+    if call is not None:
+        return call
     present, org = session_org.current_override()
     if present:
-        return org
+        # Re-garde d'appartenance à la RÉSOLUTION (pas seulement à la pose) : un
+        # Mcp-Session-Id réutilisé par un AUTRE compte (switch de compte, cf. #108)
+        # ne doit pas hériter de l'override d'org du compte précédent. `org=None` =
+        # override « perso/global » légitime (posé par oto_clear_org) → None. Sinon,
+        # non-membre ⇒ on ignore l'override et on retombe en cascade (repli maison).
+        if org is None:
+            return None
+        from . import roles
+        if roles.is_org_member(sub, org):
+            return org
     view = session_org.current_view_org()
     if view is not None:
         return None if view == 0 else view

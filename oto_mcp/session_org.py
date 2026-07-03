@@ -48,6 +48,34 @@ def current_view_org() -> Optional[int]:
     return _VIEW_ORG.get()
 
 
+# ── Org de l'APPEL (jeton explicite per-requête — modèle sans état de session) ─
+# Override porté par un PARAMÈTRE d'appel (`org=`), PAS par un état de session :
+# celui-ci ne survit pas chez claude.ai (un Mcp-Session-Id neuf est frappé à CHAQUE
+# tool call → un override keyé session_id n'est jamais relu par l'appel suivant).
+# Contextvar PER-REQUÊTE (isolé par tâche Starlette) posé par l'adaptateur capacité
+# APRÈS validation d'appartenance (is_org_member), lu EN PRIORITÉ par
+# `access.current_org`. Robuste au stateless : vit le temps de l'appel, rien à
+# persister ni à évincer. C'est la première pierre du modèle « contexte par
+# identifiants d'appel » (remplace à terme l'override de session ci-dessous).
+_CALL_ORG: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_call_org", default=None)
+
+
+def set_call_org(org_id: int) -> contextvars.Token:
+    """Épingle l'org de l'appel courant (renvoie le token à reset en fin d'appel)."""
+    return _CALL_ORG.set(org_id)
+
+
+def reset_call_org(token: contextvars.Token) -> None:
+    _CALL_ORG.reset(token)
+
+
+def current_call_org() -> Optional[int]:
+    """Org épinglée par le paramètre `org=` de l'appel courant, ou None. Déjà gardée
+    (is_org_member) à la pose par l'adaptateur → `current_org` la rend telle quelle."""
+    return _CALL_ORG.get()
+
+
 # ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
 # Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
 # tant que » un autre user dans le dashboard. Contextvar per-requête posé par

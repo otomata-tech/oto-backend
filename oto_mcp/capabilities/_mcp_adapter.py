@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import inspect
 import logging
+from typing import Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
+from .. import session_org
 from ..auth_hooks import current_user_sub_from_token
 from ..session_visibility import apply_session_visibility
 from ._types import AuthzDenied, Capability, RawCtx, apply_flat_signature
@@ -38,8 +40,25 @@ def _org_echo(org_id: int) -> dict:
         return {"id": org_id}
 
 
+def _org_param_reserved(cap: Capability) -> bool:
+    """`org=` est un axe-contexte RÉSERVÉ pour cette cap ssi elle NE déclare PAS déjà un
+    champ `org` métier (ex. `UseOrgInput.org` = l'org CIBLE d'`oto_use_org`, pas le contexte
+    d'appel) : ces caps « possèdent » le nom, l'axe-contexte n'y a pas de sens."""
+    return cap.mcp is not None and "org" not in cap.Input.model_fields
+
+
+def reserved_org_tool_names(capabilities: list[Capability]) -> frozenset:
+    """Noms des tools MCP où `org=` est injecté comme axe-contexte → pilote
+    `CallContextMiddleware` (pose la ContextVar `_CALL_ORG` autour de toute la chaîne)."""
+    return frozenset(cap.mcp for cap in capabilities if _org_param_reserved(cap))
+
+
 def _make_tool(cap: Capability):
     async def _tool(**kwargs):
+        # `org=` (axe-contexte, modèle sans état de session) est posé EN AMONT par
+        # `CallContextMiddleware` (ContextVar per-appel, lue par `current_org`) → ici on
+        # le retire simplement des kwargs pour ne pas le passer à l'`Input` de la capacité.
+        kwargs.pop("org", None)
         raw = RawCtx(sub=current_user_sub_from_token())
         try:
             inp = cap.Input(**kwargs)                 # validation (seule source : Input)
@@ -53,7 +72,8 @@ def _make_tool(cap: Capability):
             # Org EFFECTIVE APRÈS le handler : un `oto_use_org` vient peut-être de
             # basculer l'override de session → `ctx.org_id`, résolu à l'autz AVANT le
             # handler, est périmé et échoerait l'org d'AVANT le switch (#110 : réponse
-            # `{active_org: 83, _org: {id: 2}}`). On relit `current_org` post-handler ;
+            # `{active_org: 83, _org: {id: 2}}`). On relit `current_org` post-handler
+            # (la ContextVar `_CALL_ORG` vit encore — le middleware reset APRÈS) ;
             # repli sur `ctx.org_id` si non résoluble (perso/clear).
             from .. import access
             eff = access.current_org(raw.sub) if raw.sub else None
@@ -71,7 +91,18 @@ def _make_tool(cap: Capability):
         return result
     _tool.__name__ = cap.mcp
     _tool.__doc__ = cap.description or cap.key
-    return apply_flat_signature(_tool, cap.Input)
+    tool = apply_flat_signature(_tool, cap.Input)
+    # Paramètre commun `org=` (axe-contexte per-appel) ajouté au schéma plat SANS toucher
+    # l'`Input` de chaque capacité. Prime sur l'org maison, robuste au reset/absence de
+    # session (claude.ai) ; inerte pour les caps non org-scopées. (`project=`/`run_id=`
+    # suivront en passe profonde.) La pose/garde de la ContextVar vit dans le middleware.
+    if _org_param_reserved(cap):
+        sig = tool.__signature__
+        extra = inspect.Parameter("org", inspect.Parameter.KEYWORD_ONLY,
+                                  annotation=Optional[int], default=None)
+        tool.__signature__ = sig.replace(parameters=[*sig.parameters.values(), extra])
+        tool.__annotations__["org"] = Optional[int]
+    return tool
 
 
 def register(instance: FastMCP, capabilities: list[Capability]) -> None:

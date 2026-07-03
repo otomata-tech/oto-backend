@@ -6,8 +6,10 @@ import logging
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
-from mcp.types import TextContent
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS, TextContent
 
+from . import session_org
 from .auth_hooks import current_user_sub_from_token
 from .session_visibility import apply_session_visibility
 from .tool_visibility import namespace_of
@@ -232,3 +234,61 @@ def _withheld(name: str) -> ToolResult:
             text=f"[oto] rédaction de « {name} » impossible — sortie retenue par sécurité.")],
         is_error=True,
     )
+
+
+class CallContextMiddleware(Middleware):
+    """Pose le contexte d'appel (`org=`) AVANT toute la chaîne middleware, pour que la
+    résolution du handler ET les hooks post-tool (rédaction de champs, calllog) voient
+    la MÊME org que l'appel — pas l'org maison (modèle sans état de session, #108/#112).
+
+    Doit être enregistré **en dernier** (`add_middleware`) → outermost : il enveloppe
+    `FieldRedactionMiddleware` + `ToolCallLogger`, et la ContextVar `_CALL_ORG` reste
+    posée pendant qu'ils relisent `current_org` (sinon reset trop tôt = rédaction/audit
+    sous la maison). ContextVar per-tâche (isolée par appel) ; reset en `finally`.
+
+    Garde d'appartenance au point d'entrée : `org=` dont le sub n'est pas membre lève un
+    McpError **actionnable**, jamais un repli silencieux vers une autre org. Ne s'active
+    que pour les tools où `org` est le paramètre RÉSERVÉ d'axe-contexte (pas un champ
+    métier homonyme comme `oto_use_org.org`) — l'ensemble est fourni par l'adaptateur.
+    """
+
+    def __init__(self, reserved_org_tools):
+        self._reserved = frozenset(reserved_org_tools)
+
+    async def on_call_tool(self, context, call_next):
+        name = getattr(context.message, "name", "") or ""
+        args = getattr(context.message, "arguments", None) or {}
+        org = args.get("org") if name in self._reserved else None
+        tok = None
+        if org is not None:
+            tok = self._pin(org)
+        try:
+            return await call_next(context)
+        finally:
+            if tok is not None:
+                session_org.reset_call_org(tok)
+
+    @staticmethod
+    def _pin(org):
+        try:
+            org_id = int(org)
+        except (TypeError, ValueError):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Paramètre `org` invalide : {org!r} (attendu un id d'org)."))
+        sub = None
+        try:
+            sub = current_user_sub_from_token()
+        except Exception:
+            pass
+        if not sub:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="Le paramètre `org` requiert une session authentifiée."))
+        from . import roles
+        if not roles.is_org_member(sub, org_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Paramètre `org`={org_id} refusé : tu n'es pas membre de cette "
+                        f"org (ou elle n'existe pas). Vérifie avec oto_list_orgs."))
+        return session_org.set_call_org(org_id)

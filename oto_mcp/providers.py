@@ -37,6 +37,9 @@ class CredentialField:
     secret: bool = True
     reveal: bool = False
     help: str = ""
+    # False = champ facultatif (connecteur « ET/OU » type slack : au moins un
+    # champ non vide exigé à la pose, mais aucun champ individuellement requis).
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -195,7 +198,8 @@ class Connector:
             "method": self.auth_method,
             "cardinality": "multi_account" if self.auth_multi_account else "single",
             "fields": [
-                {"name": f.name, "label": f.label, "secret": f.secret}
+                {"name": f.name, "label": f.label, "secret": f.secret,
+                 "required": f.required}
                 for f in self.secret_fields
             ],
         }
@@ -427,8 +431,10 @@ _REGISTRY_LIST = [
        personal_session=False, label="Slack",
        help="messagerie Slack (bot token xoxb- et/ou user token xoxp-)",
        href="https://slack.com", credential_fields=(
-           CredentialField("bot_token", "Bot token (xoxb-)", secret=True),
-           CredentialField("user_token", "User token (xoxp-)", secret=True),
+           CredentialField("bot_token", "Bot token (xoxb-)", secret=True,
+                           required=False),
+           CredentialField("user_token", "User token (xoxp-)", secret=True,
+                           required=False),
        )),
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
@@ -1026,7 +1032,8 @@ def public_catalog() -> list[dict]:
             # dashboard rend le formulaire en bouclant dessus. Jamais de valeur,
             # juste la forme (name/label/secret).
             "credential_fields": [
-                {"name": f.name, "label": f.label, "secret": f.secret}
+                {"name": f.name, "label": f.label, "secret": f.secret,
+                 "required": f.required}
                 for f in c.secret_fields
             ],
             # Free-tier (ADR 0031) : clé plateforme ouverte sans grant, quota gratuit

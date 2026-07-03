@@ -99,3 +99,13 @@ def test_non_shareable_ignores_group_org(monkeypatch):
     with pytest.raises(McpError):
         access.resolve_credential_fields("silae")
     assert called == {"group": False, "org": False}
+
+
+def test_secret_from_input_optional_fields_subset():
+    # slack : bot_token/user_token facultatifs (« ET/OU ») — un seul suffit,
+    # packé JSON (le schéma déclare 2 champs), zéro au total refusé.
+    packed = credentials_store.secret_from_input(
+        "slack", fields={"user_token": "xoxp-abc"})
+    assert credentials_store.unpack_secret("slack", packed) == {"user_token": "xoxp-abc"}
+    with pytest.raises(ValueError, match="missing_credentials"):
+        credentials_store.secret_from_input("slack", fields={})

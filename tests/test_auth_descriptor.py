@@ -66,5 +66,5 @@ def test_catalog_exposes_auth():
     assert cat["serper"]["auth"] == {
         "method": "secret",
         "cardinality": "single",
-        "fields": [{"name": "key", "label": "API key", "secret": True}],
+        "fields": [{"name": "key", "label": "API key", "secret": True, "required": True}],
     }

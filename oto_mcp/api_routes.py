@@ -860,15 +860,21 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_json")
         if not isinstance(body, dict):
             return _json_error(request, 400, "invalid_body")
-        # Tous les champs déclarés sont requis (non vides). Le packing (raw/base64/
-        # json) est encapsulé dans credentials_store.pack_secret.
+        # Chaque champ `required` doit être non vide ; un champ facultatif
+        # (connecteur « ET/OU » type slack) peut être omis, mais il faut au moins
+        # un champ posé au total. Le packing (raw/base64/json) est encapsulé dans
+        # credentials_store.pack_secret.
         fields: dict[str, str] = {}
         for f in c.secret_fields:
             raw = body.get(f.name)
             val = raw.strip() if isinstance(raw, str) else raw
             if not val:
-                return _json_error(request, 400, "missing_credentials")
+                if f.required:
+                    return _json_error(request, 400, "missing_credentials")
+                continue
             fields[f.name] = val
+        if not fields:
+            return _json_error(request, 400, "missing_credentials")
         from . import credentials_store
         db.upsert_user(sub)
         # Scope MEMBRE (ADR 0033) : la clé est posée DANS l'org de contexte (org

@@ -128,11 +128,12 @@ def secret_from_input(
     (miroir du set-path user `api_routes.api_key_save`).
 
     - mono-champ (≤1 `secret_field`, api_key) → la valeur brute ;
-    - multi-champs (≥2, ex. zoho/silae) → tous les champs déclarés requis non vides,
+    - multi-champs (≥2, ex. zoho/silae) → chaque champ `required` non vide, les
+      champs facultatifs (« ET/OU » type slack) omissibles mais ≥1 champ au total,
       packés via `pack_secret`.
 
     Lève `ValueError(code)` actionnable : `empty_api_key` (mono vide) ou
-    `missing_credentials` (multi : champ déclaré absent/vide)."""
+    `missing_credentials` (multi : champ requis absent/vide, ou aucun champ)."""
     c = connectors.REGISTRY.get(connector)
     sfields = c.secret_fields if c is not None else ()
     if len(sfields) >= 2:
@@ -142,8 +143,12 @@ def secret_from_input(
             raw = provided.get(f.name)
             val = raw.strip() if isinstance(raw, str) else raw
             if not val:
-                raise ValueError("missing_credentials")
+                if f.required:
+                    raise ValueError("missing_credentials")
+                continue
             packed[f.name] = val
+        if not packed:
+            raise ValueError("missing_credentials")
         return pack_secret(connector, packed)
     key = (api_key or "").strip()
     if not key:

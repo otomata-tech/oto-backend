@@ -25,10 +25,15 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > l'autz d'écriture est **réappliquée** à la réception (`ownership.can_access(project, write)`)
 > et l'usage unique est garanti par la table `upload_tokens_used` (`db.consume_upload_token`,
 > consommée AVANT matérialisation → anti-rejeu). Cibles : `target='doc'` (op create/update
-> d'une page Documents) et `target='project_file'` (fichier brut « Autre document » — comble
+> d'une page Documents), `target='project_file'` (fichier brut « Autre document » — comble
 > le gap upload multipart dashboard-only : un agent peut déposer un PDF/CSV, plafond
-> `OTO_MCP_UPLOAD_MAX_BYTES`, déf. 25 Mo). L'upload multipart humain (`POST /api/me/projects/
-> {id}/files`) reste la voie dashboard.
+> `OTO_MCP_UPLOAD_MAX_BYTES`, déf. 25 Mo) et `target='datastore'` (lot de lignes NDJSON/CSV
+> → batch-upsert sur clé `schema.key`/param `key`, ns_id résolu+scellé au mint sous l'org
+> active, autz réappliquée org-agnostiquement via `ownership.can_access(datastore_namespace,
+> write)`). **Double voie pour le MÊME lien** : un agent avec shell PUT le corps brut ; sans
+> shell (claude.ai), il transmet l'URL à l'humain qui l'ouvre → **page d'upload HTML
+> autoportée** (`GET /api/upload/<token>`, POST multipart `file`, jeton consommé au POST pas
+> au GET). L'upload multipart humain dashboard (`POST /api/me/projects/{id}/files`) reste.
 
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence

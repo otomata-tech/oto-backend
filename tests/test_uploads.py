@@ -130,6 +130,60 @@ def test_materialize_project_file_ignores_curl_default_ct(monkeypatch):
     assert "s3_key" not in res["file"]              # la clé S3 ne fuite jamais
 
 
+def test_parse_rows_ndjson_and_csv():
+    rows = ut._parse_rows(b'{"a":1}\n\n{"a":2}\n', "ndjson")
+    assert rows == [{"a": 1}, {"a": 2}]
+    rows = ut._parse_rows(b"email,n\na@x,A\nb@y,B\n", "csv")
+    assert rows == [{"email": "a@x", "n": "A"}, {"email": "b@y", "n": "B"}]
+
+
+def test_parse_rows_rejects_bad_ndjson():
+    with pytest.raises(ut.UploadError) as e:
+        ut._parse_rows(b'{"a":1}\nnot json\n', "ndjson")
+    assert e.value.code == "bad_ndjson"
+    with pytest.raises(ut.UploadError) as e:
+        ut._parse_rows(b'[1,2,3]\n', "ndjson")   # array, pas un objet
+    assert e.value.code == "bad_ndjson"
+    with pytest.raises(ut.UploadError) as e:
+        ut._parse_rows(b'   \n', "ndjson")
+    assert e.value.code == "empty_dataset"
+
+
+def test_materialize_datastore_batch(monkeypatch):
+    seen = {}
+    class FakeStore:
+        def _write_rows_to_ns(self, ns_id, rows, *, key):
+            seen["ns_id"], seen["rows"], seen["key"] = ns_id, rows, key
+            return {"inserted": 2, "updated": 0, "count": 2, "key": key, "ids": ["r1", "r2"]}
+    import oto_mcp.datastore as ds
+    monkeypatch.setattr(ds, "make_store", lambda sub: FakeStore())
+    target = {"kind": "datastore", "ns_id": 7, "namespace": "boites",
+              "format": "ndjson", "key": "siren"}
+    res = ut.materialize("u1", target, b'{"siren":"1"}\n{"siren":"2"}', None)
+    assert seen["ns_id"] == 7 and seen["key"] == "siren" and len(seen["rows"]) == 2
+    assert res == {"ok": True, "kind": "datastore", "namespace": "boites",
+                   "inserted": 2, "updated": 0, "count": 2, "bytes": 27}
+
+
+def test_mint_datastore_seals_resolved_ns_id(monkeypatch):
+    class FakeStore:
+        def resolve_ns_id_for_write(self, ns): return 42
+        def declared_key(self, ns): return "email"
+    import oto_mcp.datastore as ds
+    monkeypatch.setattr(ds, "make_store", lambda sub: FakeStore())
+    monkeypatch.setattr(ut, "check_target_access", lambda sub, target: None)
+    out = U._upload_url(CTX, U.UploadUrlInput(target="datastore", namespace="contacts"))
+    p = ut.verify(out["url"].rsplit("/", 1)[1])
+    assert p["target"] == {"kind": "datastore", "ns_id": 42, "namespace": "contacts",
+                           "format": "ndjson", "key": "email"}
+
+
+def test_target_label():
+    assert "contacts" in ut.target_label({"kind": "datastore", "namespace": "contacts", "format": "csv"})
+    assert "Transcript" in ut.target_label({"kind": "doc", "op": "create", "title": "Transcript", "project_id": 5})
+    assert "r.pdf" in ut.target_label({"kind": "project_file", "filename": "r.pdf", "project_id": 5})
+
+
 def test_materialize_project_file_prefers_declared_ct(monkeypatch):
     seen = {}
     import oto_mcp.db as db

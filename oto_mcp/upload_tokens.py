@@ -14,12 +14,19 @@ Jeton = `<b64url(payload)>.<b64url(sig)>` (même famille que les states OAuth). 
 unique** (`db.consume_upload_token`, table `upload_tokens_used`). Le champ `typ` évite
 qu'un state OAuth soit rejoué comme jeton d'upload.
 
+Deux consommateurs pour la MÊME URL signée : un **agent avec shell** (curl PUT du corps
+brut) OU, à défaut (claude.ai sans shell), un **humain** à qui l'agent transmet le lien —
+l'endpoint sert alors une page d'upload (GET) qui POST le fichier en multipart.
+
 Cibles supportées (`target["kind"]`) :
 - `doc`          : page Documents d'un projet — op=create (sous project_id/parent_id)
                    ou op=update d'un doc existant ; body = texte de l'upload (utf-8).
 - `project_file` : fichier brut (« Autre document ») — blob durable en Object Storage,
                    comble le gap upload multipart dashboard-only (un agent peut déposer
                    un PDF/CSV).
+- `datastore`    : lot de lignes dans un tableau (NDJSON ou CSV) → batch upsert/dedup sur
+                   la clé (`target.key`, sinon `schema.key`). ns_id scellé au mint (org
+                   active présente) ; autz réappliquée org-agnostiquement au receive.
 """
 from __future__ import annotations
 
@@ -106,12 +113,64 @@ def verify(token: str) -> Optional[dict]:
     return data
 
 
+def target_label(target: dict) -> str:
+    """Libellé humain de la cible (page d'upload GET). Pas de secret, pas de contenu."""
+    k = target.get("kind")
+    if k == "doc":
+        if target.get("op") == "update":
+            return f"mise à jour de la page Documents #{target.get('doc_id')}"
+        return f"nouvelle page « {target.get('title')} » (projet #{target.get('project_id')})"
+    if k == "project_file":
+        return f"fichier « {target.get('filename')} » (projet #{target.get('project_id')})"
+    if k == "datastore":
+        return f"tableau « {target.get('namespace')} » (lot {target.get('format', 'ndjson')})"
+    return k or "?"
+
+
+def _parse_rows(data: bytes, fmt: str) -> list:
+    """Décode le corps d'un upload datastore en lignes (list[dict]). NDJSON (défaut,
+    une ligne = un objet JSON) ou CSV (1re ligne = en-tête). Lève `UploadError`."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise UploadError(400, "not_utf8", "Le contenu doit être de l'UTF-8.")
+    if fmt == "csv":
+        import csv
+        import io
+        rows = [dict(r) for r in csv.DictReader(io.StringIO(text))]
+        if not rows:
+            raise UploadError(400, "empty_dataset", "Aucune ligne CSV (en-tête requis).")
+        return rows
+    rows = []
+    for i, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            raise UploadError(400, "bad_ndjson", f"Ligne NDJSON {i} invalide (objet JSON attendu).")
+        if not isinstance(obj, dict):
+            raise UploadError(400, "bad_ndjson", f"Ligne NDJSON {i} n'est pas un objet.")
+        rows.append(obj)
+    if not rows:
+        raise UploadError(400, "empty_dataset", "Aucune ligne NDJSON.")
+    return rows
+
+
 def check_target_access(sub: str, target: dict) -> None:
     """Vérifie l'accès ÉCRITURE à la cible. Lève `UploadError` sinon. Appelée au mint
     (fail-fast) ET à la réception — le jeton ne fait pas foi seul, l'autz de la cible
     est réappliquée à l'écriture (verrou IDOR : ADR 0009/0030)."""
     from . import db, ownership  # lazy : évite tout cycle d'import au boot
     kind = target.get("kind")
+    if kind == "datastore":
+        ns_id = target.get("ns_id")
+        if ns_id is None:
+            raise UploadError(400, "missing_namespace", "Tableau requis.")
+        if not ownership.can_access(sub, "datastore_namespace", str(ns_id), "write"):
+            raise UploadError(403, "forbidden", "Écriture refusée sur ce tableau.")
+        return
     pid = target.get("project_id")
     if kind == "doc" and target.get("op") == "update":
         row = db.get_doc_by_id(int(target["doc_id"]))
@@ -176,5 +235,17 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         db.log_project_activity(pid, sub, "project.file_add", target.get("title") or filename)
         row.pop("s3_key", None)
         return {"ok": True, "kind": "project_file", "file": row, "bytes": len(data)}
+
+    if kind == "datastore":
+        from . import datastore as ds  # lazy : évite tout cycle d'import au boot
+        rows = _parse_rows(data, target.get("format") or "ndjson")
+        try:
+            out = ds.make_store(sub)._write_rows_to_ns(
+                int(target["ns_id"]), rows, key=target.get("key"))
+        except ValueError as e:
+            raise UploadError(400, "bad_row", str(e))
+        return {"ok": True, "kind": "datastore", "namespace": target.get("namespace"),
+                "inserted": out["inserted"], "updated": out["updated"],
+                "count": out["count"], "bytes": len(data)}
 
     raise UploadError(400, "unknown_target", f"Cible inconnue : {kind!r}.")

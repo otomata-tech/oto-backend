@@ -235,6 +235,13 @@ class DatastorePg:
         Surface publique pour les chemins de gouvernance (partage/transfert)."""
         return self._resolve(namespace)
 
+    def resolve_ns_id_for_write(self, namespace: str) -> int:
+        """ns_id d'un namespace où l'acteur peut ÉCRIRE (lève `NamespaceNotFound`/
+        `NamespaceReadOnly`). Sert à sceller la cible d'un upload signé au mint (org
+        active présente) ; l'autz est réappliquée au receive via `ownership.can_access`
+        sur `datastore_namespace` (org-agnostique), sans contexte d'org."""
+        return self._resolve(namespace, write=True)
+
     def get_url(self, namespace: str) -> str:
         self._resolve(namespace)  # 404 si inconnu
         return _ns_url(namespace)

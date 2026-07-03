@@ -93,32 +93,80 @@ def _zoho_fields(**over):
     return f
 
 
+class _FakeResp:
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self._payload = payload if payload is not None else {}
+
+    def json(self):
+        return self._payload
+
+
+def _patch_zoho(monkeypatch, *, refresh, reads=None):
+    """refresh = corps JSON du POST token. reads = suite de résultats pour les appels
+    `ZohoClient.list_records` : soit un dict (succès), soit une str (message d'exception,
+    ex. 'OAUTH_SCOPE_MISMATCH'). Épuisée → dernier résultat répété."""
+    monkeypatch.setattr(zoho.requests, "post",
+                        lambda *a, **k: _FakeResp(200, refresh))
+    seq = list(reads or [])
+
+    def _list_records(self, module, *a, **k):
+        res = seq.pop(0) if seq else (reads[-1] if reads else {"data": []})
+        if isinstance(res, str):
+            raise RuntimeError(f"zoho HTTP 401: {{'code': '{res}'}}")
+        return res
+
+    monkeypatch.setattr("oto.tools.zoho.client.ZohoClient.list_records", _list_records)
+
+
 def test_zoho_verify_ok(monkeypatch):
-    monkeypatch.setattr("oto.tools.zoho.client.ZohoClient._get_access_token",
-                        lambda self: "tok")
-    assert zoho._verify(_zoho_fields()) is None  # ne lève pas
+    # auth OK + 1er module lisible → passe.
+    _patch_zoho(monkeypatch, refresh={"access_token": "t", "scope": "ZohoCRM.modules.ALL"},
+                reads=[{"data": [{"id": "1"}]}])
+    assert zoho._verify(_zoho_fields()) is None
+
+
+def test_zoho_verify_ok_empty_module(monkeypatch):
+    # module vide (0 record) mais scope présent → utilisable.
+    _patch_zoho(monkeypatch, refresh={"access_token": "t"}, reads=[{"data": []}])
+    assert zoho._verify(_zoho_fields()) is None
+
+
+def test_zoho_verify_ok_second_module(monkeypatch):
+    # 1er module en scope-mismatch mais 2e lisible → passe (scope partiel suffit).
+    _patch_zoho(monkeypatch, refresh={"access_token": "t"},
+                reads=["OAUTH_SCOPE_MISMATCH", {"data": []}])
+    assert zoho._verify(_zoho_fields()) is None
 
 
 def test_zoho_verify_invalid_client_hint(monkeypatch):
-    def boom(self):
-        raise ValueError("Zoho OAuth error: invalid_client")
-    monkeypatch.setattr("oto.tools.zoho.client.ZohoClient._get_access_token", boom)
+    _patch_zoho(monkeypatch, refresh={"error": "invalid_client"})
     with pytest.raises(ValueError) as ei:
         zoho._verify(_zoho_fields())
     assert "data center" in str(ei.value)
 
 
 def test_zoho_verify_expired_refresh_hint(monkeypatch):
-    def boom(self):
-        raise ValueError("Zoho OAuth error: invalid_code")
-    monkeypatch.setattr("oto.tools.zoho.client.ZohoClient._get_access_token", boom)
+    _patch_zoho(monkeypatch, refresh={"error": "invalid_code"})
     with pytest.raises(ValueError) as ei:
         zoho._verify(_zoho_fields())
     assert "refresh token" in str(ei.value).lower()
 
 
+def test_zoho_verify_scope_mismatch_reports_granted_scope(monkeypatch):
+    # LE cas vécu : clé Analytics posée sur le CRM — auth OK, aucun scope CRM.
+    _patch_zoho(monkeypatch,
+                refresh={"access_token": "t", "scope": "ZohoAnalytics.fullaccess.all"},
+                reads=["OAUTH_SCOPE_MISMATCH"] * 4)
+    with pytest.raises(ValueError) as ei:
+        zoho._verify(_zoho_fields())
+    msg = str(ei.value)
+    assert "aucun scope de lecture CRM" in msg
+    assert "ZohoAnalytics.fullaccess.all" in msg  # scope réel remonté = diagnostic direct
+
+
 def test_zoho_verify_missing_data_center_is_mcperror():
-    # data center absent → _resolve_dc_domains lève une McpError (pas le hint), la
+    # data center absent → _resolve_dc_domains lève une McpError (avant tout HTTP), la
     # capacité en extraira le message.
     with pytest.raises(McpError):
         zoho._verify(_zoho_fields(data_center=""))

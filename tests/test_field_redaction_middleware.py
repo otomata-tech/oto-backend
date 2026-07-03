@@ -13,7 +13,7 @@ from fastmcp.tools.tool import ToolResult
 from mcp.types import TextContent
 from oto.tools.common import FieldFilter
 
-from oto_mcp import middleware
+from oto_mcp import middleware, redaction
 from oto_mcp.field_filter_defaults import _CANDIDATE_PII
 
 
@@ -46,14 +46,14 @@ def _run(name, result, *, ff=None, raises=False):
         def _resolve(_service):
             return ff if ff is not None else FieldFilter()
 
-    orig = middleware._resolve_field_filter
-    middleware._resolve_field_filter = _resolve
+    orig = redaction._resolve_field_filter
+    redaction._resolve_field_filter = _resolve
     try:
         async def call_next(_ctx):
             return result
         return asyncio.run(mw.on_call_tool(_Ctx(name), call_next))
     finally:
-        middleware._resolve_field_filter = orig
+        redaction._resolve_field_filter = orig
 
 
 _PROFILE = {

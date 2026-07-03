@@ -35,6 +35,11 @@ DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 PROTECTED_TOOLS: frozenset[str] = frozenset(
     {"oto_list_my_tools", "oto_enable_tool", "oto_profile",
      "oto_whoami",
+     # Dispatch universel (ADR 0036) : `oto_call` matérialise à la demande un outil
+     # NON listé (FOD, connecteur non activé…) sans l'exposer durablement — il DOIT
+     # rester atteignable même sous visibilité restrictive, sinon le catalogue latent
+     # est inaccessible. `oto_tool_schema` = son handoff de schéma (même raison).
+     "oto_call", "oto_tool_schema",
      # Échappatoires de CONTEXTE — jamais masquables (ni toggle perso ni
      # default-hidden). Un user dont `oto_use_org` est caché ne peut plus changer
      # d'org → lock-out, son client rappelle le tool en boucle → "Unknown tool".

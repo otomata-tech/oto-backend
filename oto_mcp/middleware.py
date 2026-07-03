@@ -1,15 +1,13 @@
 """Middlewares FastMCP — application des préférences user au boot de session."""
 from __future__ import annotations
 
-import json
 import logging
 
 from fastmcp.server.middleware import Middleware
-from fastmcp.tools.tool import ToolResult
 from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, INVALID_PARAMS, TextContent
+from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import session_org
+from . import redaction, session_org
 from .auth_hooks import current_user_sub_from_token
 from .session_visibility import apply_session_visibility
 from .tool_visibility import namespace_of
@@ -142,68 +140,22 @@ class FieldRedactionMiddleware(Middleware):
             return result
         name = getattr(context.message, "name", "") or ""
         service = namespace_of(name)
-        payload = self._extract(result)   # dict | list | None (forme brute renvoyée)
+        payload = redaction.extract_payload(result)   # dict | list | None
 
         # Capture passive du schéma observé (squelette clés+types, JAMAIS de valeurs) :
         # source de vérité du schéma de rédaction. Hors spine/méta. Best-effort.
         if payload is not None and service not in _SPINE_SERVICES:
             _observe_schema(service, payload)
 
+        # Rédaction déléguée à la logique PARTAGÉE (`redaction.py`) — même chemin que
+        # `oto_call` (ADR 0036), pour qu'un outil dispatché soit redacté à l'identique.
         try:
-            ff = _resolve_field_filter(service)
-        except Exception:
-            # Résolution de policy en échec (ex. DB) : on ne connaît pas la policy.
-            # Pour un service à PII connu (défaut serveur déclaré) → fail-closed ;
-            # sinon passe-through pour ne pas casser tous les tools sur un aléa DB.
-            logger.exception("resolve_field_filter a échoué pour %s", name)
-            if _service_has_server_default(service):
-                return _withheld(name)
+            red = redaction.redact_payload(service, payload)
+        except redaction.RedactionWithheld:
+            return redaction.withheld_result(name)
+        if red is redaction.PASSTHROUGH:
             return result
-
-        if ff.is_empty or payload is None:
-            return result
-
-        # Une politique de rédaction EXISTE pour ce service → fail-closed à partir d'ici.
-        try:
-            red = ff.apply(payload)
-            sc = getattr(result, "structured_content", None)
-            # structured_content reçoit la version redactée s'il portait le dict ;
-            # sinon on le laisse (None / non-dict) — le canal texte porte le redacté.
-            return self._rebuild(result, structured=red if isinstance(sc, dict) else sc, payload=red)
-        except Exception:
-            logger.exception("rédaction de %s en échec — sortie retenue", name)
-            return _withheld(name)
-
-    @staticmethod
-    def _extract(result):
-        """Forme brute renvoyée par le tool : `structured_content` si dict, sinon le
-        JSON du 1er bloc `content`. None si rien de structuré (texte libre/binaire)."""
-        sc = getattr(result, "structured_content", None)
-        if isinstance(sc, dict):
-            return sc
-        content = getattr(result, "content", None) or []
-        block = content[0] if content else None
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            try:
-                data = json.loads(text)
-            except (ValueError, TypeError):
-                return None
-            if isinstance(data, (dict, list)):
-                return data
-        return None
-
-    @staticmethod
-    def _rebuild(result, *, structured, payload) -> ToolResult:
-        """Réémet le résultat avec `payload` redacté sur le canal texte, et
-        `structured` sur le canal structuré (déjà redacté, ou laissé tel quel s'il
-        était absent/non-dict)."""
-        return ToolResult(
-            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
-            structured_content=structured if isinstance(structured, dict) else None,
-            meta=getattr(result, "meta", None),
-            is_error=False,
-        )
+        return redaction.rebuild_result(result, red)
 
 
 # Spine / méta : pas de capture de schéma (pas des connecteurs ; `data` =
@@ -214,26 +166,6 @@ _SPINE_SERVICES = {"oto", "run", "feedback", "data"}
 def _observe_schema(service: str, payload) -> None:
     from . import connector_schema_store
     connector_schema_store.observe(service, payload)
-
-
-def _resolve_field_filter(service: str):
-    # Import tardif : access importe des stores ; éviter un cycle au chargement module.
-    from . import access
-    return access.resolve_field_filter(service)
-
-
-def _service_has_server_default(service: str) -> bool:
-    from . import field_filter_defaults
-    return service in field_filter_defaults.SERVER_DEFAULTS
-
-
-def _withheld(name: str) -> ToolResult:
-    return ToolResult(
-        content=[TextContent(
-            type="text",
-            text=f"[oto] rédaction de « {name} » impossible — sortie retenue par sécurité.")],
-        is_error=True,
-    )
 
 
 class CallContextMiddleware(Middleware):

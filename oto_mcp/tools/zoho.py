@@ -11,30 +11,50 @@ from __future__ import annotations
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+
+
+# Zoho héberge par data center régional ; le self-client (client_id/secret) ET le
+# refresh token sont liés à leur région d'émission — un self-client `.eu` tapant
+# `accounts.zoho.com` est rejeté par Zoho avec un `invalid_client` opaque. Le champ
+# `data_center` du credential sélectionne les domaines API/OAuth. Régions reconnues :
+_DC_DOMAINS = {
+    "com": ("https://www.zohoapis.com", "https://accounts.zoho.com"),
+    "eu": ("https://www.zohoapis.eu", "https://accounts.zoho.eu"),
+    "in": ("https://www.zohoapis.in", "https://accounts.zoho.in"),
+    "au": ("https://www.zohoapis.com.au", "https://accounts.zoho.com.au"),
+    "jp": ("https://www.zohoapis.jp", "https://accounts.zoho.jp"),
+    "ca": ("https://www.zohoapis.ca", "https://accounts.zohocloud.ca"),
+}
+
+
+def _resolve_dc_domains(data_center: Optional[str]) -> tuple[str, str]:
+    """`(api_domain, accounts_url)` pour la région Zoho déclarée. Région manquante ou
+    non reconnue → `McpError` actionnable, **jamais** de repli silencieux sur `com` (ce
+    repli masquait la vraie cause d'un `invalid_client` : self-client posé sur une autre
+    région). `com` reste pleinement valide — on ne force aucune région, on exige juste un
+    choix reconnu."""
+    dc = (data_center or "").strip().lower()
+    if dc not in _DC_DOMAINS:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            (f"Data center Zoho non reconnu : {data_center!r}." if dc
+             else "Data center Zoho manquant.")
+            + " Renseigne ta région dans le champ « Data center » du connecteur Zoho —"
+            " l'une de : com, eu, in, au, jp, ca. Elle est visible dans l'URL quand tu es"
+            " connecté·e à Zoho (ex. crm.zoho.eu → « eu », crm.zoho.com → « com »)."
+        )))
+    return _DC_DOMAINS[dc]
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.zoho.client import ZohoClient
 
-    # Zoho héberge par data center régional ; le refresh token est lié à sa
-    # région d'émission (un token .eu est rejeté par accounts.zoho.com). Le champ
-    # `data_center` du credential (défaut "com" en back-compat) sélectionne les
-    # domaines API/OAuth passés au client.
-    _DC_DOMAINS = {
-        "com": ("https://www.zohoapis.com", "https://accounts.zoho.com"),
-        "eu": ("https://www.zohoapis.eu", "https://accounts.zoho.eu"),
-        "in": ("https://www.zohoapis.in", "https://accounts.zoho.in"),
-        "au": ("https://www.zohoapis.com.au", "https://accounts.zoho.com.au"),
-        "jp": ("https://www.zohoapis.jp", "https://accounts.zoho.jp"),
-        "ca": ("https://www.zohoapis.ca", "https://accounts.zohocloud.ca"),
-    }
-
     def _client() -> ZohoClient:
         creds = access.resolve_credential_fields("zoho")
-        dc = (creds.get("data_center") or "com").strip().lower()
-        api_domain, accounts_url = _DC_DOMAINS.get(dc, _DC_DOMAINS["com"])
+        api_domain, accounts_url = _resolve_dc_domains(creds.get("data_center"))
         return ZohoClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),

@@ -196,8 +196,47 @@ PROJECT = CallAxis(
 )
 
 
-# Axes exposés sur les tools plats. `run_id=` s'ajoutera ici (mêmes 3 mécanismes).
-AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT)
+# ── Axe run_id= (corrélation d'un appel à un déroulé — ADR 0017) ──────────────
+
+def _is_work_tool(name: str) -> bool:
+    """Le tool fait-il un TRAVAIL qu'on voudrait rattacher à un run ? = tool d'un
+    connecteur (registre) OU `data_*` (datastore). Exclut le spine méta/identité/
+    boucle d'usage (`oto_*`, `run_*`, `feedback`) — corréler `run_start` à lui-même
+    ou `oto_whoami` à un run n'a pas de sens. Sélectif : la corrélation vit sur la
+    surface de travail, pas sur toute la surface (coût tokens de `tools/list`)."""
+    ns = namespace_of(name)
+    return ns == "data" or providers.connector_for_namespace(ns) is not None
+
+
+async def _pin_run(value: object) -> list[UndoEntry]:
+    """Épingle le run_id de l'appel courant (corrélation calllog, modèle sans état de
+    session : la pile session-scopée de `doctrine_run` ne survit pas au renouvellement
+    de session claude.ai). Le sink calllog lit `current_call_run()` EN PRIORITÉ, repli
+    sur la pile. Pas de garde : un run_id est un identifiant opaque de corrélation, pas
+    un axe de droits. None/'' ⇒ inerte."""
+    if value is None or value == "":
+        return []
+    return [(session_org.reset_call_run, session_org.set_call_run(str(value)))]
+
+
+RUN = CallAxis(
+    param="run_id",
+    schema={
+        "type": "string",
+        "title": "Run Id",
+        "description": (
+            "run_id d'un déroulé ouvert par `run_start`, à repasser sur les appels de "
+            "CE run pour les corréler (la corrélation ne survit pas sinon au modèle sans "
+            "état de session). Omets hors de tout run."
+        ),
+    },
+    applies=_is_work_tool,
+    pin=_pin_run,
+)
+
+
+# Axes exposés sur les tools plats (chacun via les 3 mécanismes : advertise / strip+pose / seam).
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN)
 
 
 def axes_for(name: str) -> list[CallAxis]:

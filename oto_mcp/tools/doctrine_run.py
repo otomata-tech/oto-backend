@@ -44,7 +44,11 @@ async def _persist_open(run_id: str, label: str, doctrine: str | None) -> None:
 async def _persist_close(run_id: str, outcome: str, note: str | None) -> None:
     try:
         from .. import db
-        await asyncio.to_thread(db.finish_run, run_id, outcome, note)
+        from ..auth_hooks import current_user_sub_from_token
+        # Scope par sub : on ne clôt QUE son propre run (un run_id d'autrui — session
+        # réutilisée, #108 — ne peut pas être fermé). No-op si run_id/sub ne matchent pas.
+        await asyncio.to_thread(db.finish_run, run_id, outcome, note,
+                                sub=current_user_sub_from_token())
     except Exception:
         logger.warning("persistance run_finish échouée pour run_id=%s (best-effort)",
                        run_id, exc_info=True)
@@ -68,6 +72,11 @@ def register(mcp: FastMCP) -> None:
         """
         run_id = dr.new_run_id()
         await dr.push_run(ctx, run_id, label, doctrine)
+        # Axe d'appel run_id (#108) : pose SANS reset — la ContextVar meurt avec la
+        # requête, mais stampe le tool_call de run_start lui-même sous son run, et
+        # amorce l'axe pour l'agent (qui le repasse ensuite via `run_id=`).
+        from .. import session_org
+        session_org.set_call_run(run_id)
         await _persist_open(run_id, label, doctrine)
         return {"run_id": run_id, "label": label, "doctrine": doctrine}
 

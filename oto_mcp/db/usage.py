@@ -75,13 +75,17 @@ def insert_run(
         )
 
 
-def finish_run(run_id: str, outcome: str, note: Optional[str] = None) -> None:
+def finish_run(run_id: str, outcome: str, note: Optional[str] = None,
+               sub: Optional[str] = None) -> None:
     """Clôt un run persisté (outcome + note + finished_at). No-op si run_id inconnu
-    (run ouvert dans une session sans persistance, ou déjà prune)."""
+    (run ouvert dans une session sans persistance, ou déjà prune). `sub` (≠ None)
+    SCOPE la clôture au propriétaire du run — un run_id d'autrui (session réutilisée,
+    #108) n'est pas clôturable ; `sub=None` (stdio local) matche les runs sans sub."""
     with _connect() as conn:
         conn.execute(
-            "UPDATE runs SET outcome = %s, note = %s, finished_at = NOW() WHERE run_id = %s",
-            (outcome, note, run_id),
+            "UPDATE runs SET outcome = %s, note = %s, finished_at = NOW() "
+            "WHERE run_id = %s AND sub IS NOT DISTINCT FROM %s",
+            (outcome, note, run_id, sub),
         )
 
 

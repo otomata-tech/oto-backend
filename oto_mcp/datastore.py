@@ -279,6 +279,46 @@ class DatastorePg:
         row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)
         return self._row_to_dict(row), inserted
 
+    def declared_key(self, namespace: str) -> Optional[str]:
+        """Clé métier déclarée au schéma (`schema.key`) — sert la dédup au batch
+        write. None si aucune (table libre / schéma sans clé)."""
+        k = (self.get_schema(namespace) or {}).get("key")
+        return k if isinstance(k, str) and k else None
+
+    def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None) -> dict:
+        """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
+        `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
+        UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
+        sinon append d'une nouvelle row. Renvoie un récap {inserted, updated, count,
+        key, ids}. Résout le namespace UNE fois (write) pour tout le lot."""
+        ns_id = self._resolve(namespace, write=True)
+        return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(namespace))
+
+    def _write_rows_to_ns(self, ns_id: int, rows: list, *, key: Optional[str]) -> dict:
+        """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
+        d'org — matérialisation d'un upload signé, où l'org de session est absente)."""
+        inserted, updated, ids = 0, 0, []
+        for data in rows:
+            if not isinstance(data, dict):
+                raise ValueError("chaque row doit être un objet")
+            user_data = {k: v for k, v in data.items() if k not in _META_COLS}
+            kv = user_data.get(key) if key else None
+            if key and kv is not None and str(kv) != "":
+                existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
+                if existing_id is not None:
+                    cur = db.datastore_get_row(ns_id, existing_id)
+                    merged = dict((cur or {}).get("data") or {})
+                    merged.update(user_data)
+                    db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                    updated += 1
+                    ids.append(existing_id)
+                    continue
+            row = db.datastore_insert_row(ns_id, _new_id(), user_data)
+            inserted += 1
+            ids.append(row["row_id"])
+        return {"inserted": inserted, "updated": updated, "count": inserted + updated,
+                "key": key, "ids": ids}
+
     def get_row(self, namespace: str, row_id: str) -> dict:
         ns_id = self._resolve(namespace)
         row = db.datastore_get_row(ns_id, row_id)

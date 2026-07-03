@@ -152,9 +152,13 @@ def register(mcp: FastMCP) -> None:
 
         A typed namespace renders as readable cards/records instead of a flat table.
         `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
-        bool|json", "role"?: "title|badge|metric|status|qualif|note"}]}. SOFT: no write
-        validation — it drives rendering and tells the agent what each field means.
-        Requires write access. Pass schema=null to switch back to free-table mode.
+        bool|json", "role"?: "title|badge|metric|status|qualif|note"}], "key"?: str}.
+        The optional top-level `"key"` names the field that is the row's BUSINESS KEY
+        (e.g. "email", "siren"): batch writes (`data_write` rows=…, `oto_upload_url`)
+        then UPSERT on it — same key value updates the existing row instead of
+        duplicating. SOFT: no write validation — it drives rendering, dedup and tells
+        the agent what each field means. Requires write access. Pass schema=null to
+        switch back to free-table mode.
 
         Args:
             namespace: target namespace (must exist; you must have write access).
@@ -174,10 +178,22 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
-    def data_write(namespace: str, row: dict, id: str | None = None) -> dict:
-        """Write a row. WITHOUT `id` = append a NEW row (new JSON keys auto-create
+    def data_write(namespace: str, row: dict | None = None, id: str | None = None,
+                   rows: list | None = None, key: str | None = None) -> dict:
+        """Write one row, or a BATCH of rows in a single call.
+
+        SINGLE (`row`): WITHOUT `id` = append a NEW row (new JSON keys auto-create
         columns). WITH `id` = PARTIAL update of that row (only provided fields
         change). Returns the row (with `_id`/`_created_at`/`_updated_at`).
+
+        BATCH (`rows` = list of dicts): write them all at once — for importing a
+        dataset without round-tripping each row through your context. If a business
+        KEY is in effect (the `key` arg, else the namespace's declared `schema.key`),
+        every row carrying that key value UPSERTS (merges) onto the existing row of
+        the same key instead of duplicating; rows without a key are appended. Returns
+        a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
+        declare a persistent `key`. For LARGE batches, prefer `oto_upload_url` to push
+        the data out-of-band (never through your context).
 
         ⚠️ The namespace must EXIST first (create it with `data_create_namespace`);
         writing to an unknown namespace raises "namespace inconnu" — it is NOT
@@ -191,20 +207,31 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             namespace: target namespace (must already exist), or `slot:<name>`.
-            row: row content as a dict (strings/numbers/bools/objects/arrays,
-                JSON-encoded automatically).
+            row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`.
+            rows: BATCH mode — a list of row dicts written in one call.
+            key: business key field for batch upsert/dedup (else `schema.key`).
         """
         sub = access.current_user_sub_or_raise()
         namespace = _ns(namespace)
-        if not isinstance(row, dict):
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
         store = _store_for(sub)
         try:
-            out = store.append_row(namespace, row) if id is None \
-                else store.update_row(namespace, id, row)
+            if rows is not None:
+                if row is not None or id is not None:
+                    raise McpError(ErrorData(code=INVALID_PARAMS,
+                                             message="passer `rows` (batch) OU `row`/`id`, pas les deux"))
+                if not isinstance(rows, list):
+                    raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
+                out = {"namespace": namespace, **store.write_rows(namespace, rows, key=key)}
+            else:
+                if not isinstance(row, dict):
+                    raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
+                out = store.append_row(namespace, row) if id is None \
+                    else store.update_row(namespace, id, row)
             hint = _project_hint(namespace)
             return {**out, "project_hint": hint} if hint else out
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
         except NamespaceReadOnly:

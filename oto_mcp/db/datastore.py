@@ -319,6 +319,20 @@ def datastore_upsert_row(ns_id: int, row_id: str, data: dict) -> tuple[dict, boo
         return dict(row), inserted
 
 
+def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optional[str]:
+    """Trouve le `row_id` d'une row par une CLÉ MÉTIER (champ JSONB `data->>key`),
+    pour la dédup applicative d'un batch write. Renvoie le plus ancien match (ordre
+    stable) ou None. Le JSONB n'a pas de contrainte d'unicité → c'est ce lookup qui
+    porte la sémantique de clé. Champ et valeur paramétrés → pas d'injection."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND data->>%s = %s "
+            "ORDER BY created_at ASC LIMIT 1",
+            (ns_id, key_field, str(key_value)),
+        ).fetchone()
+        return row["row_id"] if row else None
+
+
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(

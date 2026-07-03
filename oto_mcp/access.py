@@ -194,7 +194,13 @@ def current_group(sub: str | None) -> Optional[int]:
         return None
     has_g, g = session_org.current_group_override()
     if has_g:
-        return g
+        # Re-garde d'appartenance à la RÉSOLUTION (miroir de current_org, #108) : un
+        # Mcp-Session-Id réutilisé par un autre compte ne doit pas hériter du groupe
+        # de session du compte précédent. Non-lecteur ⇒ on ignore l'override et on
+        # retombe en cascade (le repli maison rend le home_group PROPRE au caller).
+        from . import roles
+        if roles.can_read_group(sub, g):
+            return g
     if session_org.current_override()[0]:
         return None  # org de session sans groupe → niveau org
     vg = session_org.current_view_group()
@@ -209,8 +215,28 @@ def current_project() -> Optional[int]:
     """Projet ACTIF de la conversation (ADR 0032 §4, B2.2) — **bracelet de session**
     posé par `oto_use_project`, MCP-only, éphémère. Pas de projet « maison » : pas
     d'override ⇒ None. Sert à appliquer la surcharge connecteur PRÉFAITE du projet
-    (le bracelet sélectionne un projet préfait ; il ne déclare jamais de config)."""
-    return session_org.current_project_override()
+    (le bracelet sélectionne un projet préfait ; il ne déclare jamais de config).
+
+    Re-garde à la RÉSOLUTION (fermeture #108 sur l'axe projet) : l'override n'est
+    honoré que si l'ACTEUR courant a accès en lecture au projet (privacy-by-default,
+    ADR 0030) — un Mcp-Session-Id réutilisé par un autre compte n'hérite pas du projet
+    du précédent. Le sub est résolu ici (chemin MCP de l'acteur courant) plutôt que
+    passé en argument : tous les appelants sont ce même acteur. Sub non identifiable
+    (stdio/tests, hors surface authentifiée) ⇒ bracelet honoré tel quel."""
+    pid = session_org.current_project_override()
+    if pid is None:
+        return None
+    from .auth_hooks import current_user_sub_from_token
+    try:
+        sub = current_user_sub_from_token()
+    except Exception:
+        sub = None
+    if not sub:
+        return pid
+    from . import ownership
+    if ownership.can_access(sub, "project", str(pid), "read"):
+        return pid
+    return None  # projet inaccessible par l'acteur (session_id réutilisé) → hors projet
 
 
 def project_pinned_identity(connector: str, project_id: Optional[int] = None) -> Optional[str]:

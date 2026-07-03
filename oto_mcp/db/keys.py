@@ -37,7 +37,14 @@ def _check_provider(provider: str) -> None:
 # `org_id=None` (défensif, contexte org introuvable) → pas de clé, jamais un repli
 # org-agnostique : c'était le trou que 0033 ferme.
 
-def set_member_api_key(sub: str, org_id: int, provider: str, key: str) -> None:
+# `account` discrimine le multi-compte (ADR 0033 étendu) : plusieurs credentials du
+# MÊME connecteur pour un même (sub, org) — ex. « 2 Zoho ». '' = mono-compte legacy
+# (déchiffrable sans migration, l'AAD n'ajoute le segment que s'il est non vide). La
+# SÉLECTION du compte (défaut projet / défaut membre / auto) vit dans access ; ici,
+# passe-plat pur vers le coffre déjà multi-compte.
+
+def set_member_api_key(sub: str, org_id: int, provider: str, key: str,
+                       account: str = "") -> None:
     _check_provider(provider)
     upsert_user(sub)
     # Coffre chiffré, source unique. Import lazy (db ne doit pas importer
@@ -45,33 +52,41 @@ def set_member_api_key(sub: str, org_id: int, provider: str, key: str) -> None:
     from .. import credentials_store
     credentials_store.set_credential(
         credentials_store.MEMBER, credentials_store.member_id(org_id, sub),
-        provider, key, set_by=sub)
+        provider, key, set_by=sub, account=account)
 
 
-def clear_member_api_key(sub: str, org_id: int, provider: str) -> None:
+def clear_member_api_key(sub: str, org_id: int, provider: str,
+                         account: str = "") -> bool:
     _check_provider(provider)
     from .. import credentials_store
-    credentials_store.clear_credential(
-        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
+    return credentials_store.clear_credential(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
+        account=account)
 
 
-def get_member_api_key(sub: str, org_id: Optional[int], provider: str) -> Optional[str]:
+def get_member_api_key(sub: str, org_id: Optional[int], provider: str,
+                       account: str = "") -> Optional[str]:
     # Lit le coffre `connector_credentials` (déchiffre — chemin de RÉSOLUTION).
     # Import lazy (anti-cycle) ; require_keyed dans le store.
     if org_id is None:
         return None
     from .. import credentials_store
     return credentials_store.get_credential(
-        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
+        account=account)
 
 
-def has_member_api_key(sub: str, org_id: Optional[int], provider: str) -> bool:
-    """Présence de la clé du membre dans CETTE org, SANS déchiffrer (status_for)."""
+def has_member_api_key(sub: str, org_id: Optional[int], provider: str,
+                       account: Optional[str] = None) -> bool:
+    """Présence de la clé du membre dans CETTE org, SANS déchiffrer (status_for).
+    `account=None` = n'importe quel compte (présence du connecteur, multi-compte
+    inclus) ; '' = strictement le mono-compte ; une valeur = ce compte précis."""
     if org_id is None:
         return False
     from .. import credentials_store
     return credentials_store.has_credential(
-        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider)
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
+        account=account)
 
 
 def _pk_aad(provider: str, label: str) -> str:

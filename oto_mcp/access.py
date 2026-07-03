@@ -412,6 +412,7 @@ class ResolvedCredential:
 
 def resolve_credential(provider: str, want: str = "auto",
                        sub: Optional[str] = None, *,
+                       account: Optional[str] = None,
                        emit_on_failure: bool = True) -> ResolvedCredential:
     """Vue publique de la résolution. Sur **échec** (McpError actionnable — credential
     absent / quota dépassé / accès RBAC refusé), émet un événement de monitoring
@@ -430,7 +431,7 @@ def resolve_credential(provider: str, want: str = "auto",
             return _resolve_credential_anon(provider, want, anon.org_id)
     sub = sub or current_user_sub_or_raise()
     try:
-        return _resolve_credential_impl(provider, want, sub)
+        return _resolve_credential_impl(provider, want, sub, account=account)
     except McpError:
         if emit_on_failure:
             _emit_connector_failure(provider, sub)
@@ -454,13 +455,24 @@ def _emit_connector_failure(provider: str, sub: str) -> None:
         logger.debug("connector failure emit failed", exc_info=True)
 
 
-def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCredential:
+def _is_multi_account(provider: str) -> bool:
+    """Le connecteur porte-t-il plusieurs comptes dans le coffre (segment `account`,
+    registre `providers.MULTI_ACCOUNT_PROVIDERS`) ? Gate le chemin de sélection de
+    compte ; un connecteur mono-compte garde la résolution historique (account='')."""
+    con = connectors.connector_for_provider(provider)
+    return con is not None and con.auth_multi_account
+
+
+def _resolve_credential_impl(provider: str, want: str, sub: str,
+                             account: Optional[str] = None) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
     user > groupe actif > org active [> grant plateforme] **une fois** et renvoie
     le credential gagnant (clé + origine + config). `want="byo"` court-circuite le
     palier plateforme (sémantique byo-only de `resolve_credential_fields`) ;
     `want="auto"` inclut le grant plateforme + quota (sémantique `resolve_api_key`).
     `sub` explicite = utilisable HORS contexte MCP (routes REST) ; None = sub courant.
+    `account` sélectionne le compte au palier MEMBRE en multi-compte (« 2 Zoho ») —
+    None ⇒ épinglage projet, sinon compte unique auto, sinon McpError (voir plus bas).
     Lève une McpError actionnable si rien ne résout."""
     sub = sub or current_user_sub_or_raise()
     # RBAC connecteur interne à l'org (ADR 0025) — backstop DUR : un connecteur
@@ -473,11 +485,46 @@ def _resolve_credential_impl(provider: str, want: str, sub: str) -> ResolvedCred
     # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
     # le premier palier : plus aucun credential per-user org-agnostique.
     active_org = current_org(sub)
-    member_key = db.get_member_api_key(sub, active_org, provider)
+    member_key = None
+    eff = ""  # compte effectif du palier membre (multi-compte)
+    if active_org is not None:
+        if _is_multi_account(provider):
+            # Multi-compte (coffre à N comptes, ex. « 2 Zoho ») : sélection du compte =
+            # account explicite > épinglage projet > compte unique auto > McpError
+            # (jamais de repli muet vers un autre compte/l'org/la plateforme —
+            # anti-usurpation). '' = mono-compte legacy (aucune ligne nommée).
+            eff = account if account is not None else project_pinned_identity(provider)
+            if eff is None:
+                accts = credentials_store.list_accounts(
+                    credentials_store.MEMBER, credentials_store.member_id(active_org, sub), provider)
+                if len(accts) == 1:
+                    eff = accts[0]["account"]
+                elif len(accts) == 0:
+                    eff = ""
+                else:
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message=(
+                            f"Plusieurs comptes `{provider}` configurés dans cette org — "
+                            f"précise lequel (oto_connector_identities pour les lister)."
+                        )))
+            member_key = db.get_member_api_key(sub, active_org, provider, eff)
+            if eff and not member_key:
+                # Compte explicite/épinglé introuvable → on NE retombe PAS sur l'org/la
+                # plateforme (ce serait agir sous une autre identité que celle demandée).
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=(
+                        f"Compte `{eff}` introuvable pour `{provider}` — vérifie avec "
+                        f"oto_connector_identities, ou pose-le sur {_ACCOUNT_URL}."
+                    )))
+        else:
+            # Mono-compte (chemin historique inchangé) : account='' implicite.
+            member_key = db.get_member_api_key(sub, active_org, provider)
     if member_key:
         return ResolvedCredential(provider, member_key, False, "user",
                                   credentials_store.MEMBER,
-                                  credentials_store.member_id(active_org, sub))
+                                  credentials_store.member_id(active_org, sub), account=eff)
 
     # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
     # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
@@ -590,14 +637,15 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) ->
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
-def resolve_api_key(provider: str) -> tuple[str, bool]:
+def resolve_api_key(provider: str, account: Optional[str] = None) -> tuple[str, bool]:
     """Renvoie `(api_key, is_platform)` ou lève McpError actionnable. Vue mince
-    sur `resolve_credential` (contrat inchangé pour les ~15 tools keyed)."""
-    rc = resolve_credential(provider, want="auto")
+    sur `resolve_credential` (contrat inchangé pour les ~15 tools keyed ; `account`
+    optionnel sélectionne le compte en multi-compte)."""
+    rc = resolve_credential(provider, want="auto", account=account)
     return rc.key, rc.is_platform
 
 
-def resolve_credential_fields(provider: str) -> dict:
+def resolve_credential_fields(provider: str, account: Optional[str] = None) -> dict:
     """Résout un credential **multi-champs** byo_user (modèle générique, ADR 0011)
     du sub courant → dict des champs déclarés (`Connector.secret_fields`).
 
@@ -605,8 +653,9 @@ def resolve_credential_fields(provider: str) -> dict:
     secrets (ex. Silae : client_id / client_secret / subscription_key, OAuth2
     client-credentials). **byo-only** : pas de clé plateforme ni de quota — le
     credential EST le grant, comme un mount. Vue mince sur `resolve_credential`
-    (cascade user > groupe > org, sans palier plateforme)."""
-    return resolve_credential(provider, want="byo").fields
+    (cascade user > groupe > org, sans palier plateforme ; `account` sélectionne
+    le compte en multi-compte)."""
+    return resolve_credential(provider, want="byo", account=account).fields
 
 
 def resolve_field_filter(service: str):

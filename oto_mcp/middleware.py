@@ -6,6 +6,7 @@ import logging
 from fastmcp.server.middleware import Middleware
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
+from starlette.concurrency import run_in_threadpool
 
 from . import redaction, session_org
 from .auth_hooks import current_user_sub_from_token
@@ -185,42 +186,61 @@ class CallContextMiddleware(Middleware):
     """
 
     def __init__(self, reserved_org_tools):
-        self._reserved = frozenset(reserved_org_tools)
+        self._org = frozenset(reserved_org_tools)
 
     async def on_call_tool(self, context, call_next):
         name = getattr(context.message, "name", "") or ""
         args = getattr(context.message, "arguments", None) or {}
-        org = args.get("org") if name in self._reserved else None
-        tok = None
-        if org is not None:
-            tok = self._pin(org)
+        # Pose chaque axe-contexte fourni pour CE tool, en collectant sa fonction de
+        # reset AU MOMENT de la pose → reset LIFO dans le `finally` même si une pose
+        # ultérieure lève (les tokens déjà posés sont toujours nettoyés). Les axes
+        # project/group/run/account sont câblés dans les barreaux suivants (R3-R5).
+        undo: list = []
         try:
+            if name in self._org and args.get("org") is not None:
+                undo.append((session_org.reset_call_org, await self._pin_org(args["org"])))
             return await call_next(context)
         finally:
-            if tok is not None:
-                session_org.reset_call_org(tok)
+            for reset, tok in reversed(undo):
+                reset(tok)
 
     @staticmethod
-    def _pin(org):
-        try:
-            org_id = int(org)
-        except (TypeError, ValueError):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Paramètre `org` invalide : {org!r} (attendu un id d'org)."))
-        sub = None
-        try:
-            sub = current_user_sub_from_token()
-        except Exception:
-            pass
-        if not sub:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message="Le paramètre `org` requiert une session authentifiée."))
+    async def _pin_org(org):
+        org_id = _require_axis_int(org, "org")
+        sub = _require_axis_sub("org")
         from . import roles
-        if not roles.is_org_member(sub, org_id):
+        # Garde d'appartenance en threadpool : `org=` est repassé à CHAQUE appel
+        # (modèle sans état de session) → is_org_member = requête PG sync sur le chemin
+        # inbound le plus chaud, à SORTIR de l'event loop mono (perf, otomata-private).
+        if not await run_in_threadpool(roles.is_org_member, sub, org_id):
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Paramètre `org`={org_id} refusé : tu n'es pas membre de cette "
                         f"org (ou elle n'existe pas). Vérifie avec oto_list_orgs."))
         return session_org.set_call_org(org_id)
+
+
+def _require_axis_int(value, axis: str) -> int:
+    """Convertit un axe-contexte d'appel en id entier ou lève un McpError actionnable."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Paramètre `{axis}` invalide : {value!r} (attendu un id)."))
+
+
+def _require_axis_sub(axis: str) -> str:
+    """sub authentifié courant, requis pour garder un axe-contexte ; McpError sinon
+    (un axe piloté par un tenant n'a aucun sens sans identité — vaut aussi pour
+    l'endpoint MCP anonyme, cf. #108)."""
+    sub = None
+    try:
+        sub = current_user_sub_from_token()
+    except Exception:
+        pass
+    if not sub:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Le paramètre `{axis}` requiert une session authentifiée."))
+    return sub

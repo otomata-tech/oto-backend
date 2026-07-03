@@ -76,6 +76,72 @@ def current_call_org() -> Optional[int]:
     return _CALL_ORG.get()
 
 
+# ── Autres axes-contexte d'appel (même modèle que _CALL_ORG, posés par le même
+# middleware) — project/group/run_id/account. Généralisation du contexte par
+# identifiants d'appel (remplace à terme les overrides de session par axe). Chacun
+# est gardé/dérivé à la pose par le middleware ; None = axe non fourni pour l'appel.
+_CALL_PROJECT: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_call_project", default=None)
+_CALL_GROUP: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "oto_call_group", default=None)
+_CALL_RUN: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_call_run", default=None)
+_CALL_ACCOUNT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_call_account", default=None)
+
+
+def set_call_project(project_id: int) -> contextvars.Token:
+    return _CALL_PROJECT.set(project_id)
+
+
+def reset_call_project(token: contextvars.Token) -> None:
+    _CALL_PROJECT.reset(token)
+
+
+def current_call_project() -> Optional[int]:
+    """Projet épinglé par `project=` de l'appel courant (déjà gardé can_access), ou None."""
+    return _CALL_PROJECT.get()
+
+
+def set_call_group(group_id: int) -> contextvars.Token:
+    return _CALL_GROUP.set(group_id)
+
+
+def reset_call_group(token: contextvars.Token) -> None:
+    _CALL_GROUP.reset(token)
+
+
+def current_call_group() -> Optional[int]:
+    """Groupe épinglé par `group=` de l'appel courant (déjà gardé can_read_group), ou None."""
+    return _CALL_GROUP.get()
+
+
+def set_call_run(run_id: str) -> contextvars.Token:
+    return _CALL_RUN.set(run_id)
+
+
+def reset_call_run(token: contextvars.Token) -> None:
+    _CALL_RUN.reset(token)
+
+
+def current_call_run() -> Optional[str]:
+    """run_id explicite de l'appel courant (corrélation calllog), ou None."""
+    return _CALL_RUN.get()
+
+
+def set_call_account(account: str) -> contextvars.Token:
+    return _CALL_ACCOUNT.set(account)
+
+
+def reset_call_account(token: contextvars.Token) -> None:
+    _CALL_ACCOUNT.reset(token)
+
+
+def current_call_account() -> Optional[str]:
+    """Compte (identité connecteur) épinglé par `account=` de l'appel courant, ou None."""
+    return _CALL_ACCOUNT.get()
+
+
 # ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
 # Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
 # tant que » un autre user dans le dashboard. Contextvar per-requête posé par

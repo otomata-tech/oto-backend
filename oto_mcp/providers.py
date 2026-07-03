@@ -40,6 +40,11 @@ class CredentialField:
     # False = champ facultatif (connecteur « ET/OU » type slack : au moins un
     # champ non vide exigé à la pose, mais aucun champ individuellement requis).
     required: bool = True
+    # False (défaut) = les whitespace n'ont aucun sens dans la valeur (clés, tokens,
+    # ids) → nettoyés à la pose (parasites d'un copier-coller). True = l'espace est
+    # significatif (mot de passe) → strip des bords seul. Cf.
+    # credentials_store.clean_field_value.
+    whitespace_significant: bool = False
 
 
 @dataclass(frozen=True)
@@ -217,7 +222,8 @@ class Connector:
             return (CredentialField("key", "API key", secret=True, reveal=True),)
         if self.secret_kind == "basic_auth":
             return (CredentialField("email", "Email", secret=False),
-                    CredentialField("password", "Mot de passe", secret=True))
+                    CredentialField("password", "Mot de passe", secret=True,
+                                    whitespace_significant=True))
         return ()
 
     @property
@@ -248,13 +254,14 @@ _CATEGORY_BY_CONNECTOR = {
     "fullenrich": "Prospection", "lemlist": "Prospection", "attio": "Prospection",
     "folk": "Prospection", "crunchbase": "Prospection",
     "unipile": "Prospection", "topograph": "Prospection",
-    "sirene": "Data FR", "culture": "Data FR",
+    "sirene": "Data FR", "culture": "Data FR", "droit": "Data FR",
     "foncier": "Data FR", "sante": "Data FR", "frenchtech": "Data FR", "gr": "Data GR",
     "reddit": "Web",
     "infosec": "Infosec",
     "pennylane": "Finance", "pennylaneged": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
-    "memento": "Knowledge", "notion": "Knowledge", "planity": "Métier",
+    "memento": "Knowledge", "notion": "Knowledge", "zohoanalytics": "Knowledge",
+    "planity": "Métier",
     "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
@@ -281,13 +288,14 @@ _PUBLISHER_BY_CONNECTOR = {
     "hubspot": "HubSpot", "apollo": "Apollo", "zerobounce": "ZeroBounce",
     "hithorizons": "HitHorizons", "phantombuster": "Phantombuster",
     "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
-    "zoho": "Zoho", "zohodesk": "Zoho",
+    "zoho": "Zoho", "zohodesk": "Zoho", "zohoanalytics": "Zoho",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
     "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "culture": "Ministère de la Culture",
+    "droit": "Légifrance / DILA",
     "reddit": "Reddit",
     "foncier": "État (open data)", "sante": "HAS / FINESS",
     "frenchtech": "La French Tech (open data)",
@@ -304,10 +312,15 @@ _DESCRIPTION_BY_CONNECTOR = {
     "sirene": (
         "Les données d'entreprise françaises unifiées : recherche multicritère, "
         "fiche agrégée (identité + bilans INPI + événements BODACC), dirigeants, "
-        "marchés publics BOAMP, accords collectifs, conventions collectives, "
-        "législation et jurisprudence. Inclut le stock SIRENE complet "
-        "(~43 M d'établissements) pour le batch : sièges, établissements, "
+        "marchés publics BOAMP, accords d'entreprise. Inclut le stock SIRENE "
+        "complet (~43 M d'établissements) pour le batch : sièges, établissements, "
         "recherche NAF/commune."
+    ),
+    "droit": (
+        "L'information légale française : jurisprudence (Cour de cassation, "
+        "Conseil d'État, Conseil constitutionnel, CEDH/CJUE), codes consolidés "
+        "versionnés (texte en vigueur à une date) et conventions collectives de "
+        "branche (KALI). Sources DILA/Légifrance."
     ),
     "culture": (
         "Les entreprises du spectacle vivant, en open data du Ministère de la "
@@ -355,7 +368,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
     "atlassian": "atlassian.com",
-    "sirene": "insee.fr",
+    "sirene": "insee.fr", "droit": "legifrance.gouv.fr",
     "culture": "culture.gouv.fr", "foncier": "data.gouv.fr",
     "urba": "geoportail-urbanisme.gouv.fr", "sante": "has-sante.fr",
     "frenchtech": "lafrenchtech.com",
@@ -406,6 +419,14 @@ _REGISTRY_LIST = [
        secret_kind="api_key", default_quota=200, platform_key_open=True,
        in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr", "fr_stock")),
+    # droit : jurisprudence (juris_*) + codes consolidés (loi_*) + conventions
+    # collectives (ccn_*), servis par le service FOD (fod_juris/loi/ccn). Extrait
+    # de `sirene`/`fr` (n'était pas de l'INSEE : DILA/Justice/Légifrance). Open
+    # data, sans clé. 3 namespaces → 1 carte « Info légale FR ».
+    _c("droit", ["juris", "loi", "ccn"], secret_kind="none", in_default_preset=True,
+       label="Info légale FR",
+       help="jurisprudence, codes consolidés, conventions collectives (open data DILA/Légifrance)",
+       href="https://www.legifrance.gouv.fr", modules=("droit",)),
     # attio : masqué par défaut (2026-06-11) — le MCP Attio officiel est meilleur
     # pour l'instant. Code conservé (tools/attio.py) pour d'éventuelles implems
     # custom ; self-activable via oto_enable_tool.
@@ -733,6 +754,17 @@ _REGISTRY_LIST = [
            CredentialField("client_secret", "Client Secret", secret=True),
            CredentialField("refresh_token", "Refresh Token", secret=True),
            CredentialField("org_id", "Org ID", secret=False),
+       )),
+    _c("zohoanalytics", ["zohoanalytics"], auth_modes={"byo_user", "byo_org"},
+       secret_kind="fields", in_default_bundle=False, label="Zoho Analytics",
+       help="Zoho Analytics (workspaces, vues, export, requêtes SQL)",
+       href="https://analytics.zoho.com", credential_fields=(
+           CredentialField("client_id", "Client ID", secret=True),
+           CredentialField("client_secret", "Client Secret", secret=True),
+           CredentialField("refresh_token", "Refresh Token", secret=True),
+           CredentialField("org_id", "Org ID", secret=False),
+           CredentialField("data_center", "Data center (com, eu, in, au, jp, ca, sa)",
+                           secret=False, reveal=True),
        )),
 
     # --- ATS / talent sourcing (RH) — câblés 2026-06-20 ----------------------

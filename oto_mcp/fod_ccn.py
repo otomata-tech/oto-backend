@@ -8,8 +8,8 @@ intégral et la résolution IDCC→convention depuis ce stock partagé.
 Pas de fallback (même doctrine qu'ADR 0028) : service indisponible/mal configuré
 ⟹ erreur actionnable.
 
-Config (env de process) : `FOD_REGLEMENT_BASE_URL` + `FOD_REGLEMENT_API_TOKEN` —
-même instance que la capacité règlement (data.oto.zone, PG otomata-0).
+Config (env de process) : `FOD_BASE_URL` + `FOD_API_TOKEN` — le service FOD unique
+(box fod-0, VPC) sert SIRENE et le DILA (CCN/LOI/JURIS/règlement).
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from typing import Any, Optional
 
 import httpx
 
-_BASE = os.environ.get("FOD_REGLEMENT_BASE_URL")
-_TOKEN = os.environ.get("FOD_REGLEMENT_API_TOKEN")
+_BASE = os.environ.get("FOD_BASE_URL")
+_TOKEN = os.environ.get("FOD_API_TOKEN")
 # Recherche = FTS indexé GIN : timeout court.
 _TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
 
@@ -30,8 +30,8 @@ def _c() -> httpx.Client:
     global _client
     if not _BASE or not _TOKEN:
         raise RuntimeError(
-            "Service FOD non configuré (FOD_REGLEMENT_BASE_URL / "
-            "FOD_REGLEMENT_API_TOKEN absents). Les conventions collectives sont "
+            "Service FOD non configuré (FOD_BASE_URL / "
+            "FOD_API_TOKEN absents). Les conventions collectives sont "
             "servies par le service FOD dédié (france-opendata-service#6)."
         )
     if _client is None:

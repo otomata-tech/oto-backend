@@ -7,7 +7,7 @@ de 1992 cite l'art. 1128 CC → texte d'époque, pas la rédaction actuelle), pl
 timeline des versions et la recherche plein-texte.
 
 Pas de fallback : service indisponible/mal configuré ⟹ erreur actionnable.
-Config : `FOD_REGLEMENT_BASE_URL` + `FOD_REGLEMENT_API_TOKEN` (même instance).
+Config : `FOD_BASE_URL` + `FOD_API_TOKEN` (même instance).
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from typing import Any, Optional
 
 import httpx
 
-_BASE = os.environ.get("FOD_REGLEMENT_BASE_URL")
-_TOKEN = os.environ.get("FOD_REGLEMENT_API_TOKEN")
+_BASE = os.environ.get("FOD_BASE_URL")
+_TOKEN = os.environ.get("FOD_API_TOKEN")
 _TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
 
 _client: Optional[httpx.Client] = None
@@ -27,8 +27,8 @@ def _c() -> httpx.Client:
     global _client
     if not _BASE or not _TOKEN:
         raise RuntimeError(
-            "Service FOD non configuré (FOD_REGLEMENT_BASE_URL / "
-            "FOD_REGLEMENT_API_TOKEN absents). Les codes consolidés sont servis "
+            "Service FOD non configuré (FOD_BASE_URL / "
+            "FOD_API_TOKEN absents). Les codes consolidés sont servis "
             "par le service FOD dédié (france-opendata-service#7)."
         )
     if _client is None:

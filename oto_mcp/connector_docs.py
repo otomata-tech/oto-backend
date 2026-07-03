@@ -376,6 +376,23 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- « les réponses de ce ticket » → `zohodesk_ticket_threads`"
         )),
     ),
+    "zohoanalytics": (
+        DocSection(kind="prerequisite", title="self-client oauth zoho analytics (5 champs)", body_md=(
+            "zoho analytics utilise un **self-client oauth2**. dans la [console développeur zoho api](https://api-console.zoho.com), crée un **self client**, génère un grant token avec les scopes `ZohoAnalytics.data.read` + `ZohoAnalytics.metadata.read`, puis échange-le contre un refresh token. tu dois fournir à oto :\n"
+            "- **client_id** et **client_secret** — du self client\n"
+            "- **refresh_token** — issu de l'échange\n"
+            "- **org_id** — l'id de ton organisation analytics (en-tête `ZANALYTICS-ORGID`)\n"
+            "- **data_center** — ta région zoho (`com`, `eu`, `in`, `au`, `jp`, `ca`, `sa`), visible dans l'url (ex. analytics.zoho.eu → `eu`)\n"
+            "renseigne ces 5 champs dans oto sur ton compte (`/account`), connecteur **zohoanalytics**. byo (perso ou org)."
+        )),
+        DocSection(kind="usage", title="ce que tu peux faire", body_md=(
+            "interroge tes données zoho analytics depuis claude.\n"
+            "- « liste mes workspaces » → `zohoanalytics_workspaces`\n"
+            "- « quelles vues dans ce workspace » → `zohoanalytics_views`\n"
+            "- « exporte les données de cette table » → `zohoanalytics_export` (json par défaut)\n"
+            "- « ventes par région » → `zohoanalytics_query` (requête sql select sur les tables du workspace)"
+        )),
+    ),
     # ── données entreprise & open-data ──────────────────────────────────────
     "sirene": (
         DocSection(kind="prerequisite", title="clé api insee sirene", body_md=(
@@ -398,25 +415,28 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_stock_siege(siren)` / `fr_stock_etablissements(siren)` — siège ou tous les établissements d'une boîte\n"
             "- `fr_stock_search(naf=…, enseigne=…, departement=…)` — énumère tous les sites (ex. tous les « intermarché » d'un département)"
         )),
+    ),
+    # ── info légale FR (jurisprudence / codes / conventions, service FOD) ────
+    "droit": (
         DocSection(kind="usage", title="conventions collectives (kali)", body_md=(
             "le droit de la branche en texte intégral (stock kali/dila complet, ~290k articles) : minima, congés, primes, classifications. filtre idcc natif.\n"
-            "- `fr_ccn_conventions(idcc=… | query=…)` — résoudre une convention (« quelle est la 3090 ? », « conventions du spectacle »)\n"
-            "- `fr_ccn_search(query=…, idcc=…)` — recherche plein-texte dans les articles d'une branche (ou toutes)\n"
-            "- `fr_ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
-            "- complément : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand), puis `fr_accords_text(acco_id)` pour lire l'accord lui-même (texte à la demande via légifrance)"
+            "- `ccn_conventions(idcc=… | query=…)` — résoudre une convention (« quelle est la 3090 ? », « conventions du spectacle »)\n"
+            "- `ccn_search(query=…, idcc=…)` — recherche plein-texte dans les articles d'une branche (ou toutes)\n"
+            "- `ccn_get(kali_id)` — texte intégral consolidé d'un article + lien légifrance vérifiable\n"
+            "- complément côté entreprise (connecteur sirene) : `fr_accords_search(idcc=…)` — les accords d'**entreprise** de la branche (qui a négocié quoi, quand), puis `fr_accords_text(acco_id)` pour lire l'accord"
         )),
         DocSection(kind="usage", title="codes consolidés (legi)", body_md=(
             "les 22 codes français avec versions historiques : citer la loi exacte, à la bonne date, avec lien légifrance.\n"
-            "- `fr_loi_article(code=\"CT\", num=\"L1242-2\", date=…)` — le texte en vigueur à la date demandée (défaut aujourd'hui)\n"
-            "- `fr_loi_versions(code, num)` — la timeline des rédactions d'un article\n"
-            "- `fr_loi_search(query=…, code=…)` — retrouver l'article quand on connaît le concept, pas le numéro\n"
-            "- `fr_loi_codes()` — les alias couverts (CT, CC, CP, CSS, CGI…)"
+            "- `loi_article(code=\"CT\", num=\"L1242-2\", date=…)` — le texte en vigueur à la date demandée (défaut aujourd'hui)\n"
+            "- `loi_versions(code, num)` — la timeline des rédactions d'un article\n"
+            "- `loi_search(query=…, code=…)` — retrouver l'article quand on connaît le concept, pas le numéro\n"
+            "- `loi_codes()` — les alias couverts (CT, CC, CP, CSS, CGI…)"
         )),
-        DocSection(kind="usage", title="jurisprudence (6 fonds dila)", body_md=(
-            "comment les juges tranchent : cassation (publiés + inédits), cours d'appel, CE/CAA/TA, conseil constitutionnel, cnil. tri pertinence × autorité.\n"
-            "- `fr_juris_search(query=…, fond=…, juridiction=…, date_min=…)` — recherche unifiée plein-texte\n"
-            "- `fr_juris_get(decision_id)` — texte intégral d'une décision + lien légifrance\n"
-            "- workflow type : `fr_juris_search` → repérer l'arrêt de principe → `fr_juris_get` → citer avec `fr_loi_article` (les textes visés, à la date de la décision)"
+        DocSection(kind="usage", title="jurisprudence (6 fonds dila + cedh/cjue)", body_md=(
+            "comment les juges tranchent : cassation (publiés + inédits), cours d'appel, CE/CAA/TA, conseil constitutionnel, cnil, cedh, cjue. tri pertinence × autorité.\n"
+            "- `juris_search(query=…, fond=…, juridiction=…, date_min=…)` — recherche unifiée plein-texte\n"
+            "- `juris_get(decision_id)` — texte intégral d'une décision + lien légifrance\n"
+            "- workflow type : `juris_search` → repérer l'arrêt de principe → `juris_get` → citer avec `loi_article` (les textes visés, à la date de la décision)"
         )),
     ),
     "hithorizons": (

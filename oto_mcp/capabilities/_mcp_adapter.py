@@ -54,11 +54,17 @@ def reserved_org_tool_names(capabilities: list[Capability]) -> frozenset:
 
 
 def _make_tool(cap: Capability):
+    org_reserved = _org_param_reserved(cap)
+
     async def _tool(**kwargs):
         # `org=` (axe-contexte, modèle sans état de session) est posé EN AMONT par
-        # `CallContextMiddleware` (ContextVar per-appel, lue par `current_org`) → ici on
-        # le retire simplement des kwargs pour ne pas le passer à l'`Input` de la capacité.
-        kwargs.pop("org", None)
+        # `CallContextMiddleware` (ContextVar per-appel, lue par `current_org`) → on le
+        # retire des kwargs pour ne pas le passer à l'`Input`. UNIQUEMENT quand `org` est
+        # l'axe RÉSERVÉ : pour une cap qui DÉCLARE `org` en champ métier (oto_use_org.org =
+        # l'org CIBLE), c'est un vrai paramètre à conserver — sinon on droppait l'org cible
+        # → `UseOrgInput.org Field required` (#108 régression, vécu prod 2026-07-04).
+        if org_reserved:
+            kwargs.pop("org", None)
         raw = RawCtx(sub=current_user_sub_from_token())
         try:
             inp = cap.Input(**kwargs)                 # validation (seule source : Input)
@@ -96,7 +102,7 @@ def _make_tool(cap: Capability):
     # l'`Input` de chaque capacité. Prime sur l'org maison, robuste au reset/absence de
     # session (claude.ai) ; inerte pour les caps non org-scopées. (`project=`/`run_id=`
     # suivront en passe profonde.) La pose/garde de la ContextVar vit dans le middleware.
-    if _org_param_reserved(cap):
+    if org_reserved:
         sig = tool.__signature__
         extra = inspect.Parameter("org", inspect.Parameter.KEYWORD_ONLY,
                                   annotation=Optional[int], default=None)

@@ -312,8 +312,7 @@ class HostDispatch:
                 from . import share_ui
                 html_out, status = await run_in_threadpool(
                     share_ui.build_page, proj, scope.get("path") or "/",
-                    offset=_offset_from_query(scope), datastore_exposed=ds_exposed,
-                    connect_url=_connect_url(host))
+                    offset=_offset_from_query(scope), connect_url=_connect_url(host))
                 if html_out is not None:
                     return await _send_html(send, html_out, status)
             # Garde-fou anti-abus : token-bucket par (IP, projet) avant tout travail.

@@ -2,7 +2,9 @@
 (gating fail-closed par appartenance au projet), rendus, dérivation de colonnes."""
 from oto_mcp import db, org_store, share_ui
 
-_PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstration."}
+# `secret` = partage navigable → les tableaux liés sont montrés (lecture seule).
+_PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstration.",
+            "mcp_access": "secret"}
 
 _LINKS = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement"},
@@ -20,7 +22,7 @@ def _wire(monkeypatch, *, links=None):
 # ── Index ─────────────────────────────────────────────────────────────────────
 def test_index_lists_entities(monkeypatch):
     _wire(monkeypatch)
-    html, status = share_ui.build_page(_PROJECT, "/", datastore_exposed=True, connect_url="https://x.share.oto.cx/mcp")
+    html, status = share_ui.build_page(_PROJECT, "/", connect_url="https://x.share.oto.cx/mcp")
     assert status == 200
     assert "Enrichir" in html and "/procedures/11" in html
     assert "Prospects" in html and "/data/22" in html
@@ -38,9 +40,11 @@ def test_index_shows_exposed_tools_chips(monkeypatch):
     assert "Outils exposés" in html and "fr_search" in html and "serper_web_search" in html
 
 
-def test_index_hides_tables_when_datastore_not_exposed(monkeypatch):
+def test_index_hides_tables_when_anonymous(monkeypatch):
+    # `anonymous` (endpoint-outil listé) ne montre PAS les tableaux du datastore.
     _wire(monkeypatch)
-    html, _ = share_ui.build_page(_PROJECT, "/", datastore_exposed=False, connect_url="u")
+    proj = {**_PROJECT, "mcp_access": "anonymous"}
+    html, _ = share_ui.build_page(proj, "/", connect_url="u")
     assert "/data/22" not in html and "Prospects" not in html
     assert "/procedures/11" in html   # procédures et docs restent
 
@@ -52,6 +56,17 @@ def test_index_escapes_name(monkeypatch):
     html, _ = share_ui.build_page(proj, "/", connect_url="u")
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_index_renders_brief_markdown(monkeypatch):
+    # Le brief est rendu en Markdown (titres/gras), pas affiché en brut.
+    _wire(monkeypatch, links=[])
+    monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [])
+    proj = {"id": 5, "name": "P", "brief_md": "## Objet\n\nUn **vivier** de leads.",
+            "mcp_access": "secret"}
+    html, _ = share_ui.build_page(proj, "/", connect_url="u")
+    assert "<h2>Objet</h2>" in html and "<strong>vivier</strong>" in html
+    assert "## Objet" not in html   # plus de markdown brut
 
 
 # ── Procédure ───────────────────────────────────────────────────────────────
@@ -73,7 +88,7 @@ def test_procedure_not_linked_is_404(monkeypatch):
 
 
 # ── Datastore ────────────────────────────────────────────────────────────────
-def test_data_allowed_and_exposed(monkeypatch):
+def test_data_allowed_on_secret(monkeypatch):
     _wire(monkeypatch)
     monkeypatch.setattr(db, "get_datastore_namespace_by_id",
                         lambda rid: {"namespace": "prospects", "schema": None})
@@ -81,17 +96,19 @@ def test_data_allowed_and_exposed(monkeypatch):
     monkeypatch.setattr(db, "datastore_list_rows",
                         lambda rid, **kw: [{"data": {"nom": "Alice", "email": "a@x.fr"}},
                                            {"data": {"nom": "Bob"}}])
-    html, status = share_ui.build_page(_PROJECT, "/data/22", datastore_exposed=True, connect_url="u")
+    html, status = share_ui.build_page(_PROJECT, "/data/22", connect_url="u")
     assert status == 200
     assert "prospects" in html and "nom" in html and "email" in html and "Alice" in html
     assert "1–2 sur 2" in html
 
 
-def test_data_denied_when_not_exposed(monkeypatch):
+def test_data_denied_when_anonymous(monkeypatch):
+    # `anonymous` ne sert pas les lignes du datastore (même si le tableau est lié).
     _wire(monkeypatch)
     monkeypatch.setattr(db, "get_datastore_namespace_by_id",
                         lambda rid: (_ for _ in ()).throw(AssertionError("ne doit pas lire")))
-    html, status = share_ui.build_page(_PROJECT, "/data/22", datastore_exposed=False, connect_url="u")
+    proj = {**_PROJECT, "mcp_access": "anonymous"}
+    html, status = share_ui.build_page(proj, "/data/22", connect_url="u")
     assert status == 404
 
 
@@ -99,7 +116,7 @@ def test_data_not_linked_is_404(monkeypatch):
     _wire(monkeypatch)
     monkeypatch.setattr(db, "get_datastore_namespace_by_id",
                         lambda rid: (_ for _ in ()).throw(AssertionError("hors allowlist")))
-    html, status = share_ui.build_page(_PROJECT, "/data/99", datastore_exposed=True, connect_url="u")
+    html, status = share_ui.build_page(_PROJECT, "/data/99", connect_url="u")
     assert status == 404
 
 

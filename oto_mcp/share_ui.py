@@ -103,11 +103,6 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None) -> str:
 </div></body></html>"""
 
 
-def _brief_html(brief_md: str) -> str:
-    paras = [p.strip() for p in (brief_md or "").split("\n\n") if p.strip()]
-    return "".join(f"<p>{html.escape(p).replace(chr(10), '<br>')}</p>" for p in paras[:4])
-
-
 def _nav_section(title: str, items: list[dict]) -> str:
     """Une carte « section » avec une liste de liens navigables (ou rien si vide)."""
     if not items:
@@ -124,7 +119,9 @@ def _nav_section(title: str, items: list[dict]) -> str:
 # ── Rendus de page ────────────────────────────────────────────────────────────
 def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: list[dict],
                  docs: list[dict], connect_url: str, tools: Optional[list[str]] = None) -> str:
-    lede = _brief_html(brief_md) or '<p class="empty">Projet partagé, en lecture seule.</p>'
+    brief_html = (f'<div class=card><article>{_MD.render(brief_md)}</article></div>'
+                  if (brief_md or "").strip()
+                  else '<p class="empty">Projet partagé, en lecture seule.</p>')
     sections = (
         _nav_section("Procédures", [
             {"href": f"/procedures/{p['id']}", "kind": "procédure", "label": p["label"]}
@@ -150,7 +147,7 @@ def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: li
                   if chips else "")
     inner = (f'  <div class=eyebrow>Projet partagé · Oto</div>\n'
              f'  <h1>{html.escape(name or "Projet")}</h1>\n'
-             f'  <div class=lede>{lede}</div>\n'
+             f'  {brief_html}\n'
              f'  {sections}\n  {connect}\n  {tools_card}')
     return _shell(title=name, inner=inner)
 
@@ -210,15 +207,20 @@ def _cell(v: object) -> str:
 
 # ── Routeur (lectures DB SYNC → appeler en threadpool) ────────────────────────
 def build_page(project: dict, path: str, *, offset: int = 0,
-               datastore_exposed: bool = False,
                connect_url: str = "") -> tuple[Optional[str], int]:
     """Rend la page UI pour ce (projet, path), ou `(None, 0)` si le path n'est PAS une
     route UI (le dispatch retombe alors sur le MCP). Fail-closed : une entité non liée au
-    projet (ou un tableau non exposé) → 404, jamais une lecture hors périmètre."""
+    projet → 404, jamais une lecture hors périmètre. Les TABLEAUX (datastore, lecture seule)
+    ne sont navigables que sur un partage `secret` (mode « partage de projet ») ; le flag
+    `mcp_expose_datastore`, lui, gate les OUTILS `data_*` MCP, pas cette vue humaine."""
     from . import db, org_store
 
     pid = int(project["id"])
     p = (path or "/").rstrip("/") or "/"
+    # Tableaux navigables (lecture seule) uniquement sur un partage `secret` : l'owner a
+    # lié le tableau ET publié le projet en partage → consentement explicite. `anonymous`
+    # (endpoint-outil listé publiquement) ne montre pas les lignes du datastore.
+    show_data = (project.get("mcp_access") == "secret")
 
     if p == "/":
         links = db.list_project_links(pid)
@@ -230,7 +232,7 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             {"id": int(l["target_ref"]), "label": l.get("label") or l.get("namespace") or f"#{l['target_ref']}"}
             for l in links
             if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()]
-            if datastore_exposed else [])
+            if show_data else [])
         # Docs : pages de l'arbre du projet + docs explicitement liés.
         docs = [{"id": int(d["id"]), "label": d.get("title") or f"#{d['id']}"}
                 for d in db.list_docs_for_project(pid)]
@@ -263,7 +265,7 @@ def build_page(project: dict, path: str, *, offset: int = 0,
         if section == "data":
             allowed = {int(l["target_ref"]) for l in links
                        if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()}
-            ns = db.get_datastore_namespace_by_id(rid) if (datastore_exposed and rid in allowed) else None
+            ns = db.get_datastore_namespace_by_id(rid) if (show_data and rid in allowed) else None
             if not ns:
                 return render_not_found(), 404
             total = db.datastore_count_rows(rid)

@@ -469,6 +469,16 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     if pinned is not None and getattr(pinned, "connector", None) == provider:
         return _resolve_pinned_instance(provider, sub, pinned)
 
+    # Binding de PROJET (ADR 0038 B5) : le projet de l'appel (`project=`) binde une
+    # instance pour ce provider → résolution EN DUR, RE-GARDÉE pour l'APPELANT (le
+    # binding a été gardé pour celui qui l'a posé ; l'appelant d'un projet partagé
+    # peut être un autre membre). `instance=` explicite (ci-dessus) prime — le jeton
+    # le plus spécifique de l'appel.
+    bound = project_pinned_instance(provider)
+    if bound is not None:
+        guard_instance_access(sub, bound)
+        return _resolve_pinned_instance(provider, sub, bound)
+
     # Scope MEMBRE (ADR 0033) : « ma clé » n'existe QUE dans l'org de contexte —
     # posée dans l'org A, elle ne résout pas depuis l'org B. L'org est résolue via
     # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
@@ -590,14 +600,85 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
+def guard_instance_access(sub: str, ref) -> Optional[int]:
+    """Garde d'accès à une instance de connecteur par NIVEAU (ADR 0038 B6) — même
+    sémantique que la projection B4 : member = MA ligne dans une org où je suis
+    membre ; group = groupe dont je suis lecteur ; org = org dont je suis membre ;
+    platform = refusé (le grant se résout déjà en dernier palier). Renvoie l'org de
+    l'instance (à co-poser). McpError actionnable sinon. Chemin DB sync — appelants
+    inbound chauds : threadpool. Partagée par l'axe `instance=` (pose) et la
+    résolution d'un binding de projet (re-garde pour l'APPELANT, qui n'est pas
+    forcément celui qui a bindé)."""
+    from . import group_store, roles
+    if ref.level == "member":
+        if ref.sub != sub:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=("Instance refusée : elle appartient à un autre membre (le "
+                         "partage d'instance n'est pas encore là — ADR 0038 B5).")))
+        if not roles.is_org_member(sub, ref.org_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Instance refusée : tu n'es plus membre de l'org #{ref.org_id}."))
+        return ref.org_id
+    if ref.level == "group":
+        if not roles.can_read_group(sub, ref.group_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Instance refusée : tu n'es pas membre du groupe #{ref.group_id}."))
+        g = group_store.get_group(ref.group_id)
+        return g.get("org_id") if g else None
+    if ref.level == "org":
+        if not roles.is_org_member(sub, ref.org_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Instance refusée : tu n'es pas membre de l'org #{ref.org_id}."))
+        return ref.org_id
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message="Les refs `platform:` ne s'épinglent pas (le grant plateforme se "
+                "résout déjà tout seul en dernier palier)."))
+
+
+def project_pinned_instance(provider: str, project_id: Optional[int] = None):
+    """Instance de connecteur BINDÉE par le projet de l'appel pour `provider`
+    (`project_links.config.instance_ref`, ADR 0038 B5), ou None ⇒ cascade normale.
+    **Un seul** binding à instance ⇒ son ref (parsé) ; **plusieurs** ⇒ McpError
+    actionnable (identité d'action en jeu — jamais de choix silencieux : l'agent
+    précise `instance=`). Lecture des liens fail-soft (DB en hoquet ⇒ None, comme
+    `project_pinned_identity`) ; un ref STOCKÉ inparsable lève (validé au link —
+    corruption = erreur, pas un repli muet)."""
+    pid = current_project() if project_id is None else project_id
+    if pid is None:
+        return None
+    try:
+        refs = [(link.get("config") or {}).get("instance_ref")
+                for link in db.list_project_links(int(pid))
+                if link.get("target_type") == "connecteur"
+                and link.get("target_ref") == provider
+                and (link.get("config") or {}).get("instance_ref")]
+    except Exception as e:
+        logger.warning("project_pinned_instance fail-soft %s/%s: %s", pid, provider, e)
+        return None
+    if not refs:
+        return None
+    if len(refs) > 1:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Le projet #{pid} binde PLUSIEURS instances `{provider}` — "
+                     f"précise laquelle avec `instance=` ({', '.join(refs)}).")))
+    from . import instance_refs
+    return instance_refs.parse_ref(refs[0])
+
+
 def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential:
-    """Résolution EN DUR d'une instance explicite (`instance=`, ADR 0038 B6) : lit
-    exactement la ligne du coffre que le ref désigne. L'ACCÈS a déjà été gardé à la
-    POSE par l'axe (`call_axes._guard_instance_ref` : member = ma ligne + membre de
-    l'org ; group = lecteur ; org = membre — même requête, même acteur) ; le RBAC
-    connecteur (ADR 0025) a été rejoué par l'appelant. Ligne absente = McpError
-    actionnable, JAMAIS de fallback vers un autre palier (§C : agir sous une autre
-    identité que celle demandée est interdit)."""
+    """Résolution EN DUR d'une instance explicite (`instance=` OU binding de projet,
+    ADR 0038 B6/B5) : lit exactement la ligne du coffre que le ref désigne. L'ACCÈS
+    a été gardé par `guard_instance_access` (à la pose pour l'axe ; re-gardé pour
+    l'APPELANT sur le chemin binding) ; le RBAC connecteur (ADR 0025) a été rejoué
+    par l'appelant. Ligne absente = McpError actionnable, JAMAIS de fallback vers
+    un autre palier (§C : agir sous une autre identité que celle demandée est
+    interdit)."""
     from . import instance_refs
     if ref.level == "member":
         etype, eid = credentials_store.MEMBER, credentials_store.member_id(ref.org_id, sub)

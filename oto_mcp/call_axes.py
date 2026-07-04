@@ -373,46 +373,6 @@ def _is_instance_scopable_tool(name: str) -> bool:
     return providers.connector_for_namespace(namespace_of(name)) is not None
 
 
-def _guard_instance_ref(sub: str, ref) -> Optional[int]:
-    """Garde par NIVEAU (chemin DB sync, appelé en threadpool) — même sémantique
-    que la projection B4 : member = MA ligne dans une org où je suis membre ;
-    group = groupe dont je suis lecteur ; org = org dont je suis membre. Renvoie
-    l'org à co-poser. Lève une McpError actionnable sinon."""
-    from . import group_store, roles
-    if ref.level == "member":
-        if ref.sub != sub:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=("Paramètre `instance` refusé : cette instance appartient à un "
-                         "autre membre (le partage d'instance n'est pas encore là — "
-                         "ADR 0038 B5).")))
-        if not roles.is_org_member(sub, ref.org_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Paramètre `instance` refusé : tu n'es plus membre de "
-                         f"l'org #{ref.org_id}.")))
-        return ref.org_id
-    if ref.level == "group":
-        if not roles.can_read_group(sub, ref.group_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Paramètre `instance` refusé : tu n'es pas membre du "
-                         f"groupe #{ref.group_id}.")))
-        g = group_store.get_group(ref.group_id)
-        return g.get("org_id") if g else None
-    if ref.level == "org":
-        if not roles.is_org_member(sub, ref.org_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Paramètre `instance` refusé : tu n'es pas membre de "
-                         f"l'org #{ref.org_id}.")))
-        return ref.org_id
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message="Les refs `platform:` ne sont pas encore acceptés en `instance=` "
-                "(le grant plateforme se résout déjà tout seul en dernier palier)."))
-
-
 async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
     """Épingle l'instance explicite de l'appel (§C : `instance=` prime sur la
     préférence de proximité, jamais de fallback si elle ne résout pas) + co-pose
@@ -435,7 +395,8 @@ async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
             code=INVALID_PARAMS,
             message=(f"Paramètre `instance` refusé : ce ref est une instance "
                      f"`{ref.connector}`, pas `{con.name}` (le connecteur de ce tool).")))
-    org = await run_in_threadpool(_guard_instance_ref, sub, ref)
+    from . import access
+    org = await run_in_threadpool(access.guard_instance_access, sub, ref)
     undo: list[UndoEntry] = []
     if org is not None:
         undo.append((session_org.reset_call_org, session_org.set_call_org(int(org))))

@@ -319,6 +319,54 @@ def test_get_link_carries_config(seams):
     assert out["links"][0]["config"] == {}
 
 
+def test_link_connector_instance_ref(seams, monkeypatch):
+    # ADR 0038 B5 : binding à INSTANCE — validé (grammaire + match connecteur) et
+    # GARDÉ au link (le lieur doit avoir accès à l'instance), stocké config.instance_ref.
+    import oto_mcp.access as access_mod
+    monkeypatch.setattr(access_mod, "guard_instance_access", lambda sub, ref: 5)
+    out = P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                         target_ref="zoho", instance_ref="org:5:zoho"))
+    assert out["ok"] is True
+    (link,) = seams["link"]
+    assert link[5] == {"instance_ref": "org:5:zoho"} and link[6] is None
+
+
+def test_link_connector_instance_ref_mismatch(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                       target_ref="hunter", instance_ref="org:5:zoho"))
+    assert e.value.code == "instance_mismatch"
+
+
+def test_link_connector_instance_ref_invalid(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                       target_ref="zoho", instance_ref="grand:nawak"))
+    assert e.value.code == "invalid_instance_ref"
+
+
+def test_link_connector_instance_ref_exclusive_of_identity(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                       target_ref="zoho", instance_ref="org:5:zoho",
+                                       identity_ref="acc_1"))
+    assert e.value.code == "conflicting_binding"
+
+
+def test_link_connector_instance_ref_forbidden(seams, monkeypatch):
+    # Le lieur n'a pas accès à l'instance → 403, rien stocké.
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData, INVALID_PARAMS
+    import oto_mcp.access as access_mod
+    def _deny(sub, ref):
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="Instance refusée : test"))
+    monkeypatch.setattr(access_mod, "guard_instance_access", _deny)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="connecteur",
+                                       target_ref="zoho", instance_ref="org:5:zoho"))
+    assert e.value.code == "instance_forbidden" and seams["link"] == []
+
+
 def test_link_missing_target(seams):
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="tableau"))

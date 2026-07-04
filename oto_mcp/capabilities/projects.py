@@ -52,6 +52,7 @@ class ProjectInput(BaseModel):
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
+    instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_connector_instances) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
     slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>)
 
 
@@ -370,6 +371,30 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             legacy_id = config.pop("identity_id", None) if config else None
             if identity_ref is None:
                 identity_ref = legacy_id or None
+            # Binding à INSTANCE (ADR 0038 B5) : le lien désigne exactement UN credential
+            # (ref B4). Validé + gardé AU LINK (le lieur doit avoir accès à l'instance ;
+            # la résolution RE-gardera l'appelant). Exclusif d'identity_ref.
+            if inp.op == "link" and inp.instance_ref:
+                _require(identity_ref is None, "conflicting_binding",
+                         "Donne `instance_ref` OU `identity_ref`, pas les deux "
+                         "(le ref d'instance porte déjà le compte).")
+                from mcp.shared.exceptions import McpError
+                from .. import access as access_mod, instance_refs
+                try:
+                    iref = instance_refs.parse_ref(inp.instance_ref)
+                except ValueError:
+                    _require(False, "invalid_instance_ref",
+                             f"`instance_ref` invalide : {inp.instance_ref!r} "
+                             "(un ref s'obtient via oto_connector_instances).")
+                _require(iref.connector == target_ref, "instance_mismatch",
+                         f"Ce ref est une instance `{iref.connector}`, pas "
+                         f"`{target_ref}` (le connecteur du lien).")
+                try:
+                    access_mod.guard_instance_access(sub, iref)
+                except McpError as e:
+                    _require(False, "instance_forbidden", e.error.message, 403)
+                config = dict(config or {})
+                config["instance_ref"] = inp.instance_ref
             # Édition legacy (front actuel, pas d'identity_ref explicite) : s'il existe UN
             # binding unique avec une AUTRE identité, on le DÉPLACE (delete+insert) au lieu
             # d'en créer un 2e — préserve la sémantique « éditer le connecteur du projet ».
@@ -523,7 +548,10 @@ CAPABILITIES += [
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "
-            "agreements by the mutuelle theme'); for a tableau: {provision?: shared|empty|seeded} "
+            "agreements by the mutuelle theme'), or `instance_ref` (a ref from "
+            "oto_connector_instances, ADR 0038 B5) to bind EXACTLY that credential — calls "
+            "carrying this project's token then resolve it hard, no fallback; "
+            "for a tableau: {provision?: shared|empty|seeded} "
             "= how a project copy treats it (empty/seeded = each copy gets its own fresh table). "
             "Optional `slot` = the SLOT NAME this link BINDS for the project (ADR 0035): "
             "procedures declare required entities as slots and reference them <slot:name> "

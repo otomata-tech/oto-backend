@@ -154,6 +154,63 @@ def test_resolution_missing_instance_hard_error_no_fallback(resolution, monkeypa
         session_org.reset_call_instance(tok)
 
 
+# ── Binding de projet (ADR 0038 B5) : le projet fournit le ref ──────────────
+
+def _bind_project(monkeypatch, pid, links):
+    monkeypatch.setattr(session_org, "current_call_project", lambda: pid)
+    from oto_mcp import db
+    monkeypatch.setattr(db, "list_project_links", lambda p: links)
+
+
+def test_resolution_project_binding_resolves_hard(resolution, monkeypatch):
+    # project=P porte un binding zoho → instance org:5 servie, re-gardée pour l'APPELANT.
+    resolution[("org", "5", "zoho", "")] = "SECRET-BOUND"
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho"}}])
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    rc = access._resolve_credential_impl("zoho", "auto", "u")
+    assert rc.secret == "SECRET-BOUND" and rc.mode == "org"
+
+
+def test_resolution_project_binding_reguards_caller(resolution, monkeypatch):
+    # L'appelant du projet partagé n'est PAS membre de l'org de l'instance bindée →
+    # refus actionnable, jamais le credential (le binding ne rouvre pas l'org).
+    resolution[("org", "5", "zoho", "")] = "SECRET-BOUND"
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho"}}])
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    with pytest.raises(McpError, match="pas membre"):
+        access._resolve_credential_impl("zoho", "auto", "u")
+
+
+def test_resolution_explicit_instance_beats_project_binding(resolution, monkeypatch):
+    # `instance=` explicite (jeton le plus spécifique) prime sur le binding du projet.
+    eid = credentials_store.member_id(8, "u")
+    resolution[(credentials_store.MEMBER, eid, "zoho", "perso")] = "SECRET-EXPLICITE"
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho"}}])
+    tok = _pin("member:8:u:zoho:perso")
+    try:
+        rc = access._resolve_credential_impl("zoho", "auto", "u")
+    finally:
+        session_org.reset_call_instance(tok)
+    assert rc.secret == "SECRET-EXPLICITE"
+
+
+def test_resolution_multiple_bindings_actionable_error(resolution, monkeypatch):
+    # 2 bindings zoho dans le projet, pas d'instance= → erreur qui LISTE les choix.
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho"}},
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "member:5:u:zoho:alx"}}])
+    with pytest.raises(McpError, match="PLUSIEURS instances"):
+        access._resolve_credential_impl("zoho", "auto", "u")
+
+
 def test_resolution_foreign_provider_ref_ignored(resolution, monkeypatch):
     # Ref zoho épinglé mais résolution du provider hunter (résolution auxiliaire) :
     # le ref est ignoré → cascade normale (ici : rien ne résout → erreur STANDARD,

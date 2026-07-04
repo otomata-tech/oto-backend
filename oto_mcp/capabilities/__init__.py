@@ -39,6 +39,8 @@ from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke
 from . import connectors_account_grants  # noqa: F401 — connectors.account_grants.{list,grant,revoke}
 # Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — override positif (allow).
 from . import connectors_force  # noqa: F401 — connectors.force.member (oto_force_connector)
+# Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
+from . import connectors_instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin, access_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,key_grant}

@@ -77,6 +77,24 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 
 `kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. un bridge back-office client (repo privé)) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. Le mount MCP-to-MCP (`otomata#16`, memento) = flavor complémentaire pour les remotes déjà-MCP.
 
+## Projection instances (ADR 0038 B4)
+
+Le coffre est relu comme un **listing d'instances possédées nommées** (une ligne
+`(entity_type, entity_id, connector, account)` = une instance), en **lecture pure,
+sans jamais déchiffrer** : capacité `connectors.instances.list` (MCP
+`oto_connector_instances`, REST `GET /api/me/connector-instances`,
+`capabilities/connectors_instances.py`). Agrège les 4 familles que la cascade
+résout — membre `(org, sub)` > mes groupes de l'org > org > clés plateforme
+(grants user/org + free-tier via `db.list_platform_keys_meta`, le pendant
+non-déchiffrant de `list_platform_keys`). Chaque instance porte un **`ref` stable
+opaque** (grammaire dans `instance_refs.py`, projection 1:1 de la PK ;
+`platform:{id}` pour les clés plateforme) — future cible des bindings B5 et de
+l'axe `instance=` B6. Métadonnées seulement (meta public, jamais un bearer) ;
+limite : les `config_fields` packés dans `secret_enc` (ex. `data_center`) ne
+sortent pas — seule la part `meta` est projetée en `config`. Le « gagnant » de la
+cascade reste dit par `status_for` (une seule vérité) ; la projection ne porte
+que l'ordre de proximité (tri membre < groupe < org < plateforme).
+
 ## Validation
 
 Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetable (docker)** + revue adversariale par phase. Migrations idempotentes au boot (`init_db` : ALTER additifs, PK 4-col, backfills, encrypt-existing, drop-plaintext gaté).

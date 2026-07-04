@@ -132,6 +132,22 @@ def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
     return out
 
 
+def list_platform_keys_meta(provider: Optional[str] = None) -> list[dict]:
+    """Métadonnées des clés plateforme SANS déchiffrement (id, provider, label,
+    created_at) — projection instances (ADR 0038 B4). Contrairement à
+    `list_platform_keys`, ne SELECTionne JAMAIS `api_key_enc`."""
+    sql = "SELECT id, provider, label, created_at FROM platform_keys"
+    params: tuple = ()
+    if provider:
+        sql += " WHERE provider = %s"
+        params = (provider,)
+    # Même ordre que list_platform_keys → la dernière par provider = la clé
+    # active du free-tier (miroir de get_platform_api_key).
+    sql += " ORDER BY provider, created_at"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def get_platform_api_key(provider: str) -> Optional[dict]:
     """Clé plateforme la plus récente d'un provider, déchiffrée (free-tier ADR 0031).
     Renvoie {api_key, label} ou None — utilisée SANS grant pour les connecteurs

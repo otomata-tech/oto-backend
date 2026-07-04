@@ -460,6 +460,30 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
         return [dict(r) for r in rows]
 
 
+def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
+                              limit: int = 100, q: Optional[str] = None,
+                              filters: Optional[list] = None) -> list[dict]:
+    """Page **keyset** (curseur stable) triée par `row_id`. `row_id` est un uuid7 —
+    monotone dans le temps de création — donc `ORDER BY row_id ASC` = ordre de
+    création et `WHERE row_id > after_row_id` (borne EXCLUSIVE) enchaîne les pages
+    sans dérive sous écritures concurrentes (contrairement à OFFSET, décalé par toute
+    insertion). `after_row_id=None` = première page. `q`/`filters` = même filtrage
+    SQL que `datastore_list_rows`. La clé est exacte (pas de troncature de timestamp,
+    contrairement à un keyset sur `created_at` rendu à la seconde)."""
+    where, params = _ds_where(ns_id, q, filters)
+    if after_row_id:
+        where += " AND row_id > %s"
+        params.append(after_row_id)
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
+            f"{where} ORDER BY row_id ASC LIMIT %s",
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def datastore_count_rows(ns_id: int, q: Optional[str] = None,
                          filters: Optional[list] = None) -> int:
     """Nombre total de rows d'un namespace (pour la pagination), filtré par `q` et

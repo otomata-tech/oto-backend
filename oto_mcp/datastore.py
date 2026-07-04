@@ -17,6 +17,8 @@ projection optionnelle, déférée à otomata#29.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import time
 import uuid
@@ -27,6 +29,22 @@ from . import db, ownership
 
 
 _META_COLS = ("_id", "_created_at", "_updated_at")
+
+
+class InvalidCursor(ValueError):
+    """Curseur de pagination illisible (mal formé / tronqué)."""
+
+
+def _encode_cursor(row_id: str) -> str:
+    """Curseur opaque = base64url du dernier `row_id` de la page (keyset)."""
+    return base64.urlsafe_b64encode(row_id.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> str:
+    try:
+        return base64.urlsafe_b64decode(cursor.encode()).decode()
+    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        raise InvalidCursor(cursor) from e
 
 
 def _now_iso() -> str:
@@ -382,6 +400,27 @@ class DatastorePg:
             if len(out) >= limit:
                 break
         return out
+
+    def cursor_rows(
+        self,
+        namespace: str,
+        *,
+        filter: Optional[dict] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Page **keyset** pour l'agent (chemin MCP `data_rows`) : tri stable par
+        `row_id`, filtre exact `{col: val}` poussé en SQL. Renvoie
+        `{rows, next_cursor}` — `next_cursor` non nul ⇒ il reste des lignes (repasse-le
+        pour la suite). Robuste aux écritures concurrentes (pas d'OFFSET qui dérive)."""
+        ns_id = self._resolve(namespace)
+        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        after = _decode_cursor(cursor) if cursor else None
+        rows = db.datastore_list_rows_after(
+            ns_id, after_row_id=after, limit=limit, filters=filters)
+        out = [self._row_to_dict(r) for r in rows]
+        next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
+        return {"rows": out, "next_cursor": next_cursor}
 
     def page_rows(
         self,

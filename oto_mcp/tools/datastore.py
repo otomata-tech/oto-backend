@@ -19,6 +19,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
 from ..datastore import (
+    InvalidCursor,
     NamespaceExists,
     NamespaceForbidden,
     NamespaceNotFound,
@@ -263,9 +264,15 @@ def register(mcp: FastMCP) -> None:
     def data_rows(
         namespace: str, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
+        cursor: str | None = None,
     ) -> dict:
-        """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = list
-        rows (optional exact-match `filter`, `limit`).
+        """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
+        of rows (optional exact-match `filter`, `limit`) with a stable cursor.
+
+        List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
+        there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/
+        filter) to get the next page — repeat until `next_cursor` is null. The cursor
+        is keyset-stable (rows created meanwhile don't shift the paging).
 
         Args:
             namespace: target namespace, or `slot:<name>` = the table bound under
@@ -273,15 +280,19 @@ def register(mcp: FastMCP) -> None:
             id: `_id` of one row ; omit = list rows.
             filter: dict `{column: value}` exact match (list mode only),
                 e.g. `{"project": "roundtable"}`.
-            limit: max rows (default 100, list mode only).
+            limit: page size (default 100, list mode only).
+            cursor: opaque `next_cursor` from a previous call = fetch the NEXT page.
         """
         store = _acting_store()
         namespace = _ns(namespace)
         try:
             if id is not None:
                 return store.get_row(namespace, id)
-            rows = store.list_rows(namespace, filter=filter, limit=limit)
-            return {"rows": rows, "count": len(rows)}
+            page = store.cursor_rows(namespace, filter=filter, limit=limit, cursor=cursor)
+            return {"rows": page["rows"], "count": len(page["rows"]),
+                    "next_cursor": page["next_cursor"]}
+        except InvalidCursor:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="`cursor` invalide (repartir sans cursor)"))
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
         except RowNotFound:

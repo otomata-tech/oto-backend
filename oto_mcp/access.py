@@ -483,6 +483,15 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # (département/user). Avant toute résolution → couvre keyed/fields/BYO.
     require_connector_access(provider, sub)
 
+    # Instance EXPLICITE de l'appel (`instance=`, ADR 0038 §C/B6) : si le ref épinglé
+    # vise CE provider, on résout EXACTEMENT cette ligne du coffre — jamais de
+    # fallback (une instance demandée qui ne résout pas = erreur actionnable, pas
+    # une autre identité). Un ref d'un AUTRE provider est ignoré ici (il ne visait
+    # pas cette résolution — ex. résolution auxiliaire d'un tool composite).
+    pinned = session_org.current_call_instance()
+    if pinned is not None and getattr(pinned, "connector", None) == provider:
+        return _resolve_pinned_instance(provider, sub, pinned)
+
     # Scope MEMBRE (ADR 0033) : « ma clé » n'existe QUE dans l'org de contexte —
     # posée dans l'org A, elle ne résout pas depuis l'org B. L'org est résolue via
     # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
@@ -602,6 +611,37 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         ))
 
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
+
+
+def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential:
+    """Résolution EN DUR d'une instance explicite (`instance=`, ADR 0038 B6) : lit
+    exactement la ligne du coffre que le ref désigne. L'ACCÈS a déjà été gardé à la
+    POSE par l'axe (`call_axes._guard_instance_ref` : member = ma ligne + membre de
+    l'org ; group = lecteur ; org = membre — même requête, même acteur) ; le RBAC
+    connecteur (ADR 0025) a été rejoué par l'appelant. Ligne absente = McpError
+    actionnable, JAMAIS de fallback vers un autre palier (§C : agir sous une autre
+    identité que celle demandée est interdit)."""
+    from . import instance_refs
+    if ref.level == "member":
+        etype, eid = credentials_store.MEMBER, credentials_store.member_id(ref.org_id, sub)
+        mode = "user"
+    elif ref.level == "group":
+        etype, eid, mode = "group", str(ref.group_id), "group"
+    elif ref.level == "org":
+        etype, eid, mode = "org", str(ref.org_id), "org"
+    else:  # platform — refusé dès la pose par l'axe ; défense en profondeur ici.
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message="Ref d'instance `platform:` non résoluble en `instance=` (B6)."))
+    secret = credentials_store.get_credential(etype, eid, provider, ref.account)
+    if not secret:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"L'instance `{instance_refs.format_ref(ref)}` ne résout plus "
+                     "(credential retiré ou compte renommé ?). Reliste avec "
+                     "oto_connector_instances — pas de repli vers une autre identité.")))
+    return ResolvedCredential(provider, secret, False, mode, etype, eid,
+                              account=ref.account)
 
 
 def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) -> ResolvedCredential:

@@ -48,11 +48,20 @@ class CallAxis:
     de la propriété (optionnelle) ajoutée. `applies(name)` décide, tool par tool, si
     l'axe est advertisé/lu. `pin(value)` garde/pose la/les ContextVar(s) et renvoie la
     LISTE d'entrées d'annulation (vide si l'axe est inerte pour cette valeur ; plusieurs
-    si l'axe co-pose — ex. project= pose projet + org dérivée)."""
+    si l'axe co-pose — ex. project= pose projet + org dérivée). `pin_named(value, name)`
+    = variante qui reçoit AUSSI le nom du tool (garde dépendante du tool, ex. le match
+    connecteur d'`instance=`) — prime sur `pin` si présent."""
     param: str
     schema: dict
     applies: Callable[[str], bool]
-    pin: Callable[[object], Awaitable[list[UndoEntry]]]
+    pin: Optional[Callable[[object], Awaitable[list[UndoEntry]]]] = None
+    pin_named: Optional[Callable[[object, str], Awaitable[list[UndoEntry]]]] = None
+
+    async def pin_for(self, value: object, tool_name: str) -> list[UndoEntry]:
+        """Pose l'axe pour CE tool (dispatch pin/pin_named)."""
+        if self.pin_named is not None:
+            return await self.pin_named(value, tool_name)
+        return await self.pin(value)  # type: ignore[misc]
 
 
 # ── Helpers partagés (aussi utilisés par le middleware pour `org=`) ───────────
@@ -352,9 +361,106 @@ GROUP = CallAxis(
 )
 
 
+# ── Axe instance= (instance de connecteur explicite — ADR 0038 §C / B6) ───────
+
+def _is_instance_scopable_tool(name: str) -> bool:
+    """Tool d'un connecteur du REGISTRE (le ref d'instance projette le coffre, qui
+    est keyé par provider). Exclut `data_*` (le datastore n'est pas encore un
+    connecteur — B7) et le spine."""
+    return providers.connector_for_namespace(namespace_of(name)) is not None
+
+
+def _guard_instance_ref(sub: str, ref) -> Optional[int]:
+    """Garde par NIVEAU (chemin DB sync, appelé en threadpool) — même sémantique
+    que la projection B4 : member = MA ligne dans une org où je suis membre ;
+    group = groupe dont je suis lecteur ; org = org dont je suis membre. Renvoie
+    l'org à co-poser. Lève une McpError actionnable sinon."""
+    from . import group_store, roles
+    if ref.level == "member":
+        if ref.sub != sub:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=("Paramètre `instance` refusé : cette instance appartient à un "
+                         "autre membre (le partage d'instance n'est pas encore là — "
+                         "ADR 0038 B5).")))
+        if not roles.is_org_member(sub, ref.org_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Paramètre `instance` refusé : tu n'es plus membre de "
+                         f"l'org #{ref.org_id}.")))
+        return ref.org_id
+    if ref.level == "group":
+        if not roles.can_read_group(sub, ref.group_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Paramètre `instance` refusé : tu n'es pas membre du "
+                         f"groupe #{ref.group_id}.")))
+        g = group_store.get_group(ref.group_id)
+        return g.get("org_id") if g else None
+    if ref.level == "org":
+        if not roles.is_org_member(sub, ref.org_id):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Paramètre `instance` refusé : tu n'es pas membre de "
+                         f"l'org #{ref.org_id}.")))
+        return ref.org_id
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message="Les refs `platform:` ne sont pas encore acceptés en `instance=` "
+                "(le grant plateforme se résout déjà tout seul en dernier palier)."))
+
+
+async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
+    """Épingle l'instance explicite de l'appel (§C : `instance=` prime sur la
+    préférence de proximité, jamais de fallback si elle ne résout pas) + co-pose
+    son org. Gardes : ref bien formé, connecteur du ref = connecteur du TOOL
+    (anti-confusion), accès par niveau."""
+    if value is None or value == "":
+        return []
+    from . import instance_refs
+    try:
+        ref = instance_refs.parse_ref(str(value))
+    except ValueError:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Paramètre `instance` invalide : {value!r}. Un ref s'obtient "
+                     "via oto_connector_instances (opaque, à repasser tel quel).")))
+    sub = require_axis_sub("instance")
+    con = providers.connector_for_namespace(namespace_of(tool_name))
+    if con is not None and ref.connector is not None and ref.connector != con.name:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Paramètre `instance` refusé : ce ref est une instance "
+                     f"`{ref.connector}`, pas `{con.name}` (le connecteur de ce tool).")))
+    org = await run_in_threadpool(_guard_instance_ref, sub, ref)
+    undo: list[UndoEntry] = []
+    if org is not None:
+        undo.append((session_org.reset_call_org, session_org.set_call_org(int(org))))
+    undo.append((session_org.reset_call_instance, session_org.set_call_instance(ref)))
+    return undo
+
+
+INSTANCE = CallAxis(
+    param="instance",
+    schema={
+        "type": "string",
+        "title": "Instance",
+        "description": (
+            "Ref d'instance de connecteur (obtenu via oto_connector_instances) sous "
+            "laquelle exécuter CET appel — résout EXACTEMENT ce credential-là (ta clé, "
+            "celle d'un de tes groupes ou celle de l'org), jamais un autre. Omets pour "
+            "la résolution de proximité normale."
+        ),
+    },
+    applies=_is_instance_scopable_tool,
+    pin_named=_pin_instance,
+)
+
+
 # Axes exposés sur les tools plats (chacun via les 3 mécanismes : advertise / strip+pose / seam).
-# ⚠️ Ordre = ordre de pose : GROUP après ORG pour que son org co-posée prime (plus spécifique).
-AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG, GROUP)
+# ⚠️ Ordre = ordre de pose : GROUP après ORG pour que son org co-posée prime (plus
+# spécifique) ; INSTANCE en dernier (le jeton le plus spécifique de tous).
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG, GROUP, INSTANCE)
 
 
 def axes_for(name: str) -> list[CallAxis]:

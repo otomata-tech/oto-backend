@@ -220,7 +220,7 @@ class CallContextMiddleware(Middleware):
             # existants (resolve_credential…) lisent la ContextVar.
             for axis in call_axes.axes_for(name):
                 if axis.param in args:
-                    undo.extend(await axis.pin(args.pop(axis.param)))
+                    undo.extend(await axis.pin_for(args.pop(axis.param), name))
             return await call_next(context)
         finally:
             for reset, tok in reversed(undo):

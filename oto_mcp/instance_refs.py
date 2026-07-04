@@ -78,6 +78,18 @@ def make_platform_ref(platform_key_id: int) -> str:
     return f"platform:{platform_key_id}"
 
 
+def format_ref(r: InstanceRef) -> str:
+    """Inverse de `parse_ref` — re-sérialise un ref décomposé (messages d'erreur,
+    ré-affichage). Roundtrip exact avec les make_*."""
+    if r.level == "member":
+        return make_member_ref(r.org_id, r.sub, r.connector, r.account)
+    if r.level == "group":
+        return make_group_ref(r.group_id, r.connector, r.account)
+    if r.level == "org":
+        return make_org_ref(r.org_id, r.connector, r.account)
+    return make_platform_ref(r.platform_key_id)
+
+
 def _int(segment: str) -> int:
     """Segment id — int strict ASCII (`isdigit` seul accepte les chiffres Unicode
     → refs alias non-canoniques, latent pour B5 où le ref devient un input)."""

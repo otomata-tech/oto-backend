@@ -126,6 +126,27 @@ def current_call_run() -> Optional[str]:
     return _CALL_RUN.get()
 
 
+_CALL_INSTANCE: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
+    "oto_call_instance", default=None)
+
+
+def set_call_instance(ref: object) -> contextvars.Token:
+    """Épingle l'instance de connecteur de l'appel courant (un `InstanceRef` parsé,
+    ADR 0038 B6 — déjà gardé par niveau à la pose par l'axe `instance=`)."""
+    return _CALL_INSTANCE.set(ref)
+
+
+def reset_call_instance(token: contextvars.Token) -> None:
+    _CALL_INSTANCE.reset(token)
+
+
+def current_call_instance() -> Optional[object]:
+    """`InstanceRef` épinglé par `instance=` de l'appel courant, ou None. Lu par
+    `access._resolve_credential_impl` : résolution EN DUR de cette ligne du coffre,
+    jamais de fallback (§C ADR 0038)."""
+    return _CALL_INSTANCE.get()
+
+
 def set_call_account(account: str) -> contextvars.Token:
     return _CALL_ACCOUNT.set(account)
 

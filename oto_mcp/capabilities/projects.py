@@ -137,6 +137,19 @@ def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
     return str(inst["id"]) if inst and inst.get("id") is not None else ref
 
 
+def _resolve_tableau_id(owner_type: object, owner_id: object, ref: str) -> Optional[str]:
+    """Réf de tableau → l'ID NUMÉRIQUE stable du namespace (comme les procédures). Accepte
+    un id (chiffres, renvoyé tel quel) OU un nom de namespace, résolu contre le datastore du
+    PROPRIÉTAIRE du projet. Renvoie None si un nom ne résout pas (namespace inexistant) — le
+    caller décide (erreur au link, ref brute conservée à l'unlink). Stocker l'id garde la
+    résolution cohérente (audit, list_project_links, share_ui l'attendent numérique)."""
+    ref = str(ref or "").strip()
+    if not ref or ref.isdigit():
+        return ref or None
+    ns = db.get_datastore_namespace(str(owner_type or ""), str(owner_id or ""), ref)
+    return str(ns["id"]) if ns and ns.get("id") is not None else None
+
+
 def _mcp_unresolvable_tools(row: dict, tools: list[str],
                             expose_datastore: bool = False) -> list[str]:
     """Sonde de publication SANS LOGIN (anonymous/secret, ADR 0032) : un endpoint sans
@@ -339,6 +352,16 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         if inp.target_type == "procedure":
             proj_org = int(row["owner_id"]) if row.get("owner_type") == "org" else ctx.org_id
             target_ref = _procedure_ref_to_id(proj_org, target_ref)
+        elif inp.target_type == "tableau":
+            # Normalise nom→id (le datastore du propriétaire du projet). Stocker l'id garde
+            # la résolution cohérente ; un nom introuvable au LINK = erreur (pas de lien mort
+            # silencieux), mais un unlink d'une réf legacy/supprimée passe avec la réf brute.
+            resolved = _resolve_tableau_id(row.get("owner_type"), row.get("owner_id"), target_ref)
+            if resolved is not None:
+                target_ref = resolved
+            elif inp.op == "link":
+                _require(False, "unknown_tableau",
+                         f"Aucun tableau nommé « {target_ref} » dans le datastore du projet.", 404)
         elif inp.target_type == "connecteur":
             # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
             # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /

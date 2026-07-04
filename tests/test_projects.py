@@ -263,6 +263,16 @@ def test_mcp_url_per_mode():
     assert P._mcp_url(None, "secret") is None
 
 
+def test_resolve_tableau_id(monkeypatch):
+    # id numérique → tel quel ; nom → id du namespace (datastore du propriétaire) ; inconnu → None.
+    monkeypatch.setattr(P.db, "get_datastore_namespace",
+                        lambda ot, oid, name: {"id": 65} if name == "vivier" else None)
+    assert P._resolve_tableau_id("org", "83", "65") == "65"
+    assert P._resolve_tableau_id("org", "83", "vivier") == "65"
+    assert P._resolve_tableau_id("org", "83", "nope") is None
+    assert P._resolve_tableau_id("org", "83", "") is None
+
+
 def test_link(seams):
     out = P._project(CTX, P.ProjectInput(op="link", project_id=7,
                                          target_type="tableau", target_ref="7", label="Leads"))

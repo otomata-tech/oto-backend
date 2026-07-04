@@ -5,6 +5,7 @@ de remap de l'arbre des docs, la préservation des liens, et la copie S3 des fic
 """
 import oto_mcp.db.projects as PJ
 import oto_mcp.media_store as MS
+import oto_mcp.org_store as OS
 
 
 def _wire(monkeypatch, *, src):
@@ -238,3 +239,54 @@ def test_duplicate_copies_files_via_s3(monkeypatch):
     assert key == "project-files/101/copied/doc.pdf"   # nouvelle clé S3
     # public ne se propage pas : add_project_file n'accepte pas `public` → la copie repart privée.
     assert "public" not in kw
+
+
+# ── Procédures : copiées dans l'org cible quand la source appartient à une autre org ──
+def _wire_procedures(monkeypatch, *, instr):
+    """Câble org_store pour les liens `procedure` : lookup + copie cross-org."""
+    copied = {"copies": []}
+
+    def _copy(iid, dest_org, set_by=None):
+        copied["copies"].append((iid, dest_org, set_by))
+        return {"id": 900 + iid, "slug": "proc-copy", "org_id": dest_org}
+    monkeypatch.setattr(OS, "get_instruction_by_id", lambda iid: instr.get(iid))
+    monkeypatch.setattr(OS, "copy_instruction_to_org", _copy)
+    return copied
+
+
+def test_duplicate_copies_procedure_from_other_org(monkeypatch):
+    # La procédure #11 appartient à l'org source (77) ; la copie va dans l'org 42 →
+    # la procédure est COPIÉE dans 42 et le lien repointe sur la copie.
+    links = [{"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
+              "role": "étapes", "config": None, "slot": None}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
+    created = _wire(monkeypatch, src=src)
+    proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 77, "title": "Enrichir"}})
+    PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
+    assert proc["copies"] == [(11, 42, "u1")]                 # copiée dans l'org cible
+    assert created["links"] == [(101, "procedure", "911", "Enrichir", "étapes", None)]
+
+
+def test_duplicate_keeps_procedure_pointer_same_org(monkeypatch):
+    # Copie DANS la même org (42) : la procédure #11 y appartient déjà → on garde le
+    # pointeur (savoir partagé de l'org), pas de copie.
+    links = [{"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
+              "role": None, "config": None, "slot": None}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
+    created = _wire(monkeypatch, src=src)
+    proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 42, "title": "Enrichir"}})
+    PJ.duplicate_project(7, "Copie", "org", "42")
+    assert proc["copies"] == []                               # aucune copie
+    assert created["links"] == [(101, "procedure", "11", "Enrichir", None, None)]
+
+
+def test_duplicate_skips_dead_procedure(monkeypatch):
+    # Procédure introuvable (supprimée) : lien ignoré (pas de dead_link répliqué) + warning.
+    links = [{"target_type": "procedure", "target_ref": "11", "label": "Fantôme",
+              "role": None, "config": None, "slot": None}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
+    created = _wire(monkeypatch, src=src)
+    _wire_procedures(monkeypatch, instr={})                   # #11 absente
+    _new, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    assert created["links"] == []
+    assert any("Fantôme" in w for w in warnings)

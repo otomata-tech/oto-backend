@@ -80,8 +80,10 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > (REST-only `POST /api/me/projects/import`, `ORG_MEMBER`) : **forke** un projet PUBLIÉ
 > (`mcp_access ∈ {anonymous, secret}`, résolu par `get_project_by_mcp_slug` — le slug non
 > devinable = consentement) dans l'**org active** de l'appelant via `duplicate_project`
-> (structure only : brief + docs + liens + fichiers ; un tableau d'une autre org est
-> re-provisionné à vide ; **jamais** de credentials). **Idempotent** : colonne
+> (structure only : brief + docs + liens + fichiers ; une **procédure** d'une autre org est
+> **copiée** dans l'org cible et le lien repointé — sinon il pendrait sur l'org source ; un
+> tableau d'une autre org est re-provisionné à vide ; **jamais** de credentials).
+> **Idempotent** : colonne
 > `projects.copied_from` + `find_copied_project` → si l'org a déjà forké la source, on la
 > RÉCUPÈRE (pas de doublon) ; si la source appartient déjà à l'org active, on l'ouvre. Le
 > dashboard (`/import?slug=`, `ImportProjectView.vue`) gère le login puis redirige vers le

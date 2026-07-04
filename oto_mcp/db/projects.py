@@ -715,7 +715,10 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                       track_source: bool = False) -> int:
     """Copie un projet en un NOUVEAU projet possédé par `(owner_type, owner_id)` :
     brief + arbre des docs (hiérarchie préservée) + liens (label/role/config) +
-    fichiers bruts (copie S3, repartis PRIVÉS). Un lien `tableau` est par défaut un
+    fichiers bruts (copie S3, repartis PRIVÉS). Un lien `procedure` vers une procédure
+    d'une AUTRE org est COPIÉ dans l'org cible (non destructif, slug suffixé) et le lien
+    repointé dessus (sinon le lien pendrait sur l'org source, illisible / fuite) ; une
+    procédure déjà dans l'org cible garde son pointeur (savoir partagé). Un lien `tableau` est par défaut un
     **pointeur** vers le même namespace (réutilisation par référence, `config.provision`
     absent/`shared`) ; en mode **`empty`/`seeded`** (ADR §6) il est **provisionné** — un
     namespace FRAIS (même schéma, rows optionnelles) pour que chaque instance ait son
@@ -799,6 +802,27 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                 target_ref = fresh
                 warnings.append(f"tableau « {label} » : re-provisionné à vide "
                                 "(la source appartient à une autre org — pas de pointeur vers ses données).")
+        elif link["target_type"] == "procedure" and owner_type == "org" and str(target_ref).isdigit():
+            # Une procédure est org-scopée. Copier un projet dans une AUTRE org sans copier
+            # ses procédures laisserait des liens vers l'org SOURCE (illisibles / fuite) —
+            # même problème que les tableaux `shared`. Si la procédure appartient déjà à
+            # l'org cible, on garde le pointeur (savoir partagé de l'org) ; sinon on la COPIE
+            # dans l'org cible (non destructif, slug suffixé) et on repointe le lien dessus.
+            from .. import org_store
+            src_instr = org_store.get_instruction_by_id(int(target_ref))
+            label = link.get("label") or (src_instr or {}).get("title") or f"#{target_ref}"
+            if src_instr is None:
+                warnings.append(f"procédure « {label} » : lien ignoré (la source ne résout plus).")
+                continue
+            if int(src_instr.get("org_id") or 0) != int(owner_id):
+                try:
+                    copied = org_store.copy_instruction_to_org(int(target_ref), int(owner_id),
+                                                               set_by=copied_by)
+                    target_ref = str(copied["id"])
+                except Exception:
+                    logger.warning("duplicate_project: copie procédure #%s échouée", target_ref)
+                    warnings.append(f"procédure « {label} » : copie impossible, lien ignoré.")
+                    continue
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None,

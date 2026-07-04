@@ -102,14 +102,14 @@ def current_org(sub: str | None) -> Optional[int]:
     visibilité, entitlements, redaction). Aujourd'hui (barreau R0) =
     l'org persistée (`org_store.get_active_org`, qui devient l'« org maison »).
 
-    Résout `org_de_session ?? org_de_consultation ?? org_maison` (ADR 0023) :
-    - **org de session** (MCP) — override éphémère posé par `oto_use_org`, keyé par
-      la session MCP courante ;
+    Résout `jeton d'appel ?? consultation ?? maison` (ADR 0038, amende 0023) :
+    - **jeton d'appel** (MCP) — `org=`/`project=`/`group=` posés déjà gardés par
+      les axes/adaptateurs (contextvar per-requête) ; AUCUN état de session ;
     - **org de consultation** (REST) — view-as du dashboard, contextvar per-requête
       posé APRÈS validation d'appartenance par l'adaptateur REST ;
     - sinon → repli sur la **maison** persistante (`org_store.get_active_org`).
 
-    Les deux premières ne coexistent jamais (session = MCP only, consultation =
+    Jeton et consultation ne coexistent jamais (jeton = MCP only, consultation =
     REST only). Garder ce seam étroit : candidat broker de credentials (ADR 0004)."""
     if sub is None:
         # Endpoint MCP ANONYME (`<slug>.mcp.oto.cx`, ADR 0032) : pas de sub, mais l'org
@@ -260,9 +260,8 @@ def resolve_slot_tableau(name: str) -> str:
     if pid is None:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
-            message=(f"`slot:{name}` exige un PROJET ACTIF (le binding nom→instance vit "
+            message=(f"`slot:{name}` exige un PROJET (le binding nom→instance vit "
                      "dans le projet, ADR 0035). Passe `project=<id>` sur CET appel "
-                     "(sans état, recommandé) ou active le bracelet `oto_use_project(<id>)` "
                      "(liste : `oto_project op=list`) — ou crée un projet et binde le slot "
                      f"(`oto_project op=link target_type=tableau … slot='{name}'`), ou "
                      "passe un `namespace` explicite.")))

@@ -258,7 +258,7 @@ def test_resolve_slot_no_project_actionable(monkeypatch):
     _wire_resolve(monkeypatch, project=None)
     with pytest.raises(McpError) as e:
         access.resolve_slot_tableau("sortie")
-    assert "oto_use_project" in str(e.value)   # la marche à suivre, pas un refus sec
+    assert "project=<id>" in str(e.value)   # la marche à suivre, pas un refus sec
 
 
 def test_resolve_slot_unbound_lists_bound(monkeypatch):

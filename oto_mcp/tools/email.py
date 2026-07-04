@@ -66,7 +66,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
         if match is not None:
             sender, connector = match
             if not roles.is_org_member(sub, org):
-                raise _err("Tu n'es pas membre de l'org active — bascule avec `oto_use_org`.")
+                raise _err("Tu n'es pas membre de l'org active — passe `org=<id>` sur cet appel.")
             transport = providers.EMAIL_CONNECTOR_TRANSPORT.get(connector)
             if transport is None:
                 raise _err(f"Connecteur email inconnu pour « {sender.get('email')} » : {connector!r}.")
@@ -86,7 +86,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
     # Chemin marque oto@otomata.tech — super_admin uniquement
     if from_email is not None:
         raise _err("Aucune org active avec une adresse d'envoi configurée. Configure-la "
-                   "(`oto_set_org_email_settings`) ou bascule sur la bonne org (`oto_use_org`).")
+                   "(`oto_set_org_email_settings`) ou passe la bonne org (`org=<id>`).")
     if not access.is_super_admin(sub):
         raise _err("Ton org n'a pas d'adresse d'envoi configurée — demande à un org_admin "
                    "de l'ajouter via `oto_set_org_email_settings`. L'envoi sous la marque "

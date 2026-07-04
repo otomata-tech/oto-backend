@@ -121,8 +121,8 @@ def _require_active_org_visible(ctx: ResolvedCtx, row: dict) -> None:
         owner = ownership.owner_of(RTYPE, rid)
         oname = (org_store.get_org(int(owner[1])) or {}).get("name") \
             if owner and owner[0] == "org" else None
-        hint = (f" Il appartient à l'org « {oname} » — bascule dessus (`oto_use_org`) "
-                "pour l'ouvrir." if oname else "")
+        hint = (f" Il appartient à l'org « {oname} » — passe `org=<id>` sur cet "
+                "appel pour l'ouvrir." if oname else "")
         raise AuthzDenied(403, "wrong_org_context",
                           f"Projet #{rid} hors de l'org active.{hint}")
     raise AuthzDenied(404, "unknown_project", f"Projet #{rid} inconnu.")
@@ -501,7 +501,7 @@ CAPABILITIES += [
             "Projects (organization layer, ADR 0030 owned resource). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
             "(ORG-SCOPED: the ACTIVE org's projects + projects shared with it or with you — "
-            "switch org with oto_use_org to see another org's; every response echoes the "
+            "pass `org=<id>` to see another org's; every response echoes the "
             "effective org in `_org`) / list_templates (published MODEL projects you can copy) / "
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
             "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "

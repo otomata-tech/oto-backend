@@ -175,7 +175,7 @@ def test_get_cross_org_member_blocked_with_switch_hint(seams, monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         P._project(ctx, P.ProjectInput(op="get", project_id=7))
     assert e.value.code == "wrong_org_context" and e.value.status == 403
-    assert "Ferme Solaire" in e.value.message and "oto_use_org" in e.value.message
+    assert "Ferme Solaire" in e.value.message and "org=<id>" in e.value.message
 
 
 def test_get_unknown(seams):

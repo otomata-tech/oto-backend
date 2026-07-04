@@ -62,3 +62,34 @@ de paiement).
 > `SUB_ONLY`, owner := ctx.sub par construction — pas d'escalade org_admin). ⚠️ La clé
 > du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
 > BYO perso ≠ celle du grantee → 404 Unipile surfacé).
+
+## API v1 / v2 (client sélectionnable, v1 par défaut)
+
+Le client Unipile existe en **deux versions** dans oto-core
+(`oto/tools/unipile/`) exposant la **même surface publique** (les wrappers
+`tools/unipile.py` sont inchangés) — factory `make_unipile_client(api_version=…)` :
+
+- **v1** (`client.UnipileClient`) — DSN par compte `apiXX.unipile.com:port/api/v1`,
+  `account_id` en query, enveloppe `{items, cursor}`. **Défaut en prod.**
+- **v2** (`client_v2.UnipileClientV2`) — API v2 Unipile : base `https://{dsn}/v2`,
+  **`account_id` dans le path** (`/v2/{account_id}/…`), enveloppe `{data,
+  total_count, next_cursor}` **normalisée** en `{items, cursor}` (aval inchangé),
+  surface éclatée (search people/companies par produit, invitations =
+  `users/me/relation-requests`, participants = ex-attendees, solde InMail =
+  `inmail-credits`). **Beta Unipile** (nouveau compte + migration de données requis).
+
+**Bascule** (`tools/unipile.unipile_client`) : `rc.config['api_version']` de la clé
+résolue (la v2 impose un compte/clé dédiés → la version suit la clé), sinon env
+`OTO_UNIPILE_API_VERSION` (bascule globale). Défaut `v1`.
+
+**Fixes feedback intégrés au client v2** (la v2 seule ne les donne pas) : garde
+**anti-mismatch** identifier↔réponse sur `get_profile`/`get_company` (rejette une
+réponse qui ne correspond pas au membre/à la société demandé·e — bug de réponses
+croisées #144-149/#153, retryable) ; erreurs réseau mappées proprement (#177) ;
+**account_id caviardé** dans les messages d'erreur (#178). `react_message` exige le
+`chat_id` en v2 (route sous le fil) — le wrapper ne le passe que s'il est fourni
+(compat oto-core sans le kwarg).
+
+> ⚠️ **Déploiement** : le client v2 vit dans oto-core (pin `pyproject`). Shipper la
+> bascule v2 = tagger oto-core + bumper le pin ; tant que le pin n'est pas bumpé,
+> seul le chemin v1 (défaut) tourne — donc merge sans risque prod.

@@ -176,7 +176,7 @@ def unipile_client(provider: str = "LINKEDIN"):
     partagée), l'API Unipile répondra 404 sur l'account_id — erreur surfacée telle
     quelle (la clé résolue est indépendante du compte).
     """
-    from oto.tools.unipile import UnipileClient
+    from oto.tools.unipile import make_unipile_client
     from .. import connector_identities
     rc = access.resolve_credential("unipile", want="auto")
     sub = access.current_user_sub_or_raise()
@@ -207,7 +207,13 @@ def unipile_client(provider: str = "LINKEDIN"):
     # sous-domaine), tiré de la config du credential résolu. Clé plateforme →
     # DSN env/défaut (instance Otomata).
     dsn = None if rc.is_platform else rc.config.get("dsn")
-    return UnipileClient(api_key=rc.key, account_id=account_id, dsn=dsn)
+    # Version d'API : v1 par défaut (prod). Opt-in v2 par la config du credential
+    # (`api_version`) — la v2 Unipile impose un compte/clé dédiés, donc la bascule
+    # suit la clé — sinon repli sur l'env `OTO_UNIPILE_API_VERSION` (bascule globale).
+    api_version = (rc.config.get("api_version")
+                   or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1")
+    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn,
+                               api_version=api_version)
 
 
 def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
@@ -550,10 +556,17 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().patch_chat(chat_id, action, value=value)
 
     @mcp.tool()
-    def unipile_message_react(message_id: str, reaction: str) -> dict:
+    def unipile_message_react(message_id: str, reaction: str,
+                              chat_id: Optional[str] = None) -> dict:
         """Réagit à un message LinkedIn (DM) avec un emoji natif (ex. '👍').
-        `message_id` = id d'un message de unipile_read_chat."""
-        return unipile_client().react_message(message_id, reaction)
+        `message_id` = id d'un message de unipile_read_chat. `chat_id` (celui du
+        fil) est **requis sur l'API v2**, ignoré en v1."""
+        client = unipile_client()
+        # Ne passe `chat_id` que s'il est fourni : garde la compat si oto-core est
+        # encore à une version dont `react_message` n'a pas ce kwarg (v2-only).
+        if chat_id is not None:
+            return client.react_message(message_id, reaction, chat_id=chat_id)
+        return client.react_message(message_id, reaction)
 
     # ---- LinkedIn recruiter / sales navigator ---------------------------
     # Nécessitent un abonnement Recruiter / Sales Navigator sur le compte connecté.

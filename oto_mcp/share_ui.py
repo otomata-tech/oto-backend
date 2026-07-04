@@ -80,11 +80,11 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None) -> str:
   article pre code{{background:none;padding:0}}
   article blockquote{{margin:.8em 0;padding:.2em 16px;border-left:3px solid var(--hair);color:var(--mute)}}
   .tablewrap{{overflow-x:auto;border:1px solid var(--hair);border-radius:12px}}
-  table{{border-collapse:collapse;width:100%;font-size:13.5px}}
+  table{{border-collapse:collapse;font-size:13.5px}}
   th,td{{border-bottom:1px solid var(--hair);padding:8px 12px;text-align:left;vertical-align:top;
-    max-width:340px;overflow-wrap:anywhere}}
+    min-width:90px;max-width:340px;overflow-wrap:anywhere}}
   th{{background:var(--paper2);font-family:'JetBrains Mono',monospace;font-size:11.5px;
-    text-transform:uppercase;letter-spacing:.04em;color:var(--mute);position:sticky;top:0}}
+    text-transform:uppercase;letter-spacing:.04em;color:var(--mute);position:sticky;top:0;white-space:nowrap}}
   tr:last-child td{{border-bottom:none}}
   .pager{{display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13.5px}}
   .pager a{{color:var(--accent);text-decoration:none}} .pager span{{color:var(--mute)}}

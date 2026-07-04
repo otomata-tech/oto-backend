@@ -148,11 +148,13 @@ Conteneur de travail **possédé** : brief + liens typés (`project_links` : tab
 procédure/connecteur/**doc** — `doc` = une page Documents attachée, ex-memento
 base/page retirés le 2026-07-03) + docs en arbre. Capacités `oto_project`/`oto_doc` ;
 partage/transfert via `oto_resource`. S'y greffent : **livraison client cascade**
-(#52), **partage public chiffré zero-knowledge** (`/p/p/<token>#clé`), **endpoint MCP
-dédié par projet** (`<slug>.mcp.oto.cx`, modes **anonymous** (sans login + listé) /
-**secret** (sans login, non listé, slug non devinable généré serveur = URL secrète) /
-**org** (authentifié) ; sonde credential-less **non bloquante** → `mcp_unresolvable_tools`
-en warning ; landing HTML, annuaire oto.ninja/apps). **Détail : `docs/projects.md`**.
+(#52), **endpoint MCP + partage navigable par projet** — un projet publié est servi sur
+son sous-domaine dédié, modes **anonymous** (`<slug>.mcp.oto.cx`, sans login + listé) /
+**secret** (`<slug>.share.oto.cx`, URL non devinable = **UI navigable** lecture seule des
+procédures/tableaux/docs, rendu server-side `share_ui`, + MCP au path `/mcp`) / **org**
+(authentifié) ; sonde credential-less **non bloquante** → `mcp_unresolvable_tools` en
+warning ; annuaire oto.ninja/apps. (Le partage public **chiffré** `/p/p` a été retiré,
+supplanté par ce partage navigable live.) **Détail : `docs/projects.md`**.
 
 ## Messagerie & LinkedIn (Unipile)
 
@@ -536,7 +538,7 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/datastore.md` — datastore spine PG (`data_*`) + OAuth Google per-user (setup GCP, scopes).
 - `docs/groups-and-roles.md` — groupes/départements & hiérarchie de droits (ADR 0012).
 - `docs/browser-automation.md` — substrat Browserbase (Context/Live View/run_fetch), connecteurs brevo/crunchbase/pennylaneged, LinkedIn isolation de session.
-- `docs/projects.md` — projet (liens typés, docs), livraison client cascade, partage public chiffré, endpoint MCP par projet (`<slug>.mcp.oto.cx`).
+- `docs/projects.md` — projet (liens typés, docs), livraison client cascade, endpoint MCP + partage navigable par projet (`<slug>.{mcp,share}.oto.cx`).
 - `docs/unipile.md` — messagerie hébergée : mode plateforme, DSN, sélecteur d'identité, comptes partagés (#55).
 - `docs/ownership.md` — primitive de ressource possédée (can_access/can_govern, tripwire owner_pairs, abolition du perso).
 - `docs/email.md` — envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours.

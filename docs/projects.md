@@ -53,17 +53,19 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 `/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
 (MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
 
-> **Partage public CHIFFRÉ d'un projet (ADR 0032 §3, zero-knowledge).** Un projet peut être
-> publié en lecture seule derrière un lien, avec le contenu **chiffré côté navigateur**
-> (AES-256-GCM, `oto-dashboard` `lib/crypto.ts`). Le backend ne stocke QUE le ciphertext
-> (`project_public_shares`, une part par projet, token opaque) — la clé vit dans le **fragment**
-> de l'URL (`/p/p/<token>#<clé>`) et n'atteint jamais le serveur → la plateforme ne peut pas lire
-> un projet partagé. **REST-only** (le ciphertext vient du front, l'agent MCP ne peut pas chiffrer
-> dans le navigateur → pas de binding MCP, esprit « secret jamais en argument MCP ») :
-> `POST|DELETE /api/me/projects/{id}/public-share` (autz `can_access write`) + lecture publique
-> sans auth `GET /api/public/projects/{token}`. Re-publier fait **tourner** le token+la clé
-> (ancien lien caduc). `oto_project(op=get)` expose `public_shared`/`public_shared_at` (présence
-> seule, jamais la clé). Pendant du partage public de doc rendu (#4a) mais **chiffré**.
+> **Partage NAVIGABLE d'un projet — `<slug>.share.oto.cx` (ADR 0032).** Un projet publié en
+> `secret` est servi sur son sous-domaine `<slug>.share.oto.cx` comme un petit site rendu
+> **server-side** (lisible humain ET agent WebFetch), en **lecture seule** : la racine = index
+> (brief + procédures/tableaux/docs + carte « brancher »), `/procedures/<id>` (prose), `/data/<ns>`
+> (table, gaté par `mcp_expose_datastore`), `/docs/<id>`. Le MCP reste au path `/mcp`. Rendu par
+> `share_ui.py` (routeur `build_page`, lectures DB en threadpool, contenu échappé, markdown sûr),
+> **gating fail-closed** par appartenance au projet (seules les entités liées sont navigables).
+> Même dispatch que `.mcp.oto.cx` (`subdomain_project.HostDispatch`, suffixes `.mcp`/`.share`,
+> URL de branchement path-aware). `oto_project(op=get)` expose `mcp_url` (per-mode : `secret` →
+> `share.oto.cx/mcp`, sinon `mcp.oto.cx/mcp`) + `share_url` (base navigable, `secret` uniquement).
+> Infra : wildcard `*.share.oto.cx` (grey) + Caddy on-demand TLS gaté par `/api/mcp/tls-check`.
+> **Remplace** l'ancien partage public **chiffré** zero-knowledge (`/p/p`, `project_public_shares`,
+> `lib/crypto.ts`, `PublicProjectView.vue`) — **retiré** (le navigable live le supplante).
 
 > **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
 > se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de

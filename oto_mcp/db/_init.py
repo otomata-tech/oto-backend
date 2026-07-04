@@ -46,6 +46,12 @@ def init_db() -> None:
         # l'org propriétaire (pas de sub). Défaut FALSE (le datastore reste privé). JAMAIS
         # honoré en `anonymous` (endpoint public listé) : cf. set_project_mcp_publication.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE")
+        # « Ajouter à mon Oto » (otomata-private, canal d'acquisition) : un projet forké
+        # depuis un partage public garde le pointeur vers sa source → import IDEMPOTENT
+        # (on RÉCUPÈRE la copie déjà présente dans l'org au lieu d'en refaire une).
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS copied_from BIGINT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_copied_from "
+                     "ON projects(owner_type, owner_id, copied_from) WHERE copied_from IS NOT NULL")
         # Retrait du partage public CHIFFRÉ zero-knowledge (`/p/p`), supplanté par le
         # partage NAVIGABLE live sur `<slug>.share.oto.cx` (share_ui). La table ne stockait
         # que du ciphertext irrécupérable (clé jamais côté serveur) → drop sûr, pas de legacy.

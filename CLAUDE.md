@@ -154,7 +154,12 @@ son sous-domaine dédié, modes **anonymous** (`<slug>.mcp.oto.cx`, sans login +
 procédures/tableaux/docs, rendu server-side `share_ui`, + MCP au path `/mcp`) / **org**
 (authentifié) ; sonde credential-less **non bloquante** → `mcp_unresolvable_tools` en
 warning ; annuaire oto.ninja/apps. (Le partage public **chiffré** `/p/p` a été retiré,
-supplanté par ce partage navigable live.) **Détail : `docs/projects.md`**.
+supplanté par ce partage navigable live.) La page navigable (`share_ui`) est un **canal
+d'acquisition** : hero « brancher », connecteurs en pastilles (logo + tooltip + lien fiche),
+tableau riche (recherche/tri/filtres), et CTA **« Ajouter à mon Oto »** → capacité
+`me.import_project` (`POST /api/me/projects/import`) qui **forke un projet publié par slug**
+dans l'org active (structure only, jamais de credentials ; idempotent via `projects.copied_from`).
+**Détail : `docs/projects.md`**.
 
 ## Messagerie & LinkedIn (Unipile)
 

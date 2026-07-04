@@ -32,12 +32,38 @@ def test_index_lists_entities(monkeypatch):
     assert "serper" not in html                               # connecteur non navigable
 
 
-def test_index_shows_exposed_tools_chips(monkeypatch):
+def test_index_shows_connectors_with_tooltip_and_link(monkeypatch):
+    # Les tools exposés sont groupés par CONNECTEUR : pastille (logo/monogramme) +
+    # tooltip (description) + lien vers la fiche marketplace du dashboard.
     _wire(monkeypatch, links=[])
     monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [])
     proj = {"id": 5, "name": "P", "brief_md": "", "mcp_tools": ["fr_search", "serper_web_search"]}
     html, _ = share_ui.build_page(proj, "/", connect_url="u")
-    assert "Outils exposés" in html and "fr_search" in html and "serper_web_search" in html
+    assert "Connecteurs" in html
+    # serper_web_search → connecteur `serper` ; fr_search → connecteur `sirene`.
+    assert "connector=serper" in html
+    assert "dashboard.oto.ninja/connectors?tab=marketplace" in html
+    assert 'class=conn' in html and 'data-tip=' in html  # pastille + tooltip
+
+
+def test_connectors_from_tools_groups_and_derives():
+    conns, loose = share_ui._connectors_from_tools(["serper_web_search", "serper_news_search",
+                                                    "fr_search"])
+    names = {c["name"] for c in conns}
+    assert "serper" in names
+    serper = next(c for c in conns if c["name"] == "serper")
+    assert serper["tool_count"] == 2            # deux tools serper regroupés
+    assert serper["href"].endswith("connector=serper")
+    assert "connectors?tab=marketplace" in serper["href"]
+
+
+def test_add_to_oto_cta_when_slug_present(monkeypatch):
+    _wire(monkeypatch, links=[])
+    monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [])
+    proj = {"id": 5, "name": "P", "brief_md": "", "mcp_access": "secret", "mcp_slug": "demo-x"}
+    html, _ = share_ui.build_page(proj, "/", connect_url="https://demo-x.share.oto.cx/mcp")
+    assert "Ajouter à mon Oto" in html
+    assert "dashboard.oto.ninja/import?slug=demo-x" in html
 
 
 def test_index_hides_tables_when_anonymous(monkeypatch):

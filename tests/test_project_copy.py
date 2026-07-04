@@ -12,9 +12,9 @@ def _wire(monkeypatch, *, src):
     created = {"projects": [], "docs": [], "links": [], "files": [], "activity": []}
     counter = {"pid": 100, "doc": 200}
 
-    def create_project(ot, oid, name, brief_md="", created_by=None):
+    def create_project(ot, oid, name, brief_md="", created_by=None, copied_from=None):
         counter["pid"] += 1
-        created["projects"].append((counter["pid"], ot, oid, name, brief_md, created_by))
+        created["projects"].append((counter["pid"], ot, oid, name, brief_md, created_by, copied_from))
         return counter["pid"]
 
     def create_doc(pid, title, *, parent_id=None, body_md="", kind="doc", created_by=None):
@@ -70,7 +70,7 @@ def test_duplicate_copies_brief_and_owner(monkeypatch):
     created = _wire(monkeypatch, src=src)
     new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
     assert new_id == 101 and warnings == []
-    assert created["projects"] == [(101, "org", "42", "Copie", "le brief", "u1")]
+    assert created["projects"] == [(101, "org", "42", "Copie", "le brief", "u1", None)]
     assert created["activity"] == [(101, "project.copy", "from #7")]
 
 

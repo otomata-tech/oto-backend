@@ -564,3 +564,65 @@ def test_gen_secret_slug_is_valid_and_unique():
     b = P._gen_secret_slug(None)
     assert a != b and _MCP_SLUG_RE.match(a) and _MCP_SLUG_RE.match(b)
     assert _MCP_SLUG_RE.match(P._gen_secret_slug("French Tech Marseille"))
+
+
+# ── « Ajouter à mon Oto » : import d'un projet publié par slug (canal d'acquisition) ──
+_PUB = {"id": 42, "owner_type": "org", "owner_id": "77", "name": "Prospection FT",
+        "mcp_access": "secret", "mcp_slug": "demo-x"}
+
+
+def _wire_import(monkeypatch, *, src=_PUB, existing=None, dup_id=101):
+    calls = {"dup": [], "activity": []}
+    monkeypatch.setattr(P.db, "get_project_by_mcp_slug",
+                        lambda slug: dict(src) if src and slug == src["mcp_slug"] else None)
+    monkeypatch.setattr(P.db, "find_copied_project",
+                        lambda ot, oid, sid: dict(existing) if existing else None)
+
+    def _dup(sid, name, ot, oid, copied_by=None, track_source=False):
+        calls["dup"].append((sid, name, ot, oid, copied_by, track_source))
+        return dup_id, []
+    monkeypatch.setattr(P.db, "duplicate_project", _dup)
+    monkeypatch.setattr(P.db, "log_project_activity",
+                        lambda pid, sub, action, detail=None: calls["activity"].append((pid, action, detail)))
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(_PUB, id=pid))
+    return calls
+
+
+def test_import_forks_published_project(monkeypatch):
+    calls = _wire_import(monkeypatch)
+    out = P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
+    assert out["imported"] is True and out["project_id"] == 101
+    assert out["copied_from"] == 42
+    # Forké dans l'org ACTIVE (99), en trackant la source (idempotence).
+    assert calls["dup"] == [(42, "Prospection FT", "org", "99", "u1", True)]
+
+
+def test_import_idempotent_returns_existing(monkeypatch):
+    calls = _wire_import(monkeypatch, existing={"id": 55, "name": "Prospection FT"})
+    out = P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
+    assert out["imported"] is False and out["project_id"] == 55
+    assert out["reason"] == "already_imported"
+    assert calls["dup"] == []          # aucun doublon créé
+
+
+def test_import_own_project_is_noop(monkeypatch):
+    # La source appartient déjà à mon org active (99) → rien à forker, on l'ouvre.
+    src = dict(_PUB, owner_id="99")
+    calls = _wire_import(monkeypatch, src=src)
+    out = P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
+    assert out["imported"] is False and out["project_id"] == 42
+    assert out["reason"] == "own_project" and calls["dup"] == []
+
+
+def test_import_unknown_slug_404(monkeypatch):
+    _wire_import(monkeypatch, src=None)
+    with pytest.raises(AuthzDenied) as e:
+        P._import_project(CTX, P.ImportProjectInput(slug="nope"))
+    assert e.value.status == 404 and e.value.code == "unknown_project"
+
+
+def test_import_rejects_unpublished(monkeypatch):
+    _wire_import(monkeypatch, src=dict(_PUB, mcp_access="org"))
+    with pytest.raises(AuthzDenied) as e:
+        P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
+    assert e.value.status == 403 and e.value.code == "not_importable"

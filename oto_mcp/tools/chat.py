@@ -20,6 +20,40 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+def _http_error(e) -> McpError:
+    """Normalise un `googleapiclient.errors.HttpError` (stacktrace brut illisible)
+    en message actionnable, aligné sur la famille messagerie (oto-backend#110).
+    Le cas courant = l'API Google Chat non activée / le compte sans accès Chat →
+    l'ancien retour était un `<HttpError 404 …>` opaque."""
+    status = getattr(getattr(e, "resp", None), "status", None) or getattr(e, "status_code", None)
+    detail = ""
+    try:
+        import json
+        payload = json.loads(e.content.decode()) if getattr(e, "content", None) else {}
+        detail = (payload.get("error") or {}).get("message") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    detail = detail or (getattr(e, "reason", None) or "").strip() or "erreur inconnue"
+    low = detail.lower()
+    if status == 404 and ("app not found" in low or "chat api" in low or "turn on" in low):
+        msg = ("Google Chat n'est pas disponible pour ce compte : l'API Google Chat doit "
+               "être activée côté Google (ou le compte n'a pas accès à Chat). "
+               f"Détail : {detail}")
+    else:
+        msg = f"Google Chat a refusé la requête (HTTP {status}) : {detail}"
+    return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+async def _call(fn, *args):
+    """Exécute un appel client Chat hors boucle + traduit tout `HttpError` en erreur
+    propre (jamais de stacktrace brut renvoyé à l'agent)."""
+    from googleapiclient.errors import HttpError
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except HttpError as e:
+        raise _http_error(e)
+
+
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
@@ -48,14 +82,14 @@ def register(mcp: FastMCP) -> None:
         """
         client = _client_for_user(account)
         filter_ = f'spaceType = "{space_type}"' if space_type else None
-        spaces = await asyncio.to_thread(client.list_spaces, filter_, max_results)
+        spaces = await _call(client.list_spaces, filter_, max_results)
         return {"spaces": spaces, "count": len(spaces)}
 
     @mcp.tool()
     async def chat_messages(space: str, max_results: int = 20, account: Optional[str] = None) -> dict:
         """List recent messages in a space (most recent first). `space` = 'spaces/XXXX'."""
         client = _client_for_user(account)
-        messages = await asyncio.to_thread(client.list_messages, space, max_results)
+        messages = await _call(client.list_messages, space, max_results)
         return {"messages": messages, "count": len(messages)}
 
     @mcp.tool()
@@ -78,5 +112,5 @@ def register(mcp: FastMCP) -> None:
             raise _bad("Fournis soit `space` (message dans un espace) soit `user` (DM), pas les deux ni aucun.")
         client = _client_for_user(account)
         if user:
-            return await asyncio.to_thread(client.send_dm, user, text)
-        return await asyncio.to_thread(client.send, space, text)
+            return await _call(client.send_dm, user, text)
+        return await _call(client.send, space, text)

@@ -67,6 +67,7 @@ class AnonContext:
     project_id: int
     org_id: Optional[int]          # org propriétaire (résolution de credential) ; None si projet user-owned legacy
     tools: frozenset               # allowlist figée du preset (les seuls tools exposés)
+    datastore_exposed: bool = False  # opt-in `secret` : les tools data_* agissent sous l'org propriétaire
 
 
 # Contexte anonyme : contextvar (même requête, ex. l'initialize qui calcule la
@@ -177,6 +178,13 @@ def current_allowlist() -> Optional[frozenset]:
     return ctx.tools if ctx else None
 
 
+def current_anon_datastore_exposed() -> bool:
+    """L'endpoint anonyme/secret courant expose-t-il le datastore de l'org (opt-in) ?
+    False hors endpoint anonyme (seam pour les tools data_*)."""
+    ctx = current_anon_context()
+    return bool(ctx and ctx.datastore_exposed and ctx.org_id is not None)
+
+
 def _slug_from_host(host: str) -> Optional[str]:
     h = (host or "").split(":")[0].strip().lower()
     if not h.endswith(_SUFFIX):
@@ -274,7 +282,11 @@ class HostDispatch:
             if not _check_bucket((_client_ip(scope, headers), int(proj["id"])), time.monotonic()):
                 return await _send_429(send)
             ctx = AnonContext(int(proj["id"]), org_id,
-                              frozenset(proj.get("mcp_tools") or []))
+                              frozenset(proj.get("mcp_tools") or []),
+                              # opt-in datastore : honoré uniquement en `secret` (jamais
+                              # `anonymous` public) — cf. set_project_mcp_publication.
+                              datastore_exposed=(access_mode == "secret"
+                                                 and bool(proj.get("mcp_expose_datastore"))))
             tok = _CTX.set(ctx)
             if sid:
                 _store_ctx(sid, ctx)

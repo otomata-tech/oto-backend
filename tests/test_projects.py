@@ -436,8 +436,10 @@ def test_use_clear_project_registered():
 def _patch_publish(monkeypatch, rec, unresolvable):
     """Câble les seams propres à publish_mcp : record de la pose + sonde contrôlée."""
     monkeypatch.setattr(P.db, "set_project_mcp_publication",
-                        lambda pid, slug, access, tools: rec.setdefault("pub", []).append((pid, slug, access, tools)))
-    monkeypatch.setattr(P, "_mcp_unresolvable_tools", lambda row, tools: list(unresolvable))
+                        lambda pid, slug, access, tools, expose_datastore=False:
+                        rec.setdefault("pub", []).append((pid, slug, access, tools, expose_datastore)))
+    monkeypatch.setattr(P, "_mcp_unresolvable_tools",
+                        lambda row, tools, expose_datastore=False: list(unresolvable))
 
 
 def test_publish_mcp_secret_generates_unguessable_slug(seams, monkeypatch):
@@ -446,7 +448,7 @@ def test_publish_mcp_secret_generates_unguessable_slug(seams, monkeypatch):
     _patch_publish(monkeypatch, rec, unresolvable=[])
     out = P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7,
                                          mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
-    (pid, slug, access, tools), = rec["pub"]
+    (pid, slug, access, tools, expose_datastore), = rec["pub"]
     assert access == "secret" and pid == 7
     # slug NON saisi → généré, non devinable, valide (préfixe par défaut `mcp-`).
     assert slug.startswith("mcp-") and _MCP_SLUG_RE.match(slug)
@@ -459,7 +461,7 @@ def test_publish_mcp_secret_prefixes_from_typed_slug(seams, monkeypatch):
     _patch_publish(monkeypatch, rec, unresolvable=[])
     P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="Ma Base!!",
                                    mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
-    (_, slug, _, _), = rec["pub"]
+    (_, slug, _, _, _), = rec["pub"]
     assert slug.startswith("ma-base-") and _MCP_SLUG_RE.match(slug)
 
 
@@ -481,6 +483,28 @@ def test_publish_mcp_org_requires_slug(seams, monkeypatch):
         P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7,
                                        mcp_access="org", mcp_tools=["frenchtech_evenements"]))
     assert ei.value.code == "missing_slug"
+
+
+def test_publish_mcp_expose_datastore_secret_persists(seams, monkeypatch):
+    """Opt-in datastore en `secret` : persisté (expose_datastore=True dans la pose)."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_access="secret",
+                                   mcp_tools=["data_write"], mcp_expose_datastore=True))
+    (_, _, access, _, expose_datastore), = rec["pub"]
+    assert access == "secret" and expose_datastore is True
+
+
+def test_publish_mcp_expose_datastore_rejected_on_anonymous(seams, monkeypatch):
+    """Opt-in datastore INTERDIT hors `secret` (un endpoint anonyme est public)."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    with pytest.raises(AuthzDenied) as ei:
+        P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="ft-pub",
+                                       mcp_access="anonymous", mcp_tools=["data_write"],
+                                       mcp_expose_datastore=True))
+    assert ei.value.code == "datastore_secret_only"
+    assert not rec.get("pub"), "aucune publication ne doit avoir eu lieu"
 
 
 def test_gen_secret_slug_is_valid_and_unique():

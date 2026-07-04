@@ -59,6 +59,33 @@ def test_list_namespaces_scopes_groups_on_active_org(monkeypatch):
     assert by_id[2]["can_write"] is False
 
 
+def test_org_store_lists_owned_without_sub(monkeypatch):
+    # Store agissant-org (endpoint secret opt-in) : sub-less, contexte = org
+    # propriétaire seule, aucun groupe, pas de gouvernance.
+    rec = {}
+    _wire(monkeypatch, rec, org=None)  # current_org ne doit PAS être consulté
+    out = D.make_org_store(99).list_namespaces()
+    assert rec["owners"] == [("org", "99")]
+    assert rec["granted_to"] == (None, [99], [])   # sub=None, org propriétaire, zéro groupe
+    assert "groups_for" not in rec                 # pas de scope de groupe (sub-less)
+    by_id = {e["id"]: e for e in out}
+    assert by_id[1]["can_govern"] is False and by_id[1]["is_personal"] is False
+
+
+def test_org_store_write_uses_org_principal(monkeypatch):
+    # L'écriture d'un store agissant-org se décide sur `org_can_access(org, …)`,
+    # jamais sur `can_access(sub, …)` (il n'y a pas de sub).
+    seen = {}
+    monkeypatch.setattr(D.db, "resolve_datastore_ns",
+                        lambda ns, sub, org_ids, group_ids: {"id": 1} if ns == "leads" else None)
+    monkeypatch.setattr(D.ownership, "org_can_access",
+                        lambda org_id, t, rid, want="read": seen.setdefault("org", (org_id, want)) or True)
+    monkeypatch.setattr(D.ownership, "can_access",
+                        lambda *a, **k: pytest.fail("can_access(sub) ne doit pas être appelé en mode org"))
+    ns_id = D.make_org_store(99)._resolve("leads", write=True)
+    assert ns_id == 1 and seen["org"] == (99, "write")
+
+
 def test_list_namespaces_dedups_owned_over_granted(monkeypatch):
     # Un namespace possédé ET accordé ne sort qu'une fois, en possédé.
     rec = {}

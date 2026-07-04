@@ -41,6 +41,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_access TEXT NOT NULL DEFAULT 'off'")
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_tools TEXT[] NOT NULL DEFAULT '{}'")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_mcp_slug ON projects(mcp_slug) WHERE mcp_slug IS NOT NULL")
+        # Opt-in explicite : exposer les tools `data_*` (datastore de l'org propriétaire)
+        # sur un endpoint `secret` sans login — l'endpoint AGIT alors sous l'autorité de
+        # l'org propriétaire (pas de sub). Défaut FALSE (le datastore reste privé). JAMAIS
+        # honoré en `anonymous` (endpoint public listé) : cf. set_project_mcp_publication.
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE")
         # ADR 0032 §7 : l'onboarding n'est plus un mode spécial mais un projet « Découverte »
         # (semé à la création de l'org perso). On retire la machinerie d'accueil de la fiche
         # « situation avec oto » — il ne reste que le data model `profile`, relu à chaque session.

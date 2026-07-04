@@ -151,6 +151,24 @@ def can_access(sub: str, resource_type: str, resource_id: str, want: str = "read
     return want == "read" or best == "write"
 
 
+def org_can_access(org_id: int, resource_type: str, resource_id: str,
+                   want: str = "read") -> bool:
+    """Plan CONTENU vu depuis un PRINCIPAL ORG (pas un user) — pendant `sub`-less de
+    `can_access`, pour un endpoint MCP agissant SOUS L'AUTORITÉ d'une org (secret +
+    opt-in datastore, ADR 0032). Accès si l'org POSSÈDE la ressource, ou si un grant
+    `principal=('org', org_id)` suffisant existe (write requis pour écrire). Pas
+    d'escalade de rôle : c'est du contenu, pas de la gouvernance."""
+    owner = owner_of(resource_type, resource_id)
+    if owner is None:
+        return False
+    if (str(owner[0]), str(owner[1])) == ("org", str(org_id)):
+        return True
+    g = db.get_resource_grant(resource_type, resource_id, "org", str(org_id))
+    if g is None:
+        return False
+    return want == "read" or g["permission"] == "write"
+
+
 def _best_grant(sub: str, resource_type: str, resource_id: str) -> Optional[str]:
     """Meilleure permission accordée à l'acteur (write > read), ou None."""
     scope = accessor_scope(sub)

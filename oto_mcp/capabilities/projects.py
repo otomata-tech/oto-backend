@@ -41,6 +41,7 @@ class ProjectInput(BaseModel):
     mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$) ; en `secret`, sert de préfixe optionnel (un suffixe aléatoire est ajouté serveur)
     mcp_access: Optional[Literal["anonymous", "secret", "org"]] = None  # anonymous = sans login + listé ; secret = sans login, non listé, slug non devinable ; org = JWT + org épinglée
     mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
+    mcp_expose_datastore: Optional[bool] = None  # opt-in `secret` uniquement : exposer les tools data_* (datastore de l'org propriétaire), servis sous l'autorité de l'org — défaut False (datastore privé)
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
@@ -86,6 +87,7 @@ def _view(row: dict) -> dict:
         "mcp_slug": row.get("mcp_slug"),
         "mcp_access": row.get("mcp_access") or "off",
         "mcp_tools": list(row.get("mcp_tools") or []),
+        "mcp_expose_datastore": bool(row.get("mcp_expose_datastore")),
         "mcp_url": (f"https://{row['mcp_slug']}.mcp.oto.cx/mcp"
                     if row.get("mcp_slug") and (row.get("mcp_access") or "off") != "off" else None),
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
@@ -123,7 +125,8 @@ def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
     return str(inst["id"]) if inst and inst.get("id") is not None else ref
 
 
-def _mcp_unresolvable_tools(row: dict, tools: list[str]) -> list[str]:
+def _mcp_unresolvable_tools(row: dict, tools: list[str],
+                            expose_datastore: bool = False) -> list[str]:
     """Sonde de publication SANS LOGIN (anonymous/secret, ADR 0032) : un endpoint sans
     login n'a pas d'identité user → un tool n'est servi que s'il est résoluble SANS `sub`.
     Renvoie la liste des tools **non résolubles** pour l'org propriétaire : tool spine/méta
@@ -131,7 +134,10 @@ def _mcp_unresolvable_tools(row: dict, tools: list[str]) -> list[str]:
     (`access.connector_resolvable_for_org`). **Non bloquant** (choix produit) : on publie
     quand même, ces tools sont exposés mais **échouent proprement à l'appel** (McpError, pas
     de fallback) ; la liste remonte en warning pour que l'humain configure une clé d'org ou
-    retire les outils."""
+    retire les outils.
+
+    `expose_datastore` (opt-in `secret`) : les tools `data_*` agissent alors SOUS l'org
+    propriétaire (pas de connecteur, pas de `sub` requis) → considérés résolubles."""
     from .. import access, providers
     from ..tool_visibility import namespace_of
     if row.get("owner_type") != "org":
@@ -139,6 +145,8 @@ def _mcp_unresolvable_tools(row: dict, tools: list[str]) -> list[str]:
     org_id = int(row["owner_id"])
     bad = []
     for t in tools:
+        if expose_datastore and namespace_of(t) == "data":
+            continue  # datastore de l'org, servi sous son autorité (opt-in)
         con = providers.connector_for_namespace(namespace_of(t))
         if con is None or not access.connector_resolvable_for_org(con.name, org_id):
             bad.append(t)
@@ -394,6 +402,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         access_mode = inp.mcp_access or "anonymous"
         tools = [t for t in (inp.mcp_tools or []) if t and t.strip()]
         _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
+        # Opt-in datastore : réservé à `secret` (un endpoint `anonymous` est PUBLIC ; un
+        # endpoint `org` a déjà un membre authentifié → data_* résout nativement).
+        expose_datastore = bool(inp.mcp_expose_datastore)
+        _require(not (expose_datastore and access_mode != "secret"),
+                 "datastore_secret_only",
+                 "mcp_expose_datastore est réservé à l'accès `secret` (un endpoint "
+                 "`anonymous` est public, un endpoint `org` résout déjà data_* via le "
+                 "membre authentifié).", 400)
         # Slug effectif : `secret` → non devinable, généré serveur (préfixe optionnel issu
         # du slug saisi) ; on RÉUTILISE le slug existant si l'endpoint est déjà secret
         # (re-publier ne doit pas casser l'URL déjà distribuée). anonymous/org : slug saisi requis.
@@ -405,11 +421,12 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             slug = inp.mcp_slug
         # Sonde credential-less NON bloquante (anonymous/secret) : on publie, les tools non
         # résolubles sont exposés mais échouent proprement à l'appel — la liste remonte en warning.
-        unresolvable = (_mcp_unresolvable_tools(row, tools)
+        unresolvable = (_mcp_unresolvable_tools(row, tools, expose_datastore)
                         if access_mode in ("anonymous", "secret") else [])
         try:
             db.set_project_mcp_publication(int(inp.project_id), slug=slug,
-                                           access=access_mode, tools=tools)
+                                           access=access_mode, tools=tools,
+                                           expose_datastore=expose_datastore)
         except ValueError as e:
             code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
             _require(False, code, str(e), 409 if code == "slug_taken" else 400)
@@ -497,8 +514,11 @@ CAPABILITIES += [
             "optional readable prefix); `org` = Logto JWT + pins the org. For anonymous/secret, "
             "tools that aren't credential-less or resolvable for the org are published anyway but "
             "FAIL cleanly at call time — they come back in `mcp_unresolvable_tools` (configure an "
-            "org key or drop them). unpublish_mcp removes it. get returns "
-            "mcp_slug/mcp_access/mcp_tools/mcp_url."
+            "org key or drop them). mcp_expose_datastore (SECRET only) opts the `data_*` tools "
+            "in: they then act under the OWNER ORG's authority (read/write the org's namespaces) "
+            "without a login — off by default (the datastore stays private); refused on "
+            "anonymous/org. unpublish_mcp removes it. get returns "
+            "mcp_slug/mcp_access/mcp_tools/mcp_expose_datastore/mcp_url."
         ),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),

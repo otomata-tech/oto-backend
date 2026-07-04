@@ -79,15 +79,27 @@ def make_store(sub: str) -> "DatastorePg":
     return DatastorePg(sub)
 
 
-class DatastorePg:
-    """Store tabulaire per-user adossé à PostgreSQL.
+def make_org_store(org_id: int) -> "DatastorePg":
+    """Store agissant SOUS L'AUTORITÉ d'une ORG, sans user (`sub=None`). Sert un
+    endpoint MCP `secret` opt-in datastore (ADR 0032) : la résolution de namespace et
+    le droit d'écriture se décident sur le principal ORG (owner-match / grant d'org),
+    jamais sur un membre. N'expose PAS la gouvernance (create/delete/rename/share) —
+    ces actes restent réservés à un user identifié (tools sub-only)."""
+    return DatastorePg(None, acting_org=int(org_id))
 
-    State-less, instancié par requête à partir du `sub`. Résout chaque namespace
-    en `ns_id` (possédé OU partagé) et opère sur `datastore_rows`.
+
+class DatastorePg:
+    """Store tabulaire adossé à PostgreSQL.
+
+    State-less, instancié par requête. Normalement à partir du `sub` (l'acteur user) ;
+    ou, pour un endpoint MCP agissant sous une org (`acting_org`, secret opt-in), avec
+    `sub=None` — l'autorité est alors l'org propriétaire. Résout chaque namespace en
+    `ns_id` (possédé OU partagé) et opère sur `datastore_rows`.
     """
 
-    def __init__(self, sub: str):
+    def __init__(self, sub: Optional[str], *, acting_org: Optional[int] = None):
         self.sub = sub
+        self.acting_org = acting_org
         self._active_scope_cache: Optional[tuple[list[int], list[int]]] = None
 
     # --- résolution namespace -> ns_id ---------------------------------------
@@ -100,6 +112,11 @@ class DatastorePg:
         grants perso (`principal user`) suivent l'acteur : ils n'appartiennent à aucune
         org, donc ne sont pas une fuite d'org — `resolve_datastore_ns` les garde via `sub`."""
         if self._active_scope_cache is None:
+            if self.acting_org is not None:
+                # Endpoint agissant-org (sub-less) : contexte = l'org propriétaire seule,
+                # aucun groupe (pas de membre → pas de scope de groupe).
+                self._active_scope_cache = ([int(self.acting_org)], [])
+                return self._active_scope_cache
             from . import access, group_store
             oid = access.current_org(self.sub)
             if oid is None:
@@ -121,9 +138,14 @@ class DatastorePg:
         if not ns:
             raise NamespaceNotFound(namespace)
         ns_id = int(ns["id"])
-        if write and not ownership.can_access(
-                self.sub, "datastore_namespace", str(ns_id), "write"):
-            raise NamespaceReadOnly(namespace)
+        if write:
+            ok = (ownership.org_can_access(self.acting_org, "datastore_namespace",
+                                           str(ns_id), "write")
+                  if self.acting_org is not None
+                  else ownership.can_access(self.sub, "datastore_namespace",
+                                            str(ns_id), "write"))
+            if not ok:
+                raise NamespaceReadOnly(namespace)
         return ns_id
 
     @staticmethod
@@ -142,7 +164,12 @@ class DatastorePg:
 
     def _entry(self, n: dict, *, shared: bool, permission: Optional[str] = None) -> dict:
         ns_id = int(n["id"])
-        perso = n.get("owner_type") == "user" and n.get("owner_id") == self.sub
+        perso = (self.sub is not None
+                 and n.get("owner_type") == "user" and n.get("owner_id") == self.sub)
+        # Agissant-org (sub-less) : pas de gouvernance via l'endpoint (create/delete/
+        # rename/share restent réservés à un user identifié).
+        can_govern = (False if self.acting_org is not None
+                      else ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)))
         return {
             "id": ns_id,
             "namespace": n["namespace"],
@@ -153,7 +180,7 @@ class DatastorePg:
             "owner_id": n.get("owner_id"),
             "permission": permission if shared else "write",
             "can_write": (permission == "write") if shared else True,
-            "can_govern": ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)),
+            "can_govern": can_govern,
             "is_personal": perso,
             "schema": n.get("schema"),   # mode typé optionnel (ADR 0032 §6 / 0029, B6) ; None = table libre
         }
@@ -169,13 +196,17 @@ class DatastorePg:
         (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
         namespace d'une autre org ne se résout plus hors de son org non plus."""
         from . import access, group_store
-        owner = ownership.active_owner(access.current_org(self.sub))
-        if owner is None:
-            return []
-        org = int(owner[1])
-        org_ids = [org]
-        group_ids = [int(g["group_id"])
-                     for g in group_store.list_groups_for_user(self.sub, org)]
+        if self.acting_org is not None:
+            owner = ("org", str(self.acting_org))
+            org, org_ids, group_ids = int(self.acting_org), [int(self.acting_org)], []
+        else:
+            owner = ownership.active_owner(access.current_org(self.sub))
+            if owner is None:
+                return []
+            org = int(owner[1])
+            org_ids = [org]
+            group_ids = [int(g["group_id"])
+                         for g in group_store.list_groups_for_user(self.sub, org)]
         out: dict[int, dict] = {}
         for n in db.list_datastore_namespaces_for_owners([owner]):
             out[int(n["id"])] = self._entry(n, shared=False)

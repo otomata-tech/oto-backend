@@ -289,6 +289,10 @@ CREATE TABLE IF NOT EXISTS projects (
     mcp_slug TEXT UNIQUE,
     mcp_access TEXT NOT NULL DEFAULT 'off',
     mcp_tools TEXT[] NOT NULL DEFAULT '{}',
+    -- Opt-in : exposer les tools `data_*` (datastore de l'org propriétaire) sur un
+    -- endpoint `secret` sans login — l'endpoint agit alors sous l'autorité de l'org
+    -- propriétaire. Défaut FALSE (datastore privé) ; jamais honoré en `anonymous`.
+    mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE,
     archived_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

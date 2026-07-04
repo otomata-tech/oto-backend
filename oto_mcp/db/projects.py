@@ -31,7 +31,7 @@ from .users import upsert_user
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
-                 "is_template, mcp_slug, mcp_access, mcp_tools, "
+                 "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
                  "archived_at, created_at, updated_at")
 
 # Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
@@ -187,12 +187,20 @@ def list_published_mcp_projects() -> list[dict]:
 
 
 def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
-                                access: str, tools: list[str]) -> None:
+                                access: str, tools: list[str],
+                                expose_datastore: bool = False) -> None:
     """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug
     (rend le sous-domaine inerte). Valide le format de slug et l'énumération d'accès —
-    la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité."""
+    la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité.
+
+    `expose_datastore` = opt-in pour exposer les tools `data_*` (datastore de l'org
+    propriétaire) sur cet endpoint sans login. **Forcé à FALSE hors `secret`** : un
+    endpoint `anonymous` est PUBLIC (annuaire) — n'y jamais exposer l'écriture du
+    datastore d'une org ; un endpoint `org` a déjà un membre authentifié (sub) qui
+    résout `data_*` nativement, l'opt-in y est sans objet."""
     if access not in _MCP_ACCESS:
         raise ValueError(f"mcp_access invalide: {access!r} (attendu {_MCP_ACCESS})")
+    expose_datastore = bool(expose_datastore) and access == "secret"
     if access == "off":
         slug = None
     else:
@@ -210,8 +218,8 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                 raise ValueError(f"slug_taken: le sous-domaine « {slug} » est déjà pris")
         conn.execute(
             "UPDATE projects SET mcp_slug = %s, mcp_access = %s, mcp_tools = %s, "
-            "updated_at = NOW() WHERE id = %s",
-            (slug, access, list(tools or []), project_id),
+            "mcp_expose_datastore = %s, updated_at = NOW() WHERE id = %s",
+            (slug, access, list(tools or []), expose_datastore, project_id),
         )
 
 

@@ -24,12 +24,35 @@ from ..datastore import (
     NamespaceNotFound,
     NamespaceReadOnly,
     RowNotFound,
+    make_org_store,
     make_store,
 )
 
 
 def _store_for(sub: str):
     return make_store(sub)
+
+
+def _acting_store():
+    """Store du datastore pour l'acteur courant, pour les tools NON-gouvernance
+    (list/read/write/schema).
+
+    - User authentifié (`sub`) → son store, contexte = son org active (inchangé).
+    - Endpoint MCP `secret` avec opt-in datastore (ADR 0032) → store agissant SOUS
+      L'ORG propriétaire du projet (sub-less) : lecture/écriture décidées sur le
+      principal org (owner-match / grant d'org).
+    - Sinon (endpoint sans login SANS opt-in) → McpError « Unauthenticated ».
+
+    Les tools de GOUVERNANCE/destructifs (create/delete/rename/share) n'utilisent PAS
+    ce seam : ils gardent `current_user_sub_or_raise()` → jamais exposés sur un endpoint
+    sans user identifié."""
+    sub = access.current_user_sub_from_token()
+    if sub:
+        return make_store(sub)
+    from .. import subdomain_project
+    if subdomain_project.current_anon_datastore_exposed():
+        return make_org_store(int(subdomain_project.current_anon_org()))
+    access.current_user_sub_or_raise()  # pas d'opt-in → lève « Unauthenticated »
 
 
 def _project_hint(namespace: str) -> Optional[str]:
@@ -69,8 +92,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_list_namespaces() -> dict:
         """List the user's datastore namespaces (owned + shared)."""
-        sub = access.current_user_sub_or_raise()
-        store = _store_for(sub)
+        store = _acting_store()
         return {"namespaces": store.list_namespaces()}
 
     @mcp.tool()
@@ -164,9 +186,8 @@ def register(mcp: FastMCP) -> None:
             namespace: target namespace (must exist; you must have write access).
             schema: the schema object, or null to clear it.
         """
-        sub = access.current_user_sub_or_raise()
+        store = _acting_store()
         namespace = _ns(namespace)
-        store = _store_for(sub)
         try:
             return store.set_schema(namespace, schema)
         except NamespaceNotFound:
@@ -212,9 +233,8 @@ def register(mcp: FastMCP) -> None:
             rows: BATCH mode — a list of row dicts written in one call.
             key: business key field for batch upsert/dedup (else `schema.key`).
         """
-        sub = access.current_user_sub_or_raise()
+        store = _acting_store()
         namespace = _ns(namespace)
-        store = _store_for(sub)
         try:
             if rows is not None:
                 if row is not None or id is not None:
@@ -255,9 +275,8 @@ def register(mcp: FastMCP) -> None:
                 e.g. `{"project": "roundtable"}`.
             limit: max rows (default 100, list mode only).
         """
-        sub = access.current_user_sub_or_raise()
+        store = _acting_store()
         namespace = _ns(namespace)
-        store = _store_for(sub)
         try:
             if id is not None:
                 return store.get_row(namespace, id)

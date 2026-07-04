@@ -5,7 +5,7 @@ Le viewer historique était une route SPA (Vue) : un `WebFetch` sans exécution 
 voyait qu'un shell vide → **illisible par un agent**. On ne peut pas distinguer un agent
 d'un navigateur par l'entête `Accept` (les deux demandent `text/html`), donc la seule voie
 robuste = servir une page qui **contient** déjà le contenu, pour tout le monde — même patron
-que `anon_landing` pour les endpoints MCP.
+que `share_ui` pour les projets partagés.
 
 Auto-portée (tokens Otomata inline + Google Fonts), aucune dépendance front. Le markdown est
 rendu avec `markdown-it-py` en **mode sûr** (`html=False` → le HTML brut du doc est échappé,

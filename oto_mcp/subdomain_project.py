@@ -1,7 +1,11 @@
-"""Endpoint MCP par PROJET — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).
+"""Endpoint MCP + partage navigable par PROJET (ADR 0032, amende #44).
 
 Un projet publié (`mcp_access ∈ {anonymous, secret, org}`, cf. `db.set_project_mcp_publication`)
-est servi sur un sous-domaine dédié. Trois postures :
+est servi sur un sous-domaine dédié, **sur deux domaines de même dispatch** (coexistence par
+intention) : `<slug>.mcp.oto.cx` = endpoint MCP listé dans l'annuaire (mode `anonymous`, on le
+branche comme un outil) ; `<slug>.share.oto.cx` = partage de projet secret **navigable** (UI web
+en lecture seule à la racine + `/procedures`/`/data`/`/docs`, le MCP au path dédié `/mcp`). Trois
+postures :
 
 - **anonymous** — AUCUN login. Le sous-domaine est servi par une **2ᵉ instance FastMCP
   sans auth** ; la visibilité y fige l'**allowlist** du preset (`AnonymousVisibilityMiddleware`)
@@ -35,11 +39,13 @@ from . import session_org
 
 logger = logging.getLogger(__name__)
 
-# Suffixe figé du domaine public (le label avant = le slug de projet).
-_SUFFIX = ".mcp.oto.cx"
+# Suffixes figés des domaines publics par projet (le label avant = le slug de projet).
+# `.mcp.oto.cx` = endpoint MCP publié (annuaire, mode anonymous) ; `.share.oto.cx` = partage
+# de projet navigable (mode secret, UI + /mcp). MÊME dispatch, deux intentions.
+_SUFFIXES = (".mcp.oto.cx", ".share.oto.cx")
 
-# Resource indicator (audience JWT) d'un endpoint org : `https://<slug>.mcp.oto.cx/mcp`.
-_ORG_AUD_RE = re.compile(r"^https://([a-z0-9]([a-z0-9-]*[a-z0-9]))\.mcp\.oto\.cx/mcp/?$")
+# Resource indicator (audience JWT) d'un endpoint org : `https://<slug>.{mcp,share}.oto.cx/mcp`.
+_ORG_AUD_RE = re.compile(r"^https://([a-z0-9]([a-z0-9-]*[a-z0-9]))\.(?:mcp|share)\.oto\.cx/mcp/?$")
 
 
 def valid_org_audience(aud: object) -> bool:
@@ -140,12 +146,24 @@ def _client_ip(scope, headers: dict) -> str:
     return client[0] if client else "unknown"
 
 
-async def _send_html(send, body: str) -> None:
+async def _send_html(send, body: str, status: int = 200) -> None:
     data = body.encode("utf-8")
-    await send({"type": "http.response.start", "status": 200,
+    # max-age court : l'UI navigable reflète des données live (datastore/docs) → pas de
+    # cache long qui montrerait du périmé.
+    await send({"type": "http.response.start", "status": status,
                 "headers": [(b"content-type", b"text/html; charset=utf-8"),
-                            (b"cache-control", b"public, max-age=300")]})
+                            (b"cache-control", b"public, max-age=60")]})
     await send({"type": "http.response.body", "body": data})
+
+
+def _offset_from_query(scope) -> int:
+    """Offset de pagination (`?offset=`) d'une page de tableau. Défensif → 0 sur absence/erreur."""
+    from urllib.parse import parse_qs
+    try:
+        vals = parse_qs((scope.get("query_string") or b"").decode("latin-1")).get("offset", ["0"])
+        return max(0, int(vals[0]))
+    except (ValueError, IndexError):
+        return 0
 
 
 async def _send_429(send) -> None:
@@ -187,11 +205,25 @@ def current_anon_datastore_exposed() -> bool:
 
 def _slug_from_host(host: str) -> Optional[str]:
     h = (host or "").split(":")[0].strip().lower()
-    if not h.endswith(_SUFFIX):
-        return None
-    slug = h[: -len(_SUFFIX)]
-    # Un seul label (pas de point) : `x.y.mcp.oto.cx` n'est pas un slug de projet.
-    return slug if slug and "." not in slug else None
+    for suffix in _SUFFIXES:
+        if h.endswith(suffix):
+            slug = h[: -len(suffix)]
+            # Un seul label (pas de point) : `x.y.mcp.oto.cx` n'est pas un slug de projet.
+            return slug if slug and "." not in slug else None
+    return None
+
+
+def _is_share_host(host: str) -> bool:
+    """True si le Host est sur le domaine de PARTAGE navigable (`.share.oto.cx`) — la
+    racine y sert l'UI et le MCP vit au path `/mcp` ; sur `.mcp.oto.cx` le MCP est à la racine."""
+    return (host or "").split(":")[0].strip().lower().endswith(".share.oto.cx")
+
+
+def _connect_url(host: str) -> str:
+    """URL à brancher dans Claude. `.share.oto.cx` = path `/mcp` explicite (la racine est
+    l'UI navigable) ; `.mcp.oto.cx` = URL nue (MCP servi à la racine, rétro-compat)."""
+    base = f"https://{host}"
+    return f"{base}/mcp" if _is_share_host(host) else base
 
 
 def resolve_project(host: str) -> Optional[dict]:
@@ -269,15 +301,21 @@ class HostDispatch:
             # `secret` = même chemin sans login que `anonymous` (aucun sub, credential de
             # l'org propriétaire) ; il n'en diffère QUE par l'annuaire (non listé) et un slug
             # non devinable — deux propriétés portées côté publication, transparentes ici.
-            # Navigateur (GET, Accept: text/html) sur la RACINE → landing HTML publique :
-            # la MÊME URL sert la page de présentation ET le serveur MCP. Claude/Mistral
-            # (POST, ou Accept event-stream) tombent dans le chemin MCP ci-dessous.
-            if (scope.get("method") == "GET" and scope.get("path") in ("", "/")
+            ds_exposed = (access_mode == "secret" and bool(proj.get("mcp_expose_datastore")))
+            # Navigateur (GET, Accept: text/html) → UI NAVIGABLE server-side (lecture seule) :
+            # la MÊME URL sert l'UI (racine + /procedures//data//docs) ET le serveur MCP.
+            # `build_page` fait des lectures DB SYNC → threadpool (serveur mono-loop). Il rend
+            # `(None, 0)` pour un path non-UI (ex. GET /mcp) → on retombe sur le MCP ci-dessous.
+            if (scope.get("method") == "GET"
                     and b"text/html" in headers.get(b"accept", b"").lower()):
-                from . import anon_landing
-                return await _send_html(send, anon_landing.render(
-                    name=proj.get("name") or "", brief_md=proj.get("brief_md") or "",
-                    tools=list(proj.get("mcp_tools") or []), connect_url=f"https://{host}"))
+                from starlette.concurrency import run_in_threadpool
+                from . import share_ui
+                html_out, status = await run_in_threadpool(
+                    share_ui.build_page, proj, scope.get("path") or "/",
+                    offset=_offset_from_query(scope), datastore_exposed=ds_exposed,
+                    connect_url=_connect_url(host))
+                if html_out is not None:
+                    return await _send_html(send, html_out, status)
             # Garde-fou anti-abus : token-bucket par (IP, projet) avant tout travail.
             if not _check_bucket((_client_ip(scope, headers), int(proj["id"])), time.monotonic()):
                 return await _send_429(send)
@@ -285,8 +323,7 @@ class HostDispatch:
                               frozenset(proj.get("mcp_tools") or []),
                               # opt-in datastore : honoré uniquement en `secret` (jamais
                               # `anonymous` public) — cf. set_project_mcp_publication.
-                              datastore_exposed=(access_mode == "secret"
-                                                 and bool(proj.get("mcp_expose_datastore"))))
+                              datastore_exposed=ds_exposed)
             tok = _CTX.set(ctx)
             if sid:
                 _store_ctx(sid, ctx)

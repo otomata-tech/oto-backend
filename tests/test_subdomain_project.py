@@ -17,6 +17,22 @@ def test_slug_parsing():
     assert sp._slug_from_host("") is None
 
 
+def test_slug_parsing_share_domain():
+    # `.share.oto.cx` (partage navigable) partage le MÊME dispatch que `.mcp.oto.cx`.
+    assert sp._slug_from_host("mon-projet.share.oto.cx") == "mon-projet"
+    assert sp._slug_from_host("FOO.share.oto.cx:443") == "foo"
+    assert sp._slug_from_host("share.oto.cx") is None          # pas de label de slug
+    assert sp._slug_from_host("a.b.share.oto.cx") is None      # multi-label ≠ slug
+
+
+def test_connect_url_is_path_aware():
+    # `.share.oto.cx` = path `/mcp` explicite (racine = UI) ; `.mcp.oto.cx` = URL nue.
+    assert sp._is_share_host("x.share.oto.cx") is True
+    assert sp._is_share_host("x.mcp.oto.cx") is False
+    assert sp._connect_url("mon-projet.share.oto.cx") == "https://mon-projet.share.oto.cx/mcp"
+    assert sp._connect_url("ft.mcp.oto.cx") == "https://ft.mcp.oto.cx"
+
+
 def test_resolve_project(monkeypatch):
     monkeypatch.setattr(db, "get_project_by_mcp_slug",
                         lambda s: {"id": 7, "mcp_access": "anonymous"} if s == "ft" else None)
@@ -151,6 +167,85 @@ async def test_host_dispatch_routes_anonymous(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_host_dispatch_secret_on_share_domain(monkeypatch):
+    """`secret` sur `.share.oto.cx` route vers l'app anonyme, identique à `.mcp.oto.cx`
+    (équivalence B1) : même contexte anonyme posé, même org propriétaire."""
+    sp._BUCKETS.clear()
+    seen = {}
+
+    async def _authed(scope, receive, send): seen["app"] = "authed"
+
+    async def _anon(scope, receive, send):
+        seen["app"] = "anon"
+        seen["org"] = sp.current_anon_org()
+        seen["allow"] = sp.current_allowlist()
+
+    monkeypatch.setattr(sp, "resolve_project", lambda host: {
+        "id": 12, "owner_type": "org", "owner_id": "99",
+        "mcp_access": "secret", "mcp_tools": ["frenchtech_evenements"]})
+    disp = sp.HostDispatch(_authed, _anon)
+    scope = {"type": "http", "method": "POST", "path": "/mcp",
+             "headers": [(b"host", b"mon-projet.share.oto.cx")], "client": ("1.2.3.4", 1)}
+    await disp(scope, None, None)
+    assert seen["app"] == "anon"
+    assert seen["org"] == 99
+    assert seen["allow"] == {"frenchtech_evenements"}
+    assert sp.current_anon_org() is None
+
+
+@pytest.mark.asyncio
+async def test_host_dispatch_browser_get_serves_ui(monkeypatch):
+    """GET navigateur (text/html) sur une route UI → servi par `share_ui`, ni anon ni authed."""
+    sp._BUCKETS.clear()
+    sent = {}
+
+    async def _authed(scope, receive, send): sent["app"] = "authed"
+
+    async def _anon(scope, receive, send): sent["app"] = "anon"
+
+    async def _send(msg):
+        if msg["type"] == "http.response.start":
+            sent["status"] = msg["status"]
+        elif msg["type"] == "http.response.body":
+            sent["body"] = msg["body"]
+
+    from oto_mcp import share_ui
+    monkeypatch.setattr(sp, "resolve_project", lambda host: {
+        "id": 5, "owner_type": "org", "owner_id": "99", "name": "P", "brief_md": "",
+        "mcp_access": "secret", "mcp_tools": [], "mcp_expose_datastore": True})
+    monkeypatch.setattr(share_ui, "build_page", lambda proj, path, **kw: ("<html>UI</html>", 200))
+    disp = sp.HostDispatch(_authed, _anon)
+    scope = {"type": "http", "method": "GET", "path": "/procedures/11", "query_string": b"",
+             "headers": [(b"host", b"p.share.oto.cx"), (b"accept", b"text/html")]}
+    await disp(scope, None, _send)
+    assert sent.get("status") == 200 and b"UI" in sent.get("body", b"")
+    assert "app" not in sent   # court-circuite le MCP
+
+
+@pytest.mark.asyncio
+async def test_host_dispatch_browser_get_mcp_path_falls_through(monkeypatch):
+    """GET text/html sur `/mcp` : `build_page` rend (None,0) → retombe sur l'app MCP anonyme."""
+    sp._BUCKETS.clear()
+    seen = {}
+
+    async def _authed(scope, receive, send): seen["app"] = "authed"
+
+    async def _anon(scope, receive, send): seen["app"] = "anon"
+
+    from oto_mcp import share_ui
+    monkeypatch.setattr(sp, "resolve_project", lambda host: {
+        "id": 5, "owner_type": "org", "owner_id": "99",
+        "mcp_access": "secret", "mcp_tools": [], "mcp_expose_datastore": False})
+    monkeypatch.setattr(share_ui, "build_page", lambda proj, path, **kw: (None, 0))
+    disp = sp.HostDispatch(_authed, _anon)
+    scope = {"type": "http", "method": "GET", "path": "/mcp", "query_string": b"",
+             "headers": [(b"host", b"p.share.oto.cx"), (b"accept", b"text/html")],
+             "client": ("1.2.3.4", 1)}
+    await disp(scope, None, None)
+    assert seen["app"] == "anon"
+
+
+@pytest.mark.asyncio
 async def test_host_dispatch_org_pins_and_uses_authed(monkeypatch):
     from oto_mcp import session_org
     seen = {}
@@ -182,6 +277,15 @@ def test_valid_org_audience(monkeypatch):
     assert sp.valid_org_audience("https://evil.com/mcp") is False        # hors domaine
     assert sp.valid_org_audience("https://movinmotion.mcp.oto.cx") is False  # pas /mcp
     assert sp.valid_org_audience(None) is False
+
+
+def test_valid_org_audience_share_domain(monkeypatch):
+    """Le motif d'audience org accepte aussi `<slug>.share.oto.cx/mcp` (même dispatch)."""
+    monkeypatch.setattr(db, "get_project_by_mcp_slug",
+                        lambda s: {"id": 8, "mcp_access": "org"} if s == "mon-projet" else None)
+    assert sp.valid_org_audience("https://mon-projet.share.oto.cx/mcp") is True
+    assert sp.valid_org_audience("https://nope.share.oto.cx/mcp") is False
+    assert sp.valid_org_audience("https://mon-projet.share.oto.cx") is False  # pas /mcp
 
 
 def test_valid_org_audience_fail_closed(monkeypatch):

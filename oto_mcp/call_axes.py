@@ -300,8 +300,61 @@ ORG = CallAxis(
 )
 
 
+# ── Axe group= (équipe d'exécution de l'appel — ADR 0038 B3) ──────────────────
+
+def _resolve_group_guarded(sub: str, gid: int) -> dict:
+    """Garde de lecture du groupe (chemin DB sync, appelé en threadpool). Même garde
+    que la re-garde de `current_group` (`roles.can_read_group` : membre du groupe ou
+    escalade org_admin). McpError actionnable sinon."""
+    from . import group_store, roles
+    g = group_store.get_group(gid)
+    if not g:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS, message=f"Paramètre `group`={gid} : groupe inconnu."))
+    if not roles.can_read_group(sub, gid):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Paramètre `group`={gid} refusé : tu n'es pas membre de ce "
+                     "groupe. Vérifie avec oto_list_groups.")))
+    return g
+
+
+async def _pin_group(value: object) -> list[UndoEntry]:
+    """Épingle l'équipe de l'appel + co-pose l'org PARENTE du groupe (invariant
+    « groupe ⊂ org » par construction — comme `project=` co-pose l'org du projet).
+    Si `org=` est aussi passé, l'org du groupe prime (le jeton le plus spécifique)."""
+    if value is None:
+        return []
+    gid = require_axis_int(value, "group")
+    sub = require_axis_sub("group")
+    g = await run_in_threadpool(_resolve_group_guarded, sub, gid)
+    undo: list[UndoEntry] = []
+    org = g.get("org_id")
+    if org is not None:
+        undo.append((session_org.reset_call_org, session_org.set_call_org(int(org))))
+    undo.append((session_org.reset_call_group, session_org.set_call_group(gid)))
+    return undo
+
+
+GROUP = CallAxis(
+    param="group",
+    schema={
+        "type": "integer",
+        "title": "Group",
+        "description": (
+            "Équipe (groupe, id) sous laquelle exécuter CET appel — résout les secrets "
+            "et la doctrine du groupe, et scope l'action sur son org parente. Omets "
+            "hors contexte d'équipe."
+        ),
+    },
+    applies=_is_org_scopable_tool,
+    pin=_pin_group,
+)
+
+
 # Axes exposés sur les tools plats (chacun via les 3 mécanismes : advertise / strip+pose / seam).
-AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG)
+# ⚠️ Ordre = ordre de pose : GROUP après ORG pour que son org co-posée prime (plus spécifique).
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG, GROUP)
 
 
 def axes_for(name: str) -> list[CallAxis]:

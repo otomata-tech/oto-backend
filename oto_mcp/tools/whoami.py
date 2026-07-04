@@ -71,21 +71,21 @@ def register(mcp: FastMCP) -> None:
         except Exception:
             role = None
 
-        # Org EFFECTIVE sous laquelle tu agis (ADR 0023) = org de session ?? maison.
-        # `scope`='session' = override éphémère posé par oto_use_org (cette conversation) ;
-        # 'home' = ton org maison (défaut). 0/None = espace perso.
+        # Org EFFECTIVE sous laquelle tu agis (ADR 0038) = jeton d'appel ?? maison.
+        # `scope`='call' = org épinglée par le jeton de CET appel (org=/project=/group=) ;
+        # 'home' = ton org maison (défaut de tout appel sans jeton). 0/None = perso.
         org_block = None
         active_org = None
         try:
             active_org = access.current_org(sub)
-            has_override, _ = session_org.current_override()
+            has_call_pin = session_org.current_call_org() is not None
             if active_org is not None:
                 o = org_store.get_org(active_org)
                 org_block = {
                     "id": active_org,
                     "name": o["name"] if o else None,
                     "role": org_store.get_org_role(active_org, sub),
-                    "scope": "session" if has_override else "home",
+                    "scope": "call" if has_call_pin else "home",
                 }
         except Exception as e:
             logger.warning("whoami: org lookup failed: %s", e)
@@ -137,17 +137,16 @@ def register(mcp: FastMCP) -> None:
             logger.warning("whoami: memento status failed: %s", e)
 
         who = user.get("name") or user.get("email") or sub
-        has_override, _ = session_org.current_override()
         if org_block:
             scope = f"org « {org_block['name']} » (rôle {org_block['role']})"
             if group_block:
                 scope += f", groupe « {group_block['name']} »"
         else:
             scope = "espace perso (aucune org active)"
-        if has_override:
-            scope += " — override de session (cette conversation ; oto_use_org)"
+        if org_block and org_block["scope"] == "call":
+            scope += " — épinglée par le jeton de CET appel (org=/project=/group=)"
         if project_block:
-            scope += f" — projet actif « {project_block['name']} » (oto_use_project)"
+            scope += f" — projet actif « {project_block['name']} »"
         summary = f"Tu agis pour {who} dans {scope}."
 
         return {

@@ -104,33 +104,41 @@ def _list_my_groups(ctx: ResolvedCtx, inp: NoInput) -> dict:
 
 
 def _use_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
-    """Bascule l'équipe active (ADR 0023 étendu). MCP (session présente) = override
-    de session éphémère (équipe + org parente, cette conversation) ; REST = pose
-    l'équipe MAISON persistante (et son org parente)."""
+    """MCP = hint SANS ÉTAT (ADR 0038 B3 — le bracelet de session est retiré) :
+    valide l'appartenance et renvoie le geste fiable (`group=` par appel, qui
+    co-pose l'org parente). REST = pose l'équipe MAISON persistante."""
     g = group_store.get_group(inp.group_id)
     if not g:
         raise AuthzDenied(404, "unknown_group", f"Groupe #{inp.group_id} inconnu.")
     sid = session_org.current_session_id()
-    if sid is not None:  # MCP : override de session (équipe + org parente, invariant)
+    if sid is not None:  # MCP : hint sans état
         if not group_store.is_group_member(ctx.sub, inp.group_id):
             raise AuthzDenied(403, "not_a_member",
                               "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
-        session_org.set_override(sid, g["org_id"])
-        session_org.set_group_override(sid, inp.group_id)
-    elif not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison (persiste)
+        return {
+            "group": inp.group_id, "name": g["name"], "org": g["org_id"],
+            "session_state": None,
+            "how_to": (f"Aucun état de session (ADR 0038) : passe `group={inp.group_id}` "
+                       "sur chaque appel scopé équipe (l'org parente en est dérivée), ou "
+                       "fixe ton équipe par défaut avec oto_set_home_group."),
+        }
+    if not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison (persiste)
         raise AuthzDenied(403, "not_a_member",
                           "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
     return {"active_group": inp.group_id, "name": g["name"], "active_org": g["org_id"]}
 
 
 def _clear_group(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    """Retour au niveau org (ADR 0023 étendu). MCP = retire l'override d'équipe de
-    session (l'org de session reste) ; REST = efface l'équipe maison."""
+    """Retour au niveau org. MCP = hint sans état (plus de bracelet, ADR 0038 B3) ;
+    REST = efface l'équipe maison."""
     sid = session_org.current_session_id()
     if sid is not None:
-        session_org.clear_group_override(sid)
-    else:
-        group_store.clear_active_group(ctx.sub)
+        return {"session_state": None,
+                "how_to": ("Aucun état de session à effacer (ADR 0038). Sans `group=`, "
+                           "l'appel est au niveau org (ton équipe maison ne s'applique "
+                           "que dans ton org maison) — pour changer le défaut durable : "
+                           "oto_set_home_group.")}
+    group_store.clear_active_group(ctx.sub)
     return {"active_group": None}
 
 
@@ -196,28 +204,28 @@ CAPABILITIES += [
     ),
     Capability(
         key="group.use", handler=_use_group, Input=UseGroupInput, authz=SUB_ONLY,
-        description=("Switch your active group (department) by id, FOR THIS CONVERSATION "
-                     "ONLY. Also sets your active org to its parent. Ephemeral: it does "
-                     "not change your home group or other conversations, and a new "
-                     "conversation reverts to your home. The active group decides which "
-                     "group doctrine and shared secrets apply."),
+        description=("Resolve a group (department) you belong to and get the RELIABLE "
+                     "way to act under it. NO session state (ADR 0038): pass "
+                     "`group=<id>` directly on each group-scoped call (its parent org "
+                     "is derived), or set your persistent default with "
+                     "oto_set_home_group. The group decides which group doctrine and "
+                     "shared secrets apply."),
         mcp="oto_use_group",
-        rest=RestBinding("PUT", "/api/me/active-group"),
-        refresh_visibility=True,  # le groupe actif pose l'org active → visibilité par connecteur
+        rest=RestBinding("PUT", "/api/me/active-group"),  # REST : équipe maison
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
-        description=("Operate at the org level again (no group) FOR THIS CONVERSATION. "
-                     "Ephemeral: a new conversation reverts to your home."),
+        description=("No-op hint (ADR 0038: no session state). Without a `group=` "
+                     "token a call is at org level; to change your durable default "
+                     "use oto_set_home_group."),
         mcp="oto_clear_group",
-        rest=RestBinding("DELETE", "/api/me/active-group"),
-        refresh_visibility=True,  # retour au niveau org → baseline de l'org
+        rest=RestBinding("DELETE", "/api/me/active-group"),  # REST : efface l'équipe maison
     ),
     Capability(
         key="group.set_home", handler=_set_home_group, Input=UseGroupInput, authz=SUB_ONLY,
-        description=("Set your HOME group (department) by id — the default every NEW "
-                     "conversation starts under (also sets its parent org as home). "
-                     "Persistent, unlike oto_use_group (this conversation only)."),
+        description=("Set your HOME group (department) by id — the persistent default "
+                     "of calls without a `group=` token (also sets its parent org as "
+                     "home). Takes effect immediately (ADR 0038)."),
         mcp="oto_set_home_group",
         refresh_visibility=True,
     ),

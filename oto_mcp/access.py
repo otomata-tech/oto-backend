@@ -131,18 +131,10 @@ def current_org(sub: str | None) -> Optional[int]:
     call = session_org.current_call_org()
     if call is not None:
         return call
-    present, org = session_org.current_override()
-    if present:
-        # Re-garde d'appartenance à la RÉSOLUTION (pas seulement à la pose) : un
-        # Mcp-Session-Id réutilisé par un AUTRE compte (switch de compte, cf. #108)
-        # ne doit pas hériter de l'override d'org du compte précédent. `org=None` =
-        # override « perso/global » légitime (posé par oto_clear_org) → None. Sinon,
-        # non-membre ⇒ on ignore l'override et on retombe en cascade (repli maison).
-        if org is None:
-            return None
-        from . import roles
-        if roles.is_org_member(sub, org):
-            return org
+    # Le BRACELET de session (`oto_use_org`, dict keyé Mcp-Session-Id) n'est PLUS lu
+    # (ADR 0038 B3) : claude.ai renouvelle le session_id à chaque appel (jamais relu)
+    # et un session_id recyclé cross-compte faisait fuiter le scope (#108). Le scope
+    # est porté par l'appel (`org=`/`project=`/`group=`, ci-dessus) ou retombe maison.
     view = session_org.current_view_org()
     if view is not None:
         return None if view == 0 else view
@@ -175,14 +167,13 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) ->
 
 def current_group(sub: str | None) -> Optional[int]:
     """Équipe (groupe) EFFECTIVE — mirror de `current_org` pour l'axe groupe
-    (ADR 0023 étendu). Résout `session ?? consultation ?? maison` en TENANT
-    l'invariant « groupe ⊂ org » : un override/consultation d'ORG **sans** groupe
+    (ADR 0038). Résout `jeton d'appel ?? consultation ?? maison` en TENANT
+    l'invariant « groupe ⊂ org » : un jeton/consultation d'ORG **sans** groupe
     explicite ⇒ niveau org (None), jamais le home_group d'une autre org."""
     if sub is None:
         return None
     # Sous lock d'org par sous-domaine : le groupe n'est rendu QUE s'il ⊂ l'org
-    # épinglée (sinon None = niveau org). Ignore tout override de session vers un
-    # groupe d'une autre org → hard-lock cohérent avec current_org.
+    # épinglée (sinon None = niveau org) — hard-lock cohérent avec current_org.
     cand = session_org.current_subdomain_candidate()
     if cand is not None:
         from . import roles
@@ -192,23 +183,29 @@ def current_group(sub: str | None) -> Optional[int]:
         if ag is not None and (group_store.get_group(ag) or {}).get("org_id") == cand:
             return ag
         return None
-    has_g, g = session_org.current_group_override()
-    if has_g:
-        # Re-garde d'appartenance à la RÉSOLUTION (miroir de current_org, #108) : un
-        # Mcp-Session-Id réutilisé par un autre compte ne doit pas hériter du groupe
-        # de session du compte précédent. Non-lecteur ⇒ on ignore l'override et on
-        # retombe en cascade (le repli maison rend le home_group PROPRE au caller).
-        from . import roles
-        if roles.can_read_group(sub, g):
-            return g
-    if session_org.current_override()[0]:
-        return None  # org de session sans groupe → niveau org
+    # Jeton d'appel `group=` : déjà gardé à la pose (can_read_group + org co-posée
+    # par l'axe, invariant par construction) → rendu tel quel. Le BRACELET de session
+    # (`oto_use_group`) n'est plus lu (ADR 0038 B3, même raison que current_org).
+    call_g = session_org.current_call_group()
+    if call_g is not None:
+        return call_g
     vg = session_org.current_view_group()
     if vg is not None:
         return None if vg == 0 else vg
     if session_org.current_view_org() is not None:
         return None  # consultation d'org sans groupe → niveau org
-    return group_store.get_active_group(sub)  # maison
+    ag = group_store.get_active_group(sub)  # maison
+    if ag is None:
+        return None
+    # Jeton d'org (`org=`/`project=`) SANS groupe : le home_group n'est rendu que
+    # s'il appartient à l'org épinglée (invariant groupe ⊂ org — jamais le
+    # home_group d'une AUTRE org sous une org de jeton).
+    call_org = session_org.current_call_org()
+    if call_org is not None:
+        g = group_store.get_group(ag)
+        if not g or g.get("org_id") != call_org:
+            return None
+    return ag
 
 
 def current_project() -> Optional[int]:

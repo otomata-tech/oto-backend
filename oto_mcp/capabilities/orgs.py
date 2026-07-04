@@ -36,11 +36,10 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
         raise AuthzDenied(400, "invalid_name", "Nom d'espace requis.")
     org_id = org_store.create_org(name, created_by=ctx.sub)
     org_store.add_org_member(org_id, ctx.sub, "org_admin")
-    org_store.set_active_org(ctx.sub, org_id)  # nouvelle org = ton org maison (défaut)
-    sid = session_org.current_session_id()
-    if sid is not None:
-        session_org.set_override(sid, org_id)       # + active dans la conversation courante
-        session_org.clear_group_override(sid)       # nouvelle org → pas d'équipe (invariant)
+    # Nouvelle org = ton org maison (défaut) — effective immédiatement, y compris dans
+    # cette conversation (le seam `current_org` retombe sur la maison sans jeton ; plus
+    # de bracelet de session, ADR 0038 B3).
+    org_store.set_active_org(ctx.sub, org_id)
     return {"org_id": org_id, "name": name, "active_org": org_id, "org_role": "org_admin"}
 
 
@@ -49,45 +48,48 @@ class UseOrgInput(BaseModel):
 
 
 def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
-    """Bascule l'org active (ADR 0023). Sur la face MCP (session présente) =
-    **override de session éphémère** (cette conversation seulement) ; sur la face
-    REST (dashboard) = pose l'**org maison** persistante (défaut). `org` = id/nom."""
+    """Hint SANS ÉTAT (ADR 0038 B3 — le bracelet de session est retiré) : valide
+    l'appartenance et renvoie le geste fiable. Le scope d'un appel est porté par
+    l'appel (`org=`/`project=`/`group=`) ou retombe sur l'org maison — jamais par
+    un état serveur. `org` = id/nom."""
     try:
         org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)  # garantit l'appartenance
     except ValueError as e:
         raise AuthzDenied(404, "unknown_org", str(e))
-    sid = session_org.current_session_id()
-    if sid is not None:
-        session_org.set_override(sid, org_id)        # MCP : org de session
-        session_org.clear_group_override(sid)        # bascule d'org → drop l'équipe (invariant)
-    else:
-        org_store.set_active_org(ctx.sub, org_id)    # REST : org maison
     o = org_store.get_org(org_id)
-    return {"active_org": org_id, "name": o["name"] if o else None}
+    return {
+        "org": org_id, "name": o["name"] if o else None, "session_state": None,
+        "how_to": (f"Aucun état de session (ADR 0038) : passe `org={org_id}` sur chaque "
+                   "appel scopé org (connecteurs, data_*, capacités l'acceptent), ou "
+                   f"fixe ton défaut persistant avec oto_set_home_org (org={org_id})."),
+    }
 
 
 def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
-    """Pose l'**org maison** persistante (le défaut des nouvelles conversations),
-    depuis n'importe quelle face — ≠ `oto_use_org` qui n'agit que sur la session
-    courante (ADR 0023). `org` = id/nom d'une org dont tu es membre."""
+    """Pose l'**org maison** persistante — le défaut de TOUT appel sans jeton
+    (`org=`/`project=`), donc effectif immédiatement, conversations en cours
+    incluses (ADR 0038). `org` = id/nom d'une org dont tu es membre. Sert aussi
+    le `PUT /api/me/active-org` du dashboard (« définir par défaut »)."""
     try:
         org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)
     except ValueError as e:
         raise AuthzDenied(404, "unknown_org", str(e))
     org_store.set_active_org(ctx.sub, org_id)  # colonne = org maison
     o = org_store.get_org(org_id)
-    return {"home_org": org_id, "name": o["name"] if o else None}
+    # `active_org` en écho pour compat front (l'ex-face REST d'use_org rendait ça).
+    return {"home_org": org_id, "active_org": org_id, "name": o["name"] if o else None}
 
 
 def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    """Retour à l'espace par défaut (suppression du perso : plus d'état org-less).
-    MCP = retire l'override de session → retombe sur la maison (override None) ; REST
+    """Retour à l'espace par défaut. MCP = hint sans état (plus de bracelet à
+    retirer, ADR 0038 B3 : sans jeton, chaque appel résout déjà la maison) ; REST
     = bascule la maison sur l'**org perso** de l'user (jamais org-less)."""
     sid = session_org.current_session_id()
     if sid is not None:
-        session_org.set_override(sid, None)          # MCP : override None → retombe maison
-        session_org.clear_group_override(sid)
-        return {"active_org": None}
+        return {"session_state": None,
+                "how_to": ("Aucun état de session à effacer (ADR 0038) : sans `org=`, "
+                           "chaque appel résout ton org maison. Pour changer le défaut : "
+                           "oto_set_home_org.")}
     pid = org_store.ensure_personal_org(ctx.sub)     # REST : maison = org perso
     org_store.set_active_org(ctx.sub, pid)
     return {"active_org": pid}
@@ -113,18 +115,14 @@ CAPABILITIES += [
         Input=UseOrgInput,
         authz=SUB_ONLY,
         description=(
-            "Switch the organization you act under, FOR THIS CONVERSATION ONLY "
-            "(by id or name). The active org decides which shared secrets, tools "
-            "and data scope your calls. Ephemeral: does NOT change your home org "
-            "or other conversations. ⚠️ BEST-EFFORT — this switch may NOT persist "
-            "across your following calls (the session is renewed per call). For "
-            "RELIABLE scoping, pass `org=<id>` DIRECTLY on each org-scoped call "
-            "(oto_my_connectors, catalog, secrets… all accept it) instead of "
-            "relying on this switch. Use `org=` when the org matters."
+            "Resolve an organization you belong to (by id or name) and get the "
+            "RELIABLE way to act under it. This tool holds NO session state "
+            "(ADR 0038): to act under another org, pass `org=<id>` directly on "
+            "each org-scoped call (connectors, data_*, capabilities all accept "
+            "it), or change your persistent default with oto_set_home_org. "
+            "Without a token, every call resolves your home org."
         ),
         mcp="oto_use_org",
-        rest=RestBinding("PUT", "/api/me/active-org"),
-        refresh_visibility=True,  # recharge la toolbox de l'org de session (live in-session)
     ),
     Capability(
         key="org.set_home",
@@ -132,12 +130,14 @@ CAPABILITIES += [
         Input=UseOrgInput,
         authz=SUB_ONLY,
         description=(
-            "Set your HOME organization (by id or name) — the default every NEW "
-            "conversation starts under. Persistent, unlike oto_use_org (which only "
-            "switches the current conversation). Use this to change your default org."
+            "Set your HOME organization (by id or name) — the persistent default "
+            "of every call that carries no `org=`/`project=` token (ADR 0038). "
+            "Takes effect immediately, current conversation included. Use this to "
+            "change your default org."
         ),
         mcp="oto_set_home_org",
-        refresh_visibility=True,  # si pas d'override de session, l'org effective change → recompute
+        rest=RestBinding("PUT", "/api/me/active-org"),  # « définir par défaut » dashboard
+        refresh_visibility=True,  # l'org effective (maison) change → recompute la toolbox
     ),
     Capability(
         key="org.clear",
@@ -145,12 +145,11 @@ CAPABILITIES += [
         Input=NoInput,
         authz=SUB_ONLY,
         description=(
-            "Act under your personal/global profile (no org) FOR THIS "
-            "CONVERSATION — your personal toolset and settings apply. Ephemeral: "
-            "a new conversation reverts to your home org."
+            "No-op hint (ADR 0038: no session state — without an `org=` token "
+            "every call already resolves your home org). To change your default: "
+            "oto_set_home_org."
         ),
         mcp="oto_clear_org",
-        rest=RestBinding("DELETE", "/api/me/active-org"),
-        refresh_visibility=True,  # retour profil perso/global → toolbox perso
+        rest=RestBinding("DELETE", "/api/me/active-org"),  # REST : maison = org perso
     ),
 ]

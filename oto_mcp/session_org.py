@@ -1,19 +1,16 @@
-"""Org de session — override éphémère per-conversation (ADR 0023, barreau R1).
+"""Contextes d'exécution — jetons d'appel (ADR 0038) + consultation REST (ADR 0023).
 
-`oto_use_org` (MCP) ne mute plus l'« org maison » persistante (colonne
-`users.active_org`) : il pose un **override de session**, vécu le temps d'une
-conversation claude.ai. Une nouvelle conversation repart sur la maison.
+⚠️ **Les BRACELETS de session org/groupe sont INERTES depuis ADR 0038 B3** : plus
+écrits par `oto_use_org`/`oto_use_group` (devenus hints sans état), plus lus par
+`access.current_org`/`current_group`. Raisons : claude.ai renouvelle le
+`Mcp-Session-Id` à CHAQUE appel (bracelet jamais relu, #72) et un session_id
+recyclé cross-compte faisait hériter le scope (#108). Le scope est porté par
+l'appel (`org=`/`project=`/`group=`, contextvars `_CALL_*` ci-dessous) ou retombe
+sur la maison. Les stores `_OVERRIDES`/`_GROUP_OVERRIDES` et leurs fonctions sont
+**conservés transitoirement** (WIP en vol les importe) — à supprimer au prochain
+nettoyage. Le bracelet PROJET (`_PROJECT_OVERRIDES`) reste actif (B3b à venir).
 
-Stockage : un dict en mémoire **keyé par `session_id`** (sync — `ctx.session_id`
-est une propriété sync du contexte fastmcp), PAS l'état de session async
-(`ctx.get_state`/`set_state` ne sont pas lisibles depuis le code sync chaud comme
-`resolve_api_key`). Repose sur l'**isolation des sessions MCP par conversation**
-(claude.ai : vérifié). État éphémère assumé : perdu au restart → tout retombe sur
-la maison (direction sûre). Borné (`_CAP`) pour ne pas fuir.
-
-Sentinelle : `0` = profil **perso/global** (cohérent ADR 0015 `org_id=0`), pour
-distinguer « override = perso » (posé par `oto_clear_org`) de « pas d'override »
-(→ repli maison).
+Sentinelle : `0` = profil **perso/global** (cohérent ADR 0015 `org_id=0`).
 """
 from __future__ import annotations
 

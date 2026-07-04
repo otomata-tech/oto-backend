@@ -293,6 +293,10 @@ CREATE TABLE IF NOT EXISTS projects (
     -- endpoint `secret` sans login — l'endpoint agit alors sous l'autorité de l'org
     -- propriétaire. Défaut FALSE (datastore privé) ; jamais honoré en `anonymous`.
     mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Projet forké depuis un partage public (« Ajouter à mon Oto ») : pointeur vers la
+    -- source, pour un import IDEMPOTENT par org (idx_projects_copied_from, créé dans `_init`
+    -- après l'ADD COLUMN — même gotcha que is_template sur une table préexistante).
+    copied_from BIGINT,
     archived_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

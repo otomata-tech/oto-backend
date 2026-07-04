@@ -66,6 +66,28 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > Infra : wildcard `*.share.oto.cx` (grey) + Caddy on-demand TLS gaté par `/api/mcp/tls-check`.
 > **Remplace** l'ancien partage public **chiffré** zero-knowledge (`/p/p`, `project_public_shares`,
 > `lib/crypto.ts`, `PublicProjectView.vue`) — **retiré** (le navigable live le supplante).
+>
+> **Canal de démonstration / acquisition (otomata-private).** L'index `share_ui` est soigné
+> pour « claquer » : un **hero** « brancher dans Claude/Mistral » (URL MCP + copie), les tools
+> exposés **groupés par CONNECTEUR** (pastille logo + description au survol + lien vers la fiche
+> marketplace `dashboard.oto.ninja/connectors?tab=marketplace&connector=<name>`, dérivé de
+> `providers.connector_for_namespace`), et une vue **tableau** pleine largeur avec recherche
+> globale + tri 3 états + filtres par colonne (JS inline, opère sur le DOM rendu — pagination
+> serveur inchangée). Le hero porte aussi un CTA **« Ajouter à mon Oto »** → deep-link
+> `dashboard.oto.ninja/import?slug=<slug>`.
+>
+> **« Ajouter à mon Oto » — import d'un projet publié par slug.** Capacité `me.import_project`
+> (REST-only `POST /api/me/projects/import`, `ORG_MEMBER`) : **forke** un projet PUBLIÉ
+> (`mcp_access ∈ {anonymous, secret}`, résolu par `get_project_by_mcp_slug` — le slug non
+> devinable = consentement) dans l'**org active** de l'appelant via `duplicate_project`
+> (structure only : brief + docs + liens + fichiers ; une **procédure** d'une autre org est
+> **copiée** dans l'org cible et le lien repointé — sinon il pendrait sur l'org source ; un
+> tableau d'une autre org est re-provisionné à vide ; **jamais** de credentials).
+> **Idempotent** : colonne
+> `projects.copied_from` + `find_copied_project` → si l'org a déjà forké la source, on la
+> RÉCUPÈRE (pas de doublon) ; si la source appartient déjà à l'org active, on l'ouvre. Le
+> dashboard (`/import?slug=`, `ImportProjectView.vue`) gère le login puis redirige vers le
+> nouveau projet.
 
 > **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
 > se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de

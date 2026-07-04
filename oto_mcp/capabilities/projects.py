@@ -19,7 +19,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from .. import db, org_store, ownership, roles, session_org
-from ._authz import SUB_ONLY
+from ._authz import ORG_MEMBER, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -629,7 +629,60 @@ def _clear_project(ctx: ResolvedCtx, inp: NoInput) -> dict:
                        "`project=` est hors projet par construction.")}
 
 
+# ── « Ajouter à mon Oto » : forker un projet PUBLIÉ par slug (canal d'acquisition) ──
+class ImportProjectInput(BaseModel):
+    slug: str   # mcp_slug d'un projet publié (partage `<slug>.share.oto.cx` / `<slug>.mcp.oto.cx`)
+
+
+def _import_project(ctx: ResolvedCtx, inp: ImportProjectInput) -> dict:
+    """« Ajouter à mon Oto » : forke un projet PUBLIÉ (résolu par slug) dans l'org ACTIVE
+    de l'appelant, ou RÉCUPÈRE la copie déjà présente (idempotent). Copie la STRUCTURE
+    (brief + docs + liens + fichiers ; un tableau d'une autre org est re-provisionné à
+    vide par `duplicate_project` — anti-fuite) — JAMAIS les credentials (org-scopés). Le
+    slug d'un partage `secret` est non devinable → le posséder = consentement au fork ;
+    `anonymous` est déjà listé publiquement. La source reste intacte."""
+    slug = (inp.slug or "").strip().lower()
+    _require(bool(slug), "missing_slug", "`slug` requis.", 400)
+    src = db.get_project_by_mcp_slug(slug)
+    _require(src is not None, "unknown_project", "Aucun projet partagé pour ce lien.", 404)
+    _require((src.get("mcp_access") or "off") in ("anonymous", "secret"), "not_importable",
+             "Ce projet n'est pas partagé publiquement (import réservé aux partages "
+             "anonymous/secret).", 403)
+    src_id = int(src["id"])
+    org_id = ctx.org_id
+    # Déjà à moi : la source EST possédée par mon org active → rien à forker, on l'ouvre.
+    if src.get("owner_type") == "org" and str(src.get("owner_id")) == str(org_id):
+        return {"project_id": src_id, "imported": False, "reason": "own_project",
+                "name": src.get("name")}
+    # Idempotent : une copie déjà forkée dans cette org → on la récupère (« si déjà dans
+    # ton compte »), pas de doublon.
+    existing = db.find_copied_project("org", str(org_id), src_id)
+    if existing is not None:
+        return {"project_id": int(existing["id"]), "imported": False,
+                "reason": "already_imported", "name": existing.get("name")}
+    new_id, warnings = db.duplicate_project(
+        src_id, src.get("name") or "Projet importé", "org", str(org_id),
+        copied_by=ctx.sub, track_source=True)
+    db.log_project_activity(new_id, ctx.sub, "project.import", f"from #{src_id} ({slug})")
+    return {"project_id": new_id, "imported": True, "name": src.get("name"),
+            "copied_from": src_id, "warnings": warnings}
+
+
 CAPABILITIES += [
+    Capability(
+        key="me.import_project", handler=_import_project, Input=ImportProjectInput,
+        authz=ORG_MEMBER,
+        description=(
+            "« Add to my Oto »: FORK a PUBLISHED project (resolved by its share slug) into "
+            "your ACTIVE org, or RETURN the copy you already imported (idempotent). Copies the "
+            "STRUCTURE (brief + docs + links + files; a tableau owned by another org is "
+            "re-provisioned EMPTY) — NEVER credentials. Source stays intact. Powers the public "
+            "share page's acquisition CTA; the dashboard calls it after login."
+        ),
+        # Canal d'acquisition dashboard-only (login géré côté dashboard) — pas d'outil MCP.
+        mcp=None,
+        rest=RestBinding("POST", "/api/me/projects/import"),
+    ),
     Capability(
         key="me.use_project", handler=_use_project, Input=UseProjectInput, authz=SUB_ONLY,
         description=(

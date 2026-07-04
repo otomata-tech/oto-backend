@@ -3,10 +3,14 @@
 humain ET par un agent via WebFetch, contrairement à l'ex-partage chiffré SPA `/p/p`). Le
 MCP (agir) reste au path `/mcp` ; ici on ne fait que CONSULTER.
 
+C'est aussi le **canal de démonstration / acquisition** : la page doit « claquer » (hero
+« brancher dans Claude », carte « Ajouter à mon Oto », connecteurs présentés avec logo +
+description au survol + lien, tableaux confortables à explorer).
+
 Quatre pages, toutes gatées par l'appartenance au projet (fail-closed) :
-- `/`               index : brief + liens vers procédures / tableaux / docs + carte « brancher »
+- `/`               index : brief + hero MCP + connecteurs + liens procédures / tableaux / docs
 - `/procedures/<id>`  prose d'une procédure liée (markdown sûr)
-- `/data/<id>`        lignes d'un tableau lié (table HTML), gaté par `mcp_expose_datastore`
+- `/data/<id>`        lignes d'un tableau lié (table riche : recherche + tri + filtres), gaté `secret`
 - `/docs/<id>`        page Documents (liée au projet ou de son arbre)
 
 Auto-portée (tokens Otomata inline + Google Fonts), aucune dépendance front. Tout contenu
@@ -20,6 +24,7 @@ PAS une route UI (→ le dispatch retombe sur le MCP : `/mcp`, `/.well-known/*`�
 from __future__ import annotations
 
 import html
+import json
 from typing import Optional
 
 from markdown_it import MarkdownIt
@@ -30,12 +35,17 @@ _MD = MarkdownIt("commonmark", {"html": False})
 # Plafond de lignes affichées par page de tableau (pagination par `?offset=`).
 _DATA_PAGE = 100
 
+# Deep-link « Ajouter à mon Oto » (le dashboard gère le login puis le fork/récupération).
+_DASHBOARD = "https://dashboard.oto.ninja"
+
 
 # ── Shell HTML charté (mêmes tokens que public_doc_page) ──────────────────────
-def _shell(*, title: str, inner: str, home_url: Optional[str] = None) -> str:
+def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
+           wide: bool = False, extra_head: str = "", extra_body: str = "") -> str:
     safe_title = html.escape(title or "Projet")
     crumb = (f'<a class=back href="{html.escape(home_url)}">← Retour au projet</a>'
              if home_url else "")
+    wrap_cls = "wrap wide" if wide else "wrap"
     return f"""<!DOCTYPE html>
 <html lang=fr><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
@@ -46,30 +56,36 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None) -> str:
 <link rel=preconnect href="https://fonts.gstatic.com" crossorigin>
 <link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Hanken+Grotesk:wght@400..700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-  :root{{--bg:#fefcf5;--surface:#fff;--paper2:#f4ecd2;--ink:#2c2112;--ink-soft:#4a3a23;
-    --mute:#6c5e44;--hair:#dccfa8;--primary:#f0b41e;--primary-soft:#fbe7a8;--primary-ink:#5a3b03;--accent:#2a87d8}}
+  :root{{--bg:#fefcf5;--surface:#fff;--paper2:#f4ecd2;--paper3:#faf5e6;--ink:#2c2112;--ink-soft:#4a3a23;
+    --mute:#6c5e44;--faint:#8a7b5c;--hair:#dccfa8;--hair-soft:#ede1bd;--primary:#f0b41e;
+    --primary-soft:#fbe7a8;--primary-ink:#5a3b03;--accent:#2a87d8;--ink-deep:#241a0e;
+    --shadow-card:0 1px 2px rgba(44,33,18,.04),0 8px 24px -12px rgba(44,33,18,.14)}}
   *{{box-sizing:border-box}}
   body{{margin:0;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,sans-serif;
     line-height:1.6;-webkit-font-smoothing:antialiased}}
-  .wrap{{max-width:820px;margin:0 auto;padding:48px 24px 40px}}
+  .wrap{{max-width:820px;margin:0 auto;padding:44px 24px 40px}}
+  .wrap.wide{{max-width:1180px}}
   .eyebrow{{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:600}}
   h1{{font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:34px;line-height:1.15;
     margin:8px 0 4px;letter-spacing:-.01em}}
   .back{{display:inline-block;margin-bottom:18px;color:var(--accent);text-decoration:none;font-size:13.5px}}
+  .back:hover{{text-decoration:underline}}
   .lede{{color:var(--ink-soft);font-size:16px;margin:6px 0 8px}}
   .lede p{{margin:.5em 0}}
-  .card{{background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:24px 28px;margin:22px 0}}
-  .card h2{{font-family:'Bricolage Grotesque',sans-serif;font-size:16px;margin:0 0 12px;font-weight:700}}
+  .card{{background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:22px 26px;
+    margin:20px 0;box-shadow:var(--shadow-card)}}
+  .card h2{{font-family:'Bricolage Grotesque',sans-serif;font-size:15px;margin:0 0 12px;font-weight:700;
+    letter-spacing:.01em}}
+  .card h2 .muted{{color:var(--mute);font-weight:600}}
   .nav{{list-style:none;margin:0;padding:0;display:grid;gap:8px}}
   .nav a{{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
-    background:var(--paper2);border:1px solid var(--hair);border-radius:10px;padding:11px 14px;font-size:14.5px}}
-  .nav a:hover{{border-color:var(--primary)}}
-  .nav .k{{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-ink);
-    background:var(--primary-soft);border-radius:5px;padding:2px 7px;white-space:nowrap}}
+    background:var(--paper3);border:1px solid var(--hair);border-radius:10px;padding:11px 14px;font-size:14.5px;
+    transition:border-color .12s,transform .12s}}
+  .nav a:hover{{border-color:var(--primary);transform:translateX(2px)}}
+  .nav .k{{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--primary-ink);
+    background:var(--primary-soft);border-radius:5px;padding:2px 7px;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}}
+  .nav .arrow{{margin-left:auto;color:var(--faint)}}
   .empty{{color:var(--mute);font-size:14px}}
-  .chips{{display:flex;flex-wrap:wrap;gap:6px}}
-  .chip{{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:var(--primary-soft);
-    color:var(--primary-ink);border-radius:6px;padding:3px 8px}}
   article{{color:var(--ink-soft);font-size:15.5px}}
   article h1,article h2,article h3{{font-family:'Bricolage Grotesque',sans-serif;color:var(--ink)}}
   article h2{{font-size:22px;margin:1.4em 0 .4em}} article h3{{font-size:18px;margin:1.2em 0 .3em}}
@@ -79,28 +95,90 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None) -> str:
   article pre{{background:var(--paper2);border:1px solid var(--hair);border-radius:10px;padding:14px 16px;overflow-x:auto}}
   article pre code{{background:none;padding:0}}
   article blockquote{{margin:.8em 0;padding:.2em 16px;border-left:3px solid var(--hair);color:var(--mute)}}
-  .tablewrap{{overflow-x:auto;border:1px solid var(--hair);border-radius:12px}}
-  table{{border-collapse:collapse;font-size:13.5px}}
-  th,td{{border-bottom:1px solid var(--hair);padding:8px 12px;text-align:left;vertical-align:top;
-    min-width:90px;max-width:340px;overflow-wrap:anywhere}}
-  th{{background:var(--paper2);font-family:'JetBrains Mono',monospace;font-size:11.5px;
-    text-transform:uppercase;letter-spacing:.04em;color:var(--mute);position:sticky;top:0;white-space:nowrap}}
-  tr:last-child td{{border-bottom:none}}
+
+  /* ── Hero « brancher » (carte MCP URL + Ajouter à mon Oto) ── */
+  .hero{{background:linear-gradient(135deg,#fff 0%,var(--paper3) 100%);border:1px solid var(--hair);
+    border-radius:16px;padding:24px 26px;margin:22px 0;box-shadow:var(--shadow-card)}}
+  .hero h2{{font-family:'Bricolage Grotesque',sans-serif;font-size:17px;margin:0 0 4px;font-weight:700}}
+  .hero .sub{{color:var(--ink-soft);font-size:14px;margin:0 0 16px}}
+  .url{{display:flex;gap:8px;align-items:center;background:var(--ink-deep);border-radius:11px;
+    padding:11px 12px 11px 15px;font-family:'JetBrains Mono',monospace;font-size:13px;word-break:break-all}}
+  .url code{{flex:1;color:#f6ecc9}}
+  .url .badge{{color:#c7b48a;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+    padding-right:4px;white-space:nowrap}}
+  .btn{{font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;border:1px solid var(--primary);
+    background:var(--primary);color:var(--primary-ink);border-radius:9px;padding:8px 14px;white-space:nowrap;
+    text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:filter .12s}}
+  .btn:hover{{filter:brightness(1.05)}}
+  .btn.ghost{{background:transparent;color:var(--ink);border-color:var(--hair)}}
+  .btn.ghost:hover{{border-color:var(--primary);background:var(--paper3)}}
+  .btn.copy{{background:#3a2c17;color:#f6ecc9;border-color:#3a2c17;padding:7px 11px}}
+  .cta-row{{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}}
+  .cta-row .hint{{color:var(--faint);font-size:12.5px}}
+
+  /* ── Connecteurs (chips avec logo + tooltip + lien) ── */
+  .conns{{display:flex;flex-wrap:wrap;gap:8px}}
+  .conn{{position:relative;display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);
+    background:var(--paper3);border:1px solid var(--hair);border-radius:999px;padding:6px 13px 6px 7px;
+    font-size:13.5px;font-weight:600;transition:border-color .12s,transform .12s}}
+  .conn:hover{{border-color:var(--primary);transform:translateY(-1px)}}
+  .conn .logo{{width:22px;height:22px;border-radius:6px;object-fit:contain;background:#fff;
+    border:1px solid var(--hair-soft);flex:none}}
+  .conn .mono{{width:22px;height:22px;border-radius:6px;flex:none;display:grid;place-items:center;
+    font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:12px;color:var(--primary-ink);
+    background:var(--primary-soft)}}
+  .conn .n{{line-height:1}} .conn .cnt{{color:var(--faint);font-weight:500;font-size:12px}}
+  /* tooltip pur CSS (title accessible en fallback) */
+  .conn[data-tip]:hover::after{{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 8px);
+    z-index:20;width:max-content;max-width:280px;background:var(--ink-deep);color:#f6ecc9;
+    font-size:12px;font-weight:400;line-height:1.45;padding:9px 12px;border-radius:9px;
+    box-shadow:0 10px 30px -8px rgba(44,33,18,.4);white-space:normal;pointer-events:none}}
+  .conn[data-tip]:hover::before{{content:"";position:absolute;left:16px;top:calc(100% + 2px);z-index:21;
+    border:6px solid transparent;border-bottom-color:var(--ink-deep);pointer-events:none}}
+  .toolchips{{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}}
+  .toolchip{{font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--paper2);
+    color:var(--mute);border-radius:6px;padding:2px 8px}}
+
+  /* ── Tableau riche (recherche + tri + filtres) ── */
+  .dtoolbar{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 14px}}
+  .search{{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--surface);
+    border:1px solid var(--hair);border-radius:10px;padding:8px 12px}}
+  .search input{{flex:1;border:none;outline:none;background:none;font-family:inherit;font-size:14px;color:var(--ink)}}
+  .search svg{{flex:none;color:var(--faint)}}
+  .count{{color:var(--mute);font-size:13px;white-space:nowrap}}
+  .tablewrap{{overflow-x:auto;border:1px solid var(--hair);border-radius:12px;box-shadow:var(--shadow-card);background:var(--surface)}}
+  table{{border-collapse:separate;border-spacing:0;font-size:13.5px;width:100%}}
+  th,td{{border-bottom:1px solid var(--hair-soft);padding:9px 14px;text-align:left;vertical-align:top;
+    min-width:110px;max-width:420px;overflow-wrap:anywhere}}
+  thead th{{background:var(--paper2);position:sticky;top:0;z-index:2}}
+  th .thlabel{{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;
+    font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--mute);white-space:nowrap}}
+  th .thlabel:hover{{color:var(--ink)}}
+  th .sort{{color:var(--faint);font-size:10px}}
+  th.asc .sort::after{{content:"▲";color:var(--primary-ink)}}
+  th.desc .sort::after{{content:"▼";color:var(--primary-ink)}}
+  th .sort::after{{content:"↕"}}
+  th input.colf{{margin-top:6px;width:100%;border:1px solid var(--hair);border-radius:6px;padding:4px 7px;
+    font-family:inherit;font-size:12px;background:var(--surface);color:var(--ink)}}
+  th input.colf::placeholder{{color:var(--faint)}}
+  tbody tr:nth-child(even) td{{background:var(--paper3)}}
+  tbody tr:hover td{{background:var(--primary-soft)}}
+  tbody tr:last-child td{{border-bottom:none}}
+  .norows td{{color:var(--mute);text-align:center;padding:22px}}
   .pager{{display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13.5px}}
-  .pager a{{color:var(--accent);text-decoration:none}} .pager span{{color:var(--mute)}}
-  .url{{display:flex;gap:8px;align-items:center;background:var(--paper2);border:1px solid var(--hair);
-    border-radius:9px;padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:12.5px;word-break:break-all}}
-  .url code{{flex:1;color:var(--ink)}}
-  button{{font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--primary);
-    background:var(--primary);color:var(--primary-ink);border-radius:8px;padding:7px 12px}}
-  footer{{margin-top:30px;padding-top:16px;border-top:1px solid var(--hair);font-size:12.5px;color:var(--mute)}}
+  .pager a{{color:var(--accent);text-decoration:none;font-weight:600}} .pager a:hover{{text-decoration:underline}}
+  .pager span{{color:var(--mute)}}
+
+  footer{{margin-top:34px;padding-top:16px;border-top:1px solid var(--hair);font-size:12.5px;color:var(--mute)}}
   footer a{{color:var(--accent);text-decoration:none}}
-</style></head>
-<body><div class=wrap>
+  @media (max-width:560px){{h1{{font-size:28px}} .wrap{{padding:32px 16px 32px}}}}
+{extra_head}</style></head>
+<body><div class="{wrap_cls}">
 {crumb}
 {inner}
-  <footer>Partagé via <a href="https://oto.ninja">Oto</a> — la boîte à outils d'automatisation.</footer>
-</div></body></html>"""
+  <footer>Partagé via <a href="https://oto.ninja">Oto</a> — la boîte à outils d'automatisation pour agents IA.</footer>
+</div>{extra_body}</body></html>"""
 
 
 def _nav_section(title: str, items: list[dict]) -> str:
@@ -110,15 +188,64 @@ def _nav_section(title: str, items: list[dict]) -> str:
     lis = "".join(
         f'<a href="{html.escape(it["href"])}">'
         f'<span class=k>{html.escape(it["kind"])}</span>'
-        f'<span>{html.escape(it["label"])}</span></a>'
+        f'<span class=n>{html.escape(it["label"])}</span>'
+        f'<span class=arrow>→</span></a>'
         for it in items
     )
     return f'<div class=card><h2>{html.escape(title)}</h2><div class=nav>{lis}</div></div>'
 
 
+def _hero_connect(connect_url: str, add_url: Optional[str]) -> str:
+    """Hero « brancher dans Claude/Mistral » : l'URL MCP publique + copie + CTA
+    « Ajouter à mon Oto » (deep-link dashboard — login géré côté dashboard)."""
+    if not connect_url:
+        return ""
+    url = html.escape(connect_url)
+    add_btn = (
+        f'<a class="btn" href="{html.escape(add_url)}" target="_blank" rel="noopener">'
+        '<span>＋</span> Ajouter à mon Oto</a>' if add_url else "")
+    hint = ('<span class=hint>déjà client Oto ? récupère ce projet dans ton espace</span>'
+            if add_url else "")
+    return (
+        '<div class=hero>'
+        '<h2>Brancher ce projet dans Claude ou Mistral</h2>'
+        '<p class=sub>Colle cette URL comme connecteur MCP — tu obtiens les outils de '
+        'ce projet, prêts à l\'emploi.</p>'
+        '<div class=url><span class=badge>MCP</span>'
+        f'<code id=u>{url}</code>'
+        '<button class="btn copy" onclick="navigator.clipboard.writeText('
+        'document.getElementById(\'u\').textContent).then(()=>{this.textContent=\'copié ✓\'})">'
+        'copier</button></div>'
+        f'<div class=cta-row>{add_btn}{hint}</div>'
+        '</div>')
+
+
+def _connectors_card(connectors: list[dict]) -> str:
+    """Carte « connecteurs » : une pastille par connecteur (logo/monogramme + nom +
+    nb d'outils), tooltip = description, clic = fiche marketplace du dashboard."""
+    if not connectors:
+        return ""
+    pills = []
+    for c in connectors:
+        logo = (f'<img class=logo src="{html.escape(c["logo"])}" alt="" loading=lazy '
+                'onerror="this.style.display=\'none\'">' if c.get("logo")
+                else f'<span class=mono>{html.escape(c["mono"])}</span>')
+        cnt = (f'<span class=cnt>· {c["tool_count"]}</span>'
+               if c.get("tool_count") else "")
+        tip = html.escape(c.get("description") or "")
+        pills.append(
+            f'<a class=conn href="{html.escape(c["href"])}" target="_blank" rel="noopener" '
+            f'data-tip="{tip}" title="{tip}">'
+            f'{logo}<span class=n>{html.escape(c["label"])}</span>{cnt}</a>')
+    return ('<div class=card><h2>Connecteurs <span class=muted>· ce que ce projet '
+            'sait faire</span></h2>'
+            f'<div class=conns>{"".join(pills)}</div></div>')
+
+
 # ── Rendus de page ────────────────────────────────────────────────────────────
 def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: list[dict],
-                 docs: list[dict], connect_url: str, tools: Optional[list[str]] = None) -> str:
+                 docs: list[dict], connect_url: str, connectors: Optional[list[dict]] = None,
+                 add_url: Optional[str] = None, loose_tools: Optional[list[str]] = None) -> str:
     brief_html = (f'<div class=card><article>{_MD.render(brief_md)}</article></div>'
                   if (brief_md or "").strip()
                   else '<p class="empty">Projet partagé, en lecture seule.</p>')
@@ -136,19 +263,18 @@ def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: li
     if not sections:
         sections = ('<div class=card><p class="empty">Ce projet n\'expose encore aucune '
                     'procédure, tableau ni document.</p></div>')
-    url = html.escape(connect_url)
-    connect = (
-        '<div class=card><h2>Brancher dans Claude ou Mistral</h2>'
-        f'<div class=url><code id=u>{url}</code>'
-        '<button onclick="navigator.clipboard.writeText(document.getElementById(\'u\')'
-        '.textContent).then(()=>{this.textContent=\'copié ✓\'})">copier</button></div></div>')
-    chips = "".join(f"<span class=chip>{html.escape(t)}</span>" for t in (tools or []))
-    tools_card = (f'<div class=card><h2>Outils exposés</h2><div class=chips>{chips}</div></div>'
-                  if chips else "")
+    conns = _connectors_card(connectors or [])
+    # Outils sans connecteur reconnu (open-data/maison) : chips discrètes, sans lien.
+    loose = ""
+    if loose_tools:
+        chips = "".join(f"<span class=toolchip>{html.escape(t)}</span>" for t in loose_tools)
+        loose = (f'<div class=card><h2>Autres outils</h2><div class=toolchips>{chips}</div></div>')
     inner = (f'  <div class=eyebrow>Projet partagé · Oto</div>\n'
              f'  <h1>{html.escape(name or "Projet")}</h1>\n'
              f'  {brief_html}\n'
-             f'  {sections}\n  {connect}\n  {tools_card}')
+             f'  {_hero_connect(connect_url, add_url)}\n'
+             f'  {conns}\n'
+             f'  {sections}\n  {loose}')
     return _shell(title=name, inner=inner)
 
 
@@ -163,17 +289,32 @@ def render_prose(*, name: str, title: str, body_md: str, kind_label: str) -> str
 def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dict],
                 total: int, offset: int) -> str:
     if columns and rows:
-        head = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
+        head_cells = []
+        for i, c in enumerate(columns):
+            head_cells.append(
+                f'<th data-col="{i}"><div class=thlabel onclick="otoSort({i})">'
+                f'<span>{html.escape(c)}</span><span class=sort></span></div>'
+                f'<input class=colf placeholder="filtrer…" oninput="otoFilter()" data-col="{i}"></th>')
+        head = "".join(head_cells)
         body_rows = []
         for r in rows:
             data = r.get("data") or {}
             cells = "".join(
                 f"<td>{html.escape(_cell(data.get(c)))}</td>" for c in columns)
             body_rows.append(f"<tr>{cells}</tr>")
-        table = (f'<div class=tablewrap><table><thead><tr>{head}</tr></thead>'
-                 f'<tbody>{"".join(body_rows)}</tbody></table></div>')
+        table = (
+            '<div class=dtoolbar>'
+            '<label class=search>'
+            '<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2>'
+            '<circle cx=11 cy=11 r=8></circle><path d="m21 21-4.3-4.3"></path></svg>'
+            '<input id=q placeholder="Rechercher dans le tableau…" oninput="otoFilter()"></label>'
+            f'<span class=count id=cnt>{len(rows)} lignes</span></div>'
+            f'<div class=tablewrap><table id=dt><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body_rows)}</tbody></table></div>')
+        script = _DATA_SCRIPT
     else:
         table = '<div class=card><p class="empty">Ce tableau est vide.</p></div>'
+        script = ""
     start = offset + 1 if rows else 0
     end = offset + len(rows)
     pager_bits = [f"<span>{start}–{end} sur {total}</span>"]
@@ -184,7 +325,7 @@ def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dic
     pager = f'<div class=pager>{"".join(pager_bits)}</div>' if total else ""
     inner = (f'  <div class=eyebrow>Tableau · {html.escape(name or "Projet")}</div>\n'
              f'  <h1>{html.escape(namespace)}</h1>\n  {table}\n  {pager}')
-    return _shell(title=namespace, inner=inner, home_url="/")
+    return _shell(title=namespace, inner=inner, home_url="/", wide=True, extra_body=script)
 
 
 def render_not_found(*, name: str = "") -> str:
@@ -194,15 +335,110 @@ def render_not_found(*, name: str = "") -> str:
     return _shell(title="Introuvable", inner=inner, home_url="/")
 
 
+# JS de tableau : recherche globale + filtres par colonne + tri 3 états. Opère sur le
+# DOM déjà rendu (aucune donnée dupliquée) ; pas de dépendance externe. Le compteur
+# reflète les lignes visibles / total de la page.
+_DATA_SCRIPT = """<script>
+(function(){
+  var tb=document.querySelector('#dt tbody');
+  if(!tb)return;
+  var rows=[].slice.call(tb.rows);
+  var cnt=document.getElementById('cnt');
+  var sortCol=-1, sortDir=0;
+  window.otoFilter=function(){
+    var q=(document.getElementById('q').value||'').toLowerCase();
+    var cf=[].slice.call(document.querySelectorAll('input.colf'));
+    var vis=0;
+    rows.forEach(function(tr){
+      var cells=tr.cells, ok=true;
+      if(q){ ok=[].slice.call(cells).some(function(td){return td.textContent.toLowerCase().indexOf(q)>-1;}); }
+      if(ok){ for(var i=0;i<cf.length;i++){ var v=(cf[i].value||'').toLowerCase(); if(v){ var td=cells[+cf[i].dataset.col];
+        if(!td||td.textContent.toLowerCase().indexOf(v)<0){ok=false;break;} } } }
+      tr.style.display=ok?'':'none'; if(ok)vis++;
+    });
+    if(cnt)cnt.textContent=vis+(vis===rows.length?' lignes':' / '+rows.length+' lignes');
+  };
+  window.otoSort=function(col){
+    var ths=document.querySelectorAll('#dt thead th');
+    if(sortCol===col){ sortDir=sortDir===1?-1:(sortDir===-1?0:1); } else { sortCol=col; sortDir=1; }
+    ths.forEach(function(th){th.classList.remove('asc','desc');});
+    var num=function(s){var n=parseFloat(String(s).replace(/[^0-9.\\-]/g,''));return isNaN(n)?null:n;};
+    if(sortDir===0){ sortCol=-1; rows.forEach(function(tr){tb.appendChild(tr);}); return; }
+    ths[col].classList.add(sortDir===1?'asc':'desc');
+    var sorted=rows.slice().sort(function(a,b){
+      var x=a.cells[col].textContent.trim(), y=b.cells[col].textContent.trim();
+      var nx=num(x), ny=num(y), r;
+      if(nx!==null&&ny!==null){ r=nx-ny; } else { r=x.localeCompare(y,'fr',{numeric:true}); }
+      return sortDir===1?r:-r;
+    });
+    sorted.forEach(function(tr){tb.appendChild(tr);});
+  };
+})();
+</script>"""
+
+
 def _cell(v: object) -> str:
     """Représentation texte d'une valeur de cellule (dict/list → JSON compact court)."""
     if v is None:
         return ""
     if isinstance(v, (dict, list)):
-        import json
         s = json.dumps(v, ensure_ascii=False)
         return s if len(s) <= 300 else s[:297] + "…"
     return str(v)
+
+
+# ── Connecteurs dérivés des tools exposés (tooltip + logo + lien marketplace) ──
+def _connectors_from_tools(tools: list[str]) -> tuple[list[dict], list[str]]:
+    """Groupe les tools par connecteur (namespace) et enrichit chacun (logo, description,
+    lien fiche). Retourne `(connectors, loose_tools)` : `loose_tools` = les tools dont le
+    namespace n'est pas un connecteur reconnu (open-data/maison sans fiche). Défensif —
+    tout import/lookup échouant retombe sur une présentation nue."""
+    if not tools:
+        return [], []
+    try:
+        from . import providers
+        from .tool_visibility import namespace_of
+    except Exception:  # noqa: BLE001
+        return [], list(tools)
+
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for t in tools:
+        try:
+            ns = namespace_of(t)
+        except Exception:  # noqa: BLE001
+            ns = ""
+        if ns not in groups:
+            groups[ns] = []
+            order.append(ns)
+        groups[ns].append(t)
+
+    connectors: list[dict] = []
+    loose: list[str] = []
+    for ns in order:
+        con = None
+        try:
+            con = providers.connector_for_namespace(ns)
+        except Exception:  # noqa: BLE001
+            con = None
+        if con is None:
+            loose.extend(groups[ns])
+            continue
+        try:
+            logo = con.logo_url_for()
+        except Exception:  # noqa: BLE001
+            logo = None
+        label = getattr(con, "name", ns) or ns
+        connectors.append({
+            "name": con.name,
+            "label": label,
+            "mono": (label[:1] or "•").upper(),
+            "logo": logo,
+            "description": (getattr(con, "description", "") or "").strip(),
+            "tool_count": len(groups[ns]),
+            "href": f"{_DASHBOARD}/connectors?tab=marketplace&connector={con.name}",
+        })
+    return connectors, loose
 
 
 # ── Routeur (lectures DB SYNC → appeler en threadpool) ────────────────────────
@@ -243,10 +479,14 @@ def build_page(project: dict, path: str, *, offset: int = 0,
                 if did not in seen:
                     docs.append({"id": did, "label": l.get("label") or l.get("title") or f"#{did}"})
                     seen.add(did)
+        connectors, loose = _connectors_from_tools(list(project.get("mcp_tools") or []))
+        # « Ajouter à mon Oto » : deep-link dashboard (login + fork/récupération gérés là-bas).
+        slug = project.get("mcp_slug")
+        add_url = f"{_DASHBOARD}/import?slug={slug}" if slug else None
         return render_index(
             name=project.get("name") or "", brief_md=project.get("brief_md") or "",
             procedures=procedures, tables=tables, docs=docs, connect_url=connect_url,
-            tools=list(project.get("mcp_tools") or [])), 200
+            connectors=connectors, add_url=add_url, loose_tools=loose), 200
 
     parts = p.strip("/").split("/")
     if len(parts) == 2 and parts[1].isdigit():

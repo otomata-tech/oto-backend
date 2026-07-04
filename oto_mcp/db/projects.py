@@ -41,18 +41,33 @@ _MCP_ACCESS = ("off", "anonymous", "secret", "org")
 
 
 def create_project(owner_type: str, owner_id: str, name: str,
-                   brief_md: str = "", created_by: Optional[str] = None) -> int:
+                   brief_md: str = "", created_by: Optional[str] = None,
+                   copied_from: Optional[int] = None) -> int:
     """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
-    (perso) | org.id::text | group.id::text."""
+    (perso) | org.id::text | group.id::text. `copied_from` = id de la source si ce projet
+    est un fork (« Ajouter à mon Oto ») → import idempotent par org."""
     if owner_type == "user":
         upsert_user(owner_id)
     with _connect() as conn:
         row = conn.execute(
-            "INSERT INTO projects (owner_type, owner_id, name, brief_md, created_by) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (owner_type, owner_id, name, brief_md, created_by),
+            "INSERT INTO projects (owner_type, owner_id, name, brief_md, created_by, copied_from) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (owner_type, owner_id, name, brief_md, created_by, copied_from),
         ).fetchone()
         return int(row["id"])
+
+
+def find_copied_project(owner_type: str, owner_id: str, src_id: int) -> Optional[dict]:
+    """Un projet NON archivé possédé par `(owner_type, owner_id)` déjà forké depuis
+    `src_id` (« Ajouter à mon Oto » idempotent), ou None. Le plus récent d'abord."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects "
+            "WHERE owner_type = %s AND owner_id = %s AND copied_from = %s "
+            "  AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            (owner_type, owner_id, src_id),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_project_by_id(project_id: int) -> Optional[dict]:
@@ -696,10 +711,14 @@ def _provision_tableau(owner_type: str, owner_id: str, src_ref: str, *,
 
 
 def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str,
-                      copied_by: Optional[str] = None) -> int:
+                      copied_by: Optional[str] = None,
+                      track_source: bool = False) -> int:
     """Copie un projet en un NOUVEAU projet possédé par `(owner_type, owner_id)` :
     brief + arbre des docs (hiérarchie préservée) + liens (label/role/config) +
-    fichiers bruts (copie S3, repartis PRIVÉS). Un lien `tableau` est par défaut un
+    fichiers bruts (copie S3, repartis PRIVÉS). Un lien `procedure` vers une procédure
+    d'une AUTRE org est COPIÉ dans l'org cible (non destructif, slug suffixé) et le lien
+    repointé dessus (sinon le lien pendrait sur l'org source, illisible / fuite) ; une
+    procédure déjà dans l'org cible garde son pointeur (savoir partagé). Un lien `tableau` est par défaut un
     **pointeur** vers le même namespace (réutilisation par référence, `config.provision`
     absent/`shared`) ; en mode **`empty`/`seeded`** (ADR §6) il est **provisionné** — un
     namespace FRAIS (même schéma, rows optionnelles) pour que chaque instance ait son
@@ -714,8 +733,11 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
     if src is None:
         raise ValueError(f"projet source #{src_id} introuvable")
 
+    # `track_source` = fork « Ajouter à mon Oto » : on garde le pointeur `copied_from`
+    # pour un ré-import idempotent. Une copie interne (op=copy) ne le pose pas (défaut).
     new_id = create_project(owner_type, owner_id, new_name,
-                            brief_md=src.get("brief_md", ""), created_by=copied_by)
+                            brief_md=src.get("brief_md", ""), created_by=copied_by,
+                            copied_from=src_id if track_source else None)
 
     # Arbre des docs : copie niveau par niveau, en remappant parent_id src→cible.
     docs = list_docs_for_project(src_id)
@@ -780,6 +802,27 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                 target_ref = fresh
                 warnings.append(f"tableau « {label} » : re-provisionné à vide "
                                 "(la source appartient à une autre org — pas de pointeur vers ses données).")
+        elif link["target_type"] == "procedure" and owner_type == "org" and str(target_ref).isdigit():
+            # Une procédure est org-scopée. Copier un projet dans une AUTRE org sans copier
+            # ses procédures laisserait des liens vers l'org SOURCE (illisibles / fuite) —
+            # même problème que les tableaux `shared`. Si la procédure appartient déjà à
+            # l'org cible, on garde le pointeur (savoir partagé de l'org) ; sinon on la COPIE
+            # dans l'org cible (non destructif, slug suffixé) et on repointe le lien dessus.
+            from .. import org_store
+            src_instr = org_store.get_instruction_by_id(int(target_ref))
+            label = link.get("label") or (src_instr or {}).get("title") or f"#{target_ref}"
+            if src_instr is None:
+                warnings.append(f"procédure « {label} » : lien ignoré (la source ne résout plus).")
+                continue
+            if int(src_instr.get("org_id") or 0) != int(owner_id):
+                try:
+                    copied = org_store.copy_instruction_to_org(int(target_ref), int(owner_id),
+                                                               set_by=copied_by)
+                    target_ref = str(copied["id"])
+                except Exception:
+                    logger.warning("duplicate_project: copie procédure #%s échouée", target_ref)
+                    warnings.append(f"procédure « {label} » : copie impossible, lien ignoré.")
+                    continue
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None,

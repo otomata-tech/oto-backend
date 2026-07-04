@@ -16,7 +16,7 @@ from oto_mcp.capabilities import _mcp_adapter, _rest_adapter, registry
 # tools/ DOIT être dérivé du registre `kind="tools"`. Cette liste-ci change rarement
 # (≠ un nouveau connecteur, qui n'a RIEN à ajouter ici).
 _EXPLICIT_TOOL_MODULES = {
-    "meta", "profile", "whoami", "email", "datastore", "doctrine_run",
+    "meta", "profile", "whoami", "guide", "email", "datastore", "doctrine_run",
     "remote", "mount",
 }
 

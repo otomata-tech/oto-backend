@@ -35,6 +35,9 @@ DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 PROTECTED_TOOLS: frozenset[str] = frozenset(
     {"oto_list_my_tools", "oto_enable_tool", "oto_profile",
      "oto_whoami",
+     # Guides d'usage plateforme (oto-backend#111) — read-only, toujours atteignable :
+     # l'agent doit pouvoir charger le how-to (ex. bulk-load) en toute session.
+     "oto_guide",
      # Dispatch universel (ADR 0036) : `oto_call` matérialise à la demande un outil
      # NON listé (FOD, connecteur non activé…) sans l'exposer durablement — il DOIT
      # rester atteignable même sous visibilité restrictive, sinon le catalogue latent

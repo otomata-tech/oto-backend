@@ -76,6 +76,37 @@ def read_guide(slug: str) -> Optional[dict]:
             "description": meta.get("description") or "", "body_md": body}
 
 
+def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]:
+    """Corps BRUT (stripped) de la prose « init » d'un scope — mirror **lecture-seule**
+    des sources existantes (ADR 0042, barreau 1 : centraliser la lecture dans le store,
+    sans toucher composition/DB). None si absent/vide/erreur (**fail-open** ; le rendu —
+    header, variables, ordre, seed plateforme — reste chez l'appelant `instructions.py`).
+
+    Aucune table neuve : `platform` = `platform_instructions[owner_id|'secret_sauce']` ;
+    `org`/`group` = `*_instructions` slug `claude_md` ; `user` = `user_agent_readme`."""
+    try:
+        if scope == "platform":
+            from . import db
+            row = db.get_platform_instruction(owner_id or "secret_sauce")
+        elif scope == "org":
+            from . import org_store
+            row = org_store.get_instruction(int(owner_id), org_store.BASE_SLUG)
+        elif scope == "group":
+            from . import group_store, org_store
+            row = group_store.get_group_instruction(int(owner_id), org_store.BASE_SLUG)
+        elif scope == "user":
+            from . import db
+            row = db.get_user_readme(str(owner_id))
+        else:
+            return None
+    except Exception:  # noqa: BLE001
+        logger.warning("init_guide_body(%s, %s) échec (fail-open)", scope, owner_id,
+                       exc_info=True)
+        return None
+    body = ((row or {}).get("body_md") or "").strip()
+    return body or None
+
+
 def guides_index_md() -> str:
     """Index markdown des guides — enrichit la description de `oto_guide` au `tools/list`
     (même pattern que `skills_index_md` pour les doctrines). '' si aucun guide."""

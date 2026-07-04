@@ -69,17 +69,10 @@ _VAR_TOKENS = ("{{org}}", "{{user}}", "{{équipe}}", "{{equipe}}", "{{connecteur
 
 def _platform_block(key: str, seed: str) -> str:
     """Le bloc plateforme `key` : override DB s'il existe et non vide, sinon `seed`
-    (constante). Fail-open au seed. Runtime uniquement (jamais à l'import)."""
-    try:
-        from . import db
-        row = db.get_platform_instruction(key)
-        body = ((row or {}).get("body_md") or "").strip()
-        if body:
-            return body
-    except Exception:
-        logger.warning("lecture bloc plateforme '%s' échouée (fallback seed)", key,
-                       exc_info=True)
-    return seed.strip()
+    (constante). Fail-open au seed. La lecture DB est centralisée dans `guide_store`
+    (ADR 0042 : source unique de la prose init ; le seed reste ici, son domicile)."""
+    from . import guide_store
+    return guide_store.init_guide_body("platform", key) or seed.strip()
 
 
 def _catalog() -> str:
@@ -264,13 +257,8 @@ def _block_c(sub: str | None, org_id: int | None) -> str:
 def _format_org_readme(org_id: int, ctx: dict) -> str:
     """L'agent README de l'org (`org_instructions` slug `claude_md`), variables
     substituées, sous son en-tête. '' si absent/vide."""
-    try:
-        from . import org_store
-        instr = org_store.get_instruction(org_id, org_store.BASE_SLUG)
-        body = ((instr or {}).get("body_md") or "").strip()
-    except Exception:
-        logger.warning("lecture readme org=%s échouée (fail-open)", org_id, exc_info=True)
-        return ""
+    from . import guide_store
+    body = guide_store.init_guide_body("org", org_id)
     if not body:
         return ""
     return f"{_README_ORG_HEADER} ({ctx['org_name']})\n\n{_apply_vars(body, ctx)}"
@@ -283,13 +271,8 @@ def _format_group_readme(ctx: dict) -> str:
     gid = ctx.get("group_id")
     if gid is None:
         return ""
-    try:
-        from . import group_store, org_store
-        instr = group_store.get_group_instruction(gid, org_store.BASE_SLUG)
-        body = ((instr or {}).get("body_md") or "").strip()
-    except Exception:
-        logger.warning("lecture readme groupe=%s échouée (fail-open)", gid, exc_info=True)
-        return ""
+    from . import guide_store
+    body = guide_store.init_guide_body("group", gid)
     if not body:
         return ""
     name = f" ({ctx['group_name']})" if ctx.get("group_name") else ""
@@ -301,12 +284,8 @@ def _format_user_readme(sub: str | None, ctx: dict) -> str:
     — le plus spécifique, cumulé en dernier. '' si absent/vide."""
     if not sub:
         return ""
-    try:
-        from . import db
-        body = (db.get_user_readme(sub).get("body_md") or "").strip()
-    except Exception:
-        logger.warning("lecture readme user=%s échouée (fail-open)", sub, exc_info=True)
-        return ""
+    from . import guide_store
+    body = guide_store.init_guide_body("user", sub)
     if not body:
         return ""
     return f"{_README_USER_HEADER}\n\n{_apply_vars(body, ctx)}"
@@ -315,15 +294,15 @@ def _format_user_readme(sub: str | None, ctx: dict) -> str:
 def _org_readme_only(org_id: int) -> str:
     """Fallback : le README d'org seul (sans section de contexte, sans variables), si
     la résolution du contexte a échoué mais qu'on peut encore le lire."""
+    from . import guide_store
+    body = guide_store.init_guide_body("org", org_id)
+    if not body:
+        return ""
     try:
         from . import org_store
-        instr = org_store.get_instruction(org_id, org_store.BASE_SLUG)
-        body = ((instr or {}).get("body_md") or "").strip()
-        if not body:
-            return ""
         name = (org_store.get_org(org_id) or {}).get("name") or f"#{org_id}"
     except Exception:
-        return ""
+        name = f"#{org_id}"
     return f"{_README_ORG_HEADER} ({name})\n\n{body}"
 
 

@@ -78,18 +78,30 @@ def _handoff_md(row: dict) -> str:
     )
 
 
+def _mcp_url(slug: object, access: str) -> object:
+    """URL du connecteur MCP d'un projet publié : `secret` → `<slug>.share.oto.cx/mcp`
+    (partage navigable), `anonymous`/`org` → `<slug>.mcp.oto.cx/mcp`. None si non publié."""
+    if not slug or access == "off":
+        return None
+    dom = "share.oto.cx" if access == "secret" else "mcp.oto.cx"
+    return f"https://{slug}.{dom}/mcp"
+
+
 def _view(row: dict) -> dict:
     return {
         "id": row["id"], "name": row["name"], "brief_md": row.get("brief_md", ""),
         "owner_type": row["owner_type"], "owner_id": row["owner_id"],
         "is_template": bool(row.get("is_template")),
-        # Publication MCP (ADR 0032, amende #44) : présence + URL dérivée.
+        # Publication MCP (ADR 0032) : présence + URLs dérivées. `secret` = partage
+        # navigable `<slug>.share.oto.cx` (UI + /mcp) ; `anonymous`/`org` = `<slug>.mcp.oto.cx`.
         "mcp_slug": row.get("mcp_slug"),
         "mcp_access": row.get("mcp_access") or "off",
         "mcp_tools": list(row.get("mcp_tools") or []),
         "mcp_expose_datastore": bool(row.get("mcp_expose_datastore")),
-        "mcp_url": (f"https://{row['mcp_slug']}.mcp.oto.cx/mcp"
-                    if row.get("mcp_slug") and (row.get("mcp_access") or "off") != "off" else None),
+        "mcp_url": _mcp_url(row.get("mcp_slug"), row.get("mcp_access") or "off"),
+        # Base de PARTAGE navigable (lecture seule, humain) — mode `secret` uniquement.
+        "share_url": (f"https://{row['mcp_slug']}.share.oto.cx"
+                      if row.get("mcp_slug") and (row.get("mcp_access") or "off") == "secret" else None),
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
         "archived_at": row.get("archived_at"),
     }
@@ -224,16 +236,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require_active_org_visible(ctx, row)
 
     if inp.op == "get":
-        # Part publique CHIFFRÉE (ADR 0032 §3) : le serveur ne connaît que sa présence
-        # + son horodatage, JAMAIS la clé (côté navigateur). La (re)publication passe
-        # par la route REST dédiée (le ciphertext vient du front, pas de l'agent).
         from .. import project_audit
-        share = db.get_project_public_share(int(inp.project_id))
         links = db.list_project_links(int(inp.project_id))
         return {**_view(row),
                 "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
-                "public_shared": bool(share),
-                "public_shared_at": share.get("updated_at") if share else None,
                 "links": links,
                 # B5 : liens vérifiés comme des refs — le lien mort remonte à l'agent
                 # qui LIT le projet (brief), pas seulement à op=inventory (curation).

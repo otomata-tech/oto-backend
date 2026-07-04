@@ -46,6 +46,10 @@ def init_db() -> None:
         # l'org propriétaire (pas de sub). Défaut FALSE (le datastore reste privé). JAMAIS
         # honoré en `anonymous` (endpoint public listé) : cf. set_project_mcp_publication.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE")
+        # Retrait du partage public CHIFFRÉ zero-knowledge (`/p/p`), supplanté par le
+        # partage NAVIGABLE live sur `<slug>.share.oto.cx` (share_ui). La table ne stockait
+        # que du ciphertext irrécupérable (clé jamais côté serveur) → drop sûr, pas de legacy.
+        conn.execute("DROP TABLE IF EXISTS project_public_shares")
         # ADR 0032 §7 : l'onboarding n'est plus un mode spécial mais un projet « Découverte »
         # (semé à la création de l'org perso). On retire la machinerie d'accueil de la fiche
         # « situation avec oto » — il ne reste que le data model `profile`, relu à chaque session.

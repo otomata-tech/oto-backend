@@ -1,8 +1,8 @@
 """Surcharge d'identité connecteur par projet actif (ADR 0032 §4, B2.2).
 
 `access.project_pinned_identity(connector)` lit la config PRÉFAITE du lien connecteur
-du projet de session (bracelet) → identity_id, ou None (repli défaut user). On
-monkeypatche les seams (`current_project_override`, `list_project_links`), pas de DB.
+du projet de l'APPEL (jeton project=, ADR 0038) → identity_id, ou None (repli défaut user). On
+monkeypatche les seams (`current_call_project`, `list_project_links`), pas de DB.
 """
 import pytest
 
@@ -12,7 +12,7 @@ from oto_mcp import access
 @pytest.fixture
 def wire(monkeypatch):
     state = {"pid": None, "links": []}
-    monkeypatch.setattr(access.session_org, "current_project_override", lambda: state["pid"])
+    monkeypatch.setattr(access.session_org, "current_call_project", lambda: state["pid"])
     monkeypatch.setattr(access.db, "list_project_links", lambda pid: state["links"])
     return state
 

@@ -157,13 +157,14 @@ ACCOUNT = CallAxis(
 
 # ── Axe project= (slots de tableau — enforcement serveur ADR 0035) ────────────
 
-def _is_slot_aware_tool(name: str) -> bool:
-    """Le tool résout-il un `slot:<name>` contre le projet actif ? Les tools `data_*`
-    (namespace `data`, ADR 0035 B3) — `resolve_slot_tableau` LÈVE sans projet actif
-    (enforcement dur, jamais de fallback) → c'est le cas où la perte du bracelet de
-    session casse un flux. L'épinglage d'IDENTITÉ connecteur par projet reste fail-soft
-    (repli sur le défaut user) → hors périmètre de l'axe pour l'instant."""
-    return namespace_of(name) == "data"
+def _is_project_scopable_tool(name: str) -> bool:
+    """Tool de TRAVAIL (connecteurs + `data_*`) : `project=` est le jeton PRIMAIRE
+    du modèle sans état (ADR 0038 §A — l'org en dérive, les slots `slot:<name>` s'y
+    résolvent, l'identité connecteur préfaite du projet s'y épingle). Élargi de
+    `data_*` seul à toute la surface de travail au retrait du bracelet
+    `oto_use_project` (B3b) — l'axe est le SEUL porteur du contexte projet."""
+    ns = namespace_of(name)
+    return ns == "data" or providers.connector_for_namespace(ns) is not None
 
 
 def _resolve_project_org_guarded(sub: str, pid: int, subdomain_org: Optional[int]) -> Optional[int]:
@@ -224,12 +225,14 @@ PROJECT = CallAxis(
         "type": "integer",
         "title": "Project",
         "description": (
-            "Projet à activer pour CET appel (id, cf. `oto_project op=list`). Résout les "
-            "`slot:<nom>` de `namespace` contre les bindings du projet et scope l'action "
-            "sur son org. Alternative sans état au bracelet `oto_use_project`."
+            "Projet dans le cadre duquel exécuter CET appel (id, cf. `oto_project "
+            "op=list`) — le jeton PRIMAIRE : scope l'action sur l'org du projet, résout "
+            "les `slot:<nom>` contre ses bindings et épingle ses identités connecteur "
+            "préfaites. À passer sur CHAQUE appel fait pour un projet (aucun état de "
+            "session ne le retient)."
         ),
     },
-    applies=_is_slot_aware_tool,
+    applies=_is_project_scopable_tool,
     pin=_pin_project,
 )
 

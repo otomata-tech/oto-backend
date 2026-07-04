@@ -54,10 +54,10 @@ def register(mcp: FastMCP) -> None:
         `knowledge` (base Memento connectée ?), `connectors` (résumé des connecteurs
         configurés), et un `summary` lisible. Lecture seule.
 
-        Pour basculer d'org dans la conversation en cours : `oto_use_org <org>`
-        (override de session éphémère — recharge toolbox + credentials, n'affecte
-        ni ton org maison ni les autres conversations). Pour changer ton org par
-        défaut (maison, appliquée aux prochaines conversations) : `oto_set_home_org`.
+        Pour agir sous une autre org/équipe/projet : passe le jeton `org=` /
+        `group=` / `project=` directement sur chaque appel de travail (aucun état
+        de session, ADR 0038) — `oto_whoami(org=X)` montre le contexte résultant.
+        Pour changer ton défaut persistant : `oto_set_home_org`.
         """
         sub = _require_sub()
 
@@ -105,7 +105,7 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             logger.warning("whoami: group lookup failed: %s", e)
 
-        # Projet actif de la conversation (bracelet de session, ADR 0032 §4 B2.2).
+        # Projet de l'appel (jeton project= — le bracelet de session est retiré, ADR 0038 B3b).
         project_block = None
         try:
             active_project = access.current_project()

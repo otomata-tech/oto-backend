@@ -6,9 +6,9 @@
 `Mcp-Session-Id` à CHAQUE appel (bracelet jamais relu, #72) et un session_id
 recyclé cross-compte faisait hériter le scope (#108). Le scope est porté par
 l'appel (`org=`/`project=`/`group=`, contextvars `_CALL_*` ci-dessous) ou retombe
-sur la maison. Les stores `_OVERRIDES`/`_GROUP_OVERRIDES` et leurs fonctions sont
-**conservés transitoirement** (WIP en vol les importe) — à supprimer au prochain
-nettoyage. Le bracelet PROJET (`_PROJECT_OVERRIDES`) reste actif (B3b à venir).
+sur la maison. Les stores `_OVERRIDES`/`_GROUP_OVERRIDES`/`_PROJECT_OVERRIDES`
+(B3b) et leurs fonctions sont **conservés transitoirement** (WIP en vol les
+importe) — à supprimer au prochain nettoyage.
 
 Sentinelle : `0` = profil **perso/global** (cohérent ADR 0015 `org_id=0`).
 """

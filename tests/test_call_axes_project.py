@@ -13,13 +13,16 @@ def _params(name):
     return {a.param for a in call_axes.axes_for(name)}
 
 
-def test_project_axis_applies_to_data_tools_only():
+def test_project_axis_applies_to_work_tools():
+    # ADR 0038 B3b : `project=` = jeton PRIMAIRE sur TOUTE la surface de travail
+    # (data_* + connecteurs — le bracelet oto_use_project n'existe plus).
     assert "project" in _params("data_write")
     assert "project" in _params("data_rows")
-    # connecteurs : épinglage d'identité fail-soft → hors périmètre de l'axe
-    assert "project" not in _params("zoho_get")
-    assert "project" not in _params("folk_search")
+    assert "project" in _params("zoho_get")
+    assert "project" in _params("folk_search")
+    # spine : hors surface de travail.
     assert "project" not in _params("oto_whoami")
+    assert "project" not in _params("run_start")
 
 
 def _project_axis():

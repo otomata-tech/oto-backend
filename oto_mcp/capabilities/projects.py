@@ -71,10 +71,11 @@ def _handoff_md(row: dict) -> str:
     l'agent lit le brief via `oto_project(op=get)` — donnée d'outil, pas texte pré-collé."""
     pid, name = row["id"], row.get("name") or f"#{row['id']}"
     return (
-        f"Charge le projet Oto #{pid} « {name} » : appelle `oto_use_project({pid})` "
-        f"pour l'activer dans cette conversation, puis `oto_project(op=get, "
-        f"project_id={pid})` pour son brief, ses pages et ses entités liées. "
-        f"Travaille DANS ce projet (ses connecteurs préconfigurés, ses tableaux de sortie)."
+        f"Charge le projet Oto #{pid} « {name} » : appelle `oto_project(op=get, "
+        f"project_id={pid})` pour son brief, ses pages et ses entités liées, puis "
+        f"passe `project={pid}` sur CHAQUE appel de travail fait pour ce projet "
+        f"(ses connecteurs préconfigurés, ses slots et ses tableaux en découlent — "
+        f"aucun état de session, ADR 0038)."
     )
 
 
@@ -514,7 +515,7 @@ CAPABILITIES += [
             "ANOTHER org is re-provisioned EMPTY (never a pointer to the source's private data), "
             "and links whose namespace no longer resolves are skipped — both surfaced in the "
             "response `warnings`. Pass project_id = source + name = target) / handoff (a copy-paste « resume in Claude » blob "
-            "that pre-writes oto_use_project for this project) / archive / link & unlink "
+            "that pre-writes the per-call `project=` token for this project) / archive / link & unlink "
             "(attach an entity: "
             "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "
             "(for `doc`: a Documents page id — attach a knowledge page from the org KB or "
@@ -558,12 +559,11 @@ CAPABILITIES += [
 ]
 
 
-# ── Bracelet de session « projet actif » (ADR 0032 §4, B2.2) ─────────────────
-# `oto_use_project` pose un projet ACTIF pour la conversation (override de session,
-# éphémère, MCP-only — pas de « projet maison »). Tant qu'il est actif, la résolution
-# d'identité d'un connecteur applique la surcharge PRÉFAITE du projet (le compte épinglé
-# sur le lien). Le bracelet SÉLECTIONNE un projet préfait ; il ne déclare aucune config.
-# Miroir de `oto_use_org` (ADR 0023), sans persistance.
+# ── « Projet actif » = jeton d'appel (ADR 0038 B3b — le bracelet est retiré) ──
+# `oto_use_project` ne pose PLUS d'état de session : le contexte projet est porté
+# par le jeton `project=` de CHAQUE appel de travail (l'axe co-pose l'org du projet,
+# résout les slots et épingle les identités connecteur préfaites). Ce tool valide
+# l'accès et renvoie le geste fiable + les surcharges préfaites (informatif).
 
 
 class UseProjectInput(BaseModel):
@@ -575,47 +575,48 @@ class NoInput(BaseModel):
 
 
 def _use_project(ctx: ResolvedCtx, inp: UseProjectInput) -> dict:
-    """Active un projet pour CETTE conversation (override de session, ADR 0032 §4)."""
-    rid = str(inp.project_id)
+    """Hint SANS ÉTAT (ADR 0038 B3b) : valide l'accès au projet et renvoie le geste
+    fiable (`project=` par appel) + ses surcharges connecteur préfaites."""
     row = db.get_project_by_id(inp.project_id)
     _require(row is not None, "unknown_project", f"Projet #{inp.project_id} inconnu.", 404)
     _require_active_org_visible(ctx, row)
-    sid = session_org.current_session_id()
-    _require(sid is not None, "no_session",
-             "oto_use_project ne s'utilise que dans une conversation MCP.", 400)
-    session_org.set_project_override(sid, inp.project_id)
     # Surcharges connecteur préfaites portées par ce projet (informatif pour l'agent).
     overrides = [{"connector": l["target_ref"], "config": l.get("config") or {}}
                  for l in db.list_project_links(inp.project_id)
                  if l.get("target_type") == "connecteur" and (l.get("config") or {})]
-    return {"active_project": inp.project_id, "name": row.get("name"),
-            "connector_overrides": overrides}
+    return {
+        "project": inp.project_id, "name": row.get("name"),
+        "connector_overrides": overrides, "session_state": None,
+        "how_to": (f"Aucun état de session (ADR 0038) : passe `project={inp.project_id}` "
+                   "sur CHAQUE appel de travail fait pour ce projet (connecteurs et "
+                   "data_* l'acceptent — l'org du projet, ses slots et ses identités "
+                   "préfaites en découlent)."),
+    }
 
 
 def _clear_project(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    """Quitte le projet actif de la conversation (retour « hors projet »)."""
-    sid = session_org.current_session_id()
-    if sid is not None:
-        session_org.clear_project_override(sid)
-    return {"active_project": None}
+    """Hint sans état (ADR 0038 B3b) : hors projet = simplement ne pas passer `project=`."""
+    return {"session_state": None,
+            "how_to": ("Aucun état de session à effacer (ADR 0038) : un appel sans "
+                       "`project=` est hors projet par construction.")}
 
 
 CAPABILITIES += [
     Capability(
         key="me.use_project", handler=_use_project, Input=UseProjectInput, authz=SUB_ONLY,
         description=(
-            "Set the ACTIVE PROJECT for this conversation (project_id from oto_project "
-            "op=list). While a project is active, connectors resolve the project's PRE-MADE "
-            "identity (which account to act as), set up ahead of time on the project — you "
-            "don't declare it. Ephemeral: this conversation only; a new conversation starts "
-            "with no active project. Returns the project's connector overrides. Leave with "
-            "oto_clear_project."
+            "Resolve a project you can access (project_id from oto_project op=list) and "
+            "get the RELIABLE way to work in it. NO session state (ADR 0038): pass "
+            "`project=<id>` directly on each work call — the project's org, slot "
+            "bindings and PRE-MADE connector identities all derive from that token. "
+            "Returns the project's connector overrides."
         ),
         mcp="oto_use_project",
     ),
     Capability(
         key="me.clear_project", handler=_clear_project, Input=NoInput, authz=SUB_ONLY,
-        description="Leave the active project of this conversation (back to no project).",
+        description=("No-op hint (ADR 0038: no session state — a call without "
+                     "`project=` is out of any project by construction)."),
         mcp="oto_clear_project",
     ),
 ]

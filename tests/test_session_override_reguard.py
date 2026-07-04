@@ -4,16 +4,16 @@ Axe GROUPE : le bracelet (`oto_use_group`) est retiré — `current_group` réso
 `jeton group= (déjà gardé à la pose) ?? consultation ?? équipe maison`, en tenant
 l'invariant « groupe ⊂ org » face aux jetons d'org (`org=`/`project=`).
 
-Axe PROJET : le bracelet reste (B3b à venir) — sa re-garde à la RÉSOLUTION (#108)
-est conservée : un Mcp-Session-Id réutilisé par un AUTRE compte ne doit pas hériter
-du projet de session du précédent (`ownership.can_access`, ADR 0030).
+Axe PROJET (B3b) : même modèle — `current_project` = jeton d'appel `project=`
+(déjà gardé `can_access` + org co-posée à la pose), le bracelet (`oto_use_project`)
+n'est plus lu.
 
 On exerce le vrai chemin de résolution (pas de stub des seams eux-mêmes) — leçon
 row-shape/fail-open (CLAUDE.md).
 """
 import pytest
 
-from oto_mcp import access, auth_hooks, group_store, ownership, session_org
+from oto_mcp import access, group_store, session_org
 
 
 @pytest.fixture(autouse=True)
@@ -71,29 +71,20 @@ def test_home_group_without_any_token(monkeypatch):
     assert access.current_group("u") == 99
 
 
-# ── current_project (bracelet conservé — B3b) : re-garde #108 ───────────────
-def test_project_override_honored_when_can_access(monkeypatch):
+# ── current_project (B3b) : jeton d'appel seul, bracelet ignoré ─────────────
+def test_call_project_token_honored():
+    tok = session_org.set_call_project(7)
+    try:
+        assert access.current_project() == 7
+    finally:
+        session_org.reset_call_project(tok)
+
+
+def test_project_bracelet_ignored(monkeypatch):
+    # Bracelet résiduel vers 7 (store inerte, ADR 0038 B3b) → IGNORÉ : hors projet.
     monkeypatch.setattr(session_org, "current_project_override", lambda: 7)
-    monkeypatch.setattr(auth_hooks, "current_user_sub_from_token", lambda: "u")
-    monkeypatch.setattr(ownership, "can_access", lambda sub, rt, rid, want="read": True)
-    assert access.current_project() == 7
+    assert access.current_project() is None
 
 
-def test_project_override_ignored_when_no_access(monkeypatch):
-    # session_id réutilisé par « other » : le projet 7 ne lui est pas accessible.
-    monkeypatch.setattr(session_org, "current_project_override", lambda: 7)
-    monkeypatch.setattr(auth_hooks, "current_user_sub_from_token", lambda: "other")
-    monkeypatch.setattr(ownership, "can_access", lambda sub, rt, rid, want="read": False)
-    assert access.current_project() is None  # hors projet, pas de fuite
-
-
-def test_project_override_honored_without_sub(monkeypatch):
-    # stdio/tests (sub non identifiable, hors surface authentifiée) : pas de régression.
-    monkeypatch.setattr(session_org, "current_project_override", lambda: 7)
-    monkeypatch.setattr(auth_hooks, "current_user_sub_from_token", lambda: None)
-    assert access.current_project() == 7
-
-
-def test_no_project_override_is_none(monkeypatch):
-    monkeypatch.setattr(session_org, "current_project_override", lambda: None)
+def test_no_project_token_is_none():
     assert access.current_project() is None

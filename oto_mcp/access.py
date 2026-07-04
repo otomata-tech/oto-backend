@@ -209,36 +209,14 @@ def current_group(sub: str | None) -> Optional[int]:
 
 
 def current_project() -> Optional[int]:
-    """Projet ACTIF de la conversation (ADR 0032 §4, B2.2) — **bracelet de session**
-    posé par `oto_use_project`, MCP-only, éphémère. Pas de projet « maison » : pas
-    d'override ⇒ None. Sert à appliquer la surcharge connecteur PRÉFAITE du projet
-    (le bracelet sélectionne un projet préfait ; il ne déclare jamais de config).
-
-    Re-garde à la RÉSOLUTION (fermeture #108 sur l'axe projet) : l'override n'est
-    honoré que si l'ACTEUR courant a accès en lecture au projet (privacy-by-default,
-    ADR 0030) — un Mcp-Session-Id réutilisé par un autre compte n'hérite pas du projet
-    du précédent. Le sub est résolu ici (chemin MCP de l'acteur courant) plutôt que
-    passé en argument : tous les appelants sont ce même acteur. Sub non identifiable
-    (stdio/tests, hors surface authentifiée) ⇒ bracelet honoré tel quel."""
-    # Axe d'appel `project=` (modèle sans état de session, #108) : déjà gardé
-    # (can_access) à la pose par le middleware → rendu tel quel, prime sur le bracelet.
-    call = session_org.current_call_project()
-    if call is not None:
-        return call
-    pid = session_org.current_project_override()
-    if pid is None:
-        return None
-    from .auth_hooks import current_user_sub_from_token
-    try:
-        sub = current_user_sub_from_token()
-    except Exception:
-        sub = None
-    if not sub:
-        return pid
-    from . import ownership
-    if ownership.can_access(sub, "project", str(pid), "read"):
-        return pid
-    return None  # projet inaccessible par l'acteur (session_id réutilisé) → hors projet
+    """Projet de l'APPEL courant (ADR 0038) = jeton `project=` — posé déjà gardé
+    (`can_access` + org dérivée co-posée) par l'axe d'appel. Le BRACELET de session
+    (`oto_use_project`) n'est plus lu (B3b — même raison que org/groupe : claude.ai
+    renouvelle le session_id à chaque appel, et un session_id recyclé cross-compte
+    faisait hériter le contexte, #108). Pas de projet « maison » : pas de jeton ⇒
+    None (hors projet). Sert la surcharge connecteur PRÉFAITE du projet, les slots
+    (ADR 0035) et le gel `runs.project_id`."""
+    return session_org.current_call_project()
 
 
 def project_pinned_identity(connector: str, project_id: Optional[int] = None) -> Optional[str]:

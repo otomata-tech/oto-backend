@@ -344,7 +344,7 @@ def test_activity(seams):
 
 def test_handoff_md_pure():
     md = P._handoff_md({"id": 7, "name": "Prospection MM", "brief_md": "le but du projet"})
-    assert "oto_use_project(7)" in md and "#7" in md and "Prospection MM" in md
+    assert "project=7" in md and "#7" in md and "Prospection MM" in md
 
 
 def test_handoff_md_excludes_brief_content():
@@ -356,7 +356,7 @@ def test_handoff_md_excludes_brief_content():
 
 def test_handoff_op(seams):
     out = P._project(CTX, P.ProjectInput(op="handoff", project_id=7))
-    assert out["id"] == 7 and "oto_use_project(7)" in out["markdown"]
+    assert out["id"] == 7 and "project=7" in out["markdown"]
 
 
 def test_handoff_other_org_hidden(seams, monkeypatch):
@@ -375,12 +375,13 @@ def test_capability_registered():
     assert cap.rest is not None and cap.rest.path == "/api/me/projects"
 
 
-# ── Bracelet « projet actif » (B2.2) ─────────────────────────────────────────
+# ── « Projet actif » = jeton d'appel (ADR 0038 B3b — hint sans état) ─────────
 
-def test_use_project_sets_session_override(seams):
+def test_use_project_is_stateless_hint(seams):
     out = P._use_project(CTX, P.UseProjectInput(project_id=7))
-    assert seams["proj"] == [("sess1", 7)]
-    assert out["active_project"] == 7 and out["name"] == "Proj"
+    assert seams["proj"] == []                     # AUCUN état de session posé
+    assert out["project"] == 7 and out["name"] == "Proj"
+    assert "project=7" in out["how_to"]
 
 
 def test_use_project_unknown(seams):
@@ -402,11 +403,11 @@ def test_use_project_other_org_hidden(seams, monkeypatch):
     assert seams["proj"] == []
 
 
-def test_use_project_requires_session(seams, monkeypatch):
-    monkeypatch.setattr(P.session_org, "current_session_id", lambda: None)   # face REST
-    with pytest.raises(AuthzDenied) as e:
-        P._use_project(CTX, P.UseProjectInput(project_id=7))
-    assert e.value.code == "no_session"
+def test_use_project_no_session_needed(seams, monkeypatch):
+    # Hint sans état : plus d'exigence de session MCP (ADR 0038 B3b).
+    monkeypatch.setattr(P.session_org, "current_session_id", lambda: None)
+    out = P._use_project(CTX, P.UseProjectInput(project_id=7))
+    assert out["project"] == 7 and seams["proj"] == []
 
 
 def test_use_project_returns_connector_overrides(seams, monkeypatch):
@@ -421,9 +422,9 @@ def test_use_project_returns_connector_overrides(seams, monkeypatch):
         {"connector": "fr", "config": {"identity_id": "acc_1", "instructions_md": "thème mutuelle"}}]
 
 
-def test_clear_project(seams):
+def test_clear_project_is_stateless_hint(seams):
     out = P._clear_project(CTX, P.NoInput())
-    assert out == {"active_project": None} and seams["proj"] == [("sess1", None)]
+    assert out["session_state"] is None and seams["proj"] == []
 
 
 def test_use_clear_project_registered():

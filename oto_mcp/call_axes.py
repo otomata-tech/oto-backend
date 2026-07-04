@@ -24,6 +24,7 @@ axe porte un prédicat `applies` dérivé du registre.
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
@@ -34,6 +35,8 @@ from starlette.concurrency import run_in_threadpool
 from . import providers, session_org
 from .auth_hooks import current_user_sub_from_token
 from .tool_visibility import namespace_of
+
+logger = logging.getLogger(__name__)
 
 # Entrée d'annulation d'un axe posé : (fonction de reset, token ContextVar).
 UndoEntry = tuple[Callable[[object], None], object]
@@ -78,6 +81,32 @@ def require_axis_sub(axis: str) -> str:
             code=INVALID_PARAMS,
             message=f"Le paramètre `{axis}` requiert une session authentifiée."))
     return sub
+
+
+async def resolve_org_guarded(org: object) -> int:
+    """Résout un `org=` (id ou nom) → org_id, gardé par la MÊME résolution qu'`oto_use_org`
+    (`org_store.resolve_org_for_user` : appartenance réelle du sub). McpError PROPRE en cas
+    d'échec — jamais une exception opaque. Partagé par le middleware (org= des capacités,
+    `CallContextMiddleware._pin_org`), l'axe plat `org=` et `oto_call(org=)`. DB en
+    threadpool (chemin inbound chaud, mono-loop)."""
+    org_id = require_axis_int(org, "org")
+    sub = require_axis_sub("org")
+    from . import org_store
+    try:
+        return await run_in_threadpool(org_store.resolve_org_for_user, sub, str(org_id))
+    except ValueError:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Paramètre `org`={org_id} refusé : tu n'es membre d'aucune "
+                    f"org #{org_id}. Vérifie avec oto_list_orgs."))
+    except McpError:
+        raise
+    except Exception:
+        logger.exception("garde `org=` a levé pour sub=%s org=%s", sub, org_id)
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Impossible de vérifier ton accès à l'org #{org_id} "
+                    f"(erreur interne). Réessaie."))
 
 
 # ── Axe account= (connecteurs multi-compte) ──────────────────────────────────
@@ -235,8 +264,44 @@ RUN = CallAxis(
 )
 
 
+# ── Axe org= (org d'exécution de l'appel — connecteurs + data + whoami) ───────
+
+def _is_org_scopable_tool(name: str) -> bool:
+    """Tool PLAT dont l'action dépend de l'org (résolution de credential/visibilité/
+    données) : tools de TRAVAIL (connecteurs + `data_*`) + `oto_whoami` (lecture de
+    l'identité effective). Les CAPACITÉS reçoivent déjà `org=` par `_mcp_adapter` (elles
+    ne sont pas des tools de travail → exclues ici, pas de double-traitement)."""
+    return _is_work_tool(name) or name == "oto_whoami"
+
+
+async def _pin_org_flat(value: object) -> list[UndoEntry]:
+    """Épingle l'org d'exécution de l'appel (même garde qu'`oto_use_org`, via
+    `resolve_org_guarded`). Lue par le seam `current_org` → credentials/visibilité/
+    données résolus sous cette org, sans dépendre du bracelet de session."""
+    if value is None:
+        return []
+    return [(session_org.reset_call_org, session_org.set_call_org(
+        await resolve_org_guarded(value)))]
+
+
+ORG = CallAxis(
+    param="org",
+    schema={
+        "type": "integer",
+        "title": "Org",
+        "description": (
+            "Organisation (id) sous laquelle exécuter CET appel — résout les credentials, "
+            "la visibilité et les données de cette org. Alternative fiable et sans état au "
+            "bracelet `oto_use_org` (qui ne persiste pas). Omets pour ton org courante."
+        ),
+    },
+    applies=_is_org_scopable_tool,
+    pin=_pin_org_flat,
+)
+
+
 # Axes exposés sur les tools plats (chacun via les 3 mécanismes : advertise / strip+pose / seam).
-AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN)
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG)
 
 
 def axes_for(name: str) -> list[CallAxis]:

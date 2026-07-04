@@ -180,3 +180,61 @@ def test_alpha_gate_noop_without_flag(monkeypatch):
     monkeypatch.setattr(session_visibility, "alpha_gate_enabled", lambda: False)
     # flag off → aucune lecture DB, aucun refus
     meta._enforce_alpha_gate("sub-123", "fr_ccn_search")
+
+
+# --- 6. jeton `org=` (ADR 0038) : posé pendant run, nettoyé après ----------
+
+class _OrgCapturingTool(_FakeTool):
+    """Capture l'org épinglée (`_CALL_ORG`) AU MOMENT de l'exécution du tool cible —
+    l'invariant : le seam `current_org` doit voir l'org de l'appel PENDANT run."""
+    def __init__(self, name):
+        super().__init__(name, result=_tool_result({"ok": True}))
+        self.org_during_run = None
+
+    async def run(self, arguments):
+        from oto_mcp import session_org
+        self.org_during_run = session_org.current_call_org()
+        return self._result
+
+
+def test_dispatch_pins_org_during_run_then_resets(oto_call_fn, monkeypatch):
+    from oto_mcp import call_axes, session_org
+    monkeypatch.setattr(redaction, "_resolve_field_filter", lambda _s: FieldFilter())
+
+    async def _fake_guard(org):  # court-circuite la garde DB (appartenance réelle)
+        return 167
+    monkeypatch.setattr(call_axes, "resolve_org_guarded", _fake_guard)
+
+    target = _OrgCapturingTool("zoho_records")
+    assert session_org.current_call_org() is None            # propre avant
+    _call(oto_call_fn, [target], name="zoho_records",
+          arguments={"module": "Contacts"}, org=167)
+
+    assert target.org_during_run == 167                      # le tool a vu l'org 167
+    assert session_org.current_call_org() is None            # reset après (pas de fuite)
+
+
+def test_dispatch_without_org_leaves_context_clean(oto_call_fn, monkeypatch):
+    from oto_mcp import session_org
+    monkeypatch.setattr(redaction, "_resolve_field_filter", lambda _s: FieldFilter())
+    target = _OrgCapturingTool("zoho_records")
+    _call(oto_call_fn, [target], name="zoho_records", arguments={})
+    assert target.org_during_run is None                     # aucune org sans org=
+    assert session_org.current_call_org() is None
+
+
+def test_dispatch_org_refused_raises_before_run(oto_call_fn, monkeypatch):
+    """Org non-membre : la garde lève un McpError PROPRE avant le dispatch → run
+    jamais appelé, contexte inchangé (parité stricte avec l'axe plat `org=`)."""
+    from oto_mcp import call_axes, session_org
+    from mcp.types import ErrorData, INVALID_PARAMS
+
+    async def _reject(org):
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="pas membre"))
+    monkeypatch.setattr(call_axes, "resolve_org_guarded", _reject)
+
+    target = _OrgCapturingTool("zoho_records")
+    with pytest.raises(McpError):
+        _call(oto_call_fn, [target], name="zoho_records", arguments={}, org=999)
+    assert target.org_during_run is None                     # dispatch jamais atteint
+    assert session_org.current_call_org() is None

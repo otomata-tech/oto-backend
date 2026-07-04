@@ -23,7 +23,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 
-from .. import access, db, doctrine_run, redaction
+from .. import access, call_axes, db, doctrine_run, redaction, session_org
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
@@ -222,7 +222,8 @@ def register(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    async def oto_call(name: str, arguments: Optional[dict] = None, *, ctx: Context):
+    async def oto_call(name: str, arguments: Optional[dict] = None,
+                       org: Optional[int] = None, *, ctx: Context):
         """Call ANY oto tool by name — including one that is NOT listed (hidden by
         default, connector not activated, FOD…), for a single call, WITHOUT adding it
         durably to your toolbox.
@@ -238,6 +239,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             name: Exact target tool name (e.g. `fr_ccn_search`).
             arguments: Argument object passed to the target tool. `{}` if none.
+            org: run the target tool under THIS organization (id) — resolves its
+                credentials/visibility/data for that org (ADR 0038 call token,
+                same membership guard as the flat `org=` axis). Omit for your
+                current org.
         """
         # Identité ambiante : le sub du JWT porte déjà l'appel (le handler cible
         # résout ses propres credentials dessus). Soft — sur stdio local il n'y a pas
@@ -266,6 +271,12 @@ def register(mcp: FastMCP) -> None:
                 message=f"Unknown tool `{name}`. Use oto_list_my_tools to see available names."))
 
         args = arguments if isinstance(arguments, dict) else {}
+        # `org=` (jeton d'appel ADR 0038) : oto_call s'exécute HORS middleware → l'axe
+        # ORG des tools plats ne s'applique pas ici. On pose `_CALL_ORG` nous-mêmes
+        # autour de `tool.run`, avec la garde partagée `resolve_org_guarded`
+        # (appartenance réelle du sub + McpError propre). Refus = AVANT dispatch.
+        org_tok = (session_org.set_call_org(await call_axes.resolve_org_guarded(org))
+                   if org is not None else None)
         started = time.monotonic()
         ok, err = True, None
         try:
@@ -285,6 +296,8 @@ def register(mcp: FastMCP) -> None:
             ok, err = False, str(e)
             return {"tool": name, "ok": False, "error": str(e)}
         finally:
+            if org_tok is not None:
+                session_org.reset_call_org(org_tok)
             await _trace_target_call(sub, name, args, ok, err,
                                      int((time.monotonic() - started) * 1000))
 

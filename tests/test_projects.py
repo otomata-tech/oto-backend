@@ -32,7 +32,7 @@ def seams(monkeypatch):
                         lambda pid, name=None, brief_md=None, is_template=None: rec["update"].append((pid, name, brief_md, is_template)))
     rec["copy"] = []
     monkeypatch.setattr(P.db, "duplicate_project",
-                        lambda src, name, ot, oid, copied_by=None: rec["copy"].append((src, name, ot, oid, copied_by)) or 8)
+                        lambda src, name, ot, oid, copied_by=None: rec["copy"].append((src, name, ot, oid, copied_by)) or (8, []))
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
     rec["link"] = []
     rec["unlink"] = []

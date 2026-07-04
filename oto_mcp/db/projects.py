@@ -756,7 +756,10 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
     absent/`shared`) ; en mode **`empty`/`seeded`** (ADR §6) il est **provisionné** — un
     namespace FRAIS (même schéma, rows optionnelles) pour que chaque instance ait son
     vivier isolé. La copie n'est jamais un modèle elle-même (`is_template=false` par
-    défaut). Retourne le nouvel id."""
+    défaut). Un lien tableau `shared` vers un namespace d'un AUTRE propriétaire est
+    re-provisionné à vide (anti-fuite inter-org) ; un lien dont le namespace ne résout
+    plus est ignoré (pas de dead_link répliqué) — oto-backend#112. Retourne
+    `(nouvel id, warnings)`."""
     from .. import media_store
 
     src = get_project_by_id(src_id)
@@ -799,14 +802,36 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
     # 0032 §6) NE recopie PAS le pointeur : il matérialise un namespace FRAIS (même schéma,
     # rows si seeded) possédé par la copie, et le lien pointe dessus → vivier isolé par
     # instance. `config.provision` reste sur le lien copié : re-copier re-provisionne.
+    warnings: list[str] = []
     for link in list_project_links(src_id):
         target_ref = link["target_ref"]
         if link["target_type"] == "tableau":
             mode = (link.get("config") or {}).get("provision")
+            src_ns = (get_datastore_namespace_by_id(int(target_ref))
+                      if str(target_ref).isdigit() else None)
+            label = link.get("label") or (src_ns or {}).get("namespace") or f"#{target_ref}"
+            if src_ns is None:
+                # Lien mort dans la source (namespace supprimé/introuvable) : on NE le
+                # réplique PAS, sinon la copie hérite d'un dead_link (oto-backend#112).
+                warnings.append(f"tableau « {label} » : lien ignoré (la source ne résout plus).")
+                continue
             if mode in ("empty", "seeded"):
                 target_ref = _provision_tableau(
                     owner_type, owner_id, target_ref, seed=(mode == "seeded")
                 ) or target_ref
+            elif not (src_ns.get("owner_type") == owner_type
+                      and str(src_ns.get("owner_id")) == str(owner_id)):
+                # Pointeur par défaut (`shared`) vers un namespace d'un AUTRE propriétaire =
+                # fuite inter-org : la copie exposerait les données privées de la source
+                # (oto-backend#112). On matérialise un vivier VIERGE (même schéma, 0 row)
+                # possédé par la copie ; l'utilisateur y refait SON travail.
+                fresh = _provision_tableau(owner_type, owner_id, target_ref, seed=False)
+                if fresh is None:
+                    warnings.append(f"tableau « {label} » : lien ignoré (re-provisionnement impossible).")
+                    continue
+                target_ref = fresh
+                warnings.append(f"tableau « {label} » : re-provisionné à vide "
+                                "(la source appartient à une autre org — pas de pointeur vers ses données).")
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None,
@@ -824,4 +849,4 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                          description=f.get("description"), created_by=copied_by)
 
     log_project_activity(new_id, copied_by, "project.copy", f"from #{src_id}")
-    return new_id
+    return new_id, warnings

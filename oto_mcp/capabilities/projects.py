@@ -314,10 +314,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(ownership.can_access(sub, RTYPE, rid, "read"), "forbidden", "Accès refusé.", 403)
         _require(inp.name and inp.name.strip(), "missing_name", "`name` (cible) requis.")
         _require(ctx.org_id is not None, "no_active_org", "Aucune org active.", 400)
-        new_id = db.duplicate_project(int(inp.project_id), inp.name.strip(),
-                                      "org", str(ctx.org_id), copied_by=sub)
+        new_id, warnings = db.duplicate_project(int(inp.project_id), inp.name.strip(),
+                                                "org", str(ctx.org_id), copied_by=sub)
         return {**_view(db.get_project_by_id(new_id)),
-                "links": db.list_project_links(new_id), "copied_from": inp.project_id}
+                "links": db.list_project_links(new_id), "copied_from": inp.project_id,
+                "warnings": warnings}
 
     if inp.op in ("link", "unlink"):
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -480,8 +481,10 @@ CAPABILITIES += [
             "a tableau link stays a POINTER to the same namespace by default (config.provision "
             "absent/`shared`), but with config.provision=`empty`|`seeded` it is PROVISIONED — a "
             "FRESH namespace (same schema, rows only if `seeded`) so each copy gets its own "
-            "isolated table (e.g. a campaign template's lead pool); pass project_id "
-            "= source + name = target) / handoff (a copy-paste « resume in Claude » blob "
+            "isolated table (e.g. a campaign template's lead pool). A `shared` tableau owned by "
+            "ANOTHER org is re-provisioned EMPTY (never a pointer to the source's private data), "
+            "and links whose namespace no longer resolves are skipped — both surfaced in the "
+            "response `warnings`. Pass project_id = source + name = target) / handoff (a copy-paste « resume in Claude » blob "
             "that pre-writes oto_use_project for this project) / archive / link & unlink "
             "(attach an entity: "
             "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "

@@ -68,8 +68,8 @@ def _wire(monkeypatch, *, src):
 def test_duplicate_copies_brief_and_owner(monkeypatch):
     src = {"project": {"id": 7, "brief_md": "le brief"}, "docs": [], "links": [], "files": []}
     created = _wire(monkeypatch, src=src)
-    new_id = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
-    assert new_id == 101
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
+    assert new_id == 101 and warnings == []
     assert created["projects"] == [(101, "org", "42", "Copie", "le brief", "u1")]
     assert created["activity"] == [(101, "project.copy", "from #7")]
 
@@ -143,15 +143,55 @@ def test_duplicate_seeds_tableau(monkeypatch):
 
 
 def test_duplicate_shared_tableau_stays_pointer(monkeypatch):
-    # Défaut (provision absent) : le lien reste un pointeur vers le MÊME namespace.
+    # Défaut (provision absent) MÊME propriétaire : le lien reste un pointeur vers le
+    # MÊME namespace (réutilisation intra-org intentionnelle).
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Commun",
               "role": None, "config": {}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": [{"id": 5, "namespace": "suppression", "schema": None}]}
+           "namespaces": [{"id": 5, "namespace": "suppression", "schema": None,
+                           "owner_type": "org", "owner_id": "42"}]}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
     assert created["provisioned_ns"] == []               # rien de provisionné
     assert created["links"] == [(101, "tableau", "5", "Commun", None, None)]
+    assert warnings == []
+
+
+def test_duplicate_reprovisions_cross_owner_tableau(monkeypatch):
+    # Fuite inter-org (oto-backend#112) : un lien `shared` vers un namespace d'un AUTRE
+    # propriétaire (org 2) copié dans l'org 42 → NE pointe PAS vers la source, il est
+    # re-provisionné à vide (schéma cloné, 0 row) + warning.
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Réseau N1",
+              "role": "leads", "config": {}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "namespaces": [{"id": 5, "namespace": "reseau-n1", "owner_type": "org",
+                           "owner_id": "2", "schema": {"fields": [{"key": "urn"}]}}],
+           "ns_rows": {5: [{"row_id": "r1", "data": {"urn": "secret"}}]}}
+    created = _wire(monkeypatch, src=src)
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    # Un namespace frais possédé par l'org 42, schéma cloné, AUCUNE row de la source.
+    assert len(created["provisioned_ns"]) == 1
+    new_ns = created["provisioned_ns"][0]
+    assert new_ns["owner"] == ("org", "42")
+    assert created["schemas_set"] == [(new_ns["id"], {"fields": [{"key": "urn"}]})]
+    assert created["rows_inserted"] == []                # zéro donnée de l'org source
+    # Le lien pointe sur le NOUVEAU namespace, jamais "5" (celui de l'org 2).
+    assert created["links"] == [(101, "tableau", str(new_ns["id"]), "Réseau N1", "leads", None)]
+    assert len(warnings) == 1 and "autre org" in warnings[0]
+
+
+def test_duplicate_skips_dead_tableau_link(monkeypatch):
+    # Lien mort dans la source (namespace disparu) : NON répliqué (pas de dead_link hérité)
+    # + warning — oto-backend#112.
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Fantôme",
+              "role": None, "config": {}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "namespaces": []}                              # ns 5 n'existe plus
+    created = _wire(monkeypatch, src=src)
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    assert created["links"] == []                         # lien mort non copié
+    assert created["provisioned_ns"] == []
+    assert len(warnings) == 1 and "ne résout plus" in warnings[0]
 
 
 def test_apply_tableau_names_resolves_by_id():

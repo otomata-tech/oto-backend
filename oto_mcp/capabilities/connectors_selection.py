@@ -17,6 +17,8 @@ d'effet de visibilité — le masquage de la pause est branché au middleware en
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 from .. import access, connector_activation, connector_selection, db, org_store, providers, tool_registry
@@ -28,9 +30,12 @@ from .registry import CAPABILITIES
 _ID = {"id": "org_id"}
 
 
-class NoInput(BaseModel):
-    """Capacité sans paramètre (classe dédiée — ne jamais passer `BaseModel` nu en
-    `Input`, l'adaptateur MCP injecte `__signature__` sur la classe)."""
+class MyConnectorsInput(BaseModel):
+    """Filtre/projection de `connectors.me`. Défaut = **compact** (identité + état) :
+    la vue pleine (doc_sections/auth/credential_fields/…) gonfle le payload à ~90 KB
+    pour 55 connecteurs et dépasse le plafond de tokens MCP (oto-backend#109)."""
+    verbose: bool = False                # True = payload complet (dashboard / setup credential)
+    state: Optional[str] = None          # filtre : not_selected | active | paused
 
 
 class ConnectorActionInput(BaseModel):
@@ -82,23 +87,33 @@ def _doctrine_refs_by_ns(org_id: int | None) -> dict[str, set]:
         return {}
 
 
-def _me(ctx: ResolvedCtx, inp: NoInput) -> dict:
+# Champs conservés en mode COMPACT (défaut MCP) : identité + axes de tri + état.
+# Les gros champs (doc_sections/auth/credential_fields/description/namespaces) ne
+# reviennent qu'en `verbose=True` (dashboard, setup credential). Cf. #109.
+_COMPACT_KEYS = ("name", "label", "help", "family", "category", "availability", "logo_url")
+
+
+def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     org_id = ctx.org_id or 0
     selection = connector_selection.list_selection(ctx.sub, org_id)
     recommended = set(org_store.get_org_default_connectors(ctx.org_id) or []) if ctx.org_id else set()
     doc_refs = _doctrine_refs_by_ns(ctx.org_id)
     connectors = []
     for c in _visible_catalog(ctx):
+        state = selection.get(c["name"], "not_selected")
+        if inp.state and state != inp.state:
+            continue
         refset: set = set()
         for ns in c.get("namespaces") or []:
             refset |= doc_refs.get(ns, set())
+        base = c if inp.verbose else {k: c.get(k) for k in _COMPACT_KEYS}
         connectors.append({
-            **c,
-            "state": selection.get(c["name"], "not_selected"),
+            **base,
+            "state": state,
             "recommended": c["name"] in recommended,
             "doctrine_ref_count": len(refset),
         })
-    return {"connectors": connectors}
+    return {"connectors": connectors, "verbose": inp.verbose}
 
 
 def _require_exposed(ctx: ResolvedCtx, name: str) -> None:
@@ -109,10 +124,23 @@ def _require_exposed(ctx: ResolvedCtx, name: str) -> None:
                           f"Connecteur `{name}` indisponible pour ton org active.")
 
 
+# Guidage post-activation (oto-backend#111). Le registre d'outils d'une session MCP est
+# FIGÉ à l'ouverture de la conversation : un connecteur activé en cours de session n'y
+# monte pas ses outils (le hot-reload `tools/list_changed` n'est pas appliqué par
+# claude.ai). Le pont fiable = `oto_call` (dispatch universel, ADR 0036) ; sinon, nouvelle
+# conversation. On le DIT à l'agent au moment où il installe, pour qu'il enchaîne sans
+# conclure « la capacité n'existe pas ».
+def _activation_hint(name: str) -> str:
+    return (f"`{name}` est actif. Ses outils ne sont pas encore montés dans CETTE conversation "
+            f"(le registre d'outils est figé à l'ouverture) — appelle-les DÈS MAINTENANT via "
+            f"`oto_call(name=\"{name}_…\", arguments={{…}})`, ou ouvre une NOUVELLE conversation "
+            f"pour les voir listés directement.")
+
+
 def _select(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     _require_exposed(ctx, inp.name)
     connector_selection.set_state(ctx.sub, inp.name, connector_selection.ACTIVE, ctx.org_id or 0)
-    return {"connector": inp.name, "state": "active"}
+    return {"connector": inp.name, "state": "active", "hint": _activation_hint(inp.name)}
 
 
 def _pause(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
@@ -137,17 +165,22 @@ def _recommend(ctx: ResolvedCtx, inp: RecommendInput) -> dict:
 
 CAPABILITIES += [
     Capability(
-        key="connectors.me", handler=_me, Input=NoInput, authz=SUB_ONLY,
+        key="connectors.me", handler=_me, Input=MyConnectorsInput, authz=SUB_ONLY,
         description="List every connector available to you (the marketplace catalog) with your "
                     "per-workspace state: not_selected (in the library) / active / paused, plus "
                     "`recommended` when your org proposes it. Source for both the connector "
-                    "library and your installed connectors.",
+                    "library and your installed connectors. Returns a COMPACT row per connector "
+                    "by default (name/label/family/category/state/…) — pass verbose=true for the "
+                    "full card (doc, auth descriptor, credential fields). Filter with state="
+                    "active|paused|not_selected.",
         mcp="oto_my_connectors", rest=RestBinding("GET", "/api/me/connectors"),
     ),
     Capability(
         key="connectors.select", handler=_select, Input=ConnectorActionInput, authz=SUB_ONLY,
-        description="Install a connector into your active workspace (state=active). Its tools "
-                    "become visible. name = connector name from the catalog.",
+        description="Install a connector into your active workspace (state=active). name = "
+                    "connector name from the catalog. Its tools do NOT mount in the current "
+                    "conversation (the tool registry is frozen at open) — the response `hint` "
+                    "tells you to reach them right away via oto_call, or open a new conversation.",
         mcp="oto_select_connector", rest=RestBinding("POST", "/api/me/connectors/{name}/select"),
     ),
     Capability(

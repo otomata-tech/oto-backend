@@ -53,6 +53,9 @@ _ACTION_SCHEMA = [
 
 class GetFieldFiltersInput(BaseModel):
     org_id: int
+    # Le bloc `schemas` (catalogue de champs de TOUS les connecteurs) pèse ~160 KB et
+    # dépasse le plafond de tokens MCP (oto-backend#109) — omis par défaut, opt-in.
+    include_schemas: bool = False
 
 
 class SetFieldFilterInput(BaseModel):
@@ -84,9 +87,19 @@ def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     filters = org_store.get_org_field_filters(inp.org_id)
+    out = {
+        "org_id": inp.org_id,
+        "filters": filters,
+        "defaults": field_filter_defaults.SERVER_DEFAULTS,   # vide : rien par défaut
+        "templates": field_filter_defaults.TEMPLATES,         # jeux applicables en 1 clic
+        "schema": _ACTION_SCHEMA,
+    }
+    if not inp.include_schemas:
+        return out
     # Schéma par connecteur = OBSERVÉ (squelette des vraies réponses, source de vérité)
     # fusionné avec le curé (libellés/sensibilité). Union de tous les services connus
-    # (observés + déjà configurés + curés) pour ne rien cacher.
+    # (observés + déjà configurés + curés) pour ne rien cacher. Volumineux (~160 KB) →
+    # opt-in (#109).
     observed = db.get_all_connector_schemas()   # {service: {name: {type, paths}}}
     services = set(connector_field_schema.CONNECTOR_FIELD_SCHEMA) | set(filters) | set(observed)
 
@@ -97,14 +110,8 @@ def _get_field_filters(ctx: ResolvedCtx, inp: GetFieldFiltersInput) -> dict:
                  if f["name"].lower() not in seen]
         return curated + extra
 
-    return {
-        "org_id": inp.org_id,
-        "filters": filters,
-        "defaults": field_filter_defaults.SERVER_DEFAULTS,   # vide : rien par défaut
-        "templates": field_filter_defaults.TEMPLATES,         # jeux applicables en 1 clic
-        "schema": _ACTION_SCHEMA,
-        "schemas": {svc: _merged_schema(svc) for svc in sorted(services)},
-    }
+    out["schemas"] = {svc: _merged_schema(svc) for svc in sorted(services)}
+    return out
 
 
 def _set_field_filter(ctx: ResolvedCtx, inp: SetFieldFilterInput) -> dict:
@@ -157,7 +164,9 @@ CAPABILITIES += [
         key="org.field_filters.get", handler=_get_field_filters, Input=GetFieldFiltersInput,
         authz=ORG_MEMBER_OF("org_id"),
         description=("Read the org's field-redaction policy per connector, plus the "
-                     "server defaults and the available redaction modes/params."),
+                     "server defaults and the available redaction modes/params. Pass "
+                     "include_schemas=true to also get the full per-connector field "
+                     "catalog (large — omitted by default)."),
         mcp="oto_get_org_field_filters",
         rest=RestBinding("GET", "/api/orgs/{id}/field-filters", _ID),
     ),

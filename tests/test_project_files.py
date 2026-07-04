@@ -66,6 +66,55 @@ def test_cross_org_member_blocked(seams, monkeypatch):
     assert e.value.code == "wrong_org_context" and e.value.status == 403
 
 
+@pytest.fixture
+def delete_seams(seams, monkeypatch):
+    calls = {"deleted": [], "s3": [], "activity": []}
+    monkeypatch.setattr(P.db, "get_project_file",
+                        lambda fid: {"id": fid, "project_id": 7, "s3_key": "k/abc/file.pdf",
+                                     "filename": "file.pdf", "title": "Brief"} if fid == 1 else None)
+    monkeypatch.setattr(P.db, "delete_project_file", lambda fid: calls["deleted"].append(fid))
+    monkeypatch.setattr(P.media_store, "delete_by_key", lambda key: calls["s3"].append(key))
+    monkeypatch.setattr(P.db, "log_project_activity",
+                        lambda pid, sub, action, detail: calls["activity"].append((pid, sub, action, detail)))
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    return calls
+
+
+def test_delete_removes_row_and_object(delete_seams):
+    out = P._project_files(CTX, P.ProjectFilesInput(op="delete", project_id=7, file_id=1))
+    assert out == {"ok": True}
+    assert delete_seams["deleted"] == [1]
+    assert delete_seams["s3"] == ["k/abc/file.pdf"]              # l'objet stocké part aussi
+    assert delete_seams["activity"] == [(7, "u1", "project.file_delete", "Brief")]
+
+
+def test_delete_requires_file_id(delete_seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project_files(CTX, P.ProjectFilesInput(op="delete", project_id=7))
+    assert e.value.code == "missing_file_id" and e.value.status == 400
+
+
+def test_delete_unknown_or_foreign_file(delete_seams, monkeypatch):
+    # Fichier inexistant, ou rattaché à un AUTRE projet que celui de l'appel : 404.
+    monkeypatch.setattr(P.db, "get_project_file",
+                        lambda fid: {"id": fid, "project_id": 8, "s3_key": "k"} if fid == 1 else None)
+    for fid in (1, 999):
+        with pytest.raises(AuthzDenied) as e:
+            P._project_files(CTX, P.ProjectFilesInput(op="delete", project_id=7, file_id=fid))
+        assert e.value.code == "unknown_file" and e.value.status == 404
+    assert delete_seams["deleted"] == []
+
+
+def test_delete_needs_write_access(delete_seams, monkeypatch):
+    # Lecture OK (le gate de contexte passe) mais pas d'accès write → 403, rien détruit.
+    monkeypatch.setattr(P.ownership, "can_access",
+                        lambda sub, t, rid, want="read": want == "read")
+    with pytest.raises(AuthzDenied) as e:
+        P._project_files(CTX, P.ProjectFilesInput(op="delete", project_id=7, file_id=1))
+    assert e.value.code == "forbidden" and e.value.status == 403
+    assert delete_seams["deleted"] == [] and delete_seams["s3"] == []
+
+
 def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.project_files"), None)

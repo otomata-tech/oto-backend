@@ -162,11 +162,21 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
                                               row.get("account") or ""),
                 row))
 
-        # 2. GROUPES — TOUS mes groupes de l'org active (pas de « groupe actif » :
-        # depuis B3 `group=` est un jeton d'appel → toute instance d'un de mes
-        # groupes est atteignable = visible au sens §C).
-        for g in group_store.list_groups_for_user(sub, org):
-            gid = g["group_id"]
+        # 2. GROUPES — les groupes que je peux LIRE (miroir de `can_read_group`,
+        # la garde de résolution) : mes groupes, et TOUS les groupes de l'org pour
+        # un org_admin (escalade roles.py — « un connecteur par département, vu au
+        # niveau org » : l'admin voit et administre chaque instance départementale).
+        # Depuis B3, `group=` est un jeton d'appel → toute instance listée ici est
+        # atteignable = visible au sens §C.
+        from .. import roles as _roles
+        try:
+            org_admin = _roles.is_org_admin(sub, org)
+        except Exception:
+            org_admin = False
+        groups = (group_store.list_groups(org) if org_admin
+                  else group_store.list_groups_for_user(sub, org))
+        for g in groups:
+            gid = g.get("group_id") or g.get("id")
             owner = {"type": "group", "id": gid, "label": g.get("name")}
             for row in credentials_store.list_credentials("group", str(gid)):
                 out.append(_cred_instance(

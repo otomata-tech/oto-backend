@@ -135,6 +135,8 @@ def seams(monkeypatch):
     monkeypatch.setattr(ci.db, "member_allowed_connectors",
                         lambda sub, org_id: set())
     monkeypatch.setattr(ci.access, "is_super_admin", lambda sub: False)
+    import oto_mcp.roles as roles_mod
+    monkeypatch.setattr(roles_mod, "is_org_admin", lambda sub, org: False)
     monkeypatch.setattr(ci, "providers", SimpleNamespace(REGISTRY=_FAKE_REGISTRY))
     return SimpleNamespace(vault=vault, monkeypatch=monkeypatch)
 

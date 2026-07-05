@@ -486,7 +486,12 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     active_org = current_org(sub)
     member_key = None
     eff = ""  # compte effectif du palier membre (multi-compte)
-    if active_org is not None:
+    # Palier membre SEULEMENT pour un provider byo_user : un byo-org-only (http,
+    # ex-mm…) n'a pas de credential membre par construction — et la LECTURE du
+    # coffre le valide (`require_credential` lève ValueError) : sans ce gate, toute
+    # résolution d'un provider org-only explosait AVANT les paliers groupe/org
+    # (trou exposé par le cas « un http par département », 2026-07-05).
+    if active_org is not None and connectors.is_byo_user(provider):
         if _is_multi_account(provider):
             # Multi-compte (coffre à N comptes, ex. « 2 Zoho ») : sélection du compte =
             # account explicite (param) > axe d'appel `account=` (#108) > épinglage

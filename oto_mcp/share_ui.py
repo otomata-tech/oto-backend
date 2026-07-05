@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Optional
 
 from markdown_it import MarkdownIt
@@ -149,8 +150,25 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
   .tablewrap{{overflow-x:auto;border:1px solid var(--hair);border-radius:12px;box-shadow:var(--shadow-card);background:var(--surface)}}
   table{{border-collapse:separate;border-spacing:0;font-size:13.5px;width:100%}}
   th,td{{border-bottom:1px solid var(--hair-soft);padding:9px 14px;text-align:left;vertical-align:top;
-    min-width:110px;max-width:420px;overflow-wrap:anywhere}}
+    min-width:110px;max-width:420px}}
+  td.rich{{min-width:210px}}
   thead th{{background:var(--paper2);position:sticky;top:0;z-index:2}}
+  /* Cellule : hauteur BORNÉE (lignes uniformes) ; les cellules qui débordent sont
+     fondues en bas (masque bg-agnostique posé par JS sur `.clamped`). */
+  td .cell{{display:block;max-height:150px;overflow:hidden;overflow-wrap:anywhere}}
+  td .cell.clamped{{-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent);
+    mask-image:linear-gradient(180deg,#000 72%,transparent)}}
+  /* JSON lisible : dict → clé/valeur, liste d'objets → blocs, liste de scalaires → puces. */
+  .kv{{display:grid;gap:3px}}
+  .kvrow{{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:baseline}}
+  .kvk{{font-family:'JetBrains Mono',monospace;font-size:10px;text-transform:uppercase;
+    letter-spacing:.03em;color:var(--faint);white-space:nowrap}}
+  .kvv{{color:var(--ink-soft);min-width:0;overflow-wrap:anywhere}}
+  .kvv a{{color:var(--accent)}}
+  .jlist{{display:flex;flex-direction:column;gap:9px}}
+  .jitem{{padding-left:10px;border-left:2px solid var(--hair-soft)}}
+  .chips{{display:flex;flex-wrap:wrap;gap:4px}}
+  .chip{{background:var(--paper2);border-radius:6px;padding:1px 8px;font-size:12px;color:var(--ink-soft)}}
   th .thlabel{{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;
     font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
     color:var(--mute);white-space:nowrap}}
@@ -299,8 +317,7 @@ def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dic
         body_rows = []
         for r in rows:
             data = r.get("data") or {}
-            cells = "".join(
-                f"<td>{html.escape(_cell(data.get(c)))}</td>" for c in columns)
+            cells = "".join(_cell_td(data.get(c)) for c in columns)
             body_rows.append(f"<tr>{cells}</tr>")
         table = (
             '<div class=dtoolbar>'
@@ -342,6 +359,10 @@ _DATA_SCRIPT = """<script>
 (function(){
   var tb=document.querySelector('#dt tbody');
   if(!tb)return;
+  // Fondu bas des cellules dont le contenu déborde la hauteur bornée (masque CSS).
+  [].forEach.call(document.querySelectorAll('#dt .cell'),function(c){
+    if(c.scrollHeight-c.clientHeight>2)c.classList.add('clamped');
+  });
   var rows=[].slice.call(tb.rows);
   var cnt=document.getElementById('cnt');
   var sortCol=-1, sortDir=0;
@@ -378,13 +399,92 @@ _DATA_SCRIPT = """<script>
 
 
 def _cell(v: object) -> str:
-    """Représentation texte d'une valeur de cellule (dict/list → JSON compact court)."""
+    """Représentation TEXTE d'une valeur de cellule (dict/list → JSON compact court).
+    Sert au `title` de survol (contenu complet) et à la recherche/tri côté DOM."""
     if v is None:
         return ""
     if isinstance(v, (dict, list)):
         s = json.dumps(v, ensure_ascii=False)
         return s if len(s) <= 300 else s[:297] + "…"
     return str(v)
+
+
+_URL_RE = re.compile(r"^https?://\S+$", re.I)
+
+
+def _cell_td(v: object) -> str:
+    """Une cellule `<td>` : contenu rendu (structuré pour le JSON), enveloppé dans un
+    `.cell` à hauteur bornée. `title` = valeur texte complète (survol). Les valeurs
+    dict/list obtiennent la classe `rich` (colonne un peu plus large)."""
+    inner = _cell_html(v)
+    rich = isinstance(v, (dict, list)) and v not in (None, "", [], {})
+    full = _cell(v)
+    title = f' title="{html.escape(full)}"' if (rich or len(full) > 60) else ""
+    cls = "cell rich-cell" if rich else "cell"
+    td_cls = ' class="rich"' if rich else ""
+    return f'<td{td_cls}><div class="{cls}"{title}>{inner}</div></td>'
+
+
+def _cell_html(v: object) -> str:
+    """Rendu HTML d'une valeur : scalaire/URL en texte, dict en clé/valeur, liste de
+    scalaires en puces, liste d'objets en blocs empilés. Tout est échappé."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, dict):
+        return _kv_html(v)
+    if isinstance(v, list):
+        if not v:
+            return ""
+        if all(not isinstance(x, (dict, list)) for x in v):
+            chips = "".join(f"<span class=chip>{html.escape(_short(x, 48))}</span>"
+                            for x in v if x not in (None, ""))
+            return f"<div class=chips>{chips}</div>" if chips else ""
+        blocks = "".join(
+            f"<div class=jitem>{_kv_html(x) if isinstance(x, dict) else _scalar_html(x)}</div>"
+            for x in v)
+        return f"<div class=jlist>{blocks}</div>"
+    return _scalar_html(v)
+
+
+def _scalar_html(v: object) -> str:
+    """Scalaire → texte échappé ; une URL http(s) → lien (label tronqué)."""
+    s = "" if v is None else str(v)
+    if not s:
+        return ""
+    if _URL_RE.match(s):
+        label = s if len(s) <= 44 else s[:41] + "…"
+        return (f'<a href="{html.escape(s)}" target="_blank" rel="noopener nofollow">'
+                f'{html.escape(label)}</a>')
+    return html.escape(s)
+
+
+def _kv_html(d: dict) -> str:
+    """dict → liste clé/valeur lisible (remplace le JSON brut char-wrappé)."""
+    rows = []
+    for k, val in d.items():
+        if val in (None, "", [], {}):
+            continue
+        rows.append(f"<div class=kvrow><span class=kvk>{html.escape(str(k))}</span>"
+                    f"<span class=kvv>{_flat_val(val)}</span></div>")
+    return f"<div class=kv>{''.join(rows)}</div>" if rows else ""
+
+
+def _flat_val(v: object) -> str:
+    """Valeur imbriquée dans une ligne KV : dict/list aplatis sur une ligne courte."""
+    if isinstance(v, dict):
+        parts = [f"{html.escape(str(k))}: {html.escape(_short(vv))}"
+                 for k, vv in v.items() if vv not in (None, "")]
+        return " · ".join(parts)
+    if isinstance(v, list):
+        if all(not isinstance(x, (dict, list)) for x in v):
+            return html.escape(", ".join(_short(x) for x in v if x not in (None, "")))
+        return f"{len(v)} éléments"
+    return _scalar_html(v)
+
+
+def _short(v: object, n: int = 80) -> str:
+    s = "" if v is None else str(v)
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 # ── Connecteurs dérivés des tools exposés (tooltip + logo + lien marketplace) ──

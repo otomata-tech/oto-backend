@@ -192,7 +192,44 @@ def test_derive_columns_union_of_rows():
 
 
 def test_cell_rendering():
+    # `_cell` = valeur TEXTE (title de survol + recherche/tri DOM) — inchangé.
     assert share_ui._cell(None) == ""
     assert share_ui._cell("x") == "x"
     assert share_ui._cell(42) == "42"
     assert share_ui._cell({"k": "v"}) == '{"k": "v"}'
+
+
+def test_cell_html_renders_json_as_key_value():
+    # Un dict/list d'objets est rendu en clé/valeur lisible, PAS en JSON brut échappé.
+    html_dict = share_ui._cell_html({"nom": "Régis", "email": "r@x.fr"})
+    assert "class=kv" in html_dict
+    assert "nom" in html_dict and "Régis" in html_dict and "r@x.fr" in html_dict
+    assert "{" not in html_dict and '"' not in html_dict   # plus de soupe JSON
+
+    html_list = share_ui._cell_html([{"nom": "Régis"}, {"nom": "Bob"}])
+    assert "class=jlist" in html_list and html_list.count("class=jitem") == 2
+
+
+def test_cell_html_scalars_and_urls():
+    assert share_ui._cell_html(None) == "" and share_ui._cell_html("") == ""
+    assert share_ui._cell_html("hello") == "hello"
+    link = share_ui._cell_html("https://example.com/a")
+    assert link.startswith("<a href=") and 'rel="noopener nofollow"' in link
+    # liste de scalaires → puces
+    chips = share_ui._cell_html(["a", "b"])
+    assert "class=chips" in chips and chips.count("class=chip>") == 2
+
+
+def test_cell_html_escapes_values():
+    out = share_ui._cell_html({"x": "<script>alert(1)</script>"})
+    assert "<script>" not in out and "&lt;script&gt;" in out
+
+
+def test_cell_td_wraps_and_marks_rich():
+    # Cellule structurée : classe `rich` (colonne large) + wrapper `.cell` borné + title complet.
+    td = share_ui._cell_td({"nom": "Alice"})
+    assert '<td class="rich">' in td and 'class="cell rich-cell"' in td
+    assert "title=" in td
+    # Scalaire court : td nu, wrapper `.cell` simple, pas de title.
+    td2 = share_ui._cell_td("court")
+    assert td2.startswith("<td>") and 'class="cell"' in td2 and "title=" not in td2

@@ -66,6 +66,11 @@ def seams(monkeypatch):
     rec["granted"] = []
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: rec["granted"].append(principals) or [])
+    # Pastilles d'état de l'index (refonte UX) : nb de grants batché + audit par projet.
+    monkeypatch.setattr(P.db, "project_grant_counts", lambda ids: {})
+    monkeypatch.setattr("oto_mcp.project_audit.audit_project",
+                        lambda pid, links=None: {"dead_links": [], "unbound_slots": [],
+                                                 "inert_procedures": []})
     # Équipes de l'acteur dans l'org active (lentille « partagés à mon équipe ») :
     # défaut = aucune ; les tests dédiés surchargent.
     monkeypatch.setattr(P.ownership.group_store, "list_groups_for_user",
@@ -388,6 +393,49 @@ def test_unlink(seams):
 def test_activity(seams):
     out = P._project(CTX, P.ProjectInput(op="activity", project_id=7))
     assert out["id"] == 7 and out["activity"][0]["action"] == "project.create"
+
+
+def test_activity_actor_null_when_unknown(seams):
+    # Le seam par défaut ne résout pas l'auteur → actor null (best-effort, refonte UX).
+    out = P._project(CTX, P.ProjectInput(op="activity", project_id=7))
+    assert out["activity"][0]["actor"] is None
+
+
+def test_activity_carries_actor_identity(seams, monkeypatch):
+    monkeypatch.setattr(P.db, "list_project_activity",
+                        lambda pid, limit=50: [{"sub": "u1", "action": "project.update",
+                                                "detail": None, "created_at": "2026-06-30",
+                                                "actor_name": "Jean-Baptiste",
+                                                "actor_email": "jb@oto.ninja"}])
+    out = P._project(CTX, P.ProjectInput(op="activity", project_id=7))
+    assert out["activity"][0]["actor"] == {"name": "Jean-Baptiste", "email": "jb@oto.ninja"}
+
+
+def test_runs_resolves_procedure_to_slug(seams, monkeypatch):
+    # target_ref = id stable de doctrine → résolu en slug (clé de runs.doctrine).
+    monkeypatch.setattr(P.org_store, "get_instruction_by_id",
+                        lambda i: {"id": i, "slug": "relance"} if i == 42 else None)
+    seen = {}
+
+    def _runs(pid, doctrine=None, limit=20):
+        seen["args"] = (pid, doctrine)
+        return [{"run_id": "r1", "label": "run", "doctrine": "relance", "outcome": "done",
+                 "started_at": "2026-07-01", "finished_at": "2026-07-01"}]
+    monkeypatch.setattr(P.db, "project_runs", _runs)
+    out = P._project(CTX, P.ProjectInput(op="runs", project_id=7, target_ref="42"))
+    assert seen["args"] == (7, "relance")
+    assert out["runs"][0]["outcome"] == "done"
+
+
+def test_runs_all_when_no_target(seams, monkeypatch):
+    seen = {}
+
+    def _runs(pid, doctrine=None, limit=20):
+        seen["d"] = doctrine
+        return []
+    monkeypatch.setattr(P.db, "project_runs", _runs)
+    P._project(CTX, P.ProjectInput(op="runs", project_id=7))
+    assert seen["d"] is None
 
 
 def test_handoff_md_pure():

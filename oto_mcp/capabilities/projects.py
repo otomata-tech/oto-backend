@@ -31,7 +31,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur", "doc")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "copy", "handoff", "link", "unlink", "activity", "inventory",
+                "copy", "handoff", "link", "unlink", "activity", "runs", "inventory",
                 "publish_mcp", "unpublish_mcp"]
     project_id: Optional[int] = None
     name: Optional[str] = None
@@ -221,12 +221,27 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # #52 / partage d'équipe) — marqués `shared` (l'owner reste l'org émettrice ;
         # ce n'est pas une fuite, c'est un don d'accès). Les groupes sont ceux de
         # l'org active seulement : pas de fuite cross-org.
+        from .. import project_audit
         owner = ownership.active_owner(ctx.org_id)
         _require(owner is not None, "no_active_org", "Aucune org active.", 400)
-        own = [_view(r) for r in db.list_projects_for_owners([owner])]
+        own_rows = db.list_projects_for_owners([owner])
+        # Pastilles d'ÉTAT de l'index (refonte UX, ADR 0032) : nb d'entités liées +
+        # partagé + « à vérifier » (audit). Le nb de grants est batché (1 requête) ; les
+        # liens/audit sont par projet (les listes d'org sont petites) et best-effort.
+        grant_counts = db.project_grant_counts([r["id"] for r in own_rows])
+
+        def _enrich(r: dict, shared: bool) -> dict:
+            links = db.list_project_links(r["id"])
+            aud = project_audit.audit_project(r["id"], links)
+            has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
+                             or aud.get("inert_procedures"))
+            return {**_view(r), "entity_count": len(links), "has_audit": has_audit,
+                    "shared": shared or grant_counts.get(r["id"], 0) > 0}
+
+        own = [_enrich(r, False) for r in own_rows]
         seen = {p["id"] for p in own}
         principals = ownership.active_org_principals(ctx.sub, ctx.org_id)
-        shared = [{**_view(r), "shared": True, "permission": r.get("permission")}
+        shared = [{**_enrich(r, True), "permission": r.get("permission")}
                   for r in db.list_projects_granted_to(principals)
                   if r["id"] not in seen]
         return {"projects": own + shared}
@@ -262,7 +277,29 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 "audit": project_audit.audit_project(int(inp.project_id), links)}
 
     if inp.op == "activity":
-        return {"id": inp.project_id, "activity": db.list_project_activity(int(inp.project_id))}
+        # Chaque événement porte l'IDENTITÉ de son auteur (`actor`, résolue du sub loggé)
+        # → l'Historique dashboard affiche « par X » réel (refonte UX, ADR 0032).
+        rows = db.list_project_activity(int(inp.project_id))
+        activity = [{
+            "sub": r.get("sub"), "action": r["action"], "detail": r.get("detail"),
+            "created_at": r.get("created_at"),
+            "actor": ({"name": r.get("actor_name"), "email": r.get("actor_email")}
+                      if r.get("actor_name") or r.get("actor_email") else None),
+        } for r in rows]
+        return {"id": inp.project_id, "activity": activity}
+
+    if inp.op == "runs":
+        # Derniers runs (ADR 0017) d'une procédure liée — pastille ok/échec du viewer.
+        # `target_ref` = id stable de la doctrine → résolu en slug (clé de `runs.doctrine`) ;
+        # omis = tous les runs du projet. Read seul (gate de contexte d'org déjà passée).
+        from .. import org_store  # local (org_store est shadowé en local par d'autres branches)
+        slug: Optional[str] = None
+        if inp.target_ref:
+            ref = str(inp.target_ref)
+            instr = org_store.get_instruction_by_id(int(ref)) if ref.isdigit() else None
+            slug = (instr or {}).get("slug") or ref
+        return {"id": inp.project_id, "target_ref": inp.target_ref,
+                "runs": db.project_runs(int(inp.project_id), doctrine=slug)}
 
     if inp.op == "handoff":
         # « Reprendre dans Claude » (B5b) : blob copier-coller qui charge ce projet.
@@ -567,6 +604,8 @@ CAPABILITIES += [
             "inventory = the project's DERIVED surface (union of the linked procedures' "
             "<tool:> refs + tools actually used by the project's runs, plus connectors "
             "from links & declared slots) — never retype a tool list: derive, then curate. "
+            "runs (optional target_ref = a linked procedure's stable id) = the project's "
+            "recent runs (label/doctrine/outcome), filtered to that procedure when given. "
             "publish_mcp (mcp_slug + mcp_access anonymous|secret|org + mcp_tools = the fixed "
             "tool allowlist) publishes the project as a dedicated MCP endpoint "
             "`<mcp_slug>.mcp.oto.cx/mcp`, the toolset served under the OWNER ORG's credentials — "

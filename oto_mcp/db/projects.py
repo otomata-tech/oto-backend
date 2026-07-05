@@ -101,6 +101,23 @@ def list_projects_for_owners(owners: list[tuple[str, str]], *,
         return [dict(r) for r in rows]
 
 
+def project_grant_counts(project_ids: list[int]) -> dict[int, int]:
+    """Nombre de partages (`resource_grants`) par projet, en UNE requête — alimente la
+    pastille « partagé » de l'index (ADR 0032, refonte UX). `resource_id` est stocké en
+    texte (l'id du projet) → comparaison sur un tableau de str. Projets sans grant absents
+    de la map (get(...) = 0)."""
+    if not project_ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT resource_id, count(*) AS n FROM resource_grants "
+            "WHERE resource_type = 'project' AND resource_id = ANY(%s) "
+            "GROUP BY resource_id",
+            ([str(p) for p in project_ids],),
+        ).fetchall()
+        return {int(r["resource_id"]): int(r["n"]) for r in rows}
+
+
 def list_projects_granted_to(principals: list[tuple[str, str]]) -> list[dict]:
     """Projets PARTAGÉS aux principals donnés (`resource_grants`, ADR 0030) — la
     lentille « livré à mon org / à moi » (#52). Chaque row porte en plus la
@@ -604,10 +621,16 @@ def log_project_activity(project_id: int, sub: Optional[str], action: str,
 
 
 def list_project_activity(project_id: int, limit: int = 50) -> list[dict]:
+    """Journal du projet, plus récent d'abord. Enrichi de l'IDENTITÉ de l'auteur
+    (`actor_name`/`actor_email`, résolus depuis `users` par le `sub` loggé) — l'Historique
+    du dashboard affiche « par X » réel plutôt qu'un sub opaque (refonte UX, ADR 0032).
+    LEFT JOIN : un sub inconnu (compte supprimé / action système) → actor null, best-effort."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT sub, action, detail, created_at FROM project_activity "
-            "WHERE project_id = %s ORDER BY created_at DESC LIMIT %s",
+            "SELECT pa.sub, pa.action, pa.detail, pa.created_at, "
+            "       u.name AS actor_name, u.email AS actor_email "
+            "FROM project_activity pa LEFT JOIN users u ON u.sub = pa.sub "
+            "WHERE pa.project_id = %s ORDER BY pa.created_at DESC LIMIT %s",
             (project_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]

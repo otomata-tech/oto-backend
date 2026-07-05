@@ -118,6 +118,23 @@ def project_run_tools(project_id: int, limit: int = 200) -> list[str]:
     return [r["tool"] for r in rows]
 
 
+def project_runs(project_id: int, doctrine: Optional[str] = None,
+                 limit: int = 20) -> list[dict]:
+    """Derniers runs d'un projet (plus récent d'abord), optionnellement filtrés sur une
+    `doctrine` (slug) — alimente la pastille ok/échec du viewer de procédure (refonte UX,
+    ADR 0032/0017). `outcome` NULL = run en cours / non clôturé."""
+    sql = ("SELECT run_id, label, doctrine, outcome, started_at, finished_at "
+           "FROM runs WHERE project_id = %s ")
+    params: list = [project_id]
+    if doctrine is not None:
+        sql += "AND doctrine = %s "
+        params.append(doctrine)
+    sql += "ORDER BY started_at DESC LIMIT %s"
+    params.append(limit)
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
 def project_run_stats(project_id: int) -> dict:
     """Nombre de runs d'un projet + slugs de doctrines déroulées (distincts) — sert
     l'inertie de l'audit de liens (ADR 0035 B5 : procédure liée jamais déroulée)."""

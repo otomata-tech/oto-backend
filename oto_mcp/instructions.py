@@ -245,50 +245,39 @@ def _block_c(sub: str | None, org_id: int | None) -> str:
                        org_id, exc_info=True)
         return _org_readme_only(org_id)
 
+    # Readmes « init » cumulés du général au spécifique (org → équipe → user) : le
+    # MÊME primitif de guide, rendu uniformément par scope (ADR 0042). Chaque scope =
+    # (owner, en-tête) ; corps lu via `guide_store.init_guide_body`, variables
+    # substituées. Ordre = cumul de doctrine ; un scope vide est omis.
     sections = [_format_context(ctx)]
-    for part in (_format_org_readme(org_id, ctx),
-                 _format_group_readme(ctx),
-                 _format_user_readme(sub, ctx)):
+    for part in (
+        _render_init_readme("org", org_id, f"{_README_ORG_HEADER} ({ctx['org_name']})", ctx),
+        _render_init_readme("group", ctx.get("group_id"), _group_readme_header(ctx), ctx),
+        _render_init_readme("user", sub, _README_USER_HEADER, ctx),
+    ):
         if part:
             sections.append(part)
     return "\n\n".join(sections)
 
 
-def _format_org_readme(org_id: int, ctx: dict) -> str:
-    """L'agent README de l'org (`org_instructions` slug `claude_md`), variables
-    substituées, sous son en-tête. '' si absent/vide."""
-    from . import guide_store
-    body = guide_store.init_guide_body("org", org_id)
-    if not body:
-        return ""
-    return f"{_README_ORG_HEADER} ({ctx['org_name']})\n\n{_apply_vars(body, ctx)}"
-
-
-def _format_group_readme(ctx: dict) -> str:
-    """L'agent README de l'équipe ACTIVE (`org_group_instructions` slug `claude_md`),
-    variables substituées — cumulé APRÈS celui de l'org (complément du chef d'équipe).
-    '' si pas d'équipe active / absent / vide."""
-    gid = ctx.get("group_id")
-    if gid is None:
-        return ""
-    from . import guide_store
-    body = guide_store.init_guide_body("group", gid)
-    if not body:
-        return ""
+def _group_readme_header(ctx: dict) -> str:
+    """En-tête du readme d'équipe — suffixé du nom d'équipe s'il est connu."""
     name = f" ({ctx['group_name']})" if ctx.get("group_name") else ""
-    return f"{_README_GROUP_HEADER}{name}\n\n{_apply_vars(body, ctx)}"
+    return f"{_README_GROUP_HEADER}{name}"
 
 
-def _format_user_readme(sub: str | None, ctx: dict) -> str:
-    """L'agent README PERSONNEL de l'user (`user_agent_readme`), variables substituées
-    — le plus spécifique, cumulé en dernier. '' si absent/vide."""
-    if not sub:
+def _render_init_readme(scope: str, owner_id, header: str, ctx: dict) -> str:
+    """Un readme « init » d'un scope (org/group/user) : corps `guide_store.init_guide_body`
+    variables substituées, sous `header`. '' si pas d'owner (owner_id falsy) ou corps
+    vide — un scope absent est simplement omis du cumul. Source unique des ex-
+    `_format_{org,group,user}_readme` (ADR 0042 : guide = primitif uniforme par scope)."""
+    if not owner_id:
         return ""
     from . import guide_store
-    body = guide_store.init_guide_body("user", sub)
+    body = guide_store.init_guide_body(scope, owner_id)
     if not body:
         return ""
-    return f"{_README_USER_HEADER}\n\n{_apply_vars(body, ctx)}"
+    return f"{header}\n\n{_apply_vars(body, ctx)}"
 
 
 def _org_readme_only(org_id: int) -> str:

@@ -63,15 +63,29 @@ def _acting_store():
 def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
     """Ids des namespaces LIÉS au projet (`project_links` type tableau) — le datastore
     exposé sur un endpoint partagé est scopé à CES tableaux, jamais tout le datastore de
-    l'org (anti-fuite #193). project_id None / erreur / aucun lien ⇒ frozenset() (rien
-    d'exposé, jamais de fallback ouvert)."""
+    l'org (anti-fuite #193). Un lien tableau porte soit l'id numérique du namespace, soit
+    son NOM (liens legacy d'avant la normalisation nom→id) → on résout LES DEUX formes
+    contre le datastore de l'org propriétaire (`current_anon_org`). project_id None /
+    erreur / aucun lien ⇒ frozenset() (rien d'exposé, jamais de fallback ouvert)."""
+    from .. import subdomain_project
     if project_id is None:
         return frozenset()
     try:
-        links = db.list_project_links(int(project_id))
-        return frozenset(int(l["target_ref"]) for l in links
-                         if l.get("target_type") == "tableau"
-                         and str(l.get("target_ref", "")).isdigit())
+        org = subdomain_project.current_anon_org()
+        ids: set[int] = set()
+        for l in db.list_project_links(int(project_id)):
+            if l.get("target_type") != "tableau":
+                continue
+            ref = str(l.get("target_ref") or "").strip()
+            if not ref:
+                continue
+            if ref.isdigit():
+                ids.add(int(ref))
+            elif org is not None:
+                ns = db.get_datastore_namespace("org", str(org), ref)
+                if ns:
+                    ids.add(int(ns["id"]))
+        return frozenset(ids)
     except Exception:  # noqa: BLE001
         return frozenset()
 

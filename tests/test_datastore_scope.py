@@ -160,6 +160,25 @@ def test_org_store_resolve_outside_scope_not_found(monkeypatch):
     assert D.make_org_store(99, allowed_ns_ids={1})._resolve("leads") == 1   # dans le scope → OK
 
 
+def test_anon_project_scope_resolves_name_and_id_links(monkeypatch):
+    # Le scope d'un endpoint partagé résout les liens tableau par ID **et** par NOM
+    # (liens legacy d'avant la normalisation nom→id — vécu sur le projet Mūcho preprod
+    # où data_list_namespaces revenait vide car les refs étaient des noms).
+    from oto_mcp.tools import datastore as TD
+    from oto_mcp import subdomain_project as sp
+    monkeypatch.setattr(sp, "current_anon_org", lambda: 81)
+    monkeypatch.setattr(TD.db, "list_project_links", lambda pid: [
+        {"target_type": "tableau", "target_ref": "70"},               # id numérique
+        {"target_type": "tableau", "target_ref": "accords_worklist"}, # NOM (legacy)
+        {"target_type": "procedure", "target_ref": "x"},              # ignoré (pas tableau)
+    ])
+    monkeypatch.setattr(TD.db, "get_datastore_namespace",
+                        lambda ot, oid, name: {"id": 67}
+                        if (ot, oid, name) == ("org", "81", "accords_worklist") else None)
+    assert TD._anon_project_tableau_ns_ids(7) == frozenset({70, 67})
+    assert TD._anon_project_tableau_ns_ids(None) == frozenset()   # pas de projet → rien
+
+
 def test_org_store_read_only_blocks_write(monkeypatch):
     # read_only=True : l'écriture lève NamespaceReadOnly AVANT le check ownership.
     monkeypatch.setattr(D.db, "resolve_datastore_ns",

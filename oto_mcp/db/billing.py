@@ -110,6 +110,20 @@ def set_subscription_card(org_id: int, card_id: str) -> bool:
     return n > 0
 
 
+def mark_cancel_at_period_end(org_id: int) -> bool:
+    """Résiliation à fin de période : stampe `canceled_at`, coupe la prochaine
+    échéance. Le statut RESTE `active` (entitlement jusqu'à current_period_end) —
+    la bascule finale est l'affaire du billing_runner."""
+    with _connect() as conn:
+        n = conn.execute(
+            "UPDATE org_subscriptions SET canceled_at = NOW(), "
+            "next_billing_at = NULL, updated_at = NOW() "
+            "WHERE org_id = %s AND status != 'canceled'",
+            (org_id,),
+        ).rowcount
+    return n > 0
+
+
 def schedule_next_billing(
     org_id: int, current_period_end: str, next_billing_at: str
 ) -> bool:

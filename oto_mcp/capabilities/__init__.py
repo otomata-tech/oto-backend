@@ -23,6 +23,8 @@ from . import groups_secrets  # noqa: F401 — group.secret.{set,delete}
 from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,delete,versions,revert}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.
 from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) + projections
+# Abonnement par org (ADR 0043) — REST-only : subscribe/confirm/cancel (org_admin) + status.
+from . import billing  # noqa: F401 — billing.{plans,status,subscribe,confirm,cancel,payments}
 # Doctrine & instructions d'org (ADR 0009) — CRUD doctrine + usage, membre + admin.
 from . import orgs_instructions  # noqa: F401 — org.{doctrine.*, instruction.*}
 # Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.

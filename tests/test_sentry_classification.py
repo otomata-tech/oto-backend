@@ -69,6 +69,17 @@ def test_4xx_are_managed_connector_errors():
     )
 
 
+def test_real_oto_core_connector_errors_are_classified():
+    # Seam oto-core (>=1.14.0) : UnipileError porte status_code aux sites de
+    # raise HTTP ; ZohoAuthError (refus OAuth en HTTP 200) = 401 synthétique.
+    from oto.tools.unipile.client import UnipileError
+    from oto.tools.zoho import ZohoAuthError
+    assert _is_managed_connector_error(UnipileError("Unipile 422: x", status_code=422))
+    assert _is_managed_connector_error(ZohoAuthError("Zoho OAuth error: invalid_client"))
+    assert not _is_managed_connector_error(UnipileError("Unipile 500: x", status_code=500))
+    assert not _is_managed_connector_error(UnipileError("Unipile: erreur réseau (Timeout)."))
+
+
 def test_real_bugs_and_5xx_still_reported():
     assert not _is_managed_connector_error(_Upstream(503))   # amont cassé, ops-worthy
     assert not _is_managed_connector_error(KeyError("sub"))  # vrai bug code

@@ -107,6 +107,77 @@ def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]
     return body or None
 
 
+# --- Guides ON-DEMAND scopés (ADR 0042 B5) : platform=fichiers, org/user=DB ---------
+
+class GuideError(ValueError):
+    """Écriture de guide invalide (slug mal formé, scope non éditable…)."""
+
+
+def _slug_ok(slug: str) -> bool:
+    return bool(_SLUG_RE.match(slug or ""))
+
+
+def list_guides_for(sub: Optional[str] = None, org_id: Optional[int] = None) -> list[dict]:
+    """Guides on-demand VISIBLES par le caller : plateforme (fichiers) ∪ org active (DB)
+    ∪ user (DB). Chaque entrée porte son `scope`. Sans les corps."""
+    out = [{**g, "scope": "platform"} for g in list_guides()]
+    from . import db
+    if org_id is not None:
+        out += [{"slug": g["slug"], "scope": "org", "title": g["title"],
+                 "description": g["description"]} for g in db.list_guides_db("org", str(org_id))]
+    if sub:
+        out += [{"slug": g["slug"], "scope": "user", "title": g["title"],
+                 "description": g["description"]} for g in db.list_guides_db("user", sub)]
+    return out
+
+
+def read_guide_scoped(slug: str, *, scope: Optional[str] = None,
+                      org_id: Optional[int] = None, sub: Optional[str] = None) -> Optional[dict]:
+    """Lit un guide on-demand. `scope` explicite, sinon cherche plateforme → org → user
+    (1er match). Renvoie `{slug, scope, title, description, body_md}` ou None."""
+    from . import db
+    for sc in ([scope] if scope else ["platform", "org", "user"]):
+        if sc == "platform":
+            g = read_guide(slug)                       # fichiers
+            if g:
+                return {**g, "scope": "platform"}
+        elif sc == "org" and org_id is not None:
+            g = db.get_guide_db("org", str(org_id), slug)
+            if g:
+                return {"slug": slug, "scope": "org", "title": g["title"],
+                        "description": g["description"], "body_md": g["body_md"]}
+        elif sc == "user" and sub:
+            g = db.get_guide_db("user", sub, slug)
+            if g:
+                return {"slug": slug, "scope": "user", "title": g["title"],
+                        "description": g["description"], "body_md": g["body_md"]}
+    return None
+
+
+def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
+              title: str = "", description: str = "") -> dict:
+    """Crée/met à jour un guide on-demand (scope `org`|`user` seulement — `platform` =
+    fichiers, édités en PR). Slug strict. Renvoie `{slug, scope, title, description}`."""
+    if scope not in ("org", "user"):
+        raise GuideError("scope éditable = org | user (platform = fichiers, PR).")
+    if not _slug_ok(slug):
+        raise GuideError("slug invalide (min. `^[a-z0-9][a-z0-9-]*$`).")
+    if not (body_md or "").strip():
+        raise GuideError("body_md requis.")
+    from . import db
+    row = db.set_guide_db(scope, str(owner_id), slug, body_md.strip(),
+                          (title or "").strip(), (description or "").strip())
+    return {"slug": slug, "scope": scope, "title": row["title"],
+            "description": row["description"]}
+
+
+def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
+    if scope not in ("org", "user"):
+        raise GuideError("scope éditable = org | user.")
+    from . import db
+    return db.delete_guide_db(scope, str(owner_id), slug)
+
+
 def guides_index_md() -> str:
     """Index markdown des guides — enrichit la description de `oto_guide` au `tools/list`
     (même pattern que `skills_index_md` pour les doctrines). '' si aucun guide."""

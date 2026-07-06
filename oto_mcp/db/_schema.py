@@ -621,6 +621,24 @@ CREATE TABLE IF NOT EXISTS platform_instructions (
     updated_by TEXT
 );
 
+-- Guides d'usage ON-DEMAND (ADR 0042) — PROSE how-to chargée à la demande via
+-- `oto_guide`, distincte des PROCÉDURES (`org_instructions`, avec slots/versioning)
+-- et des readmes INIT (secret_sauce + *_instructions[claude_md] + user_agent_readme).
+-- Scope `org`|`user` (platform on-demand = fichiers `guides/*.md`, versionnés en PR).
+-- En CLAIR (prose, pas un credential).
+CREATE TABLE IF NOT EXISTS guides (
+    id BIGSERIAL PRIMARY KEY,
+    scope TEXT NOT NULL,                         -- 'org' | 'user'
+    owner_id TEXT NOT NULL,                      -- org.id::text | sub
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    body_md TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (scope, owner_id, slug)
+);
+
 -- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
 -- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
 -- 'claude_md' = la doctrine de base servie d'office par oto_get_doctrine(), les

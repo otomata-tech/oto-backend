@@ -37,6 +37,8 @@ from . import connectors_verify  # noqa: F401 — connectors.verify (oto_verify_
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
+# Partage d'instance (ADR 0044) — le propriétaire PRÊTE sa clé à un pair (share_side, oto_lend_instance).
+from . import connectors_sharing  # noqa: F401 — connectors.lend_instance
 # Autorisation de compte connecteur partagé (#55) — le propriétaire accorde l'opération de SON compte.
 from . import connectors_account_grants  # noqa: F401 — connectors.account_grants.{list,grant,revoke}
 # Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — override positif (allow).
@@ -57,8 +59,6 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Agent README personnel (niveau USER du concept agent_readme, cumulable).
 from . import agent_readme  # noqa: F401 — me.agent_readme.{get,set} (GET/PUT /api/me/agent-readme)
-# Guides ON-DEMAND (ADR 0042) — surface REST des how-to (miroir de l'outil MCP oto_guide).
-from . import guides  # noqa: F401 — me.guides.{list,get,set,delete} (/api/me/guides…)
 # Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).
 from . import profile  # noqa: F401 — me.profile.{get,set} (GET/PUT /api/me/profile)
 # Blocs d'instructions plateforme A/B (#50) — édition admin plateforme.

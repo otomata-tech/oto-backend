@@ -193,6 +193,16 @@ def init_db() -> None:
         # gouverne la fraîcheur du cache (TTL) côté unipile_feed. NULL = jamais sync.
         conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS feed_synced_at TIMESTAMPTZ")
         conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
+        # ADR 0044 (B0) : l'entrée du coffre devient une INSTANCE de connecteur (config
+        # possédée). Colonnes DORMANTES — non lues par la résolution avant B2/B3 (canari
+        # additif). `version` = verrou optimiste (B1) ; `share_down` = ouverture au
+        # sous-arbre, mono-scope ; `share_side` = prêts nominatifs à des pairs.
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1")
+        # share_down = ALLOWLIST deny-by-default ([] = ouvert au sous-arbre ; restreint aux
+        # scopes listés) ; share_side = EXTENSION (prêts nominatifs à des pairs). Dormantes
+        # jusqu'à l'enforcement (deny-check cascade + garde pin).
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_down JSONB NOT NULL DEFAULT '[]'::jsonb")
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_side JSONB NOT NULL DEFAULT '[]'::jsonb")
         # Retrait du rôle `guest` (2026-06-15) : défaut → member + migration des
         # lignes existantes (guest était un alias sans effet, cf. access.py).
         conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")

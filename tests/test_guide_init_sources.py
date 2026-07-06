@@ -1,27 +1,28 @@
-"""Barreau 1 ADR 0042 : `guide_store.init_guide_body` = source unique de lecture de la
-prose `init`, mirror fidèle des 4 sources existantes (aucune table neuve). Canari no-op :
-les slugs/sources lus sont exactement ceux d'avant, fail-open identique."""
+"""ADR 0042 : `guide_store.init_guide_body` = lecture unique de la prose `init`.
+platform + user lisent `guides` (delivery='init', barreau 1) ; org/group lisent encore
+`*_instructions[claude_md]` (barreau 2 à venir). Fail-open identique."""
 from oto_mcp import guide_store as G
 from oto_mcp import instructions as I
 
 
-# ── platform : platform_instructions[key] ──
+# ── platform : guides delivery='init', owner='platform', slug=la clé ──
 
-def test_platform_reads_platform_instruction(monkeypatch):
+def test_platform_reads_init_guide(monkeypatch):
     seen = {}
     import oto_mcp.db as db
-    def _get(key):
-        seen["key"] = key
+    def _get(scope, owner, slug):
+        seen.update(scope=scope, owner=owner, slug=slug)
         return {"body_md": "  A  "}
-    monkeypatch.setattr(db, "get_platform_instruction", _get)
+    monkeypatch.setattr(db, "get_init_guide_db", _get)
     assert G.init_guide_body("platform", "secret_sauce") == "A"   # strippé
-    assert seen["key"] == "secret_sauce"
+    assert seen == {"scope": "platform", "owner": "platform", "slug": "secret_sauce"}
 
 
 def test_platform_defaults_key(monkeypatch):
     import oto_mcp.db as db
-    monkeypatch.setattr(db, "get_platform_instruction", lambda key: {"body_md": key})
-    assert G.init_guide_body("platform") == "secret_sauce"        # clé par défaut
+    monkeypatch.setattr(db, "get_init_guide_db",
+                        lambda scope, owner, slug: {"body_md": slug})
+    assert G.init_guide_body("platform") == "secret_sauce"        # slug par défaut
 
 
 # ── org / group : *_instructions slug claude_md ──
@@ -45,19 +46,24 @@ def test_group_reads_base_slug(monkeypatch):
     assert seen == {"gid": 7, "slug": os_.BASE_SLUG}
 
 
-# ── user : user_agent_readme ──
+# ── user : guides delivery='init', owner=sub, slug='readme' ──
 
 def test_user_reads_readme(monkeypatch):
     import oto_mcp.db as db
-    monkeypatch.setattr(db, "get_user_readme", lambda sub: {"body_md": "USER"})
+    seen = {}
+    def _get(scope, owner, slug):
+        seen.update(scope=scope, owner=owner, slug=slug)
+        return {"body_md": "USER"}
+    monkeypatch.setattr(db, "get_init_guide_db", _get)
     assert G.init_guide_body("user", "u1") == "USER"
+    assert seen == {"scope": "user", "owner": "u1", "slug": "readme"}
 
 
 # ── fail-open : absent / vide / erreur → None ──
 
 def test_empty_body_is_none(monkeypatch):
     import oto_mcp.db as db
-    monkeypatch.setattr(db, "get_platform_instruction", lambda key: {"body_md": "   "})
+    monkeypatch.setattr(db, "get_init_guide_db", lambda scope, owner, slug: {"body_md": "   "})
     assert G.init_guide_body("platform") is None
 
 

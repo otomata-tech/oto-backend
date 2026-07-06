@@ -76,27 +76,42 @@ def read_guide(slug: str) -> Optional[dict]:
             "description": meta.get("description") or "", "body_md": body}
 
 
-def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]:
-    """Corps BRUT (stripped) de la prose « init » d'un scope — mirror **lecture-seule**
-    des sources existantes (ADR 0042, barreau 1 : centraliser la lecture dans le store,
-    sans toucher composition/DB). None si absent/vide/erreur (**fail-open** ; le rendu —
-    header, variables, ordre, seed plateforme — reste chez l'appelant `instructions.py`).
+# Prose INIT dans `guides` (delivery='init'). Slugs canoniques par scope :
+# platform = la clé passée (secret_sauce) ; org/group/user = 'readme'.
+PLATFORM_OWNER = "platform"
+PLATFORM_SLUG = "secret_sauce"
+INIT_SLUG = "readme"
+# Scopes dont la prose INIT vit désormais dans `guides` (ADR 0042). org/group
+# suivront au barreau 2 (split readme↔procédure) — ils lisent encore leur table.
+_INIT_IN_GUIDES = ("platform", "user")
 
-    Aucune table neuve : `platform` = `platform_instructions[owner_id|'secret_sauce']` ;
-    `org`/`group` = `*_instructions` slug `claude_md` ; `user` = `user_agent_readme`."""
+
+def _init_ref(scope: str, ident: Optional[str]) -> tuple[str, str]:
+    """(owner_id de colonne, slug) d'un readme init dans `guides`. Pour platform,
+    `ident` EST le slug (la clé, ex. secret_sauce), l'owner est constant."""
+    if scope == "platform":
+        return PLATFORM_OWNER, (ident or PLATFORM_SLUG)
+    return str(ident), INIT_SLUG
+
+
+def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]:
+    """Corps BRUT (stripped) de la prose « init » d'un scope. None si absent/vide/erreur
+    (**fail-open** ; le rendu — header, variables, ordre, seed plateforme — reste chez
+    l'appelant `instructions.py`).
+
+    `platform`/`user` = `guides` delivery='init' (ADR 0042) ; `org`/`group` = encore
+    `*_instructions` slug `claude_md` (barreau 2 à venir)."""
     try:
-        if scope == "platform":
+        if scope in _INIT_IN_GUIDES:
             from . import db
-            row = db.get_platform_instruction(owner_id or "secret_sauce")
+            owner, slug = _init_ref(scope, owner_id)
+            row = db.get_init_guide_db(scope, owner, slug)
         elif scope == "org":
             from . import org_store
             row = org_store.get_instruction(int(owner_id), org_store.BASE_SLUG)
         elif scope == "group":
             from . import group_store, org_store
             row = group_store.get_group_instruction(int(owner_id), org_store.BASE_SLUG)
-        elif scope == "user":
-            from . import db
-            row = db.get_user_readme(str(owner_id))
         else:
             return None
     except Exception:  # noqa: BLE001
@@ -105,6 +120,36 @@ def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]
         return None
     body = ((row or {}).get("body_md") or "").strip()
     return body or None
+
+
+def get_init_guide(scope: str, owner_id: Optional[str] = None) -> dict:
+    """État d'un readme init (scopes dans `guides`) : `{body_md, updated_at}`. Jamais
+    None — un owner sans ligne renvoie l'état vide. Sert les vues d'édition."""
+    if scope not in _INIT_IN_GUIDES:
+        raise GuideError(f"get_init_guide: scope `{scope}` pas encore dans guides.")
+    from . import db
+    owner, slug = _init_ref(scope, owner_id)
+    row = db.get_init_guide_db(scope, owner, slug)
+    return {"body_md": (row or {}).get("body_md") or "",
+            "updated_at": (row or {}).get("updated_at")}
+
+
+def set_init_guide(scope: str, owner_id: Optional[str], body_md: str) -> dict:
+    """Écrit un readme init (upsert). Renvoie `{body_md, updated_at}`. Scopes dans
+    `guides` seulement (platform/user au barreau 1)."""
+    if scope not in _INIT_IN_GUIDES:
+        raise GuideError(f"set_init_guide: scope `{scope}` pas encore dans guides.")
+    from . import db
+    owner, slug = _init_ref(scope, owner_id)
+    row = db.set_init_guide_db(scope, owner, slug, body_md)
+    return {"body_md": row.get("body_md") or "", "updated_at": row.get("updated_at")}
+
+
+def seed_init_guide(scope: str, ident: Optional[str], body_md: str) -> None:
+    """Pose le défaut d'un readme init s'il n'existe pas (boot, idempotent)."""
+    from . import db
+    owner, slug = _init_ref(scope, ident)
+    db.seed_init_guide_db(scope, owner, slug, body_md)
 
 
 # --- Guides ON-DEMAND scopés (ADR 0042 B5) : platform=fichiers, org/user=DB ---------

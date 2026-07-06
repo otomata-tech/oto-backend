@@ -321,13 +321,11 @@ def default_block(key: str) -> str:
 
 
 def seed_platform_blocks() -> None:
-    """Pose au boot le défaut du bloc plateforme s'il n'existe pas encore (idempotent,
-    best-effort). Le code reste le défaut ; la DB porte l'override admin."""
-    try:
-        from . import db
-        db.seed_platform_instruction(KEY_SECRET_SAUCE, _SECRET_SAUCE.strip())
-    except Exception:
-        logger.warning("seed du bloc plateforme échoué (non bloquant)", exc_info=True)
+    """No-op (ADR 0042) : la prose init plateforme vit dans `guides` (delivery='init').
+    Aucun seed DB — la constante `_SECRET_SAUCE` reste le défaut/fallback (`_platform_block`
+    y retombe quand `guides` n'a pas de ligne), et le backfill au boot copie l'override
+    admin existant (ex-`platform_instructions`) dans `guides`. Conservée (appelée au boot
+    par `server._build_mcp`) pour ne pas toucher le chemin de démarrage."""
 
 
 def skills_index_md(org_id: int | None) -> str:

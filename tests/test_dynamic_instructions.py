@@ -19,8 +19,8 @@ from oto_mcp import middleware as mw
 
 # ── bloc plateforme A (DB override → seed) + catalogue dérivé toujours appendé ─
 def test_block_a_db_override(monkeypatch):
-    monkeypatch.setattr(db, "get_platform_instruction",
-                        lambda key: {"body_md": "POSTURE ÉDITÉE"})
+    monkeypatch.setattr(db, "get_init_guide_db",
+                        lambda scope, owner, slug: {"body_md": "POSTURE ÉDITÉE"})
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "• fr_* — entreprises")
     out = instr._block_a()
     assert "POSTURE ÉDITÉE" in out                 # la prose éditée
@@ -28,7 +28,7 @@ def test_block_a_db_override(monkeypatch):
 
 
 def test_block_a_seed_fallback(monkeypatch):
-    monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)
+    monkeypatch.setattr(db, "get_init_guide_db", lambda scope, owner, slug: None)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     out = instr._block_a()
     assert "TA boîte à outils" in out          # le seed constant
@@ -37,9 +37,9 @@ def test_block_a_seed_fallback(monkeypatch):
 
 
 def test_block_a_fail_open_to_seed(monkeypatch):
-    def boom(key):
+    def boom(scope, owner, slug):
         raise RuntimeError("db down")
-    monkeypatch.setattr(db, "get_platform_instruction", boom)
+    monkeypatch.setattr(db, "get_init_guide_db", boom)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     assert "TA boîte à outils" in instr._block_a()
 
@@ -77,7 +77,13 @@ def test_format_context_optional_lines():
 # ── composition de session ───────────────────────────────────────────────────
 def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
                   group_readme=None, user_readme=""):
-    monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)  # seeds
+    # platform + user lisent guides delivery='init' (ADR 0042) via db.get_init_guide_db :
+    # dispatch par scope — platform → None (seed fallback), user → le readme fourni.
+    def _init_guide_db(scope, owner, slug):
+        if scope == "user":
+            return {"body_md": user_readme} if user_readme else None
+        return None
+    monkeypatch.setattr(db, "get_init_guide_db", _init_guide_db)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     monkeypatch.setattr(org_store, "get_org", lambda oid: {"name": "Acme"})
     monkeypatch.setattr(db, "get_user", lambda sub: {"name": "Jean"})
@@ -95,8 +101,6 @@ def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
     monkeypatch.setattr(db, "recent_runs", lambda sub, oid, limit=5: [])
     monkeypatch.setattr(db, "get_account_profile",
                         lambda sub: {"profile": {"role": "fondateur"}})
-    monkeypatch.setattr(db, "get_user_readme",
-                        lambda sub: {"body_md": user_readme, "updated_at": None})
     monkeypatch.setattr(org_store, "get_instruction",
                         lambda oid, slug: {"body_md": org_readme})
 
@@ -138,7 +142,7 @@ def test_compose_session_catalog_always_present(monkeypatch):
 
 
 def test_compose_session_no_org(monkeypatch):
-    monkeypatch.setattr(db, "get_platform_instruction", lambda key: None)
+    monkeypatch.setattr(db, "get_init_guide_db", lambda scope, owner, slug: None)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     out = instr.compose_session("u1", None)
     assert "TA boîte à outils" in out

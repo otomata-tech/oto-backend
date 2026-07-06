@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import db
+from .. import guide_store
 from ._authz import SUB_ONLY
 from ._types import Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -28,11 +28,11 @@ class SetReadmeInput(BaseModel):
 
 
 def _get_readme(ctx: ResolvedCtx, inp: _NoInput) -> dict:
-    return db.get_user_readme(ctx.sub)
+    return guide_store.get_init_guide("user", ctx.sub)
 
 
 def _set_readme(ctx: ResolvedCtx, inp: SetReadmeInput) -> dict:
-    return db.set_user_readme(ctx.sub, inp.body_md)
+    return guide_store.set_init_guide("user", ctx.sub, inp.body_md)
 
 
 CAPABILITIES += [

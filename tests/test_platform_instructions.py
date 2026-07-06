@@ -1,5 +1,6 @@
-"""Capacité d'édition du bloc plateforme A (#50). On monkeypatche les seams DB
-(get/set/list_platform_instruction) — pas de vraie DB. (Le bloc onboarding a disparu :
+"""Capacité d'édition du bloc plateforme A (#50). La prose init plateforme vit
+désormais dans `guides` (delivery='init', ADR 0042) : on monkeypatche le seam
+`db.{get,set}_init_guide_db` — pas de vraie DB. (Le bloc onboarding a disparu :
 l'onboarding est un projet, ADR 0032 §7.)
 """
 import pytest
@@ -13,15 +14,20 @@ CTX = ResolvedCtx(sub="admin1", org_id=None)
 
 @pytest.fixture
 def store(monkeypatch):
-    rows: dict[str, dict] = {}
-    monkeypatch.setattr(P.db, "get_platform_instruction", lambda key: rows.get(key))
-    monkeypatch.setattr(P.db, "list_platform_instructions",
-                        lambda: [dict(v) for v in rows.values()])
+    import oto_mcp.db as db
+    rows: dict[tuple, dict] = {}
 
-    def _set(key, body_md, updated_by=None):
-        rows[key] = {"key": key, "body_md": body_md, "updated_at": "2026-06-30",
-                     "updated_by": updated_by}
-    monkeypatch.setattr(P.db, "set_platform_instruction", _set)
+    def _get(scope, owner, slug):
+        return rows.get((scope, owner, slug))
+
+    def _set(scope, owner, slug, body_md):
+        row = {"scope": scope, "owner_id": owner, "slug": slug,
+               "body_md": body_md or "", "delivery": "init", "updated_at": "2026-06-30"}
+        rows[(scope, owner, slug)] = row
+        return row
+
+    monkeypatch.setattr(db, "get_init_guide_db", _get)
+    monkeypatch.setattr(db, "set_init_guide_db", _set)
     return rows
 
 
@@ -37,7 +43,7 @@ def test_set_then_get(store):
         op="set", key="secret_sauce", body_md="NOUVELLE PROSE"))
     out = P._platform_instructions(CTX, P.PlatformInstrInput(op="get", key="secret_sauce"))
     assert out["is_seed"] is False and out["body_md"] == "NOUVELLE PROSE"
-    assert out["updated_by"] == "admin1"
+    assert out["updated_by"] is None                       # guides ne porte pas d'auteur
     # le défaut reste accessible (bouton « rétablir »)
     assert "TA boîte à outils" in out["default_md"]
 

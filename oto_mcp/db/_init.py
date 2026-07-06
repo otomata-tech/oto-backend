@@ -69,6 +69,25 @@ def init_db() -> None:
         conn.execute("ALTER TABLE user_account_profile DROP COLUMN IF EXISTS onboarded")
         conn.execute("ALTER TABLE user_account_profile DROP COLUMN IF EXISTS onboarded_at")
         conn.execute("DELETE FROM platform_instructions WHERE key = 'onboarding'")
+        # ADR 0042 (barreau 1) : `guides` unifie la PROSE d'instruction sur deux
+        # livraisons — 'on-demand' (how-to `oto_guide`) et 'init' (readme injecté au
+        # handshake). Colonne `delivery` (existants → 'on-demand' par DEFAULT = les
+        # guides B5 restent des how-to) + backfill des readmes init platform + user
+        # depuis les ex-tables (org/group suivent au barreau 2). ON CONFLICT DO NOTHING
+        # = idempotent, ne réécrit jamais une ligne guides déjà posée.
+        conn.execute("ALTER TABLE guides ADD COLUMN IF NOT EXISTS delivery TEXT NOT NULL DEFAULT 'on-demand'")
+        conn.execute(
+            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
+            "SELECT 'platform', 'platform', key, 'init', body_md, "
+            "       COALESCE(updated_at, NOW()), COALESCE(updated_at, NOW()) "
+            "FROM platform_instructions WHERE key = 'secret_sauce' "
+            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        conn.execute(
+            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
+            "SELECT 'user', sub, 'readme', 'init', body_md, "
+            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
+            "FROM user_agent_readme WHERE COALESCE(body_md, '') <> '' "
+            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).

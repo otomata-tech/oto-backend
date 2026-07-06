@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, instructions
+from .. import guide_store, instructions
 from ._authz import PLATFORM_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -46,12 +46,14 @@ def _require_key(key: Optional[str]) -> str:
 
 
 def _view(key: str) -> dict:
-    """L'état effectif d'un bloc : la ligne DB, ou le seed (is_seed=True) si jamais
-    posée. `default_md` accompagne toujours (pour un bouton « rétablir le défaut »)."""
-    row = db.get_platform_instruction(key)
+    """L'état effectif d'un bloc : la ligne `guides` (delivery='init'), ou le seed
+    (is_seed=True, corps = constante) si jamais éditée. `default_md` accompagne toujours
+    (bouton « rétablir le défaut »). `updated_by` retiré (guides ne le porte pas)."""
+    st = guide_store.get_init_guide("platform", key)
     default_md = instructions.default_block(key)
-    if row:
-        return {**row, "is_seed": False, "default_md": default_md}
+    if st["updated_at"] is not None:
+        return {"key": key, "body_md": st["body_md"], "updated_at": st["updated_at"],
+                "updated_by": None, "is_seed": False, "default_md": default_md}
     return {"key": key, "body_md": default_md, "updated_at": None,
             "updated_by": None, "is_seed": True, "default_md": default_md}
 
@@ -66,7 +68,7 @@ def _get(ctx: ResolvedCtx, inp: KeyInput) -> dict:
 
 def _set(ctx: ResolvedCtx, inp: SetInput) -> dict:
     key = _require_key(inp.key)
-    db.set_platform_instruction(key, inp.body_md or "", ctx.sub)
+    guide_store.set_init_guide("platform", key, inp.body_md or "")
     return _view(key)
 
 

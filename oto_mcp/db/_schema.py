@@ -621,16 +621,18 @@ CREATE TABLE IF NOT EXISTS platform_instructions (
     updated_by TEXT
 );
 
--- Guides d'usage ON-DEMAND (ADR 0042) — PROSE how-to chargée à la demande via
--- `oto_guide`, distincte des PROCÉDURES (`org_instructions`, avec slots/versioning)
--- et des readmes INIT (secret_sauce + *_instructions[claude_md] + user_agent_readme).
--- Scope `org`|`user` (platform on-demand = fichiers `guides/*.md`, versionnés en PR).
--- En CLAIR (prose, pas un credential).
+-- Guides (ADR 0042) — PROSE d'instruction, UNE table pour deux LIVRAISONS :
+--   * delivery='on-demand' : how-to chargé à la demande via `oto_guide`
+--     (scope org|user en DB ; platform on-demand = fichiers `guides/*.md`, PR) ;
+--   * delivery='init' : readme injecté au handshake (bloc A/C) — le MÊME primitif,
+--     migré des ex-tables (secret_sauce, *_instructions[claude_md], user_agent_readme).
+-- Distincte des PROCÉDURES (`org_instructions`, slots/versioning). CLAIR (pas un credential).
 CREATE TABLE IF NOT EXISTS guides (
     id BIGSERIAL PRIMARY KEY,
-    scope TEXT NOT NULL,                         -- 'org' | 'user'
-    owner_id TEXT NOT NULL,                      -- org.id::text | sub
-    slug TEXT NOT NULL,
+    scope TEXT NOT NULL,                         -- 'platform' | 'org' | 'group' | 'user'
+    owner_id TEXT NOT NULL,                      -- 'platform' | org.id::text | group.id::text | sub
+    slug TEXT NOT NULL,                          -- 'readme'/'secret_sauce' (init) | how-to slug
+    delivery TEXT NOT NULL DEFAULT 'on-demand',  -- 'init' | 'on-demand'
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     body_md TEXT NOT NULL DEFAULT '',

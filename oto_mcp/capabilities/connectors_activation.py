@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import connector_activation, db, org_store, providers
+from .. import access, connector_activation, db, org_store, providers
 from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -27,7 +27,7 @@ _ID = {"id": "org_id"}     # placeholder {id} → champ Input org_id
 # Couche 3 (option de connecteur, ADR 0024) : connecteur → option débloquable.
 # Aujourd'hui seul unipile (option « messagerie hébergée »). Map curée — pas de
 # champ générique au registre tant qu'il n'y a qu'une option.
-_PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
+# Option payante par connecteur → home canonique dans access.paid_option_for (derive don't duplicate).
 
 
 def _org_subscribed(org_id: int, option: str) -> bool:
@@ -79,7 +79,7 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         if not master and org_ov is None:
             continue
         effective = org_ov if org_ov is not None else bool(master)
-        option = _PAID_OPTION_BY_CONNECTOR.get(name)   # add-on payant (couche 3) ou None
+        option = access.paid_option_for(name)          # add-on payant (couche 3) ou None
         out.append({
             "connector": name, "label": c.label, "help": c.help,
             "namespaces": list(c.namespaces),

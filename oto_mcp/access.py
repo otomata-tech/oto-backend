@@ -149,6 +149,16 @@ def current_org(sub: str | None) -> Optional[int]:
 _UNSET: object = object()
 
 
+# Add-on payant requis par un connecteur (couche 3, ADR 0043). None = aucun. HOME
+# canonique de ce mapping (les surfaces org ET user en dérivent — derive don't duplicate).
+_PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
+
+
+def paid_option_for(connector: str) -> Optional[str]:
+    """Option payante requise par un connecteur (ou None)."""
+    return _PAID_OPTION_BY_CONNECTOR.get(connector)
+
+
 def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) -> bool:
     """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option de
     connecteur `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —

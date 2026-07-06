@@ -67,6 +67,20 @@ def get_instance_sharing(entity_type: str, entity_id: str, connector: str,
     return (row["share_down"] or []), (row["share_side"] or [])
 
 
+def list_shared_with(scopes: list) -> list[dict]:
+    """Instances dont le `share_side` vise l'un des `scopes` (ex. `['user:sub',
+    'group:2']`) — le « partagé avec moi » (ADR 0044). Métadonnées seulement (secret
+    jamais lu). `[]` scopes ⟹ `[]`. `jsonb_exists_any` = indexé par le GIN share_side."""
+    if not scopes:
+        return []
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT entity_type, entity_id, connector, account, meta, secret_kind, "
+            "set_by, set_at FROM connector_credentials "
+            "WHERE jsonb_exists_any(share_side, %s)",
+            (list(scopes),)).fetchall()
+
+
 def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
                          account: str = "", *, share_down=None, share_side=None) -> bool:
     """Met à jour `share_down`/`share_side` d'une instance EXISTANTE (ADR 0044) sans

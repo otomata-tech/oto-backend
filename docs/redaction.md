@@ -1,3 +1,19 @@
+---
+title: Rédaction de champs (anonymisation des sorties connecteurs)
+type: explanation
+description: >-
+  Explique le mécanisme de rédaction/anonymisation des sorties de connecteurs dans
+  oto-backend : middleware unique FieldRedactionMiddleware (enregistré en dernier,
+  retouche le résultat final via access.resolve_field_filter), fail-closed si la
+  policy existe (sortie retenue, jamais le brut), rien par défaut avec templates
+  1-clic (candidate, bank_details). Détaille la capture passive du schéma observé
+  via connector_schema_store (squelette clés+types, jamais de valeurs/PII, table
+  connector_schemas, cap 1000 clés) car les API tierces (Unipile, Apollo…) ne
+  publient pas de schéma de réponse. Couvre le dry-run preview (oto_preview_org_field_filter)
+  et le moteur FieldFilter d'oto-core (mask/pseudonym/generalize/hash/drop). À lire
+  pour configurer ou étendre la rédaction de PII dans une org.
+---
+
 # Rédaction de champs (anonymisation des sorties connecteurs)
 
 Masquer/pseudonymiser des champs des **réponses d'outils** avant qu'elles atteignent

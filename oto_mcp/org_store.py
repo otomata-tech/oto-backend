@@ -565,6 +565,16 @@ def get_personal_org(sub: str) -> Optional[int]:
         return int(row["id"]) if row else None
 
 
+def is_personal_org(org_id: int) -> bool:
+    """True si l'org est un **espace personnel** (`personal_of` renseigné) — non
+    supprimable (elle serait recréée au boot par `ensure_personal_org`)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT personal_of FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+        return bool(row and row["personal_of"] is not None)
+
+
 def _personal_label(email: Optional[str], name: Optional[str]) -> str:
     return (name or (email.split("@")[0] if email else None) or "Mon espace").strip() or "Mon espace"
 

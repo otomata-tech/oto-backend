@@ -30,6 +30,14 @@ def test_slug_parsing():
     assert subdomain_org._slug_from_host("") is None
 
 
+def test_slug_parsing_domain_env_driven(monkeypatch):
+    # Le suffixe `--<host>` suit le HOST canonique MCP (OTO_MCP_PUBLIC_URL) : PROD mcp.oto.cx
+    # (cutover ADR 0040), plus figé sur .oto.ninja (sinon l'épinglage d'org casse en prod).
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    assert subdomain_org._slug_from_host("acme--mcp.oto.cx") == "acme"
+    assert subdomain_org._slug_from_host("acme--mcp.oto.ninja") is None
+
+
 def test_org_resolution_and_cache():
     assert subdomain_org.org_id_for_host("acme--mcp.oto.ninja") == 42
     assert subdomain_org.org_id_for_host("inconnu--mcp.oto.ninja") is None

@@ -77,6 +77,8 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
              "domain": org.get("domain"),
              "industry": org.get("industry") or "",
              "location": org.get("location") or "",
+             # espace perso : non supprimable (gate du bouton « supprimer l'org »).
+             "personal": org_store.is_personal_org(org["id"]),
              "member_count": len(org_store.list_org_members(org["id"]))}
     if my_role is not None:
         brief["my_role"] = my_role

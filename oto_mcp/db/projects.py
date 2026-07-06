@@ -31,7 +31,7 @@ from .users import upsert_user
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
-                 "archived_at, created_at, updated_at")
+                 "mcp_expose_datastore_write, archived_at, created_at, updated_at")
 
 # Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
 _MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
@@ -219,7 +219,8 @@ def list_published_mcp_projects() -> list[dict]:
 
 def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                                 access: str, tools: list[str],
-                                expose_datastore: bool = False) -> None:
+                                expose_datastore: bool = False,
+                                expose_datastore_write: bool = False) -> None:
     """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug
     (rend le sous-domaine inerte). Valide le format de slug et l'énumération d'accès —
     la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité.
@@ -228,10 +229,13 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
     propriétaire) sur cet endpoint sans login. **Forcé à FALSE hors `secret`** : un
     endpoint `anonymous` est PUBLIC (annuaire) — n'y jamais exposer l'écriture du
     datastore d'une org ; un endpoint `org` a déjà un membre authentifié (sub) qui
-    résout `data_*` nativement, l'opt-in y est sans objet."""
+    résout `data_*` nativement, l'opt-in y est sans objet.
+    `expose_datastore_write` = opt-in ADDITIONNEL (#193) pour l'écriture ; sans objet
+    (forcé FALSE) si la lecture n'est pas exposée."""
     if access not in _MCP_ACCESS:
         raise ValueError(f"mcp_access invalide: {access!r} (attendu {_MCP_ACCESS})")
     expose_datastore = bool(expose_datastore) and access == "secret"
+    expose_datastore_write = bool(expose_datastore_write) and expose_datastore
     if access == "off":
         slug = None
     else:
@@ -249,8 +253,10 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                 raise ValueError(f"slug_taken: le sous-domaine « {slug} » est déjà pris")
         conn.execute(
             "UPDATE projects SET mcp_slug = %s, mcp_access = %s, mcp_tools = %s, "
-            "mcp_expose_datastore = %s, updated_at = NOW() WHERE id = %s",
-            (slug, access, list(tools or []), expose_datastore, project_id),
+            "mcp_expose_datastore = %s, mcp_expose_datastore_write = %s, "
+            "updated_at = NOW() WHERE id = %s",
+            (slug, access, list(tools or []), expose_datastore,
+             expose_datastore_write, project_id),
         )
 
 
@@ -327,6 +333,18 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
                 l["namespace"] = nm
 
 
+def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
+    """Attache le NOM à un lien `tableau` dont le `target_ref` EST déjà un nom (≠ id
+    numérique), quand ce namespace existe (fix #117 : un lien créé par NOM — l'agent lie
+    ainsi, le dashboard lie par id — résout maintenant, plus de slot « qui ne résout
+    plus »). Pur (mutation en place). Ref-nom inexistant → pas de clé `namespace` (le lien
+    reste, dead-link signalé à l'usage). Symétrique de `_apply_tableau_names` (chemin id)."""
+    for l in links:
+        if (l.get("target_type") == "tableau" and not l.get("namespace")
+                and l.get("target_ref") in existing):
+            l["namespace"] = l["target_ref"]
+
+
 def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
     """Attache le TITRE de la doctrine à chaque lien `procedure` (résolu depuis l'id
     stable porté par `target_ref`, ADR 0032 « stop using slug ») — sans lui, un lien
@@ -389,6 +407,18 @@ def list_project_links(project_id: int) -> list[dict]:
                 "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
             ).fetchall()
             _apply_tableau_names(out, {r["id"]: r["namespace"] for r in nrows})
+        # Miroir #117 : un lien tableau peut porter target_ref = NOM (créé par l'agent)
+        # et non un id (dashboard) — résoudre AUSSI ces refs-nom existants, sinon le slot
+        # tombait en « ne résout plus » alors que le namespace existe bel et bien.
+        name_refs = [l["target_ref"] for l in out
+                     if l.get("target_type") == "tableau" and not l.get("namespace")
+                     and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
+        if name_refs:
+            erows = conn.execute(
+                "SELECT DISTINCT namespace FROM user_datastores WHERE namespace = ANY(%s)",
+                (name_refs,),
+            ).fetchall()
+            _apply_tableau_name_refs(out, {r["namespace"] for r in erows})
         # Idem pour les titres de doctrine des procédures (id stable, ADR 0032).
         doc_ids = [int(l["target_ref"]) for l in out
                    if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]

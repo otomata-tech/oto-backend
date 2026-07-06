@@ -1,6 +1,7 @@
 """#55 — capacité `connectors.account_grants.{list,grant,revoke}` : le propriétaire
 (et lui seul, owner := ctx.sub par construction) accorde/révoque l'opération de son
-compte à un membre nommé d'une org commune. Deny-by-default, audité."""
+compte à N'IMPORTE QUEL user oto, **y compris hors de ses orgs** (cross-org assumé).
+Deny-by-default, audité."""
 import pytest
 
 from oto_mcp.capabilities import connectors_account_grants as cap
@@ -10,13 +11,12 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 _OWNER = ResolvedCtx(sub="owner", org_id=3, role="member")
 
 
-def _wire(monkeypatch, *, users=None, share=True, connected="OWNER_ACC"):
+def _wire(monkeypatch, *, users=None, connected="OWNER_ACC"):
     users = users or {"grantee": {"sub": "grantee", "email": "g@x.io"}}
     monkeypatch.setattr(cap.db, "get_user", lambda sub: users.get(sub))
     monkeypatch.setattr(cap.db, "get_user_by_email",
                         lambda email: next((u for u in users.values()
                                             if u.get("email") == email), None))
-    monkeypatch.setattr(cap.db, "users_share_org", lambda a, b: share)
     monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, org, prov: connected)
 
 
@@ -58,11 +58,17 @@ def test_grant_rejects_self(monkeypatch):
     assert e.value.code == "self_grant"
 
 
-def test_grant_rejects_grantee_without_shared_org(monkeypatch):
-    _wire(monkeypatch, share=False)
-    with pytest.raises(AuthzDenied) as e:
-        cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin", grantee="grantee"))
-    assert e.value.code == "not_in_shared_org" and e.value.status == 400
+def test_grant_allows_cross_org_grantee(monkeypatch):
+    # Cross-org assumé : un grantee sans AUCUNE org commune est accepté (on partage
+    # son propre compte à qui on veut — freelance externe).
+    _wire(monkeypatch, users={"ext": {"sub": "ext", "email": "freelance@ext.io"}})
+    saved = {}
+    monkeypatch.setattr(cap.db, "set_account_grant",
+                        lambda owner, prov, aid, grantee, granted_by:
+                        saved.update(grantee=grantee))
+    res = cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin",
+                                                   grantee="freelance@ext.io"))
+    assert res["ok"] and saved["grantee"] == "ext"
 
 
 def test_grant_rejects_unconnected_channel(monkeypatch):

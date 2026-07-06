@@ -40,8 +40,8 @@ def _acting_store():
 
     - User authentifié (`sub`) → son store, contexte = son org active (inchangé).
     - Endpoint MCP `secret` avec opt-in datastore (ADR 0032) → store agissant SOUS
-      L'ORG propriétaire du projet (sub-less) : lecture/écriture décidées sur le
-      principal org (owner-match / grant d'org).
+      L'ORG propriétaire du projet (sub-less), **scopé aux tableaux LIÉS au projet**
+      (anti-fuite #193) et en **lecture seule** sauf opt-in write séparé.
     - Sinon (endpoint sans login SANS opt-in) → McpError « Unauthenticated ».
 
     Les tools de GOUVERNANCE/destructifs (create/delete/rename/share) n'utilisent PAS
@@ -52,8 +52,28 @@ def _acting_store():
         return make_store(sub)
     from .. import subdomain_project
     if subdomain_project.current_anon_datastore_exposed():
-        return make_org_store(int(subdomain_project.current_anon_org()))
+        return make_org_store(
+            int(subdomain_project.current_anon_org()),
+            allowed_ns_ids=_anon_project_tableau_ns_ids(
+                subdomain_project.current_anon_project_id()),
+            read_only=not subdomain_project.current_anon_datastore_writable())
     access.current_user_sub_or_raise()  # pas d'opt-in → lève « Unauthenticated »
+
+
+def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
+    """Ids des namespaces LIÉS au projet (`project_links` type tableau) — le datastore
+    exposé sur un endpoint partagé est scopé à CES tableaux, jamais tout le datastore de
+    l'org (anti-fuite #193). project_id None / erreur / aucun lien ⇒ frozenset() (rien
+    d'exposé, jamais de fallback ouvert)."""
+    if project_id is None:
+        return frozenset()
+    try:
+        links = db.list_project_links(int(project_id))
+        return frozenset(int(l["target_ref"]) for l in links
+                         if l.get("target_type") == "tableau"
+                         and str(l.get("target_ref", "")).isdigit())
+    except Exception:  # noqa: BLE001
+        return frozenset()
 
 
 def _project_hint(namespace: str) -> Optional[str]:
@@ -113,6 +133,15 @@ def _row_not_found_hint(store, namespace: str, row_id: object) -> str:
     except Exception:  # noqa: BLE001
         pass
     return msg
+
+
+def _project_row(row: dict, fields: list[str]) -> dict:
+    """Projette une row sur `fields` (sous-ensemble de colonnes, feedback #191) en
+    gardant TOUJOURS `_id` — sans lui l'agent ne pourrait plus adresser/mettre à jour
+    la ligne. Les champs demandés absents de la row sont simplement omis."""
+    keep = set(fields)
+    keep.add("_id")
+    return {k: v for k, v in row.items() if k in keep}
 
 
 def _ns(namespace: str) -> str:
@@ -304,7 +333,8 @@ def register(mcp: FastMCP) -> None:
     def data_rows(
         namespace: str, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
-        cursor: str | None = None,
+        cursor: str | None = None, fields: Optional[list[str]] = None,
+        count_only: bool = False,
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (optional exact-match `filter`, `limit`) with a stable cursor.
@@ -314,6 +344,16 @@ def register(mcp: FastMCP) -> None:
         filter) to get the next page — repeat until `next_cursor` is null. The cursor
         is keyset-stable (rows created meanwhile don't shift the paging).
 
+        Use `count_only=True` to get just the TOTAL number of (optionally filtered)
+        rows — computed server-side, no rows returned — when you only need the count
+        (e.g. how many leads match a filter) without pulling the data into context.
+
+        Use `fields` to PROJECT a subset of columns when the full row is heavy and you
+        only need a few (e.g. name + email + score over a large vivier): each row is
+        trimmed to those columns (plus `_id`, always kept so you can still update the
+        row), drastically shrinking the payload. Bump `limit` when projecting — narrow
+        rows let you pull far more per page.
+
         Args:
             namespace: target namespace, or `slot:<name>` = the table bound under
                 that slot name by the ACTIVE project (actionable error if unbound).
@@ -322,15 +362,31 @@ def register(mcp: FastMCP) -> None:
                 e.g. `{"project": "roundtable"}`.
             limit: page size (default 100, list mode only).
             cursor: opaque `next_cursor` from a previous call = fetch the NEXT page.
+            fields: list of column names to keep (projection) — the returned rows
+                carry only these plus `_id`. Omit = full rows.
+            count_only: return only `{total}` (filtered row count), no rows.
         """
         store = _acting_store()
         namespace = _ns(namespace)
         try:
+            if count_only:
+                return {"total": store.count_rows(namespace, filter=filter)}
             if id is not None:
-                return store.get_row(namespace, id)
+                row = store.get_row(namespace, id)
+                return _project_row(row, fields) if fields else row
             page = store.cursor_rows(namespace, filter=filter, limit=limit, cursor=cursor)
-            out = {"rows": page["rows"], "count": len(page["rows"]),
+            rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
+            out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"]}
+            # Projection sur des colonnes absentes de TOUTES les lignes = même piège
+            # silencieux que le filter (#163) : on le signale sans bloquer.
+            if fields and page["rows"]:
+                present = {k for r in page["rows"] for k in r}
+                unknown = [f for f in fields if f not in present]
+                if unknown:
+                    out["warning"] = (
+                        f"colonne(s) de `fields` inconnue(s) dans ce namespace : "
+                        f"{', '.join(unknown)} — vérifie l'orthographe (absentes du résultat)")
             # 0 résultat filtré ≠ « la donnée n'existe pas » : si une clé du filter
             # n'apparaît dans AUCUNE ligne échantillonnée, c'est probablement une
             # colonne mal orthographiée — on le SIGNALE (non bloquant, feedback #163).
@@ -349,6 +405,49 @@ def register(mcp: FastMCP) -> None:
         except RowNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message=_row_not_found_hint(store, namespace, id)))
+
+    @mcp.tool()
+    def data_aggregate(
+        namespace: str,
+        metrics: Optional[list[dict]] = None,
+        group_by: str | None = None,
+        filter: Optional[dict] = None,
+    ) -> dict:
+        """Aggregate rows SERVER-SIDE — stats over a whole (optionally filtered) table
+        WITHOUT pulling the rows into context (feedback #191). Use this for totals and
+        distributions over a large vivier (e.g. total kWc, average score, count per
+        department) instead of reading 300+ rows and summing them yourself.
+
+        `metrics` = list of `{op, field?}`; `op` ∈ count|sum|avg|min|max (default
+        `[{"op":"count"}]`). `count` without `field` = total rows; sum/avg/min/max
+        require a numeric `field` and ignore non-numeric values. `group_by` = a column
+        to group on (omit = one global row). Results are sorted by the first metric
+        descending when grouped (so `group_by` gives you the TOP groups first).
+
+        Returns `{results: [...]}` — each entry carries the `group_by` value (when set)
+        plus one key per metric (`count`, `sum_<field>`, `avg_<field>`…).
+
+        Examples:
+            - total rows matching a filter: metrics omitted, filter={"statut":"qualified"}
+            - MWc by department: group_by="departement",
+              metrics=[{"op":"sum","field":"kwc_estime"}, {"op":"count"}]
+
+        Args:
+            namespace: target namespace, or `slot:<name>` (active project).
+            metrics: list of `{op, field?}` aggregations (default = count of rows).
+            group_by: column to group by (omit = global aggregate, single row).
+            filter: dict `{column: value}` exact match to scope the aggregate.
+        """
+        store = _acting_store()
+        namespace = _ns(namespace)
+        try:
+            results = store.aggregate(
+                namespace, group_by=group_by, metrics=metrics, filter=filter)
+            return {"results": results}
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
 
     @mcp.tool()
     def data_delete_row(namespace: str, id: str) -> dict:

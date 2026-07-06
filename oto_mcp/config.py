@@ -12,6 +12,15 @@ def require_env(name: str) -> str:
     return val
 
 
+def project_domain() -> str:
+    """Domaine racine des endpoints de PROJET publiés — `<slug>.mcp.<D>` (annuaire, mode
+    anonymous) et `<slug>.share.<D>` (partage navigable, mode secret). **PROD = `oto.cx`,
+    PREPROD = `oto.ninja`** (cutover ADR 0040) : sans ça le routing par Host et les URLs
+    dérivées restaient figés sur la prod (`.oto.cx`), rendant les endpoints de projet
+    injoignables en preprod. Env `OTO_PROJECT_DOMAIN` (défaut `oto.cx`)."""
+    return os.environ.get("OTO_PROJECT_DOMAIN", "oto.cx").strip().lower().lstrip(".")
+
+
 def mcp_audience_alts() -> frozenset[str]:
     """Audiences MCP canoniques SECONDAIRES (coexistence multi-domaine, ex.
     `https://mcp.oto.cx/mcp` en plus de `MCP_AUDIENCE`=`https://mcp.oto.ninja/mcp`).

@@ -149,6 +149,16 @@ def current_org(sub: str | None) -> Optional[int]:
 _UNSET: object = object()
 
 
+# Add-on payant requis par un connecteur (couche 3, ADR 0043). None = aucun. HOME
+# canonique de ce mapping (les surfaces org ET user en dérivent — derive don't duplicate).
+_PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
+
+
+def paid_option_for(connector: str) -> Optional[str]:
+    """Option payante requise par un connecteur (ou None)."""
+    return _PAID_OPTION_BY_CONNECTOR.get(connector)
+
+
 def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) -> bool:
     """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option de
     connecteur `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
@@ -558,12 +568,15 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         active_group = current_group(sub)
         if active_group is not None:
             grp_key = group_store.get_group_secret(active_group, provider)
-            if grp_key:
+            # share_down (ADR 0044) : une instance de groupe restreinte dont `sub` est
+            # exclu est SAUTÉE (soft — la cascade continue vers l'org/plateforme),
+            # jamais un blocage dur (ça, c'est la politique d'org, axe 1).
+            if grp_key and _share_down_allows("group", str(active_group), provider, sub):
                 return ResolvedCredential(provider, grp_key, False, "group",
                                           "group", str(active_group))
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
-            if org_key:
+            if org_key and _share_down_allows(credentials_store.ORG, str(active_org), provider, sub):
                 return ResolvedCredential(provider, org_key, False, "org",
                                           "org", str(active_org))
 
@@ -629,6 +642,53 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     return ResolvedCredential(provider, grant["api_key"], True, "platform")
 
 
+def _sub_matches_scopes(sub: str, scopes) -> bool:
+    """Vrai si `sub` appartient à l'un des scopes listés — vocabulaire COMMUN aux
+    allowlists `share_down` et aux prêts `share_side` (ADR 0044), aligné sur
+    `org_connector_access` : `user:<sub>` | `group:<gid>` (appartenance réelle) |
+    `org` (tout le monde). Fail-closed par entrée (une ref malformée est ignorée,
+    jamais d'exception qui casserait la résolution)."""
+    from . import group_store
+    for s in scopes or []:
+        if s == "org":
+            return True
+        kind, _, ident = str(s).partition(":")
+        if kind == "user" and ident == sub:
+            return True
+        if kind == "group":
+            try:
+                if group_store.is_group_member(sub, int(ident)):
+                    return True
+            except (ValueError, TypeError):
+                continue
+    return False
+
+
+def _instance_sharing_safe(entity_type: str, entity_id: str, provider: str,
+                           account: str = "") -> tuple[list, list]:
+    """(share_down, share_side) d'une instance, RÉSILIENT (même stance que
+    `require_connector_access`) : sur hoquet DB → `([], [])` + warning. En prod ce
+    chemin n'est atteint qu'après une lecture de clé réussie (même DB) — le fail-safe
+    ne mord donc qu'aux tests unitaires sans DB. Directions sûres : share_down `[]`
+    ⟹ **fail-OPEN** (restriction non appliquée, comme require_connector_access) ;
+    share_side `[]` ⟹ **fail-CLOSED** (aucun prêt accordé sans preuve)."""
+    try:
+        return credentials_store.get_instance_sharing(entity_type, entity_id, provider, account)
+    except Exception as e:
+        logger.warning("instance_sharing fail-safe %s:%s/%s: %s", entity_type, entity_id, provider, e)
+        return [], []
+
+
+def _share_down_allows(entity_type: str, entity_id: str, provider: str, sub: str,
+                       account: str = "") -> bool:
+    """Deny-check de l'allowlist `share_down` d'une instance PARTAGÉE (ADR 0044) :
+    vide ⟹ ouverte à tout le sous-arbre (True) ; non-vide ⟹ seulement les scopes
+    listés. Appliqué IDENTIQUEMENT à la cascade (palier groupe/org) ET au pin
+    (`guard_instance_access`) → un share_down ne se contourne pas en épinglant."""
+    down, _ = _instance_sharing_safe(entity_type, entity_id, provider, account)
+    return (not down) or _sub_matches_scopes(sub, down)
+
+
 def guard_instance_access(sub: str, ref) -> Optional[int]:
     """Garde d'accès à une instance de connecteur par NIVEAU (ADR 0038 B6) — même
     sémantique que la projection B4 : member = MA ligne dans une org où je suis
@@ -640,21 +700,35 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
     forcément celui qui a bindé)."""
     from . import group_store, roles
     if ref.level == "member":
-        if ref.sub != sub:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=("Instance refusée : elle appartient à un autre membre (le "
-                         "partage d'instance n'est pas encore là — ADR 0038 B5).")))
-        if not roles.is_org_member(sub, ref.org_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Instance refusée : tu n'es plus membre de l'org #{ref.org_id}."))
-        return ref.org_id
+        if ref.sub == sub:                       # owner : ma propre instance
+            if not roles.is_org_member(sub, ref.org_id):
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=f"Instance refusée : tu n'es plus membre de l'org #{ref.org_id}."))
+            return ref.org_id
+        # Prêt à un pair (share_side, ADR 0044) : instance d'un AUTRE membre, autorisée
+        # ssi `sub` est nommé dans son share_side. On EMPRUNTE la clé mais on garde le
+        # contexte de l'APPELANT → co-pose SON org (pas celle de l'owner ; cross-org OK,
+        # le prêt nominatif EST le consentement). Pin explicite → refus DUR si non prêté.
+        _, side = _instance_sharing_safe(
+            credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub),
+            ref.connector, ref.account)
+        if _sub_matches_scopes(sub, side):
+            return current_org(sub)
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=("Instance refusée : elle appartient à un autre membre et ne t'est "
+                     "pas prêtée (share_side).")))
     if ref.level == "group":
         if not roles.can_read_group(sub, ref.group_id):
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Instance refusée : tu n'es pas membre du groupe #{ref.group_id}."))
+        if not _share_down_allows("group", str(ref.group_id), ref.connector, sub, ref.account):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Instance refusée : la clé du groupe #{ref.group_id} est "
+                         f"réservée à certaines équipes/personnes (share_down).")))
         g = group_store.get_group(ref.group_id)
         return g.get("org_id") if g else None
     if ref.level == "org":
@@ -662,6 +736,11 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Instance refusée : tu n'es pas membre de l'org #{ref.org_id}."))
+        if not _share_down_allows(credentials_store.ORG, str(ref.org_id), ref.connector, sub, ref.account):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"Instance refusée : la clé de l'org #{ref.org_id} est réservée "
+                         f"à certaines équipes/personnes (share_down).")))
         return ref.org_id
     raise McpError(ErrorData(
         code=INVALID_PARAMS,

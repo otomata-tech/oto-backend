@@ -25,6 +25,21 @@ def test_slug_parsing_share_domain():
     assert sp._slug_from_host("a.b.share.oto.cx") is None      # multi-label ≠ slug
 
 
+def test_project_domain_env_driven(monkeypatch):
+    # PREPROD (cutover ADR 0040) : OTO_PROJECT_DOMAIN=oto.ninja → routing + audience suivent,
+    # le domaine prod (.oto.cx) ne matche plus. C'est le fix du suffixe figé.
+    monkeypatch.setenv("OTO_PROJECT_DOMAIN", "oto.ninja")
+    assert sp._slug_from_host("mon-projet.share.oto.ninja") == "mon-projet"
+    assert sp._slug_from_host("ft.mcp.oto.ninja") == "ft"
+    assert sp._slug_from_host("ft.mcp.oto.cx") is None            # plus le domaine courant
+    assert sp._is_share_host("x.share.oto.ninja") is True
+    assert sp._is_share_host("x.share.oto.cx") is False
+    monkeypatch.setattr(db, "get_project_by_mcp_slug",
+                        lambda s: {"id": 8, "mcp_access": "org"} if s == "mm" else None)
+    assert sp.valid_org_audience("https://mm.mcp.oto.ninja/mcp") is True   # audience sur le domaine courant
+    assert sp.valid_org_audience("https://mm.mcp.oto.cx/mcp") is False     # domaine prod rejeté en preprod
+
+
 def test_connect_url_is_path_aware():
     # `.share.oto.cx` = path `/mcp` explicite (racine = UI) ; `.mcp.oto.cx` = URL nue.
     assert sp._is_share_host("x.share.oto.cx") is True
@@ -53,6 +68,42 @@ def test_anon_context_and_current_org_seam():
         sp._CTX.reset(tok)
     assert sp.current_anon_org() is None
     assert access.current_org(None) is None            # hors contexte → None
+
+
+# ── Couplage visibilité ↔ datastore exposé (#193) ────────────────────────────
+def test_allowlist_couples_datastore_when_exposed():
+    # NON exposé → allowlist = preset nu (le flag découplé n'ajoutait rien : #193).
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"})))
+    try:
+        assert sp.current_allowlist() == {"fr_search"}
+    finally:
+        sp._CTX.reset(tok)
+    # exposé LECTURE → data_list_namespaces + data_rows ajoutés, PAS l'écriture.
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        allow = sp.current_allowlist()
+        assert {"fr_search", "data_list_namespaces", "data_rows"} <= allow
+        assert "data_write" not in allow and "data_set_schema" not in allow
+        assert sp.current_anon_datastore_exposed() is True
+        assert sp.current_anon_datastore_writable() is False
+    finally:
+        sp._CTX.reset(tok)
+    # exposé + WRITE opt-in → data_write + data_set_schema aussi.
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}),
+                                     datastore_exposed=True, datastore_writable=True))
+    try:
+        allow = sp.current_allowlist()
+        assert {"data_write", "data_set_schema"} <= allow
+        assert sp.current_anon_datastore_writable() is True
+    finally:
+        sp._CTX.reset(tok)
+    # exposé mais org_id None (projet legacy user-owned) → PAS de data_* (garde).
+    tok = sp._CTX.set(sp.AnonContext(1, None, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        assert sp.current_allowlist() == {"fr_search"}
+        assert sp.current_anon_datastore_exposed() is False
+    finally:
+        sp._CTX.reset(tok)
 
 
 # ── Résolution de credential anonyme (sans sub) ──────────────────────────────
@@ -134,6 +185,28 @@ async def test_anon_visibility_allowlist(monkeypatch):
         sp._CTX.reset(tok)
     # seuls les hors-preset sont masqués ; le preset reste visible
     assert hidden["names"] == {"serper_web_search", "oto_project", "data_write"}
+
+
+@pytest.mark.asyncio
+async def test_anon_visibility_exposes_datastore_read(monkeypatch):
+    # datastore exposé (lecture) → data_list_namespaces/data_rows VISIBLES au handshake
+    # (le bug #193 : le flag rendait résolvable mais laissait masqué). data_write reste
+    # masqué sans opt-in write.
+    hidden = {}
+
+    async def _fake_disable(ctx, names, components):
+        hidden["names"] = set(names)
+
+    monkeypatch.setattr(av, "disable_components", _fake_disable)
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        mw = av.AnonymousVisibilityMiddleware()
+        all_names = ["fr_search", "data_list_namespaces", "data_rows",
+                     "data_write", "serper_web_search"]
+        await mw.on_initialize(_FakeMwCtx(all_names), lambda c: _async_none())
+    finally:
+        sp._CTX.reset(tok)
+    assert hidden["names"] == {"data_write", "serper_web_search"}
 
 
 async def _async_none():

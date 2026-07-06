@@ -293,6 +293,39 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
+    def fr_avis_sirene(siret: str) -> dict:
+        """Official INSEE « Avis de situation au répertoire SIRENE » PDF of an
+        establishment — the signed 1-page administrative document, for a dossier.
+
+        Unlike `fr_siret` (JSON identity, needs the SIRENE key), this wraps INSEE's
+        PUBLIC avis endpoint (no key) and returns a directly-fetchable URL to the PDF
+        (availability is checked). The caller downloads the URL to get the file.
+
+        Args:
+            siret: SIRET number (14 digits ; spaces/dots are ignored).
+        """
+        import requests
+        digits = "".join(c for c in str(siret) if c.isdigit())
+        if len(digits) != 14:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"SIRET invalide : {siret!r} — 14 chiffres attendus.")))
+        url = f"https://api-avis-situation-sirene.insee.fr/identification/pdf/{digits}"
+        try:
+            resp = requests.head(url, timeout=20)
+        except requests.RequestException as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"endpoint INSEE avis-situation injoignable : {e}")))
+        if resp.status_code == 404:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"aucun avis SIRENE pour le SIRET {digits} — établissement inconnu "
+                "au répertoire (SIRET erroné ?).")))
+        if resp.status_code != 200 or "pdf" not in resp.headers.get("Content-Type", "").lower():
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"INSEE avis-situation a répondu HTTP {resp.status_code} "
+                f"({resp.headers.get('Content-Type', '?')}).")))
+        return {"siret": digits, "url": url, "format": "pdf"}
+
+    @mcp.tool()
     def fr_headquarters(siren: str) -> Optional[dict]:
         """Fetch the headquarters (siège) of a company from INSEE SIRENE.
 

@@ -2,14 +2,24 @@
 # Origin Cert *.oto.ninja already at /etc/caddy/origin-certs/oto-ninja.{pem,key}.
 
 # --- oto-mcp ---
+# ⚠️ Référence uniquement. Source de vérité RÉELLE = la /etc/caddy/Caddyfile LIVE
+# de oto-platform (éditée en place ; aucun deploy ne la régénère).
 #
-# Auth = Logto JWT validation in the FastMCP backend itself. On unauthenticated
-# requests, the backend returns 401 with `WWW-Authenticate: Bearer
-# resource_metadata="https://mcp.oto.ninja/.well-known/oauth-protected-resource/mcp"`,
-# which is the discovery hint MCP clients need to start the OAuth dance.
-# No edge bearer-gate — it would strip that header and break discovery.
+# ⚠️ Cutover ADR 0040 (2026-07-06) : .ninja↔.cx inversés.
+#   - PROD    = mcp.oto.cx    → :9103   (audience canonique mcp.oto.cx/mcp)
+#   - PREPROD = mcp.oto.ninja → :9105   (audience mcp.oto.ninja/mcp, ex-prod)
+#
+# Auth = Logto JWT (auth.oto.ninja) validé dans le backend FastMCP. Sur requête
+# non-auth, 401 + `WWW-Authenticate` resource_metadata pointant la PRM du domaine
+# (discovery MCP). Pas de bearer-gate edge (il stripperait le header → discovery cassée).
 
+# --- prod (grey CF + ACME direct box) ---
+mcp.oto.cx {
+	reverse_proxy localhost:9103
+}
+
+# --- preprod (ex-prod .ninja avant cutover) ---
 mcp.oto.ninja {
 	tls /etc/caddy/origin-certs/oto-ninja.pem /etc/caddy/origin-certs/oto-ninja.key
-	reverse_proxy localhost:9103
+	reverse_proxy localhost:9105
 }

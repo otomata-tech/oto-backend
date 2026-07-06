@@ -1,3 +1,17 @@
+---
+title: Auth — Logto
+type: reference
+description: >-
+  Contrat d'authentification JWT entre oto-backend et Logto self-hosted (auth.oto.zone) :
+  algorithme ES384 (gotcha RS256 → tout rejeté), discovery OAuth RFC 9728 via
+  WWW-Authenticate sur 401, et façade DCR (oauth_facade.py) qui émule le Dynamic
+  Client Registration absent de Logto pour permettre l'auto-installation par Claude,
+  ChatGPT et Mistral sans client_id fixe. Inclut les variables d'environnement
+  requises (LOGTO_ENDPOINT, OTO_MCP_CLAUDE_APP_ID, OTO_MCP_LOGTO_M2M_*) et les
+  garde-fous _redirect_ok ; à consulter dès qu'un 401 JWT ou un échec d'installation
+  MCP est à diagnostiquer.
+---
+
 # Auth — Logto
 
 Le backend valide les bearer JWT émis par `auth.oto.zone/oidc`. Sur 401, le

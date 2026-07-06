@@ -1,3 +1,20 @@
+---
+title: Boucle d'usage (ADR 0017 — déroulés + feedback volontaire)
+type: reference
+description: >-
+  Référence du flux d'événements de session unifié dans oto-backend (ADR 0017) :
+  corrélation session_id + run_id sur tool_calls (colonnes OTO-locales, index dans
+  ALTER pas dans _SCHEMA), tools spine run_start/run_finish (tools/doctrine_run.py,
+  pile session FastMCP, runs imbriqués OK), et capacité feedback (signal
+  tool_feedback|gap → table durable usage_signals hors prune 30j). Détaille les
+  projections admin /api/admin/usage/* (runs, gaps, tool-quality, signals filtrables
+  open/resolved) et la résolution de signaux via oto_admin_resolve_signal. À charger
+  pour comprendre comment tracer un déroulé d'agent, remonter un gap d'outil, ou
+  déboguer un run_id manquant sur les appels.
+adr:
+  - "0017"
+---
+
 # Boucle d'usage (ADR 0017 — déroulés + feedback volontaire)
 
 Un **flux d'événements de session** unifie le calllog (involontaire) + le feedback

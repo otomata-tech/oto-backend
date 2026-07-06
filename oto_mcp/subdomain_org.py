@@ -11,20 +11,29 @@ colonne `orgs.slug` unique + index ; invalidation de cache.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from starlette.requests import Request
 
-# Le label avant `--mcp` est le slug d'org. Suffixe figé sur le domaine public.
-_SUFFIX = "--mcp.oto.ninja"
 _CACHE: dict[str, int] = {}   # slug → org_id (seuls les hits sont cachés)
+
+
+def _suffix() -> str:
+    """Suffixe `--<host canonique>` (le label avant = le slug d'org). Dérivé du HOST
+    canonique MCP (`OTO_MCP_PUBLIC_URL`) — PROD `mcp.oto.cx` / PREPROD `mcp.oto.ninja`
+    (cutover ADR 0040) : plus de domaine figé (sinon l'épinglage d'org casse hors prod)."""
+    host = urlparse(os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja")).hostname or "mcp.oto.ninja"
+    return f"--{host}"
 
 
 def _slug_from_host(host: str) -> Optional[str]:
     h = (host or "").split(":")[0].strip().lower()
-    if not h.endswith(_SUFFIX):
+    suffix = _suffix()
+    if not h.endswith(suffix):
         return None
-    return h[: -len(_SUFFIX)] or None
+    return h[: -len(suffix)] or None
 
 
 def _resolve_slug(slug: str) -> Optional[int]:

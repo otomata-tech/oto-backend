@@ -144,6 +144,30 @@ def _platform_eligible(provider: str) -> bool:
     return con is not None and "platform" in con.auth_modes
 
 
+def _shared_ref(entity_type: str, entity_id: str, connector: str,
+                account: str) -> Optional[str]:
+    """Ref PINNABLE d'une instance partagée avec moi (share_side), reconstruit depuis
+    (entity_type, entity_id). None si non-pinnable (résidu oauth `user`, id malformé)."""
+    if entity_type == "member":
+        oid, _, osub = entity_id.partition(":")
+        if not (oid.isdigit() and osub):
+            return None
+        return instance_refs.make_member_ref(int(oid), osub, connector, account)
+    if entity_type == "group" and entity_id.isdigit():
+        return instance_refs.make_group_ref(int(entity_id), connector, account)
+    if entity_type == "org" and entity_id.isdigit():
+        return instance_refs.make_org_ref(int(entity_id), connector, account)
+    return None
+
+
+def _shared_owner(entity_type: str, entity_id: str) -> dict:
+    """Propriétaire (le PRÊTEUR) d'une instance partagée — pas moi."""
+    if entity_type == "member":
+        _, _, osub = entity_id.partition(":")
+        return {"type": "user", "id": osub}
+    return {"type": entity_type, "id": entity_id}
+
+
 def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
     # Handler SYNC exécuté INLINE par les adaptateurs de capacité (pattern des
     # capacités existantes — pas de threadpool ici) : requêtes courtes indexées.
@@ -236,6 +260,35 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
         out.append(_platform_instance(
             k["id"], k["provider"], k.get("label") or "", "free_tier",
             {"created_at": k.get("created_at")}))
+
+    # 5. PARTAGÉ AVEC MOI (ADR 0044 share_side) : instances d'AUTRES dont le
+    # share_side me vise (nominatif `user:` ou via un de mes groupes). Cross-org
+    # possible (le prêt nominatif = consentement). Le pin résout la clé de l'owner ;
+    # `require_connector_access` re-gate MON org à l'appel (le filtre RBAC ci-dessous
+    # le reflète déjà). Dédup par ref (une instance de groupe déjà listée en §2 ne
+    # réapparaît pas).
+    my_scopes = [f"user:{sub}"]
+    if org is not None:
+        for g in group_store.list_groups_for_user(sub, org):
+            my_scopes.append(f"group:{g.get('group_id') or g.get('id')}")
+    my_eids = {credentials_store.member_id(org, sub)} if org is not None else set()
+    existing_refs = {i["ref"] for i in out}
+    try:
+        shared = credentials_store.list_shared_with(my_scopes)
+    except Exception:
+        logger.warning("instances: 'partagé avec moi' indisponible (fail-open)", exc_info=True)
+        shared = []
+    for row in shared:
+        et, eid = row["entity_type"], row["entity_id"]
+        if et == "member" and eid in my_eids:
+            continue  # défensif : jamais ma propre ligne
+        ref = _shared_ref(et, eid, row["connector"], row.get("account") or "")
+        if ref is None or ref in existing_refs:
+            continue
+        existing_refs.add(ref)
+        inst = _cred_instance(et, _shared_owner(et, eid), ref, row)
+        inst["via"] = "shared_with_me"
+        out.append(inst)
 
     # Filtre RBAC (ADR 0025, fail-open loggé) puis filtres d'input.
     hidden = _hidden_connectors(sub, org)

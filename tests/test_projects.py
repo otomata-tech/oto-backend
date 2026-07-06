@@ -78,6 +78,14 @@ def seams(monkeypatch):
     return rec
 
 
+def test_mcp_url_domain_env_driven(monkeypatch):
+    # Les URLs dérivées suivent OTO_PROJECT_DOMAIN (PREPROD oto.ninja, cutover ADR 0040).
+    monkeypatch.setenv("OTO_PROJECT_DOMAIN", "oto.ninja")
+    assert P._mcp_url("ft", "secret") == "https://ft.share.oto.ninja/mcp"
+    assert P._mcp_url("ft", "anonymous") == "https://ft.mcp.oto.ninja/mcp"
+    assert P._mcp_url("ft", "off") is None
+
+
 def test_create_defaults_to_active_org(seams):
     # Suppression du perso : le défaut crée dans l'ORG ACTIVE (ctx.org_id), plus en user.
     ctx = ResolvedCtx(sub="u1", org_id=99)
@@ -535,8 +543,9 @@ def test_use_clear_project_registered():
 def _patch_publish(monkeypatch, rec, unresolvable):
     """Câble les seams propres à publish_mcp : record de la pose + sonde contrôlée."""
     monkeypatch.setattr(P.db, "set_project_mcp_publication",
-                        lambda pid, slug, access, tools, expose_datastore=False:
-                        rec.setdefault("pub", []).append((pid, slug, access, tools, expose_datastore)))
+                        lambda pid, slug, access, tools, expose_datastore=False, expose_datastore_write=False:
+                        rec.setdefault("pub", []).append(
+                            (pid, slug, access, tools, expose_datastore, expose_datastore_write)))
     monkeypatch.setattr(P, "_mcp_unresolvable_tools",
                         lambda row, tools, expose_datastore=False: list(unresolvable))
 
@@ -547,8 +556,10 @@ def test_publish_mcp_secret_generates_unguessable_slug(seams, monkeypatch):
     _patch_publish(monkeypatch, rec, unresolvable=[])
     out = P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7,
                                          mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
-    (pid, slug, access, tools, expose_datastore), = rec["pub"]
+    (pid, slug, access, tools, expose_datastore, expose_write), = rec["pub"]
     assert access == "secret" and pid == 7
+    # DÉFAUT au partage `secret` : lecture exposée d'emblée, écriture non (#193).
+    assert expose_datastore is True and expose_write is False
     # slug NON saisi → généré, non devinable, valide (préfixe par défaut `mcp-`).
     assert slug.startswith("mcp-") and _MCP_SLUG_RE.match(slug)
     assert out["mcp_access"] == "off"  # ROW mocké n'a pas de mcp_access → _view défaut ; pas d'erreur
@@ -560,7 +571,7 @@ def test_publish_mcp_secret_prefixes_from_typed_slug(seams, monkeypatch):
     _patch_publish(monkeypatch, rec, unresolvable=[])
     P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="Ma Base!!",
                                    mcp_access="secret", mcp_tools=["frenchtech_evenements"]))
-    (_, slug, _, _, _), = rec["pub"]
+    (_, slug, _, _, _, _), = rec["pub"]
     assert slug.startswith("ma-base-") and _MCP_SLUG_RE.match(slug)
 
 
@@ -590,8 +601,28 @@ def test_publish_mcp_expose_datastore_secret_persists(seams, monkeypatch):
     _patch_publish(monkeypatch, rec, unresolvable=[])
     P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_access="secret",
                                    mcp_tools=["data_write"], mcp_expose_datastore=True))
-    (_, _, access, _, expose_datastore), = rec["pub"]
+    (_, _, access, _, expose_datastore, _), = rec["pub"]
     assert access == "secret" and expose_datastore is True
+
+
+def test_publish_mcp_secret_can_close_datastore(seams, monkeypatch):
+    """Le défaut lecture ON est explicitement refermable (mcp_expose_datastore=False)."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_access="secret",
+                                   mcp_tools=["frenchtech_evenements"], mcp_expose_datastore=False))
+    (_, _, _, _, expose_datastore, expose_write), = rec["pub"]
+    assert expose_datastore is False and expose_write is False
+
+
+def test_publish_mcp_datastore_write_optin(seams, monkeypatch):
+    """Écriture = opt-in ADDITIONNEL (#193) : posée seulement si demandée, avec lecture ON."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_access="secret",
+                                   mcp_tools=["data_write"], mcp_expose_datastore_write=True))
+    (_, _, _, _, expose_datastore, expose_write), = rec["pub"]
+    assert expose_datastore is True and expose_write is True
 
 
 def test_publish_mcp_expose_datastore_rejected_on_anonymous(seams, monkeypatch):

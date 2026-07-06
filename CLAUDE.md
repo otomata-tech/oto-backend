@@ -2,8 +2,8 @@
 
 MCP server (Streamable HTTP) qui expose les connecteurs **oto-core** (`oto.tools`,
 importés directement — **plus aucune dép à la CLI**) comme tools, branchable dans
-claude.ai et Claude Code. Public : `https://mcp.oto.ninja/mcp` (box Scaleway
-dédiée — cf. §Infra).
+claude.ai et Claude Code. Public **prod** = `https://mcp.oto.cx/mcp` (box Scaleway
+dédiée ; `mcp.oto.ninja` = **preprod** depuis le cutover ADR 0040 — cf. §Auth « CUTOVER »).
 
 **Positionnement : oto-mcp = le produit central, déployable** (SaaS hébergé OU
 on-premise pour un client — image `Dockerfile`, config 100% par env). oto-cli =
@@ -67,12 +67,18 @@ JWT Logto **ES384** (défaut RS256 = tout rejeté), discovery RFC 9728 sur 401,
 façade DCR self-service (`oauth_facade.py`) pour les clients sans DCR (Claude/ChatGPT/
 Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 
-> **Coexistence multi-domaine (2026-07-02)** : `https://mcp.oto.cx/mcp` sert le MCP
-> en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (liste d'audiences
-> canoniques secondaires, vide = no-op), resource Logto dédiée, PRM Host-aware
-> (`config.mcp_audience_alt_hosts`). Le 401 `WWW-Authenticate` pointe la PRM
-> canonique .ninja (fastmcp `base_url`, non Host-aware) — fonctionne car l'audience
-> canonique est acceptée sur .cx. DNS mcp.oto.cx = grey+ACME direct box.
+> **⚠️ CUTOVER ADR 0040 (2026-07-06) — `.ninja`↔`.cx` inversés.** Désormais **PROD =
+> `mcp.oto.cx`** (:9103, audience canonique `mcp.oto.cx/mcp`, dashboard `manage.oto.cx`) et
+> **PREPROD = `mcp.oto.ninja`** (:9105, audience `mcp.oto.ninja/mcp`, dashboard `manage.oto.ninja`).
+> DB découplée (backends inchangés, seuls domaines/audiences/dashboards ont basculé ; prod
+> reste sur `otomata-main`). ⚠️ **Logto = 2 instances** : la vraie prod/preprod = **`auth.oto.ninja`**
+> (creds SOPS `LOGTO_NINJA_MGMT_*`), PAS `auth.oto.zone`. Les mentions `mcp.oto.ninja=prod`
+> ailleurs dans ce fichier sont **antérieures au cutover**.
+>
+> **Coexistence multi-domaine (2026-07-02, contexte pré-cutover)** : `mcp.oto.cx/mcp` servait le
+> MCP en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (audiences canoniques secondaires,
+> vide = no-op), resource Logto dédiée, PRM Host-aware (`config.mcp_audience_alt_hosts`).
+> DNS mcp.oto.cx = grey+ACME direct box.
 
 ## Rôles + résolution de clé API
 
@@ -466,6 +472,22 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (1 clé keyed + platform/quota) **ou** `resolve_credential_fields` (byo multi-champs
   sans quota, ex. `silae` : client_id/client_secret/subscription_key). `cookie`/`oauth`
   (linkedin/google/memento) ont des flux dédiés → `secret_fields` vide.
+- **Sonde « tester la connexion » par connecteur** (`connector_verify.py`, registre
+  calqué sur `browser_session.register`) : un connecteur enregistre une `_verify(fields)`
+  qui **lève sur échec** (le message d'exception = le retour d'erreur). Capacité unique
+  `connectors.verify` (MCP `oto_verify_connector` + REST `POST /api/me/connectors/{provider}/verify`,
+  `authz=ORG_MEMBER`, `level` auto|org) → `{ok, error, elapsed_ms}`, jamais un 500 ;
+  `providers.public_catalog` expose `verifiable: connector_verify.supports(name)` (front
+  gate le bouton). **Une bonne sonde teste l'auth ET les scopes**, pas juste l'auth :
+  seed Zoho (`tools/zoho.py::_verify`) fait un refresh OAuth brut (valide client/secret/
+  refresh/région d'un coup + capte le `scope` accordé) PUIS une **lecture réelle**
+  (`ZohoClient.list_records` sur Contacts/Deals/Accounts/Leads, `per_page=1`) — une clé
+  qui authentifie mais n'a **aucun scope CRM** (ex. clé Zoho **Analytics** posée par erreur
+  sur le connecteur CRM) est rejetée avec le scope réel dans le message. ⚠️ Gotchas Zoho
+  empiriques : le refresh renvoie **HTTP 200 + body `{"error":"invalid_client"}`** (région/
+  client faux) ou `invalid_code`/`invalid_grant` (refresh mort) ; l'API CRM **v7 exige un
+  param `fields`** (une lecture nue → 400, pas un scope-mismatch) → sonder via `list_records`
+  (qui fournit les `DEFAULT_FIELDS`), pas un `GET /crm/v7/{module}` brut.
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - **Aucune résolution de secret côté serveur hors DB/env de process** : pas de
   `get_secret`/`require_secret` oto.config dans le code serveur (l'unit pose

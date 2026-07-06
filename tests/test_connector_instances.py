@@ -427,3 +427,42 @@ def test_sub_only_requires_auth():
     with pytest.raises(AuthzDenied) as ei:
         SUB_ONLY(RawCtx(sub=None))
     assert ei.value.status == 401 and ei.value.code == "auth_required"
+
+
+# ─── 6. Partagé avec moi (ADR 0044 share_side) ───────────────────────────────
+
+def test_shared_with_me_surfaces_lent_instance(seams):
+    # instance d'un AUTRE membre (org 9, usr_owner), prêtée à moi via share_side
+    shared_row = {"entity_type": "member", "entity_id": "9:usr_owner",
+                  "connector": "zoho", "account": "", "secret_kind": "api_key",
+                  "set_by": "usr_owner", "set_at": "2026-07-01 10:00:00", "meta": {}}
+    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
+                              lambda scopes: [shared_row])
+    out = _run()
+    assert out["count"] == 1
+    inst = out["instances"][0]
+    assert inst["via"] == "shared_with_me"
+    assert inst["ref"] == "member:9:usr_owner:zoho"      # pinnable
+    assert inst["owner"] == {"type": "user", "id": "usr_owner"}  # le PRÊTEUR
+    assert inst["level"] == "member"
+
+
+def test_shared_with_me_excludes_own_line(seams):
+    # défensif : une ligne à MOI ne réapparaît jamais via share_side
+    own = {"entity_type": credentials_store.MEMBER,
+           "entity_id": credentials_store.member_id(ORG, SUB),
+           "connector": "zoho", "account": "", "secret_kind": "api_key",
+           "set_by": SUB, "set_at": "2026-07-01 10:00:00", "meta": {}}
+    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
+                              lambda scopes: [own])
+    assert _run()["count"] == 0
+
+
+def test_shared_with_me_scopes_include_my_groups(seams):
+    seams.monkeypatch.setattr(ci.group_store, "list_groups_for_user",
+                              lambda sub, org_id=None: [{"group_id": 2, "name": "Sales"}])
+    captured = {}
+    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
+                              lambda scopes: captured.setdefault("scopes", scopes) and [])
+    _run()
+    assert captured["scopes"] == [f"user:{SUB}", "group:2"]

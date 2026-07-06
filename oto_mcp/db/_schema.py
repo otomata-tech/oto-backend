@@ -293,6 +293,9 @@ CREATE TABLE IF NOT EXISTS projects (
     -- endpoint `secret` sans login — l'endpoint agit alors sous l'autorité de l'org
     -- propriétaire. Défaut FALSE (datastore privé) ; jamais honoré en `anonymous`.
     mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Opt-in ADDITIONNEL, séparé de la lecture (#193) : autoriser l'ÉCRITURE du datastore
+    -- (data_write/data_set_schema) sur l'endpoint partagé. Défaut FALSE (lecture seule).
+    mcp_expose_datastore_write BOOLEAN NOT NULL DEFAULT FALSE,
     -- Projet forké depuis un partage public (« Ajouter à mon Oto ») : pointeur vers la
     -- source, pour un import IDEMPOTENT par org (idx_projects_copied_from, créé dans `_init`
     -- après l'ADD COLUMN — même gotcha que is_template sur une table préexistante).
@@ -797,6 +800,10 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     meta        JSONB NOT NULL DEFAULT '{}',
     set_by      TEXT,
     set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- ADR 0044 : l'entrée du coffre EST une instance de connecteur (config possédée).
+    version     INTEGER NOT NULL DEFAULT 1,   -- verrou optimiste (B1) vs last-writer-wins
+    share_down  JSONB NOT NULL DEFAULT '[]',  -- ALLOWLIST deny-by-default : [] = ouvert au sous-arbre ; ['team:5',…] = restreint aux scopes listés
+    share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);

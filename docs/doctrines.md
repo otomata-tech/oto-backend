@@ -1,3 +1,19 @@
+---
+title: Doctrines & instructions d'org
+type: reference
+description: >-
+  Référence du mécanisme de doctrine oto-backend : prose opératoire métier par org,
+  structurée en skills identifiés par slug et versionnés dans org_instructions +
+  org_instruction_revisions. Détaille les 4 tools MCP (oto_get_doctrine sans slug =
+  call de début de session renvoyant base + index, avec slug = skill nommé ;
+  oto_set_doctrine, oto_list_doctrines, oto_delete_doctrine), l'autz conditionnelle
+  org_admin self-service vs platform_admin cross-org, le versioning append-only avec
+  revert via from_version, et les gotchas (verrou advisory par org/slug, pas de cache,
+  pas d'instruction par namespace d'outil). Aligne sur ADR 0006 (harnais sans état).
+adr:
+  - "0006"
+---
+
 # Doctrines & instructions d'org
 
 Prose opératoire métier (workflows validés, règles, vocabulaire) pour les users qui pilotent

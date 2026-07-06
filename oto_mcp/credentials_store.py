@@ -51,6 +51,57 @@ def member_id(org_id: int, sub: str) -> str:
     donc un credential membre est cryptographiquement lié à son org."""
     return f"{org_id}:{sub}"
 
+
+def get_instance_sharing(entity_type: str, entity_id: str, connector: str,
+                         account: str = "") -> tuple[list, list]:
+    """(share_down, share_side) d'une instance du coffre (ADR 0044). `share_down` =
+    ALLOWLIST deny-by-default (vide = ouverte) ; `share_side` = EXTENSION (prêts
+    nominatifs). Listes vides si la ligne n'existe pas (JSONB → list côté psycopg)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT share_down, share_side FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (entity_type, entity_id, connector, account)).fetchone()
+    if not row:
+        return [], []
+    return (row["share_down"] or []), (row["share_side"] or [])
+
+
+def list_shared_with(scopes: list) -> list[dict]:
+    """Instances dont le `share_side` vise l'un des `scopes` (ex. `['user:sub',
+    'group:2']`) — le « partagé avec moi » (ADR 0044). Métadonnées seulement (secret
+    jamais lu). `[]` scopes ⟹ `[]`. `jsonb_exists_any` = indexé par le GIN share_side."""
+    if not scopes:
+        return []
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT entity_type, entity_id, connector, account, meta, secret_kind, "
+            "set_by, set_at FROM connector_credentials "
+            "WHERE jsonb_exists_any(share_side, %s)",
+            (list(scopes),)).fetchall()
+
+
+def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
+                         account: str = "", *, share_down=None, share_side=None) -> bool:
+    """Met à jour `share_down`/`share_side` d'une instance EXISTANTE (ADR 0044) sans
+    toucher au secret ; bump `version`. Ne met à jour que les champs fournis (non
+    None). Renvoie False si aucune ligne (⟹ pas d'instance à partager — l'appelant
+    lève actionnable). Le partage présuppose que la clé existe."""
+    sets, params = ["version = version + 1"], []
+    if share_down is not None:
+        sets.append("share_down = %s::jsonb"); params.append(json.dumps(share_down))
+    if share_side is not None:
+        sets.append("share_side = %s::jsonb"); params.append(json.dumps(share_side))
+    if len(sets) == 1:
+        return True  # rien à changer
+    params += [entity_type, entity_id, connector, account]
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE connector_credentials SET {', '.join(sets)} "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            tuple(params))
+    return (cur.rowcount or 0) > 0
+
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
 # refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /
@@ -300,12 +351,27 @@ def has_credential(entity_type: str, entity_id: str, connector: str, account: Op
         return conn.execute(sql + " LIMIT 1", params).fetchone() is not None
 
 
-def _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, meta) -> None:
+class ConcurrencyConflict(Exception):
+    """Écriture optimiste rejetée : l'instance a changé depuis la lecture (ADR 0044 B1)."""
+
+
+def _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, meta,
+            expected_version=None) -> None:
     # Chiffrement obligatoire : secret_enc porte le ciphertext. crypto.encrypt lève
     # si OTO_MCP_MASTER_KEY absente (pas de stockage plaintext).
     enc = crypto.encrypt(secret, _aad(entity_type, entity_id, connector, account))
-    conn.execute(
-        """
+    # Verrou optimiste (ADR 0044 B1) : chaque écriture bump `version` ; sur une édition
+    # VERSIONNÉE (expected_version fourni), une garde `WHERE version = attendu` sur la
+    # branche DO UPDATE fait échouer silencieusement le write si un autre l'a devancé →
+    # 0 ligne touchée ⟺ conflit d'insertion + garde en échec (jamais une création).
+    where = ""
+    params = [entity_type, entity_id, connector, account, enc, _secret_kind(connector),
+              json.dumps(meta or {}), set_by]
+    if expected_version is not None:
+        where = "\n        WHERE connector_credentials.version = %s"
+        params.append(expected_version)
+    cur = conn.execute(
+        f"""
         INSERT INTO connector_credentials
             (entity_type, entity_id, connector, account, secret_enc, secret_kind, meta, set_by)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -314,11 +380,15 @@ def _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, me
             secret_kind = EXCLUDED.secret_kind,
             meta = EXCLUDED.meta,
             set_by = EXCLUDED.set_by,
-            set_at = NOW()
+            set_at = NOW(),
+            version = connector_credentials.version + 1{where}
         """,
-        (entity_type, entity_id, connector, account, enc, _secret_kind(connector),
-         json.dumps(meta or {}), set_by),
+        tuple(params),
     )
+    if expected_version is not None and (cur.rowcount or 0) == 0:
+        raise ConcurrencyConflict(
+            f"{connector} ({entity_type}:{entity_id}) modifié depuis la lecture "
+            f"(version ≠ {expected_version}) — relis puis rejoue.")
 
 
 def _delete(conn, entity_type, entity_id, connector, account) -> bool:
@@ -339,6 +409,7 @@ def set_credential(
     meta: Optional[dict] = None,
     conn=None,
     account: str = "",
+    expected_version: Optional[int] = None,
 ) -> None:
     """Pose/rote le secret (UPSERT). secret_kind dérivé du registre. `account`
     discrimine le multi-compte ('' = mono-compte ; ex. email Google).
@@ -355,10 +426,12 @@ def set_credential(
     if not secret:
         raise ValueError("secret requis")
     if conn is not None:
-        _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, meta)
+        _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, meta,
+                expected_version=expected_version)
     else:
         with _connect() as c:
-            _upsert(c, entity_type, entity_id, connector, account, secret, set_by, meta)
+            _upsert(c, entity_type, entity_id, connector, account, secret, set_by, meta,
+                    expected_version=expected_version)
 
 
 def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None,

@@ -81,9 +81,14 @@ def register(mcp: FastMCP) -> None:
         return _client().list_views(workspace_id, view_types=view_types)
 
     @mcp.tool()
-    def zohoanalytics_view_details(workspace_id: str, view_id: str) -> dict:
-        """Get the metadata of one view (columns, type, folder…)."""
-        return _client().get_view_details(workspace_id, view_id)
+    def zohoanalytics_view_details(view_id: str) -> dict:
+        """Get the metadata of one view — columns (name + type), view type, folder.
+
+        `view_id` is the globally-unique id from `zohoanalytics_views` (no
+        workspace needed). Use this to discover a view's columns before querying
+        it with `zohoanalytics_query`.
+        """
+        return _client().get_view_details(view_id)
 
     @mcp.tool()
     def zohoanalytics_export(

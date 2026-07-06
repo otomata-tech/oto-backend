@@ -2,8 +2,8 @@
 
 MCP server (Streamable HTTP) qui expose les connecteurs **oto-core** (`oto.tools`,
 importés directement — **plus aucune dép à la CLI**) comme tools, branchable dans
-claude.ai et Claude Code. Public : `https://mcp.oto.ninja/mcp` (box Scaleway
-dédiée — cf. §Infra).
+claude.ai et Claude Code. Public **prod** = `https://mcp.oto.cx/mcp` (box Scaleway
+dédiée ; `mcp.oto.ninja` = **preprod** depuis le cutover ADR 0040 — cf. §Auth « CUTOVER »).
 
 **Positionnement : oto-mcp = le produit central, déployable** (SaaS hébergé OU
 on-premise pour un client — image `Dockerfile`, config 100% par env). oto-cli =
@@ -67,12 +67,18 @@ JWT Logto **ES384** (défaut RS256 = tout rejeté), discovery RFC 9728 sur 401,
 façade DCR self-service (`oauth_facade.py`) pour les clients sans DCR (Claude/ChatGPT/
 Mistral). **Détail : `docs/auth-logto.md`** (gotchas, env, onboarding).
 
-> **Coexistence multi-domaine (2026-07-02)** : `https://mcp.oto.cx/mcp` sert le MCP
-> en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (liste d'audiences
-> canoniques secondaires, vide = no-op), resource Logto dédiée, PRM Host-aware
-> (`config.mcp_audience_alt_hosts`). Le 401 `WWW-Authenticate` pointe la PRM
-> canonique .ninja (fastmcp `base_url`, non Host-aware) — fonctionne car l'audience
-> canonique est acceptée sur .cx. DNS mcp.oto.cx = grey+ACME direct box.
+> **⚠️ CUTOVER ADR 0040 (2026-07-06) — `.ninja`↔`.cx` inversés.** Désormais **PROD =
+> `mcp.oto.cx`** (:9103, audience canonique `mcp.oto.cx/mcp`, dashboard `manage.oto.cx`) et
+> **PREPROD = `mcp.oto.ninja`** (:9105, audience `mcp.oto.ninja/mcp`, dashboard `manage.oto.ninja`).
+> DB découplée (backends inchangés, seuls domaines/audiences/dashboards ont basculé ; prod
+> reste sur `otomata-main`). ⚠️ **Logto = 2 instances** : la vraie prod/preprod = **`auth.oto.ninja`**
+> (creds SOPS `LOGTO_NINJA_MGMT_*`), PAS `auth.oto.zone`. Les mentions `mcp.oto.ninja=prod`
+> ailleurs dans ce fichier sont **antérieures au cutover**.
+>
+> **Coexistence multi-domaine (2026-07-02, contexte pré-cutover)** : `mcp.oto.cx/mcp` servait le
+> MCP en plus de `mcp.oto.ninja` — env **`MCP_AUDIENCE_ALT`** (audiences canoniques secondaires,
+> vide = no-op), resource Logto dédiée, PRM Host-aware (`config.mcp_audience_alt_hosts`).
+> DNS mcp.oto.cx = grey+ACME direct box.
 
 ## Rôles + résolution de clé API
 

@@ -32,6 +32,8 @@ def test_mcp_caps_are_mounted():
 
     async def go():
         for cap in registry.caps_with_mcp():
+            if not cap.is_exposed():  # feature flag off (dark launch) → non montée
+                continue
             assert await m.get_tool(cap.mcp) is not None, cap.key
 
     asyncio.run(go())
@@ -86,6 +88,8 @@ def test_rest_caps_are_mounted():
     routes = _rest_adapter.make_routes(None, None, None, None, None, registry.CAPABILITIES)
     paths = {r.path for r in routes}
     for cap in registry.caps_with_rest():
+        if not cap.is_exposed():  # feature flag off (dark launch) → non montée
+            continue
         for b in cap.rest_bindings():
             assert b.path in paths, cap.key
 
@@ -113,6 +117,27 @@ def test_no_mcp_name_collision_with_legacy():
 
     async def go():
         for cap in registry.caps_with_mcp():
+            if not cap.is_exposed():  # feature flag off (dark launch) → non montée
+                continue
             assert await m.get_tool(cap.mcp) is not None, cap.key
 
     asyncio.run(go())
+
+
+def test_feature_gate_hides_surface(monkeypatch):
+    """Le gate (ADR 0043, dark launch) montre/masque la surface d'une capacité au
+    MONTAGE selon l'env, sans jamais quitter le registre. Billing = pilote."""
+    billing_keys = {c.key for c in registry.CAPABILITIES if c.key.startswith("billing.")}
+    assert billing_keys, "billing doit être au registre (introspection/catalogue)"
+
+    def rest_paths():
+        rs = _rest_adapter.make_routes(None, None, None, None, None, registry.CAPABILITIES)
+        return {r.path for r in rs}
+
+    # OFF (défaut prod) : billing absent de la surface REST montée.
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "0")
+    assert not any(p.startswith("/api/me/billing") or p == "/api/billing/plans" for p in rest_paths())
+
+    # ON (canari / go-live) : billing exposé.
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+    assert "/api/billing/plans" in rest_paths()

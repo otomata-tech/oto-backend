@@ -75,6 +75,12 @@ class Capability:
     # session courante → `tools/list_changed` live (B2/B3). No-op côté REST (le
     # dashboard n'est pas une session MCP).
     refresh_visibility: bool = False
+    # Feature flag optionnel (dark launch) : callable 0-arg évalué au MONTAGE
+    # (make_routes REST / register MCP), pas à l'import → le descripteur reste
+    # dans le registre (introspection, tests, catalogue) mais sa surface n'est
+    # pas exposée si le gate rend faux. Piloté par env par-déploiement (prod off,
+    # canari on) sans divergence de branche. None = toujours exposé.
+    gate: "Optional[Callable[[], bool]]" = None
 
     def __post_init__(self):
         if self.mcp is None and not self.rest:
@@ -82,6 +88,10 @@ class Capability:
                 f"Capability {self.key!r} sans surface : déclarer mcp= et/ou rest= "
                 f"(un opt-out doit être explicite, pas un oubli)."
             )
+
+    def is_exposed(self) -> bool:
+        """False = déclarée mais NON montée (feature flag off à ce déploiement)."""
+        return self.gate is None or bool(self.gate())
 
     def rest_bindings(self) -> list[RestBinding]:
         if self.rest is None:

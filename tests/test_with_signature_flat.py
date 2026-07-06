@@ -25,6 +25,8 @@ def test_capability_tools_have_flat_schema():
 
     async def go():
         for cap in registry.caps_with_mcp():
+            if not cap.is_exposed():  # feature flag off (dark launch) → non montée
+                continue
             tool = await m.get_tool(cap.mcp)
             s = _schema(tool)
             assert s is not None, cap.mcp

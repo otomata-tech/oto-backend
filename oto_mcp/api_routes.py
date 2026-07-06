@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                   Response, StreamingResponse)
 
-from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
+from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from . import auth_hooks
@@ -585,6 +585,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 "invites_left": user.get("invite_quota", 0),
                 "invited_by": user.get("invited_by"),
             },
+            # Feature flags par-déploiement (dark launch) : le dashboard dérive sa
+            # nav de l'effet backend (ex. billing masqué en prod tant que le PSP
+            # n'est pas live) — une seule source, pas de flag front dupliqué.
+            "features": {"billing": billing.is_enabled()},
             # crunchbase = connecteur `personal_session` standard → exposé dans
             # `providers` (comme brevo), plus de bloc dédié (ADR 0026).
             # Fédération MCP (otomata#16) : statut du compte memento fédéré du user

@@ -17,6 +17,7 @@ table) : la vérité produit est versionnée et relue par l'entitlement (has_opt
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -26,6 +27,14 @@ from . import db
 from .db import billing as db_billing
 
 logger = logging.getLogger(__name__)
+
+
+def is_enabled() -> bool:
+    """Feature flag global (ADR 0043, dark launch) : la surface billing (capacités
+    REST/MCP + nav dashboard + runner) n'est exposée QUE si `OTO_BILLING_ENABLED=1`.
+    Absent/0 = dormant. Piloté par-déploiement (prod off tant que le PSP n'est pas
+    live/KYB, canari on) sans divergence de branche ni revert."""
+    return os.environ.get("OTO_BILLING_ENABLED", "0") == "1"
 
 # plan → prix (centimes), intervalle, options de connecteur débloquées (couche 3,
 # lues par access.has_option). Prix HT mensuels (Alexis 2026-07-06). Chaque

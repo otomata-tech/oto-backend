@@ -72,6 +72,8 @@ def make_routes(
     """Une Route (+ OPTIONS) par capacité REST. Liste vide si rien (canari)."""
     routes: list[Route] = []
     for cap in capabilities:
+        if not cap.is_exposed():
+            continue
         for binding in cap.rest_bindings():
             h = _make_handler(cap, binding, verifier, authenticate, json_response, json_error)
             routes.append(Route(binding.path, h, methods=[binding.verb]))

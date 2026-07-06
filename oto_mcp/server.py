@@ -396,9 +396,10 @@ def main():
         if os.environ.get("OTO_BOAMP_REFRESH_ENABLED", "1") != "0":
             from . import boamp_refresh
             _bg_loops.append(boamp_refresh.run_boamp_refresh_loop)
-        if os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
-            # échéances d'abonnement + réconciliation (ADR 0043 B3) — no-op
-            # silencieux tant que STANCER_API_KEY n'est pas posée.
+        from . import billing as _billing
+        if _billing.is_enabled() and os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
+            # échéances d'abonnement + réconciliation (ADR 0043 B3) — gaté sur le
+            # feature flag billing (dormant en prod) + no-op sans STANCER_API_KEY.
             from . import billing_runner
             _bg_loops.append(billing_runner.run_billing_loop)
         import contextlib

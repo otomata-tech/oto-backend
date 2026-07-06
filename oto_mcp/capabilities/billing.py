@@ -6,6 +6,8 @@ résilier = org_admin ; consulter = tout membre de l'org active.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydantic import BaseModel
 
 from .. import billing
@@ -98,7 +100,7 @@ def _payments(ctx: ResolvedCtx, inp: PaymentsInput) -> dict:
     ]}
 
 
-CAPABILITIES += [
+_BILLING_CAPS = [
     Capability(
         key="billing.plans", handler=_plans, Input=NoInput, authz=SUB_ONLY,
         rest=RestBinding("GET", "/api/billing/plans"),
@@ -138,3 +140,8 @@ CAPABILITIES += [
         rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"}),
     ),
 ]
+
+# Feature flag (ADR 0043, dark launch) : billing dormant tant que OTO_BILLING_ENABLED
+# n'est pas posé (prod off / canari on). Les descripteurs restent au registre
+# (introspection, tests, catalogue admin) ; SEULE la surface est gatée au montage.
+CAPABILITIES += [replace(_cap, gate=billing.is_enabled) for _cap in _BILLING_CAPS]

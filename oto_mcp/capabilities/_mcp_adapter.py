@@ -116,4 +116,6 @@ def register(instance: FastMCP, capabilities: list[Capability]) -> None:
     for cap in capabilities:
         if cap.mcp is None:
             continue
+        if not cap.is_exposed():
+            continue
         instance.tool(name=cap.mcp, description=cap.description or None)(_make_tool(cap))

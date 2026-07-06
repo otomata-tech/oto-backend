@@ -163,7 +163,8 @@ def _unipile_list(sub: str) -> list[dict]:
     seen = {i["id"]: i for i in out}
     for g in granted:
         owner = {"sub": g["owner_sub"], "email": g.get("owner_email"),
-                 "name": g.get("owner_name")}
+                 "name": g.get("owner_name"),
+                 "org": g.get("owner_org_id"), "org_name": g.get("owner_org_name")}
         existing = seen.get(g["account_id"])
         if existing is not None:
             existing["granted"] = True

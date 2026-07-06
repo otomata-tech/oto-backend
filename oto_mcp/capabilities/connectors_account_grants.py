@@ -1,6 +1,8 @@
 """Autorisation de compte connecteur partagé (otomata-private#55) — surface du
-PROPRIÉTAIRE : accorder / révoquer à un membre nommé le droit d'opérer SON compte
-Unipile sur un canal (agence multi-clients, compte d'org opéré par une équipe).
+PROPRIÉTAIRE : accorder / révoquer à un user nommé le droit d'opérer SON compte
+Unipile sur un canal (agence multi-clients, compte d'org opéré par une équipe,
+freelance externe). **Cross-org assumé** : le grantee n'a PAS besoin de partager
+une org avec le propriétaire — on partage son PROPRE compte, à qui on veut.
 
 Deny-by-default, révocation à effet immédiat (le grant est revalidé à chaque appel
 dans la résolution, cf. `connector_identities.resolve_operated_account_id`), audité
@@ -31,8 +33,11 @@ def _provider_for(channel: str) -> str:
 
 
 def _resolve_grantee(ctx: ResolvedCtx, grantee: str) -> dict:
-    """`grantee` = sub OU email → fiche user. Anti-IDOR : self-grant refusé,
-    et le grantee doit partager AU MOINS une org avec le propriétaire."""
+    """`grantee` = sub OU email → fiche user. Le propriétaire partage SON PROPRE
+    compte (owner := ctx.sub par construction) → il peut l'accorder à N'IMPORTE
+    QUEL user oto, **y compris hors de ses orgs** (cross-org assumé : agence /
+    freelance externe). Seuls garde-fous : l'user doit exister, et pas de
+    self-grant (tu opères déjà ton compte)."""
     if "@" in grantee:
         user = db.get_user_by_email(grantee)
     else:
@@ -41,9 +46,6 @@ def _resolve_grantee(ctx: ResolvedCtx, grantee: str) -> dict:
         raise AuthzDenied(404, "unknown_user", f"Utilisateur inconnu : {grantee}")
     if user["sub"] == ctx.sub:
         raise AuthzDenied(400, "self_grant", "Tu opères déjà ton propre compte.")
-    if not db.users_share_org(ctx.sub, user["sub"]):
-        raise AuthzDenied(400, "not_in_shared_org",
-                          f"`{grantee}` n'est membre d'aucune de tes orgs.")
     return user
 
 
@@ -112,10 +114,10 @@ CAPABILITIES += [
     Capability(
         key="connectors.account_grants.grant", handler=_grant, Input=AccountGrantInput,
         authz=SUB_ONLY,
-        description="[account owner] Authorize a named member of one of your orgs (grantee = "
-                    "sub or email) to OPERATE your connected account on a channel (linkedin, "
-                    "whatsapp, …) — e.g. an agency teammate running outreach as you. Only the "
-                    "owner can grant; revocable anytime with immediate effect; audited.",
+        description="[account owner] Authorize any oto user (grantee = email or sub — including "
+                    "someone OUTSIDE your orgs, e.g. an external freelancer or agency) to OPERATE "
+                    "your connected account on a channel (linkedin, whatsapp, …), acting as you. "
+                    "Only the owner can grant; revocable anytime with immediate effect; audited.",
         mcp="oto_grant_account_access",
         rest=RestBinding("POST", "/api/me/connector-accounts/{channel}/grants"),
     ),

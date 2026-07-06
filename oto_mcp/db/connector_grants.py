@@ -64,16 +64,21 @@ def list_account_grants_by_owner(owner_sub: str) -> list[dict]:
 
 def list_account_grants_to(grantee_sub: str) -> list[dict]:
     """Grants reçus PAR ce user (face « comptes que je peux opérer »).
-    `active=False` si le owner a déconnecté le canal (grant inerte)."""
+    `active=False` si le owner a déconnecté le canal (grant inerte).
+    `owner_org_id`/`owner_org_name` = l'org sous laquelle le owner a connecté ce
+    compte (`unipile_accounts.org_id`) — pour que l'UI dise D'OÙ vient le partage
+    (le grant lui-même n'est pas scopé à une org)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT g.provider, g.owner_sub, u.email AS owner_email, "
             "u.name AS owner_name, ua.account_id, ua.account_name, "
+            "ua.org_id AS owner_org_id, o.name AS owner_org_name, "
             "g.granted_at, (ua.account_id IS NOT NULL) AS active "
             "FROM connector_account_grants g "
             "LEFT JOIN users u ON u.sub = g.owner_sub "
             "LEFT JOIN unipile_accounts ua "
             "  ON ua.sub = g.owner_sub AND ua.provider = g.provider "
+            "LEFT JOIN orgs o ON o.id = ua.org_id "
             "WHERE g.grantee_sub = %s ORDER BY g.provider, g.granted_at",
             (grantee_sub,),
         ).fetchall()
@@ -96,17 +101,6 @@ def granted_accounts_for(grantee_sub: str, provider: str) -> dict[str, dict]:
         ).fetchall()
     return {r["account_id"]: {"owner_sub": r["owner_sub"],
                               "owner_email": r["owner_email"]} for r in rows}
-
-
-def users_share_org(sub_a: str, sub_b: str) -> bool:
-    """True si les deux users sont membres d'AU MOINS une org commune (anti-IDOR
-    au grant : « même org », pas « l'org active »)."""
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM org_members a JOIN org_members b USING (org_id) "
-            "WHERE a.sub = %s AND b.sub = %s LIMIT 1",
-            (sub_a, sub_b),
-        ).fetchone() is not None
 
 
 def get_operated_account(sub: str, provider: str) -> Optional[dict]:

@@ -138,6 +138,51 @@ def schedule_next_billing(
     return n > 0
 
 
+def retry_billing_at(org_id: int, when) -> bool:
+    """Décale la prochaine tentative d'échéance (retry J+3 du runner) sans
+    toucher au reste du cycle."""
+    with _connect() as conn:
+        n = conn.execute(
+            "UPDATE org_subscriptions SET next_billing_at = %s, updated_at = NOW() "
+            "WHERE org_id = %s", (when, org_id),
+        ).rowcount
+    return n > 0
+
+
+def count_renewal_attempts(org_id: int, since) -> int:
+    """Tentatives de renouvellement déjà jouées pour la période courante
+    (`since` = current_period_end) — pilote la politique de retry du runner."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM billing_payments "
+            "WHERE org_id = %s AND kind = 'renewal' AND created_at >= %s",
+            (org_id, since),
+        ).fetchone()
+    return int(row["n"])
+
+
+def sweep_period_end_cancellations() -> list[int]:
+    """Bascule `canceled` les abonnements résiliés dont la période est finie.
+    Retourne les org_id basculées (log/notification)."""
+    with _connect() as conn:
+        return [r["org_id"] for r in conn.execute(
+            "UPDATE org_subscriptions SET status = 'canceled', updated_at = NOW() "
+            "WHERE canceled_at IS NOT NULL AND status != 'canceled' "
+            "AND current_period_end <= NOW() RETURNING org_id"
+        )]
+
+
+def sweep_grace_expired() -> list[int]:
+    """Bascule `canceled` les impayés dont la grace period est consommée —
+    c'est LA fermeture d'entitlement du dunning (ADR 0043)."""
+    with _connect() as conn:
+        return [r["org_id"] for r in conn.execute(
+            "UPDATE org_subscriptions SET status = 'canceled', updated_at = NOW() "
+            "WHERE status = 'past_due' AND grace_until IS NOT NULL "
+            "AND grace_until <= NOW() RETURNING org_id"
+        )]
+
+
 def due_subscriptions(limit: int = 50) -> list[dict]:
     """Échéances à tirer par le billing_runner (actives ou en retard, dues)."""
     with _connect() as conn:

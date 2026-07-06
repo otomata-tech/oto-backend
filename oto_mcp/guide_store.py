@@ -217,14 +217,18 @@ def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
     return db.delete_guide_db(scope, str(owner_id), slug)
 
 
-def guides_index_md() -> str:
-    """Index markdown des guides — enrichit la description de `oto_guide` au `tools/list`
-    (même pattern que `skills_index_md` pour les doctrines). '' si aucun guide."""
-    guides = list_guides()
+def guides_index_md(sub: Optional[str] = None, org_id: Optional[int] = None) -> str:
+    """Index markdown des guides VISIBLES par le caller (plateforme ∪ org active ∪ user)
+    — enrichit la description de `oto_guide` au `tools/list`, per-(sub, org), même pattern
+    que `skills_index_md` pour les doctrines. Sans sub/org = plateforme seule (stdio/boot).
+    '' si aucun guide."""
+    guides = list_guides_for(sub, org_id)
     if not guides:
         return ""
+    _tag = {"platform": "", "org": " [org]", "user": " [perso]"}
     lines = ["Guides disponibles (charge le corps avec `oto_guide(op=read, slug=…)`) :"]
     for g in guides:
         lines.append(f"- {g['slug']} — {g['title']}"
-                     + (f" : {g['description']}" if g["description"] else ""))
+                     + (f" : {g['description']}" if g.get("description") else "")
+                     + _tag.get(g.get("scope", "platform"), ""))
     return "\n".join(lines)

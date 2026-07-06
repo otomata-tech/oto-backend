@@ -50,4 +50,4 @@ def test_tool_registers_on_fastmcp():
     from fastmcp import FastMCP
     from oto_mcp.tools import guide
     mcp = FastMCP("probe")
-    guide.register(mcp)   # ne lève pas ; la description embarque l'index
+    guide.register(mcp)   # ne lève pas ; l'index est ajouté par le middleware, pas ici

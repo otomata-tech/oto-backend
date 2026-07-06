@@ -82,6 +82,13 @@ def _entry(tool) -> dict:
 _REGISTRY: dict[str, dict] | None = None
 
 
+def boot_tool_names() -> list[str]:
+    """Noms de TOUS les tools du registre BOOT (réchauffé hors session au lifespan,
+    immunisé à la visibilité, #75) — tri stable ; [] si non réchauffé (tests).
+    Sert la découverte post-activation (#186 : donner les NOMS à oto_call)."""
+    return sorted(_REGISTRY or {})
+
+
 async def _build_registry_live(mcp_instance=None) -> dict[str, dict]:
     """Construit la map nom → entrée à la volée. ⚠️ Si appelée DANS un contexte de
     session, la visibilité de session filtre le résultat (cf. `_REGISTRY`)."""

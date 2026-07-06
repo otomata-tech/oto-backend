@@ -38,10 +38,18 @@ class _FakeTool:
 
 
 class _FakeFastMCP:
+    """Duck-type du Provider fastmcp : `_resolve_tool` énumère via l'UNBOUND
+    `Provider.list_tools(instance)` (catalogue brut, disabled inclus — #186), qui
+    ne lit que `_list_tools()` + `transforms`."""
+    transforms: list = []
+
     def __init__(self, tools):
         self._tools = tools
 
-    async def list_tools(self, run_middleware=False):
+    async def _list_tools(self):
+        return self._tools
+
+    async def list_tools(self, run_middleware=False):  # compat (non utilisé par le dispatch)
         return self._tools
 
 
@@ -180,6 +188,35 @@ def test_alpha_gate_noop_without_flag(monkeypatch):
     monkeypatch.setattr(session_visibility, "alpha_gate_enabled", lambda: False)
     # flag off → aucune lecture DB, aucun refus
     meta._enforce_alpha_gate("sub-123", "fr_ccn_search")
+
+
+# --- 5bis. #186 : un tool DÉSACTIVÉ par la visibilité reste dispatchable ----
+
+def test_resolve_tool_sees_visibility_disabled_tool():
+    """Régression #186 : la visibilité (connecteur non activé au handshake,
+    default_hidden) désactive le tool via les transforms fastmcp — l'énumération
+    interne du dispatch doit le voir QUAND MÊME (catalogue brut Provider), sinon
+    l'échappatoire oto_call/oto_tool_schema ment (« Unknown tool »). VRAIE
+    instance FastMCP + vraie règle de visibilité, aucun stub sur ce chemin."""
+    from fastmcp import FastMCP
+    from fastmcp.server.transforms.visibility import create_visibility_transforms
+
+    real = FastMCP("t186")
+
+    @real.tool()
+    def http_get(path: str) -> str:
+        return path
+
+    for tr in create_visibility_transforms([{"enabled": False, "names": ["http_get"]}]):
+        real.add_transform(tr)
+
+    # Le listing serveur (même sans middleware) le filtre — c'était le piège…
+    served = {t.name for t in asyncio.run(real.list_tools(run_middleware=False))}
+    assert "http_get" not in served
+    # …mais le dispatch le résout (catalogue brut).
+    ctx = type("Ctx", (), {"fastmcp": real})()
+    tool = asyncio.run(meta._resolve_tool(ctx, "http_get"))
+    assert tool is not None and tool.name == "http_get"
 
 
 # --- 6. jeton `org=` (ADR 0038) : posé pendant run, nettoyé après ----------

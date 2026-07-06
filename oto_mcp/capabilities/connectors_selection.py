@@ -130,17 +130,33 @@ def _require_exposed(ctx: ResolvedCtx, name: str) -> None:
 # claude.ai). Le pont fiable = `oto_call` (dispatch universel, ADR 0036) ; sinon, nouvelle
 # conversation. On le DIT à l'agent au moment où il installe, pour qu'il enchaîne sans
 # conclure « la capacité n'existe pas ».
-def _activation_hint(name: str) -> str:
+def _connector_tools(name: str) -> list[str]:
+    """Noms des tools du connecteur, depuis le registre BOOT (immunisé à la
+    visibilité de session) — la moitié « découverte » de #186 : le hint ordonnait
+    « appelle via oto_call » sans donner UN SEUL nom, et l'introspection de session
+    ne voyait pas les tools d'un connecteur fraîchement activé."""
+    from .. import providers, tool_registry
+    from ..tool_visibility import namespace_of
+    con = providers.REGISTRY.get(name)
+    ns = set(con.namespaces) if con else {name}
+    return [t for t in tool_registry.boot_tool_names() if namespace_of(t) in ns]
+
+
+def _activation_hint(name: str, tools: list[str]) -> str:
+    listing = (f" Ses outils : {', '.join(tools[:12])}." if tools
+               else " (noms indisponibles — oto_tool_schema les décrit à la demande).")
     return (f"`{name}` est actif. Ses outils ne sont pas encore montés dans CETTE conversation "
-            f"(le registre d'outils est figé à l'ouverture) — appelle-les DÈS MAINTENANT via "
-            f"`oto_call(name=\"{name}_…\", arguments={{…}})`, ou ouvre une NOUVELLE conversation "
-            f"pour les voir listés directement.")
+            f"(le registre d'outils est figé à l'ouverture) —{listing} Appelle-les DÈS "
+            f"MAINTENANT via `oto_call(name=…, arguments={{…}})` (schéma d'un outil : "
+            f"`oto_tool_schema`), ou ouvre une NOUVELLE conversation pour les voir listés.")
 
 
 def _select(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     _require_exposed(ctx, inp.name)
     connector_selection.set_state(ctx.sub, inp.name, connector_selection.ACTIVE, ctx.org_id or 0)
-    return {"connector": inp.name, "state": "active", "hint": _activation_hint(inp.name)}
+    tools = _connector_tools(inp.name)
+    return {"connector": inp.name, "state": "active", "tools": tools,
+            "hint": _activation_hint(inp.name, tools)}
 
 
 def _pause(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:

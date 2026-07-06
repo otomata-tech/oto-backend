@@ -63,10 +63,16 @@ def _active_org(sub: str) -> int:
 
 
 async def _resolve_tool(ctx: Context, name: str):
-    """Objet Tool FastMCP par nom (ou None), **y compris masqué** : `run_middleware=
-    False` liste le catalogue COMPLET — la denylist de visibilité ne filtre que le
-    listing exposé au client, pas cette énumération interne (ADR 0031/0036)."""
-    tools = await ctx.fastmcp.list_tools(run_middleware=False)
+    """Objet Tool FastMCP par nom (ou None), **y compris masqué/désactivé** — on
+    énumère le catalogue BRUT du `Provider` parent (« including disabled ones »,
+    docstring fastmcp). ⚠️ `list_tools(run_middleware=False)` ne suffit PAS : il
+    applique quand même `apply_session_transforms` + filtre `is_enabled` → un tool
+    masqué par la visibilité de LA SESSION (connecteur non activé au handshake,
+    default_hidden) était introuvable au dispatch — l'échappatoire `oto_call`/
+    `oto_tool_schema` répondait « Unknown tool » (#186, régression du passage à la
+    visibilité native fastmcp)."""
+    from fastmcp.server.providers.base import Provider
+    tools = await Provider.list_tools(ctx.fastmcp)
     for t in tools:
         if t.name == name:
             return t

@@ -52,7 +52,12 @@ def test_select_returns_activation_hint(monkeypatch):
     calls = []
     monkeypatch.setattr(CS.connector_selection, "set_state",
                         lambda sub, name, state, org: calls.append((sub, name, state, org)))
+    # #186 : la réponse DONNE les noms d'outils (registre boot, immunisé visibilité).
+    import oto_mcp.tool_registry as tr
+    monkeypatch.setattr(tr, "boot_tool_names",
+                        lambda: ["unipile_me", "unipile_search", "zoho_get"])
     out = CS._select(ResolvedCtx(sub="u1", org_id=42), CS.ConnectorActionInput(name="unipile"))
     assert out["connector"] == "unipile" and out["state"] == "active"
-    assert "oto_call" in out["hint"] and "unipile_" in out["hint"]
+    assert out["tools"] == ["unipile_me", "unipile_search"]   # les siens, pas zoho
+    assert "oto_call" in out["hint"] and "unipile_me" in out["hint"]
     assert calls and calls[0][1] == "unipile"

@@ -49,9 +49,11 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
         log.error("billing_runner: org %s a un plan inconnu %r — échéance sautée",
                   org_id, sub_row["plan"])
         return "skipped"
-    if sub_row.get("method") != "card" or not sub_row.get("card_id"):
-        log.error("billing_runner: org %s sans token carte (method=%s) — sautée",
-                  org_id, sub_row.get("method"))
+    method = sub_row.get("method")
+    token_field = {"card": "card_id", "sepa": "sepa_id"}.get(method)
+    if not token_field or not sub_row.get(token_field):
+        log.error("billing_runner: org %s sans moyen de paiement rejouable "
+                  "(method=%s) — sautée", org_id, method)
         return "skipped"
 
     period_ref = str(sub_row.get("current_period_end") or "epoch")[:10]
@@ -65,7 +67,9 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
     try:
         payment = stancer_client.create_payment(
             plan["amount"], currency=plan["currency"],
-            card=sub_row["card_id"], customer=sub_row.get("customer_id"),
+            card=sub_row.get("card_id") if method == "card" else None,
+            sepa=sub_row.get("sepa_id") if method == "sepa" else None,
+            customer=sub_row.get("customer_id"),
             unique_id=unique_id,
             description=f"Abonnement {plan['label']} — échéance {period_ref}")
         pstatus = str(payment.get("status") or "")

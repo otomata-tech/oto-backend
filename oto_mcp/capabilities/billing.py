@@ -22,6 +22,12 @@ class NoInput(BaseModel):
 class SubscribeInput(BaseModel):
     plan: str
     return_url: str          # URL de retour du dashboard (page billing)
+    method: str = "card"     # 'card' | 'sepa' (prélèvement)
+    # champs SEPA (exigés ensemble si method='sepa') — le mobile reçoit l'OTP
+    # de signature du mandat sur la page hébergée Stancer.
+    iban: str | None = None
+    holder_name: str | None = None
+    mobile: str | None = None
 
 
 class PaymentsInput(BaseModel):
@@ -53,7 +59,12 @@ def _status(ctx: ResolvedCtx, inp: NoInput) -> dict:
 
 
 def _subscribe(ctx: ResolvedCtx, inp: SubscribeInput) -> dict:
-    return _domain(billing.subscribe, ctx.org_id, inp.plan, inp.return_url)
+    def call():
+        return billing.subscribe(ctx.org_id, inp.plan, inp.return_url,
+                                 method=inp.method, iban=inp.iban,
+                                 holder_name=inp.holder_name, mobile=inp.mobile)
+
+    return _domain(call)
 
 
 def _confirm(ctx: ResolvedCtx, inp: NoInput) -> dict:

@@ -86,16 +86,45 @@ def _ref_id(value: Any) -> Optional[str]:
 
 # ── souscription ─────────────────────────────────────────────────────────────
 
-def subscribe(org_id: int, plan: str, return_url: str) -> dict:
-    """Ouvre la souscription : customer Stancer (réutilisé si l'org en a déjà
-    un) + payment intent → renvoie l'URL de la page de paiement hébergée.
-    Le miroir n'est PAS posé ici — il naît à `confirm` (paiement constaté)."""
+def subscribe(org_id: int, plan: str, return_url: str, *,
+              method: str = "card", iban: Optional[str] = None,
+              holder_name: Optional[str] = None,
+              mobile: Optional[str] = None) -> dict:
+    """Ouvre la souscription. Deux voies symétriques (l'URL renvoyée = la page
+    hébergée Stancer où le payeur finit le geste) :
+    - `card` : payment intent → page de paiement (tokenisation + 3DS) ;
+    - `sepa` : IBAN tokenisé + mandat → page de SIGNATURE (`sign_url`, OTP SMS
+      — `mobile` du signataire OBLIGATOIRE, exigence Stancer vérifiée sandbox).
+      Le miroir naît `incomplete` (jamais entitled) ; le 1er prélèvement part à
+      `confirm` une fois le mandat signé.
+    Le miroir carte n'est PAS posé ici — il naît à `confirm` (paiement constaté)."""
     meta = PLANS.get(plan)
     if meta is None:
         raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
+    if method not in ("card", "sepa"):
+        raise ValueError(f"unknown_method: {method!r} (card | sepa)")
     existing = db_billing.get_org_subscription(org_id)
     if existing and existing["status"] == "active" and not existing.get("canceled_at"):
         raise ValueError("already_subscribed: l'org a déjà un abonnement actif")
+
+    if method == "sepa":
+        if not iban or not holder_name or not mobile:
+            raise ValueError(
+                "sepa_fields_required: iban + holder_name + mobile requis "
+                "(le mobile reçoit l'OTP de signature du mandat)")
+        cust = stancer_client._req("POST", "/v2/customers/", json={
+            "name": holder_name, "mobile": mobile,
+            "external_id": f"org-{org_id}-sepa-{uuid.uuid4().hex[:6]}"})
+        sepa = stancer_client.create_sepa(iban=iban, name=holder_name,
+                                          customer=cust["id"])
+        mandate = stancer_client.create_mandate(sepa["id"])
+        # miroir `incomplete` : porte sepa/mandat pour que confirm les retrouve
+        # (pas d'order_id ici — il n'y a pas d'intent côté SEPA).
+        db_billing.upsert_org_subscription(
+            org_id, plan=plan, method="sepa", customer_id=cust["id"],
+            sepa_id=sepa["id"], mandate_id=mandate["id"], status="incomplete")
+        return {"checkout_url": mandate.get("sign_url"),
+                "mandate_id": mandate["id"], "plan": plan, "method": "sepa"}
 
     customer_id = existing["customer_id"] if existing and existing.get("customer_id") else None
     if not customer_id:
@@ -114,14 +143,18 @@ def subscribe(org_id: int, plan: str, return_url: str) -> dict:
         org_id, "initial", meta["amount"], currency=meta["currency"],
         payment_intent_id=intent["id"], status=intent.get("status", "processing"))
     return {"checkout_url": intent.get("url"), "payment_intent_id": intent["id"],
-            "plan": plan}
+            "plan": plan, "method": "card"}
 
 
 def confirm(org_id: int) -> dict:
-    """Polle le dernier paiement initial ouvert de l'org et, si l'intent a
-    encaissé, pose le miroir `active` (extraction du token carte du paiement).
+    """Fait avancer la souscription en cours (POLLING, pas de webhooks) :
+    - voie carte : lit l'intent ; encaissé → extrait le token, miroir `active` ;
+    - voie SEPA (`incomplete`) : lit le mandat ; signé → 1er prélèvement SDD
+      + activation (RUM définitive du mandat).
     Idempotent : re-confirmer un abonnement déjà actif est un no-op informatif."""
     sub_row = db_billing.get_org_subscription(org_id)
+    if sub_row and sub_row["status"] == "incomplete" and sub_row.get("mandate_id"):
+        return _confirm_sepa(org_id, sub_row)
     open_initial = [
         p for p in db_billing.list_billing_payments(org_id)
         if p["kind"] == "initial"
@@ -175,6 +208,41 @@ def confirm(org_id: int) -> dict:
     logger.info("billing: org %s abonnée (plan %s, échéance %s)", org_id, plan,
                 period_end.date())
     return {"status": "active", "plan": plan,
+            "current_period_end": period_end.isoformat()}
+
+
+def _confirm_sepa(org_id: int, sub_row: dict) -> dict:
+    """Voie SEPA de confirm : mandat signé ? → 1er prélèvement + activation."""
+    mandate = stancer_client.get_mandate(sub_row["mandate_id"])
+    if not stancer_client.mandate_is_signed(mandate):
+        return {"status": "pending", "mandate_status": "awaiting_signature",
+                "sign_url": mandate.get("sign_url")}
+
+    plan = sub_row["plan"]
+    meta = PLANS.get(plan)
+    if meta is None:
+        raise RuntimeError(f"bad_plan: plan inconnu sur le miroir ({plan!r})")
+    now = datetime.now(timezone.utc)
+    row_id = db_billing.insert_billing_payment(
+        org_id, "initial", meta["amount"], currency=meta["currency"],
+        status="processing")
+    payment = stancer_client.create_payment(
+        meta["amount"], currency=meta["currency"], sepa=sub_row["sepa_id"],
+        customer=sub_row.get("customer_id"),
+        # déterministe PAR MANDAT : un double confirm concurrent prend un 409,
+        # une re-souscription (nouveau mandat) reste unique.
+        unique_id=f"org{org_id}-init-{sub_row['mandate_id'][-8:]}",
+        description=f"Abonnement {meta['label']} — 1ʳᵉ échéance")
+    db_billing.update_billing_payment(
+        row_id, status=str(payment.get("status") or "processing"),
+        payment_id=payment.get("id"))
+    period_end = _add_period(now, meta["interval"])
+    db_billing.activate_subscription(
+        org_id, current_period_end=period_end, next_billing_at=period_end,
+        mandate_rum=mandate.get("rum"))
+    logger.info("billing: org %s abonnée par prélèvement (plan %s, échéance %s)",
+                org_id, plan, period_end.date())
+    return {"status": "active", "plan": plan, "method": "sepa",
             "current_period_end": period_end.isoformat()}
 
 

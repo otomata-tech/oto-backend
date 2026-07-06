@@ -930,11 +930,12 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     provider TEXT NOT NULL DEFAULT 'stancer',
     customer_id TEXT,                       -- cust_xxx Stancer
     card_id TEXT,                           -- card_xxx tokenisée (rejeu MIT)
-    sepa_id TEXT,                           -- sepa_xxx (phase 2, post-ICS)
-    mandate_rum TEXT,                       -- RUM du mandat SEPA (phase 2)
+    sepa_id TEXT,                           -- sepa_xxx (IBAN tokenisé, prélèvement)
+    mandate_id TEXT,                        -- mndt_xxx (mandat SEPA, signé via sign_url)
+    mandate_rum TEXT,                       -- RUM du mandat signé
     method TEXT NOT NULL DEFAULT 'card',    -- 'card' | 'sepa'
     plan TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',  -- active | past_due | canceled
+    status TEXT NOT NULL DEFAULT 'active',  -- incomplete (mandat en attente) | active | past_due | canceled
     current_period_end TIMESTAMPTZ,
     next_billing_at TIMESTAMPTZ,
     grace_until TIMESTAMPTZ,                -- posé au passage past_due (grace 14 j)

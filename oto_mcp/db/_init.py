@@ -49,6 +49,9 @@ def init_db() -> None:
         # l'org propriétaire (pas de sub). Défaut FALSE (le datastore reste privé). JAMAIS
         # honoré en `anonymous` (endpoint public listé) : cf. set_project_mcp_publication.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_expose_datastore BOOLEAN NOT NULL DEFAULT FALSE")
+        # ADR 0043 phase 2 (SEPA) : id du mandat Stancer (mndt_xxx) sur l'abonnement —
+        # la table existait déjà (B1) quand la colonne est arrivée.
+        conn.execute("ALTER TABLE org_subscriptions ADD COLUMN IF NOT EXISTS mandate_id TEXT")
         # « Ajouter à mon Oto » (otomata-private, canal d'acquisition) : un projet forké
         # depuis un partage public garde le pointeur vers sa source → import IDEMPOTENT
         # (on RÉCUPÈRE la copie déjà présente dans l'org au lieu d'en refaire une).

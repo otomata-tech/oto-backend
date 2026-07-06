@@ -184,6 +184,32 @@ def get_payment(payment_id: str) -> dict:
     return _req("GET", f"/v2/payments/{payment_id}")
 
 
+# ── sepa & mandats (phase 2 — prélèvement) ───────────────────────────────────
+
+def create_sepa(*, iban: str, name: str, customer: str) -> dict:
+    """Tokenise un IBAN (`sepa_xxx`). Le prélèvement exige ENSUITE un mandat
+    signé (create_mandate → sign_url) — sans lui, tout paiement est refusé
+    `no valid mandate` (vérifié sandbox 2026-07-06)."""
+    return _req("POST", "/v2/sepa/", json={"iban": iban, "name": name,
+                                           "customer": customer})
+
+
+def create_mandate(sepa_id: str) -> dict:
+    """Crée le mandat du `sepa_xxx` et renvoie notamment `sign_url` (page de
+    signature hébergée Stancer, OTP SMS — le customer DOIT porter un mobile)
+    et `upload_url` (voie mandat papier). RUM générée par Stancer à la
+    signature ; `signed_at`/`rum` restent null tant que non signé."""
+    return _req("POST", "/v2/mandates/", json={"sepa": sepa_id})
+
+
+def get_mandate(mandate_id: str) -> dict:
+    return _req("GET", f"/v2/mandates/{mandate_id}")
+
+
+def mandate_is_signed(mandate: dict) -> bool:
+    return bool(mandate.get("signed_at"))
+
+
 # ── cards ────────────────────────────────────────────────────────────────────
 
 def get_card(card_id: str) -> dict:

@@ -21,7 +21,9 @@ TERMINAL_PAYMENT_STATUSES = frozenset(
     {"captured", "canceled", "refused", "failed", "expired", "unpaid"}
 )
 
-SUBSCRIPTION_STATUSES = ("active", "past_due", "canceled")
+# `incomplete` = souscription SEPA ouverte, mandat pas encore signé (jamais
+# entitled — les lectures d'entitlement ne regardent que active/past_due).
+SUBSCRIPTION_STATUSES = ("incomplete", "active", "past_due", "canceled")
 
 
 # ── org_subscriptions ────────────────────────────────────────────────────────
@@ -42,6 +44,7 @@ def upsert_org_subscription(
     customer_id: Optional[str] = None,
     card_id: Optional[str] = None,
     sepa_id: Optional[str] = None,
+    mandate_id: Optional[str] = None,
     mandate_rum: Optional[str] = None,
     status: str = "active",
     current_period_end: Optional[str] = None,
@@ -56,14 +59,16 @@ def upsert_org_subscription(
         conn.execute(
             """
             INSERT INTO org_subscriptions
-                (org_id, provider, customer_id, card_id, sepa_id, mandate_rum,
-                 method, plan, status, current_period_end, next_billing_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                (org_id, provider, customer_id, card_id, sepa_id, mandate_id,
+                 mandate_rum, method, plan, status, current_period_end,
+                 next_billing_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (org_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 customer_id = EXCLUDED.customer_id,
                 card_id = EXCLUDED.card_id,
                 sepa_id = EXCLUDED.sepa_id,
+                mandate_id = EXCLUDED.mandate_id,
                 mandate_rum = EXCLUDED.mandate_rum,
                 method = EXCLUDED.method,
                 plan = EXCLUDED.plan,
@@ -74,8 +79,9 @@ def upsert_org_subscription(
                 canceled_at = NULL,
                 updated_at = NOW()
             """,
-            (org_id, provider, customer_id, card_id, sepa_id, mandate_rum,
-             method, plan, status, current_period_end, next_billing_at),
+            (org_id, provider, customer_id, card_id, sepa_id, mandate_id,
+             mandate_rum, method, plan, status, current_period_end,
+             next_billing_at),
         )
 
 
@@ -95,6 +101,22 @@ def set_subscription_status(
             "canceled_at = CASE WHEN %s THEN NOW() ELSE canceled_at END, "
             "updated_at = NOW() WHERE org_id = %s",
             (status, grace_until, canceled, org_id),
+        ).rowcount
+    return n > 0
+
+
+def activate_subscription(
+    org_id: int, *, current_period_end, next_billing_at,
+    mandate_rum: Optional[str] = None,
+) -> bool:
+    """Passe `active` une souscription `incomplete` (mandat SEPA signé + 1er
+    prélèvement parti) — pose la RUM définitive lue du mandat signé."""
+    with _connect() as conn:
+        n = conn.execute(
+            "UPDATE org_subscriptions SET status = 'active', "
+            "mandate_rum = COALESCE(%s, mandate_rum), current_period_end = %s, "
+            "next_billing_at = %s, updated_at = NOW() WHERE org_id = %s",
+            (mandate_rum, current_period_end, next_billing_at, org_id),
         ).rowcount
     return n > 0
 

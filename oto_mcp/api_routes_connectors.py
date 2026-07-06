@@ -19,27 +19,17 @@ import asyncio
 import json
 import logging
 import os
-import secrets
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from mcp.shared.exceptions import McpError
 
 from . import access, connector_activation, db, org_store, providers
 
 logger = logging.getLogger(__name__)
 
-
-def _unipile_default_limit() -> int:
-    """Plafond par défaut de comptes Unipile par org (anti-dérapage coût) si l'org
-    n'en définit pas un propre. 0 = pas de plafond."""
-    try:
-        return int(os.environ.get("OTO_MCP_UNIPILE_DEFAULT_LIMIT", "5"))
-    except ValueError:
-        return 5
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -150,69 +140,15 @@ def make_routes(
             body = await request.json()
         except Exception:
             body = {}
-        provider = str(body.get("channel") or "linkedin").upper()
-        if provider not in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER", "TWITTER"):
-            return json_error(request, 400, "invalid_channel")
-        api_key = access.unipile_api_key_for(sub)
-        if not api_key:
-            return json_error(request, 404, "unipile_not_configured")
-        # BYO = clé propre (user/groupe/ORG), pas la clé plateforme — via le seam
-        # de résolution (mode), PAS un check user-only qui ratait une clé d'org.
-        byo = access.credential_mode_for(sub, "unipile") in access.BYO_MODES
-        # Scope membre (ADR 0033 B4) : le binding est rattaché à l'org de CONTEXTE
-        # (consultation dashboard incluse) quel que soit le mode de clé. Le plafond
-        # de sièges, lui, ne vaut qu'en mode plateforme (platform_seat).
-        org_id = access.current_org(sub)
-        if org_id is None:
-            return json_error(request, 400, "no_org_context")
-        platform_seat = not byo
-        # Gate OPTION (couche 3, docs/connector-model.md) : seam unique
-        # `access.has_option` = comp admin (user|org). BYO (clé perso) = l'user gère
-        # sa propre instance Unipile → pas de gate. Sinon l'option de messagerie
-        # hébergée doit avoir été accordée à l'org par un admin (plus de paiement).
-        if not byo and not access.has_option(sub, "unipile"):
-            return json_error(request, 402, "unipile_option_required")
-        # Plafond anti-dérapage : chaque compte HÉBERGÉ consomme un siège sur la clé
-        # plateforme Unipile (les BYO ne comptent pas). On bloque une NOUVELLE connexion
-        # au-delà du plafond (un user qui a déjà un compte peut reconnecter = remplacement).
-        if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
-            limit = db.get_org_unipile_limit(org_id)
-            if limit is None:
-                limit = _unipile_default_limit()
-            if limit and db.count_unipile_accounts_for_org(org_id) >= limit:
-                logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
-                return json_error(request, 429, "unipile_account_limit_reached")
-        from oto.tools.unipile import UnipileClient
-        # DSN apparié à la clé BYO (chaque clé Unipile = son sous-domaine) ; clé
-        # plateforme → DSN env/défaut (instance Otomata).
-        dsn = None
-        if byo:
-            try:
-                # Sonde (lookup DSN) : avale la McpError → pas un échec de connecteur réel.
-                dsn = access.resolve_credential(
-                    "unipile", want="byo", sub=sub, emit_on_failure=False).config.get("dsn")
-            except McpError:
-                dsn = None
-        client = UnipileClient(api_key=api_key, dsn=dsn)
-        public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
-        dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
-        nonce = secrets.token_urlsafe(24)
-        db.create_unipile_pending(nonce, sub, org_id, provider, platform_seat=platform_seat)
-        ch = provider.lower()
+        # Corps partagé REST + MCP (`unipile_connect_start`, feedback #131) :
+        # gates + nonce + hosted_auth_link vivent dans `unipile_connect`.
+        from . import unipile_connect
         try:
-            url = await asyncio.to_thread(
-                client.hosted_auth_link,
-                name=nonce,
-                providers=[provider],
-                notify_url=f"{public}/api/unipile/webhook",
-                success_redirect_url=f"{dash}/console/connections?unipile=connected&channel={ch}",
-                failure_redirect_url=f"{dash}/console/connections?unipile=failed&channel={ch}",
-            )
-        except Exception as e:
-            return json_error(request, 502, f"unipile_link_failed: {e}")
-        if not url:
-            return json_error(request, 502, "unipile_link_empty")
-        return json_response(request, {"url": url})
+            out = await unipile_connect.hosted_auth_url(
+                sub, str(body.get("channel") or "linkedin"))
+        except unipile_connect.ConnectRefused as e:
+            return json_error(request, e.status, e.message if e.status == 502 else e.code)
+        return json_response(request, {"url": out["url"]})
 
     async def unipile_webhook(request: Request) -> JSONResponse:
         """Notification Unipile au succès du hosted-auth (B3). **NON authentifié**

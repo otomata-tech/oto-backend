@@ -57,7 +57,8 @@ def register(mcp: FastMCP) -> None:
         Pour agir sous une autre org/équipe/projet : passe le jeton `org=` /
         `group=` / `project=` directement sur chaque appel de travail (aucun état
         de session, ADR 0038) — `oto_whoami(org=X)` montre le contexte résultant.
-        Pour changer ton défaut persistant : `oto_set_home_org`.
+        L'org/équipe PAR DÉFAUT (maison) ne se change que dans le dashboard —
+        l'agent ne mute jamais le défaut.
         """
         sub = _require_sub()
 

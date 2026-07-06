@@ -60,16 +60,18 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
     return {
         "org": org_id, "name": o["name"] if o else None, "session_state": None,
         "how_to": (f"Aucun état de session (ADR 0038) : passe `org={org_id}` sur chaque "
-                   "appel scopé org (connecteurs, data_*, capacités l'acceptent), ou "
-                   f"fixe ton défaut persistant avec oto_set_home_org (org={org_id})."),
+                   "appel scopé org (connecteurs, data_*, capacités l'acceptent). "
+                   "L'org par défaut (maison) ne se change que dans le dashboard — "
+                   "jamais depuis l'agent."),
     }
 
 
 def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
-    """Pose l'**org maison** persistante — le défaut de TOUT appel sans jeton
-    (`org=`/`project=`), donc effectif immédiatement, conversations en cours
-    incluses (ADR 0038). `org` = id/nom d'une org dont tu es membre. Sert aussi
-    le `PUT /api/me/active-org` du dashboard (« définir par défaut »)."""
+    """Pose l'**org maison** persistante — le défaut de TOUT appel sans jeton.
+    **UI-ONLY (décision 2026-07-06)** : muter le défaut depuis l'agent polluait
+    toutes les autres conversations (vécu : « workaround fiable » spontané des
+    agents après le retrait du bracelet) → le binding MCP est retiré, seule
+    l'action « définir par défaut » du dashboard y accède (`PUT /api/me/active-org`)."""
     try:
         org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)
     except ValueError as e:
@@ -88,8 +90,8 @@ def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
     if sid is not None:
         return {"session_state": None,
                 "how_to": ("Aucun état de session à effacer (ADR 0038) : sans `org=`, "
-                           "chaque appel résout ton org maison. Pour changer le défaut : "
-                           "oto_set_home_org.")}
+                           "chaque appel résout ton org maison (elle ne se change que "
+                           "dans le dashboard).")}
     pid = org_store.ensure_personal_org(ctx.sub)     # REST : maison = org perso
     org_store.set_active_org(ctx.sub, pid)
     return {"active_org": pid}
@@ -119,8 +121,8 @@ CAPABILITIES += [
             "RELIABLE way to act under it. This tool holds NO session state "
             "(ADR 0038): to act under another org, pass `org=<id>` directly on "
             "each org-scoped call (connectors, data_*, capabilities all accept "
-            "it), or change your persistent default with oto_set_home_org. "
-            "Without a token, every call resolves your home org."
+            "it). Without a token, every call resolves your home org — which is "
+            "changed in the DASHBOARD only, never by the agent."
         ),
         mcp="oto_use_org",
     ),
@@ -130,12 +132,10 @@ CAPABILITIES += [
         Input=UseOrgInput,
         authz=SUB_ONLY,
         description=(
-            "Set your HOME organization (by id or name) — the persistent default "
-            "of every call that carries no `org=`/`project=` token (ADR 0038). "
-            "Takes effect immediately, current conversation included. Use this to "
-            "change your default org."
+            "Set the HOME organization — the persistent default of every call "
+            "without an org token. UI-ONLY (dashboard « définir par défaut ») : "
+            "no MCP binding, the agent must not mutate the default (ADR 0038)."
         ),
-        mcp="oto_set_home_org",
         rest=RestBinding("PUT", "/api/me/active-org"),  # « définir par défaut » dashboard
         refresh_visibility=True,  # l'org effective (maison) change → recompute la toolbox
     ),
@@ -146,8 +146,8 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         description=(
             "No-op hint (ADR 0038: no session state — without an `org=` token "
-            "every call already resolves your home org). To change your default: "
-            "oto_set_home_org."
+            "every call already resolves your home org, which is changed in the "
+            "dashboard only)."
         ),
         mcp="oto_clear_org",
         rest=RestBinding("DELETE", "/api/me/active-org"),  # REST : maison = org perso

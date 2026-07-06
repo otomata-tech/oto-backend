@@ -119,8 +119,8 @@ def _use_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
             "group": inp.group_id, "name": g["name"], "org": g["org_id"],
             "session_state": None,
             "how_to": (f"Aucun état de session (ADR 0038) : passe `group={inp.group_id}` "
-                       "sur chaque appel scopé équipe (l'org parente en est dérivée), ou "
-                       "fixe ton équipe par défaut avec oto_set_home_group."),
+                       "sur chaque appel scopé équipe (l'org parente en est dérivée). "
+                       "L'équipe par défaut ne se change que dans le dashboard."),
         }
     if not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison (persiste)
         raise AuthzDenied(403, "not_a_member",
@@ -136,8 +136,8 @@ def _clear_group(ctx: ResolvedCtx, inp: NoInput) -> dict:
         return {"session_state": None,
                 "how_to": ("Aucun état de session à effacer (ADR 0038). Sans `group=`, "
                            "l'appel est au niveau org (ton équipe maison ne s'applique "
-                           "que dans ton org maison) — pour changer le défaut durable : "
-                           "oto_set_home_group.")}
+                           "que dans ton org maison) — le défaut durable se change dans "
+                           "le dashboard.")}
     group_store.clear_active_group(ctx.sub)
     return {"active_group": None}
 
@@ -207,27 +207,27 @@ CAPABILITIES += [
         description=("Resolve a group (department) you belong to and get the RELIABLE "
                      "way to act under it. NO session state (ADR 0038): pass "
                      "`group=<id>` directly on each group-scoped call (its parent org "
-                     "is derived), or set your persistent default with "
-                     "oto_set_home_group. The group decides which group doctrine and "
-                     "shared secrets apply."),
+                     "is derived). Your default group is changed in the dashboard "
+                     "only. The group decides which group doctrine and shared "
+                     "secrets apply."),
         mcp="oto_use_group",
         rest=RestBinding("PUT", "/api/me/active-group"),  # REST : équipe maison
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
         description=("No-op hint (ADR 0038: no session state). Without a `group=` "
-                     "token a call is at org level; to change your durable default "
-                     "use oto_set_home_group."),
+                     "token a call is at org level; the durable default is changed "
+                     "in the dashboard only."),
         mcp="oto_clear_group",
         rest=RestBinding("DELETE", "/api/me/active-group"),  # REST : efface l'équipe maison
     ),
     Capability(
         key="group.set_home", handler=_set_home_group, Input=UseGroupInput, authz=SUB_ONLY,
-        description=("Set your HOME group (department) by id — the persistent default "
-                     "of calls without a `group=` token (also sets its parent org as "
-                     "home). Takes effect immediately (ADR 0038)."),
-        mcp="oto_set_home_group",
-        refresh_visibility=True,
+        description=("Set the HOME group (department) — persistent default. UI-ONLY "
+                     "(décision 2026-07-06, comme org.set_home) : pas de binding MCP, "
+                     "l'agent ne mute pas le défaut (il pose aussi l'org parente en "
+                     "maison — double mutation)."),
+        rest=RestBinding("PUT", "/api/me/home-group"),
     ),
     Capability(
         key="group.get", handler=_group_detail, Input=GroupIdInput,

@@ -41,7 +41,8 @@ class ProjectInput(BaseModel):
     mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$) ; en `secret`, sert de préfixe optionnel (un suffixe aléatoire est ajouté serveur)
     mcp_access: Optional[Literal["anonymous", "secret", "org"]] = None  # anonymous = sans login + listé ; secret = sans login, non listé, slug non devinable ; org = JWT + org épinglée
     mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
-    mcp_expose_datastore: Optional[bool] = None  # opt-in `secret` uniquement : exposer les tools data_* (datastore de l'org propriétaire), servis sous l'autorité de l'org — défaut False (datastore privé)
+    mcp_expose_datastore: Optional[bool] = None  # `secret` uniquement : exposer les tools data_* en LECTURE (tableaux liés au projet, sous l'autorité de l'org). None = DÉFAUT exposé au partage secret (#193) ; passer False pour refermer
+    mcp_expose_datastore_write: Optional[bool] = None  # opt-in ADDITIONNEL (#193) : autoriser l'ÉCRITURE (data_write/data_set_schema) ; sans objet si la lecture n'est pas exposée — défaut False (lecture seule)
     # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
     owner_type: Literal["user", "org"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
@@ -100,6 +101,7 @@ def _view(row: dict) -> dict:
         "mcp_access": row.get("mcp_access") or "off",
         "mcp_tools": list(row.get("mcp_tools") or []),
         "mcp_expose_datastore": bool(row.get("mcp_expose_datastore")),
+        "mcp_expose_datastore_write": bool(row.get("mcp_expose_datastore_write")),
         "mcp_url": _mcp_url(row.get("mcp_slug"), row.get("mcp_access") or "off"),
         # Base de PARTAGE navigable (lecture seule, humain) — mode `secret` uniquement.
         "share_url": (f"https://{row['mcp_slug']}.share.oto.cx"
@@ -495,14 +497,19 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         access_mode = inp.mcp_access or "anonymous"
         tools = [t for t in (inp.mcp_tools or []) if t and t.strip()]
         _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
-        # Opt-in datastore : réservé à `secret` (un endpoint `anonymous` est PUBLIC ; un
-        # endpoint `org` a déjà un membre authentifié → data_* résout nativement).
-        expose_datastore = bool(inp.mcp_expose_datastore)
+        # Datastore exposé (LECTURE) : DÉFAUT au partage `secret` (#193 — le vivier lié au
+        # projet doit être lisible d'emblée, sans config manuelle), explicitement
+        # refermable (mcp_expose_datastore=False). Réservé à `secret` (un endpoint
+        # `anonymous` est PUBLIC ; un endpoint `org` résout déjà data_* via le membre
+        # authentifié). L'ÉCRITURE est un opt-in ADDITIONNEL, séparé de la lecture.
+        expose_datastore = ((access_mode == "secret") if inp.mcp_expose_datastore is None
+                            else bool(inp.mcp_expose_datastore))
         _require(not (expose_datastore and access_mode != "secret"),
                  "datastore_secret_only",
                  "mcp_expose_datastore est réservé à l'accès `secret` (un endpoint "
                  "`anonymous` est public, un endpoint `org` résout déjà data_* via le "
                  "membre authentifié).", 400)
+        expose_datastore_write = bool(inp.mcp_expose_datastore_write) and expose_datastore
         # Slug effectif : `secret` → non devinable, généré serveur (préfixe optionnel issu
         # du slug saisi) ; on RÉUTILISE le slug existant si l'endpoint est déjà secret
         # (re-publier ne doit pas casser l'URL déjà distribuée). anonymous/org : slug saisi requis.
@@ -519,7 +526,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         try:
             db.set_project_mcp_publication(int(inp.project_id), slug=slug,
                                            access=access_mode, tools=tools,
-                                           expose_datastore=expose_datastore)
+                                           expose_datastore=expose_datastore,
+                                           expose_datastore_write=expose_datastore_write)
         except ValueError as e:
             code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
             _require(False, code, str(e), 409 if code == "slug_taken" else 400)

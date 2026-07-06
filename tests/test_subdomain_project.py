@@ -55,6 +55,42 @@ def test_anon_context_and_current_org_seam():
     assert access.current_org(None) is None            # hors contexte → None
 
 
+# ── Couplage visibilité ↔ datastore exposé (#193) ────────────────────────────
+def test_allowlist_couples_datastore_when_exposed():
+    # NON exposé → allowlist = preset nu (le flag découplé n'ajoutait rien : #193).
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"})))
+    try:
+        assert sp.current_allowlist() == {"fr_search"}
+    finally:
+        sp._CTX.reset(tok)
+    # exposé LECTURE → data_list_namespaces + data_rows ajoutés, PAS l'écriture.
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        allow = sp.current_allowlist()
+        assert {"fr_search", "data_list_namespaces", "data_rows"} <= allow
+        assert "data_write" not in allow and "data_set_schema" not in allow
+        assert sp.current_anon_datastore_exposed() is True
+        assert sp.current_anon_datastore_writable() is False
+    finally:
+        sp._CTX.reset(tok)
+    # exposé + WRITE opt-in → data_write + data_set_schema aussi.
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}),
+                                     datastore_exposed=True, datastore_writable=True))
+    try:
+        allow = sp.current_allowlist()
+        assert {"data_write", "data_set_schema"} <= allow
+        assert sp.current_anon_datastore_writable() is True
+    finally:
+        sp._CTX.reset(tok)
+    # exposé mais org_id None (projet legacy user-owned) → PAS de data_* (garde).
+    tok = sp._CTX.set(sp.AnonContext(1, None, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        assert sp.current_allowlist() == {"fr_search"}
+        assert sp.current_anon_datastore_exposed() is False
+    finally:
+        sp._CTX.reset(tok)
+
+
 # ── Résolution de credential anonyme (sans sub) ──────────────────────────────
 def test_anon_resolve_dispatch(monkeypatch):
     """resolve_credential(sub=None) sous contexte anonyme → _resolve_credential_anon."""
@@ -134,6 +170,28 @@ async def test_anon_visibility_allowlist(monkeypatch):
         sp._CTX.reset(tok)
     # seuls les hors-preset sont masqués ; le preset reste visible
     assert hidden["names"] == {"serper_web_search", "oto_project", "data_write"}
+
+
+@pytest.mark.asyncio
+async def test_anon_visibility_exposes_datastore_read(monkeypatch):
+    # datastore exposé (lecture) → data_list_namespaces/data_rows VISIBLES au handshake
+    # (le bug #193 : le flag rendait résolvable mais laissait masqué). data_write reste
+    # masqué sans opt-in write.
+    hidden = {}
+
+    async def _fake_disable(ctx, names, components):
+        hidden["names"] = set(names)
+
+    monkeypatch.setattr(av, "disable_components", _fake_disable)
+    tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
+    try:
+        mw = av.AnonymousVisibilityMiddleware()
+        all_names = ["fr_search", "data_list_namespaces", "data_rows",
+                     "data_write", "serper_web_search"]
+        await mw.on_initialize(_FakeMwCtx(all_names), lambda c: _async_none())
+    finally:
+        sp._CTX.reset(tok)
+    assert hidden["names"] == {"data_write", "serper_web_search"}
 
 
 async def _async_none():

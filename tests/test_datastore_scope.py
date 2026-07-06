@@ -134,3 +134,39 @@ def test_resolve_finds_active_org_namespace(monkeypatch):
         D.db, "resolve_datastore_ns",
         lambda namespace, *, sub, org_ids, group_ids: {"id": 1} if org_ids == [99] else None)
     assert D.make_store("u1").resolve_ns_id("leads") == 1
+
+
+# ── Endpoint partagé : scope aux tableaux liés au projet + read-only (#193) ──
+def test_org_store_scoped_to_allowed_ns_ids(monkeypatch):
+    # Le store agissant-org d'un endpoint partagé est SCOPÉ aux tableaux liés au projet
+    # (allowed_ns_ids) : list_namespaces ne renvoie QUE ces ids (anti-fuite — sans ça
+    # l'endpoint exposerait tout le datastore de l'org).
+    rec = {}
+    _wire(monkeypatch, rec, org=None)          # OWNED id=1, GRANTED id=2
+    out = D.make_org_store(99, allowed_ns_ids={1}).list_namespaces()
+    assert [e["id"] for e in out] == [1]        # id 2 (hors scope) filtré
+    assert D.make_org_store(99, allowed_ns_ids=set()).list_namespaces() == []  # scope vide = rien
+
+
+def test_org_store_resolve_outside_scope_not_found(monkeypatch):
+    # Résoudre un namespace HORS du scope projet lève NamespaceNotFound (on ne divulgue
+    # pas l'existence d'un namespace hors périmètre).
+    monkeypatch.setattr(D.db, "resolve_datastore_ns",
+                        lambda ns, *, sub, org_ids, group_ids: {"id": 2})   # existe côté org
+    with pytest.raises(D.NamespaceNotFound):
+        D.make_org_store(99, allowed_ns_ids={1})._resolve("accords")        # id 2 ∉ {1}
+    monkeypatch.setattr(D.db, "resolve_datastore_ns",
+                        lambda ns, *, sub, org_ids, group_ids: {"id": 1})
+    assert D.make_org_store(99, allowed_ns_ids={1})._resolve("leads") == 1   # dans le scope → OK
+
+
+def test_org_store_read_only_blocks_write(monkeypatch):
+    # read_only=True : l'écriture lève NamespaceReadOnly AVANT le check ownership.
+    monkeypatch.setattr(D.db, "resolve_datastore_ns",
+                        lambda ns, *, sub, org_ids, group_ids: {"id": 1})
+    monkeypatch.setattr(D.ownership, "org_can_access",
+                        lambda *a, **k: pytest.fail("pas de check ownership en read_only"))
+    store = D.make_org_store(99, allowed_ns_ids={1}, read_only=True)
+    with pytest.raises(D.NamespaceReadOnly):
+        store._resolve("leads", write=True)
+    assert store._resolve("leads") == 1        # lecture OK en read_only

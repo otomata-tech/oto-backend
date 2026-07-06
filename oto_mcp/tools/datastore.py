@@ -40,8 +40,8 @@ def _acting_store():
 
     - User authentifié (`sub`) → son store, contexte = son org active (inchangé).
     - Endpoint MCP `secret` avec opt-in datastore (ADR 0032) → store agissant SOUS
-      L'ORG propriétaire du projet (sub-less) : lecture/écriture décidées sur le
-      principal org (owner-match / grant d'org).
+      L'ORG propriétaire du projet (sub-less), **scopé aux tableaux LIÉS au projet**
+      (anti-fuite #193) et en **lecture seule** sauf opt-in write séparé.
     - Sinon (endpoint sans login SANS opt-in) → McpError « Unauthenticated ».
 
     Les tools de GOUVERNANCE/destructifs (create/delete/rename/share) n'utilisent PAS
@@ -52,8 +52,28 @@ def _acting_store():
         return make_store(sub)
     from .. import subdomain_project
     if subdomain_project.current_anon_datastore_exposed():
-        return make_org_store(int(subdomain_project.current_anon_org()))
+        return make_org_store(
+            int(subdomain_project.current_anon_org()),
+            allowed_ns_ids=_anon_project_tableau_ns_ids(
+                subdomain_project.current_anon_project_id()),
+            read_only=not subdomain_project.current_anon_datastore_writable())
     access.current_user_sub_or_raise()  # pas d'opt-in → lève « Unauthenticated »
+
+
+def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
+    """Ids des namespaces LIÉS au projet (`project_links` type tableau) — le datastore
+    exposé sur un endpoint partagé est scopé à CES tableaux, jamais tout le datastore de
+    l'org (anti-fuite #193). project_id None / erreur / aucun lien ⇒ frozenset() (rien
+    d'exposé, jamais de fallback ouvert)."""
+    if project_id is None:
+        return frozenset()
+    try:
+        links = db.list_project_links(int(project_id))
+        return frozenset(int(l["target_ref"]) for l in links
+                         if l.get("target_type") == "tableau"
+                         and str(l.get("target_ref", "")).isdigit())
+    except Exception:  # noqa: BLE001
+        return frozenset()
 
 
 def _project_hint(namespace: str) -> Optional[str]:

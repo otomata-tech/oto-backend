@@ -67,13 +67,21 @@ def valid_org_audience(aud: object) -> bool:
         return False
 
 
+# Tools datastore exposables sur un endpoint `secret` opt-in — visibilité COUPLÉE au
+# flag `mcp_expose_datastore` (#193 : le flag rendait le datastore résolvable au CALL
+# mais jamais visible au `tools/list`). Lecture par défaut, écriture en opt-in séparé.
+DATASTORE_READ_TOOLS = frozenset({"data_list_namespaces", "data_rows"})
+DATASTORE_WRITE_TOOLS = frozenset({"data_write", "data_set_schema"})
+
+
 @dataclass(frozen=True)
 class AnonContext:
     """Contexte d'un endpoint MCP anonyme résolu pour la requête courante."""
     project_id: int
     org_id: Optional[int]          # org propriétaire (résolution de credential) ; None si projet user-owned legacy
     tools: frozenset               # allowlist figée du preset (les seuls tools exposés)
-    datastore_exposed: bool = False  # opt-in `secret` : les tools data_* agissent sous l'org propriétaire
+    datastore_exposed: bool = False  # opt-in `secret` : data_* LECTURE sous l'org, scopé aux tableaux LIÉS au projet
+    datastore_writable: bool = False  # opt-in additionnel : écriture (data_write/data_set_schema)
 
 
 # Contexte anonyme : contextvar (même requête, ex. l'initialize qui calcule la
@@ -191,9 +199,21 @@ def current_anon_org() -> Optional[int]:
 
 
 def current_allowlist() -> Optional[frozenset]:
-    """Allowlist figée du preset anonyme courant, ou None (pas d'endpoint anonyme)."""
+    """Allowlist figée du preset anonyme courant, ou None (pas d'endpoint anonyme).
+
+    Quand le datastore est exposé (opt-in `secret`), les tools data_* de LECTURE — et
+    d'ÉCRITURE si l'opt-in write est posé — sont ajoutés à l'allowlist : sinon le flag
+    rendait le datastore RÉSOLVABLE au call mais jamais VISIBLE au `tools/list`
+    (découplage corrigé, #193)."""
     ctx = current_anon_context()
-    return ctx.tools if ctx else None
+    if ctx is None:
+        return None
+    allow = ctx.tools
+    if ctx.datastore_exposed and ctx.org_id is not None:
+        allow = allow | DATASTORE_READ_TOOLS
+        if ctx.datastore_writable:
+            allow = allow | DATASTORE_WRITE_TOOLS
+    return allow
 
 
 def current_anon_datastore_exposed() -> bool:
@@ -201,6 +221,21 @@ def current_anon_datastore_exposed() -> bool:
     False hors endpoint anonyme (seam pour les tools data_*)."""
     ctx = current_anon_context()
     return bool(ctx and ctx.datastore_exposed and ctx.org_id is not None)
+
+
+def current_anon_datastore_writable() -> bool:
+    """L'endpoint courant autorise-t-il l'ÉCRITURE du datastore (opt-in séparé de la
+    lecture, #193) ? Toujours False si le datastore n'est pas exposé."""
+    ctx = current_anon_context()
+    return bool(ctx and ctx.datastore_exposed and ctx.datastore_writable
+                and ctx.org_id is not None)
+
+
+def current_anon_project_id() -> Optional[int]:
+    """Projet de l'endpoint anonyme courant — seam pour scoper le datastore exposé aux
+    tableaux LIÉS au projet (jamais tout le datastore de l'org). None hors endpoint anonyme."""
+    ctx = current_anon_context()
+    return ctx.project_id if ctx else None
 
 
 def _slug_from_host(host: str) -> Optional[str]:
@@ -302,6 +337,7 @@ class HostDispatch:
             # l'org propriétaire) ; il n'en diffère QUE par l'annuaire (non listé) et un slug
             # non devinable — deux propriétés portées côté publication, transparentes ici.
             ds_exposed = (access_mode == "secret" and bool(proj.get("mcp_expose_datastore")))
+            ds_writable = ds_exposed and bool(proj.get("mcp_expose_datastore_write"))
             # Navigateur (GET, Accept: text/html) → UI NAVIGABLE server-side (lecture seule) :
             # la MÊME URL sert l'UI (racine + /procedures//data//docs) ET le serveur MCP.
             # `build_page` fait des lectures DB SYNC → threadpool (serveur mono-loop). Il rend
@@ -322,7 +358,8 @@ class HostDispatch:
                               frozenset(proj.get("mcp_tools") or []),
                               # opt-in datastore : honoré uniquement en `secret` (jamais
                               # `anonymous` public) — cf. set_project_mcp_publication.
-                              datastore_exposed=ds_exposed)
+                              datastore_exposed=ds_exposed,
+                              datastore_writable=ds_writable)
             tok = _CTX.set(ctx)
             if sid:
                 _store_ctx(sid, ctx)

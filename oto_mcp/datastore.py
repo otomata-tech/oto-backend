@@ -99,13 +99,20 @@ def make_store(sub: str) -> "DatastorePg":
     return DatastorePg(sub)
 
 
-def make_org_store(org_id: int) -> "DatastorePg":
+def make_org_store(org_id: int, *, allowed_ns_ids: Optional[set] = None,
+                   read_only: bool = False) -> "DatastorePg":
     """Store agissant SOUS L'AUTORITÉ d'une ORG, sans user (`sub=None`). Sert un
     endpoint MCP `secret` opt-in datastore (ADR 0032) : la résolution de namespace et
     le droit d'écriture se décident sur le principal ORG (owner-match / grant d'org),
     jamais sur un membre. N'expose PAS la gouvernance (create/delete/rename/share) —
-    ces actes restent réservés à un user identifié (tools sub-only)."""
-    return DatastorePg(None, acting_org=int(org_id))
+    ces actes restent réservés à un user identifié (tools sub-only).
+
+    `allowed_ns_ids` (non None) = **scope dur** : seuls ces namespaces sont listables/
+    résolvables — les tableaux LIÉS au projet partagé (anti-fuite #193 : sans ce scope
+    l'endpoint exposerait TOUT le datastore de l'org). Set vide ⇒ rien d'exposé.
+    `read_only=True` ⇒ l'écriture (`data_write`/`data_set_schema`) lève `NamespaceReadOnly`."""
+    return DatastorePg(None, acting_org=int(org_id),
+                       allowed_ns_ids=allowed_ns_ids, read_only=read_only)
 
 
 class DatastorePg:
@@ -117,9 +124,14 @@ class DatastorePg:
     `ns_id` (possédé OU partagé) et opère sur `datastore_rows`.
     """
 
-    def __init__(self, sub: Optional[str], *, acting_org: Optional[int] = None):
+    def __init__(self, sub: Optional[str], *, acting_org: Optional[int] = None,
+                 allowed_ns_ids: Optional[set] = None, read_only: bool = False):
         self.sub = sub
         self.acting_org = acting_org
+        # Scope dur (endpoint partagé) : None = pas de restriction ; set = ces ns_ids seuls.
+        self.allowed_ns_ids: Optional[set] = (None if allowed_ns_ids is None
+                                              else {int(x) for x in allowed_ns_ids})
+        self.read_only = bool(read_only)
         self._active_scope_cache: Optional[tuple[list[int], list[int]]] = None
 
     # --- résolution namespace -> ns_id ---------------------------------------
@@ -158,6 +170,13 @@ class DatastorePg:
         if not ns:
             raise NamespaceNotFound(namespace)
         ns_id = int(ns["id"])
+        # Scope dur d'endpoint partagé : hors des tableaux liés au projet ⇒ invisible
+        # (anti-fuite #193 ; NamespaceNotFound plutôt que Forbidden — on ne divulgue pas
+        # l'existence d'un namespace hors périmètre).
+        if self.allowed_ns_ids is not None and ns_id not in self.allowed_ns_ids:
+            raise NamespaceNotFound(namespace)
+        if write and self.read_only:
+            raise NamespaceReadOnly(namespace)
         if write:
             ok = (ownership.org_can_access(self.acting_org, "datastore_namespace",
                                            str(ns_id), "write")
@@ -234,6 +253,9 @@ class DatastorePg:
             if int(n["id"]) in out:
                 continue
             out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))
+        # Scope dur d'endpoint partagé : ne lister QUE les tableaux liés au projet.
+        if self.allowed_ns_ids is not None:
+            return [e for e in out.values() if int(e["id"]) in self.allowed_ns_ids]
         return list(out.values())
 
     def _default_owner(self) -> tuple[str, str]:

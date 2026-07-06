@@ -31,7 +31,7 @@ from .users import upsert_user
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
-                 "archived_at, created_at, updated_at")
+                 "mcp_expose_datastore_write, archived_at, created_at, updated_at")
 
 # Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
 _MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
@@ -219,7 +219,8 @@ def list_published_mcp_projects() -> list[dict]:
 
 def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                                 access: str, tools: list[str],
-                                expose_datastore: bool = False) -> None:
+                                expose_datastore: bool = False,
+                                expose_datastore_write: bool = False) -> None:
     """Publie/dé-publie un projet en endpoint MCP. `access='off'` retire le slug
     (rend le sous-domaine inerte). Valide le format de slug et l'énumération d'accès —
     la GARDE métier (allowlist credential-safe) est appliquée en amont dans la capacité.
@@ -228,10 +229,13 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
     propriétaire) sur cet endpoint sans login. **Forcé à FALSE hors `secret`** : un
     endpoint `anonymous` est PUBLIC (annuaire) — n'y jamais exposer l'écriture du
     datastore d'une org ; un endpoint `org` a déjà un membre authentifié (sub) qui
-    résout `data_*` nativement, l'opt-in y est sans objet."""
+    résout `data_*` nativement, l'opt-in y est sans objet.
+    `expose_datastore_write` = opt-in ADDITIONNEL (#193) pour l'écriture ; sans objet
+    (forcé FALSE) si la lecture n'est pas exposée."""
     if access not in _MCP_ACCESS:
         raise ValueError(f"mcp_access invalide: {access!r} (attendu {_MCP_ACCESS})")
     expose_datastore = bool(expose_datastore) and access == "secret"
+    expose_datastore_write = bool(expose_datastore_write) and expose_datastore
     if access == "off":
         slug = None
     else:
@@ -249,8 +253,10 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
                 raise ValueError(f"slug_taken: le sous-domaine « {slug} » est déjà pris")
         conn.execute(
             "UPDATE projects SET mcp_slug = %s, mcp_access = %s, mcp_tools = %s, "
-            "mcp_expose_datastore = %s, updated_at = NOW() WHERE id = %s",
-            (slug, access, list(tools or []), expose_datastore, project_id),
+            "mcp_expose_datastore = %s, mcp_expose_datastore_write = %s, "
+            "updated_at = NOW() WHERE id = %s",
+            (slug, access, list(tools or []), expose_datastore,
+             expose_datastore_write, project_id),
         )
 
 

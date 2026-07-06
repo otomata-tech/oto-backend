@@ -81,9 +81,10 @@ def read_guide(slug: str) -> Optional[dict]:
 PLATFORM_OWNER = "platform"
 PLATFORM_SLUG = "secret_sauce"
 INIT_SLUG = "readme"
-# Scopes dont la prose INIT vit désormais dans `guides` (ADR 0042). org/group
-# suivront au barreau 2 (split readme↔procédure) — ils lisent encore leur table.
-_INIT_IN_GUIDES = ("platform", "user")
+# Scopes dont la prose INIT vit dans `guides` (ADR 0042). TOUS depuis le barreau 2 :
+# le readme d'org/group est sorti de `*_instructions[claude_md]` (split readme↔procédure,
+# les procédures gardent leur table + versioning). Owner = org.id/group.id::text.
+_INIT_IN_GUIDES = ("platform", "user", "org", "group")
 
 
 def _init_ref(scope: str, ident: Optional[str]) -> tuple[str, str]:
@@ -99,19 +100,12 @@ def init_guide_body(scope: str, owner_id: Optional[str] = None) -> Optional[str]
     (**fail-open** ; le rendu — header, variables, ordre, seed plateforme — reste chez
     l'appelant `instructions.py`).
 
-    `platform`/`user` = `guides` delivery='init' (ADR 0042) ; `org`/`group` = encore
-    `*_instructions` slug `claude_md` (barreau 2 à venir)."""
+    Tous les scopes (platform/user/org/group) = `guides` delivery='init' (ADR 0042)."""
     try:
         if scope in _INIT_IN_GUIDES:
             from . import db
             owner, slug = _init_ref(scope, owner_id)
             row = db.get_init_guide_db(scope, owner, slug)
-        elif scope == "org":
-            from . import org_store
-            row = org_store.get_instruction(int(owner_id), org_store.BASE_SLUG)
-        elif scope == "group":
-            from . import group_store, org_store
-            row = group_store.get_group_instruction(int(owner_id), org_store.BASE_SLUG)
         else:
             return None
     except Exception:  # noqa: BLE001

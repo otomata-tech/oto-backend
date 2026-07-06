@@ -77,12 +77,12 @@ def test_format_context_optional_lines():
 # ── composition de session ───────────────────────────────────────────────────
 def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
                   group_readme=None, user_readme=""):
-    # platform + user lisent guides delivery='init' (ADR 0042) via db.get_init_guide_db :
-    # dispatch par scope — platform → None (seed fallback), user → le readme fourni.
+    # TOUS les readmes init lisent guides delivery='init' (ADR 0042) via db.get_init_guide_db :
+    # dispatch par scope — platform → None (seed fallback), org/group/user → le readme fourni.
+    bodies = {"org": org_readme, "group": group_readme or "", "user": user_readme}
     def _init_guide_db(scope, owner, slug):
-        if scope == "user":
-            return {"body_md": user_readme} if user_readme else None
-        return None
+        body = bodies.get(scope)
+        return {"body_md": body} if body else None
     monkeypatch.setattr(db, "get_init_guide_db", _init_guide_db)
     monkeypatch.setattr(providers, "render_namespace_catalog", lambda: "CATALOGUE")
     monkeypatch.setattr(org_store, "get_org", lambda oid: {"name": "Acme"})
@@ -92,8 +92,6 @@ def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
                         lambda sub: 3 if group_readme is not None else None)
     monkeypatch.setattr(group_store, "get_group",
                         lambda gid: {"name": "Sales"} if group_readme is not None else None)
-    monkeypatch.setattr(group_store, "get_group_instruction",
-                        lambda gid, slug: {"body_md": group_readme or ""})
     monkeypatch.setattr(access, "status_for",
                         lambda sub: {"providers": {"folk": {"mode": "user"},
                                                    "x": {"mode": "forbidden"}}})
@@ -101,8 +99,6 @@ def _wire_context(monkeypatch, *, org_readme="Readme de {{org}}.",
     monkeypatch.setattr(db, "recent_runs", lambda sub, oid, limit=5: [])
     monkeypatch.setattr(db, "get_account_profile",
                         lambda sub: {"profile": {"role": "fondateur"}})
-    monkeypatch.setattr(org_store, "get_instruction",
-                        lambda oid, slug: {"body_md": org_readme})
 
 
 def test_compose_session_full(monkeypatch):

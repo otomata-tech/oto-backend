@@ -76,6 +76,14 @@ def test_init_readme_absent_from_on_demand_catalog(db):
     assert "howto" in slugs and "readme" not in slugs                    # init exclu
 
 
-def test_set_init_guide_rejects_unmigrated_scope(db):
+def test_org_and_group_init_roundtrip(db):
+    G.set_init_guide("org", 42, "readme d'org")
+    G.set_init_guide("group", 7, "readme d'équipe")
+    assert db.rows[("org", "42", "readme")]["delivery"] == "init"
+    assert G.init_guide_body("org", 42) == "readme d'org"
+    assert G.init_guide_body("group", 7) == "readme d'équipe"
+
+
+def test_set_init_guide_rejects_unknown_scope(db):
     with pytest.raises(G.GuideError):
-        G.set_init_guide("org", "42", "x")      # org = barreau 2
+        G.set_init_guide("team", "42", "x")     # scope inexistant

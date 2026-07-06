@@ -88,6 +88,20 @@ def init_db() -> None:
             "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
             "FROM user_agent_readme WHERE COALESCE(body_md, '') <> '' "
             "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortent de
+        # `*_instructions` (qui ne gardent que les PROCÉDURES + versioning) vers `guides`.
+        conn.execute(
+            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
+            "SELECT 'org', org_id::text, 'readme', 'init', body_md, "
+            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
+            "FROM org_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
+            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        conn.execute(
+            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
+            "SELECT 'group', group_id::text, 'readme', 'init', body_md, "
+            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
+            "FROM org_group_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
+            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).

@@ -25,25 +25,28 @@ def test_platform_defaults_key(monkeypatch):
     assert G.init_guide_body("platform") == "secret_sauce"        # slug par défaut
 
 
-# ── org / group : *_instructions slug claude_md ──
+# ── org / group : guides delivery='init', owner=id::text, slug='readme' (barreau 2) ──
 
-def test_org_reads_base_slug(monkeypatch):
-    import oto_mcp.org_store as os_
+def test_org_reads_init_guide(monkeypatch):
+    import oto_mcp.db as db
     seen = {}
-    monkeypatch.setattr(os_, "get_instruction",
-                        lambda oid, slug: seen.update(oid=oid, slug=slug) or {"body_md": "ORG"})
+    def _get(scope, owner, slug):
+        seen.update(scope=scope, owner=owner, slug=slug)
+        return {"body_md": "ORG"}
+    monkeypatch.setattr(db, "get_init_guide_db", _get)
     assert G.init_guide_body("org", 42) == "ORG"
-    assert seen == {"oid": 42, "slug": os_.BASE_SLUG}             # claude_md, org 42
+    assert seen == {"scope": "org", "owner": "42", "slug": "readme"}
 
 
-def test_group_reads_base_slug(monkeypatch):
-    import oto_mcp.group_store as gs
-    import oto_mcp.org_store as os_
+def test_group_reads_init_guide(monkeypatch):
+    import oto_mcp.db as db
     seen = {}
-    monkeypatch.setattr(gs, "get_group_instruction",
-                        lambda gid, slug: seen.update(gid=gid, slug=slug) or {"body_md": "GRP"})
+    def _get(scope, owner, slug):
+        seen.update(scope=scope, owner=owner, slug=slug)
+        return {"body_md": "GRP"}
+    monkeypatch.setattr(db, "get_init_guide_db", _get)
     assert G.init_guide_body("group", 7) == "GRP"
-    assert seen == {"gid": 7, "slug": os_.BASE_SLUG}
+    assert seen == {"scope": "group", "owner": "7", "slug": "readme"}
 
 
 # ── user : guides delivery='init', owner=sub, slug='readme' ──
@@ -68,10 +71,10 @@ def test_empty_body_is_none(monkeypatch):
 
 
 def test_error_is_none(monkeypatch):
-    import oto_mcp.org_store as os_
-    def boom(oid, slug):
+    import oto_mcp.db as db
+    def boom(scope, owner, slug):
         raise RuntimeError("DB down")
-    monkeypatch.setattr(os_, "get_instruction", boom)
+    monkeypatch.setattr(db, "get_init_guide_db", boom)
     assert G.init_guide_body("org", 1) is None                   # fail-open
 
 

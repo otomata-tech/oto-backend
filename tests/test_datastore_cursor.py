@@ -66,3 +66,17 @@ def test_exact_multiple_terminates_with_empty_page(store):
 def test_filter_pushed_to_sql(store):
     p = store.cursor_rows("ns", filter={"n": 3})
     assert [r["n"] for r in p["rows"]] == [3] and p["next_cursor"] is None
+
+
+# ── count_only (feedback #191) ──
+
+def test_count_rows_pushes_filter_to_sql(monkeypatch):
+    seen = {}
+    def _fake_count(ns_id, q=None, filters=None):
+        seen["filters"] = filters
+        return 301
+    monkeypatch.setattr(D.db, "datastore_count_rows", _fake_count)
+    s = D.DatastorePg("u1")
+    monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
+    assert s.count_rows("ns", filter={"statut": "qualified"}) == 301
+    assert seen["filters"] == [{"field": "statut", "op": "eq", "value": "qualified"}]

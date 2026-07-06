@@ -465,6 +465,14 @@ class DatastorePg:
         next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
         return {"rows": out, "next_cursor": next_cursor}
 
+    def count_rows(self, namespace: str, *, filter: Optional[dict] = None) -> int:
+        """Nombre de lignes (filtré exact `{col: val}`), poussé en SQL (`COUNT(*)`)
+        — sans rapatrier les lignes (feedback #191 : stats d'un gros vivier sans
+        charger 300+ lignes en contexte)."""
+        ns_id = self._resolve(namespace)
+        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        return db.datastore_count_rows(ns_id, filters=filters)
+
     def page_rows(
         self,
         namespace: str,

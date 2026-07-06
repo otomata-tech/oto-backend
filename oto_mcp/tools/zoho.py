@@ -147,8 +147,25 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def zoho_modules() -> dict:
-        """List the available CRM modules (Contacts, Leads, Deals, Accounts…)."""
-        return {"modules": _client().list_modules()}
+        """List the available CRM modules (Contacts, Leads, Deals, Accounts…).
+
+        Reads Zoho's module metadata, which needs the **settings** scope on the
+        self-client — `ZohoCRM.settings.modules.READ` (or `ZohoCRM.settings.ALL`).
+        A token minted with only data scopes (`ZohoCRM.modules.ALL`) reads records
+        fine (`zoho_records`) but is rejected here; regenerate the self-client with
+        the settings scope added.
+        """
+        from oto.tools.common.errors import UpstreamHTTPError
+        try:
+            return {"modules": _client().list_modules()}
+        except UpstreamHTTPError as e:
+            if "OAUTH_SCOPE_MISMATCH" in str(e.body):
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "le token Zoho n'a pas le scope métadonnées `ZohoCRM.settings.modules.READ` "
+                    "(ou `ZohoCRM.settings.ALL`) requis pour lister les modules — les données "
+                    "(`zoho_records`) restent lisibles. Régénère le self-client Zoho CRM en "
+                    "ajoutant ce scope settings à côté des scopes data.")))
+            raise
 
     @mcp.tool()
     def zoho_records(

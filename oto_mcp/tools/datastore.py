@@ -115,6 +115,15 @@ def _row_not_found_hint(store, namespace: str, row_id: object) -> str:
     return msg
 
 
+def _project_row(row: dict, fields: list[str]) -> dict:
+    """Projette une row sur `fields` (sous-ensemble de colonnes, feedback #191) en
+    gardant TOUJOURS `_id` — sans lui l'agent ne pourrait plus adresser/mettre à jour
+    la ligne. Les champs demandés absents de la row sont simplement omis."""
+    keep = set(fields)
+    keep.add("_id")
+    return {k: v for k, v in row.items() if k in keep}
+
+
 def _ns(namespace: str) -> str:
     """Adressage par SLOT (ADR 0035 B3) : `slot:<name>` = le tableau bindé sous ce
     nom par le PROJET ACTIF (`access.resolve_slot_tableau` — erreur actionnable si
@@ -304,7 +313,8 @@ def register(mcp: FastMCP) -> None:
     def data_rows(
         namespace: str, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
-        cursor: str | None = None,
+        cursor: str | None = None, fields: Optional[list[str]] = None,
+        count_only: bool = False,
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (optional exact-match `filter`, `limit`) with a stable cursor.
@@ -314,6 +324,16 @@ def register(mcp: FastMCP) -> None:
         filter) to get the next page — repeat until `next_cursor` is null. The cursor
         is keyset-stable (rows created meanwhile don't shift the paging).
 
+        Use `count_only=True` to get just the TOTAL number of (optionally filtered)
+        rows — computed server-side, no rows returned — when you only need the count
+        (e.g. how many leads match a filter) without pulling the data into context.
+
+        Use `fields` to PROJECT a subset of columns when the full row is heavy and you
+        only need a few (e.g. name + email + score over a large vivier): each row is
+        trimmed to those columns (plus `_id`, always kept so you can still update the
+        row), drastically shrinking the payload. Bump `limit` when projecting — narrow
+        rows let you pull far more per page.
+
         Args:
             namespace: target namespace, or `slot:<name>` = the table bound under
                 that slot name by the ACTIVE project (actionable error if unbound).
@@ -322,15 +342,31 @@ def register(mcp: FastMCP) -> None:
                 e.g. `{"project": "roundtable"}`.
             limit: page size (default 100, list mode only).
             cursor: opaque `next_cursor` from a previous call = fetch the NEXT page.
+            fields: list of column names to keep (projection) — the returned rows
+                carry only these plus `_id`. Omit = full rows.
+            count_only: return only `{total}` (filtered row count), no rows.
         """
         store = _acting_store()
         namespace = _ns(namespace)
         try:
+            if count_only:
+                return {"total": store.count_rows(namespace, filter=filter)}
             if id is not None:
-                return store.get_row(namespace, id)
+                row = store.get_row(namespace, id)
+                return _project_row(row, fields) if fields else row
             page = store.cursor_rows(namespace, filter=filter, limit=limit, cursor=cursor)
-            out = {"rows": page["rows"], "count": len(page["rows"]),
+            rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
+            out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"]}
+            # Projection sur des colonnes absentes de TOUTES les lignes = même piège
+            # silencieux que le filter (#163) : on le signale sans bloquer.
+            if fields and page["rows"]:
+                present = {k for r in page["rows"] for k in r}
+                unknown = [f for f in fields if f not in present]
+                if unknown:
+                    out["warning"] = (
+                        f"colonne(s) de `fields` inconnue(s) dans ce namespace : "
+                        f"{', '.join(unknown)} — vérifie l'orthographe (absentes du résultat)")
             # 0 résultat filtré ≠ « la donnée n'existe pas » : si une clé du filter
             # n'apparaît dans AUCUNE ligne échantillonnée, c'est probablement une
             # colonne mal orthographiée — on le SIGNALE (non bloquant, feedback #163).

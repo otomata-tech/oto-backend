@@ -1,0 +1,37 @@
+name: Deploy canari
+
+# Jumeau preprod de deploy.yml : test (runner HOSTED) → deploy (runner SELF-HOSTED
+# oto-platform) vers /opt/oto-mcp-canari (branche `canari`, base chiffrée oto_canari,
+# endpoint mcp-canari.oto.ninja). Staging/canari de l'ADR 0040. Ne trigge QUE sur la
+# branche `canari` → la prod (deploy.yml sur main) n'est pas impactée. La logique de
+# deploy (reset + reinstall oto-core au tag + restart + healthcheck + rollback) vit
+# dans /opt/deploy/oto-backend-canari.sh — source de vérité unique.
+on:
+  push:
+    branches: [canari]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (deps + dev)
+        run: pip install -e ".[dev]"
+      - name: Tests
+        run: pytest -q
+
+  deploy-preprod:
+    needs: test
+    if: github.ref == 'refs/heads/canari'
+    runs-on: [self-hosted, oto-platform]
+    concurrency:
+      group: deploy-preprod
+      cancel-in-progress: false
+    steps:
+      - name: Deploy preprod (build serveur via script root-restreint)
+        run: sudo /opt/deploy/oto-backend-canari.sh

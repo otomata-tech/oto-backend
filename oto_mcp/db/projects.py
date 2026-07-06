@@ -333,6 +333,18 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
                 l["namespace"] = nm
 
 
+def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
+    """Attache le NOM à un lien `tableau` dont le `target_ref` EST déjà un nom (≠ id
+    numérique), quand ce namespace existe (fix #117 : un lien créé par NOM — l'agent lie
+    ainsi, le dashboard lie par id — résout maintenant, plus de slot « qui ne résout
+    plus »). Pur (mutation en place). Ref-nom inexistant → pas de clé `namespace` (le lien
+    reste, dead-link signalé à l'usage). Symétrique de `_apply_tableau_names` (chemin id)."""
+    for l in links:
+        if (l.get("target_type") == "tableau" and not l.get("namespace")
+                and l.get("target_ref") in existing):
+            l["namespace"] = l["target_ref"]
+
+
 def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
     """Attache le TITRE de la doctrine à chaque lien `procedure` (résolu depuis l'id
     stable porté par `target_ref`, ADR 0032 « stop using slug ») — sans lui, un lien
@@ -395,6 +407,18 @@ def list_project_links(project_id: int) -> list[dict]:
                 "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
             ).fetchall()
             _apply_tableau_names(out, {r["id"]: r["namespace"] for r in nrows})
+        # Miroir #117 : un lien tableau peut porter target_ref = NOM (créé par l'agent)
+        # et non un id (dashboard) — résoudre AUSSI ces refs-nom existants, sinon le slot
+        # tombait en « ne résout plus » alors que le namespace existe bel et bien.
+        name_refs = [l["target_ref"] for l in out
+                     if l.get("target_type") == "tableau" and not l.get("namespace")
+                     and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
+        if name_refs:
+            erows = conn.execute(
+                "SELECT DISTINCT namespace FROM user_datastores WHERE namespace = ANY(%s)",
+                (name_refs,),
+            ).fetchall()
+            _apply_tableau_name_refs(out, {r["namespace"] for r in erows})
         # Idem pour les titres de doctrine des procédures (id stable, ADR 0032).
         doc_ids = [int(l["target_ref"]) for l in out
                    if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]

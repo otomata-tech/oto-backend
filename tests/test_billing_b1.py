@@ -28,6 +28,16 @@ def test_schema_declares_billing_tables():
         assert f"'{st}'" in _schema._SCHEMA
 
 
+def test_init_drops_legacy_table_before_schema():
+    # la migration #82→0043 (drop de l'org_subscriptions Stripe) doit courir
+    # AVANT l'application de _SCHEMA, sinon boot KO (vécu 2026-07-06).
+    import inspect
+    from oto_mcp.db import _init
+
+    src = inspect.getsource(_init.init_db)
+    assert src.index("_drop_legacy_org_subscriptions") < src.index("conn.execute(_SCHEMA)")
+
+
 def test_db_surface_exposes_billing():
     # ré-export plat db.<fn> (convention __init__) — sans connexion DB.
     import oto_mcp.db as db

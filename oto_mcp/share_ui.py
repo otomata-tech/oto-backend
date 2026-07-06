@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 from typing import Optional
 
@@ -37,7 +38,8 @@ _MD = MarkdownIt("commonmark", {"html": False})
 _DATA_PAGE = 100
 
 # Deep-link « Ajouter à mon Oto » (le dashboard gère le login puis le fork/récupération).
-_DASHBOARD = "https://dashboard.oto.ninja"
+# Env-driven (cutover ADR 0040 : prod dashboard ≠ preprod ; ne pas figer sur .oto.ninja).
+_DASHBOARD = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
 
 
 # ── Shell HTML charté (mêmes tokens que public_doc_page) ──────────────────────

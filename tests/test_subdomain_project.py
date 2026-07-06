@@ -25,6 +25,21 @@ def test_slug_parsing_share_domain():
     assert sp._slug_from_host("a.b.share.oto.cx") is None      # multi-label ≠ slug
 
 
+def test_project_domain_env_driven(monkeypatch):
+    # PREPROD (cutover ADR 0040) : OTO_PROJECT_DOMAIN=oto.ninja → routing + audience suivent,
+    # le domaine prod (.oto.cx) ne matche plus. C'est le fix du suffixe figé.
+    monkeypatch.setenv("OTO_PROJECT_DOMAIN", "oto.ninja")
+    assert sp._slug_from_host("mon-projet.share.oto.ninja") == "mon-projet"
+    assert sp._slug_from_host("ft.mcp.oto.ninja") == "ft"
+    assert sp._slug_from_host("ft.mcp.oto.cx") is None            # plus le domaine courant
+    assert sp._is_share_host("x.share.oto.ninja") is True
+    assert sp._is_share_host("x.share.oto.cx") is False
+    monkeypatch.setattr(db, "get_project_by_mcp_slug",
+                        lambda s: {"id": 8, "mcp_access": "org"} if s == "mm" else None)
+    assert sp.valid_org_audience("https://mm.mcp.oto.ninja/mcp") is True   # audience sur le domaine courant
+    assert sp.valid_org_audience("https://mm.mcp.oto.cx/mcp") is False     # domaine prod rejeté en preprod
+
+
 def test_connect_url_is_path_aware():
     # `.share.oto.cx` = path `/mcp` explicite (racine = UI) ; `.mcp.oto.cx` = URL nue.
     assert sp._is_share_host("x.share.oto.cx") is True

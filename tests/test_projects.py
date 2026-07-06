@@ -78,6 +78,14 @@ def seams(monkeypatch):
     return rec
 
 
+def test_mcp_url_domain_env_driven(monkeypatch):
+    # Les URLs dérivées suivent OTO_PROJECT_DOMAIN (PREPROD oto.ninja, cutover ADR 0040).
+    monkeypatch.setenv("OTO_PROJECT_DOMAIN", "oto.ninja")
+    assert P._mcp_url("ft", "secret") == "https://ft.share.oto.ninja/mcp"
+    assert P._mcp_url("ft", "anonymous") == "https://ft.mcp.oto.ninja/mcp"
+    assert P._mcp_url("ft", "off") is None
+
+
 def test_create_defaults_to_active_org(seams):
     # Suppression du perso : le défaut crée dans l'ORG ACTIVE (ctx.org_id), plus en user.
     ctx = ResolvedCtx(sub="u1", org_id=99)

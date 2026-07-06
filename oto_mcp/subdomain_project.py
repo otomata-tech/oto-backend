@@ -35,27 +35,37 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from . import session_org
+from . import config, session_org
 
 logger = logging.getLogger(__name__)
 
-# Suffixes figés des domaines publics par projet (le label avant = le slug de projet).
-# `.mcp.oto.cx` = endpoint MCP publié (annuaire, mode anonymous) ; `.share.oto.cx` = partage
-# de projet navigable (mode secret, UI + /mcp). MÊME dispatch, deux intentions.
-_SUFFIXES = (".mcp.oto.cx", ".share.oto.cx")
+# Domaines publics par projet — le label avant le suffixe = le slug de projet.
+# `.mcp.<D>` = endpoint MCP publié (annuaire, mode anonymous) ; `.share.<D>` = partage de
+# projet navigable (mode secret, UI + /mcp). MÊME dispatch, deux intentions. `<D>` =
+# `config.project_domain()` (PROD `oto.cx` / PREPROD `oto.ninja`, cutover ADR 0040) — plus
+# de domaine figé, sinon les endpoints de projet sont injoignables hors prod.
 
-# Resource indicator (audience JWT) d'un endpoint org : `https://<slug>.{mcp,share}.oto.cx/mcp`.
-_ORG_AUD_RE = re.compile(r"^https://([a-z0-9]([a-z0-9-]*[a-z0-9]))\.(?:mcp|share)\.oto\.cx/mcp/?$")
+
+def _suffixes() -> tuple[str, ...]:
+    d = config.project_domain()
+    return (f".mcp.{d}", f".share.{d}")
+
+
+def _org_aud_re() -> "re.Pattern[str]":
+    """Motif du resource indicator (audience JWT) d'un endpoint org :
+    `https://<slug>.{mcp,share}.<D>/mcp`, `<D>` = domaine de projet courant."""
+    d = re.escape(config.project_domain())
+    return re.compile(rf"^https://([a-z0-9]([a-z0-9-]*[a-z0-9]))\.(?:mcp|share)\.{d}/mcp/?$")
 
 
 def valid_org_audience(aud: object) -> bool:
     """Un `aud` de token est-il le resource indicator d'un endpoint org PUBLIÉ ?
-    (ADR 0032 barreau 4, #44). Vérifie le motif `<slug>.mcp.oto.cx/mcp` PUIS que le
+    (ADR 0032 barreau 4, #44). Vérifie le motif `<slug>.mcp.<D>/mcp` PUIS que le
     projet existe et est en `mcp_access='org'`. **Fail-closed** : toute erreur (DB
     indispo) → False (on rejette plutôt que d'accepter une audience non prouvée)."""
     if not isinstance(aud, str):
         return False
-    m = _ORG_AUD_RE.match(aud)
+    m = _org_aud_re().match(aud)
     if not m:
         return False
     try:
@@ -240,23 +250,23 @@ def current_anon_project_id() -> Optional[int]:
 
 def _slug_from_host(host: str) -> Optional[str]:
     h = (host or "").split(":")[0].strip().lower()
-    for suffix in _SUFFIXES:
+    for suffix in _suffixes():
         if h.endswith(suffix):
             slug = h[: -len(suffix)]
-            # Un seul label (pas de point) : `x.y.mcp.oto.cx` n'est pas un slug de projet.
+            # Un seul label (pas de point) : `x.y.mcp.<D>` n'est pas un slug de projet.
             return slug if slug and "." not in slug else None
     return None
 
 
 def _is_share_host(host: str) -> bool:
-    """True si le Host est sur le domaine de PARTAGE navigable (`.share.oto.cx`) — la
-    racine y sert l'UI et le MCP vit au path `/mcp` ; sur `.mcp.oto.cx` le MCP est à la racine."""
-    return (host or "").split(":")[0].strip().lower().endswith(".share.oto.cx")
+    """True si le Host est sur le domaine de PARTAGE navigable (`.share.<D>`) — la racine
+    y sert l'UI et le MCP vit au path `/mcp` ; sur `.mcp.<D>` le MCP est à la racine."""
+    return (host or "").split(":")[0].strip().lower().endswith(f".share.{config.project_domain()}")
 
 
 def _connect_url(host: str) -> str:
-    """URL à brancher dans Claude. `.share.oto.cx` = path `/mcp` explicite (la racine est
-    l'UI navigable) ; `.mcp.oto.cx` = URL nue (MCP servi à la racine, rétro-compat)."""
+    """URL à brancher dans Claude. `.share.<D>` = path `/mcp` explicite (la racine est
+    l'UI navigable) ; `.mcp.<D>` = URL nue (MCP servi à la racine, rétro-compat)."""
     base = f"https://{host}"
     return f"{base}/mcp" if _is_share_host(host) else base
 
@@ -413,7 +423,7 @@ def make_routes():
                 out.append({"slug": slug, "name": p.get("name"),
                             "brief": (p.get("brief_md") or "")[:400],
                             "tools": list(p.get("mcp_tools") or []),
-                            "url": f"https://{slug}.mcp.oto.cx"})
+                            "url": f"https://{slug}.mcp.{config.project_domain()}"})
         except Exception as e:  # noqa: BLE001
             logger.warning("public mcp-projects list failed: %s", e)
         return JSONResponse({"projects": out},

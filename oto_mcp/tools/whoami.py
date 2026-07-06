@@ -12,6 +12,7 @@ visible (`PROTECTED_TOOLS`). Pas de dépendance externe.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
@@ -22,7 +23,8 @@ from ..auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
 
-_DASHBOARD = "https://dashboard.oto.ninja"
+# Env-driven (cutover ADR 0040 : prod dashboard ≠ preprod ; ne pas figer sur .oto.ninja).
+_DASHBOARD = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
 
 
 def _require_sub() -> str:

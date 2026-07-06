@@ -18,7 +18,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, org_store, ownership, roles, session_org
+from .. import config, db, org_store, ownership, roles, session_org
 from ._authz import ORG_MEMBER, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -82,11 +82,13 @@ def _handoff_md(row: dict) -> str:
 
 
 def _mcp_url(slug: object, access: str) -> object:
-    """URL du connecteur MCP d'un projet publié : `secret` → `<slug>.share.oto.cx/mcp`
-    (partage navigable), `anonymous`/`org` → `<slug>.mcp.oto.cx/mcp`. None si non publié."""
+    """URL du connecteur MCP d'un projet publié : `secret` → `<slug>.share.<D>/mcp`
+    (partage navigable), `anonymous`/`org` → `<slug>.mcp.<D>/mcp`. `<D>` = domaine de projet
+    (PROD `oto.cx` / PREPROD `oto.ninja`, cutover ADR 0040). None si non publié."""
     if not slug or access == "off":
         return None
-    dom = "share.oto.cx" if access == "secret" else "mcp.oto.cx"
+    d = config.project_domain()
+    dom = f"share.{d}" if access == "secret" else f"mcp.{d}"
     return f"https://{slug}.{dom}/mcp"
 
 
@@ -104,7 +106,7 @@ def _view(row: dict) -> dict:
         "mcp_expose_datastore_write": bool(row.get("mcp_expose_datastore_write")),
         "mcp_url": _mcp_url(row.get("mcp_slug"), row.get("mcp_access") or "off"),
         # Base de PARTAGE navigable (lecture seule, humain) — mode `secret` uniquement.
-        "share_url": (f"https://{row['mcp_slug']}.share.oto.cx"
+        "share_url": (f"https://{row['mcp_slug']}.share.{config.project_domain()}"
                       if row.get("mcp_slug") and (row.get("mcp_access") or "off") == "secret" else None),
         "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
         "archived_at": row.get("archived_at"),
@@ -539,7 +541,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             try:
                 from .. import oauth_facade
                 oauth_facade.ensure_api_resource(
-                    f"https://{slug}.mcp.oto.cx/mcp",
+                    f"https://{slug}.mcp.{config.project_domain()}/mcp",
                     name=f"oto MCP — {row.get('name') or slug}")
                 resource_registered = True
             except Exception:  # noqa: BLE001

@@ -348,8 +348,33 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             tools.append(t)
             connectors.add(con.name)
         connectors |= {l["target_ref"] for l in links if l["target_type"] == "connecteur"}
+        # Source de CHAQUE connecteur (pour distinguer dans l'UI « déclaré au projet »
+        # vs « requis par une procédure » vs « vu en run ») — additif, `connectors` reste
+        # la liste plate rétro-compatible.
+        csources: dict[str, set] = {}
+
+        def _tag(con, src):
+            if con:
+                csources.setdefault(con, set()).add(src)
+        for l in links:
+            if l["target_type"] == "connecteur":
+                _tag(l["target_ref"], "declared")
+        for p in procedures:
+            if not p.get("resolved"):
+                continue
+            slug = p.get("slug")
+            for s in (p.get("slots") or []):
+                if s.get("type") == "connecteur":
+                    _tag(s.get("connector") or s.get("name"), f"procedure:{slug}")
+            for t in (p.get("tools") or []):
+                con = providers.connector_for_namespace(namespace_of(t))
+                _tag(con.name if con else None, f"procedure:{slug}")
+        for t in run_tools:
+            con = providers.connector_for_namespace(namespace_of(t))
+            _tag(con.name if con else None, "run")
         from .. import project_audit
         return {"id": inp.project_id, "tools": tools, "connectors": sorted(connectors),
+                "connector_sources": {k: sorted(v) for k, v in csources.items()},
                 "sources": {"procedures": procedures, "runs": run_tools,
                             "tableaux": [{"slot": l.get("slot"), "namespace": l.get("namespace"),
                                           "ref": l["target_ref"]}

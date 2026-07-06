@@ -57,6 +57,8 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Agent README personnel (niveau USER du concept agent_readme, cumulable).
 from . import agent_readme  # noqa: F401 — me.agent_readme.{get,set} (GET/PUT /api/me/agent-readme)
+# Guides ON-DEMAND (ADR 0042) — surface REST des how-to (miroir de l'outil MCP oto_guide).
+from . import guides  # noqa: F401 — me.guides.{list,get,set,delete} (/api/me/guides…)
 # Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).
 from . import profile  # noqa: F401 — me.profile.{get,set} (GET/PUT /api/me/profile)
 # Blocs d'instructions plateforme A/B (#50) — édition admin plateforme.

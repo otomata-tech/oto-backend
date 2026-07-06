@@ -801,9 +801,9 @@ CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_
 
 -- Comps d'options admin (gratuit) — débloque une option de connecteur (ex. `unipile`
 -- = messagerie hébergée) pour une entité user|org, accordée par un admin. `access.
--- has_option` débloque l'option ssi un comp est posé (cf. docs/connector-model.md,
--- couche 3). Entity-keyé (user|org). Plus de paiement : la gouvernance de l'option
--- est purement admin (le modèle billing/Stripe a été retiré).
+-- has_option` débloque l'option ssi comp posé OU abonnement d'org actif dont le
+-- plan inclut l'option (ADR 0043, cf. org_subscriptions plus bas). Cf.
+-- docs/connector-model.md, couche 3. Entity-keyé (user|org).
 CREATE TABLE IF NOT EXISTS option_comps (
     entity_type TEXT NOT NULL,        -- 'user' | 'org'
     entity_id   TEXT NOT NULL,        -- sub (user) ou org_id en texte (org)

@@ -152,16 +152,25 @@ _UNSET: object = object()
 def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) -> bool:
     """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option de
     connecteur `option` (ex. `unipile`) est-elle débloquée pour `sub` ? **Seam unique** —
-    débloquée par un **comp admin** sur l'USER OU sur l'ORG active (plus de paiement :
-    le modèle billing/Stripe a été retiré, la gouvernance de l'option est purement admin).
+    deux sources (ADR 0043) : un **comp admin** sur l'USER ou l'ORG active, OU
+    l'**abonnement actif de l'org** dont le plan inclut l'option (mapping
+    `billing.plan_options`, miroir `org_subscriptions` — `past_due` reste ouvert
+    tant que la grace court ; la fermeture est un acte du billing_runner).
     Ne JAMAIS lire les sources en direct ailleurs (un nouveau chemin passe par ici).
     `org` explicite (≠ _UNSET) = calcul pour un tiers contre une org donnée (fiche admin),
     sans current_org (anti-fuite de contexte)."""
     if db.has_option_comp("user", sub, option):
         return True
     org = current_org(sub) if org is _UNSET else org
-    if org is not None and db.has_option_comp("org", str(org), option):
+    if org is None:
+        return False
+    if db.has_option_comp("org", str(org), option):
         return True
+    plan = db.subscription_plan_for_org(int(org))
+    if plan is not None:
+        from . import billing  # import tardif (billing tire stancer/httpx)
+
+        return option in billing.plan_options(plan)
     return False
 
 

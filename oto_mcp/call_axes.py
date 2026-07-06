@@ -249,6 +249,21 @@ def _is_work_tool(name: str) -> bool:
     return ns == "data" or providers.connector_for_namespace(ns) is not None
 
 
+# Spine « surface de travail » : ces tools oto_* AGISSENT dans un déroulé (lier un
+# tableau, poser un doc, partager une ressource) — un agent qui propage run_id comme
+# le prescrivent les instructions run_start/finish ne doit pas se faire rejeter
+# (« Unexpected keyword argument », feedback #168). SEULEMENT l'axe run_id : org=
+# leur est déjà injecté par `_mcp_adapter` (capacités), pas de double-traitement.
+_RUN_SPINE_TOOLS = frozenset({"oto_project", "oto_project_files", "oto_doc", "oto_resource"})
+
+
+def _is_run_correlatable_tool(name: str) -> bool:
+    """Surface de corrélation d'un run = tools de travail + spine projet. Le reste
+    du spine méta/identité/boucle d'usage (`oto_whoami`, `run_*`, `feedback`) reste
+    exclu — s'y corréler n'a pas de sens."""
+    return _is_work_tool(name) or name in _RUN_SPINE_TOOLS
+
+
 async def _pin_run(value: object) -> list[UndoEntry]:
     """Épingle le run_id de l'appel courant (corrélation calllog, modèle sans état de
     session : la pile session-scopée de `doctrine_run` ne survit pas au renouvellement
@@ -271,7 +286,7 @@ RUN = CallAxis(
             "état de session). Omets hors de tout run."
         ),
     },
-    applies=_is_work_tool,
+    applies=_is_run_correlatable_tool,
     pin=_pin_run,
 )
 

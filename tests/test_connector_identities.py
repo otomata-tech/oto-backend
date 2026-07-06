@@ -111,3 +111,33 @@ def test_unipile_platform_no_selector(monkeypatch):
     assert connector_identities.list_identities("u1", "unipile") == []
     with pytest.raises(ValueError, match="plateforme"):
         connector_identities.select_identity("u1", "unipile", "A1")
+
+
+def test_unipile_hosted_lists_own_accounts(monkeypatch):
+    # Feedback #132 : revente/hosted SANS grant mais un compte CONNECTÉ → il doit
+    # apparaître (le faux [] faisait conclure « aucun compte » à l'agent).
+    monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
+                        lambda sub: [{"account_id": "H1", "account_name": "JB Fleury",
+                                      "provider": "LINKEDIN", "org_id": 39}])
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, ch: "H1")
+    ids = connector_identities.list_identities("u1", "unipile")
+    assert [i["id"] for i in ids] == ["H1"]
+    assert ids[0]["label"] == "JB Fleury" and ids[0]["channel"] == "LINKEDIN"
+    assert ids[0]["is_default"]
+
+
+def test_unknown_connector_slug_is_an_error():
+    # Feedback #162 : slug hors catalogue ≠ « connecteur sans identités ».
+    from oto_mcp.capabilities.connectors_identities import _require_known_connector
+    from oto_mcp.capabilities._types import AuthzDenied
+    _require_known_connector("unipile")  # catalogue → no-op
+    with pytest.raises(AuthzDenied) as e:
+        _require_known_connector("bidon_zzz")
+    assert e.value.code == "unknown_connector" and e.value.status == 404
+    with pytest.raises(AuthzDenied, match="unipile"):
+        _require_known_connector("linkedin")  # alias fréquent → pointe unipile

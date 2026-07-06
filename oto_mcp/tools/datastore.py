@@ -78,6 +78,43 @@ def _project_hint(namespace: str) -> Optional[str]:
         return None
 
 
+def _unknown_filter_keys(store, namespace: str, filter: dict) -> set[str]:
+    """Clés de `filter` absentes de TOUTES les lignes d'un échantillon du namespace
+    (feedback #163 : filtre sur colonne inexistante = 0 résultat silencieux,
+    indiscernable d'un « aucune ligne ne matche »). Chemin résultat-vide seulement.
+    Namespace vide ou erreur ⇒ set() (rien d'affirmable, pas de faux warning)."""
+    try:
+        sample = store.cursor_rows(namespace, limit=50)["rows"]
+        if not sample:
+            return set()
+        known: set[str] = set()
+        for r in sample:
+            known |= set(r.keys())
+        return {k for k in filter if k not in known}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _row_not_found_hint(store, namespace: str, row_id: object) -> str:
+    """Message actionnable d'un lookup `id` raté (feedback #161 : le param `id`
+    cherche par `_id` UUID technique ; quand le schéma déclare une clé métier —
+    souvent nommée `id` — l'agent passe naturellement SA valeur et tombe sur
+    « introuvable » sans piste). Si une ligne matche la clé métier, on le dit."""
+    msg = f"row `{row_id}` introuvable (le param `id` cherche par `_id` technique)"
+    try:
+        key = store.declared_key(namespace)
+        if key:
+            hit = store.cursor_rows(namespace, filter={key: row_id}, limit=1)["rows"]
+            if hit:
+                return (f"{msg} ; une ligne a bien `{key}={row_id}` (clé métier) — "
+                        f"utilise `filter={{\"{key}\": \"{row_id}\"}}`, son `_id` est "
+                        f"`{hit[0].get('_id')}`")
+            return f"{msg} ; pour la clé métier `{key}`, utilise `filter={{\"{key}\": …}}`"
+    except Exception:  # noqa: BLE001
+        pass
+    return msg
+
+
 def _ns(namespace: str) -> str:
     """Adressage par SLOT (ADR 0035 B3) : `slot:<name>` = le tableau bindé sous ce
     nom par le PROJET ACTIF (`access.resolve_slot_tableau` — erreur actionnable si
@@ -245,6 +282,9 @@ def register(mcp: FastMCP) -> None:
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
                 out = {"namespace": namespace, **store.write_rows(namespace, rows, key=key)}
             else:
+                if row is None:
+                    raise McpError(ErrorData(code=INVALID_PARAMS,
+                                             message="fournir `row` (objet) ou `rows` (liste d'objets, mode batch)"))
                 if not isinstance(row, dict):
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
                 out = store.append_row(namespace, row) if id is None \
@@ -289,14 +329,26 @@ def register(mcp: FastMCP) -> None:
             if id is not None:
                 return store.get_row(namespace, id)
             page = store.cursor_rows(namespace, filter=filter, limit=limit, cursor=cursor)
-            return {"rows": page["rows"], "count": len(page["rows"]),
-                    "next_cursor": page["next_cursor"]}
+            out = {"rows": page["rows"], "count": len(page["rows"]),
+                   "next_cursor": page["next_cursor"]}
+            # 0 résultat filtré ≠ « la donnée n'existe pas » : si une clé du filter
+            # n'apparaît dans AUCUNE ligne échantillonnée, c'est probablement une
+            # colonne mal orthographiée — on le SIGNALE (non bloquant, feedback #163).
+            if filter and not out["rows"]:
+                unknown = _unknown_filter_keys(store, namespace, filter)
+                if unknown:
+                    out["warning"] = (
+                        f"colonne(s) de filter inconnue(s) dans ce namespace : "
+                        f"{', '.join(sorted(unknown))} — vérifie l'orthographe "
+                        "(0 résultat peut venir de là)")
+            return out
         except InvalidCursor:
             raise McpError(ErrorData(code=INVALID_PARAMS, message="`cursor` invalide (repartir sans cursor)"))
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
         except RowNotFound:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"row `{id}` introuvable"))
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=_row_not_found_hint(store, namespace, id)))
 
     @mcp.tool()
     def data_delete_row(namespace: str, id: str) -> dict:

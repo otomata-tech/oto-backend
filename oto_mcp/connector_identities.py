@@ -144,9 +144,12 @@ def _unipile_list(sub: str) -> list[dict]:
                 "is_default": bool(ch) and a.get("id") == _unipile_chosen(sub, ch),
                 "channel": ch,
             })
-    elif granted:
-        # Revente AVEC grants : les comptes PROPRES connectés, pour le retour-à-soi.
-        # Sans grant, liste vide comme avant (hosted-auth, rien à choisir).
+    else:
+        # Revente (clé plateforme / hosted-auth) : les comptes PROPRES connectés.
+        # Toujours listés — même sans grant et sans « choix » à faire, un compte
+        # connecté DOIT apparaître (feedback #132 : `identities: []` alors qu'un
+        # LinkedIn hébergé était connecté = faux négatif, l'agent concluait à tort
+        # « aucun compte » et renvoyait l'utilisateur au dashboard).
         for a in db.list_unipile_accounts(sub):
             out.append({
                 "id": a["account_id"],

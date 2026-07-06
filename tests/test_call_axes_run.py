@@ -78,3 +78,12 @@ def test_finish_run_stdio_sub_none(monkeypatch):
     monkeypatch.setattr(usage, "_connect", lambda: _Conn(captured))
     usage.finish_run("run-1", "abandoned")           # sub par défaut None (stdio)
     assert captured["params"] == ("abandoned", None, "run-1", None)
+
+
+def test_run_axis_includes_project_spine_tools():
+    # feedback #168 : un agent qui propage run_id (comme prescrit par run_start)
+    # ne doit pas être rejeté par les tools spine de la surface de travail.
+    for name in ("oto_project", "oto_project_files", "oto_doc", "oto_resource"):
+        assert "run_id" in _params(name), name
+        # SEUL run_id : org= reste injecté par _mcp_adapter (pas de double-traitement)
+        assert "org" not in _params(name), name

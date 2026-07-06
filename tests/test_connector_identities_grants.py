@@ -37,11 +37,21 @@ def test_list_platform_mode_includes_granted_with_owner_label(monkeypatch):
     assert "Anna" in g["label"] and g["channel"] == "LINKEDIN"
 
 
-def test_list_platform_mode_empty_without_grants(monkeypatch):
-    # Revente sans grant : liste vide, strictement comme avant #55.
+def test_list_platform_mode_shows_own_account_without_grants(monkeypatch):
+    # Revente sans grant : le compte PROPRE connecté est listé (feedback #132 —
+    # l'ancien [] était un faux négatif : l'agent concluait « aucun compte »
+    # alors qu'un LinkedIn hébergé était connecté et fonctionnel).
     _wire_platform(monkeypatch, grants=[],
                    own=[{"provider": "LINKEDIN", "account_id": "MY_ACC",
                          "account_name": "Moi", "org_id": 3, "connected_at": "x"}])
+    ids = connector_identities.list_identities("grantee", "unipile")
+    assert [i["id"] for i in ids] == ["MY_ACC"]
+    assert ids[0].get("granted") is None  # compte propre, pas un compte accordé
+
+
+def test_list_platform_mode_truly_empty_without_accounts(monkeypatch):
+    # Ni grant ni compte connecté → liste vide (rien à montrer, hosted-auth).
+    _wire_platform(monkeypatch, grants=[], own=[])
     assert connector_identities.list_identities("grantee", "unipile") == []
 
 

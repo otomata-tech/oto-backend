@@ -25,7 +25,22 @@ class SetIdentityInput(BaseModel):
 # Handlers async : un backend d'identités enregistré (`connector_identities.register`)
 # peut être async (Browserbase — pennylaneged) ; les deux adaptateurs (MCP/REST)
 # awaitent les handlers awaitable, on relaie ici.
+def _require_known_connector(name: str) -> None:
+    """Slug hors catalogue → erreur explicite, jamais le même payload qu'un
+    connecteur connu sans identités (feedback #162 : `linkedin` rendait
+    `{supported:false, identities:[]}` comme un nom bidon — faux négatif
+    silencieux pour l'agent qui s'est trompé de slug)."""
+    from .. import providers
+    if name in providers.REGISTRY:
+        return
+    hint = " (LinkedIn passe par le connecteur `unipile`)" if name == "linkedin" else ""
+    raise AuthzDenied(
+        404, "unknown_connector",
+        f"Connecteur inconnu : `{name}`{hint}. Slugs valides : `oto_my_connectors`.")
+
+
 async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
+    _require_known_connector(inp.connector)
     ids = connector_identities.list_identities(ctx.sub, inp.connector)
     if inspect.isawaitable(ids):
         ids = await ids
@@ -37,6 +52,7 @@ async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
 
 
 async def _set_default(ctx: ResolvedCtx, inp: SetIdentityInput) -> dict:
+    _require_known_connector(inp.connector)
     try:
         res = connector_identities.select_identity(ctx.sub, inp.connector, inp.identity_id)
         if inspect.isawaitable(res):

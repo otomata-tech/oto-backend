@@ -237,6 +237,8 @@ def register(mcp: FastMCP) -> None:
         Use this when you need a tool that does not appear in your tool list. If the
         tool IS already visible, call it directly — don't wrap it in `oto_call`.
         Discover names and schemas with `oto_list_my_tools` / `oto_tool_schema`.
+        META/SPINE tools (`oto_*`, `data_*`, `run_*`, `feedback`) are NOT routable
+        here — they are always visible: call them directly.
 
         This bypasses only the DISPLAY filter, never access control: the target's
         call-time gates (credential, connector RBAC, activation, admin autz) and the

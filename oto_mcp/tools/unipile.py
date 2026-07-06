@@ -296,6 +296,14 @@ def register(mcp: FastMCP) -> None:
     def unipile_profile(identifier: str, sections: str = "*") -> dict:
         """Profil LinkedIn complet (carrière datée, écoles, réseau) via Unipile.
 
+        ⚠️ LinkedIn peut throttler une section (souvent `experience`) : la réponse
+        porte alors `throttled_sections=[…]` avec la section vide malgré un
+        `*_total_count` > 0. C'est un rate-limit AMONT, pas une absence de donnée :
+        réessaie plus tard (minutes), réduis la concurrence (≤8 en parallèle), et
+        sur un batch traite ces cibles dans une passe de rattrapage différée.
+        VÉRIFIE aussi que le `public_identifier`/id renvoyé == demandé avant
+        d'écrire (rejette + retry sinon).
+
         Args:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
@@ -354,9 +362,15 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def unipile_relations(cursor: Optional[str] = None,
-                                limit: Optional[int] = None) -> dict:
+                                limit: Optional[int] = None,
+                                fields: Optional[list] = None) -> dict:
         """Liste tes relations LinkedIn de 1er degré (N1) via Unipile — pour
         cibler/exporter ton réseau direct. Paginé (`cursor`).
+
+        `fields` = PROJECTION : ne garde que ces champs sur chaque item (ex.
+        `["name","headline","public_identifier","member_id","created_at"]`) —
+        réduit fortement le payload d'un export (le plein item porte des champs
+        lourds inutiles : profile_picture_url, urns…). Omis = items complets.
 
         ⚠️ Pagination NON fiable pour un export EXHAUSTIF : le `cursor` encode un
         offset volatil (doublons dans l'espace d'offset, total surestimé) et une
@@ -364,7 +378,12 @@ def register(mcp: FastMCP) -> None:
         dédupliquer par `member_id` (JAMAIS l'offset), garder ≤8 pages en parallèle
         (au-delà : 502 en cascade), prouver le tarissement par 2 passes décalées.
         Doctrine dédiée : `bulk-load-reseau`."""
-        return unipile_client().list_relations(cursor=cursor, limit=limit)
+        out = unipile_client().list_relations(cursor=cursor, limit=limit)
+        if fields and isinstance(out, dict) and isinstance(out.get("items"), list):
+            keep = set(fields)
+            out["items"] = [{k: v for k, v in it.items() if k in keep}
+                            for it in out["items"] if isinstance(it, dict)]
+        return out
 
     @mcp.tool()
     def unipile_invitations(direction: str = "received", limit: int = 50,

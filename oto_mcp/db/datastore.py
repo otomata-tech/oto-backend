@@ -91,17 +91,25 @@ def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[
 def resolve_datastore_ns(
     namespace: str, *, sub: str, org_ids: list[int], group_ids: list[int],
 ) -> Optional[dict]:
-    """Résout un namespace VISIBLE par l'acteur, par NOM, parmi : possédé en perso,
-    possédé par une de ses orgs, ou accordé (grant user/org/group). Priorité
-    perso > org > grant. Retourne la ligne `user_datastores` (avec `id`) ou None.
-    La décision read/write fine est ensuite faite par `ownership.can_access` sur l'id."""
+    """Résout un namespace VISIBLE par l'acteur, par NOM **ou par ID** numérique, parmi :
+    possédé en perso, possédé par une de ses orgs, ou accordé (grant user/org/group).
+    Priorité perso > org > grant. Retourne la ligne `user_datastores` (avec `id`) ou None.
+    La décision read/write fine est ensuite faite par `ownership.can_access` sur l'id.
+
+    ⚠️ **id OU nom** : un lien de projet stocke souvent le `target_ref` = **id numérique**
+    (le picker dashboard, `EntityPickerDialog`) alors que l'agent lie par **nom** — les deux
+    doivent résoudre (sinon l'aperçu tableau tombait en 404 → « Aperçu indisponible »). Le
+    prédicat de VISIBILITÉ est identique quelle que soit la clé (aucun IDOR : un id hors de
+    la portée de l'acteur ne résout pas). Collision improbable (un namespace nommé « 109 »
+    vs un id 109) → le match par NOM est préféré."""
     org_txt = [str(o) for o in org_ids]
     grp_txt = [str(g) for g in group_ids]
+    ns_id = int(namespace) if str(namespace).isdigit() else None
     with _connect() as conn:
         row = conn.execute(
             "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.schema, d.created_at "
             "FROM user_datastores d "
-            "WHERE d.namespace = %(ns)s AND ("
+            "WHERE (d.namespace = %(ns)s OR d.id = %(nsid)s) AND ("
             "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"
             "  OR (d.owner_type = 'org'  AND d.owner_id = ANY(%(org)s))"
             "  OR EXISTS ("
@@ -111,10 +119,11 @@ def resolve_datastore_ns(
             "             OR (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
             "             OR (g.principal_type = 'group' AND g.principal_id = ANY(%(grp)s)) ))"
             ") "
-            "ORDER BY CASE WHEN d.owner_type='user' AND d.owner_id=%(sub)s THEN 0 "
+            "ORDER BY CASE WHEN d.namespace = %(ns)s THEN 0 ELSE 1 END, "
+            "         CASE WHEN d.owner_type='user' AND d.owner_id=%(sub)s THEN 0 "
             "              WHEN d.owner_type='org' THEN 1 ELSE 2 END "
             "LIMIT 1",
-            {"ns": namespace, "sub": sub, "org": org_txt, "grp": grp_txt},
+            {"ns": namespace, "nsid": ns_id, "sub": sub, "org": org_txt, "grp": grp_txt},
         ).fetchone()
         return dict(row) if row else None
 

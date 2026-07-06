@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db
+from .. import access, connector_verify, db
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +216,31 @@ def unipile_client(provider: str = "LINKEDIN"):
                                api_version=api_version)
 
 
+def _verify(fields: dict) -> None:
+    """Sonde de connexion Unipile (#133) : `list_accounts()` sur la clé résolue.
+
+    Teste l'auth ET le contenu d'un coup — un endpoint compte-agnostique donc pas
+    besoin d'account_id (la sonde ne reçoit que les champs du credential, pas la
+    config/dsn). On distingue trois cas :
+    - clé absente → message actionnable (ne devrait pas arriver : `_fields_for`
+      résout le credential en amont, mais on garde le garde-fou) ;
+    - clé morte / refusée → `UnipileError` (401/4xx) laissée remonter telle quelle
+      (son message = le retour d'erreur de la sonde) ;
+    - clé valide mais AUCUN compte connecté → distinct d'un listing cassé, on lève
+      un message qui oriente vers le hosted-auth du dashboard."""
+    from oto.tools.unipile import make_unipile_client
+
+    api_key = fields.get("api_key")
+    if not api_key:
+        raise ValueError("clé API Unipile absente.")
+    client = make_unipile_client(api_key=api_key)  # dsn=None → défaut Otomata
+    accounts = client.list_accounts()
+    if not accounts:
+        raise ValueError(
+            "clé Unipile valide mais aucun compte connecté — connecte un compte "
+            "via le hosted-auth du dashboard (unipile_connect_start).")
+
+
 def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     """Enregistre les 3 outils de messagerie Unipile d'un canal :
     `{c}_list_chats` / `{c}_read_chat` / `{c}_send_message` (résolus sur le compte
@@ -249,6 +274,36 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
 
 
 def register(mcp: FastMCP) -> None:
+
+    connector_verify.register("unipile", _verify)
+
+    @mcp.tool()
+    async def unipile_connect_start(channel: str = "linkedin") -> dict:
+        """Démarre la connexion d'un compte de messagerie hébergé (LinkedIn par
+        défaut) et renvoie une **`url`** d'auth Unipile à transmettre à l'utilisateur.
+
+        L'utilisateur ouvre l'URL, se connecte à son compte (login/2FA/captcha —
+        tout se passe dans cette page hébergée) ; la liaison se **finalise
+        automatiquement** côté serveur (webhook), rien d'autre à appeler ensuite.
+        Vérifie l'état avec `oto_verify_connector(provider='unipile')`. C'est LE
+        point d'entrée d'onboarding messagerie depuis l'agent (feedback #131).
+
+        Args:
+            channel: canal à connecter — linkedin (défaut), whatsapp, telegram,
+                instagram, messenger, twitter.
+        """
+        from .. import unipile_connect
+
+        sub = access.current_user_sub_or_raise()
+        try:
+            out = await unipile_connect.hosted_auth_url(sub, channel)
+        except unipile_connect.ConnectRefused as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
+        out["instructions"] = (
+            f"Transmets `url` à l'utilisateur : il ouvre le lien, connecte son compte "
+            f"{out.get('channel', channel)}, et la liaison se finalise seule "
+            "(webhook). Vérifie ensuite avec oto_verify_connector(provider='unipile').")
+        return out
 
     @mcp.tool()
     def unipile_search(

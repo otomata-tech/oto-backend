@@ -190,6 +190,41 @@ def test_org_admin_of_denies_member_of_target(monkeypatch):
     assert _denied(_authz.ORG_ADMIN_OF("org_id"), RAW, SimpleNamespace(org_id=99)).status == 403
 
 
+# --- ORG_ADMIN_OPT (self-service par défaut, épinglable par `org`) ----------
+# Régression otomata-private#69 : une écriture org-admin doit pouvoir cibler une
+# org EXPLICITE (robuste au reset de session) sans changer de privilège.
+
+def test_org_admin_opt_falls_back_to_active_when_absent(monkeypatch):
+    """Sans `org` fourni → org active (42), garde admin sur elle (parité ORG_ADMIN)."""
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: org == 42)
+    ctx = _authz.ORG_ADMIN_OPT("org")(RAW, SimpleNamespace(org=None))
+    assert ctx.org_id == 42
+
+
+def test_org_admin_opt_pins_explicit_org(monkeypatch):
+    """`org=99` fourni → écrit sur 99, PAS l'org active (42) — robuste au reset."""
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: org == 99)
+    ctx = _authz.ORG_ADMIN_OPT("org")(RAW, SimpleNamespace(org=99))
+    assert ctx.org_id == 99
+
+
+def test_org_admin_opt_denies_explicit_org_not_admin(monkeypatch):
+    """Org explicite dont on n'est pas admin → refusé (aucune escalade cross-org)."""
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: org == 42)  # admin de l'active seulement
+    err = _denied(_authz.ORG_ADMIN_OPT("org"), RAW, SimpleNamespace(org=99))
+    assert err.status == 403 and err.code == "forbidden"
+
+
+def test_org_admin_opt_denies_plain_member_on_active():
+    err = _denied(_authz.ORG_ADMIN_OPT("org"), RAW, SimpleNamespace(org=None))
+    assert err.status == 403 and err.code == "forbidden"
+
+
+def test_org_admin_opt_denies_without_active_org(monkeypatch):
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
+    assert _denied(_authz.ORG_ADMIN_OPT("org"), RAW, SimpleNamespace(org=None)).code == "no_active_org"
+
+
 # --- GROUP_MEMBER_OF / GROUP_ADMIN_OF --------------------------------------
 
 def test_group_member_of_injects_parent_org(monkeypatch):

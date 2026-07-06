@@ -25,7 +25,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .. import access, db, group_store, org_store, roles, slots as slots_mod, tool_registry
-from ._authz import ORG_ADMIN, ORG_ADMIN_OF, ORG_MEMBER, ORG_MEMBER_OF, SUB_ONLY
+from ._authz import ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER, ORG_MEMBER_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -75,6 +75,15 @@ class InstrSetInput(BaseModel):
     # ADR 0035 : entités requises déclarées [{name, type: tableau|connecteur|base,
     # description?, connector?}] — référencées <slot:name> dans la prose. None = conserver.
     slots: Optional[list] = None
+    # #69 : épingle l'écriture à une org EXPLICITE (robuste au reset de session).
+    # None = org active (self-service). Gardé org_admin sur l'org nommée.
+    org: Optional[int] = None
+
+
+class DoctrineDeleteInput(BaseModel):
+    slug: str
+    # #69 : idem set — org explicite optionnelle (None = org active).
+    org: Optional[int] = None
 
 
 class RevertInput(BaseModel):
@@ -424,7 +433,7 @@ CAPABILITIES += [
     # ── Écritures membre (org active, org_admin) ────────────────────────────
     Capability(
         key="org.instruction.set", handler=_set_instruction, Input=InstrSetInput,
-        authz=ORG_ADMIN,
+        authz=ORG_ADMIN_OPT("org"),
         description=("Write your org's doctrine (org_admin). Each write bumps the version "
                      "and archives a snapshot. slug omitted = base doctrine; given = a named "
                      "skill. `from_version` restores a past version as a new one (revert). "
@@ -432,14 +441,18 @@ CAPABILITIES += [
                      "connecteur|base, description?, connector?}] — reference them BY NAME "
                      "in the prose as <slot:name> (never a hardcoded instance: the project "
                      "binds name→instance). Response returns cross-check warnings "
-                     "(unresolved/unreferenced slots, suggestions)."),
+                     "(unresolved/unreferenced slots, suggestions). `org` pins the write to "
+                     "an EXPLICIT org id (default = your active org) — pass it to stay robust "
+                     "if a reconnect dropped your session org; you must be org_admin of it."),
         mcp="oto_set_doctrine",
         rest=RestBinding("PUT", "/api/me/instructions/{slug}"),
     ),
     Capability(
-        key="org.instruction.delete", handler=_delete_instruction, Input=SlugInput,
-        authz=ORG_ADMIN,
-        description="Delete a doctrine and its history (org_admin). Pass the EXACT slug.",
+        key="org.instruction.delete", handler=_delete_instruction, Input=DoctrineDeleteInput,
+        authz=ORG_ADMIN_OPT("org"),
+        description=("Delete a doctrine and its history (org_admin). Pass the EXACT slug. "
+                     "`org` pins to an explicit org id (default = active org; must be "
+                     "org_admin of it)."),
         mcp="oto_delete_doctrine",
         rest=RestBinding("DELETE", "/api/me/instructions/{slug}"),
     ),

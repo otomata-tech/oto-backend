@@ -466,6 +466,22 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (1 clé keyed + platform/quota) **ou** `resolve_credential_fields` (byo multi-champs
   sans quota, ex. `silae` : client_id/client_secret/subscription_key). `cookie`/`oauth`
   (linkedin/google/memento) ont des flux dédiés → `secret_fields` vide.
+- **Sonde « tester la connexion » par connecteur** (`connector_verify.py`, registre
+  calqué sur `browser_session.register`) : un connecteur enregistre une `_verify(fields)`
+  qui **lève sur échec** (le message d'exception = le retour d'erreur). Capacité unique
+  `connectors.verify` (MCP `oto_verify_connector` + REST `POST /api/me/connectors/{provider}/verify`,
+  `authz=ORG_MEMBER`, `level` auto|org) → `{ok, error, elapsed_ms}`, jamais un 500 ;
+  `providers.public_catalog` expose `verifiable: connector_verify.supports(name)` (front
+  gate le bouton). **Une bonne sonde teste l'auth ET les scopes**, pas juste l'auth :
+  seed Zoho (`tools/zoho.py::_verify`) fait un refresh OAuth brut (valide client/secret/
+  refresh/région d'un coup + capte le `scope` accordé) PUIS une **lecture réelle**
+  (`ZohoClient.list_records` sur Contacts/Deals/Accounts/Leads, `per_page=1`) — une clé
+  qui authentifie mais n'a **aucun scope CRM** (ex. clé Zoho **Analytics** posée par erreur
+  sur le connecteur CRM) est rejetée avec le scope réel dans le message. ⚠️ Gotchas Zoho
+  empiriques : le refresh renvoie **HTTP 200 + body `{"error":"invalid_client"}`** (région/
+  client faux) ou `invalid_code`/`invalid_grant` (refresh mort) ; l'API CRM **v7 exige un
+  param `fields`** (une lecture nue → 400, pas un scope-mismatch) → sonder via `list_records`
+  (qui fournit les `DEFAULT_FIELDS`), pas un `GET /crm/v7/{module}` brut.
 - Docstrings = contrat LLM (le modèle choisit les tools là-dessus). Précis, pas verbeux.
 - **Aucune résolution de secret côté serveur hors DB/env de process** : pas de
   `get_secret`/`require_secret` oto.config dans le code serveur (l'unit pose

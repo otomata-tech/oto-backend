@@ -1,4 +1,9 @@
-"""Reddit public JSON API — no auth, no quota."""
+"""Reddit read-only — flux RSS publics (no auth, no app).
+
+Reddit a fermé l'API JSON publique (`www.reddit.com/*.json` → 403). Lecture via les
+flux `*.rss` (Atom), servis sans authentification. Best-effort : rate-limité serré par
+IP (429 → erreur claire) et sans score/votes/num_comments/arbre de commentaires.
+"""
 from __future__ import annotations
 
 from typing import Optional

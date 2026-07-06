@@ -161,6 +161,35 @@ def ORG_ADMIN_OF(field: str):
     return rule
 
 
+def ORG_ADMIN_OPT(field: str):
+    """Écriture org-admin **self-service par défaut, épinglable explicitement**.
+
+    Si `input.<field>` (un org_id) est fourni → sémantique `ORG_ADMIN_OF` : garde
+    admin sur l'org NOMMÉE et l'injecte — **robuste au reset de session** (une perte
+    de connexion qui fait retomber `current_org` sur la maison n'écrit plus sur la
+    mauvaise org, otomata-private#69). Sinon → sémantique `ORG_ADMIN` : org active
+    depuis l'état serveur. Même garde `roles.is_org_admin` (escalade platform_admin)
+    dans les deux branches → aucun changement de privilège : un org explicite dont on
+    n'est pas admin est refusé exactement comme l'org active."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        explicit = getattr(inp, field, None) if inp is not None else None
+        if explicit is not None:
+            org_id = int(explicit)
+            if not roles.is_org_admin(sub, org_id):
+                raise AuthzDenied(403, "forbidden", f"Réservé à un org_admin de l'org #{org_id}.")
+            return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
+        org_id = access.current_org(sub)
+        if org_id is None:
+            raise AuthzDenied(400, "no_active_org",
+                              "Aucune org active — choisis-en une avec oto_use_org, "
+                              "ou passe `org` explicitement.")
+        if not roles.is_org_admin(sub, org_id):
+            raise AuthzDenied(403, "forbidden", "Réservé à un org_admin de ton org active.")
+        return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
+    return rule
+
+
 def GROUP_MEMBER_OF(field: str):
     """Lecture d'un groupe désigné par `input.<field>` : membre du groupe, OU
     org_admin du groupe parent, OU platform_admin (escalade descendante `roles`).

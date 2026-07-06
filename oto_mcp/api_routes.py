@@ -936,7 +936,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             fields[f.name] = val
         if not fields:
             return _json_error(request, 400, "missing_credentials")
-        from . import credentials_store
         db.upsert_user(sub)
         account = (body.get("account") or "").strip()
         # Scope MEMBRE (ADR 0033) : la clé est posée DANS l'org de contexte (org

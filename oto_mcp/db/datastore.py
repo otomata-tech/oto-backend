@@ -609,6 +609,79 @@ def datastore_count_rows(ns_id: int, q: Optional[str] = None,
         return int(row["n"]) if row else 0
 
 
+_NUMERIC_RE = r'^\s*-?[0-9]+(\.[0-9]+)?\s*$'
+
+
+def _build_aggregate(ns_id: int, group_by: Optional[str], metrics: Optional[list],
+                     q: Optional[str], filters: Optional[list],
+                     limit: int) -> tuple[str, list, list]:
+    """Construit `(sql, params, names)` de l'agrégat — PUR (aucun I/O), testable sans PG.
+    `names` = `[(alias_sql, nom_lisible)]`. Ordre des `%s` : colonnes SELECT (group +
+    métriques) puis WHERE puis LIMIT — l'ordre de `params` doit suivre EXACTEMENT.
+    Les noms de champs passent en PARAMÈTRES (`data->>%s`), jamais interpolés (anti-injection)."""
+    metrics = metrics or [{"op": "count"}]
+    select, sparams, names = [], [], []  # noms lisibles alignés sur les alias mN
+    if group_by:
+        select.append("data->>%s AS grp")
+        sparams.append(group_by)
+    for i, m in enumerate(metrics):
+        op = str(m.get("op", "")).lower()
+        field = m.get("field")
+        alias = f"m{i}"
+        if op == "count" and not field:
+            select.append(f"COUNT(*) AS {alias}")
+            names.append((alias, "count"))
+        elif op == "count":
+            select.append(f"COUNT(data->>%s) AS {alias}")
+            sparams.append(field)
+            names.append((alias, f"count_{field}"))
+        elif op in ("sum", "avg", "min", "max"):
+            if not field:
+                raise ValueError(f"agrégat: op '{op}' exige un `field`")
+            select.append(
+                f"{op.upper()}(CASE WHEN data->>%s ~ %s THEN (data->>%s)::numeric END) AS {alias}")
+            sparams.extend([field, _NUMERIC_RE, field])
+            names.append((alias, f"{op}_{field}"))
+        else:
+            raise ValueError(f"agrégat: op inconnu {op!r} (count|sum|avg|min|max)")
+    where, wparams = _ds_where(ns_id, q, filters)
+    sql = f"SELECT {', '.join(select)} FROM datastore_rows {where}"
+    params = sparams + wparams
+    if group_by:
+        sql += " GROUP BY grp ORDER BY m0 DESC NULLS LAST, grp ASC"
+    sql += " LIMIT %s"
+    params.append(limit)
+    return sql, params, names
+
+
+def datastore_aggregate(ns_id: int, *, group_by: Optional[str] = None,
+                        metrics: Optional[list] = None, q: Optional[str] = None,
+                        filters: Optional[list] = None, limit: int = 1000) -> list[dict]:
+    """Agrégat serveur d'un namespace (feedback #191) : `COUNT/SUM/AVG/MIN/MAX` sur des
+    champs JSONB, avec `group_by` optionnel — stats d'un gros vivier sans rapatrier les
+    lignes. `group_by` = champ `data->>field` (None = agrégat global, une ligne).
+    `metrics` = liste `{op, field?}`, op ∈ count|sum|avg|min|max (défaut `[{op:count}]`) ;
+    `count` sans field = COUNT(*). sum/avg/min/max ne comptent que les valeurs
+    NUMÉRIQUES (les non-numériques sont ignorées via un garde regex, jamais d'erreur de
+    cast). Filtré par `q`/`filters` (même clause que list/count). Trié par la 1re métrique
+    décroissante (« top … ») quand `group_by`. Renvoie `[{<group_by>: val, <metric>: n}]`
+    (clés lisibles : `count`, `sum_<field>`, `avg_<field>`…)."""
+    from decimal import Decimal
+    sql, params, names = _build_aggregate(ns_id, group_by, metrics, q, filters, limit)
+    with _connect() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        d: dict = {}
+        if group_by:
+            d[group_by] = r["grp"]
+        for alias, name in names:
+            v = r[alias]
+            d[name] = float(v) if isinstance(v, Decimal) else v
+        out.append(d)
+    return out
+
+
 def datastore_update_row(ns_id: int, row_id: str, data: dict, updated_at: str) -> Optional[dict]:
     """Remplace `data` (le store a déjà fusionné le patch) + `updated_at`."""
     with _connect() as conn:

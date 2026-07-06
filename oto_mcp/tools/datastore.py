@@ -407,6 +407,49 @@ def register(mcp: FastMCP) -> None:
                                      message=_row_not_found_hint(store, namespace, id)))
 
     @mcp.tool()
+    def data_aggregate(
+        namespace: str,
+        metrics: Optional[list[dict]] = None,
+        group_by: str | None = None,
+        filter: Optional[dict] = None,
+    ) -> dict:
+        """Aggregate rows SERVER-SIDE — stats over a whole (optionally filtered) table
+        WITHOUT pulling the rows into context (feedback #191). Use this for totals and
+        distributions over a large vivier (e.g. total kWc, average score, count per
+        department) instead of reading 300+ rows and summing them yourself.
+
+        `metrics` = list of `{op, field?}`; `op` ∈ count|sum|avg|min|max (default
+        `[{"op":"count"}]`). `count` without `field` = total rows; sum/avg/min/max
+        require a numeric `field` and ignore non-numeric values. `group_by` = a column
+        to group on (omit = one global row). Results are sorted by the first metric
+        descending when grouped (so `group_by` gives you the TOP groups first).
+
+        Returns `{results: [...]}` — each entry carries the `group_by` value (when set)
+        plus one key per metric (`count`, `sum_<field>`, `avg_<field>`…).
+
+        Examples:
+            - total rows matching a filter: metrics omitted, filter={"statut":"qualified"}
+            - MWc by department: group_by="departement",
+              metrics=[{"op":"sum","field":"kwc_estime"}, {"op":"count"}]
+
+        Args:
+            namespace: target namespace, or `slot:<name>` (active project).
+            metrics: list of `{op, field?}` aggregations (default = count of rows).
+            group_by: column to group by (omit = global aggregate, single row).
+            filter: dict `{column: value}` exact match to scope the aggregate.
+        """
+        store = _acting_store()
+        namespace = _ns(namespace)
+        try:
+            results = store.aggregate(
+                namespace, group_by=group_by, metrics=metrics, filter=filter)
+            return {"results": results}
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+
+    @mcp.tool()
     def data_delete_row(namespace: str, id: str) -> dict:
         """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()

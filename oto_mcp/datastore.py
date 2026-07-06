@@ -495,6 +495,16 @@ class DatastorePg:
         filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
         return db.datastore_count_rows(ns_id, filters=filters)
 
+    def aggregate(self, namespace: str, *, group_by: Optional[str] = None,
+                  metrics: Optional[list] = None, filter: Optional[dict] = None) -> list[dict]:
+        """Agrégat serveur (feedback #191) : COUNT/SUM/AVG/MIN/MAX sur des champs JSONB,
+        `group_by` optionnel — stats d'un vivier sans rapatrier les lignes. Délègue à
+        `db.datastore_aggregate` (filtre exact `{col: val}` poussé en SQL)."""
+        ns_id = self._resolve(namespace)
+        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        return db.datastore_aggregate(
+            ns_id, group_by=group_by, metrics=metrics, filters=filters)
+
     def page_rows(
         self,
         namespace: str,

@@ -49,6 +49,7 @@ class UserDisabledToolsMiddleware(Middleware):
 
 
 _DOCTRINE_GET_TOOL = "oto_get_doctrine"
+_GUIDE_TOOL = "oto_guide"
 
 
 class DynamicInstructionsMiddleware(Middleware):
@@ -96,19 +97,25 @@ class DynamicInstructionsMiddleware(Middleware):
         if not sub:
             return tools
         try:
-            from . import access, instructions
-            index = instructions.skills_index_md(access.current_org(sub))
-            if not index:
+            from . import access, instructions, guide_store
+            org_id = access.current_org(sub)
+            # Deux loaders de prose on-demand, même canal de découverte : l'index
+            # per-(sub, org) enrichit la description de l'outil qui les charge.
+            extra = {
+                _DOCTRINE_GET_TOOL: instructions.skills_index_md(org_id),
+                _GUIDE_TOOL: guide_store.guides_index_md(sub, org_id),
+            }
+            if not any(extra.values()):
                 return tools
             return [
                 t.model_copy(update={"description":
-                                     f"{(t.description or '').rstrip()}\n\n{index}"})
-                if t.name == _DOCTRINE_GET_TOOL else t
+                                     f"{(t.description or '').rstrip()}\n\n{extra[t.name]}"})
+                if extra.get(t.name) else t
                 for t in tools
             ]
         except Exception:
-            logger.warning("enrichissement de %s échoué pour sub=%s (fail-open)",
-                           _DOCTRINE_GET_TOOL, sub, exc_info=True)
+            logger.warning("enrichissement d'index (doctrine/guide) échoué pour sub=%s "
+                           "(fail-open)", sub, exc_info=True)
             return tools
 
 

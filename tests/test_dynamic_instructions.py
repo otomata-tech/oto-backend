@@ -13,6 +13,7 @@ import oto_mcp.group_store as group_store
 import oto_mcp.org_store as org_store
 import oto_mcp.providers as providers
 import oto_mcp.roles as roles
+from oto_mcp import guide_store
 from oto_mcp import instructions as instr
 from oto_mcp import middleware as mw
 
@@ -232,6 +233,7 @@ def _run_list(tools, sub, monkeypatch):
 def test_on_list_tools_enriches_get_doctrine(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
     monkeypatch.setattr(instr, "skills_index_md", lambda org: "INDEX-BLOCK")
+    monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "")
     tools = [_FakeTool("fr_get", "search"), _FakeTool("oto_get_doctrine", "load doctrine")]
     out = {t.name: t for t in _run_list(tools, "u1", monkeypatch)}
     assert out["fr_get"].description == "search"
@@ -239,9 +241,22 @@ def test_on_list_tools_enriches_get_doctrine(monkeypatch):
     assert "INDEX-BLOCK" in out["oto_get_doctrine"].description
 
 
+def test_on_list_tools_enriches_guide_per_caller(monkeypatch):
+    # oto_guide reçoit l'index per-(sub, org) — plateforme ∪ org ∪ user — pas la doctrine.
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(instr, "skills_index_md", lambda org: "")
+    monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "GUIDES-BLOCK")
+    tools = [_FakeTool("fr_get", "search"), _FakeTool("oto_guide", "load guide")]
+    out = {t.name: t for t in _run_list(tools, "u1", monkeypatch)}
+    assert out["fr_get"].description == "search"
+    assert "load guide" in out["oto_guide"].description
+    assert "GUIDES-BLOCK" in out["oto_guide"].description
+
+
 def test_on_list_tools_noop_without_index(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
     monkeypatch.setattr(instr, "skills_index_md", lambda org: "")
+    monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "")
     tools = [_FakeTool("oto_get_doctrine", "load")]
     assert _run_list(tools, "u1", monkeypatch) is tools
 

@@ -8,8 +8,9 @@ l'utilisateur). `op=list` = catalogue visible (platform ∪ org active ∪ user)
 (`oto_get_doctrine`, avec slots) — un guide est de la PROSE (ADR 0042).
 
 Spine : chargé explicitement dans `register_all`, hors gate, toujours visible
-(`PROTECTED_TOOLS`). La description embarque l'index des guides PLATEFORME (statique) ;
-les guides d'org/user se découvrent via `op=list` (scopé au caller).
+(`PROTECTED_TOOLS`). L'index des guides visibles (plateforme ∪ org ∪ user) enrichit la
+description **par (sub, org)** au `tools/list` (`DynamicInstructionsMiddleware.on_list_tools`,
+même patron que `oto_get_doctrine`) — pas de bake statique ici (fail-open stdio = sans index).
 """
 from __future__ import annotations
 
@@ -34,10 +35,9 @@ def _bad(msg: str) -> McpError:
 
 
 def register(mcp: FastMCP) -> None:
-    index = guide_store.guides_index_md()
-    description = f"{_BASE_DESC}\n\n{index}" if index else _BASE_DESC
-
-    @mcp.tool(description=description)
+    # L'index des guides visibles enrichit la description PER-(sub, org) au tools/list
+    # (middleware `on_list_tools`) — description statique nue ici, comme oto_get_doctrine.
+    @mcp.tool(description=_BASE_DESC)
     def oto_guide(op: str = "list", slug: str | None = None, scope: str | None = None,
                   body_md: str | None = None, title: str | None = None,
                   description: str | None = None) -> dict:

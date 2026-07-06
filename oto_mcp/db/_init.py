@@ -21,6 +21,9 @@ def init_db() -> None:
         # AVANT _SCHEMA : renomme l'ancienne tool_call_log vers le schéma canonique
         # (sinon CREATE IF NOT EXISTS poserait une tool_calls vide à côté).
         _migrate_tool_call_log(conn)
+        # AVANT _SCHEMA : droppe l'org_subscriptions du modèle Stripe retiré
+        # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
+        _drop_legacy_org_subscriptions(conn)
         conn.execute(_SCHEMA)
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
@@ -357,6 +360,58 @@ def init_db() -> None:
         prune_tool_calls(int(os.environ.get("OTO_MCP_CALL_LOG_RETENTION_DAYS", "30")))
     except Exception as e:
         logger.warning("prune_tool_calls failed: %s", e)
+    # #109 ch.3 : matérialise les clés métier déclarées en contrainte (hors
+    # transaction schéma — DDL par namespace, fail-open).
+    _ensure_datastore_key_indexes()
+
+
+def _ensure_datastore_key_indexes() -> None:
+    """#109 ch.3 — pour chaque namespace dont le schéma déclare `key`, pose l'index
+    UNIQUE partiel s'il manque, en résorbant D'ABORD les doublons hérités (merge
+    chronologique dans la row la plus ancienne = ce que l'upsert applicatif aurait
+    produit sans les courses ; les doublons SONT des artefacts du bug d'unicité).
+    Fail-open PAR namespace : un tableau récalcitrant est loggé, ne bloque ni le
+    boot ni les autres (son chemin d'écriture reste l'applicatif historique)."""
+    from . import datastore as ds
+    try:
+        targets = ds.datastore_namespaces_with_key()
+    except Exception:
+        logger.warning("key-index migration: énumération échouée", exc_info=True)
+        return
+    for ns in targets:
+        try:
+            if ds.datastore_has_key_index(ns["id"]):
+                continue
+            removed = ds.datastore_merge_key_duplicates(ns["id"], ns["key"])
+            ds.datastore_ensure_key_index(ns["id"], ns["key"])
+            if removed:
+                logger.info("key-index ns=%s key=%s : %d doublon(s) résorbé(s)",
+                            ns["id"], ns["key"], removed)
+        except Exception:
+            logger.warning("key-index migration ns=%s : échec (fail-open)",
+                           ns.get("id"), exc_info=True)
+
+
+def _drop_legacy_org_subscriptions(conn: psycopg.Connection) -> None:
+    """org_subscriptions du modèle Stripe (retiré par oto-backend#82 le
+    2026-07-01 — le code est parti, la table est restée en prod) : forme
+    incompatible avec l'ADR 0043 (PK (org_id, product), colonnes stripe_*) et
+    données mortes avec le modèle → DROP, _SCHEMA recrée la forme 0043.
+    Détection par la colonne `stripe_subscription_id`, jamais présente dans la
+    forme 0043 — idempotent, no-op sur une table déjà migrée ou absente.
+    Vécu 2026-07-06 : boot KO `column "next_billing_at" does not exist`
+    (l'index partiel 0043 sur la table legacy), rollback auto du deploy."""
+    row = conn.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'org_subscriptions' "
+        "AND column_name = 'stripe_subscription_id'"
+    ).fetchone()
+    if row:
+        conn.execute("DROP TABLE org_subscriptions")
+        logger.warning(
+            "org_subscriptions legacy (modèle Stripe, #82) droppée — "
+            "recréée à la forme ADR 0043 par _SCHEMA"
+        )
 
 
 def _migrate_tool_call_log(conn: psycopg.Connection) -> None:

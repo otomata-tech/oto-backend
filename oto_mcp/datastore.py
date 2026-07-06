@@ -25,6 +25,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from psycopg.errors import UniqueViolation
+
 from . import db, ownership
 
 
@@ -304,11 +306,30 @@ class DatastorePg:
 
     def set_schema(self, namespace: str, schema: Optional[dict]) -> dict:
         """Pose (ou retire si None) le schéma typé d'un namespace. Exige le droit
-        d'écriture. SOFT : pas de validation des rows existantes (schéma de rendu)."""
+        d'écriture. SOFT pour les champs (schéma de rendu, pas de validation des
+        rows) — SAUF `schema.key` (#109 ch.3) : la clé métier déclarée devient une
+        CONTRAINTE (index UNIQUE partiel `data->>key`) → dédup concurrent-safe et
+        lookup indexé. Des doublons existants sur la clé = REFUS actionnable (on ne
+        pose pas un UNIQUE sur des données sales en silence)."""
         ns_id = self._resolve(namespace, write=True)
         if schema is not None and not isinstance(schema, dict):
             raise ValueError("schema doit être un objet {fields:[...]} ou null")
+        new_key = (schema or {}).get("key")
+        new_key = new_key if isinstance(new_key, str) and new_key else None
+        if new_key:
+            dups = db.datastore_key_dup_groups(ns_id, new_key)
+            if dups:
+                sample = ", ".join(f"{d['value']!r}×{d['n']}" for d in dups[:5])
+                raise ValueError(
+                    f"schema.key='{new_key}' refusée : {len(dups)}+ valeurs en DOUBLON "
+                    f"dans les rows existantes (ex. {sample}). Résorbe-les d'abord "
+                    f"(data_write avec key='{new_key}' merge les doublons, ou supprime "
+                    "les rows en trop), puis re-déclare la clé.")
         db.set_datastore_schema(ns_id, schema)
+        if new_key:
+            db.datastore_ensure_key_index(ns_id, new_key)
+        else:
+            db.datastore_drop_key_index(ns_id)
         return {"namespace": namespace, "schema": schema}
 
     # --- row ops -------------------------------------------------------------
@@ -369,7 +390,29 @@ class DatastorePg:
                     updated += 1
                     ids.append(existing_id)
                     continue
-            row = db.datastore_insert_row(ns_id, _new_id(), user_data)
+            try:
+                row = db.datastore_insert_row(ns_id, _new_id(), user_data)
+            except UniqueViolation:
+                # Course perdue sous l'index UNIQUE de clé métier (#109 ch.3) : un
+                # write concurrent vient d'insérer la même clé entre le lookup et
+                # l'insert — c'est PRÉCISÉMENT le doublon que la contrainte empêche.
+                # On converge en update (même merge que le chemin nominal). La clé
+                # violée est la clé DÉCLARÉE du namespace (l'index ne porte qu'elle),
+                # qui peut différer d'un `key` explicite passé à l'appel.
+                dk = ((db.get_datastore_namespace_by_id(ns_id) or {}).get("schema")
+                      or {}).get("key")
+                dkv = user_data.get(dk) if dk else None
+                existing_id = (db.datastore_find_row_id_by_key(ns_id, dk, dkv)
+                               if dk and dkv is not None else None)
+                if existing_id is None:
+                    raise  # violation inexpliquée → erreur franche, pas de repli muet
+                cur = db.datastore_get_row(ns_id, existing_id)
+                merged = dict((cur or {}).get("data") or {})
+                merged.update(user_data)
+                db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                updated += 1
+                ids.append(existing_id)
+                continue
             inserted += 1
             ids.append(row["row_id"])
         return {"inserted": inserted, "updated": updated, "count": inserted + updated,

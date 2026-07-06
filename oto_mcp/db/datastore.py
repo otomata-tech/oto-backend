@@ -180,7 +180,9 @@ def rename_datastore_namespace_by_id(ns_id: int, new: str) -> bool:
 
 def delete_datastore_namespace_by_id(ns_id: int) -> bool:
     """Supprime un namespace par id (CASCADE sur `datastore_rows`) + ses grants
-    (`resource_grants` n'a pas de FK car `resource_id` est générique)."""
+    (`resource_grants` n'a pas de FK car `resource_id` est générique) + son
+    éventuel index de clé métier (#109 ch.3 — orphelin inoffensif sinon, mais
+    autant nettoyer)."""
     with _connect() as conn:
         with conn.transaction():
             conn.execute(
@@ -188,7 +190,8 @@ def delete_datastore_namespace_by_id(ns_id: int) -> bool:
                 (str(ns_id),),
             )
             cur = conn.execute("DELETE FROM user_datastores WHERE id = %s", (ns_id,))
-        return cur.rowcount > 0
+    datastore_drop_key_index(ns_id)
+    return cur.rowcount > 0
 
 
 def reparent_datastore_namespace(ns_id: int, new_owner_type: str, new_owner_id: str) -> None:
@@ -321,16 +324,125 @@ def datastore_upsert_row(ns_id: int, row_id: str, data: dict) -> tuple[dict, boo
 
 def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optional[str]:
     """Trouve le `row_id` d'une row par une CLÉ MÉTIER (champ JSONB `data->>key`),
-    pour la dédup applicative d'un batch write. Renvoie le plus ancien match (ordre
-    stable) ou None. Le JSONB n'a pas de contrainte d'unicité → c'est ce lookup qui
-    porte la sémantique de clé. Champ et valeur paramétrés → pas d'injection."""
+    pour la dédup d'un batch write. Renvoie le plus ancien match (ordre stable) ou
+    None. La clé est interpolée en LITTÉRAL SQL (psycopg.sql, jamais un f-string) :
+    un paramètre `data->>$1` ne matcherait pas l'index d'expression de clé métier
+    (#109 ch.3) — le littéral rend le lookup indexé, O(1)."""
+    from psycopg import sql as _sql
+    q = _sql.SQL(
+        "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND data->>{k} = %s "
+        "ORDER BY created_at ASC LIMIT 1"
+    ).format(k=_sql.Literal(str(key_field)))
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND data->>%s = %s "
-            "ORDER BY created_at ASC LIMIT 1",
-            (ns_id, key_field, str(key_value)),
-        ).fetchone()
+        row = conn.execute(q, (ns_id, str(key_value))).fetchone()
         return row["row_id"] if row else None
+
+
+# ── Clé métier = contrainte (#109 ch.3) ──────────────────────────────────────
+# Quand `schema.key` est déclarée, elle cesse d'être purement applicative : un
+# index UNIQUE PARTIEL par namespace (`ds_bkey_<ns_id>`, expression `data->>key`,
+# prédicat ns_id + clé non nulle) rend la dédup concurrent-safe (deux writes
+# parallèles du même member_id ⇒ le perdant prend une UniqueViolation, convertie
+# en update par le store) et le lookup indexé. Cycle de vie : posé/déposé par
+# `set_schema` (source unique de schema.key) + migration boot pour l'existant.
+
+def _bkey_index_name(ns_id: int) -> str:
+    return f"ds_bkey_{int(ns_id)}"
+
+
+def datastore_key_dup_groups(ns_id: int, key: str, limit: int = 10) -> list[dict]:
+    """Valeurs de clé métier en DOUBLON dans les rows existantes — `[{value, n}]`,
+    plus gros groupes d'abord. Sert le refus actionnable de `set_schema` (on ne
+    pose pas un UNIQUE sur des données sales sans le dire)."""
+    from psycopg import sql as _sql
+    q = _sql.SQL(
+        "SELECT data->>{k} AS value, COUNT(*) AS n FROM datastore_rows "
+        "WHERE ns_id = %s AND data->>{k} IS NOT NULL "
+        "GROUP BY 1 HAVING COUNT(*) > 1 ORDER BY n DESC, 1 LIMIT %s"
+    ).format(k=_sql.Literal(str(key)))
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(q, (ns_id, limit)).fetchall()]
+
+
+def datastore_merge_key_duplicates(ns_id: int, key: str) -> int:
+    """Résorbe les doublons de clé métier en reconstituant la sémantique upsert :
+    pour chaque valeur en doublon, MERGE les `data` dans l'ordre chronologique dans
+    la row la plus ANCIENNE (celle que `find_row_id_by_key` aurait servie à chaque
+    write), puis supprime les plus récentes. Renvoie le nombre de rows supprimées.
+    Une transaction par groupe (échec isolé, jamais de demi-merge)."""
+    from psycopg import sql as _sql
+    key = str(key)
+    removed = 0
+    dup_q = _sql.SQL(
+        "SELECT data->>{k} AS value FROM datastore_rows "
+        "WHERE ns_id = %s AND data->>{k} IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1"
+    ).format(k=_sql.Literal(key))
+    rows_q = _sql.SQL(
+        "SELECT row_id, data FROM datastore_rows WHERE ns_id = %s AND data->>{k} = %s "
+        "ORDER BY created_at ASC, row_id ASC"
+    ).format(k=_sql.Literal(key))
+    with _connect() as conn:
+        values = [r["value"] for r in conn.execute(dup_q, (ns_id,)).fetchall()]
+    for value in values:
+        with _connect() as conn:
+            group = conn.execute(rows_q, (ns_id, value)).fetchall()
+            if len(group) < 2:
+                continue  # résorbé entre-temps
+            merged: dict = {}
+            for r in group:
+                d = r["data"]
+                merged.update(d if isinstance(d, dict) else json.loads(d))
+            keeper = group[0]["row_id"]
+            losers = [r["row_id"] for r in group[1:]]
+            conn.execute(
+                "UPDATE datastore_rows SET data = %s::jsonb, updated_at = NOW() "
+                "WHERE ns_id = %s AND row_id = %s",
+                (json.dumps(merged), ns_id, keeper))
+            conn.execute(
+                "DELETE FROM datastore_rows WHERE ns_id = %s AND row_id = ANY(%s)",
+                (ns_id, losers))
+            removed += len(losers)
+    return removed
+
+
+def datastore_ensure_key_index(ns_id: int, key: str) -> None:
+    """Pose l'index UNIQUE partiel de clé métier du namespace (dépose l'ancien —
+    la clé a pu changer). Nom déterministe `ds_bkey_<ns_id>` (int → sûr) ; la clé
+    est un LITTÉRAL composé via psycopg.sql (le DDL ne se paramètre pas)."""
+    from psycopg import sql as _sql
+    name = _bkey_index_name(ns_id)
+    with _connect() as conn:
+        conn.execute(_sql.SQL("DROP INDEX IF EXISTS {n}").format(n=_sql.Identifier(name)))
+        conn.execute(_sql.SQL(
+            "CREATE UNIQUE INDEX {n} ON datastore_rows ((data->>{k})) "
+            "WHERE ns_id = {ns} AND data->>{k} IS NOT NULL"
+        ).format(n=_sql.Identifier(name), k=_sql.Literal(str(key)),
+                 ns=_sql.Literal(int(ns_id))))
+
+
+def datastore_drop_key_index(ns_id: int) -> None:
+    from psycopg import sql as _sql
+    with _connect() as conn:
+        conn.execute(_sql.SQL("DROP INDEX IF EXISTS {n}").format(
+            n=_sql.Identifier(_bkey_index_name(ns_id))))
+
+
+def datastore_has_key_index(ns_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s",
+                           (_bkey_index_name(ns_id),)).fetchone()
+        return row is not None
+
+
+def datastore_namespaces_with_key() -> list[dict]:
+    """Namespaces dont le schéma déclare une clé métier — `[{id, key}]` (migration
+    boot #109 ch.3 : matérialiser la clé en contrainte sur l'existant)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, schema->>'key' AS key FROM user_datastores "
+            "WHERE schema->>'key' IS NOT NULL AND schema->>'key' <> ''"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:

@@ -44,6 +44,10 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
     """Tire l'échéance d'UN abonnement. Retourne l'issue (log/test) :
     'renewed' | 'retry' | 'past_due' | 'skipped'."""
     org_id = sub_row["org_id"]
+    if sub_row.get("provider") == "comp":
+        # abonnement FORCÉ par un admin (non payé) — jamais de débit. Ceinture
+        # + bretelles : due_subscriptions l'exclut déjà (next_billing_at NULL).
+        return "skipped"
     plan = billing.PLANS.get(sub_row["plan"])
     if plan is None:
         log.error("billing_runner: org %s a un plan inconnu %r — échéance sautée",

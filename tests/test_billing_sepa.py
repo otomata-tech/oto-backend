@@ -33,7 +33,7 @@ def _wire_sepa_subscribe(monkeypatch):
 
 def test_sepa_subscribe_returns_sign_url_and_incomplete_mirror(monkeypatch):
     state = _wire_sepa_subscribe(monkeypatch)
-    out = billing.subscribe(42, "standard", "https://oto.cx/billing",
+    out = billing.subscribe(42, "solo", "https://oto.cx/billing",
                             method="sepa", iban="FR14…", holder_name="ACME SAS",
                             mobile="+33612345678")
     assert out["checkout_url"].endswith("/sign")
@@ -46,19 +46,19 @@ def test_sepa_subscribe_returns_sign_url_and_incomplete_mirror(monkeypatch):
 def test_sepa_subscribe_requires_all_fields(monkeypatch):
     _wire_sepa_subscribe(monkeypatch)
     with pytest.raises(ValueError, match="sepa_fields_required"):
-        billing.subscribe(42, "standard", "https://oto.cx/billing",
+        billing.subscribe(42, "solo", "https://oto.cx/billing",
                           method="sepa", iban="FR14…")  # mobile/holder manquants
 
 
 def test_unknown_method_rejected(monkeypatch):
     _wire_sepa_subscribe(monkeypatch)
     with pytest.raises(ValueError, match="unknown_method"):
-        billing.subscribe(42, "standard", "https://oto.cx/billing", method="wire")
+        billing.subscribe(42, "solo", "https://oto.cx/billing", method="wire")
 
 
 # ── confirm (voie sepa) ──────────────────────────────────────────────────────
 
-_SUB_INCOMPLETE = {"org_id": 42, "plan": "standard", "method": "sepa",
+_SUB_INCOMPLETE = {"org_id": 42, "plan": "solo", "method": "sepa",
                    "status": "incomplete", "sepa_id": "sepa_1",
                    "mandate_id": "mndt_12345678", "customer_id": "cust_s1"}
 
@@ -74,6 +74,7 @@ def _wire_sepa_confirm(monkeypatch, *, mandate):
     monkeypatch.setattr(db_billing, "activate_subscription",
                         lambda org, **k: state.update(activate=(org, k)) or True)
     monkeypatch.setattr(billing.stancer_client, "get_mandate", lambda mid: mandate)
+    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda org, plan: None)
     monkeypatch.setattr(billing.stancer_client, "create_payment",
                         lambda amount, **k: state.update(charge=(amount, k)) or {
                             "id": "paym_s1", "status": "to_capture"})
@@ -95,7 +96,7 @@ def test_confirm_sepa_signed_charges_and_activates(monkeypatch):
     out = billing.confirm(42)
     assert out["status"] == "active" and out["method"] == "sepa"
     amount, kw = state["charge"]
-    assert amount == billing.PLANS["standard"]["amount"]
+    assert amount == billing.PLANS["solo"]["amount"]
     assert kw["sepa"] == "sepa_1"
     # unique_id ancré sur le mandat : double confirm → 409, re-souscription unique
     assert kw["unique_id"] == "org42-init-12345678"
@@ -115,7 +116,7 @@ def test_runner_charges_sepa_token(monkeypatch):
     monkeypatch.setattr(billing_runner.stancer_client, "create_payment",
                         lambda amount, **k: state.update(charge=k) or {
                             "id": "paym_r1", "status": "to_capture"})
-    sub = {"org_id": 42, "plan": "standard", "method": "sepa",
+    sub = {"org_id": 42, "plan": "solo", "method": "sepa",
            "sepa_id": "sepa_1", "card_id": None, "customer_id": "cust_s1",
            "current_period_end": NOW - timedelta(hours=1), "status": "active"}
     assert billing_runner._charge_one(sub, NOW) == "renewed"
@@ -124,6 +125,6 @@ def test_runner_charges_sepa_token(monkeypatch):
 
 
 def test_runner_skips_sepa_without_token(monkeypatch):
-    sub = {"org_id": 42, "plan": "standard", "method": "sepa", "sepa_id": None,
+    sub = {"org_id": 42, "plan": "solo", "method": "sepa", "sepa_id": None,
            "current_period_end": NOW, "status": "active"}
     assert billing_runner._charge_one(sub, NOW) == "skipped"

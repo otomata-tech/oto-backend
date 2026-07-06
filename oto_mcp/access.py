@@ -353,6 +353,16 @@ def quota_for(provider: str) -> int:
     return _QUOTA_DEFAULTS.get(provider, 0)
 
 
+def _org_unmetered(org: int) -> bool:
+    """L'org a-t-elle un plan actif qui lève les quotas plateforme ? (ADR 0043)"""
+    plan = db.subscription_plan_for_org(int(org))
+    if plan is None:
+        return False
+    from . import billing  # import tardif (billing tire stancer/httpx)
+
+    return billing.plan_is_unmetered(plan)
+
+
 @dataclass(frozen=True)
 class ResolvedCredential:
     """Credential GAGNANT de la cascade (ADR 0024) — la clé, son origine, ET sa
@@ -601,6 +611,11 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
 
     used = db.get_usage_today(sub, provider)
     limit = grant.get("daily_quota") or quota_for(provider)
+    # ADR 0043 : une org abonnée à un plan `unmetered` n'a PLUS de quota sur les
+    # clés plateforme — fin du micro-management des « credits d'appel ». Le plan
+    # est le seul cran ; hors abonnement, les quotas d'essai tiennent.
+    if limit and active_org is not None and _org_unmetered(active_org):
+        limit = 0
     if limit and used >= limit:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

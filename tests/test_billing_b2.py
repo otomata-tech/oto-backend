@@ -51,12 +51,12 @@ def _wire_subscribe(monkeypatch, existing=None):
 
 def test_subscribe_happy_path(monkeypatch):
     calls = _wire_subscribe(monkeypatch)
-    out = billing.subscribe(42, "standard", "https://oto.cx/billing")
+    out = billing.subscribe(42, "solo", "https://oto.cx/billing")
     assert out["checkout_url"].startswith("https://payment.stancer.com/")
     assert calls["customer"]["external_id"] == "org-42"
     amount, kw = calls["intent"]
-    assert amount == billing.PLANS["standard"]["amount"]
-    assert kw["order_id"].startswith("org42:standard:")   # le plan voyage dans l'intent
+    assert amount == billing.PLANS["solo"]["amount"]
+    assert kw["order_id"].startswith("org42:solo:")   # le plan voyage dans l'intent
     assert calls["insert"][0][:2] == (42, "initial")
 
 
@@ -65,16 +65,16 @@ def test_subscribe_rejects_unknown_plan_and_double(monkeypatch):
     with pytest.raises(ValueError, match="unknown_plan"):
         billing.subscribe(42, "gold", "https://oto.cx/billing")
     _wire_subscribe(monkeypatch, existing={"status": "active", "canceled_at": None,
-                                           "customer_id": "cust_1", "plan": "standard"})
+                                           "customer_id": "cust_1", "plan": "solo"})
     with pytest.raises(ValueError, match="already_subscribed"):
-        billing.subscribe(42, "standard", "https://oto.cx/billing")
+        billing.subscribe(42, "solo", "https://oto.cx/billing")
 
 
 def test_subscribe_reuses_customer(monkeypatch):
     calls = _wire_subscribe(monkeypatch, existing={
         "status": "canceled", "canceled_at": "2026-07-01", "customer_id": "cust_old",
-        "plan": "standard"})
-    billing.subscribe(42, "standard", "https://oto.cx/billing")
+        "plan": "solo"})
+    billing.subscribe(42, "solo", "https://oto.cx/billing")
     assert "customer" not in calls                      # pas de re-création
     assert calls["intent"][1]["customer"] == "cust_old"
 
@@ -94,6 +94,7 @@ def _wire_confirm(monkeypatch, *, intent, payments=None, sub=None):
     monkeypatch.setattr(billing.stancer_client, "get_payment_intent", lambda i: intent)
     monkeypatch.setattr(billing.stancer_client, "payment_intent_payments",
                         lambda i: {"payments": payments or []})
+    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda org, plan: None)
     return state
 
 
@@ -113,19 +114,19 @@ def test_confirm_success_opens_subscription(monkeypatch):
     state = _wire_confirm(
         monkeypatch,
         intent={"status": "captured", "customer": "cust_1",
-                "order_id": "org42:standard:abcd1234"},
+                "order_id": "org42:solo:abcd1234"},
         payments=[{"id": "paym_1", "card": {"id": "card_1"}}])
     out = billing.confirm(42)
-    assert out["status"] == "active" and out["plan"] == "standard"
+    assert out["status"] == "active" and out["plan"] == "solo"
     org, kw = state["upsert"]
-    assert (org, kw["plan"], kw["card_id"], kw["status"]) == (42, "standard", "card_1", "active")
+    assert (org, kw["plan"], kw["card_id"], kw["status"]) == (42, "solo", "card_1", "active")
     assert kw["next_billing_at"] == kw["current_period_end"]
 
 
 def test_confirm_without_card_token_refuses(monkeypatch):
     # fonds encaissés mais pas de token → PAS d'abonnement irrenouvelable posé.
     _wire_confirm(monkeypatch,
-                  intent={"status": "captured", "order_id": "org42:standard:x"},
+                  intent={"status": "captured", "order_id": "org42:solo:x"},
                   payments=[{"id": "paym_1"}])
     with pytest.raises(RuntimeError, match="no_card_token"):
         billing.confirm(42)
@@ -133,9 +134,9 @@ def test_confirm_without_card_token_refuses(monkeypatch):
 
 def test_confirm_idempotent_when_active(monkeypatch):
     monkeypatch.setattr(db_billing, "get_org_subscription",
-                        lambda org: {"status": "active", "plan": "standard"})
+                        lambda org: {"status": "active", "plan": "solo"})
     monkeypatch.setattr(db_billing, "list_billing_payments", lambda org, limit=20: [])
-    assert billing.confirm(42) == {"status": "active", "plan": "standard"}
+    assert billing.confirm(42) == {"status": "active", "plan": "solo"}
 
 
 # ── cancel & entitlement helper ──────────────────────────────────────────────
@@ -147,7 +148,7 @@ def test_cancel_requires_subscription(monkeypatch):
 
 
 def test_plan_options_mapping():
-    assert "unipile" in billing.plan_options("standard")
+    assert "unipile" in billing.plan_options("solo")
     assert billing.plan_options("inconnu") == frozenset()
 
 
@@ -158,6 +159,9 @@ def test_capabilities_registered_rest_only():
 
     caps = {c.key: c for c in CAPABILITIES if c.key.startswith("billing.")}
     assert set(caps) == {"billing.plans", "billing.status", "billing.subscribe",
-                         "billing.confirm", "billing.cancel", "billing.payments"}
-    # pas de face MCP (ADR 0043 : pas d'URL de paiement dans un contexte LLM).
-    assert all(c.mcp is None for c in caps.values())
+                         "billing.confirm", "billing.cancel", "billing.payments",
+                         "billing.admin_set_plan"}
+    # pas d'URL de paiement dans un contexte LLM : seule la capacité ADMIN
+    # (forcer un plan, pas de paiement) a une face MCP.
+    mcp_caps = {k for k, c in caps.items() if c.mcp is not None}
+    assert mcp_caps == {"billing.admin_set_plan"}

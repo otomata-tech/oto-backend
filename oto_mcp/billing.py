@@ -22,19 +22,36 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import stancer_client
+from . import db
 from .db import billing as db_billing
 
 logger = logging.getLogger(__name__)
 
 # plan → prix (centimes), intervalle, options de connecteur débloquées (couche 3,
-# lues par access.has_option en B4). PLACEHOLDER — cf. docstring module.
+# lues par access.has_option). Prix HT mensuels (Alexis 2026-07-06). Chaque
+# plan CONFIGURE l'org à l'activation (options débloquées + plafond de comptes
+# messagerie) → une seule action admin, plus de grants/quotas par connecteur.
+# `amount=None` = palier sur devis (pas de checkout self-serve ; posé par un
+# admin en abonnement `comp`). `unipile_accounts` alimente orgs.unipile_account_
+# limit ; `unmetered=True` = clés plateforme sans quota (fin des credits d'appel).
+# ⚠️ contenu des paliers à confirmer (question posée) — prix, eux, actés.
 PLANS: dict[str, dict] = {
-    "standard": {
-        "label": "Otomata Standard",
-        "amount": 4900,
-        "currency": "eur",
-        "interval": "month",   # 'month' | 'year'
-        "options": ("unipile",),
+    "solo": {
+        "label": "Solo", "amount": 4900, "currency": "eur", "interval": "month",
+        "options": ("unipile",), "unipile_accounts": 1, "unmetered": True,
+    },
+    "team": {
+        "label": "Team", "amount": 25000, "currency": "eur", "interval": "month",
+        "options": ("unipile",), "unipile_accounts": 5, "unmetered": True,
+    },
+    "business": {
+        "label": "Business", "amount": 50000, "currency": "eur", "interval": "month",
+        "options": ("unipile",), "unipile_accounts": 20, "unmetered": True,
+    },
+    "enterprise": {
+        "label": "Entreprise (sur devis)", "amount": None, "currency": "eur",
+        "interval": "month", "options": ("unipile",), "unipile_accounts": None,
+        "unmetered": True, "custom": True,
     },
 }
 
@@ -46,7 +63,9 @@ _INTENT_FAILED = frozenset({"canceled", "unpaid"})
 
 def plans() -> list[dict]:
     """Catalogue public (l'UI billing du dashboard boucle dessus)."""
-    return [{"plan": k, **{f: v[f] for f in ("label", "amount", "currency", "interval")}}
+    return [{"plan": k, "custom": v.get("custom", False),
+             **{f: v[f] for f in ("label", "amount", "currency", "interval",
+                                  "unipile_accounts")}}
             for k, v in PLANS.items()]
 
 
@@ -54,6 +73,22 @@ def plan_options(plan: str) -> frozenset[str]:
     """Options de connecteur débloquées par `plan` (consommé par access.has_option)."""
     meta = PLANS.get(plan)
     return frozenset(meta["options"]) if meta else frozenset()
+
+
+def plan_is_unmetered(plan: str) -> bool:
+    """Le plan lève-t-il les quotas des clés plateforme ? (fin des credits d'appel)."""
+    meta = PLANS.get(plan)
+    return bool(meta and meta.get("unmetered"))
+
+
+def apply_plan_entitlements(org_id: int, plan: str) -> None:
+    """Configure l'org d'après son plan à l'ACTIVATION — le geste qui remplace
+    le micro-management admin (options + plafond messagerie posés d'un coup).
+    Idempotent. `unipile_accounts=None` (devis) = plafond levé."""
+    meta = PLANS.get(plan)
+    if meta is None:
+        return
+    db.set_org_unipile_limit(org_id, meta.get("unipile_accounts"))
 
 
 def _add_period(dt: datetime, interval: str) -> datetime:
@@ -101,6 +136,9 @@ def subscribe(org_id: int, plan: str, return_url: str, *,
     meta = PLANS.get(plan)
     if meta is None:
         raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
+    if meta.get("custom"):
+        raise ValueError("custom_plan: ce palier est sur devis — contacter "
+                         "Otomata (un admin l'active en abonnement comp)")
     if method not in ("card", "sepa"):
         raise ValueError(f"unknown_method: {method!r} (card | sepa)")
     existing = db_billing.get_org_subscription(org_id)
@@ -205,6 +243,7 @@ def confirm(org_id: int) -> dict:
         org_id, plan=plan, method="card",
         customer_id=_ref_id(intent.get("customer")), card_id=card_id,
         status="active", current_period_end=period_end, next_billing_at=period_end)
+    apply_plan_entitlements(org_id, plan)
     logger.info("billing: org %s abonnée (plan %s, échéance %s)", org_id, plan,
                 period_end.date())
     return {"status": "active", "plan": plan,
@@ -240,6 +279,7 @@ def _confirm_sepa(org_id: int, sub_row: dict) -> dict:
     db_billing.activate_subscription(
         org_id, current_period_end=period_end, next_billing_at=period_end,
         mandate_rum=mandate.get("rum"))
+    apply_plan_entitlements(org_id, plan)
     logger.info("billing: org %s abonnée par prélèvement (plan %s, échéance %s)",
                 org_id, plan, period_end.date())
     return {"status": "active", "plan": plan, "method": "sepa",
@@ -259,6 +299,7 @@ def status(org_id: int) -> dict:
         "amount": meta.get("amount"), "currency": meta.get("currency"),
         "interval": meta.get("interval"),
         "status": row["status"], "method": row["method"],
+        "comp": row["provider"] == "comp",   # abonnement forcé par un admin (non payé)
         "current_period_end": row.get("current_period_end"),
         "next_billing_at": row.get("next_billing_at"),
         "grace_until": row.get("grace_until"),
@@ -275,3 +316,34 @@ def cancel(org_id: int) -> dict:
         raise ValueError("not_subscribed: aucun abonnement à résilier")
     db_billing.mark_cancel_at_period_end(org_id)
     return status(org_id)
+
+
+# ── admin : forcer / retirer un plan (non payé) ──────────────────────────────
+
+def admin_set_plan(org_id: int, plan: str, *, granted_by: str) -> dict:
+    """Force un plan sur une org SANS paiement (abonnement `comp`) — ADR 0043.
+    Ouvre l'entitlement immédiatement (options + plafond messagerie du plan),
+    jamais de PSP derrière, jamais d'échéance tirée. Sert les pilotes,
+    partenaires et le palier « sur devis ». Écrase l'abonnement existant."""
+    if plan not in PLANS:
+        raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
+    db_billing.set_comp_subscription(org_id, plan, granted_by=granted_by)
+    apply_plan_entitlements(org_id, plan)
+    logger.info("billing: plan %s FORCÉ (comp) sur l'org %s par %s",
+                plan, org_id, granted_by)
+    return status(org_id)
+
+
+def admin_clear_plan(org_id: int) -> dict:
+    """Retire un abonnement `comp` (forcé). Refuse de toucher un abonnement PAYÉ
+    (passer par la résiliation) — anti-bévue admin."""
+    row = db_billing.get_org_subscription(org_id)
+    if not row:
+        raise ValueError("not_subscribed: aucun abonnement sur cette org")
+    if row["provider"] != "comp":
+        raise ValueError("paid_subscription: abonnement payant — résilier via "
+                         "cancel, pas admin_clear_plan")
+    db_billing.delete_subscription(org_id)
+    db.set_org_unipile_limit(org_id, None)   # retire le plafond posé par le plan
+    logger.info("billing: plan comp retiré de l'org %s", org_id)
+    return {"subscribed": False, "org_id": org_id}

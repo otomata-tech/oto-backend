@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .. import billing
 from ..stancer_client import StancerError
-from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY
+from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -32,6 +32,11 @@ class SubscribeInput(BaseModel):
 
 class PaymentsInput(BaseModel):
     limit: int = 20
+
+
+class AdminPlanInput(BaseModel):
+    org_id: int
+    plan: str | None = None   # None / omis = retirer le plan comp forcé
 
 
 def _domain(fn, *args):
@@ -75,6 +80,13 @@ def _cancel(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _domain(billing.cancel, ctx.org_id)
 
 
+def _admin_set_plan(ctx: ResolvedCtx, inp: AdminPlanInput) -> dict:
+    if inp.plan:
+        return _domain(lambda: billing.admin_set_plan(
+            inp.org_id, inp.plan, granted_by=ctx.sub))
+    return _domain(lambda: billing.admin_clear_plan(inp.org_id))
+
+
 def _payments(ctx: ResolvedCtx, inp: PaymentsInput) -> dict:
     from ..db import billing as db_billing
 
@@ -110,5 +122,19 @@ CAPABILITIES += [
     Capability(
         key="billing.payments", handler=_payments, Input=PaymentsInput,
         authz=ORG_MEMBER, rest=RestBinding("GET", "/api/me/billing/payments"),
+    ),
+    # Admin : forcer un plan sur une org SANS paiement (abonnement comp) ou le
+    # retirer (plan=null). Ouvre l'entitlement (options + plafond messagerie du
+    # plan) immédiatement. Sert pilotes/partenaires + palier « sur devis ».
+    Capability(
+        key="billing.admin_set_plan", handler=_admin_set_plan, Input=AdminPlanInput,
+        authz=SUPER_ADMIN,
+        description="[super admin] Force a plan on an org WITHOUT payment (comp "
+                    "subscription): unlocks the plan's options + messaging seat cap "
+                    "immediately, no PSP, never charged. Pass plan=null to remove a "
+                    "comp plan (refuses to touch a PAID subscription). For pilots, "
+                    "partners and the custom 'enterprise' tier.",
+        mcp="oto_admin_set_plan",
+        rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"}),
     ),
 ]

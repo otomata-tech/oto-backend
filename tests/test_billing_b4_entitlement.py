@@ -21,8 +21,8 @@ def test_comp_still_wins_without_subscription(monkeypatch):
 
 
 def test_subscription_plan_unlocks_its_options(monkeypatch):
-    _wire(monkeypatch, plan="standard")
-    assert access.has_option("u1", "unipile") is True      # dans PLANS['standard']
+    _wire(monkeypatch, plan="solo")
+    assert access.has_option("u1", "unipile") is True      # dans PLANS['solo']
     assert access.has_option("u1", "autre_option") is False  # pas dans le plan
 
 
@@ -36,7 +36,7 @@ def test_no_org_short_circuits(monkeypatch):
     called = {}
     monkeypatch.setattr(access.db, "has_option_comp", lambda et, eid, opt: False)
     monkeypatch.setattr(access.db, "subscription_plan_for_org",
-                        lambda oid: called.update(oid=oid) or "standard")
+                        lambda oid: called.update(oid=oid) or "solo")
     monkeypatch.setattr(access, "current_org", lambda sub: None)
     assert access.has_option("u1", "unipile") is False
     assert called == {}                                     # jamais interrogé
@@ -44,7 +44,7 @@ def test_no_org_short_circuits(monkeypatch):
 
 def test_explicit_org_kwarg_reaches_subscription(monkeypatch):
     # fiche admin d'un tiers : l'org EXPLICITE est utilisée (pas current_org).
-    _wire(monkeypatch, plan="standard")
+    _wire(monkeypatch, plan="solo")
     monkeypatch.setattr(access, "current_org",
                         lambda sub: (_ for _ in ()).throw(AssertionError("ne doit pas être lu")))
     assert access.has_option("tiers", "unipile", org=99) is True

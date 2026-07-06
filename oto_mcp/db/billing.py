@@ -132,6 +132,45 @@ def set_subscription_card(org_id: int, card_id: str) -> bool:
     return n > 0
 
 
+def set_comp_subscription(org_id: int, plan: str, *,
+                          granted_by: Optional[str] = None) -> None:
+    """Abonnement FORCÉ par un admin, non payé (ADR 0043) : `provider='comp'`,
+    `next_billing_at=NULL` → jamais tiré par le billing_runner, jamais de PSP
+    derrière. Ouvre l'entitlement exactement comme un abonnement payé (le seam
+    has_option ne regarde que le plan). Remplace tout abonnement existant."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO org_subscriptions "
+            "  (org_id, provider, method, plan, status, next_billing_at) "
+            "VALUES (%s, 'comp', 'comp', %s, 'active', NULL) "
+            "ON CONFLICT (org_id) DO UPDATE SET "
+            "  provider='comp', method='comp', plan=EXCLUDED.plan, "
+            "  status='active', customer_id=NULL, card_id=NULL, sepa_id=NULL, "
+            "  mandate_id=NULL, next_billing_at=NULL, grace_until=NULL, "
+            "  canceled_at=NULL, updated_at=NOW()",
+            (org_id, plan),
+        )
+
+
+def is_comp_subscription(org_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM org_subscriptions WHERE org_id=%s AND provider='comp'",
+            (org_id,),
+        ).fetchone()
+    return row is not None
+
+
+def delete_subscription(org_id: int) -> bool:
+    """Retire complètement l'abonnement (retrait d'un comp admin). Pour un
+    abonnement PAYÉ, préférer la résiliation à fin de période (mark_cancel…)."""
+    with _connect() as conn:
+        n = conn.execute(
+            "DELETE FROM org_subscriptions WHERE org_id=%s", (org_id,)
+        ).rowcount
+    return n > 0
+
+
 def mark_cancel_at_period_end(org_id: int) -> bool:
     """Résiliation à fin de période : stampe `canceled_at`, coupe la prochaine
     échéance. Le statut RESTE `active` (entitlement jusqu'à current_period_end) —

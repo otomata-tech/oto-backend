@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import INVALID_PARAMS, ErrorData
 
 from .. import access
 
@@ -137,25 +139,12 @@ def register(mcp: FastMCP) -> None:
             out["_etablissements_truncated"] = len(etabs)
         return out
 
-    @mcp.tool()
-    def fr_get(siren: str) -> dict:
-        """Full company profile by SIREN: identity (siège, directors, NAF,
-        employees) + 7 top financial ratios from the latest INPI/BCE filing
-        + recent BODACC legal events. Aggregates 3 open data sources in parallel.
-        Use this as first call when investigating a company.
+    # Nombre max de SIREN par appel batch : borne le fan-out sur les API amont
+    # (recherche-entreprises/INPI/BODACC, rate-limitées) ET la taille de réponse.
+    _FR_GET_BATCH_MAX = 20
 
-        `latest_bilan` is trimmed to 7 B2B-relevant ratios (CA, résultat net,
-        EBE, marge EBE, autonomie financière, taux d'endettement, liquidité).
-        For the full ratio set, call `fr_bilan(siren, date_cloture)`.
-
-        Resilient to per-source failures: a timeout or error on INPI (bilan) or
-        BODACC (events) degrades gracefully — the available blocks are returned
-        and the failing sources are listed under `partial_errors`. Only an
-        identity failure (the keystone source) fails the whole call.
-
-        Args:
-            siren: SIREN number (9 digits).
-        """
+    def _fr_profile(siren: str) -> dict:
+        """Corps de `fr_get` pour UN siren — factorisé pour le mode batch."""
         from concurrent.futures import ThreadPoolExecutor
 
         partial_errors: dict[str, str] = {}
@@ -221,6 +210,59 @@ def register(mcp: FastMCP) -> None:
         if partial_errors:
             out["partial_errors"] = partial_errors
         return out
+
+    @mcp.tool()
+    def fr_get(siren: str | None = None, sirens: list | None = None) -> dict:
+        """Full company profile by SIREN: identity (siège, directors, NAF,
+        employees) + 7 top financial ratios from the latest INPI/BCE filing
+        + recent BODACC legal events. Aggregates 3 open data sources in parallel.
+        Use this as first call when investigating a company.
+
+        BATCH: pass `sirens=[…]` (max 20 per call, chunk beyond) to qualify a
+        LIST in one call — returns `{profiles: […], count}`, one profile per
+        SIREN in input order; per-SIREN failures degrade to `{error, siren}`
+        without failing the batch. For bulk HQ addresses only (no financials),
+        `fr_stock_enrich` is cheaper.
+
+        `latest_bilan` is trimmed to 7 B2B-relevant ratios (CA, résultat net,
+        EBE, marge EBE, autonomie financière, taux d'endettement, liquidité).
+        For the full ratio set, call `fr_bilan(siren, date_cloture)`.
+
+        Resilient to per-source failures: a timeout or error on INPI (bilan) or
+        BODACC (events) degrades gracefully — the available blocks are returned
+        and the failing sources are listed under `partial_errors`. Only an
+        identity failure (the keystone source) fails the whole call.
+
+        Args:
+            siren: SIREN number (9 digits) — single-company mode.
+            sirens: list of SIREN numbers (max 20) — batch mode. Give one OR
+                the other, not both.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        if (siren is None) == (sirens is None):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="donner `siren` (unitaire) OU `sirens` (batch), pas les deux"))
+        if sirens is None:
+            return _fr_profile(str(siren).strip())
+        cleaned = [str(s).strip() for s in sirens if str(s).strip()]
+        if not cleaned:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="`sirens` est vide"))
+        if len(cleaned) > _FR_GET_BATCH_MAX:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"`sirens` est limité à {_FR_GET_BATCH_MAX} par appel "
+                        f"(reçu {len(cleaned)}) — découpe en lots"))
+        def _one(s: str) -> dict:
+            try:
+                return _fr_profile(s)
+            except Exception as exc:  # un SIREN en échec ne fait pas tomber le lot
+                return {"error": f"{type(exc).__name__}: {exc}", "siren": s}
+
+        # 4 profils en vol max (chacun ouvre 3-4 appels amont) : reste sous les
+        # rate limits des API publiques tout en parallélisant le lot.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            profiles = list(pool.map(_one, cleaned))
+        return {"profiles": profiles, "count": len(profiles)}
 
     @mcp.tool()
     def fr_directors(siren: str) -> list[dict]:

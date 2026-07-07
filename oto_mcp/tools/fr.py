@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- Identité (API Recherche Entreprises, open data) ---
 
-    @mcp.tool()
+    @mcp.tool(meta={"exhaustive_via": "fr_stock_search"})
     def fr_search(
         query: Optional[str] = None,
         naf: Optional[str] = None,
@@ -46,6 +46,13 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Search French companies — returns identity, HQ, NAF, employees,
         directors, finances, matched establishments. At least one filter required.
+
+        ⚠️ **Énumération plafonnée ~10 000** (`page × per_page`, per_page ≤ 25) :
+        l'API tronque **sans erreur** au-delà. Pour ÉNUMÉRER exhaustivement un grand
+        ensemble (« toutes les boîtes du secteur X en région Y » quand il y en a
+        des dizaines de milliers), bascule sur **`fr_stock_search`** (parquet SIRENE,
+        pas de plafond). Ce tool reste le bon choix pour chercher/qualifier (indexé,
+        rapide, filtres riches) tant que le résultat tient sous ~10k.
 
         ⚠️ Geographic filters (departement, code_postal, commune) match ANY
         establishment, NOT only the head office (siège). To target companies whose

@@ -230,7 +230,7 @@ def register(mcp: FastMCP) -> None:
             country=country, language=language,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta={"all_via": "serper_reviews_all"})
     def serper_reviews(
         cid: Optional[str] = None,
         fid: Optional[str] = None,
@@ -242,7 +242,13 @@ def register(mcp: FastMCP) -> None:
         country: Optional[str] = "fr",
         language: Optional[str] = "fr",
     ) -> dict:
-        """Google reviews of a place via Serper.
+        """Google reviews of a place via Serper — ONE page (~10 reviews).
+
+        ⚠️ Renders a single page : un seul appel **sous-représente
+        silencieusement** les avis d'un lieu (le total réel = `ratingCount` du
+        lieu). Pour analyser TOUS les avis (sentiment, thèmes récurrents), utilise
+        **`serper_reviews_all`** (pagine le curseur jusqu'à épuisement). Ce tool
+        reste bon pour un échantillon rapide ou pour paginer à la main.
 
         Identify the place by one of `cid` / `fid` / `place_id` (from a
         serper_places_search / serper_maps_search result) or by free-text `query`.
@@ -261,6 +267,49 @@ def register(mcp: FastMCP) -> None:
         return _run(
             "search_reviews", cid=cid, fid=fid, place_id=place_id, query=query,
             sort_by=sort_by, topic_id=topic_id, next_page_token=next_page_token,
+            country=country, language=language,
+        )
+
+    @mcp.tool(meta={"technique": "reviews-census"})
+    def serper_reviews_all(
+        cid: Optional[str] = None,
+        fid: Optional[str] = None,
+        place_id: Optional[str] = None,
+        query: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        topic_id: Optional[str] = None,
+        max_reviews: int = 200,
+        country: Optional[str] = "fr",
+        language: Optional[str] = "fr",
+    ) -> dict:
+        """ALL reviews of a place — paginates until exhausted (up to max_reviews).
+
+        À utiliser — PAS `serper_reviews` — dès qu'il faut analyser l'ENSEMBLE
+        des avis d'un lieu (sentiment global, thèmes récurrents, réputation). Un
+        `serper_reviews` seul ne rend qu'une page (~10) et sous-représente
+        silencieusement. Ce tool suit le curseur `nextPageToken` côté serveur
+        jusqu'à épuisement, ou jusqu'au plafond `max_reviews` (borne le coût — un
+        lieu peut avoir des milliers d'avis ; `truncated=True` signale la coupe).
+
+        Identifier le lieu par `cid`/`fid`/`place_id` (d'un serper_places_search /
+        serper_maps_search) ou par `query` libre.
+
+        Args:
+            cid: Google customer id of the place.
+            fid: Google feature id of the place.
+            place_id: Google place id.
+            query: Free-text place lookup (alternative to ids).
+            sort_by: 'mostRelevant' | 'newest' | 'highestRating' | 'lowestRating'.
+            topic_id: Filter reviews by topic id.
+            max_reviews: Plafond d'avis récupérés (défaut 200).
+            country: Country code (default "fr").
+            language: Language code (default "fr").
+
+        Returns {count, reviews[], pages_fetched, truncated}.
+        """
+        return _run(
+            "reviews_all", cid=cid, fid=fid, place_id=place_id, query=query,
+            sort_by=sort_by, topic_id=topic_id, max_reviews=max_reviews,
             country=country, language=language,
         )
 

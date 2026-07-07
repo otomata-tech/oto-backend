@@ -15,16 +15,18 @@ from .. import access
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.sirene import EntreprisesClient, SireneClient
-    from oto.tools.inpi import InpiClient
-    from oto.tools.bodacc import BodaccClient
-    from france_opendata import EgaproClient  # open data, sans clé (comme foncier/urba)
-    from .. import db  # BOAMP : index PG local (france-opendata#3), pas d'API live
+    from oto.tools.sirene import SireneClient  # INSEE keyé — reste in-process (FOD sans credential)
+    from .. import db  # BOAMP/ACCO : index PG local du backend (barreau data B2b)
+    from .. import fod_fr
 
-    entreprises = EntreprisesClient()
-    inpi = InpiClient()
-    bodacc = BodaccClient()
-    egapro = EgaproClient()
+    # Données entreprise open-data servies par le service FOD dédié (ADR 0028) — le
+    # backend n'exécute plus ces appels (dont l'INPI DuckDB, workload lourd) in-process.
+    # Objets proxy à surface identique aux clients france_opendata → seuls ces
+    # bindings changent, les corps des tools restent inchangés.
+    entreprises = fod_fr.entreprises
+    inpi = fod_fr.inpi
+    bodacc = fod_fr.bodacc
+    egapro = fod_fr.egapro
 
     # --- Identité (API Recherche Entreprises, open data) ---
 

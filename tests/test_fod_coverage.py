@@ -25,6 +25,16 @@ import pytest
 # Décision explicite de NON-exposition, par module data FOD (la raison est le
 # contrat : un module qu'on choisit de ne pas exposer se justifie ici, un oubli
 # n'a pas de raison à donner → il casse le test).
+# Clients foncier (données de site) consommés via le service FOD en proxy HTTP
+# LIVE (oto_mcp/fod_foncier.py → /api/foncier/*, ADR 0028 extraction totale, B1) :
+# le backend n'exécute plus ces appels in-process → plus d'import du client lib
+# direct. Exposés à l'utilisateur (tools foncier_*), mais pas via la classe lib.
+_FONCIER_VIA_FOD = (
+    "client foncier consommé via le service FOD dédié en proxy HTTP live "
+    "(oto_mcp/fod_foncier.py → /api/foncier/*, ADR 0028 extraction totale) — "
+    "le tool foncier_* reste exposé, mais plus via le client lib in-process"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -34,6 +44,13 @@ FOD_NOT_EXPOSED = {
                   "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
                   "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
                   "pas le client lib direct",
+    "ban": _FONCIER_VIA_FOD,
+    "apicarto": _FONCIER_VIA_FOD,
+    "bdtopo": _FONCIER_VIA_FOD,
+    "pvgis": _FONCIER_VIA_FOD,
+    "enedis": _FONCIER_VIA_FOD,
+    "dvf": _FONCIER_VIA_FOD,
+    "dpe": _FONCIER_VIA_FOD,
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

@@ -568,6 +568,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "email": user.get("email"),
             "name": user.get("name"),
             "avatar_url": user.get("avatar_url"),
+            # Préférence de langue de l'UI dashboard ('en'|'fr'), NULL = non définie
+            # (le front retombe sur la langue du navigateur). Écrite via PUT /api/me/locale.
+            "locale": user.get("locale"),
             "role": status["role"],
             "active_org": active_org,
             "active_org_name": active_org_name,

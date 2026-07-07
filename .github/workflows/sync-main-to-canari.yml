@@ -1,0 +1,28 @@
+name: sync-main-to-canari
+# Filet anti-divergence : après tout changement de `main` (typiquement un hotfix prod),
+# reporte-le sur `canari` pour que main reste toujours un sous-ensemble de canari.
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: canari
+          fetch-depth: 0
+      - name: Reporter main sur canari
+        run: |
+          git config user.name "oto-bot"
+          git config user.email "bot@otomata.tech"
+          git fetch origin main
+          if git merge --no-edit origin/main; then
+            git push origin canari
+            echo "canari alignée sur main."
+          else
+            echo "::error::Conflit main→canari — résolution manuelle requise (merge origin/main dans canari)."
+            exit 1
+          fi

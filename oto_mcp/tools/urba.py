@@ -7,7 +7,7 @@ territoriale** d'un point ou d'une commune :
 - risques naturels/technologiques recensés + aléa retrait-gonflement des argiles,
 - Quartiers Prioritaires de la Ville (zonage fiscal),
 - secteurs d'intervention EPFIF (maîtrise foncière, Île-de-France),
-- socio-démographie communale (INSEE Mélodi).
+- socio-démographie communale (INSEE Mélodi) et à l'IRIS/quartier (parquet INSEE bundlé).
 
 Tous les clients viennent de `france-opendata` (open data, pas de clé). Géocoder
 l'adresse au préalable via `foncier_geocode` (→ lat/lon + code INSEE).
@@ -23,13 +23,15 @@ from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata import EpfifClient, GpuClient, InseeMelodiClient, QpvClient
+    from france_opendata import (EpfifClient, GpuClient, InseeIrisClient,
+                                 InseeMelodiClient, QpvClient)
     from france_opendata.georisques import GeorisquesClient
 
     gpu = GpuClient()
     georisques = GeorisquesClient()
     qpv = QpvClient()
     insee = InseeMelodiClient()
+    iris = InseeIrisClient()  # parquet IRIS bundlé, connexion DuckDB cachée
     epfif = EpfifClient()  # instance unique → cache TTL partagé sur la durée du process
 
     # --- zonage PLU/PLUi (Géoportail de l'Urbanisme) -------------------------
@@ -134,9 +136,11 @@ def register(mcp: FastMCP) -> None:
         """Commune socio-demographic profile (INSEE Mélodi, open data).
 
         Aggregates, best-effort (a failing block is reported per section, not fatal):
-        population (2011/2016/2022), households by family type, one-person households,
-        income (median standard of living, poverty rate) and housing (main/vacant/
-        secondary dwellings, tenure split). Takes the INSEE commune code.
+        population (last 3 census millésimes → trend), households by family type,
+        one-person households, income (median standard of living, poverty rate) and
+        housing (main/vacant/secondary dwellings, tenure split). Takes the INSEE
+        commune code — for Paris/Lyon/Marseille an ARRONDISSEMENT code (e.g. 13201 =
+        Marseille 1er) works too. For a finer, within-commune breakdown use urba_iris.
         """
         out: dict = {"code_insee": code_insee}
         blocks = {
@@ -152,3 +156,33 @@ def register(mcp: FastMCP) -> None:
             except Exception as e:  # noqa: BLE001 — dégrader par bloc
                 out[key] = {"error": f"{type(e).__name__}: {e}"}
         return out
+
+    # --- recensement à l'IRIS / quartier (INSEE, parquet bundlé) --------------
+
+    @mcp.tool()
+    def urba_iris(code: str) -> dict:
+        """INSEE census at the IRIS ('quartier') level — finer than a commune.
+
+        The IRIS (~2 000 inhabitants) is INSEE's neighbourhood mesh: communes of
+        ≥10 000 inhabitants (and most of 5 000-10 000) are split into IRIS. `urba_socio`
+        stops at the commune; this drills inside it.
+
+        `code` accepts either:
+        - a 5-digit COMMUNE / arrondissement code → returns ALL IRIS of that commune
+          plus commune totals (e.g. '13201' = Marseille 1er, '75112' = Paris 12e) ;
+        - a 9-digit IRIS code → returns that single IRIS.
+
+        Per IRIS (RP 2021 counts): population (+ age bands 0-19/20-64/65+), dwellings,
+        main/secondary/vacant residences, houses vs flats, and households living in a
+        flat (rp_en_appartement — a proxy for laundromat/shared-service demand).
+        `typ_iris`: H habitat / A activité / D divers / Z whole undivided commune.
+        Neighbourhood NAMES aren't in this file (lab_iris is INSEE's numeric label).
+        For population TREND per quartier, note this millésime is single-year; use
+        urba_socio at the arrondissement level for evolution.
+        """
+        code = str(code).strip()
+        if len(code) >= 9:
+            row = iris.by_iris(code)
+            return row or {"code": code, "found": False,
+                           "note": "code IRIS (9 chiffres) inconnu"}
+        return iris.by_commune(code)

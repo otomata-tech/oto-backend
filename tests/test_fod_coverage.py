@@ -43,6 +43,15 @@ _FR_VIA_FOD = (
     "parquet isolé) — le tool fr_* reste exposé, plus via le client lib in-process"
 )
 
+# urba/sante/frenchtech (B3) : idem — proxy HTTP via FOD ; IRIS (parquet bundlé) et
+# HAS ESSMS (parquet distant) = DuckDB isolé hors event-loop backend.
+_B3_VIA_FOD = (
+    "client urba/sante/frenchtech consommé via le service FOD dédié "
+    "(oto_mcp/fod_urba|sante|frenchtech.py → /api/{urba,sante,frenchtech}/*, ADR "
+    "0028 B3 — IRIS/HAS ESSMS = DuckDB isolé) — le tool reste exposé, plus via le "
+    "client lib in-process"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -59,6 +68,7 @@ FOD_NOT_EXPOSED = {
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,
+    "sitadel": _FONCIER_VIA_FOD,  # permis DiDo — via fod_foncier (B1) ; dernier ref lib (DIDO_PAGE_SIZES) inliné au B4
     # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
     # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
     # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
@@ -71,6 +81,17 @@ FOD_NOT_EXPOSED = {
     "boamp": "index BOAMP (marchés publics) possédé par le service FOD (tables PG + "
              "ingest boamp_ingest côté fod-0) — le backend interroge /api/fr/tenders/* "
              "via oto_mcp/fod_fr.py, plus de client/ingest lib in-process (ADR 0028 B2b)",
+    # urba / sante / frenchtech (B3) : consommés via le service FOD (proxy HTTP ;
+    # IRIS et HAS ESSMS = DuckDB isolé). georisques est partagé urba + foncier_icpe.
+    "gpu": _B3_VIA_FOD,
+    "georisques": _B3_VIA_FOD,
+    "qpv": _B3_VIA_FOD,
+    "epfif": _B3_VIA_FOD,
+    "insee_melodi": _B3_VIA_FOD,
+    "insee_iris": _B3_VIA_FOD,
+    "finess": _B3_VIA_FOD,
+    "has_essms": _B3_VIA_FOD,
+    "frenchtech": _B3_VIA_FOD,
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

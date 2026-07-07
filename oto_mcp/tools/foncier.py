@@ -39,11 +39,14 @@ except Exception:  # pragma: no cover - extra `apps` absent
     _PREFAB_UI_AVAILABLE = False
 
 
-def register(mcp: FastMCP) -> None:
-    from france_opendata.georisques import GeorisquesClient
-    from france_opendata.sitadel import DIDO_PAGE_SIZES
+# Tailles de page autorisées par l'API DiDo (Sit@del) — inliné (ex-import
+# france_opendata.sitadel, retiré au B4 : plus aucune dép directe à la lib).
+_DIDO_PAGE_SIZES = (10, 20, 50, 100)
 
+
+def register(mcp: FastMCP) -> None:
     from .. import fod_foncier
+    from .. import fod_urba  # georisques (ICPE) — servi par FOD depuis B3
 
     # Données de site servies par le service FOD dédié (ADR 0028) — le backend
     # n'exécute plus ces appels in-process. Objets proxy à surface identique aux
@@ -57,9 +60,8 @@ def register(mcp: FastMCP) -> None:
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
     sitadel = fod_foncier.sitadel
-    # georisques (ICPE) reste in-process : partagé avec le connecteur urba, il
-    # rejoindra FOD au barreau urba (sinon il vivrait à deux endroits).
-    georisques = GeorisquesClient()
+    # georisques (ICPE) : servi par FOD (B3), partagé avec urba — même proxy.
+    georisques = fod_urba.georisques
 
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
 
@@ -132,7 +134,7 @@ def register(mcp: FastMCP) -> None:
 
     def _snap_page_size(limit: int) -> int:
         """Cale `limit` sur une taille de page DiDo autorisée (10/20/50/100)."""
-        return next((s for s in DIDO_PAGE_SIZES if s >= limit), DIDO_PAGE_SIZES[-1])
+        return next((s for s in _DIDO_PAGE_SIZES if s >= limit), _DIDO_PAGE_SIZES[-1])
 
     @mcp.tool()
     def foncier_permis_search(

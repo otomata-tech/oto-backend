@@ -118,10 +118,21 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = byo or access.has_option(sub, "unipile", org=org)
+    # Version d'API de la clé RÉSOLUE (v1/v2 selon la BYO) pour l'affichage carte.
+    # Self seulement (pas de résolution cross-contexte pour un tiers) ; best-effort.
+    api_version = "v1"
+    if org is access._UNSET:
+        try:
+            api_version = access.resolve_credential(
+                "unipile", want="auto", sub=sub, emit_on_failure=False
+            ).config.get("api_version") or "v1"
+        except Exception:  # noqa: BLE001 — affichage, jamais bloquant
+            pass
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
+        "api_version": api_version,  # v1|v2 de la clé résolue (info carte)
         "channels": _channels_from(accts),
     }
 

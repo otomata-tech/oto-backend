@@ -31,6 +31,7 @@ from . import (
     upload_tokens,
     opendata,
     billing,
+    legal_acceptance,
     guides,
 )
 
@@ -40,7 +41,7 @@ from . import (
 _MODULES = (
     _conn, _schema, _init, users, unipile, connector_grants, keys, usage,
     platform_instructions, visibility, emails, google, datastore, projects,
-    tokens, upload_tokens, opendata, billing, guides,
+    tokens, upload_tokens, opendata, billing, legal_acceptance, guides,
 )
 _g = globals()
 for _mod in _MODULES:

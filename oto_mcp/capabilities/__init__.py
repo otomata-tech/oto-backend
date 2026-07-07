@@ -26,6 +26,8 @@ from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,
 from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) + projections
 # Abonnement par org (ADR 0043) — REST-only : subscribe/confirm/cancel (org_admin) + status.
 from . import billing  # noqa: F401 — billing.{plans,status,subscribe,confirm,cancel,payments}
+# Acceptation des documents légaux (CGU/CGV/DPA) — REST-only, journal append-only.
+from . import legal  # noqa: F401 — me.legal.{status,accept} (GET/POST /api/me/legal)
 # Doctrine & instructions d'org (ADR 0009) — CRUD doctrine + usage, membre + admin.
 from . import orgs_instructions  # noqa: F401 — org.{doctrine.*, instruction.*}
 # Bibliothèque publique de doctrines (marketplace) — list/get/publish/fork/unpublish.

@@ -975,4 +975,24 @@ CREATE TABLE IF NOT EXISTS billing_payments (
 CREATE INDEX IF NOT EXISTS idx_billing_payments_org ON billing_payments(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_billing_payments_open
     ON billing_payments(created_at) WHERE status NOT IN ('captured', 'canceled', 'refused', 'failed', 'expired', 'unpaid');
+
+-- Journal d'acceptation des documents légaux (CGU/CGV/DPA…). Preuve juridique :
+-- quel texte (slug + version figée) a été accepté, par qui (sub), pour quelle org,
+-- dans quel contexte (access | purchase), et quand. APPEND-ONLY : on n'écrase jamais
+-- une ligne — une nouvelle acceptation (nouvelle version, re-sollicitation) = une
+-- nouvelle ligne. `org_id` NULL = acceptation au niveau user (ex. accès/inscription).
+CREATE TABLE IF NOT EXISTS legal_acceptances (
+    id BIGSERIAL PRIMARY KEY,
+    sub TEXT NOT NULL,
+    org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
+    doc_slug TEXT NOT NULL,                 -- terms | cgv | dpa | privacy | legal
+    doc_version TEXT NOT NULL,              -- version figée acceptée (ex. "2.0")
+    context TEXT NOT NULL,                  -- access | purchase
+    lang TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_legal_acceptances_sub ON legal_acceptances(sub, doc_slug, accepted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_legal_acceptances_org ON legal_acceptances(org_id, doc_slug, accepted_at DESC);
 """

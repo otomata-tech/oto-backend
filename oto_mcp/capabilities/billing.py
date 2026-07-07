@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import billing
+from .. import billing, legal_docs
+from ..db import legal_acceptance as dbla
 from ..stancer_client import StancerError
 from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -28,6 +29,9 @@ class SubscribeInput(BaseModel):
     iban: str | None = None
     holder_name: str | None = None
     mobile: str | None = None
+    # Acceptation des CGU/CGV/DPA (obligatoire à l'achat). Le dashboard coche la
+    # case puis souscrit dans le même appel → acceptation tracée atomiquement.
+    accept_terms: bool = False
 
 
 class PaymentsInput(BaseModel):
@@ -63,7 +67,32 @@ def _status(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _domain(billing.status, ctx.org_id)
 
 
+def _require_legal_acceptance(ctx: ResolvedCtx, accept_now: bool) -> None:
+    """Gate d'achat (obligation légale) : exiger l'acceptation des CGU/CGV/DPA à
+    leur version courante. Si `accept_now`, les acceptations manquantes sont
+    enregistrées (contexte 'purchase', scopées à l'org qui souscrit) ; sinon on
+    refuse proprement. Un changement de version ⇒ re-sollicitation automatique."""
+    latest = dbla.latest_acceptances(ctx.sub, ctx.org_id)
+    missing = [
+        slug for slug in legal_docs.required_slugs("purchase")
+        if not (latest.get(slug)
+                and latest[slug]["version"] == legal_docs.CURRENT_VERSIONS.get(slug))
+    ]
+    if not missing:
+        return
+    if not accept_now:
+        raise AuthzDenied(
+            400, "terms_not_accepted",
+            "acceptation requise avant de souscrire : " + ", ".join(missing))
+    for slug in missing:
+        dbla.record_legal_acceptance(
+            ctx.sub, slug, legal_docs.CURRENT_VERSIONS[slug], "purchase",
+            org_id=ctx.org_id)
+
+
 def _subscribe(ctx: ResolvedCtx, inp: SubscribeInput) -> dict:
+    _require_legal_acceptance(ctx, inp.accept_terms)
+
     def call():
         return billing.subscribe(ctx.org_id, inp.plan, inp.return_url,
                                  method=inp.method, iban=inp.iban,

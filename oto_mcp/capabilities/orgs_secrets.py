@@ -27,6 +27,7 @@ class SetSecretInput(BaseModel):
     api_key: str = ""                  # connecteurs mono-champ (clé simple)
     fields: Optional[dict[str, str]] = None   # connecteurs multi-champs (zoho/silae…)
     base_url: Optional[str] = None     # connecteurs remote uniquement (endpoint du bridge)
+    api_version: Optional[str] = None  # unipile : "v2" range {api_version, dsn} dans le meta (v1/v2 selon la BYO)
 
 
 class DeleteSecretInput(BaseModel):
@@ -41,6 +42,11 @@ def _set_secret(ctx: ResolvedCtx, inp: SetSecretInput) -> dict:
     meta, code = connectors.org_secret_meta(inp.provider, base_url)
     if code:
         raise AuthzDenied(400, code, f"Provider/base_url invalide : {code}.")
+    # Version d'API portée par le credential (v1/v2 « selon la BYO ») : pour unipile,
+    # v2 range {api_version, dsn} dans le meta (lu par resolve_credential → config →
+    # unipile_client / hosted-auth). Absence = défaut v1 (legacy).
+    if inp.provider == "unipile" and str(inp.api_version or "").lower() in ("v2", "2"):
+        meta = {**(meta or {}), "api_version": "v2", "dsn": "api.unipile.com"}
     # Mono-champ (api_key) ou multi-champs (fields packés) — source unique.
     try:
         secret = credentials_store.secret_from_input(inp.provider, inp.api_key, inp.fields)

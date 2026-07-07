@@ -556,7 +556,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "il te faut une clé **harvest api** greenhouse.\n"
             "- dans greenhouse, va dans **configure → dev center → api credentials** et crée une clé de type *harvest*\n"
             "- donne-lui les permissions candidats/jobs/applications/users\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [greenhouse.io](https://www.greenhouse.io)\n"
             "- ⚠️ les écritures (créer un candidat, ajouter une note) exigent un `on_behalf_of` = l'id d'un utilisateur greenhouse, récupéré via `greenhouse_users`"
         )),
@@ -572,7 +572,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api lever", body_md=(
             "il te faut une clé **api lever**.\n"
             "- dans lever, va dans **settings → integrations and API → API credentials** et génère une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [lever.co](https://www.lever.co)\n"
             "- ⚠️ les écritures (créer un candidat, ajouter une note) exigent un `perform_as` = l'id d'un utilisateur lever, récupéré via `lever_users`"
         )),
@@ -588,7 +588,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api ashby", body_md=(
             "il te faut une clé **api ashby**.\n"
             "- dans ashby, va dans **admin → integrations → API** et crée une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [ashbyhq.com](https://www.ashbyhq.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(
@@ -603,7 +603,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api teamtailor", body_md=(
             "il te faut une clé **api teamtailor**.\n"
             "- dans teamtailor, va dans **settings → integrations → API keys** et génère une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [teamtailor.com](https://www.teamtailor.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(
@@ -619,7 +619,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "recruitee demande **deux champs** :\n"
             "- `api_token` — ton token api personnel (recruitee, **settings → apps & plugins → personal API tokens**)\n"
             "- `company_id` — l'identifiant de ta société recruitee (visible dans l'url de ton espace, ex. `recruitee.com/c/<company_id>`)\n"
-            "renseigne les deux dans tes [clés de connecteurs](https://app.oto.ninja/).\n"
+            "renseigne les deux dans tes [clés de connecteurs](https://manage.oto.cx/).\n"
             "- doc éditeur : [recruitee.com](https://www.recruitee.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(

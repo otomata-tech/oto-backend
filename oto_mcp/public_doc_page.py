@@ -65,7 +65,7 @@ def _shell(*, title: str, inner: str) -> str:
 </style></head>
 <body><div class=wrap>
 {inner}
-  <footer>Partagé via <a href="https://oto.ninja">Oto</a> — la boîte à outils d'automatisation.</footer>
+  <footer>Partagé via <a href="https://oto.cx">Oto</a> — la boîte à outils d'automatisation.</footer>
 </div></body></html>"""
 
 

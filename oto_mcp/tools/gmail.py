@@ -1,7 +1,7 @@
 """Gmail — surface oto-core (GmailClient) exposée par-utilisateur, multi-compte.
 
 Chaque user connecte un ou plusieurs comptes Google sur
-`https://app.oto.ninja/` (section Google) via le flow OAuth unifié (scope
+`https://manage.oto.cx/` (section Google) via le flow OAuth unifié (scope
 `gmail.modify`). Les tools `gmail_*` agissent sur le compte par défaut, ou sur
 le compte ciblé par le paramètre `account` (l'adresse email).
 

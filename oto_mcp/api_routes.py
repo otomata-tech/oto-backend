@@ -930,6 +930,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         c = _credentialable(provider)
         if c is None:
             return _json_error(request, 404, "unknown_provider")
+        # RBAC connecteur (ADR 0025) : aligner la POSE sur l'USAGE — un membre non
+        # autorisé sur un connecteur RESTREINT dans son org ne peut pas poser de clé
+        # perso (sinon une clé inerte serait posable en direct, hors UI). Même seam
+        # que la résolution (`require_connector_access`), pas de règle dupliquée.
+        from mcp.shared.exceptions import McpError
+        try:
+            access.require_connector_access(provider, sub)
+        except McpError as e:
+            return _json_error(request, 403, "connector_restricted", e.error.message)
         try:
             body = await request.json()
         except Exception:

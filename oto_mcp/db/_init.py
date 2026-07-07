@@ -350,6 +350,15 @@ def init_db() -> None:
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS personal_of TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_orgs_personal_of "
                      "ON orgs(personal_of) WHERE personal_of IS NOT NULL")
+        # MFA obligatoire par org (voie « org Logto miroir », ADR 0044/sécu-auth).
+        #   require_mfa   = l'org impose le 2ᵉ facteur à ses membres (toggle org_admin).
+        #   logto_org_id  = l'organization Logto MIROIR créée derrière l'org quand le
+        #                   MFA est activé (isMfaRequired=true + membres synchronisés
+        #                   par sub) ; NULL tant que le MFA n'est pas activé.
+        # Source de vérité (org, membres, droits) = CE PG ; l'org Logto n'est qu'un
+        # miroir d'enforcement MFA au login (aucune autorité). Voir docs/auth-logto.md.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS require_mfa BOOLEAN NOT NULL DEFAULT FALSE")
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS logto_org_id TEXT")
         # Identité par org (ADR 0015) : visibilité scopée par (sub, org_id) ; org_id=0
         # = profil perso/global. Migration ONE-SHOT (gardée sur l'absence d'org_id) :
         # ajoute la colonne (existants → 0 = perso), re-keye les PK, puis BACKFILL =

@@ -89,6 +89,9 @@ def register(mcp: FastMCP) -> None:
                     "name": o["name"] if o else None,
                     "role": org_store.get_org_role(active_org, sub),
                     "scope": "call" if has_call_pin else "home",
+                    # MFA obligatoire de l'org (le 2ᵉ facteur est imposé au login des
+                    # membres, enforcé par Logto via l'org miroir — cf. mfa_mirror).
+                    "require_mfa": org_store.get_org_mfa(active_org)["require_mfa"],
                 }
         except Exception as e:
             logger.warning("whoami: org lookup failed: %s", e)

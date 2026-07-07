@@ -55,7 +55,10 @@ def _allowed_origins() -> list[str]:
     if raw:
         return [o.strip() for o in raw.split(",") if o.strip()]
     return [
-        "https://oto.ninja",
+        "https://oto.cx",                   # domaine marketing canonique (cutover ADR 0040)
+        "https://www.oto.cx",
+        "https://manage.oto.cx",            # oto-dashboard PROD (cutover ADR 0040)
+        "https://oto.ninja",                # preprod/canari + redirections
         "https://www.oto.ninja",
         "https://app.oto.ninja",
         "https://otomata.tech",             # formulaire de contact vitrine
@@ -531,12 +534,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         active_org_name = None
         active_org_logo_url = None
         org_role = None
+        active_org_require_mfa = False
         if active_org is not None:
             o = org_store.get_org(active_org)
             active_org_name = o["name"] if o else None
             # Logo EFFECTIF (upload > dérivé logo.dev du domaine déclaré).
             active_org_logo_url = org_store.effective_logo_url(o) if o else None
             org_role = org_store.get_org_role(active_org, sub)
+            # MFA obligatoire de l'org (2ᵉ facteur imposé au login des membres,
+            # enforcé par Logto via l'org miroir — cf. mfa_mirror).
+            active_org_require_mfa = org_store.get_org_mfa(active_org)["require_mfa"]
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».
         home_org = org_store.get_active_org(sub)
@@ -576,6 +583,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_name": active_org_name,
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
+            "active_org_require_mfa": active_org_require_mfa,
             "home_org": home_org,
             "home_org_name": home_org_name,
             "active_group": active_group,
@@ -972,10 +980,19 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                     request, 409, "account_required",
                     "Ce connecteur a déjà des comptes nommés — précise `account`.")
         secret = credentials_store.pack_secret(provider, fields)
+        # Version d'API portée par le credential (v1/v2 « selon la BYO ») : pour
+        # unipile, choisir v2 range {api_version, dsn} dans le meta (lu par
+        # resolve_credential → config → unipile_client / hosted-auth). Absence de
+        # meta = défaut v1 ; un re-set en v1 remet meta à {} (EXCLUDED.meta).
+        meta = None
+        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
+            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
         credentials_store.set_credential(
-            credentials_store.MEMBER, eid, provider, secret, set_by=sub, account=account)
+            credentials_store.MEMBER, eid, provider, secret, set_by=sub,
+            account=account, meta=meta)
         return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
-                               "account": account})
+                               "account": account,
+                               "api_version": (meta or {}).get("api_version", "v1")})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

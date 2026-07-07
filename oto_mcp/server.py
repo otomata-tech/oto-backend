@@ -394,15 +394,13 @@ def main():
 
         # Boucles de fond démarrées au boot en composant le lifespan FastMCP existant
         # (mono-process → une boucle par tâche). Chacune isolée en thread (ne bloque
-        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé) /
-        # OTO_BOAMP_REFRESH_ENABLED (index BOAMP, france-opendata#3).
+        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé).
+        # (L'index BOAMP/ACCO est passé au service FOD — ADR 0028 B2b — qui porte
+        # désormais l'ingest ; plus de refresh in-process backend.)
         _bg_loops = []
         if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
             from . import scheduler
             _bg_loops.append(scheduler.run_scheduler_loop)
-        if os.environ.get("OTO_BOAMP_REFRESH_ENABLED", "1") != "0":
-            from . import boamp_refresh
-            _bg_loops.append(boamp_refresh.run_boamp_refresh_loop)
         from . import billing as _billing
         if _billing.is_enabled() and os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
             # échéances d'abonnement + réconciliation (ADR 0043 B3) — gaté sur le

@@ -25,6 +25,24 @@ import pytest
 # Décision explicite de NON-exposition, par module data FOD (la raison est le
 # contrat : un module qu'on choisit de ne pas exposer se justifie ici, un oubli
 # n'a pas de raison à donner → il casse le test).
+# Clients foncier (données de site) consommés via le service FOD en proxy HTTP
+# LIVE (oto_mcp/fod_foncier.py → /api/foncier/*, ADR 0028 extraction totale, B1) :
+# le backend n'exécute plus ces appels in-process → plus d'import du client lib
+# direct. Exposés à l'utilisateur (tools foncier_*), mais pas via la classe lib.
+_FONCIER_VIA_FOD = (
+    "client foncier consommé via le service FOD dédié en proxy HTTP live "
+    "(oto_mcp/fod_foncier.py → /api/foncier/*, ADR 0028 extraction totale) — "
+    "le tool foncier_* reste exposé, mais plus via le client lib in-process"
+)
+
+# Idem pour les données entreprise (B2a) : entreprises/BODACC/Egapro en proxy HTTP,
+# INPI en DuckDB isolé sur FOD (parquet Signaux Faibles, hors event-loop backend).
+_FR_VIA_FOD = (
+    "client données entreprise consommé via le service FOD dédié "
+    "(oto_mcp/fod_fr.py → /api/fr/*, ADR 0028 extraction totale — INPI = DuckDB "
+    "parquet isolé) — le tool fr_* reste exposé, plus via le client lib in-process"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -34,6 +52,25 @@ FOD_NOT_EXPOSED = {
                   "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
                   "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
                   "pas le client lib direct",
+    "ban": _FONCIER_VIA_FOD,
+    "apicarto": _FONCIER_VIA_FOD,
+    "bdtopo": _FONCIER_VIA_FOD,
+    "pvgis": _FONCIER_VIA_FOD,
+    "enedis": _FONCIER_VIA_FOD,
+    "dvf": _FONCIER_VIA_FOD,
+    "dpe": _FONCIER_VIA_FOD,
+    # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
+    # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
+    # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
+    "entreprises": _FR_VIA_FOD,
+    "bodacc": _FR_VIA_FOD,
+    "inpi": _FR_VIA_FOD,
+    "egapro": _FR_VIA_FOD,
+    # BOAMP : index PG + ingest MIGRÉS au service FOD (B2b) — le backend interroge
+    # /api/fr/tenders/* via fod_fr, ne porte plus la table ni boamp_ingest.
+    "boamp": "index BOAMP (marchés publics) possédé par le service FOD (tables PG + "
+             "ingest boamp_ingest côté fod-0) — le backend interroge /api/fr/tenders/* "
+             "via oto_mcp/fod_fr.py, plus de client/ingest lib in-process (ADR 0028 B2b)",
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

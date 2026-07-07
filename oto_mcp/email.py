@@ -269,7 +269,7 @@ def send_alpha_invite_email(to: str, invite_url: str,
         # Footer
         '<tr><td style="border-top:1px solid #ece4d0;padding-top:20px;'
         'font-size:12px;line-height:1.5;color:#9a8a6a">'
-        'oto, par otomata · oto.ninja<br>'
+        'oto, par otomata · oto.cx<br>'
         'vous recevez cet email car vous avez été invité·e à l\'alpha.</td></tr>'
 
         '</table></div>'
@@ -306,7 +306,7 @@ def render_composed_email(
     if footer:
         footer_html = (
             '<hr style="border:none;border-top:1px solid #ece4d0;margin:24px 0 16px">'
-            f'<p style="{_FAINT}">oto, par otomata · oto.ninja<br>'
+            f'<p style="{_FAINT}">oto, par otomata · oto.cx<br>'
             'vous recevez ce message car vous avez un compte oto — '
             'répondez à cet email pour nous parler, ou pour ne plus en recevoir.</p>'
         )

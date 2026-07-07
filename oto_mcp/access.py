@@ -66,7 +66,7 @@ ROLES = (MEMBER, ADMIN, SUPER_ADMIN)
 _QUOTA_DEFAULTS = connectors.QUOTA_DEFAULTS
 ORG_SHAREABLE_PROVIDERS = connectors.ORG_SHAREABLE_PROVIDERS
 
-_ACCOUNT_URL = "https://oto.ninja/account"
+_ACCOUNT_URL = "https://manage.oto.cx/account"
 
 
 def get_user_role(sub: str) -> str:
@@ -1023,7 +1023,7 @@ def resolve_mount_token(provider: str) -> str:
         code=INVALID_PARAMS,
         message=(
             f"Connecteur `{provider}` non connecté pour ton compte. "
-            f"Connecte-le depuis ton dashboard (oto.ninja)."
+            f"Connecte-le depuis ton dashboard (manage.oto.cx)."
         ),
     ))
 

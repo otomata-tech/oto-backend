@@ -99,7 +99,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
             f"Le compte {provider.title()} qui t'était accordé n'est plus opérable "
             "(autorisation révoquée ou compte déconnecté par son propriétaire). "
             "Resélectionne ton identité (oto_set_connector_identity ou "
-            "https://dashboard.oto.ninja/console/connectors).")
+            "https://manage.oto.cx/console/connectors).")
     return db.get_unipile_account_id(sub, access.current_org(sub), provider)
 
 

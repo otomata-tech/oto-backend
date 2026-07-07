@@ -46,3 +46,45 @@ Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
 le gmail dual-sub), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_*`
 (M2M dédié pour la façade DCR). S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`)
 pour les avatars/logos. Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
+
+## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
+
+But : un `org_admin` peut rendre le MFA **obligatoire** pour tous les membres de
+son org. Décision d'archi (vérifiée contre le source Logto `@logto/core@1.38.0` +
+l'instance live) :
+
+- **On garde le login ordinaire** (token de resource, org résolue côté serveur, org
+  fluide — ADR 0023/0038). PAS de token org-scopé. Le MFA d'org de Logto est évalué
+  pendant la sign-in experience sur **l'appartenance** de l'user (agrégation de TOUTES
+  ses orgs), pas sur l'org du token — cf. `mfa.ts::isMfaRequiredByUserOrganizations`.
+- **Deux réglages combinés** :
+  1. **Tenant, une fois** : `mfa.organizationRequiredMfaPolicy = Mandatory` sur la
+     Sign-in Experience de `auth.oto.ninja` (`PATCH /api/sign-in-exp`). **Inerte** tant
+     qu'aucune org n'a `isMfaRequired`. Défaut rétrocompat = `NoPrompt` (aucun effet).
+  2. **Par org** : une **organization Logto MIROIR** avec `isMfaRequired=true` +
+     ses membres synchronisés **par `sub`**.
+- Résultat : dès qu'un membre appartient à ≥1 org à MFA, Logto le force à enrôler +
+  utiliser un 2ᵉ facteur à **chaque login** (le gate général `guardMfaVerificationStatus`
+  fait re-vérifier le facteur à chaque sign-in). Le **switch d'org** ne redéclenche
+  rien (résolution serveur, pas de nouveau token).
+
+Implémentation :
+
+- Source de vérité = PG oto : `orgs.require_mfa` (drapeau) + `orgs.logto_org_id` (id du
+  miroir). L'org Logto n'a **aucune autorité** (juste l'enforcement au login).
+- `mfa_mirror.py` = provisioning + sync (client Management API organizations, réutilise
+  le M2M `oauth_facade._mgmt_token`). `ensure_mirror`/`disable_mirror`/`sync_members` ;
+  `on_membership_changed(org_id)` branché sur `org_store.add/remove_org_member`
+  (import paresseux, best-effort). ⚠️ Le roster miroir = **tous** les membres, jamais
+  filtré sur `org_members.is_active` (ce flag = l'org active par défaut du sub, pas
+  l'appartenance).
+- Capacité `org.mfa.{get,set}` (`capabilities/orgs_mfa.py`) → `oto_get/set_org_mfa`
+  + REST `/api/orgs/{id}/mfa` (`ORG_MEMBER`/`ORG_ADMIN`). **Pas de fail-open** :
+  activation = provisionner AVANT le drapeau (Logto plante → drapeau non posé) ;
+  désactivation = baisser `isMfaRequired` AVANT le drapeau (Logto plante → reste
+  enforced). Exposé en lecture dans `oto_whoami` + `/api/me` (`active_org_require_mfa`).
+  Toggle dashboard : `OrgMfaCard.vue` sur `/org`.
+
+Limite : la **récupération par magic-link email** reste un mono-facteur (backlog, cf.
+`infra/docs/logto.md`). Le vrai **step-up par appel** (`acr_values`) n'existe pas dans
+Logto → non implémentable côté serveur ; l'enforcement est donc au **login**.

@@ -12,6 +12,7 @@ from . import orgs_admin  # noqa: F401 — org.admin.create + org.entitlement.{g
 from . import orgs_reads  # noqa: F401 — org.list/get/admin.list/get + member/secret/entitlement.list
 from . import orgs_field_filters  # noqa: F401 — org.field_filters.{get,set} (ADR 0015)
 from . import orgs_email_settings  # noqa: F401 — org.email_settings.{get,set} (envoi per-org)
+from . import orgs_mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept} + platform.invite.alpha
 from . import access_admin  # noqa: F401 — platform.access.{waitlist,grant,set_quota} (ADR 0013)

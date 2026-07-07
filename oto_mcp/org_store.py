@@ -397,6 +397,45 @@ def set_org_email_settings(org_id: int, connector: str, *,
             return True
 
 
+def get_org_mfa(org_id: int) -> dict:
+    """État MFA d'une org : `{require_mfa: bool, logto_org_id: str|None}`.
+    `require_mfa` = l'org impose le 2ᵉ facteur à ses membres ; `logto_org_id` =
+    l'organization Logto MIROIR (None si le MFA n'a jamais été activé). Défaut
+    inerte si l'org est absente."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT require_mfa, logto_org_id FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+        if not row:
+            return {"require_mfa": False, "logto_org_id": None}
+        return {"require_mfa": bool(row["require_mfa"]),
+                "logto_org_id": row["logto_org_id"]}
+
+
+def set_org_require_mfa(org_id: int, require: bool) -> bool:
+    """Pose le drapeau `require_mfa` de l'org (toggle org_admin). False si org
+    absente. **Ne provisionne PAS** l'org Logto miroir — c'est la couche
+    `mfa_mirror` qui, après ce flag, crée/supprime l'organization Logto et
+    enregistre son id via `set_org_logto_org_id`. Ici, uniquement le drapeau PG."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE orgs SET require_mfa = %s WHERE id = %s RETURNING id",
+            (bool(require), org_id),
+        ).fetchone()
+        return row is not None
+
+
+def set_org_logto_org_id(org_id: int, logto_org_id: Optional[str]) -> bool:
+    """Mémorise (ou efface avec None) l'id de l'organization Logto miroir de l'org.
+    False si org absente."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE orgs SET logto_org_id = %s WHERE id = %s RETURNING id",
+            (logto_org_id, org_id),
+        ).fetchone()
+        return row is not None
+
+
 def list_scheduled_emails(org_id: int, status: str = "pending") -> list[dict]:
     """Emails programmés de l'org (délégation au journal db)."""
     return db.list_scheduled_emails(org_id, status=status)
@@ -439,6 +478,14 @@ def org_email_quiet_hours(org_id: int, connector: str) -> Optional[dict]:
     return (get_org_email_settings(org_id).get(connector) or {}).get("quiet_hours")
 
 
+def _sync_mfa_mirror(org_id: int) -> None:
+    """Reflète l'appartenance de l'org vers son org Logto miroir si elle impose le
+    MFA (no-op sinon). Best-effort. Import PARESSEUX : `mfa_mirror` importe
+    `org_store` → éviter le cycle en important au point d'appel."""
+    from . import mfa_mirror
+    mfa_mirror.on_membership_changed(org_id)
+
+
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
     """Ajoute (ou met à jour le rôle d') un membre. Auto-promeut l'org en active
     si c'est la 1ère adhésion du sub.
@@ -470,6 +517,7 @@ def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
                 """,
                 (org_id, sub, org_role, make_active),
             )
+    _sync_mfa_mirror(org_id)   # pousse le nouveau membre dans l'org Logto miroir si MFA
 
 
 def remove_org_member(org_id: int, sub: str) -> bool:
@@ -507,7 +555,9 @@ def remove_org_member(org_id: int, sub: str) -> bool:
                         """,
                         (sub, sub),
                     )
-            return removed
+    if removed:
+        _sync_mfa_mirror(org_id)   # retire le membre parti de l'org Logto miroir si MFA (conn libérée)
+    return removed
 
 
 def set_active_org(sub: str, org_id: int) -> bool:

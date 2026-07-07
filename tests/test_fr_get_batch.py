@@ -1,6 +1,7 @@
 """fr_get en lot (feedback #143) : `sirens=[…]` qualifie une liste en un appel —
 profils dans l'ordre d'entrée, échec par-SIREN dégradé sans faire tomber le lot,
-bornes d'entrée en McpError INVALID_PARAMS. Clients amont stubés (pas de réseau)."""
+bornes d'entrée en McpError INVALID_PARAMS. Proxies FOD (fod_fr) stubés (pas de
+réseau) — les données entreprise passent par le service FOD depuis B2a (ADR 0028)."""
 from __future__ import annotations
 
 import pytest
@@ -51,11 +52,14 @@ class _Noop:
 
 @pytest.fixture()
 def fr_get(monkeypatch):
-    monkeypatch.setattr("oto.tools.sirene.EntreprisesClient", _Entreprises)
+    # Les données entreprise passent par les proxies FOD (fod_fr) depuis B2a :
+    # on stube les proxies, pas les classes de clients lib. SIRENE (keyé) reste
+    # in-process via oto.tools.sirene.SireneClient — non touché par fr_get.
+    monkeypatch.setattr("oto_mcp.fod_fr.entreprises", _Entreprises())
+    monkeypatch.setattr("oto_mcp.fod_fr.inpi", _Inpi())
+    monkeypatch.setattr("oto_mcp.fod_fr.bodacc", _Bodacc())
+    monkeypatch.setattr("oto_mcp.fod_fr.egapro", _Noop())
     monkeypatch.setattr("oto.tools.sirene.SireneClient", _Noop)
-    monkeypatch.setattr("oto.tools.inpi.InpiClient", _Inpi)
-    monkeypatch.setattr("oto.tools.bodacc.BodaccClient", _Bodacc)
-    monkeypatch.setattr("france_opendata.EgaproClient", _Noop)
     from oto_mcp.tools import fr
     reg = _Reg()
     fr.register(reg)

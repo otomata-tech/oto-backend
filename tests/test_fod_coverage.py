@@ -35,6 +35,14 @@ _FONCIER_VIA_FOD = (
     "le tool foncier_* reste exposé, mais plus via le client lib in-process"
 )
 
+# Idem pour les données entreprise (B2a) : entreprises/BODACC/Egapro en proxy HTTP,
+# INPI en DuckDB isolé sur FOD (parquet Signaux Faibles, hors event-loop backend).
+_FR_VIA_FOD = (
+    "client données entreprise consommé via le service FOD dédié "
+    "(oto_mcp/fod_fr.py → /api/fr/*, ADR 0028 extraction totale — INPI = DuckDB "
+    "parquet isolé) — le tool fr_* reste exposé, plus via le client lib in-process"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -51,6 +59,13 @@ FOD_NOT_EXPOSED = {
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,
+    # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
+    # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
+    # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
+    "entreprises": _FR_VIA_FOD,
+    "bodacc": _FR_VIA_FOD,
+    "inpi": _FR_VIA_FOD,
+    "egapro": _FR_VIA_FOD,
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

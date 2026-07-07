@@ -284,7 +284,7 @@ class ViewAsMiddleware:
         sub, err = await _authenticate(request, self._verifier, apply_view_as=False)
         if err:  # non authentifié → la route rendra son 401 ; pas de view-as
             return await self.app(scope, receive, send)
-        from . import access, db, group_store, roles, session_org
+        from . import access, db, group_store, org_store, roles, session_org
         if view_user:  # « voir en tant que » : opérateur plateforme + cible existe + LECTURE SEULE
             if not await run_in_threadpool(access.is_platform_operator, sub):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
@@ -297,8 +297,19 @@ class ViewAsMiddleware:
             if g is None or not await run_in_threadpool(roles.can_read_group, sub, view_group):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
             view_org = g["org_id"]
-        elif view_org:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
-            if not await run_in_threadpool(roles.is_org_member, sub, view_org):
+        elif view_org:  # org>0 (0=perso = profil global, pas de check)
+            # Membership RÉELLE (colonne DB, PAS l'escalade super_admin) : un membre
+            # consulte son org normalement (lecture + écriture selon son rôle).
+            real_role = await run_in_threadpool(org_store.get_org_role, view_org, sub)
+            if real_role is not None:
+                pass  # membre réel — comportement inchangé (writes gatés par le rôle)
+            elif await run_in_threadpool(access.is_platform_operator, sub):
+                # Opérateur plateforme NON-membre : inspection d'une org tierce en
+                # LECTURE SEULE (même patron que le view-as user) — jamais d'écriture,
+                # même pour un super_admin (mode inspection ≠ escalade d'admin).
+                if request.method != "GET":
+                    return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
+            else:
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
         usr_token = session_org.set_view_user(view_user) if view_user is not None else None
         org_token = session_org.set_view_org(view_org) if view_org is not None else None
@@ -544,6 +555,14 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             # MFA obligatoire de l'org (2ᵉ facteur imposé au login des membres,
             # enforcé par Logto via l'org miroir — cf. mfa_mirror).
             active_org_require_mfa = org_store.get_org_mfa(active_org)["require_mfa"]
+        # Consultation d'une org tierce EN LECTURE SEULE par un opérateur plateforme :
+        # org active posée (par X-Oto-Org) mais aucun rôle réel dans cette org. Le front
+        # affiche un bandeau + traite l'écran en lecture (le backend rejette déjà toute
+        # mutation — GET-only au middleware). Un membre a toujours un rôle → False.
+        active_org_readonly = (
+            active_org is not None and org_role is None
+            and access.is_platform_operator(sub)
+        )
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».
         home_org = org_store.get_active_org(sub)
@@ -583,6 +602,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_name": active_org_name,
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
+            "active_org_readonly": active_org_readonly,
             "active_org_require_mfa": active_org_require_mfa,
             "home_org": home_org,
             "home_org_name": home_org_name,

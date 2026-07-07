@@ -47,7 +47,19 @@ def effective_org_role(sub: str, org_id: int) -> Optional[str]:
     s'il n'a aucun droit dessus. `org_admin` > `org_member`."""
     if is_platform_admin(sub):
         return ORG_ADMIN
-    return org_store.get_org_role(org_id, sub)  # 'org_admin' | 'org_member' | None
+    real = org_store.get_org_role(org_id, sub)  # 'org_admin' | 'org_member' | None
+    if real is not None:
+        return real
+    # Opérateur plateforme CONSULTANT activement cette org (header X-Oto-Org REST posé) :
+    # accès LECTEUR (org_member), jamais admin — c'est le seam unique lu par `is_org_member`
+    # (autz `ORG_MEMBER`) ET `ownership.can_access` (contenu org). Borné au contexte de
+    # consultation : hors consultation `current_view_org()` est None → aucun droit sur une
+    # org tierce. Le middleware REST impose EN PLUS le GET-only (double garde read-only), et
+    # le MCP ne pose jamais ce contextvar → aucun effet côté agent.
+    from . import session_org
+    if session_org.current_view_org() == org_id and access.is_platform_operator(sub):
+        return ORG_MEMBER
+    return None
 
 
 def is_org_admin(sub: str, org_id: int) -> bool:

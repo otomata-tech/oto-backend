@@ -40,28 +40,26 @@ except Exception:  # pragma: no cover - extra `apps` absent
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata import (
-        ApiCartoClient,
-        BanClient,
-        BdTopoClient,
-        DpeClient,
-        DvfClient,
-        EnedisClient,
-        PvgisClient,
-        SitadelClient,
-    )
     from france_opendata.georisques import GeorisquesClient
     from france_opendata.sitadel import DIDO_PAGE_SIZES
 
-    ban = BanClient()
-    cadastre = ApiCartoClient()
-    bdtopo = BdTopoClient()
-    pvgis = PvgisClient()
-    enedis = EnedisClient()
-    dvf = DvfClient()
-    dpe = DpeClient()
+    from .. import fod_foncier
+
+    # Données de site servies par le service FOD dédié (ADR 0028) — le backend
+    # n'exécute plus ces appels in-process. Objets proxy à surface identique aux
+    # clients france_opendata (mêmes méthodes/signatures) → seuls ces bindings
+    # changent, les corps des tools restent inchangés.
+    ban = fod_foncier.ban
+    cadastre = fod_foncier.cadastre
+    bdtopo = fod_foncier.bdtopo
+    pvgis = fod_foncier.pvgis
+    enedis = fod_foncier.enedis
+    dvf = fod_foncier.dvf
+    dpe = fod_foncier.dpe
+    sitadel = fod_foncier.sitadel
+    # georisques (ICPE) reste in-process : partagé avec le connecteur urba, il
+    # rejoindra FOD au barreau urba (sinon il vivrait à deux endroits).
     georisques = GeorisquesClient()
-    sitadel = SitadelClient()
 
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
 

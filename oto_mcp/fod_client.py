@@ -1,4 +1,4 @@
-"""Client HTTP mince vers le service FOD (ADR 0028, barreau 4).
+"""Client HTTP mince vers le service FOD — capacité SIRENE stock (ADR 0028, barreau 4).
 
 Le backend n'exécute plus le scan SIRENE in-process : il appelle le service FOD
 dédié (box `fod-0`) qui porte le parquet partitionné par dept + les durcissements
@@ -6,91 +6,14 @@ dédié (box `fod-0`) qui porte le parquet partitionné par dept + les durcissem
 `france_opendata.sirene_stock`** (mêmes noms/signatures/retours) → les appelants
 (`tools/fr_stock`, `api_routes_sirene`) ne changent que leur import.
 
-Pas de fallback in-process (ADR : un scan parquet ne doit plus tourner sur la box
-backend) : FOD indisponible/mal configuré ⟹ erreur actionnable, jamais un scan
-local silencieux.
-
-Config (env de process) : `FOD_BASE_URL` (ex. http://<ip-fod>:8000) + `FOD_API_TOKEN`.
+La plomberie HTTP (client, auth, retry, erreurs) vit dans `fod_http` (partagée avec
+les autres clients FOD). Pas de fallback in-process (ADR 0028).
 """
 from __future__ import annotations
 
-import os
-import random
-import time
 from typing import Any, Iterable, Optional
 
-import httpx
-
-_BASE = os.environ.get("FOD_BASE_URL")
-_TOKEN = os.environ.get("FOD_API_TOKEN")
-# Lecture longue : le timeout DUR de FOD est ~90 s, on laisse FOD répondre/erreur
-# avant de couper côté client (connexion courte, lecture large).
-_TIMEOUT = httpx.Timeout(connect=5.0, read=100.0, write=10.0, pool=5.0)
-
-# Back-pressure de saturation (503) : le service borne la concurrence du scan et
-# REJETTE en non-bloquant dès que le plafond « en vol » est atteint (il rend la
-# main au thread plutôt que d'empiler des waiters), en demandant explicitement de
-# « réessayer dans un instant ». L'attente est donc DÉLÉGUÉE à l'appelant : on
-# absorbe ici les rafales transitoires par un retry borné à backoff jitteré, au
-# lieu de propager un 503 sec à l'agent (ToolError + bruit Sentry). 504 (scan trop
-# long) n'est PAS retryé : le répéter ne ferait que regaspiller un slot de scan.
-_RETRY_ATTEMPTS = int(os.environ.get("FOD_RETRY_ATTEMPTS", "3"))
-_RETRY_BACKOFF_S = float(os.environ.get("FOD_RETRY_BACKOFF_S", "0.5"))
-
-_client: Optional[httpx.Client] = None
-
-
-def _c() -> httpx.Client:
-    global _client
-    if not _BASE or not _TOKEN:
-        raise RuntimeError(
-            "Service FOD non configuré (FOD_BASE_URL / FOD_API_TOKEN absents). "
-            "Le stock SIRENE est servi par le service FOD dédié (ADR 0028)."
-        )
-    if _client is None:
-        _client = httpx.Client(
-            base_url=_BASE,
-            headers={"Authorization": f"Bearer {_TOKEN}"},
-            timeout=_TIMEOUT,
-        )
-    return _client
-
-
-def _detail(r: httpx.Response) -> str:
-    try:
-        return r.json().get("detail", r.text)
-    except Exception:
-        return r.text
-
-
-def _raise_for(r: httpx.Response) -> None:
-    if r.status_code == 503:
-        raise RuntimeError(f"FOD saturé — réessayez ({_detail(r)})")
-    if r.status_code == 504:
-        raise RuntimeError(f"FOD: requête trop longue ({_detail(r)})")
-    r.raise_for_status()
-
-
-def _request(method: str, path: str, *, params: Optional[dict] = None,
-             json_body: Optional[dict] = None) -> Any:
-    """Appel HTTP avec retry borné sur 503 (saturation transitoire du scan)."""
-    r: Optional[httpx.Response] = None
-    for attempt in range(_RETRY_ATTEMPTS + 1):
-        r = _c().request(method, path, params=params, json=json_body)
-        if r.status_code != 503 or attempt == _RETRY_ATTEMPTS:
-            break
-        # backoff exponentiel + jitter : laisse un slot de scan se libérer.
-        time.sleep(_RETRY_BACKOFF_S * (2 ** attempt) + random.uniform(0, _RETRY_BACKOFF_S))
-    _raise_for(r)
-    return r.json()
-
-
-def _get(path: str, params: Optional[dict] = None) -> Any:
-    return _request("GET", path, params=params)
-
-
-def _post(path: str, body: dict) -> Any:
-    return _request("POST", path, json_body=body)
+from .fod_http import get as _get, post as _post
 
 
 # --- Surface identique à france_opendata.sirene_stock ----------------------

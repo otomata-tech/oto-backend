@@ -543,6 +543,33 @@ def _connectors_from_tools(tools: list[str]) -> tuple[list[dict], list[str]]:
     return connectors, loose
 
 
+def _tableau_entries(project: dict, links: list) -> list[dict]:
+    """Tableaux liés au projet, résolus en `{id, label}` — accepte un lien référencé par
+    ID numérique OU par NOM (liens legacy d'avant la normalisation nom→id, même contrat
+    que `tools.datastore._anon_project_tableau_ns_ids`). Un lien par nom est résolu contre
+    le datastore de l'org/user propriétaire du projet ; namespace introuvable ⇒ lien ignoré
+    (jamais de 404 dur sur l'index). Sans ça la page web ne montrait QUE les liens par id."""
+    from . import db
+    owner_type = str(project.get("owner_type") or "org")
+    owner_id = str(project.get("owner_id") or "")
+    out: list[dict] = []
+    for l in links:
+        if l.get("target_type") != "tableau":
+            continue
+        ref = str(l.get("target_ref") or "").strip()
+        if not ref:
+            continue
+        if ref.isdigit():
+            out.append({"id": int(ref),
+                        "label": l.get("label") or l.get("namespace") or f"#{ref}"})
+        elif owner_id:
+            ns = db.get_datastore_namespace(owner_type, owner_id, ref)
+            if ns:
+                out.append({"id": int(ns["id"]),
+                            "label": l.get("label") or l.get("namespace") or ref})
+    return out
+
+
 # ── Routeur (lectures DB SYNC → appeler en threadpool) ────────────────────────
 def build_page(project: dict, path: str, *, offset: int = 0,
                connect_url: str = "") -> tuple[Optional[str], int]:
@@ -566,11 +593,7 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             {"id": int(l["target_ref"]), "label": l.get("label") or l.get("title") or f"#{l['target_ref']}"}
             for l in links
             if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
-        tables = ([
-            {"id": int(l["target_ref"]), "label": l.get("label") or l.get("namespace") or f"#{l['target_ref']}"}
-            for l in links
-            if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()]
-            if show_data else [])
+        tables = (_tableau_entries(project, links) if show_data else [])
         # Docs : pages de l'arbre du projet + docs explicitement liés.
         docs = [{"id": int(d["id"]), "label": d.get("title") or f"#{d['id']}"}
                 for d in db.list_docs_for_project(pid)]
@@ -605,8 +628,7 @@ def build_page(project: dict, path: str, *, offset: int = 0,
                                 body_md=instr.get("body_md") or "", kind_label="Procédure"), 200
 
         if section == "data":
-            allowed = {int(l["target_ref"]) for l in links
-                       if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()}
+            allowed = {t["id"] for t in _tableau_entries(project, links)}
             ns = db.get_datastore_namespace_by_id(rid) if (show_data and rid in allowed) else None
             if not ns:
                 return render_not_found(), 404

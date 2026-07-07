@@ -151,7 +151,7 @@ def register(mcp: FastMCP) -> None:
             location=location, country=country, language=language,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta={"census_via": "serper_maps_census"})
     def serper_maps_search(
         query: Optional[str] = None,
         ll: Optional[str] = None,
@@ -163,6 +163,12 @@ def register(mcp: FastMCP) -> None:
         language: Optional[str] = "fr",
     ) -> dict:
         """Google Maps search via Serper — richer than places, geo-anchored.
+
+        ⚠️ Plafonne à ~20 résultats/appel et biaise vers `ll` → il **sous-compte
+        silencieusement** (20 trouvés là où 60 existent, sans lever d'erreur).
+        Pour un comptage/recensement EXHAUSTIF d'un type de commerce sur une zone
+        (« combien de X à Y »), utilise **`serper_maps_census`** (pave + pagine +
+        déduplique). Règle : total exact → census ; quelques hits en tête → ce tool.
 
         Args:
             query: Search query (e.g. "coffee shops").
@@ -177,6 +183,51 @@ def register(mcp: FastMCP) -> None:
         return _run(
             "search_maps", query=query, ll=ll, place_id=place_id, cid=cid,
             num=num, page=page, country=country, language=language,
+        )
+
+    @mcp.tool(meta={"technique": "local-census"})
+    def serper_maps_census(
+        query: str,
+        center: Optional[str] = None,
+        radius_km: float = 5.0,
+        grid: int = 3,
+        zoom: int = 14,
+        ll_anchors: Optional[list[str]] = None,
+        max_pages: int = 3,
+        country: Optional[str] = "fr",
+        language: Optional[str] = "fr",
+    ) -> dict:
+        """Recensement EXHAUSTIF d'un type de commerce sur une zone (Google Maps).
+
+        À utiliser — PAS `serper_maps_search` — dès qu'il faut un **comptage ou
+        une liste exhaustive** d'un type de commerce sur une zone. Un
+        `serper_maps_search` seul plafonne à ~20 résultats et biaise vers son
+        point d'ancrage : il **sous-compte silencieusement**. Ce tool corrige les
+        deux côté serveur — il **pave** la zone en une grille d'ancres géo,
+        **pagine** chacune et **déduplique** par id de lieu → résultat complet.
+
+        Fournir soit `center` "lat,lng" (+ radius_km, grid), soit `ll_anchors`.
+        Coût : ~grid² × max_pages appels Serper (throttlés) — c'est le prix de
+        l'exhaustivité ; commencer modeste et resserrer la grille si besoin.
+
+        Args:
+            query: Ce qu'on énumère (e.g. "laverie automatique").
+            center: Centre de zone "lat,lng" (e.g. "48.8566,2.3522"). Requis sauf ll_anchors.
+            radius_km: Demi-largeur de la zone carrée autour du centre (défaut 5).
+            grid: Densité du pavage grid×grid ; + fin = + de couverture et d'appels (défaut 3 → 9 ancres).
+            zoom: Niveau de zoom Maps par ancre (défaut 14).
+            ll_anchors: Ancres "@lat,lng,zoomz" explicites, priment sur center/radius/grid.
+            max_pages: Pages maxi paginées par ancre (défaut 3).
+            country: Country code (default "fr").
+            language: Language code (default "fr").
+
+        Returns {query, count, places[], anchors_used, pages_fetched}. `count` =
+        total dédupliqué — à préférer à tout comptage d'un `serper_maps_search` seul.
+        """
+        return _run(
+            "census_maps", query=query, center=center, radius_km=radius_km,
+            grid=grid, zoom=zoom, ll_anchors=ll_anchors, max_pages=max_pages,
+            country=country, language=language,
         )
 
     @mcp.tool()

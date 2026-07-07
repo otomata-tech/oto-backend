@@ -16,8 +16,7 @@ from .. import access
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.sirene import SireneClient  # INSEE keyé — reste in-process (FOD sans credential)
-    from .. import db  # BOAMP/ACCO : index PG local du backend (barreau data B2b)
-    from .. import fod_fr
+    from .. import fod_fr  # données entreprise open-data + index BOAMP/ACCO → service FOD
 
     # Données entreprise open-data servies par le service FOD dédié (ADR 0028) — le
     # backend n'exécute plus ces appels (dont l'INPI DuckDB, workload lourd) in-process.
@@ -415,7 +414,7 @@ def register(mcp: FastMCP) -> None:
             type_marche: Market type (TRAVAUX, FOURNITURES, SERVICES).
             limit: Max results (default 20, max 100).
         """
-        return db.search_boamp(
+        return fod_fr.search_boamp(
             query=query, descripteur=descripteur, departement=departement,
             date_from=date_from, date_to=date_to, type_marche=type_marche,
             limit=limit,
@@ -428,7 +427,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             idweb: BOAMP notice identifier (e.g. "26-50647").
         """
-        result = db.get_boamp(idweb)
+        result = fod_fr.get_boamp(idweb)
         if result is None:
             return {"error": "not_found", "idweb": idweb}
         return result
@@ -489,7 +488,7 @@ def register(mcp: FastMCP) -> None:
             sort_dir: asc (oldest first) | desc (newest first).
             limit: Max results (default 20, max 100).
         """
-        return db.search_acco(
+        return fod_fr.search_acco(
             query=query, themes=themes, nature=nature, siren=siren, siret=siret,
             idcc=idcc, departement=departement, date_from=date_from, date_to=date_to,
             latest_per_siret=latest_per_siret, sort_by=sort_by, sort_dir=sort_dir,
@@ -503,7 +502,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             id_or_numero: DILA identifier (ACCOTEXT000…) or deposit number (T…).
         """
-        result = db.get_acco(id_or_numero)
+        result = fod_fr.get_acco(id_or_numero)
         if result is None:
             return {"error": "not_found", "id_or_numero": id_or_numero}
         return result
@@ -512,7 +511,7 @@ def register(mcp: FastMCP) -> None:
     def fr_accords_themes() -> list[dict]:
         """List the agreement theme codes present in the database (code → label →
         count). Discovery helper so you can pick `themes` for fr_accords_search."""
-        return db.acco_themes()
+        return fod_fr.acco_themes()
 
     @mcp.tool()
     def fr_accords_text(acco_id: str) -> dict:

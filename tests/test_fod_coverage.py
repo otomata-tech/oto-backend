@@ -66,6 +66,11 @@ FOD_NOT_EXPOSED = {
     "bodacc": _FR_VIA_FOD,
     "inpi": _FR_VIA_FOD,
     "egapro": _FR_VIA_FOD,
+    # BOAMP : index PG + ingest MIGRÉS au service FOD (B2b) — le backend interroge
+    # /api/fr/tenders/* via fod_fr, ne porte plus la table ni boamp_ingest.
+    "boamp": "index BOAMP (marchés publics) possédé par le service FOD (tables PG + "
+             "ingest boamp_ingest côté fod-0) — le backend interroge /api/fr/tenders/* "
+             "via oto_mcp/fod_fr.py, plus de client/ingest lib in-process (ADR 0028 B2b)",
 }
 
 # Modules qui exposent un *Client mais ne sont PAS des sources de données :

@@ -40,10 +40,10 @@ except Exception:  # pragma: no cover - extra `apps` absent
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata.georisques import GeorisquesClient
     from france_opendata.sitadel import DIDO_PAGE_SIZES
 
     from .. import fod_foncier
+    from .. import fod_urba  # georisques (ICPE) — servi par FOD depuis B3
 
     # Données de site servies par le service FOD dédié (ADR 0028) — le backend
     # n'exécute plus ces appels in-process. Objets proxy à surface identique aux
@@ -57,9 +57,8 @@ def register(mcp: FastMCP) -> None:
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
     sitadel = fod_foncier.sitadel
-    # georisques (ICPE) reste in-process : partagé avec le connecteur urba, il
-    # rejoindra FOD au barreau urba (sinon il vivrait à deux endroits).
-    georisques = GeorisquesClient()
+    # georisques (ICPE) : servi par FOD (B3), partagé avec urba — même proxy.
+    georisques = fod_urba.georisques
 
     # --- géocodage (BAN — Base Adresse Nationale) ----------------------------
 

@@ -15,11 +15,12 @@ from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata import FinessClient
-    from france_opendata.has_essms import HasEssmsClient
+    from .. import fod_sante
 
-    finess = FinessClient()
-    has = HasEssmsClient()
+    # FINESS + HAS ESSMS (DuckDB distant) servis par le service FOD (ADR 0028 B3) —
+    # plus d'exécution in-process. Proxies à surface identique aux clients france_opendata.
+    finess = fod_sante.finess
+    has = fod_sante.has
 
     # --- annuaire FINESS -----------------------------------------------------
 

@@ -13,9 +13,11 @@ from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata import FrenchTechClient
+    from .. import fod_frenchtech
 
-    ft = FrenchTechClient()  # Aix-Marseille par défaut
+    # Écosystème French Tech servi par le service FOD (ADR 0028 B3) — proxy à surface
+    # identique à FrenchTechClient (Aix-Marseille par défaut côté FOD).
+    ft = fod_frenchtech.ft
 
     @mcp.tool()
     def frenchtech_search_annuaire(

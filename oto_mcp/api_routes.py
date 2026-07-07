@@ -296,7 +296,13 @@ class ViewAsMiddleware:
             view_org = g["org_id"]
         elif view_org:  # org>0 : exiger l'appartenance (0=perso = profil global, pas de check)
             if not await run_in_threadpool(roles.is_org_member, sub, view_org):
-                return await _json_error(request, 403, "forbidden")(scope, receive, send)
+                # Exception SUPERVISION : un opérateur plateforme peut CONSULTER une
+                # org tierce (dont il n'est pas membre) en LECTURE SEULE — miroir du
+                # view-as user (GET only). Écriture → 403. Tout autre sub → 403.
+                if not await run_in_threadpool(access.is_platform_operator, sub):
+                    return await _json_error(request, 403, "forbidden")(scope, receive, send)
+                if request.method != "GET":
+                    return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
         usr_token = session_org.set_view_user(view_user) if view_user is not None else None
         org_token = session_org.set_view_org(view_org) if view_org is not None else None
         grp_token = session_org.set_view_group(view_group) if view_group is not None else None
@@ -576,6 +582,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_name": active_org_name,
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
+            # LECTURE SEULE : consultation d'une org dont on n'est PAS membre —
+            # réservé à un opérateur plateforme (ViewAsMiddleware, X-Oto-Org). Le
+            # seul chemin qui pose un `current_org` sans appartenance ⟹ `org_role`
+            # nul ⟹ supervision read-only. Le front affiche un bandeau ; l'écriture
+            # est de toute façon refusée par l'autz (ORG_MEMBER/ORG_ADMIN échoue).
+            "active_org_readonly": active_org is not None and org_role is None,
             "home_org": home_org,
             "home_org_name": home_org_name,
             "active_group": active_group,

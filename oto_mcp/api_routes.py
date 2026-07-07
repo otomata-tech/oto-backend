@@ -568,6 +568,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "email": user.get("email"),
             "name": user.get("name"),
             "avatar_url": user.get("avatar_url"),
+            # Préférence de langue de l'UI dashboard ('en'|'fr'), NULL = non définie
+            # (le front retombe sur la langue du navigateur). Écrite via PUT /api/me/locale.
+            "locale": user.get("locale"),
             "role": status["role"],
             "active_org": active_org,
             "active_org_name": active_org_name,
@@ -965,10 +968,19 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                     request, 409, "account_required",
                     "Ce connecteur a déjà des comptes nommés — précise `account`.")
         secret = credentials_store.pack_secret(provider, fields)
+        # Version d'API portée par le credential (v1/v2 « selon la BYO ») : pour
+        # unipile, choisir v2 range {api_version, dsn} dans le meta (lu par
+        # resolve_credential → config → unipile_client / hosted-auth). Absence de
+        # meta = défaut v1 ; un re-set en v1 remet meta à {} (EXCLUDED.meta).
+        meta = None
+        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
+            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
         credentials_store.set_credential(
-            credentials_store.MEMBER, eid, provider, secret, set_by=sub, account=account)
+            credentials_store.MEMBER, eid, provider, secret, set_by=sub,
+            account=account, meta=meta)
         return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
-                               "account": account})
+                               "account": account,
+                               "api_version": (meta or {}).get("api_version", "v1")})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

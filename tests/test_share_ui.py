@@ -146,6 +146,35 @@ def test_data_not_linked_is_404(monkeypatch):
     assert status == 404
 
 
+# Lien tableau par NOM (legacy, avant normalisation nom→id) : la page web doit le
+# résoudre contre le datastore de l'org propriétaire — sinon il était jeté par `isdigit()`
+# et le datastore n'apparaissait pas (régression vécue projet Mūcho #8).
+_PROJECT_OWNED = {**_PROJECT, "owner_type": "org", "owner_id": "81"}
+_LINKS_BY_NAME = [
+    {"target_type": "tableau", "target_ref": "accords_dormants", "label": "Vivier national"},
+]
+
+
+def test_index_lists_tableau_linked_by_name(monkeypatch):
+    _wire(monkeypatch, links=_LINKS_BY_NAME)
+    monkeypatch.setattr(db, "get_datastore_namespace",
+                        lambda ot, oid, name: {"id": 65} if name == "accords_dormants" else None)
+    html, _ = share_ui.build_page(_PROJECT_OWNED, "/", connect_url="u")
+    assert "Vivier national" in html and "/data/65" in html
+
+
+def test_data_allowed_via_name_link(monkeypatch):
+    _wire(monkeypatch, links=_LINKS_BY_NAME)
+    monkeypatch.setattr(db, "get_datastore_namespace",
+                        lambda ot, oid, name: {"id": 65} if name == "accords_dormants" else None)
+    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
+                        lambda rid: {"namespace": "accords_dormants", "schema": None})
+    monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 1)
+    monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [{"data": {"siren": "123"}}])
+    html, status = share_ui.build_page(_PROJECT_OWNED, "/data/65", connect_url="u")
+    assert status == 200 and "accords_dormants" in html and "siren" in html
+
+
 # ── Doc ──────────────────────────────────────────────────────────────────────
 def test_doc_allowed_via_project_ownership(monkeypatch):
     _wire(monkeypatch)

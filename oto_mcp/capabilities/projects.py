@@ -240,7 +240,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
                              or aud.get("inert_procedures"))
             return {**_view(r), "entity_count": len(links), "has_audit": has_audit,
-                    "shared": shared or grant_counts.get(r["id"], 0) > 0}
+                    "shared": shared or grant_counts.get(r["id"], 0) > 0,
+                    # `can_write` sur la LISTE (pastille « lecture ») — même source que op=get :
+                    # un projet partagé en lecture seule remonte false. Own = accès effectif.
+                    "can_write": ownership.can_access(sub, RTYPE, str(r["id"]), "write")}
 
         own = [_enrich(r, False) for r in own_rows]
         seen = {p["id"] for p in own}

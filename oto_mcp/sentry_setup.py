@@ -31,97 +31,21 @@ import os
 
 import sentry_sdk
 from fastmcp.server.middleware import Middleware
-from mcp.shared.exceptions import McpError
-from mcp.types import INVALID_PARAMS, INVALID_REQUEST
-from pydantic import ValidationError
 
 from .auth_hooks import current_user_sub_from_token
+# Classifieurs partagés (D2, #124) : source unique de la taxonomie d'exceptions,
+# consommée aussi par `ErrorEnvelopeMiddleware`. Ré-exportés ici (les tests et le
+# reste du module les référencent via `sentry_setup`).
+from .error_taxonomy import (  # noqa: F401
+    _USER_INPUT_CODES,
+    _is_arg_validation_error,
+    _is_expected_error,
+    _is_managed_connector_error,
+    _is_user_input_error,
+    _upstream_status,
+)
 
 logger = logging.getLogger("oto_mcp")
-
-# Codes JSON-RPC d'erreur d'ENTRÉE/CONFIG côté user (pendant natif d'un 4xx amont) :
-# « pose ta clé », « connecte ton compte », param/org invalide. Levés
-# intentionnellement par les tools/capacités, pas des bugs backend → non reportés.
-_USER_INPUT_CODES = {INVALID_PARAMS, INVALID_REQUEST}
-
-
-def _upstream_status(exc) -> int | None:
-    """Code HTTP amont porté par l'exception, sinon None.
-
-    Couvre `UpstreamHTTPError` (oto-core, `.status_code`), `httpx`/`requests`
-    HTTPError (`.response.status_code`) et les erreurs connecteur typées maison
-    (`.status`, ex. `NinjaError`).
-    """
-    for attr in ("status_code", "status"):
-        v = getattr(exc, attr, None)
-        if isinstance(v, int):
-            return v
-    v = getattr(getattr(exc, "response", None), "status_code", None)
-    return v if isinstance(v, int) else None
-
-
-def _is_managed_connector_error(exc) -> bool:
-    """True si l'exception (ou sa chaîne) est un refus client amont (4xx).
-
-    fastmcp emballe l'erreur du tool dans un `ToolError` → on remonte la chaîne
-    `__cause__`/`__context__` pour retrouver l'erreur amont d'origine. Un 4xx =
-    erreur de connecteur gérée (pas un bug backend) → non reportée.
-    """
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        sc = _upstream_status(exc)
-        if sc is not None and 400 <= sc < 500:
-            return True
-        exc = exc.__cause__ or exc.__context__
-    return False
-
-
-def _is_user_input_error(exc) -> bool:
-    """True si l'exception (ou sa chaîne) est une `McpError` d'entrée/config user.
-
-    Une `McpError` avec un code de `_USER_INPUT_CODES` (INVALID_PARAMS / INVALID_REQUEST)
-    = refus côté user explicite (« pose ta clé », « connecte ton compte », org/param
-    invalide), levé volontairement par un tool/capacité. C'est le pendant natif du
-    4xx amont — déjà rendu à l'agent et tracé dans `tool_calls`, pas un bug backend.
-    """
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        if isinstance(exc, McpError) and getattr(exc.error, "code", None) in _USER_INPUT_CODES:
-            return True
-        exc = exc.__cause__ or exc.__context__
-    return False
-
-
-def _is_arg_validation_error(exc) -> bool:
-    """True si l'exception (ou sa chaîne) est une `ValidationError` pydantic.
-
-    Un `ValidationError` = **arguments rejetés** : soit la validation d'args du tool
-    par fastmcp (le LLM a passé de mauvais paramètres, ex. `2 validation errors for
-    call[serper_web_search]`), soit un `Input` model de capacité (ADR 0009) qui EST la
-    voie de validation d'entrée. C'est un refus d'entrée structuré, pas un bug backend
-    — pendant natif du `McpError` INVALID_PARAMS pour les args mal formés.
-    """
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        if isinstance(exc, ValidationError):
-            return True
-        exc = exc.__cause__ or exc.__context__
-    return False
-
-
-def _is_expected_error(exc) -> bool:
-    """Erreur gérée, à ne PAS reporter : 4xx amont OU refus d'entrée/config user OU
-    args rejetés (ValidationError).
-
-    Les vraies exceptions code (5xx, KeyError, Runtimeable inattendu — y compris
-    `credential indéchiffrable`/InvalidTag, une corruption réelle) restent reportées.
-    """
-    return (_is_managed_connector_error(exc)
-            or _is_user_input_error(exc)
-            or _is_arg_validation_error(exc))
 
 
 def _before_send(event, hint):

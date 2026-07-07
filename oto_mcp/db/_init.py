@@ -290,6 +290,10 @@ def init_db() -> None:
             "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
             "ON CONFLICT DO NOTHING"
         )
+        # Préférence de langue de l'UI dashboard (2026-07-07) : NULL = pas de
+        # préférence explicite (le front retombe sur la langue du navigateur).
+        # Validée à 'en'|'fr' en amont (capacité me.locale.set) ; colonne libre.
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS locale TEXT")
         # Avatar utilisateur + logo d'org (2026-06-16) : URL publique (Scaleway
         # Object Storage), pas un secret → colonne en clair, hors coffre.
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")

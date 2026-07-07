@@ -216,6 +216,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .capabilities import registry as _cap_registry
     _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
 
+    # Contrat d'erreur uniforme rendu à l'agent (D2, #124) : réécrit toute exception
+    # de tool en McpError scrubbée + data {code, retryable, hint}. Ajouté AVANT Sentry
+    # → OUTERMOST : Sentry (plus interne) capture le vrai traceback en premier, cette
+    # enveloppe normalise en dernier (cf. ErrorEnvelopeMiddleware).
+    from .middleware import ErrorEnvelopeMiddleware
+    instance.add_middleware(ErrorEnvelopeMiddleware())
+
     # Capture des exceptions de tools vers Sentry (vrai traceback ; no-op si
     # OTO_SENTRY_DSN absent). Les erreurs de tool sont des erreurs JSON-RPC en
     # HTTP 200 → invisibles à l'intégration Starlette ; ce middleware les voit.

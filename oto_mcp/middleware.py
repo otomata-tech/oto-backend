@@ -8,7 +8,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from starlette.concurrency import run_in_threadpool
 
-from . import call_axes, redaction, session_org
+from . import call_axes, error_taxonomy, redaction, session_org
 from .auth_hooks import current_user_sub_from_token
 from .session_visibility import apply_session_visibility
 from .tool_visibility import namespace_of
@@ -239,3 +239,34 @@ class CallContextMiddleware(Middleware):
         # McpError propre (ce middleware est outermost → une exception opaque serait
         # invisible à Sentry, vécu prod 2026-07-04). Idem l'axe plat `org=` et oto_call.
         return session_org.set_call_org(await call_axes.resolve_org_guarded(org))
+
+
+class ErrorEnvelopeMiddleware(Middleware):
+    """Contrat d'erreur uniforme rendu à l'agent (D2, oto-backend#124).
+
+    Toute exception d'un tool est réécrite en `McpError` **scrubbée** (pas de
+    stacktrace / route interne / id technique) portant `data.oto = {code, retryable,
+    hint}` — l'agent peut alors DÉCIDER (retry / abandon / corriger l'input) au lieu
+    de deviner sur un message brut. Les tools qui lèvent déjà une `McpError` curée
+    voient leur message conservé (cf. `error_taxonomy.classify`).
+
+    **Outermost** (ajouté AVANT `SentryToolErrorMiddleware`) : la chaîne s'exécute de
+    l'extérieur vers l'intérieur, donc Sentry (plus interne) attrape l'exception
+    d'ORIGINE en premier (vrai traceback capturé), la re-raise, et cette enveloppe la
+    normalise EN DERNIER avant qu'elle ne quitte le serveur. Placer l'enveloppe plus
+    interne masquerait le vrai traceback à Sentry.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        try:
+            return await call_next(context)
+        except Exception as e:
+            info = error_taxonomy.classify(e)
+            data = {"code": info.code, "retryable": info.retryable}
+            if info.hint:
+                data["hint"] = info.hint
+            raise McpError(ErrorData(
+                code=error_taxonomy.jsonrpc_code(info),
+                message=info.message,
+                data={"oto": data},
+            )) from e

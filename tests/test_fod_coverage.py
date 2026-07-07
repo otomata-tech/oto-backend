@@ -68,6 +68,7 @@ FOD_NOT_EXPOSED = {
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,
+    "sitadel": _FONCIER_VIA_FOD,  # permis DiDo — via fod_foncier (B1) ; dernier ref lib (DIDO_PAGE_SIZES) inliné au B4
     # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
     # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
     # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.

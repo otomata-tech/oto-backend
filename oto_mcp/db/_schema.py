@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- Non secret (destiné à être diffusé), lazy-généré à la 1re demande.
     referral_code TEXT,
     avatar_url TEXT,
+    -- Préférence de langue de l'UI dashboard ('en'|'fr'). NULL = pas de préférence
+    -- explicite (le front retombe sur la langue du navigateur).
+    locale TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

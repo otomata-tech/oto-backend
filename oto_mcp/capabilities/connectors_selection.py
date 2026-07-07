@@ -112,13 +112,23 @@ def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # `mode==forbidden` conflate option/activation/RBAC. `option_ok=True` si aucune
         # option requise. Verbose seulement (compact = catalogue).
         opt = access.paid_option_for(c["name"])
+        # `option_ok` = l'option payante (couche 3) est-elle levée pour l'user. Le BYO
+        # (clé propre user/équipe/org) OUVRE l'option — l'user gère sa propre instance,
+        # pas de gate sur la ressource plateforme (MIROIR de status_for :
+        # `subscribed = byo or has_option`). Sans ça la carte affichait « Bloqué »
+        # alors qu'une clé d'org BYO rend le connecteur pleinement utilisable.
+        option_ok = (
+            opt is None
+            or access.credential_mode_for(ctx.sub, c["name"], org=ctx.org_id) in access.BYO_MODES
+            or access.has_option(ctx.sub, opt, org=ctx.org_id)
+        )
         connectors.append({
             **base,
             "state": state,
             "recommended": c["name"] in recommended,
             "doctrine_ref_count": len(refset),
             "paid_option": opt,
-            "option_ok": opt is None or access.has_option(ctx.sub, opt, org=ctx.org_id),
+            "option_ok": option_ok,
         })
     return {"connectors": connectors, "verbose": inp.verbose}
 

@@ -315,6 +315,23 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- « ajoute une note sur ce contact » → `hubspot_create_note`"
         )),
     ),
+    "brevo": (
+        DocSection(kind="prerequisite", title="ta clé api brevo (v3)", body_md=(
+            "brevo s'authentifie via une **clé api v3**. dans [ton compte brevo](https://app.brevo.com), va dans **paramètres → smtp & api → clés api**, génère une clé (elle porte tout le compte, pas de scope).\n"
+            "- copie la clé (elle commence par `xkeysib-`)\n"
+            "- colle-la dans oto sur ton compte (`/account`), connecteur **brevo**\n"
+            "- byo uniquement : ta clé ou celle partagée de ton org, pas de clé plateforme\n"
+            "- à ne pas confondre avec **brevo (automation)**, un connecteur distinct pour les scénarios d'automation (connexion par session navigateur)"
+        )),
+        DocSection(kind="usage", title="emailing & crm depuis claude", body_md=(
+            "gère ta base contacts, tes envois et ton crm brevo.\n"
+            "- « ajoute jean à la liste newsletter » → `brevo_upsert_contact` / `brevo_list_membership`\n"
+            "- « envoie cet email à marie » → `brevo_send_email` (transactionnel unitaire)\n"
+            "- « prépare une campagne pour la liste clients » → `brevo_create_campaign` (brouillon ; l'envoi de masse se déclenche dans l'ui)\n"
+            "- « combien d'ouvertures sur ma dernière campagne » → `brevo_campaigns` (statistics)\n"
+            "- « crée un deal à 10k€ » → `brevo_crm_create` (entity `deals`)"
+        )),
+    ),
     "notion": (
         DocSection(kind="prerequisite", title="ton token d'intégration notion", body_md=(
             "notion s'ouvre via une **intégration interne**. crée-la sur [notion.so/my-integrations](https://www.notion.so/my-integrations), récupère l'**internal integration token**.\n"

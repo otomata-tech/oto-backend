@@ -11,6 +11,7 @@ destructifs (delete_namespace, delete_row) et la création restent séparés.
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -624,6 +625,19 @@ def register(mcp: FastMCP) -> None:
     def _is_scalar(v: object) -> bool:
         return isinstance(v, (str, int, float, bool)) or v is None
 
+    def _compact(v: object, limit: int = 90) -> str:
+        """Résumé 1-ligne d'une valeur imbriquée pour une cellule DataTable :
+        liste → `n × {aperçu du 1er item}` ; dict → JSON compact. Tronqué."""
+        try:
+            if isinstance(v, list):
+                head = json.dumps(v[0], ensure_ascii=False, default=str) if v else ""
+                s = f"{len(v)} × {head}" if head else "0 item"
+            else:
+                s = json.dumps(v, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            s = str(v)
+        return s if len(s) <= limit else s[: limit - 1] + "…"
+
     def _message_card(title: str, message: str) -> "Card":
         with Card() as card:
             with Column(gap=4):
@@ -640,10 +654,12 @@ def register(mcp: FastMCP) -> None:
         for r in records:
             row = {}
             for k, v in r.items():
-                if not _is_scalar(v):
-                    continue
                 if k in _META and not show_meta:
                     continue
+                if not _is_scalar(v):
+                    # Sous-record / liste (schéma v2, ADR 0046) : résumé compact au
+                    # lieu de dropper la colonne (une fiche sans ses contacts[] mentait).
+                    v = _compact(v)
                 row[k] = v
                 if k not in keys:
                     keys.append(k)

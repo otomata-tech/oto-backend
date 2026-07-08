@@ -457,8 +457,8 @@ def datastore_namespaces_with_key() -> list[dict]:
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            "WHERE ns_id = %s AND row_id = %s",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            "FROM datastore_rows WHERE ns_id = %s AND row_id = %s",
             (ns_id, row_id),
         ).fetchone()
         return dict(row) if row else None
@@ -574,8 +574,8 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
         params.extend([limit, offset])
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            f"{where} ORDER BY {order_sql}{tail}",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            f"FROM datastore_rows {where} ORDER BY {order_sql}{tail}",
             tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -598,8 +598,8 @@ def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            f"{where} ORDER BY row_id ASC LIMIT %s",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            f"FROM datastore_rows {where} ORDER BY row_id ASC LIMIT %s",
             tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]

@@ -189,6 +189,7 @@ def create_platform_key(provider: str, label: str, api_key: str) -> int:
             ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             raise ValueError(f"({provider}, {label}) existe déjà") from e
+        _dual_write_platform_credential(conn, provider, label, api_key)
         return int(row["id"])
 
 
@@ -209,12 +210,32 @@ def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
             """,
             (provider, label, enc),
         ).fetchone()
+        _dual_write_platform_credential(conn, provider, label, api_key)
         return int(row["id"])
 
 
+def _dual_write_platform_credential(conn, provider: str, label: str, api_key: str) -> None:
+    """ADR 0044 §F R1 : miroir la clé plateforme dans le coffre unifié (scope PLATFORM),
+    dans la MÊME transaction que le write legacy `platform_keys` (commit/rollback ensemble).
+    Gardé sur l'éligibilité `'platform' in auth_modes` → R1 ne casse jamais un flux existant
+    (une clé legacy pour un connecteur non-plateforme resterait inerte, on ne la mirroir pas).
+    Legacy reste vérité jusqu'au cutover lectures (R3)."""
+    from .. import credentials_store, providers
+    con = providers.REGISTRY.get(provider)
+    if con and "platform" in con.auth_modes:
+        credentials_store.set_credential(
+            credentials_store.PLATFORM, label, provider, api_key, meta={}, conn=conn)
+
+
 def delete_platform_key(key_id: int) -> None:
+    from .. import credentials_store
     with _connect() as conn:
+        row = conn.execute(
+            "SELECT provider, label FROM platform_keys WHERE id = %s", (key_id,)).fetchone()
         conn.execute("DELETE FROM platform_keys WHERE id = %s", (key_id,))
+        if row:  # dual-clear le miroir coffre (R1), même transaction
+            credentials_store.clear_credential(
+                credentials_store.PLATFORM, row["label"], row["provider"], conn=conn)
 
 
 def grant_platform_key(

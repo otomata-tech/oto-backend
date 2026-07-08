@@ -45,7 +45,7 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > `recipient_credential` (le client branche SA clé ; la surcharge identité/instructions du
 > lien voyage avec le projet) ; docs/fichiers suivent d'office (héritage d'accès). Kind
 > **`doctrine`** enregistré sur la primitive ownership (owner **dérivé** d'`org_instructions.
-> org_id`, resource_id = id surrogate) → lecture cross-org **par id** `oto_get_doctrine(
+> org_id`, resource_id = id surrogate) → lecture cross-org **par id** `oto_procedure(op='get', 
 > doctrine_id=…)` / `GET /api/me/doctrines/{id}`, gatée `ownership.can_access`. Un projet
 > livré remonte chez le client dans `oto_project(op=list)` (flag `shared`+`permission`) ET
 > dans le bloc C du handshake (#50) — ouvrable en un message. Reste à cadrer : push des màj

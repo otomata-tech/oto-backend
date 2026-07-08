@@ -240,7 +240,7 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
     - `tableau`  → même geste (grant au même principal — user/org/groupe, `can_access`
       honore les trois via `AccessorScope.principal_pairs` / transfert au même owner) ;
     - `procedure`→ share = grant READ sur la doctrine (lisible cross-org par id via
-      oto_get_doctrine) ; transfer vers une org = COPIE de la doctrine chez la cible
+      oto_procedure op=get) ; transfer vers une org = COPIE de la doctrine chez la cible
       + re-pointage du lien (l'originale reste chez la source — zéro casse des autres
       projets qui la référencent) ;
     - `connecteur` → rien à propager : le destinataire branche SON credential (la
@@ -415,7 +415,7 @@ CAPABILITIES += [
             "project, doctrine}. DELIVER A FULL PROJECT (#52): share/transfer a project "
             "with cascade=true to carry its linked entities in one gesture — linked "
             "tableaux get the same share/transfer, linked procedures are share-granted "
-            "read (readable cross-org via oto_get_doctrine doctrine_id) or COPIED into "
+            "read (readable cross-org via oto_procedure op=get doctrine_id) or COPIED into "
             "the target org on transfer (link re-pointed, source untouched), connector "
             "links report `recipient_credential` (the recipient plugs their own key; the "
             "project's pre-made identity/instructions overrides travel with it); docs & "

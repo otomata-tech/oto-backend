@@ -331,7 +331,7 @@ def seed_platform_blocks() -> None:
 def skills_index_md(org_id: int | None) -> str:
     """Index markdown des doctrines NOMMÉES (skills) d'une org — `slug — titre :
     description`, SANS les corps. Sert à enrichir DYNAMIQUEMENT la description de
-    l'outil `oto_get_doctrine` au `tools/list` (les skills ne sont PAS des outils →
+    l'outil `oto_procedure` au `tools/list` (les skills ne sont PAS des outils →
     absents de `tools/list`, donc invisibles sans ça). Fail-open : '' si pas d'org /
     aucune doctrine / erreur."""
     if org_id is None:

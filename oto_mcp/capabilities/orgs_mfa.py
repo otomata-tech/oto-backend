@@ -74,7 +74,6 @@ CAPABILITIES += [
         description=("Read whether this org requires its members to use MFA (a second "
                      "factor). Returns require_mfa and whether the Logto enforcement "
                      "mirror is provisioned."),
-        mcp="oto_get_org_mfa",
         rest=RestBinding("GET", "/api/orgs/{id}/mfa", _ID),
     ),
     Capability(
@@ -84,7 +83,6 @@ CAPABILITIES += [
                      "When on, every member must enroll and use a second factor at their "
                      "next sign-in (enforced by Logto). Provisions/updates the Logto "
                      "enforcement mirror; on Logto failure it errors WITHOUT changing state."),
-        mcp="oto_set_org_mfa",
         rest=RestBinding("PUT", "/api/orgs/{id}/mfa", _ID),
     ),
 ]

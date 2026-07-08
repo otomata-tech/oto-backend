@@ -7,7 +7,7 @@ d'autz `_resolve_org_write` (MCP) vs `_active_org_edit` (REST).
 Deux paliers, par combinateur d'autz (pas de branche `org_id` à la main) :
 - **membre** : scopé à l'**org active** (`org_id` injecté depuis l'état serveur).
   Lecture = `ORG_MEMBER`/`SUB_ONLY` ; écriture = `ORG_ADMIN`. Chemins `/api/me/*`,
-  outils `oto_get_doctrine`/`oto_list_doctrines`/`oto_set_doctrine`/`oto_delete_doctrine`.
+  outil console `oto_procedure` (op=get/list/set/delete, ADR 0047 — ex 4 tools par-verbe).
 - **admin** : org ciblée par `org_id` (cross-org = platform admin via l'escalade
   `roles`). Lecture = `ORG_MEMBER_OF` ; écriture = `ORG_ADMIN_OF`. Chemins
   `/api/admin/orgs/{id}/*`, outils `oto_admin_*_doctrine`.
@@ -36,7 +36,7 @@ _BASE = org_store.BASE_SLUG
 # l'usage compte. UNE source pour le nom : sert de `mcp=` de la capacité de lecture
 # ET de filtre dans `_instruction_usage` → plus de chaîne magique à dériver (le bug
 # d'origine : un filtre sur un nom d'outil mort renvoyait toujours 0).
-_DOCTRINE_GET_TOOL = "oto_get_doctrine"
+_DOCTRINE_GET_TOOL = "oto_procedure"
 
 
 # ── Inputs — palier membre (org active, pas d'org_id) ───────────────────────
@@ -233,7 +233,7 @@ async def _get_doctrine(ctx: ResolvedCtx, inp) -> dict:
         raise AuthzDenied(404, "unknown_doctrine",
                           f"Aucune doctrine `{org_store.normalize_slug(slug)}` (scope {scope})"
                           + (f" en version {version}" if version is not None else "")
-                          + ". Vois `oto_list_doctrines`.")
+                          + ". Vois `oto_procedure(op='list')`.")
     out = {**scope_ref, "scope": scope, "slug": instr["slug"], "title": instr["title"],
            "description": instr["description"], "version": instr["version"],
            "body_md": instr["body_md"], "slots": instr.get("slots") or [],
@@ -378,7 +378,7 @@ def _instruction_revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
 
 def _instruction_usage(ctx: ResolvedCtx, inp: SlugInput) -> dict:
     """Usage d'une doctrine (ADR 0014) : nb de chargements par l'agent, appelants,
-    série journalière 30j — dérivé de `tool_calls` (`oto_get_doctrine`), scopé org."""
+    série journalière 30j — dérivé de `tool_calls` (`_DOCTRINE_GET_TOOL`), scopé org."""
     slug = org_store.normalize_slug(inp.slug)
     subs = [m["sub"] for m in org_store.list_org_members(ctx.org_id)]
     slug_filter = None if slug == _BASE else slug
@@ -396,22 +396,14 @@ CAPABILITIES += [
         description=("Operational doctrine of your active org. The base doctrine is now "
                      "INJECTED into your session instructions at connect — call this with "
                      "`slug` to load ONE named skill's full markdown (list skills with "
-                     "oto_list_doctrines). No-arg returns base + index, e.g. to refresh "
+                     "oto_procedure op=list). No-arg returns base + index, e.g. to refresh "
                      "after switching org with oto_use_org. `scope=group` targets your "
                      "active department. `doctrine_id` loads a doctrine by its STABLE id "
                      "(project procedure links) — including one SHARED to you/your org "
                      "by another org (delivered project)."),
-        mcp=_DOCTRINE_GET_TOOL,
         # Face REST par ID stable : résolution des liens `procedure` d'un projet côté
         # dashboard — y compris un projet LIVRÉ (doctrine d'une autre org, grant read).
         rest=RestBinding("GET", "/api/me/doctrines/{doctrine_id}"),
-    ),
-    Capability(
-        key="org.doctrine.list", handler=_list_doctrines, Input=DoctrineListInput,
-        authz=SUB_ONLY,
-        description=("Catalog of your org's named doctrines (skills) + active department — "
-                     "slug/title/description/version, no body. Load one with oto_get_doctrine(slug)."),
-        mcp="oto_list_doctrines",
     ),
     Capability(
         key="org.instruction.list", handler=_instructions_list, Input=EmptyInput,
@@ -447,7 +439,6 @@ CAPABILITIES += [
                      "(unresolved/unreferenced slots, suggestions). `org` pins the write to "
                      "an EXPLICIT org id (default = your active org) — pass it to stay robust "
                      "if a reconnect dropped your session org; you must be org_admin of it."),
-        mcp="oto_set_doctrine",
         rest=RestBinding("PUT", "/api/me/instructions/{slug}"),
     ),
     Capability(
@@ -456,7 +447,6 @@ CAPABILITIES += [
         description=("Delete a doctrine and its history (org_admin). Pass the EXACT slug. "
                      "`org` pins to an explicit org id (default = active org; must be "
                      "org_admin of it)."),
-        mcp="oto_delete_doctrine",
         rest=RestBinding("DELETE", "/api/me/instructions/{slug}"),
     ),
     Capability(
@@ -469,28 +459,24 @@ CAPABILITIES += [
         key="org.doctrine.admin_get", handler=_get_doctrine, Input=AdminDoctrineGetInput,
         authz=ORG_MEMBER_OF("org_id"),
         description="[ADMIN] Read another org's doctrine by id (base+index, or one skill).",
-        mcp="oto_admin_get_doctrine",
         rest=RestBinding("GET", "/api/admin/orgs/{id}/instructions/{slug}", _OID_SLUG),
     ),
     Capability(
         key="org.doctrine.admin_list", handler=_list_doctrines, Input=AdminDoctrineListInput,
         authz=ORG_MEMBER_OF("org_id"),
         description="[ADMIN] List another org's named doctrines by id (incl. base doctrine).",
-        mcp="oto_admin_list_doctrines",
         rest=RestBinding("GET", "/api/admin/orgs/{id}/instructions", _OID),
     ),
     Capability(
         key="org.instruction.admin_set", handler=_set_instruction, Input=AdminInstrSetInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="[ADMIN] Write another org's doctrine by id (cross-org = platform admin).",
-        mcp="oto_admin_set_doctrine",
         rest=RestBinding("PUT", "/api/admin/orgs/{id}/instructions/{slug}", _OID_SLUG),
     ),
     Capability(
         key="org.instruction.admin_delete", handler=_delete_instruction, Input=AdminSlugInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="[ADMIN] Delete another org's doctrine by id and its history.",
-        mcp="oto_admin_delete_doctrine",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/instructions/{slug}", _OID_SLUG),
     ),
 ]

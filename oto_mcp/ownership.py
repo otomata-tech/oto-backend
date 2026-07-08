@@ -276,7 +276,7 @@ register_kind(
 # Une doctrine est TOUJOURS un objet d'org : son owner DÉRIVE d'`org_instructions.
 # org_id` (pas de colonnes owner_* — « derive don't duplicate »). resource_id =
 # l'id surrogate stable (ADR 0032 « stop using slug »). Le partage (grant read à
-# une org cliente) rend la doctrine lisible cross-org par id via oto_get_doctrine.
+# une org cliente) rend la doctrine lisible cross-org par id via oto_procedure(op='get').
 
 def _doctrine_owner(rid: str) -> Optional[tuple[str, str]]:
     if not str(rid).isdigit():   # relique : des liens legacy portent encore un slug

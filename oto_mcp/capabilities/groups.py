@@ -187,7 +187,6 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"),
         description=("Create a group (department/team) inside an org you administer. "
                      "You become its team lead (group_admin)."),
-        mcp="oto_create_group",
         rest=RestBinding("POST", "/api/orgs/{id}/groups", _OID),
     ),
     Capability(
@@ -195,12 +194,6 @@ CAPABILITIES += [
         authz=ORG_MEMBER_OF("org_id"),
         description="List the groups (departments) of an org you belong to.",
         rest=RestBinding("GET", "/api/orgs/{id}/groups", _OID),
-    ),
-    Capability(
-        key="group.list_mine", handler=_list_my_groups, Input=NoInput, authz=SUB_ONLY,
-        description=("List the groups (departments) of your active org, your role in "
-                     "each, and which one is active."),
-        mcp="oto_list_groups",
     ),
     Capability(
         key="group.use", handler=_use_group, Input=UseGroupInput, authz=SUB_ONLY,

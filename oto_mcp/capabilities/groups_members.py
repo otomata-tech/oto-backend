@@ -94,7 +94,6 @@ CAPABILITIES += [
         authz=GROUP_ADMIN_OF("group_id"),
         description=("Add a member (by email or sub) to a group you lead. The target "
                      "must already belong to the parent org. role: group_member|group_admin."),
-        mcp="oto_add_group_member",
         rest=RestBinding("POST", "/api/groups/{id}/members", _GID),
     ),
     Capability(
@@ -107,7 +106,6 @@ CAPABILITIES += [
         key="group.member.remove", handler=_remove_member, Input=RemoveGroupMemberInput,
         authz=GROUP_ADMIN_OF("group_id"),
         description="Remove a member (by email or sub) from a group you lead.",
-        mcp="oto_remove_group_member",
         rest=RestBinding("DELETE", "/api/groups/{id}/members/{sub}",
                          {"id": "group_id", "sub": "target"}),
     ),

@@ -342,7 +342,7 @@ def _resolve_group_guarded(sub: str, gid: int) -> dict:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Paramètre `group`={gid} refusé : tu n'es pas membre de ce "
-                     "groupe. Vérifie avec oto_list_groups.")))
+                     "groupe. Vérifie avec oto_group(op='list').")))
     return g
 
 

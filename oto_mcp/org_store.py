@@ -1193,7 +1193,7 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
 
 # --- instructions d'org : doctrine de base + skills versionnés ----------------
 #
-# Modèle unifié servi par oto_get_doctrine() / oto_*_instruction(s). Le slug réservé
+# Modèle unifié servi par oto_procedure(op='get') / oto_*_instruction(s). Le slug réservé
 # BASE_SLUG ("claude_md") = la doctrine de base (servie d'office) ; les autres =
 # des skills chargés à la demande. En clair (prose, hors coffre), lu à l'appel
 # (pas de cache). Écriture = incrément de version + snapshot d'historique.

@@ -47,14 +47,12 @@ CAPABILITIES += [
         authz=ORG_MEMBER_OF("org_id"),
         description=("List the org's scheduled (deferred) emails. `status` filters "
                      "pending|sent|failed|cancelled|all (default pending)."),
-        mcp="oto_list_scheduled_emails",
         rest=RestBinding("GET", "/api/orgs/{id}/scheduled-emails", _ID),
     ),
     Capability(
         key="org.scheduled_email.cancel", handler=_scheduled_cancel, Input=ScheduledCancelInput,
         authz=ORG_MEMBER_OF("org_id"),
         description="Cancel a still-pending scheduled email of the org by id.",
-        mcp="oto_cancel_scheduled_email",
         rest=RestBinding("DELETE", "/api/orgs/{id}/scheduled-emails/{eid}",
                          {"id": "org_id", "eid": "email_id"}),
     ),

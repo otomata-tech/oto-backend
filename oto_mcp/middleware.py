@@ -48,20 +48,20 @@ class UserDisabledToolsMiddleware(Middleware):
         return result
 
 
-_DOCTRINE_GET_TOOL = "oto_get_doctrine"
+_DOCTRINE_GET_TOOL = "oto_procedure"
 _GUIDE_TOOL = "oto_guide"
 
 
 class DynamicInstructionsMiddleware(Middleware):
     """Injecte le contexte doctrine de l'org dans la surface vue par le LLM, par-(sub,
-    org), au lieu de dépendre d'un appel volontaire `oto_get_doctrine()` (canal fragile,
+    org), au lieu de dépendre d'un appel volontaire de lecture de doctrine (canal fragile,
     otomata-private#49, amende ADR 0014). Deux points d'injection, selon la NATURE :
 
     - **artefact composé** (blocs A/C, #50) → `on_initialize` REMPLACE
       `result.instructions` par `instructions.compose_session(sub, org)`
       (le « cheval de Troie », relu par session ; Claude rehandshake par conversation).
     - **index des doctrines NOMMÉES** (skills) → `on_list_tools` enrichit la
-      **description de `oto_get_doctrine`** (l'outil qui les charge). Les skills ne sont
+      **description de `oto_procedure`** (l'outil qui les charge). Les skills ne sont
       PAS des outils → absents de `tools/list` → ce serait leur seul canal. Co-localisé
       avec le loader plutôt qu'un bloc dans les instructions.
 

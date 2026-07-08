@@ -9,7 +9,7 @@ minimal :
     ---
     <corps markdown>
 
-Distinct des **doctrines nommées** (procédures d'ORG, per-org DB, `oto_get_doctrine`,
+Distinct des **doctrines nommées** (procédures d'ORG, per-org DB, `oto_procedure`,
 avec slots/versions/publish) : les guides sont **transverses, plateforme, read-only,
 versionnés avec le code** (revus en PR). C'est le pendant des « claude docs » : la
 notion d'« instructions server » a deux étages — toujours-injecté (bloc A/C) vs

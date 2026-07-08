@@ -306,11 +306,11 @@ Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **inject
 chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
 (`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
 slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
-`oto_get_doctrine`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+`oto_procedure`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
 capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
 dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
-(skill), chargée à la demande — les identifiants de code (`oto_get_doctrine`, tables,
+(skill), chargée à la demande — les identifiants de code (`_DOCTRINE_GET_TOOL`, tables,
 `docs/doctrines.md`) gardent le mot doctrine. Prose opératoire versionnée par org,
 **détail : `docs/doctrines.md`**.
 
@@ -329,9 +329,9 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 >   (`_format_org_readme`/`_format_group_readme`/`_format_user_readme`), chacun avec substitution
 >   `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
 >
-> Donc **ne plus prescrire « appelle `oto_get_doctrine()` au démarrage »** — la doctrine est injectée.
+> Donc **ne plus prescrire « appelle la lecture de doctrine au démarrage »** — la doctrine est injectée.
 > Les **doctrines nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools`
-> **enrichit la description de `oto_get_doctrine`** avec leur index per-org (`instructions.skills_index_md`,
+> **enrichit la description de `oto_procedure`** avec leur index per-org (`instructions.skills_index_md`,
 > Tool non-frozen → `model_copy`). `render()` reste la surface STATIQUE (boot / fallback, sans DB).
 > Tout **fail-open** (pas de sub/org/doctrine/DB → surface statique). Édition des blocs A/B : capacité
 > `oto_admin_platform_instructions` (+ REST `/api/admin/platform-instructions`, `PLATFORM_ADMIN`) →
@@ -347,7 +347,7 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 > `slot_taken` au link). Module `slots.py` = source unique (validation dure
 > `validate_slots`/`normalize_name` + check croisé non bloquant `slots_check` : refs
 > mortes, slots jamais cités, cohérence connecteurs déclarés ↔ refs `<tool:>`, suggestion
-> quand un connecteur à identités est référencé sans slot). Écriture : `oto_set_doctrine`/
+> quand un connecteur à identités est référencé sans slot). Écriture : `oto_procedure(op='set')`/
 > `PUT /api/me/instructions/{slug}` (param `slots`, warnings en réponse) ; transport
 > revisions + revert + `copy_instruction_to_org` + publish/fork bibliothèque +
 > `duplicate_project`. **Runtime (B3)** : les tools `data_*` acceptent
@@ -377,7 +377,7 @@ plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 Un groupe **gouverne 2 ressources** par délégation de l'org :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
-- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_get_doctrine()`
+- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
   sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
 
 **Groupe actif** : ≤1 par sub (`org_group_members.is_active`, index partiel),
@@ -590,7 +590,7 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/connector-model.md` — **carte d'ensemble** : les **3 couches** d'un connecteur (disponibilité / authentification / option de connecteur), la matrice des niveaux (user/groupe/org/plateforme), le vocabulaire canonique, le seam `access.has_option`. **À lire en premier** avant de toucher activation/clés/options (les autres docs ci-dessous = le détail par couche).
 - `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffré unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM **obligatoire** (pas de plaintext), résolution + palier org. À lire avant de toucher credentials/registre/résolution.
 - `docs/roles-and-resolution.md` — rôles (3 paliers) + cascade de résolution de clé / grants / platform keys.
-- `docs/doctrines.md` — doctrine & skills d'org (oto_get_doctrine, versionnée).
+- `docs/doctrines.md` — doctrine & skills d'org (`oto_procedure`, versionnée).
 - `docs/auth-logto.md` — auth Logto ES384, discovery RFC 9728, façade DCR.
 - `docs/rest-api.md` — inventaire des endpoints REST `/api/*`.
 - `docs/federation.md` — fédération MCP : mount (per-user) vs remote/bridge (org).

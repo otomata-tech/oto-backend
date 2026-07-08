@@ -58,7 +58,6 @@ CAPABILITIES += [
                      "(org-shareable only). Single-key connectors: pass `api_key`. "
                      "Multi-field connectors (zoho/silae…): pass `fields` (all declared "
                      "credential fields). Resolves BEFORE the org secret for members."),
-        mcp="oto_set_group_secret",
         rest=RestBinding("PUT", "/api/groups/{id}/secrets/{provider}", _GID),
     ),
     Capability(

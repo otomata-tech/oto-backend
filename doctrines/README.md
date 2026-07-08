@@ -2,7 +2,7 @@
 
 Doctrines **versionnées au repo** publiées dans la bibliothèque publique
 (`doctrine_library`) sous l'auteur **Otomata** — un catalogue de skills que
-n'importe quelle org peut **forker** (`oto_fork_doctrine`) dans son espace.
+n'importe quelle org peut **forker** (`oto_procedure(op='fork')`) dans son espace.
 
 Diffère de `scripts/seed_doctrine_library.py` (qui publie les skills d'une org
 existante) : ici les doctrines sont des fichiers markdown, pas besoin d'org source.

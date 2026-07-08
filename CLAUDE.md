@@ -440,9 +440,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (fichier + entrée registre) le garde vert SANS rien y toucher ; il casse seulement
   sur un **fichier orphelin** (connecteur posé mais pas déclaré → dort invisible) ou un
   **module fantôme** (faute dans `modules=`/nom). Seul un **module spine** chargé
-  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. ⚠️ **Aucune CI de test sur
-  les PR** (`gh pr checks` = vide ; seul `deploy.yml` tourne sur push main) → un test
-  rouge atterrit sur `main` sans rien bloquer. Lancer les tests à la main.
+  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` de
+  `deploy.yml` tourne **sur les PR ET sur push main** (`on: pull_request` + `push`,
+  required check de branch protection) et installe oto-core **au tag épinglé** (runner
+  neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (`deploy` a
+  `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
+  vérifie STATIQUEMENT que chaque `_client().<m>()` d'un tool existe sur la classe
+  oto-core épinglée (un tool en avance de phase sur son oto-core casse la PR au lieu
+  d'atteindre la prod — leçon `folk_get_user`).
 - **PERF — le serveur est MONO-LOOP : aucun I/O bloquant dans la boucle.** Un handler
   de tool qui n'`await` rien doit être `def` sync (threadpool) ; du DB sync dans un
   middleware = même règle (`run_in_threadpool`). Deux modes de gel vécus + garde-fous

@@ -357,10 +357,38 @@ class DatastorePg:
     # --- row ops -------------------------------------------------------------
 
     def append_row(self, namespace: str, data: dict) -> dict:
+        """Écrit UNE row. Si le namespace déclare une clé métier (`schema.key`),
+        applique la MÊME dédup upsert que le batch `write_rows` : une row de même
+        valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
+        sinon append. Renvoie la row (nouvelle ou mise à jour)."""
         ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
-        row = db.datastore_insert_row(ns_id, _new_id(), user_data)
+        key = self.declared_key(namespace)
+        kv = user_data.get(key) if key else None
+        if key and kv is not None and str(kv) != "":
+            existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
+            if existing_id is not None:
+                return self._row_to_dict(self._merge_into_row(ns_id, existing_id, user_data))
+        try:
+            row = db.datastore_insert_row(ns_id, _new_id(), user_data)
+        except UniqueViolation:
+            # Course perdue sous l'index UNIQUE de clé métier (#109 ch.3) : un write
+            # concurrent a inséré la même clé entre le lookup et l'insert — le doublon
+            # que la contrainte empêche. On converge en merge (même chemin que le batch).
+            existing_id = (db.datastore_find_row_id_by_key(ns_id, key, kv)
+                           if key and kv is not None else None)
+            if existing_id is None:
+                raise  # violation inexpliquée → erreur franche, pas de repli muet
+            return self._row_to_dict(self._merge_into_row(ns_id, existing_id, user_data))
         return self._row_to_dict(row)
+
+    def _merge_into_row(self, ns_id: int, row_id: str, user_data: dict) -> dict:
+        """MERGE `user_data` dans la row existante (dernier écrit gagne par champ),
+        renvoie la row brute persistée. Corps commun à l'append unitaire et au batch."""
+        cur = db.datastore_get_row(ns_id, row_id)
+        merged = dict((cur or {}).get("data") or {})
+        merged.update(user_data)
+        return db.datastore_update_row(ns_id, row_id, merged, _now_iso()) or cur
 
     def upsert_row(self, namespace: str, row_id: str, data: dict) -> tuple[dict, bool]:
         """Écrit une row à une clé `row_id` EXPLICITE (≠ append_row qui génère un
@@ -405,10 +433,7 @@ class DatastorePg:
             if key and kv is not None and str(kv) != "":
                 existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
                 if existing_id is not None:
-                    cur = db.datastore_get_row(ns_id, existing_id)
-                    merged = dict((cur or {}).get("data") or {})
-                    merged.update(user_data)
-                    db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                    self._merge_into_row(ns_id, existing_id, user_data)
                     updated += 1
                     ids.append(existing_id)
                     continue
@@ -428,10 +453,7 @@ class DatastorePg:
                                if dk and dkv is not None else None)
                 if existing_id is None:
                     raise  # violation inexpliquée → erreur franche, pas de repli muet
-                cur = db.datastore_get_row(ns_id, existing_id)
-                merged = dict((cur or {}).get("data") or {})
-                merged.update(user_data)
-                db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                self._merge_into_row(ns_id, existing_id, user_data)
                 updated += 1
                 ids.append(existing_id)
                 continue

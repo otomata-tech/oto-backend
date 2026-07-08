@@ -97,3 +97,58 @@ def test_unexplained_violation_raises(race, monkeypatch):
     st, _ = race
     with pytest.raises(UniqueViolation):
         st._write_rows_to_ns(7, [{"autre": "champ"}], key=None)
+
+
+# ── append unitaire : même dédup clé-métier que le batch (Sentry ds_bkey_109) ──
+
+def test_append_row_existing_key_merges_not_500(monkeypatch):
+    """Régression Sentry STARLETTE-3B : un append REST unitaire sur une clé métier
+    DÉJÀ présente doit MERGER (comme le batch), pas remonter une UniqueViolation."""
+    st = DatastorePg("u", acting_org=35)
+    monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
+    rows = {"r1": {"member_id": "A", "x": 1}}
+    monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
+                        lambda ns_id, key, kv: "r1" if str(kv) == "A" else None)
+    monkeypatch.setattr(dsm.db, "datastore_get_row",
+                        lambda ns_id, rid: {"row_id": rid, "created_at": "t0",
+                                            "updated_at": "t0", "data": dict(rows[rid])})
+    def _update(ns_id, rid, data, ts):
+        rows[rid] = data
+        return {"row_id": rid, "created_at": "t0", "updated_at": ts, "data": dict(data)}
+    monkeypatch.setattr(dsm.db, "datastore_update_row", _update)
+    # insert ne doit JAMAIS être atteint (la clé existe) — le câbler à un raise le prouve
+    monkeypatch.setattr(dsm.db, "datastore_insert_row",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("insert appelé")))
+
+    out = st.append_row("t", {"member_id": "A", "y": 2})
+    assert out["_id"] == "r1"
+    assert rows["r1"] == {"member_id": "A", "x": 1, "y": 2}  # merge, pas d'écrasement
+
+
+def test_append_row_lost_race_converges(monkeypatch):
+    """Course : lookup ne voit rien, l'insert viole l'index, le 2e lookup trouve la
+    gagnante → merge au lieu de 500."""
+    st = DatastorePg("u", acting_org=35)
+    monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
+    rows = {"winner": {"member_id": "A", "x": 1}}
+    state = {"lookups": 0}
+    def find(ns_id, key, kv):
+        state["lookups"] += 1
+        return "winner" if state["lookups"] > 1 and str(kv) == "A" else None
+    monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key", find)
+    monkeypatch.setattr(dsm.db, "datastore_insert_row",
+                        lambda ns_id, rid, data: (_ for _ in ()).throw(
+                            UniqueViolation("duplicate key ds_bkey_7")))
+    monkeypatch.setattr(dsm.db, "datastore_get_row",
+                        lambda ns_id, rid: {"row_id": rid, "created_at": "t0",
+                                            "updated_at": "t0", "data": dict(rows[rid])})
+    def _update(ns_id, rid, data, ts):
+        rows[rid] = data
+        return {"row_id": rid, "created_at": "t0", "updated_at": ts, "data": dict(data)}
+    monkeypatch.setattr(dsm.db, "datastore_update_row", _update)
+
+    out = st.append_row("t", {"member_id": "A", "y": 2})
+    assert out["_id"] == "winner"
+    assert rows["winner"] == {"member_id": "A", "x": 1, "y": 2}

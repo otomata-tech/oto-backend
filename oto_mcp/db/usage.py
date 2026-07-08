@@ -387,7 +387,7 @@ def instruction_usage(
     = log d'usage ») : combien de fois elle a été chargée par l'agent, par qui,
     et la distribution journalière sur `days` jours.
 
-    `tool` = `oto_get_doctrine` (slug=None pour la base, sinon filtré par
+    `tool` = le tool de lecture de doctrine (oto_procedure ; slug=None pour la base, sinon filtré par
     `args->>'slug'` pour une skill). Scopé aux `subs` (membres de
     l'org). Lecture pure ; renvoie {count, callers, daily{date:str -> n}}.
     """

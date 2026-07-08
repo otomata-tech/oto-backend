@@ -306,11 +306,11 @@ Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **inject
 chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
 (`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
 slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
-`oto_get_doctrine`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+`oto_procedure`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
 capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
 dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
-(skill), chargée à la demande — les identifiants de code (`oto_get_doctrine`, tables,
+(skill), chargée à la demande — les identifiants de code (`_DOCTRINE_GET_TOOL`, tables,
 `docs/doctrines.md`) gardent le mot doctrine. Prose opératoire versionnée par org,
 **détail : `docs/doctrines.md`**.
 
@@ -329,9 +329,9 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 >   (`_format_org_readme`/`_format_group_readme`/`_format_user_readme`), chacun avec substitution
 >   `{{org}}`/`{{user}}`/`{{équipe}}`/`{{connecteurs_actifs}}`.
 >
-> Donc **ne plus prescrire « appelle `oto_get_doctrine()` au démarrage »** — la doctrine est injectée.
+> Donc **ne plus prescrire « appelle la lecture de doctrine au démarrage »** — la doctrine est injectée.
 > Les **doctrines nommées (skills)** ne sont pas des outils → absentes de `tools/list` → `on_list_tools`
-> **enrichit la description de `oto_get_doctrine`** avec leur index per-org (`instructions.skills_index_md`,
+> **enrichit la description de `oto_procedure`** avec leur index per-org (`instructions.skills_index_md`,
 > Tool non-frozen → `model_copy`). `render()` reste la surface STATIQUE (boot / fallback, sans DB).
 > Tout **fail-open** (pas de sub/org/doctrine/DB → surface statique). Édition des blocs A/B : capacité
 > `oto_admin_platform_instructions` (+ REST `/api/admin/platform-instructions`, `PLATFORM_ADMIN`) →
@@ -347,7 +347,7 @@ dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_
 > `slot_taken` au link). Module `slots.py` = source unique (validation dure
 > `validate_slots`/`normalize_name` + check croisé non bloquant `slots_check` : refs
 > mortes, slots jamais cités, cohérence connecteurs déclarés ↔ refs `<tool:>`, suggestion
-> quand un connecteur à identités est référencé sans slot). Écriture : `oto_set_doctrine`/
+> quand un connecteur à identités est référencé sans slot). Écriture : `oto_procedure(op='set')`/
 > `PUT /api/me/instructions/{slug}` (param `slots`, warnings en réponse) ; transport
 > revisions + revert + `copy_instruction_to_org` + publish/fork bibliothèque +
 > `duplicate_project`. **Runtime (B3)** : les tools `data_*` acceptent
@@ -374,11 +374,23 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 2 ressources** par délégation de l'org :
+Un groupe **gouverne 3 ressources** par délégation de l'org :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
-- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_get_doctrine()`
+- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
   sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **gouvernance de connecteur (ADR 0012 B1/B2, restrict-only — 08/07/2026)** — le chef
+  d'équipe peut, pour SON équipe : **couper** un connecteur (`group_connector_activation`,
+  coupures seules) et **réserver** un connecteur à des membres (`group_connector_access`).
+  **INVARIANT MONOTONE** : l'équipe ne peut que RÉTRÉCIR ce que l'org expose, jamais élargir
+  (platform ⊇ org ⊇ group). Dispo = **visibilité** (`session_visibility`, fail-open,
+  `connector_activation.effective_for_group`/`group_cut_connectors`). Accès = **gate DUR** :
+  seam `access.group_rbac_denied_connectors` (mirror de `rbac_denied_connectors`, bypass
+  super/org_admin/group_admin) ; `require_connector_access` = `org_block OR grp_block` à
+  **fail-open INDÉPENDANT par palier** (un hoquet DB d'équipe ne désactive pas l'org).
+  Capacités `connectors.activation.{group_list,set_group,clear_group}` +
+  `connectors.acl.{group_list,group_grant,group_revoke}` (GROUP_*). REST
+  `/api/groups/{id}/connectors[/{name}]/activation` + `.../access`.
 
 **Groupe actif** : ≤1 par sub (`org_group_members.is_active`, index partiel),
 **invariant** = appartient à l'org active. `set_active_group` pose aussi l'org
@@ -502,7 +514,7 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 - **Sonde « tester la connexion » par connecteur** (`connector_verify.py`, registre
   calqué sur `browser_session.register`) : un connecteur enregistre une `_verify(fields)`
   qui **lève sur échec** (le message d'exception = le retour d'erreur). Capacité unique
-  `connectors.verify` (MCP `oto_verify_connector` + REST `POST /api/me/connectors/{provider}/verify`,
+  `connectors.verify` (MCP `oto_instance(op="verify")` — console ADR 0047 + REST `POST /api/me/connectors/{provider}/verify`,
   `authz=ORG_MEMBER`, `level` auto|org) → `{ok, error, elapsed_ms}`, jamais un 500 ;
   `providers.public_catalog` expose `verifiable: connector_verify.supports(name)` (front
   gate le bouton). **Une bonne sonde teste l'auth ET les scopes**, pas juste l'auth :
@@ -544,6 +556,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 # crée un env éphémère SANS les deps projet (piège, ModuleNotFoundError). Recette :
 uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
+
+# Tester un CLONE scratchpad (livraison par PR, tree /data/oto stale) SANS réinstaller les
+# deps : réutiliser le venv local (deps+pytest présents) en forçant PYTHONPATH sur le clone
+# → `oto_mcp` résolu depuis le clone (PYTHONPATH prime sur l'editable install) = ton code :
+#   PYTHONPATH=<clone> OTO_CONFIG_DISABLE_SOPS=1 /data/oto/backend/.venv/bin/python -m pytest -q <clone>/tests/...
+# Convention : tester la LOGIQUE PURE (helpers hors DB, ex. `effective_for_group`,
+# `_connector_blocked`/seams) + les gardes de capacité par stub ; le chemin SQL est vérifié
+# au déploiement (le job `test` du CI tourne le vrai suite avec toutes les deps).
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` : workflow unique
 # CI/CD (job `test` pytest → job `deploy` `needs: test`). Deploy = SSH box dédiée :
@@ -590,7 +610,7 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/connector-model.md` — **carte d'ensemble** : les **3 couches** d'un connecteur (disponibilité / authentification / option de connecteur), la matrice des niveaux (user/groupe/org/plateforme), le vocabulaire canonique, le seam `access.has_option`. **À lire en premier** avant de toucher activation/clés/options (les autres docs ci-dessous = le détail par couche).
 - `docs/connector-vault.md` — **archi centrale** : registre source unique (`connectors.py`), coffre chiffré unique `connector_credentials` (clés API + platform_keys + sessions linkedin/crunchbase/google multi-compte), enveloppe AES-256-GCM **obligatoire** (pas de plaintext), résolution + palier org. À lire avant de toucher credentials/registre/résolution.
 - `docs/roles-and-resolution.md` — rôles (3 paliers) + cascade de résolution de clé / grants / platform keys.
-- `docs/doctrines.md` — doctrine & skills d'org (oto_get_doctrine, versionnée).
+- `docs/doctrines.md` — doctrine & skills d'org (`oto_procedure`, versionnée).
 - `docs/auth-logto.md` — auth Logto ES384, discovery RFC 9728, façade DCR.
 - `docs/rest-api.md` — inventaire des endpoints REST `/api/*`.
 - `docs/federation.md` — fédération MCP : mount (per-user) vs remote/bridge (org).

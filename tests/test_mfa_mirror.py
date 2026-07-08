@@ -149,5 +149,7 @@ def test_set_unknown_org_404(monkeypatch):
 
 def test_capabilities_registered():
     by_key = {c.key: c for c in CAPABILITIES}
-    assert by_key["org.mfa.get"].mcp == "oto_get_org_mfa"
-    assert by_key["org.mfa.set"].mcp == "oto_set_org_mfa"
+    # ADR 0047 B3 : la face MCP est portée par la console oto_org_settings (domain=mfa).
+    assert by_key["org.mfa.get"].mcp is None
+    assert by_key["org.mfa.set"].mcp is None
+    assert by_key["org.settings.console"].mcp == "oto_org_settings"

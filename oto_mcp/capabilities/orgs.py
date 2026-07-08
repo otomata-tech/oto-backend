@@ -107,7 +107,6 @@ CAPABILITIES += [
             "Create your own organization (workspace). You become its org_admin "
             "and it becomes your active org. Self-serve — any authenticated user."
         ),
-        mcp="oto_create_org",
         rest=RestBinding("POST", "/api/me/orgs"),
         refresh_visibility=True,  # bascule l'org active → toolbox de la nouvelle org
     ),

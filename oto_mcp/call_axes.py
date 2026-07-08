@@ -146,7 +146,7 @@ ACCOUNT = CallAxis(
         "title": "Account",
         "description": (
             "Compte du connecteur à utiliser quand plusieurs sont configurés dans "
-            "l'org (ex. « 2 Zoho »). Le label listé par oto_connector_identities. "
+            "l'org (ex. « 2 Zoho »). Le label listé par oto_identity(op='list'). "
             "Omets si un seul compte est configuré."
         ),
     },
@@ -342,7 +342,7 @@ def _resolve_group_guarded(sub: str, gid: int) -> dict:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Paramètre `group`={gid} refusé : tu n'es pas membre de ce "
-                     "groupe. Vérifie avec oto_list_groups.")))
+                     "groupe. Vérifie avec oto_group(op='list').")))
     return g
 
 
@@ -402,7 +402,7 @@ async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Paramètre `instance` invalide : {value!r}. Un ref s'obtient "
-                     "via oto_connector_instances (opaque, à repasser tel quel).")))
+                     "via oto_instance(op='list') (opaque, à repasser tel quel).")))
     sub = require_axis_sub("instance")
     con = providers.connector_for_namespace(namespace_of(tool_name))
     if con is not None and ref.connector is not None and ref.connector != con.name:
@@ -425,7 +425,7 @@ INSTANCE = CallAxis(
         "type": "string",
         "title": "Instance",
         "description": (
-            "Ref d'instance de connecteur (obtenu via oto_connector_instances) sous "
+            "Ref d'instance de connecteur (obtenu via oto_instance(op='list')) sous "
             "laquelle exécuter CET appel — résout EXACTEMENT ce credential-là (ta clé, "
             "celle d'un de tes groupes ou celle de l'org), jamais un autre. Omets pour "
             "la résolution de proximité normale."

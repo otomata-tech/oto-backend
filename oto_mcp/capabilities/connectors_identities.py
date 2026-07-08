@@ -36,7 +36,7 @@ def _require_known_connector(name: str) -> None:
     hint = " (LinkedIn passe par le connecteur `unipile`)" if name == "linkedin" else ""
     raise AuthzDenied(
         404, "unknown_connector",
-        f"Connecteur inconnu : `{name}`{hint}. Slugs valides : `oto_my_connectors`.")
+        f"Connecteur inconnu : `{name}`{hint}. Slugs valides : `oto_connector(op='list')`.")
 
 
 async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
@@ -80,13 +80,11 @@ CAPABILITIES += [
     Capability(
         key="connectors.identities", handler=_list, Input=IdentitiesInput, authz=SUB_ONLY,
         description=CAPABILITIES_DOC_LIST,
-        mcp="oto_connector_identities",
         rest=RestBinding("GET", "/api/connectors/{connector}/identities"),
     ),
     Capability(
         key="connectors.set_default_identity", handler=_set_default, Input=SetIdentityInput,
         authz=SUB_ONLY, description=CAPABILITIES_DOC_SET,
-        mcp="oto_set_connector_identity",
         rest=RestBinding("PUT", "/api/connectors/{connector}/identities/default"),
     ),
 ]

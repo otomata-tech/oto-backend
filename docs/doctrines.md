@@ -4,9 +4,9 @@ type: reference
 description: >-
   Référence du mécanisme de doctrine oto-backend : prose opératoire métier par org,
   structurée en skills identifiés par slug et versionnés dans org_instructions +
-  org_instruction_revisions. Détaille les 4 tools MCP (oto_get_doctrine sans slug =
+  org_instruction_revisions. Détaille la surface (consolidée en `oto_procedure`, ADR 0047 — op=get sans slug =
   call de début de session renvoyant base + index, avec slug = skill nommé ;
-  oto_set_doctrine, oto_list_doctrines, oto_delete_doctrine), l'autz conditionnelle
+  op=set/list/delete), l'autz conditionnelle
   org_admin self-service vs platform_admin cross-org, le versioning append-only avec
   revert via from_version, et les gotchas (verrou advisory par org/slug, pas de cache,
   pas d'instruction par namespace d'outil). Aligne sur ADR 0006 (harnais sans état).
@@ -27,7 +27,7 @@ pipeline/des statuts, il graduate en harnais à part.
 **Modèle = skills, à la Claude Code.** Une org possède des **instructions markdown**
 identifiées par `slug`, chacune versionnée :
 - La **doctrine de base** (slug réservé **interne** `BASE_SLUG`, jamais vu de l'user) est servie
-  d'office — accédée via `oto_get_doctrine()` **sans slug**.
+  d'office — accédée via `oto_procedure(op='get')` **sans slug**.
 - Les autres slugs = des **skills** chargés à la demande (progressive disclosure) : la
   doctrine de base ne porte que l'**index** (slug + titre + quand-l'utiliser), le détail
   se charge au besoin.
@@ -36,13 +36,13 @@ identifiées par `slug`, chacune versionnée :
 optionnel **fond membre↔platform-admin** : absent = ton **org active** ; présent = une **autre org**
 par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
 (`_resolve_org_read`/`_resolve_org_write`).
-- **Lecture** : `oto_get_doctrine([slug, org_id, scope, version, with_history])` — sans `slug` =
+- **Lecture** : `oto_procedure(op='get'[, slug, scope, version, with_history])` — sans `slug` =
   `{doctrine, group_doctrine, doctrines[]}` (base org + base groupe + index), le call de **DÉBUT DE
-  SESSION** ; avec `slug` = le markdown d'une doctrine nommée. `oto_list_doctrines([query, org_id,
+  SESSION** ; avec `slug` = le markdown d'une doctrine nommée. `oto_procedure(op='list'[, query,
   scope])` = catalogue/recherche. Scopés à l'**org active** (+ groupe actif) — servis aux seuls
-  membres. **Vide sans erreur** si pas d'org active (`_SERVER_INSTRUCTIONS` invite à `oto_get_doctrine()`).
-- **Écriture** : `oto_set_doctrine([body_md, slug, org_id, title, desc, from_version])` (base = slug
-  omis ; nommée sinon ; `from_version` = revert) + `oto_delete_doctrine(slug[, org_id])`. Autz :
+  membres. **Vide sans erreur** si pas d'org active (`_SERVER_INSTRUCTIONS` invite à `oto_procedure(op='get')`).
+- **Écriture** : `oto_procedure(op='set'[, body_md, slug, org, title, desc, from_version])` (base = slug
+  omis ; nommée sinon ; `from_version` = revert) + `oto_procedure(op='delete', slug[, org])`. Autz :
   `org_id` absent → org active, **org_admin** requis (self-service MCP, NOUVEAU) ; présent → autre
   org, **platform_admin** requis (l'opérateur provisionne n'importe quelle org). La SPA dashboard
   édite aussi via REST `/api/me/instructions*` (org_admin de l'org active).

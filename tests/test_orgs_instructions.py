@@ -35,13 +35,17 @@ def test_member_instruction_routes_preserved():
 
 
 def test_doctrine_mcp_tools_present():
+    # ADR 0047 B2 : la face MCP est consolidée — oto_procedure (membre + bibliothèque)
+    # et oto_admin_doctrine (palier admin) remplacent les 8 tools par-verbe.
     names = {c.mcp for c in registry.caps_with_mcp()}
+    assert "oto_procedure" in names
+    assert "oto_admin_doctrine" in names
     for n in [
         "oto_get_doctrine", "oto_list_doctrines", "oto_set_doctrine", "oto_delete_doctrine",
         "oto_admin_get_doctrine", "oto_admin_list_doctrines",
         "oto_admin_set_doctrine", "oto_admin_delete_doctrine",
     ]:
-        assert n in names, n
+        assert n not in names, n
 
 
 # ── Garde anti-dérive (le bug d'origine) ────────────────────────────────────

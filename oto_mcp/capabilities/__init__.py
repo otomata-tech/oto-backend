@@ -33,22 +33,30 @@ from . import doctrine_library  # noqa: F401 — library.{list,get,publish,fork,
 # Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
 from . import connectors_selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 from . import connectors_identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
-from . import connectors_verify  # noqa: F401 — connectors.verify (oto_verify_connector : sonde de credential)
+from . import connectors_verify  # noqa: F401 — connectors.verify (sonde de credential — MCP via oto_instance op=verify)
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
-# Partage d'instance (ADR 0044) — le propriétaire PRÊTE sa clé à un pair (share_side, oto_lend_instance).
+# Partage d'instance (ADR 0044) — le propriétaire PRÊTE sa clé à un pair (share_side — MCP via oto_instance op=lend).
 from . import connectors_sharing  # noqa: F401 — connectors.lend_instance
 # Autorisation de compte connecteur partagé (#55) — le propriétaire accorde l'opération de SON compte.
 from . import connectors_account_grants  # noqa: F401 — connectors.account_grants.{list,grant,revoke}
 # Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — override positif (allow).
-from . import connectors_force  # noqa: F401 — connectors.force.member (oto_force_connector)
+from . import connectors_force  # noqa: F401 — connectors.force.member (MCP via oto_connector op=force)
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
 from . import connectors_instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin, access_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,key_grant}
+# Console connecteurs consolidée (ADR 0047 B1, fusion *_op) — porte les 6 tools MCP de la
+# famille (activation/access/connector/instance/identity/account_access) ; les modules
+# ci-dessus gardent leurs faces REST. À importer APRÈS eux.
+from . import connectors_console  # noqa: F401 — connectors.console.{activation,access,connector,instance,identity,account_access}
+# Console procédures (ADR 0047 B2) — oto_procedure (doctrine membre + bibliothèque publique).
+from . import procedure_console  # noqa: F401 — org.procedure.console
+# Console org/équipe (ADR 0047 B3) — oto_org, oto_org_settings, oto_group, oto_scheduled_emails.
+from . import org_console  # noqa: F401 — org.console + org.settings.console + group.console + org.scheduled_emails.console
 # Export du journal d'audit org-scopé (oto-backend#67) — REST-only, org_admin.
 from . import audit_log  # noqa: F401 — org.audit_log.export (GET /api/orgs/{id}/audit-log/export)
 # Gouvernance générique des ressources possédées (ADR 0030) — transfert/partage

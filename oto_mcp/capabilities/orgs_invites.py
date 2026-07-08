@@ -254,7 +254,6 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"),
         description="Invite someone to an org you administer (role: org_member|org_admin). "
                     "send_email=true mails a link; false returns a short code to share yourself.",
-        mcp="oto_invite_member",
         rest=(RestBinding("POST", "/api/orgs/{id}/invitations", _ID),
               RestBinding("POST", "/api/admin/orgs/{id}/invitations", _ID)),
     ),
@@ -276,7 +275,6 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         description="Accept an invitation by mail token, short code, or referral carrier code. "
                     "Org invite → joins the org; alpha/referral → grants access, create your own org next.",
-        mcp="oto_accept_invite",
         rest=RestBinding("POST", "/api/me/invitations/accept"),
     ),
     Capability(

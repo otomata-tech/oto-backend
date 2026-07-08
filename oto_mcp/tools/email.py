@@ -81,15 +81,15 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
             }
         if from_email is not None:
             raise _err(f"« {from_email} » n'est pas une adresse déclarée d'un connecteur email de "
-                       "l'org active. Ajoute-la via `oto_set_org_email_settings`, ou omets `from_email`.")
+                       "l'org active. Ajoute-la via `oto_org_settings(domain='email', op='set')`, ou omets `from_email`.")
 
     # Chemin marque oto@otomata.tech — super_admin uniquement
     if from_email is not None:
         raise _err("Aucune org active avec une adresse d'envoi configurée. Configure-la "
-                   "(`oto_set_org_email_settings`) ou passe la bonne org (`org=<id>`).")
+                   "(`oto_org_settings(domain='email', op='set')`) ou passe la bonne org (`org=<id>`).")
     if not access.is_super_admin(sub):
         raise _err("Ton org n'a pas d'adresse d'envoi configurée — demande à un org_admin "
-                   "de l'ajouter via `oto_set_org_email_settings`. L'envoi sous la marque "
+                   "de l'ajouter via `oto_org_settings(domain='email', op='set')`. L'envoi sous la marque "
                    "oto@otomata.tech est réservé au super_admin de la plateforme.")
     return sub, {"org_id": None, "connector": None, "from_email": None, "from_name": None,
                  "transport": "mailer", "reply_to": None, "quiet_hours": None}
@@ -113,7 +113,7 @@ def register(mcp: FastMCP) -> None:
         """Envoie un email à contenu libre depuis une adresse de TON org active,
         rendu à la charte. Peut être DIFFÉRÉ.
 
-        L'org déclare ses adresses expéditrices (`oto_set_org_email_settings`) ;
+        L'org déclare ses adresses expéditrices (`oto_org_settings domain=email`) ;
         chacune envoie soit via le mailer Otomata (domaine vérifié côté TEM), soit
         via la clé Resend de l'org. Usage type — séquences d'onboarding pilotées
         par l'agent : lis l'état du compte cible, rédige un message ADAPTÉ, envoie,
@@ -124,8 +124,7 @@ def register(mcp: FastMCP) -> None:
         si tu composes dedans, l'envoi est AUTO-décalé au prochain créneau ouvert —
         tu n'as rien à calculer. Laisse `send_at` vide dans ce cas. Pour une heure
         précise, passe `send_at`. Pour forcer un envoi immédiat malgré les quiet
-        hours, `force_now=True`. Gère/annule la file : `oto_list_scheduled_emails`,
-        `oto_cancel_scheduled_email`.
+        hours, `force_now=True`. Gère/annule la file : `oto_scheduled_emails(op='list'|'cancel')`.
 
         Args:
             to: adresse email du destinataire.

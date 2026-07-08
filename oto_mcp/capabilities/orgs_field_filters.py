@@ -167,7 +167,6 @@ CAPABILITIES += [
                      "server defaults and the available redaction modes/params. Pass "
                      "include_schemas=true to also get the full per-connector field "
                      "catalog (large — omitted by default)."),
-        mcp="oto_get_org_field_filters",
         rest=RestBinding("GET", "/api/orgs/{id}/field-filters", _ID),
     ),
     Capability(
@@ -179,7 +178,6 @@ CAPABILITIES += [
                      "(+kind), generalize (+to year/month/department/range), hash, "
                      "anonymize, drop. Pass rules=null to clear the connector's policy "
                      "(falls back to the server default). The org policy is authoritative."),
-        mcp="oto_set_org_field_filters",
         rest=RestBinding("PUT", "/api/orgs/{id}/field-filters/{service}", _ID),
     ),
     Capability(
@@ -189,7 +187,6 @@ CAPABILITIES += [
                      "returns the redacted payload so you can SEE exactly which fields "
                      "(incl. nested keys) get masked. Pass `rules` to test a draft, or omit "
                      "to apply the service's effective policy (org → server default)."),
-        mcp="oto_preview_org_field_filter",
         rest=RestBinding("POST", "/api/orgs/{id}/field-filters/{service}/preview", _ID),
     ),
 ]

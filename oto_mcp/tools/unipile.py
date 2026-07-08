@@ -300,7 +300,7 @@ def register(mcp: FastMCP) -> None:
         L'utilisateur ouvre l'URL, se connecte à son compte (login/2FA/captcha —
         tout se passe dans cette page hébergée) ; la liaison se **finalise
         automatiquement** côté serveur (webhook), rien d'autre à appeler ensuite.
-        Vérifie l'état avec `oto_verify_connector(provider='unipile')`. C'est LE
+        Vérifie l'état avec `oto_instance(op='verify', connector='unipile')`. C'est LE
         point d'entrée d'onboarding messagerie depuis l'agent (feedback #131).
 
         Args:
@@ -317,7 +317,7 @@ def register(mcp: FastMCP) -> None:
         out["instructions"] = (
             f"Transmets `url` à l'utilisateur : il ouvre le lien, connecte son compte "
             f"{out.get('channel', channel)}, et la liaison se finalise seule "
-            "(webhook). Vérifie ensuite avec oto_verify_connector(provider='unipile').")
+            "(webhook). Vérifie ensuite avec oto_instance(op='verify', connector='unipile').")
         return out
 
     @mcp.tool()

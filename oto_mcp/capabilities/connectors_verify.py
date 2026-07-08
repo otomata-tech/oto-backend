@@ -75,7 +75,6 @@ CAPABILITIES += [
     Capability(
         key="connectors.verify", handler=_verify, Input=VerifyInput, authz=ORG_MEMBER,
         description=CAP_DOC,
-        mcp="oto_verify_connector",
         rest=RestBinding("POST", "/api/me/connectors/{provider}/verify"),
     ),
 ]

@@ -83,7 +83,6 @@ CAPABILITIES += [
                      "domain like acme.com, industry, location). The domain also "
                      "drives the org logo when none is uploaded. "
                      "You must be org_admin of this org."),
-        mcp="oto_update_org",
         rest=(RestBinding("PATCH", "/api/orgs/{id}", _ID),
               RestBinding("PATCH", "/api/admin/orgs/{id}", _ID)),
     ),
@@ -94,7 +93,6 @@ CAPABILITIES += [
                      "from every listing and its members fall back to their other "
                      "orgs. Reversible in DB, data is kept. You must be org_admin; "
                      "your personal space cannot be archived."),
-        mcp="oto_archive_org",
         rest=RestBinding("DELETE", "/api/orgs/{id}", _ID),
         refresh_visibility=True,  # org active archivée → recharge la toolbox (repli)
     ),

@@ -100,6 +100,24 @@ def ADMIN_BY_OP(by_op: dict, *, field: str = "op"):
     return rule
 
 
+def BY_OP(rules: dict, *, fields: tuple[str, ...] = ("op",)):
+    """Généralisation d'`ADMIN_BY_OP` (ADR 0047) : la règle d'autz est choisie par la
+    valeur COMBINÉE de `input.<fields>` — clé simple pour un champ (`op`), tuple pour
+    plusieurs (ex. `(op, scope)` sur la console connecteurs, où `list` org-scopée est
+    membre mais `set` est admin, et le palier diffère encore entre org et équipe).
+    Même contrat : chaque branche est une règle fermée, clé hors map = refus net."""
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        vals = tuple(getattr(inp, f, None) for f in fields) if inp is not None else ()
+        key = vals[0] if len(vals) == 1 else vals
+        chosen = rules.get(key)
+        if chosen is None:
+            raise AuthzDenied(400, "unsupported_op",
+                              f"combinaison `{key}` non supportée (attendu : "
+                              f"{sorted(str(k) for k in rules)}).")
+        return chosen(raw, inp)
+    return rule
+
+
 def RESOURCE_GOVERN(*, type_field: str = "resource_type", id_field: str = "resource_id",
                     op_field: str = "op", list_ops: tuple[str, ...] = ("list",)):
     """Gouvernance d'une ressource possédée (ADR 0030) : owner ∪ escalade `roles.py`,

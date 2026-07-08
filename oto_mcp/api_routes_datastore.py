@@ -301,6 +301,64 @@ def make_routes(
             return json_error(request, 400, "invalid_filters")
         return json_response(request, page)
 
+    async def ds_row_activity(request: Request) -> JSONResponse:
+        """Parcours de l'agent d'une row (ADR 0046 b4) : appels `data_*` du calllog
+        corrélés à cette row (par `_id` OU valeur de clé métier) + leur run. Gate =
+        accès LECTURE au namespace (la row est relue via le store, jamais l'id nu)."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        row_id = request.path_params["row_id"]
+        store = make_store(sub)
+        try:
+            row = store.get_row(namespace, row_id)
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        except RowNotFound:
+            return json_error(request, 404, "row_not_found")
+        key = store.declared_key(namespace)
+        key_value = row.get(key) if key else None
+        activity = db.datastore_row_activity(
+            row_id, str(key_value) if key_value is not None else None)
+        return json_response(request, {"activity": activity, "key": key,
+                                       "retention_days": 30})
+
+    async def ds_aggregate(request: Request) -> JSONResponse:
+        """Agrégat serveur (ADR 0046 b1 — compteurs du cockpit) : COUNT/SUM/AVG/…
+        groupés par un champ JSONB, sans rapatrier les rows. Miroir REST du tool
+        MCP `data_aggregate` (délègue au même `store.aggregate`)."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        qp = request.query_params
+        group_by = qp.get("group_by") or None
+        metrics = None
+        raw_metrics = qp.get("metrics")
+        if raw_metrics:
+            try:
+                metrics = json.loads(raw_metrics)
+            except ValueError:
+                return json_error(request, 400, "invalid_metrics")
+        filter_eq = None
+        raw_filter = qp.get("filter")
+        if raw_filter:
+            try:
+                filter_eq = json.loads(raw_filter)
+            except ValueError:
+                return json_error(request, 400, "invalid_filter")
+            if not isinstance(filter_eq, dict):
+                return json_error(request, 400, "invalid_filter")
+        try:
+            groups = make_store(sub).aggregate(
+                namespace, group_by=group_by, metrics=metrics, filter=filter_eq)
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        except ValueError:
+            return json_error(request, 400, "invalid_aggregate")
+        return json_response(request, {"groups": groups})
+
     async def ds_get_row(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
@@ -548,9 +606,13 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/url", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/schema", ds_set_schema, methods=["PUT"]),
         Route("/api/datastore/namespaces/{namespace}/schema", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/aggregate", ds_aggregate, methods=["GET"]),
+        Route("/api/datastore/namespaces/{namespace}/aggregate", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_list_rows, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_append, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/rows", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/activity", ds_row_activity, methods=["GET"]),
+        Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/activity", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_get_row, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_update_row, methods=["PATCH"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_delete_row, methods=["DELETE"]),

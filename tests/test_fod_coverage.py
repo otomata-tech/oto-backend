@@ -61,9 +61,14 @@ FOD_NOT_EXPOSED = {
                   "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
                   "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
                   "pas le client lib direct",
+    "osm": "client OpenStreetMap/Overpass (france_opendata récent) PAS encore exposé "
+           "côté oto — aucun tool `foncier_*`/`fr_*` ne le câble à ce jour ; décision de "
+           "câblage à prendre (retirer cette entrée quand un tool l'expose). Ajouté pour "
+           "débloquer le pipeline après un bump france_opendata (2026-07-08).",
     "ban": _FONCIER_VIA_FOD,
     "apicarto": _FONCIER_VIA_FOD,
     "bdtopo": _FONCIER_VIA_FOD,
+    "ign": _FONCIER_VIA_FOD,  # IGN Géoplateforme (isochrone) — foncier_isochrone → /api/foncier/ign/isochrone
     "pvgis": _FONCIER_VIA_FOD,
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
@@ -76,6 +81,13 @@ FOD_NOT_EXPOSED = {
     "bodacc": _FR_VIA_FOD,
     "inpi": _FR_VIA_FOD,
     "egapro": _FR_VIA_FOD,
+    # SIRENE INSEE (KEYÉ) : passthrough via FOD — le backend résout la clé (vault,
+    # BYO ou plateforme) + track le quota et la passe à FOD par-appel (header
+    # X-Sirene-Key) ; l'appel INSEE tourne sur FOD, la clé n'y est pas stockée.
+    "sirene": "client INSEE SIRENE (keyé) — passthrough via le service FOD : le "
+              "backend résout la clé (access.resolve_api_key + quota) et la passe "
+              "par-appel, l'appel tourne sur FOD (oto_mcp/fod_fr.insee_* → "
+              "/api/fr/insee/*), plus de SireneClient in-process (ADR 0028/0037)",
     # BOAMP : index PG + ingest MIGRÉS au service FOD (B2b) — le backend interroge
     # /api/fr/tenders/* via fod_fr, ne porte plus la table ni boamp_ingest.
     "boamp": "index BOAMP (marchés publics) possédé par le service FOD (tables PG + "

@@ -25,9 +25,14 @@ def init_db() -> None:
         # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
         _drop_legacy_org_subscriptions(conn)
         conn.execute(_SCHEMA)
+        # ADR 0044 §F R5 : clés plateforme + grants migrés en instances du coffre unifié
+        # (connector_credentials scope PLATFORM + share_down/meta.rate_limit) → DROP des 3
+        # tables legacy (plus ni lues ni écrites). Idempotent, no-op après le 1er boot.
+        conn.execute("DROP TABLE IF EXISTS user_grants")
+        conn.execute("DROP TABLE IF EXISTS org_grants")
+        conn.execute("DROP TABLE IF EXISTS platform_keys")
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
-        conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
         # ADR 0032 §2 : le lien projet→entité porte un `role` (pourquoi cette entité est ici).
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # ADR 0032 §4 (B2) : surcharge contextuelle préfaite du lien (connecteur → identité/instructions).
@@ -55,6 +60,10 @@ def init_db() -> None:
         # ADR 0043 phase 2 (SEPA) : id du mandat Stancer (mndt_xxx) sur l'abonnement —
         # la table existait déjà (B1) quand la colonne est arrivée.
         conn.execute("ALTER TABLE org_subscriptions ADD COLUMN IF NOT EXISTS mandate_id TEXT")
+        # ADR 0046 D (datastore v2) : bail de claim de la file de travail sur les rows
+        # (data_claim_next / data_release ; NULL = libre, bail expiré = recyclable).
+        conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_by TEXT")
+        conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_until TIMESTAMPTZ")
         # « Ajouter à mon Oto » (otomata-private, canal d'acquisition) : un projet forké
         # depuis un partage public garde le pointeur vers sa source → import IDEMPOTENT
         # (on RÉCUPÈRE la copie déjà présente dans l'org au lieu d'en refaire une).
@@ -206,6 +215,11 @@ def init_db() -> None:
         # jusqu'à l'enforcement (deny-check cascade + garde pin).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_down JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_side JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # ADR 0044 §F : polarité de partage explicite. 'open' = share_down vide → ouvert au
+        # sous-arbre (comportement historique, défaut inchangé pour tous les scopes BYO) ;
+        # 'closed' = share_down vide → personne (allow-list stricte, requise par le scope
+        # plateforme dont le « sous-arbre » = tout le monde). Additif, no-op tant que 'open'.
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_mode TEXT NOT NULL DEFAULT 'open'")
         # GIN sur share_side pour la projection « partagé avec moi » (jsonb_exists_any /
         # `?|` = scan indexé au lieu d'un seq scan de tout le coffre).
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conn_cred_share_side ON connector_credentials USING gin (share_side)")
@@ -399,7 +413,6 @@ def init_db() -> None:
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE connector_credentials DROP CONSTRAINT IF EXISTS connector_credentials_pkey")
         conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
-        conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
         # TTL opt-in des tokens API (audit 2026-06-13) : NULL = non-expirant.
         conn.execute("ALTER TABLE user_api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
         _drop_legacy_plaintext_stores(conn)
@@ -503,9 +516,8 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
     `project_oto_connector_vault`). Idempotent (IF EXISTS) — no-op sur une DB
     fraîche (on-prem). Le chiffrement est désormais obligatoire : plus aucun
     chemin plaintext (writers/reveal en chiffré-seul)."""
-    # connector_credentials.secret (plaintext interne du coffre) + platform_keys.api_key
+    # connector_credentials.secret (plaintext interne du coffre)
     conn.execute("ALTER TABLE connector_credentials DROP COLUMN IF EXISTS secret")
-    conn.execute("ALTER TABLE platform_keys DROP COLUMN IF EXISTS api_key")
     # Colonnes legacy users.<provider>_api_key + sessions linkedin/crunchbase.
     for col in ("serper_api_key", "hunter_api_key", "sirene_api_key", "attio_api_key",
                 "lemlist_api_key", "kaspr_api_key", "pennylane_api_key", "slack_api_key",

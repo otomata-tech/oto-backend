@@ -66,7 +66,7 @@ ROLES = (MEMBER, ADMIN, SUPER_ADMIN)
 _QUOTA_DEFAULTS = connectors.QUOTA_DEFAULTS
 ORG_SHAREABLE_PROVIDERS = connectors.ORG_SHAREABLE_PROVIDERS
 
-_ACCOUNT_URL = "https://oto.ninja/account"
+_ACCOUNT_URL = "https://manage.oto.cx/account"
 
 
 def get_user_role(sub: str) -> str:
@@ -182,6 +182,23 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) ->
 
         return option in billing.plan_options(plan)
     return False
+
+
+def option_open(sub: str, connector: str, *, org: "int | None | object" = _UNSET,
+                group: "int | None | object" = _UNSET) -> bool:
+    """SOURCE UNIQUE de « l'option (couche 3) du connecteur est-elle levée pour `sub` ? ».
+    Le statut carte (`connectors_selection.option_ok`) ET le gate « connecter » d'unipile
+    (`status_for.subscribed`) l'appellent → ils ne peuvent plus DIVERGER (le BYO ouvrait
+    l'option ici mais pas là → carte « clé d'org » + « Bloqué » incohérente, corrigé
+    2026-07-07). Règle : pas d'option requise ⟹ ouvert ; sinon **BYO** (clé propre
+    user/groupe/org — l'user gère sa propre instance) OU **has_option** (comp admin /
+    abonnement). `org`/`group` explicites = calcul pour un tiers (fiche admin)."""
+    opt = paid_option_for(connector)
+    if opt is None:
+        return True
+    if credential_mode_for(sub, connector, org=org, group=group) in BYO_MODES:
+        return True
+    return has_option(sub, opt, org=org)
 
 
 def current_group(sub: str | None) -> Optional[int]:
@@ -307,38 +324,75 @@ def resolve_slot_tableau(name: str) -> str:
     return ns
 
 
+def rbac_denied_connectors(sub: str, org: Optional[int]) -> set:
+    """Connecteurs REFUSÉS à `sub` dans `org` par le RBAC interne (ADR 0025) — seam
+    UNIQUE des 4 surfaces (call-time `require_connector_access`, visibilité session,
+    listing d'instances, marketplace). Escalade descendante alignée sur `roles.py` :
+    super_admin ET **org_admin de l'org** transcendent la restriction — l'admin
+    gouverne l'ACL (`org_connector_access`), lui en interdire l'USAGE était une
+    incohérence (un connecteur réservé à une équipe restait inaccessible — et même
+    invisible — à l'admin de l'org). LÈVE sur hoquet DB : chaque surface garde sa
+    propre doctrine fail-open (le call-time logue, les listings best-effort)."""
+    if org is None:
+        return set()
+    if is_super_admin(sub):
+        return set()
+    from . import roles
+    if roles.is_org_admin(sub, org):
+        return set()
+    restricted = db.org_restricted_connectors(org)
+    if not restricted:
+        return set()
+    return set(restricted) - set(db.member_allowed_connectors(sub, org))
+
+
+def group_rbac_denied_connectors(sub: str, group: Optional[int]) -> set:
+    """Connecteurs REFUSÉS à `sub` par le RBAC d'ÉQUIPE (ADR 0012 B2) — mirror de
+    `rbac_denied_connectors` au grain équipe, NARROWING de l'org (une équipe réserve
+    un connecteur à un sous-ensemble de SES membres ; elle ne peut que restreindre
+    davantage). Bypass descendant (roles.py) : super_admin, org_admin de l'org parente
+    ET group_admin (chef) de l'équipe transcendent — celui qui gouverne l'ACL n'en est
+    jamais victime. LÈVE sur hoquet DB (le call-time logue, fail-open par palier)."""
+    if group is None:
+        return set()
+    if is_super_admin(sub):
+        return set()
+    from . import roles
+    if roles.can_admin_group(sub, group):   # chef d'équipe OU org_admin parent (escalade)
+        return set()
+    restricted = db.group_restricted_connectors(group)
+    if not restricted:
+        return set()
+    return set(restricted) - set(db.group_member_allowed_connectors(sub, group))
+
+
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
-    """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si
-    `provider` est RESTREINT dans l'org active du `sub` et que `sub` n'y est pas
-    autorisé (département/user), lève. **DUR** — appelé dans `resolve_credential`
-    (couvre keyed + fields + BYO : pas de clé perso qui contourne). super_admin
-    bypasse ; pas d'org active → restriction non applicable ; stdio local (sub=None)
-    = accès complet."""
+    """Backstop call-time du RBAC connecteur (ADR 0025 org + 0012 B2 équipe) : si
+    `provider` est RESTREINT dans l'org active OU dans l'ÉQUIPE active du `sub` et qu'il
+    n'y est pas autorisé, lève. **DUR** — appelé dans `resolve_credential` (couvre keyed
+    + fields + BYO : pas de clé perso qui contourne). Bypass par palier (super_admin /
+    org_admin / group_admin — escalade des deux seams) ; pas d'org/équipe active →
+    restriction non applicable ; stdio local (sub=None) = accès complet. L'équipe ne peut
+    que RESTREINDRE davantage (le verdict est un OR org|équipe — monotone). Fail-open
+    INDÉPENDANT par palier : un hoquet de la DB d'équipe ne désactive pas l'org."""
     sub = sub or current_user_sub_from_token()
     if sub is None:
         return
+    denied = False
     try:
-        if is_super_admin(sub):
-            return
-        org = current_org(sub)
-        if org is None or provider not in db.org_restricted_connectors(org):
-            return  # pas d'org, ou connecteur ouvert dans l'org
-        allowed = provider in db.member_allowed_connectors(sub, org)
+        denied = provider in rbac_denied_connectors(sub, current_org(sub))
     except Exception as e:
-        # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de
-        # credential → ne doit pas casser tous les connecteurs sur un hoquet DB.
-        # Pas de bypass exploitable : la résolution qui suit retape la DB et échoue
-        # pareil ; et la visibilité masque déjà le connecteur restreint. On LOGUE
-        # (un silence avait masqué un bug `r[0]` 2026-06-25) → un fail-open persistant
-        # = une régression visible, pas un trou muet.
-        logger.warning("require_connector_access fail-open %s/%s: %s", sub, provider, e)
-        return
-    if not allowed:
+        logger.warning("require_connector_access org fail-open %s/%s: %s", sub, provider, e)
+    try:
+        denied = denied or provider in group_rbac_denied_connectors(sub, current_group(sub))
+    except Exception as e:
+        logger.warning("require_connector_access group fail-open %s/%s: %s", sub, provider, e)
+    if denied:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 f"Le connecteur `{provider}` est réservé à certaines équipes/personnes "
-                f"de ton organisation. Demande l'accès à un admin de ton org."
+                f"de ton organisation. Demande l'accès à un admin de ton org (ou de ton équipe)."
             ),
         ))
 
@@ -472,6 +526,69 @@ def _is_multi_account(provider: str) -> bool:
     return con is not None and con.auth_multi_account
 
 
+def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
+    """Le scope de `scopes` qui vise `sub` sur une instance PLATEFORME, ou None (ADR 0044
+    §F). `user:<sub>` prime (le plus spécifique) ; `org:<id>` gaté sur l'org **ACTIVE**
+    (mirroir EXACT de l'ancien `get_active_org_grant(active_org)` — un grant d'org est métré
+    per-contexte-d'org, pas per-appartenance : un membre de l'org X actif dans Y n'en profite
+    pas). Sert l'accès (closed) ET le quota (rate_limit_by)."""
+    if not scopes:
+        return None
+    if f"user:{sub}" in scopes:
+        return f"user:{sub}"
+    if active_org is not None and f"org:{active_org}" in scopes:
+        return f"org:{active_org}"
+    return None
+
+
+def _platform_instance_usable(sub, active_org, inst: dict) -> bool:
+    """Instance plateforme utilisable par `sub` ? (ADR 0044 §F, mode-aware). Un prêt
+    `share_side` autorise (membership, comme un prêt BYO). Sinon selon `share_mode` :
+    'open' = `share_down` vide (free-tier, ouvert à tous) OU `sub` grantee ; 'closed' =
+    `sub` grantee (défaut fermé)."""
+    down, side = inst.get("share_down") or [], inst.get("share_side") or []
+    if _sub_matches_scopes(sub, side):
+        return True
+    granted = _platform_grantee_scope(sub, active_org, down) is not None
+    if inst.get("share_mode") == "closed":
+        return bool(down) and granted
+    return (not down) or granted
+
+
+def _platform_quota(sub, active_org, meta: dict) -> "int | None":
+    """Quota/jour du bénéficiaire sur une instance plateforme : `rate_limit_by[scope de sub]`
+    (user prime > org active), sinon le défaut `rate_limit` de l'instance."""
+    rlb = (meta or {}).get("rate_limit_by") or {}
+    scope = _platform_grantee_scope(sub, active_org, list(rlb.keys()))
+    if scope is not None and scope in rlb:
+        return rlb[scope]
+    return (meta or {}).get("rate_limit")
+
+
+def _platform_grant_meta(sub, provider, active_org) -> "dict | None":
+    """Palier plateforme (ADR 0044 §F R3) SANS secret : {label, daily_quota} de l'instance
+    PLATEFORM utilisable par `sub` la plus récente, ou None. Base des miroirs `status_for`/
+    `credential_mode_for` (présence + quota, jamais de déchiffrement)."""
+    for inst in credentials_store.list_platform_instances(provider):
+        if _platform_instance_usable(sub, active_org, inst):
+            return {"label": inst["label"],
+                    "daily_quota": _platform_quota(sub, active_org, inst.get("meta"))}
+    return None
+
+
+def _resolve_platform_grant(sub, provider, active_org) -> "dict | None":
+    """Palier plateforme AVEC secret : {label, secret, daily_quota} ou None. Remplace les 3
+    lectures legacy (get_active_grant/get_active_org_grant/get_platform_api_key). Le secret
+    n'est déchiffré QUE pour l'instance gagnante (chemin chaud)."""
+    g = _platform_grant_meta(sub, provider, active_org)
+    if not g:
+        return None
+    secret = credentials_store.get_credential(credentials_store.PLATFORM, g["label"], provider)
+    if secret is None:
+        return None
+    return {**g, "secret": secret}
+
+
 def _resolve_credential_impl(provider: str, want: str, sub: str,
                              account: Optional[str] = None) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
@@ -568,15 +685,17 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         active_group = current_group(sub)
         if active_group is not None:
             grp_key = group_store.get_group_secret(active_group, provider)
-            # share_down (ADR 0044) : une instance de groupe restreinte dont `sub` est
-            # exclu est SAUTÉE (soft — la cascade continue vers l'org/plateforme),
-            # jamais un blocage dur (ça, c'est la politique d'org, axe 1).
-            if grp_key and _share_down_allows("group", str(active_group), provider, sub):
+            # Une instance BYO est utilisable par tout le sous-arbre de son owner —
+            # restreindre = poser l'instance au bon niveau (équipe), pas une
+            # allowlist (le cran `share_down` BYO a été retiré, jamais exposé à
+            # l'écriture ; sur les instances PLATFORM il reste la liste des
+            # grantees, cf. `_platform_instance_usable`).
+            if grp_key:
                 return ResolvedCredential(provider, grp_key, False, "group",
                                           "group", str(active_group))
         if active_org is not None:
             org_key = org_store.get_org_secret(active_org, provider)
-            if org_key and _share_down_allows(credentials_store.ORG, str(active_org), provider, sub):
+            if org_key:
                 return ResolvedCredential(provider, org_key, False, "org",
                                           "org", str(active_org))
 
@@ -598,20 +717,12 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # compte privé, l'inverse du modèle (audité 2026-06-11).
     con = connectors.connector_for_provider(provider)
     platform_eligible = con is not None and "platform" in con.auth_modes
-    grant = db.get_active_grant(sub, provider) if platform_eligible else None
-    # Fallback : clé plateforme partagée à l'ORG active (couche 2, grant org-level).
-    # Après le grant per-user (plus spécifique). Quota métré per-membre comme le user-grant.
-    if not grant and platform_eligible and active_org is not None:
-        grant = db.get_active_org_grant(active_org, provider)
-    # Free-tier (ADR 0031) : clé plateforme OUVERTE sans grant pour les connecteurs
-    # `platform_key_open`, avec quota gratuit par user (`default_quota`). N'est atteint
-    # qu'en l'absence de toute clé BYO (cascade user>groupe>org>grant épuisée) — en BYO
-    # on n'utilise JAMAIS la clé plateforme. Le quota ci-dessous est métré per-user.
-    if not grant and platform_eligible and con.platform_key_open:
-        pk = db.get_platform_api_key(provider)
-        if pk:
-            grant = {"api_key": pk["api_key"], "label": pk["label"],
-                     "daily_quota": con.default_quota}
+    # ADR 0044 §F R3 : le palier plateforme lit les instances scope PLATFORM du coffre unifié
+    # (share_mode/share_down = accès ; meta.rate_limit* = quota) au lieu des tables legacy
+    # platform_keys/user_grants/org_grants. Free-tier = instance 'open' (share_down vide,
+    # ouverte à tous) ; grant = instance 'closed' (sub ∈ share_down : user-grant OU org-grant
+    # sur l'org active). Le secret n'est déchiffré que pour l'instance gagnante.
+    grant = _resolve_platform_grant(sub, provider, active_org) if platform_eligible else None
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -639,16 +750,18 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             ),
         ))
 
-    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+    return ResolvedCredential(provider, grant["secret"], True, "platform",
+                              credentials_store.PLATFORM, grant["label"])
 
 
 def _sub_matches_scopes(sub: str, scopes) -> bool:
     """Vrai si `sub` appartient à l'un des scopes listés — vocabulaire COMMUN aux
     allowlists `share_down` et aux prêts `share_side` (ADR 0044), aligné sur
-    `org_connector_access` : `user:<sub>` | `group:<gid>` (appartenance réelle) |
-    `org` (tout le monde). Fail-closed par entrée (une ref malformée est ignorée,
-    jamais d'exception qui casserait la résolution)."""
-    from . import group_store
+    `org_connector_access` : `user:<sub>` | `group:<gid>` | `org:<id>` (appartenance
+    réelle) | `org` (tout le monde du sous-arbre). `org:<id>` (ADR 0044 §F) porte
+    l'ancien grant org-level d'une clé plateforme. Fail-closed par entrée (une ref
+    malformée est ignorée, jamais d'exception qui casserait la résolution)."""
+    from . import group_store, roles
     for s in scopes or []:
         if s == "org":
             return True
@@ -661,32 +774,30 @@ def _sub_matches_scopes(sub: str, scopes) -> bool:
                     return True
             except (ValueError, TypeError):
                 continue
+        if kind == "org":
+            try:
+                if roles.is_org_member(sub, int(ident)):
+                    return True
+            except (ValueError, TypeError):
+                continue
     return False
 
 
-def _instance_sharing_safe(entity_type: str, entity_id: str, provider: str,
-                           account: str = "") -> tuple[list, list]:
-    """(share_down, share_side) d'une instance, RÉSILIENT (même stance que
-    `require_connector_access`) : sur hoquet DB → `([], [])` + warning. En prod ce
+def _instance_side_shares_safe(entity_type: str, entity_id: str, provider: str,
+                               account: str = "") -> list:
+    """`share_side` (prêts nominatifs) d'une instance, RÉSILIENT : sur hoquet DB →
+    `[]` + warning = **fail-CLOSED** (aucun prêt accordé sans preuve). En prod ce
     chemin n'est atteint qu'après une lecture de clé réussie (même DB) — le fail-safe
-    ne mord donc qu'aux tests unitaires sans DB. Directions sûres : share_down `[]`
-    ⟹ **fail-OPEN** (restriction non appliquée, comme require_connector_access) ;
-    share_side `[]` ⟹ **fail-CLOSED** (aucun prêt accordé sans preuve)."""
+    ne mord donc qu'aux tests unitaires sans DB. (Le cran `share_down` BYO a été
+    retiré : une instance BYO est utilisable par tout le sous-arbre de son owner,
+    restreindre = la poser au bon niveau. `share_down` ne vit plus que sur les
+    instances PLATFORM, comme liste de grantees — `_platform_instance_usable`.)"""
     try:
-        return credentials_store.get_instance_sharing(entity_type, entity_id, provider, account)
+        _, side = credentials_store.get_instance_sharing(entity_type, entity_id, provider, account)
+        return side
     except Exception as e:
         logger.warning("instance_sharing fail-safe %s:%s/%s: %s", entity_type, entity_id, provider, e)
-        return [], []
-
-
-def _share_down_allows(entity_type: str, entity_id: str, provider: str, sub: str,
-                       account: str = "") -> bool:
-    """Deny-check de l'allowlist `share_down` d'une instance PARTAGÉE (ADR 0044) :
-    vide ⟹ ouverte à tout le sous-arbre (True) ; non-vide ⟹ seulement les scopes
-    listés. Appliqué IDENTIQUEMENT à la cascade (palier groupe/org) ET au pin
-    (`guard_instance_access`) → un share_down ne se contourne pas en épinglant."""
-    down, _ = _instance_sharing_safe(entity_type, entity_id, provider, account)
-    return (not down) or _sub_matches_scopes(sub, down)
+        return []
 
 
 def guard_instance_access(sub: str, ref) -> Optional[int]:
@@ -710,7 +821,7 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
         # ssi `sub` est nommé dans son share_side. On EMPRUNTE la clé mais on garde le
         # contexte de l'APPELANT → co-pose SON org (pas celle de l'owner ; cross-org OK,
         # le prêt nominatif EST le consentement). Pin explicite → refus DUR si non prêté.
-        _, side = _instance_sharing_safe(
+        side = _instance_side_shares_safe(
             credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub),
             ref.connector, ref.account)
         if _sub_matches_scopes(sub, side):
@@ -720,15 +831,13 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             message=("Instance refusée : elle appartient à un autre membre et ne t'est "
                      "pas prêtée (share_side).")))
     if ref.level == "group":
+        # Lecteur du groupe = membre OU admin de l'org (escalade `can_read_group`,
+        # roles.py) — c'est le chemin par lequel un org_admin utilise l'instance
+        # d'une équipe de son org (pin `instance=` / binding projet).
         if not roles.can_read_group(sub, ref.group_id):
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Instance refusée : tu n'es pas membre du groupe #{ref.group_id}."))
-        if not _share_down_allows("group", str(ref.group_id), ref.connector, sub, ref.account):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Instance refusée : la clé du groupe #{ref.group_id} est "
-                         f"réservée à certaines équipes/personnes (share_down).")))
         g = group_store.get_group(ref.group_id)
         return g.get("org_id") if g else None
     if ref.level == "org":
@@ -736,11 +845,6 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Instance refusée : tu n'es pas membre de l'org #{ref.org_id}."))
-        if not _share_down_allows(credentials_store.ORG, str(ref.org_id), ref.connector, sub, ref.account):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=(f"Instance refusée : la clé de l'org #{ref.org_id} est réservée "
-                         f"à certaines équipes/personnes (share_down).")))
         return ref.org_id
     raise McpError(ErrorData(
         code=INVALID_PARAMS,
@@ -834,17 +938,16 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) ->
             code=INVALID_PARAMS,
             message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
     platform_eligible = "platform" in con.auth_modes
-    grant = db.get_active_org_grant(org_id, provider) if platform_eligible else None
-    if not grant and platform_eligible and con.platform_key_open:
-        pk = db.get_platform_api_key(provider)
-        if pk:
-            grant = {"api_key": pk["api_key"], "label": pk["label"]}
+    # ADR 0044 §F R3 : anon (pas de sub) → instance 'open' (free-tier, ouverte à tous) OU
+    # 'closed' dont le share_down vise l'org du projet (`org:<org_id>`, gaté sur org_id ici).
+    grant = _resolve_platform_grant(None, provider, org_id) if platform_eligible else None
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"L'endpoint anonyme ne peut pas résoudre `{provider}` : configure "
                      f"une clé d'org, ou grant une clé plateforme à l'org du projet.")))
-    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+    return ResolvedCredential(provider, grant["secret"], True, "platform",
+                              credentials_store.PLATFORM, grant["label"])
 
 
 def resolve_api_key(provider: str, account: Optional[str] = None) -> tuple[str, bool]:
@@ -916,13 +1019,13 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
             return org_key
-    # Mode plateforme : grant explicite sur la clé plateforme unipile. Gate sur
+    # Mode plateforme (ADR 0044 §F R3) : instance PLATFORM utilisable par sub. Gate sur
     # l'éligibilité `platform` du registre (défense en profondeur, comme resolve_api_key).
     con = connectors.connector_for_provider("unipile")
     if con and "platform" in con.auth_modes:
-        grant = db.get_active_grant(sub, "unipile")
+        grant = _resolve_platform_grant(sub, "unipile", active_org)
         if grant:
-            return grant["api_key"]
+            return grant["secret"]
     return None
 
 
@@ -950,9 +1053,7 @@ def credential_mode_for(sub: str, provider: str, *,
     con = connectors.connector_for_provider(provider)
     if not (con and "platform" in con.auth_modes):
         return "forbidden"
-    grant = db.get_active_grant(sub, provider)
-    if not grant:
-        grant = db.get_active_org_grant(o, provider) if o is not None else None
+    grant = _platform_grant_meta(sub, provider, o)  # ADR 0044 §F R3 : instances PLATFORM
     if not grant:
         return "forbidden"
     used = db.get_usage_today(sub, provider)
@@ -974,7 +1075,9 @@ def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
         return True
     if provider in ORG_SHAREABLE_PROVIDERS and org_store.has_org_secret(org_id, provider):
         return True
-    if "platform" in con.auth_modes and db.get_active_org_grant(org_id, provider):
+    # ADR 0044 §F R3 : clé plateforme utilisable par l'org (instance 'open' free-tier, ou
+    # 'closed' dont le share_down vise `org:<org_id>`). Anon = pas de sub → org_id seul.
+    if "platform" in con.auth_modes and _platform_grant_meta(None, provider, org_id):
         return True
     return False
 
@@ -1023,7 +1126,7 @@ def resolve_mount_token(provider: str) -> str:
         code=INVALID_PARAMS,
         message=(
             f"Connecteur `{provider}` non connecté pour ton compte. "
-            f"Connecte-le depuis ton dashboard (oto.ninja)."
+            f"Connecte-le depuis ton dashboard (manage.oto.cx)."
         ),
     ))
 
@@ -1069,7 +1172,7 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             org_store.has_org_secret(active_org, provider)
             if active_org is not None and shareable else False
         )
-        grant = db.get_active_grant(sub, provider)
+        grant = _platform_grant_meta(sub, provider, active_org)  # ADR 0044 §F R3 : PLATFORM
         used = db.get_usage_today(sub, provider)
         limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 
@@ -1129,13 +1232,30 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for c in connectors.REGISTRY.values():
         if c.name in out["providers"] or c.secret_kind != "cookie":
             continue
+        shareable = c.name in ORG_SHAREABLE_PROVIDERS
         st = (credentials_store.credential_status(
                   credentials_store.MEMBER,
                   credentials_store.member_id(active_org, sub), c.name)
               if active_org is not None else None)
+        # Sessions partagées (connecteur org-partageable) : équipe active puis org.
+        # Miroir de la cascade de résolution (membre > groupe > org).
+        grp_st = (credentials_store.credential_status("group", str(active_group), c.name)
+                  if shareable and active_group is not None else None)
+        org_st = (credentials_store.credential_status("org", str(active_org), c.name)
+                  if shareable and active_org is not None else None)
         meta = (st or {}).get("meta") or {}
+        # `mode` = niveau gagnant de la cascade (membre > groupe > org), pour que la
+        # carte dise sous quelle session on résout — comme les connecteurs keyés.
+        if st:
+            mode = "user"
+        elif grp_st:
+            mode = "group"
+        elif org_st:
+            mode = "org"
+        else:
+            mode = "forbidden"
         out["providers"][c.name] = {
-            "mode": "user" if st else "forbidden",
+            "mode": mode,
             "user_key_configured": st is not None,
             "session_set_at": st["set_at"] if st else None,
             # Identité/cible par défaut du sélecteur ADR 0024 (pennylaneged : la
@@ -1143,7 +1263,12 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             # affiche sans lister (le listing = une session Browserbase louée).
             "identity_id": meta.get("default_identity_id"),
             "identity_label": meta.get("default_identity_label"),
-            "org_secret_configured": False,
+            # Sessions partagées (une par scope) : présence + horodatage, pour que la
+            # carte affiche/déconnecte chaque niveau. `session_set_at` reste le membre.
+            "group_secret_configured": grp_st is not None,
+            "group_session_set_at": grp_st["set_at"] if grp_st else None,
+            "org_secret_configured": org_st is not None,
+            "org_session_set_at": org_st["set_at"] if org_st else None,
             "platform_key_label": None,
             "quota_used_today": 0,
             "quota_daily": None,

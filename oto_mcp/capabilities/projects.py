@@ -54,7 +54,7 @@ class ProjectInput(BaseModel):
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
     instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_connector_instances) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
-    slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>)
+    slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>). Binder un slot TABLEAU dont la procédure déclare un `schema` cible provisionne le namespace vierge avec ce schéma (ADR 0046)
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -497,6 +497,21 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                                 f"{inp.target_type}:{inp.label or target_ref}")
         out = {"ok": True, "id": inp.project_id,
                "links": db.list_project_links(int(inp.project_id))}
+        # 0035 × 0046 — schéma CIBLE au binding d'un slot tableau : si une procédure
+        # liée déclare ce slot avec un `schema`, un namespace vierge est PROVISIONNÉ
+        # (le tableau naît avec son contrat — validation/lifecycle/clé) ; un schéma
+        # déjà posé différent = warning non bloquant. Best-effort : jamais un link raté.
+        if inp.op == "link" and inp.target_type == "tableau" and slot:
+            try:
+                from .. import slots as slots_mod
+                target = slots_mod.target_schema_for(slot, out["links"])
+                if target is not None:
+                    res = slots_mod.provision_tableau_schema(int(target_ref), target)
+                    out["slot_schema"] = res["status"]
+                    if res.get("warning"):
+                        out["warning"] = res["warning"]
+            except Exception:  # noqa: BLE001 — provisionnement opportuniste
+                pass
         # B5 — complétude au link : lier une procédure dont des slots ne sont pas
         # bindés ⇒ WARNING immédiat (non bloquant), le pendant des refs mortes 0014.
         if inp.op == "link" and inp.target_type == "procedure":

@@ -87,6 +87,13 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # registre → jamais gatés.
     try:
         exposed = connector_activation.exposed_connectors(active_org)
+        # Tier ÉQUIPE (ADR 0012, restrict-only) : l'équipe active peut COUPER un
+        # connecteur pour ses membres — on retranche ses coupures de l'exposé (jamais
+        # d'ajout : invariant monotone). Même régime fail-open que l'org.
+        active_group = access.current_group(sub)
+        if active_group is not None:
+            exposed = connector_activation.effective_for_group(
+                exposed, connector_activation.group_cut_connectors(active_group))
         to_hide |= {
             n for n in all_names
             if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
@@ -101,19 +108,31 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # l'org active est masqué pour un membre non autorisé (département/user). Le
     # backstop DUR est au call-time (`resolve_credential` → `require_connector_access`) ;
     # ici = ergonomie (best-effort, fail-OPEN sur glitch — le call-time garantit).
+    # Seam unique `rbac_denied_connectors` (escalade super_admin + org_admin incluse).
     try:
-        if active_org is not None:
-            restricted = db.org_restricted_connectors(active_org)
-            if restricted:
-                deny = restricted - db.member_allowed_connectors(sub, active_org)
-                if deny:
-                    to_hide |= {
-                        n for n in all_names
-                        if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
-                        and c.name in deny
-                    }
+        deny = access.rbac_denied_connectors(sub, active_org)
+        if deny:
+            to_hide |= {
+                n for n in all_names
+                if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                and c.name in deny
+            }
     except Exception as e:
         logger.warning("org connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
+    # RBAC connecteur au grain ÉQUIPE (ADR 0012 B2) : l'équipe ACTIVE peut réserver un
+    # connecteur à un sous-ensemble de ses membres — masqué pour les autres (narrowing
+    # de l'org). Backstop DUR au call-time (`require_connector_access`) ; ici ergonomie
+    # (best-effort, fail-OPEN).
+    try:
+        g_deny = access.group_rbac_denied_connectors(sub, access.current_group(sub))
+        if g_deny:
+            to_hide |= {
+                n for n in all_names
+                if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                and c.name in g_deny
+            }
+    except Exception as e:
+        logger.warning("group connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
     # Sélection marketplace (ADR 0019, B5) : masque les tools d'un connecteur que
     # le membre a mis en PAUSE (state='paused'). `not_selected` reste visible à ce
     # barreau (rétro-compatible ; le flip du défaut « non-sélectionné = masqué » =

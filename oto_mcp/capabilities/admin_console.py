@@ -18,7 +18,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db
+from .. import credentials_store, db
 from . import access_admin, orgs_admin, orgs_members, orgs_reads, users_admin
 from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
@@ -115,34 +115,30 @@ class KeyGrantInput(BaseModel):
     scope: Optional[Literal["user", "org"]] = None  # grant/revoke seulement
     target: Optional[str] = None      # scope=user : email ou sub
     org_id: Optional[int] = None      # scope=org
-    key_id: Optional[int] = None
-    provider: Optional[str] = None    # op=list : filtre optionnel
+    provider: Optional[str] = None    # grant/revoke : connecteur ciblé ; op=list : filtre
     daily_quota: Optional[int] = None  # grant (optionnel)
 
 
 def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
     if inp.op == "list":
         # Inventaire des clés plateforme posées (quels vendors oto contracte). Le
-        # SECRET n'est JAMAIS renvoyé — on ne montre que l'identité de la clé.
-        keys = [
-            {"key_id": k["id"], "provider": k["provider"], "label": k.get("label"),
-             "created_at": k.get("created_at")}
-            for k in db.list_platform_keys(inp.provider)
-        ]
+        # SECRET n'est JAMAIS renvoyé — on ne montre que l'identité (provider, label).
+        # ADR 0044 §F : instances scope PLATFORM du coffre unifié (plus platform_keys).
+        keys = credentials_store.list_platform_credentials(inp.provider)
         return {"keys": keys, "count": len(keys)}
     scope = _need(inp.scope, "missing_scope", "`scope` (user|org) requis pour grant/revoke.")
-    key_id = _need(inp.key_id, "missing_key", "`key_id` (clé plateforme) requis.")
+    provider = _need(inp.provider, "missing_provider", "`provider` (connecteur) requis.")
     if inp.scope == "user":
         target = _need(inp.target, "missing_target", "scope=user : `target` requis.")
         if inp.op == "grant":
             return users_admin._grant_key(ctx, users_admin.GrantKeyInput(
-                target=target, key_id=key_id, daily_quota=inp.daily_quota))
-        return users_admin._revoke_key(ctx, users_admin.RevokeKeyInput(target=target, key_id=key_id))
+                target=target, provider=provider, daily_quota=inp.daily_quota))
+        return users_admin._revoke_key(ctx, users_admin.RevokeKeyInput(target=target, provider=provider))
     org_id = _need(inp.org_id, "missing_org", "scope=org : `org_id` requis.")
     if inp.op == "grant":
         return users_admin._grant_org_key(ctx, users_admin.OrgGrantKeyInput(
-            org_id=org_id, key_id=key_id, daily_quota=inp.daily_quota))
-    return users_admin._revoke_org_key(ctx, users_admin.OrgRevokeKeyInput(org_id=org_id, key_id=key_id))
+            org_id=org_id, provider=provider, daily_quota=inp.daily_quota))
+    return users_admin._revoke_org_key(ctx, users_admin.OrgRevokeKeyInput(org_id=org_id, provider=provider))
 
 
 CAPABILITIES += [
@@ -186,8 +182,8 @@ CAPABILITIES += [
         key="admin.key_grant", handler=_key_grant, Input=KeyGrantInput,
         authz=ADMIN_BY_OP({"list": PLATFORM_ADMIN, "grant": SUPER_ADMIN, "revoke": SUPER_ADMIN}),
         description=("Platform keys as a RIGHT — never reveals the secret. "
-                     "op=list (which vendors oto contracts: key_id, provider, label; optional "
-                     "`provider` filter; platform admin) / grant|revoke (by `key_id`, super admin) · "
+                     "op=list (which vendors oto contracts: provider, label; optional "
+                     "`provider` filter; platform admin) / grant|revoke (by `provider`, super admin) · "
                      "scope=user (`target` email|sub) | org (`org_id`); grant takes optional "
                      "`daily_quota`. To POSE a raw key/secret, use the dashboard."),
         mcp="oto_admin_key_grant",

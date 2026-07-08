@@ -23,6 +23,7 @@ PAS une route UI (→ le dispatch retombe sur le MCP : `/mcp`, `/.well-known/*`�
 """
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
@@ -41,6 +42,32 @@ _DATA_PAGE = 100
 # Env-driven (cutover ADR 0040 : prod dashboard ≠ preprod ; ne pas figer sur .oto.ninja).
 _DASHBOARD = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
 
+# Favicon Otomata (mark canonique `oto-websites/web/public/favicon.svg`) inline en data-URI :
+# page auto-portée, aucune requête réseau ni route statique à servir.
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-64 -64 128 128">'
+    '<defs>'
+    '<radialGradient id="saff" cx="38%" cy="32%" r="78%"><stop offset="0%" stop-color="#ffd24a"/><stop offset="55%" stop-color="#f0b41e"/><stop offset="100%" stop-color="#c4870c"/></radialGradient>'
+    '<radialGradient id="terr" cx="38%" cy="32%" r="78%"><stop offset="0%" stop-color="#f56a2d"/><stop offset="55%" stop-color="#d63d0a"/><stop offset="100%" stop-color="#9c2c06"/></radialGradient>'
+    '<radialGradient id="oliv" cx="38%" cy="32%" r="78%"><stop offset="0%" stop-color="#c0db4e"/><stop offset="55%" stop-color="#8aa620"/><stop offset="100%" stop-color="#5c7212"/></radialGradient>'
+    '<radialGradient id="cob" cx="38%" cy="32%" r="78%"><stop offset="0%" stop-color="#4f9be0"/><stop offset="55%" stop-color="#1f6dba"/><stop offset="100%" stop-color="#124a80"/></radialGradient>'
+    '</defs>'
+    '<clipPath id="cq"><circle r="58"/></clipPath>'
+    '<g clip-path="url(#cq)">'
+    '<rect x="-58" y="-58" width="58" height="58" fill="url(#saff)"/>'
+    '<rect x="0" y="-58" width="58" height="58" fill="url(#terr)"/>'
+    '<rect x="-58" y="0" width="58" height="58" fill="url(#cob)"/>'
+    '<rect x="0" y="0" width="58" height="58" fill="url(#oliv)"/>'
+    '</g>'
+    '<circle r="26" fill="#fefcf5"/>'
+    '</svg>'
+)
+_FAVICON_LINK = (
+    '<link rel=icon type="image/svg+xml" href="data:image/svg+xml;base64,'
+    + base64.b64encode(_FAVICON_SVG.encode("utf-8")).decode("ascii")
+    + '">'
+)
+
 
 # ── Shell HTML charté (mêmes tokens que public_doc_page) ──────────────────────
 def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
@@ -53,6 +80,7 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
 <html lang=fr><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
 <title>{safe_title} · Oto</title>
+{_FAVICON_LINK}
 <meta name=description content="Projet partagé via Oto.">
 <meta name=robots content="noindex">
 <link rel=preconnect href="https://fonts.googleapis.com">
@@ -197,7 +225,7 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
 <body><div class="{wrap_cls}">
 {crumb}
 {inner}
-  <footer>Partagé via <a href="https://oto.ninja">Oto</a> — la boîte à outils d'automatisation pour agents IA.</footer>
+  <footer>Partagé via <a href="https://oto.cx">Oto</a> — la boîte à outils d'automatisation pour agents IA.</footer>
 </div>{extra_body}</body></html>"""
 
 

@@ -42,6 +42,10 @@ def store(monkeypatch):
     for name in ("datastore_insert_row", "datastore_find_row_id_by_key",
                  "datastore_get_row", "datastore_update_row"):
         monkeypatch.setattr(D.db, name, getattr(fake, name))
+    # v2 (ADR 0046) : le batch lit le schéma du namespace (validation/lifecycle
+    # opt-in) — None = soft, comportement 0016 inchangé pour ces tests.
+    monkeypatch.setattr(D.db, "get_datastore_namespace_by_id",
+                        lambda ns_id: {"id": ns_id, "schema": None})
     # _new_id déterministe (sinon Math.random-like) pour des ids stables dans le test.
     seq = {"n": 0}
     def next_id():

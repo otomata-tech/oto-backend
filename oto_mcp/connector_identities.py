@@ -99,7 +99,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
             f"Le compte {provider.title()} qui t'était accordé n'est plus opérable "
             "(autorisation révoquée ou compte déconnecté par son propriétaire). "
             "Resélectionne ton identité (oto_set_connector_identity ou "
-            "https://dashboard.oto.ninja/console/connectors).")
+            "https://manage.oto.cx/console/connectors).")
     return db.get_unipile_account_id(sub, access.current_org(sub), provider)
 
 
@@ -145,12 +145,21 @@ def _unipile_list(sub: str) -> list[dict]:
                 "channel": ch,
             })
     else:
-        # Revente (clé plateforme / hosted-auth) : les comptes PROPRES connectés.
-        # Toujours listés — même sans grant et sans « choix » à faire, un compte
-        # connecté DOIT apparaître (feedback #132 : `identities: []` alors qu'un
-        # LinkedIn hébergé était connecté = faux négatif, l'agent concluait à tort
-        # « aucun compte » et renvoyait l'utilisateur au dashboard).
-        for a in db.list_unipile_accounts(sub):
+        # Revente (clé plateforme / hosted-auth) : les comptes PROPRES connectés
+        # DANS L'ORG DE CONTEXTE. Toujours listés — même sans grant et sans
+        # « choix » à faire, un compte connecté DOIT apparaître (feedback #132 :
+        # `identities: []` alors qu'un LinkedIn hébergé était connecté = faux
+        # négatif, l'agent concluait à tort « aucun compte » et renvoyait
+        # l'utilisateur au dashboard). Filtre org = scope membre ADR 0033 B4,
+        # aligné sur `status_for` et la résolution d'appel (`get_unipile_account_id`) :
+        # un compte d'une AUTRE org n'est pas opérable ici → le lister serait un
+        # faux positif (bouton « Use this account » inerte, vécu 2026-07-08).
+        accounts = db.list_unipile_accounts(sub)
+        if accounts:  # org résolue seulement s'il y a quelque chose à filtrer
+            from . import access
+            org = access.current_org(sub)
+            accounts = [a for a in accounts if a.get("org_id") == org]
+        for a in accounts:
             out.append({
                 "id": a["account_id"],
                 "label": a.get("account_name") or a["account_id"],

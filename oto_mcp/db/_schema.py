@@ -174,36 +174,6 @@ CREATE TABLE IF NOT EXISTS user_agent_readme (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS platform_keys (
-    id BIGSERIAL PRIMARY KEY,
-    provider TEXT NOT NULL,
-    label TEXT NOT NULL,
-    api_key_enc TEXT,                      -- enveloppe AES-256-GCM (chiffrement obligatoire)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(provider, label)
-);
-
-CREATE TABLE IF NOT EXISTS user_grants (
-    sub TEXT NOT NULL,
-    platform_key_id BIGINT NOT NULL,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by TEXT,
-    PRIMARY KEY (sub, platform_key_id),
-    FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
-);
-
--- Grant de clé plateforme au niveau ORG (couche 2 du modèle de connecteur) : partager
--- la clé plateforme à TOUS les membres d'une org, sans grant per-user. Miroir de
--- user_grants au grain org ; résolu par access.resolve_api_key (cran org platform-grant,
--- après le grant user). quota = per-membre (réutilise get_usage_today(sub)).
-CREATE TABLE IF NOT EXISTS org_grants (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    platform_key_id BIGINT NOT NULL REFERENCES platform_keys(id) ON DELETE CASCADE,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by TEXT,
-    daily_quota INTEGER,
-    PRIMARY KEY (org_id, platform_key_id)
-);
 
 -- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
 -- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne
@@ -219,6 +189,20 @@ CREATE TABLE IF NOT EXISTS org_connector_access (
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, connector, principal_type, principal_id)
+);
+
+-- ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) : un chef d'équipe
+-- réserve un connecteur à un sous-ensemble de membres de SON équipe. Intersection
+-- avec l'ACL d'org (narrowing pur — l'équipe ne peut que RESTREINDRE davantage, jamais
+-- débloquer ce que l'org autorise). ≥1 ligne ⟹ connecteur réservé dans l'équipe ;
+-- absence ⟹ ouvert à toute l'équipe. Le principal est toujours un MEMBRE (sub).
+CREATE TABLE IF NOT EXISTS group_connector_access (
+    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
+    connector TEXT NOT NULL,
+    principal_sub TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, connector, principal_sub)
 );
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
@@ -255,6 +239,11 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- File de travail (ADR 0046 D) : bail posé par data_claim_next (SKIP LOCKED).
+    -- NULL = libre ; claimed_until < NOW() = bail expiré (row recyclable). Libéré
+    -- par data_release ou par l'entrée dans un état terminal du cycle de vie.
+    claimed_by TEXT,
+    claimed_until TIMESTAMPTZ,
     PRIMARY KEY (ns_id, row_id)
 );
 
@@ -794,8 +783,8 @@ CREATE TABLE IF NOT EXISTS org_group_instruction_revisions (
 -- plaintext) ; déchiffrement JIT dans resolve_api_key. meta JSONB pour les
 -- satellites (user_agent, scopes…).
 CREATE TABLE IF NOT EXISTS connector_credentials (
-    entity_type TEXT NOT NULL,            -- 'user' | 'org' | 'group'
-    entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text | org_groups.id::text
+    entity_type TEXT NOT NULL,            -- 'member' | 'user' | 'org' | 'group' | 'platform' (ADR 0044 §F)
+    entity_id   TEXT NOT NULL,            -- member:'org:sub' | user:sub | org/group:id::text | platform:label
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
     account     TEXT NOT NULL DEFAULT '', -- discriminant multi-compte ('' = mono ; ex. email Google)
     secret_enc  TEXT,                     -- enveloppe AES-256-GCM (obligatoire)
@@ -805,8 +794,9 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- ADR 0044 : l'entrée du coffre EST une instance de connecteur (config possédée).
     version     INTEGER NOT NULL DEFAULT 1,   -- verrou optimiste (B1) vs last-writer-wins
-    share_down  JSONB NOT NULL DEFAULT '[]',  -- ALLOWLIST deny-by-default : [] = ouvert au sous-arbre ; ['team:5',…] = restreint aux scopes listés
+    share_down  JSONB NOT NULL DEFAULT '[]',  -- grantees des instances PLATFORM uniquement (§F) — le cran BYO « restreindre sous le niveau » est RETIRÉ (2026-07-08 : restreindre = poser l'instance au bon niveau)
     share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
+    share_mode  TEXT NOT NULL DEFAULT 'open', -- ADR 0044 §F : polarité du vide de share_down. 'open' = vide→sous-arbre (BYO) ; 'closed' = vide→personne (plateforme)
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);

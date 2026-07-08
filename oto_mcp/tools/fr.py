@@ -15,8 +15,7 @@ from .. import access
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.sirene import SireneClient  # INSEE keyé — reste in-process (FOD sans credential)
-    from .. import fod_fr  # données entreprise open-data + index BOAMP/ACCO → service FOD
+    from .. import fod_fr  # données entreprise + INSEE keyé (passthrough) + index BOAMP/ACCO → service FOD
 
     # Données entreprise open-data servies par le service FOD dédié (ADR 0028) — le
     # backend n'exécute plus ces appels (dont l'INPI DuckDB, workload lourd) in-process.
@@ -281,11 +280,13 @@ def register(mcp: FastMCP) -> None:
         """
         return entreprises.get_directors(siren)
 
-    # --- INSEE SIRENE (clé payante) ---
+    # --- INSEE SIRENE (clé payante — passthrough via FOD) ---
+    # Le backend résout la clé (vault : BYO membre/org → clé plateforme) + track le
+    # quota, et la PASSE à FOD par-appel (ADR 0028/0037). L'appel INSEE tourne sur FOD ;
+    # le credential reste maître dans le coffre backend, jamais stocké côté FOD.
 
-    def _sirene_client() -> tuple[SireneClient, bool]:
-        key, is_platform = access.resolve_api_key("sirene")
-        return SireneClient(api_key=key), is_platform
+    def _sirene_key() -> tuple[str, bool]:
+        return access.resolve_api_key("sirene")  # (clé, is_platform)
 
     @mcp.tool()
     def fr_siret(siret: str) -> dict:
@@ -294,8 +295,8 @@ def register(mcp: FastMCP) -> None:
         Args:
             siret: SIRET number (14 digits).
         """
-        client, is_platform = _sirene_client()
-        result = client.get_siret(siret)
+        key, is_platform = _sirene_key()
+        result = fod_fr.insee_siret(siret, key)
         if is_platform:
             access.record_platform_usage("sirene")
         return result
@@ -340,8 +341,8 @@ def register(mcp: FastMCP) -> None:
         Args:
             siren: SIREN number (9 digits).
         """
-        client, is_platform = _sirene_client()
-        result = client.get_headquarters(siren)
+        key, is_platform = _sirene_key()
+        result = fod_fr.insee_headquarters(siren, key)
         if is_platform:
             access.record_platform_usage("sirene")
         return result

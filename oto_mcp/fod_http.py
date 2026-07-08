@@ -68,11 +68,11 @@ def _raise_for(r: httpx.Response) -> None:
 
 
 def _request(method: str, path: str, *, params: Optional[dict] = None,
-             json_body: Optional[dict] = None) -> Any:
+             json_body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
     """Appel HTTP avec retry borné sur 503 (saturation transitoire du scan)."""
     r: Optional[httpx.Response] = None
     for attempt in range(_RETRY_ATTEMPTS + 1):
-        r = _c().request(method, path, params=params, json=json_body)
+        r = _c().request(method, path, params=params, json=json_body, headers=headers)
         if r.status_code != 503 or attempt == _RETRY_ATTEMPTS:
             break
         # backoff exponentiel + jitter : laisse un slot de scan se libérer.
@@ -81,9 +81,9 @@ def _request(method: str, path: str, *, params: Optional[dict] = None,
     return r.json()
 
 
-def get(path: str, params: Optional[dict] = None) -> Any:
-    return _request("GET", path, params=params)
+def get(path: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
+    return _request("GET", path, params=params, headers=headers)
 
 
-def post(path: str, body: Optional[dict] = None) -> Any:
-    return _request("POST", path, json_body=body)
+def post(path: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
+    return _request("POST", path, json_body=body, headers=headers)

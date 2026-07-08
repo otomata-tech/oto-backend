@@ -54,7 +54,10 @@ class Connector:
     availability: str                  # "self_serve" | "platform_granted"
     auth_modes: frozenset              # ⊆ {"byo_user","byo_org","platform"}
     keyed: bool                        # résolu via resolve_api_key (→ KEY_PROVIDERS)
-    personal_session: bool             # per-user only, jamais org
+    personal_session: bool             # catégorie « session navigateur » (Live View
+                                       # Browserbase) côté UI — ORTHOGONAL au partage :
+                                       # le niveau (user/équipe/org) suit `auth_modes`
+                                       # (`byo_org` ⇒ session partageable, ex. pennylaneged)
     secret_kind: str                   # api_key|refresh_token|oauth|cookie|none
     default_quota: int                 # 0 = illimité
     in_default_bundle: bool            # axe A : accordé d'office (bundle par défaut)
@@ -658,12 +661,17 @@ _REGISTRY_LIST = [
     # connecteur keyé `pennylane` (API publique) : credential = session navigateur,
     # pas une clé API → l'API publique ne porte aucun scope DMS. Exécution =
     # **Browserbase** : l'user se logue 1× via Live View (`pennylaneged_connect_start`),
-    # sa session persiste dans un Context = le credential per-user (coffre). Upload =
+    # sa session persiste dans un Context = le credential (coffre). Upload =
     # control plane ici (URL S3 présignée) + PUT des octets EN LOCAL (RGPD, issue #31).
     # Expérimental (API interne RE) : hors bundle + masqué, self-activable.
-    _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, default_hidden=True,
-       label="Pennylane GED", help="bac documentaire Pennylane (session Browserbase)",
+    # **byo_org** : la session peut être configurée au niveau USER, ÉQUIPE ou ORG
+    # (cas cabinet : une seule connexion Pennylane partagée par la team pour pousser
+    # dans les GED clients — cascade user > groupe > org). `personal_session=True`
+    # reste = catégorie « session navigateur » côté UI (orthogonal au partage).
+    _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user", "byo_org"},
+       personal_session=True, secret_kind="cookie", in_default_bundle=False,
+       default_hidden=True, label="Pennylane GED",
+       help="bac documentaire Pennylane (session Browserbase)",
        publisher="Pennylane", href="https://app.pennylane.com"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
     # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),

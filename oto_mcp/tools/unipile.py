@@ -241,7 +241,11 @@ def _verify(fields: dict) -> None:
       un message qui oriente vers le hosted-auth du dashboard."""
     from oto.tools.unipile import make_unipile_client
 
-    api_key = fields.get("api_key")
+    # ⚠️ Le champ dérivé de `secret_kind="api_key"` se nomme `key` (cf.
+    # providers.secret_fields) — lire `api_key` ici rendait la sonde AVEUGLE
+    # (« clé absente » systémique quel que soit le coffre, vécu 2026-07-08 :
+    # diagnostiqué à tort comme clé plateforme manquante).
+    api_key = fields.get("key")
     if not api_key:
         raise ValueError("clé API Unipile absente.")
     client = make_unipile_client(api_key=api_key)  # dsn=None → défaut Otomata

@@ -106,6 +106,21 @@ def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
             tuple(params))
     return (cur.rowcount or 0) > 0
 
+
+def list_platform_instances(provider: str) -> list[dict]:
+    """ADR 0044 §F : les instances scope PLATEFORM d'un `provider` (label + partage +
+    meta), SANS secret (le gagnant est déchiffré à part via `get_credential`, chemin chaud
+    léger). Trié récent d'abord (miroir de l'ancien « la clé plateforme la plus récente »).
+    C'est la source de la résolution du palier plateforme depuis le cutover R3."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id AS label, share_mode, share_down, share_side, meta "
+            "FROM connector_credentials WHERE entity_type=%s AND connector=%s "
+            "ORDER BY set_at DESC", (PLATFORM, provider)).fetchall()
+    return [{"label": r["label"], "share_mode": r["share_mode"],
+             "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
+             "meta": r["meta"] or {}} for r in rows]
+
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
 # refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /

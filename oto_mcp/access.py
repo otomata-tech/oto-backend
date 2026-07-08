@@ -489,6 +489,69 @@ def _is_multi_account(provider: str) -> bool:
     return con is not None and con.auth_multi_account
 
 
+def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
+    """Le scope de `scopes` qui vise `sub` sur une instance PLATEFORME, ou None (ADR 0044
+    §F). `user:<sub>` prime (le plus spécifique) ; `org:<id>` gaté sur l'org **ACTIVE**
+    (mirroir EXACT de l'ancien `get_active_org_grant(active_org)` — un grant d'org est métré
+    per-contexte-d'org, pas per-appartenance : un membre de l'org X actif dans Y n'en profite
+    pas). Sert l'accès (closed) ET le quota (rate_limit_by)."""
+    if not scopes:
+        return None
+    if f"user:{sub}" in scopes:
+        return f"user:{sub}"
+    if active_org is not None and f"org:{active_org}" in scopes:
+        return f"org:{active_org}"
+    return None
+
+
+def _platform_instance_usable(sub, active_org, inst: dict) -> bool:
+    """Instance plateforme utilisable par `sub` ? (ADR 0044 §F, mode-aware). Un prêt
+    `share_side` autorise (membership, comme un prêt BYO). Sinon selon `share_mode` :
+    'open' = `share_down` vide (free-tier, ouvert à tous) OU `sub` grantee ; 'closed' =
+    `sub` grantee (défaut fermé)."""
+    down, side = inst.get("share_down") or [], inst.get("share_side") or []
+    if _sub_matches_scopes(sub, side):
+        return True
+    granted = _platform_grantee_scope(sub, active_org, down) is not None
+    if inst.get("share_mode") == "closed":
+        return bool(down) and granted
+    return (not down) or granted
+
+
+def _platform_quota(sub, active_org, meta: dict) -> "int | None":
+    """Quota/jour du bénéficiaire sur une instance plateforme : `rate_limit_by[scope de sub]`
+    (user prime > org active), sinon le défaut `rate_limit` de l'instance."""
+    rlb = (meta or {}).get("rate_limit_by") or {}
+    scope = _platform_grantee_scope(sub, active_org, list(rlb.keys()))
+    if scope is not None and scope in rlb:
+        return rlb[scope]
+    return (meta or {}).get("rate_limit")
+
+
+def _platform_grant_meta(sub, provider, active_org) -> "dict | None":
+    """Palier plateforme (ADR 0044 §F R3) SANS secret : {label, daily_quota} de l'instance
+    PLATEFORM utilisable par `sub` la plus récente, ou None. Base des miroirs `status_for`/
+    `credential_mode_for` (présence + quota, jamais de déchiffrement)."""
+    for inst in credentials_store.list_platform_instances(provider):
+        if _platform_instance_usable(sub, active_org, inst):
+            return {"label": inst["label"],
+                    "daily_quota": _platform_quota(sub, active_org, inst.get("meta"))}
+    return None
+
+
+def _resolve_platform_grant(sub, provider, active_org) -> "dict | None":
+    """Palier plateforme AVEC secret : {label, secret, daily_quota} ou None. Remplace les 3
+    lectures legacy (get_active_grant/get_active_org_grant/get_platform_api_key). Le secret
+    n'est déchiffré QUE pour l'instance gagnante (chemin chaud)."""
+    g = _platform_grant_meta(sub, provider, active_org)
+    if not g:
+        return None
+    secret = credentials_store.get_credential(credentials_store.PLATFORM, g["label"], provider)
+    if secret is None:
+        return None
+    return {**g, "secret": secret}
+
+
 def _resolve_credential_impl(provider: str, want: str, sub: str,
                              account: Optional[str] = None) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
@@ -615,20 +678,12 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # compte privé, l'inverse du modèle (audité 2026-06-11).
     con = connectors.connector_for_provider(provider)
     platform_eligible = con is not None and "platform" in con.auth_modes
-    grant = db.get_active_grant(sub, provider) if platform_eligible else None
-    # Fallback : clé plateforme partagée à l'ORG active (couche 2, grant org-level).
-    # Après le grant per-user (plus spécifique). Quota métré per-membre comme le user-grant.
-    if not grant and platform_eligible and active_org is not None:
-        grant = db.get_active_org_grant(active_org, provider)
-    # Free-tier (ADR 0031) : clé plateforme OUVERTE sans grant pour les connecteurs
-    # `platform_key_open`, avec quota gratuit par user (`default_quota`). N'est atteint
-    # qu'en l'absence de toute clé BYO (cascade user>groupe>org>grant épuisée) — en BYO
-    # on n'utilise JAMAIS la clé plateforme. Le quota ci-dessous est métré per-user.
-    if not grant and platform_eligible and con.platform_key_open:
-        pk = db.get_platform_api_key(provider)
-        if pk:
-            grant = {"api_key": pk["api_key"], "label": pk["label"],
-                     "daily_quota": con.default_quota}
+    # ADR 0044 §F R3 : le palier plateforme lit les instances scope PLATFORM du coffre unifié
+    # (share_mode/share_down = accès ; meta.rate_limit* = quota) au lieu des tables legacy
+    # platform_keys/user_grants/org_grants. Free-tier = instance 'open' (share_down vide,
+    # ouverte à tous) ; grant = instance 'closed' (sub ∈ share_down : user-grant OU org-grant
+    # sur l'org active). Le secret n'est déchiffré que pour l'instance gagnante.
+    grant = _resolve_platform_grant(sub, provider, active_org) if platform_eligible else None
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -656,7 +711,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             ),
         ))
 
-    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+    return ResolvedCredential(provider, grant["secret"], True, "platform",
+                              credentials_store.PLATFORM, grant["label"])
 
 
 def _sub_matches_scopes(sub: str, scopes) -> bool:
@@ -858,17 +914,16 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) ->
             code=INVALID_PARAMS,
             message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
     platform_eligible = "platform" in con.auth_modes
-    grant = db.get_active_org_grant(org_id, provider) if platform_eligible else None
-    if not grant and platform_eligible and con.platform_key_open:
-        pk = db.get_platform_api_key(provider)
-        if pk:
-            grant = {"api_key": pk["api_key"], "label": pk["label"]}
+    # ADR 0044 §F R3 : anon (pas de sub) → instance 'open' (free-tier, ouverte à tous) OU
+    # 'closed' dont le share_down vise l'org du projet (`org:<org_id>`, gaté sur org_id ici).
+    grant = _resolve_platform_grant(None, provider, org_id) if platform_eligible else None
     if not grant:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"L'endpoint anonyme ne peut pas résoudre `{provider}` : configure "
                      f"une clé d'org, ou grant une clé plateforme à l'org du projet.")))
-    return ResolvedCredential(provider, grant["api_key"], True, "platform")
+    return ResolvedCredential(provider, grant["secret"], True, "platform",
+                              credentials_store.PLATFORM, grant["label"])
 
 
 def resolve_api_key(provider: str, account: Optional[str] = None) -> tuple[str, bool]:
@@ -940,13 +995,13 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
             return org_key
-    # Mode plateforme : grant explicite sur la clé plateforme unipile. Gate sur
+    # Mode plateforme (ADR 0044 §F R3) : instance PLATFORM utilisable par sub. Gate sur
     # l'éligibilité `platform` du registre (défense en profondeur, comme resolve_api_key).
     con = connectors.connector_for_provider("unipile")
     if con and "platform" in con.auth_modes:
-        grant = db.get_active_grant(sub, "unipile")
+        grant = _resolve_platform_grant(sub, "unipile", active_org)
         if grant:
-            return grant["api_key"]
+            return grant["secret"]
     return None
 
 
@@ -974,9 +1029,7 @@ def credential_mode_for(sub: str, provider: str, *,
     con = connectors.connector_for_provider(provider)
     if not (con and "platform" in con.auth_modes):
         return "forbidden"
-    grant = db.get_active_grant(sub, provider)
-    if not grant:
-        grant = db.get_active_org_grant(o, provider) if o is not None else None
+    grant = _platform_grant_meta(sub, provider, o)  # ADR 0044 §F R3 : instances PLATFORM
     if not grant:
         return "forbidden"
     used = db.get_usage_today(sub, provider)
@@ -998,7 +1051,9 @@ def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
         return True
     if provider in ORG_SHAREABLE_PROVIDERS and org_store.has_org_secret(org_id, provider):
         return True
-    if "platform" in con.auth_modes and db.get_active_org_grant(org_id, provider):
+    # ADR 0044 §F R3 : clé plateforme utilisable par l'org (instance 'open' free-tier, ou
+    # 'closed' dont le share_down vise `org:<org_id>`). Anon = pas de sub → org_id seul.
+    if "platform" in con.auth_modes and _platform_grant_meta(None, provider, org_id):
         return True
     return False
 
@@ -1093,7 +1148,7 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             org_store.has_org_secret(active_org, provider)
             if active_org is not None and shareable else False
         )
-        grant = db.get_active_grant(sub, provider)
+        grant = _platform_grant_meta(sub, provider, active_org)  # ADR 0044 §F R3 : PLATFORM
         used = db.get_usage_today(sub, provider)
         limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 

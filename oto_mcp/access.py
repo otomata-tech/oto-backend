@@ -346,34 +346,53 @@ def rbac_denied_connectors(sub: str, org: Optional[int]) -> set:
     return set(restricted) - set(db.member_allowed_connectors(sub, org))
 
 
+def group_rbac_denied_connectors(sub: str, group: Optional[int]) -> set:
+    """Connecteurs REFUSÉS à `sub` par le RBAC d'ÉQUIPE (ADR 0012 B2) — mirror de
+    `rbac_denied_connectors` au grain équipe, NARROWING de l'org (une équipe réserve
+    un connecteur à un sous-ensemble de SES membres ; elle ne peut que restreindre
+    davantage). Bypass descendant (roles.py) : super_admin, org_admin de l'org parente
+    ET group_admin (chef) de l'équipe transcendent — celui qui gouverne l'ACL n'en est
+    jamais victime. LÈVE sur hoquet DB (le call-time logue, fail-open par palier)."""
+    if group is None:
+        return set()
+    if is_super_admin(sub):
+        return set()
+    from . import roles
+    if roles.can_admin_group(sub, group):   # chef d'équipe OU org_admin parent (escalade)
+        return set()
+    restricted = db.group_restricted_connectors(group)
+    if not restricted:
+        return set()
+    return set(restricted) - set(db.group_member_allowed_connectors(sub, group))
+
+
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
-    """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si
-    `provider` est RESTREINT dans l'org active du `sub` et que `sub` n'y est pas
-    autorisé (département/user), lève. **DUR** — appelé dans `resolve_credential`
-    (couvre keyed + fields + BYO : pas de clé perso qui contourne). super_admin
-    et org_admin de l'org bypassent (escalade `rbac_denied_connectors`) ; pas
-    d'org active → restriction non applicable ; stdio local (sub=None) = accès
-    complet."""
+    """Backstop call-time du RBAC connecteur (ADR 0025 org + 0012 B2 équipe) : si
+    `provider` est RESTREINT dans l'org active OU dans l'ÉQUIPE active du `sub` et qu'il
+    n'y est pas autorisé, lève. **DUR** — appelé dans `resolve_credential` (couvre keyed
+    + fields + BYO : pas de clé perso qui contourne). Bypass par palier (super_admin /
+    org_admin / group_admin — escalade des deux seams) ; pas d'org/équipe active →
+    restriction non applicable ; stdio local (sub=None) = accès complet. L'équipe ne peut
+    que RESTREINDRE davantage (le verdict est un OR org|équipe — monotone). Fail-open
+    INDÉPENDANT par palier : un hoquet de la DB d'équipe ne désactive pas l'org."""
     sub = sub or current_user_sub_from_token()
     if sub is None:
         return
+    denied = False
     try:
-        allowed = provider not in rbac_denied_connectors(sub, current_org(sub))
+        denied = provider in rbac_denied_connectors(sub, current_org(sub))
     except Exception as e:
-        # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de
-        # credential → ne doit pas casser tous les connecteurs sur un hoquet DB.
-        # Pas de bypass exploitable : la résolution qui suit retape la DB et échoue
-        # pareil ; et la visibilité masque déjà le connecteur restreint. On LOGUE
-        # (un silence avait masqué un bug `r[0]` 2026-06-25) → un fail-open persistant
-        # = une régression visible, pas un trou muet.
-        logger.warning("require_connector_access fail-open %s/%s: %s", sub, provider, e)
-        return
-    if not allowed:
+        logger.warning("require_connector_access org fail-open %s/%s: %s", sub, provider, e)
+    try:
+        denied = denied or provider in group_rbac_denied_connectors(sub, current_group(sub))
+    except Exception as e:
+        logger.warning("require_connector_access group fail-open %s/%s: %s", sub, provider, e)
+    if denied:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 f"Le connecteur `{provider}` est réservé à certaines équipes/personnes "
-                f"de ton organisation. Demande l'accès à un admin de ton org."
+                f"de ton organisation. Demande l'accès à un admin de ton org (ou de ton équipe)."
             ),
         ))
 

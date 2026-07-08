@@ -119,6 +119,20 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
             }
     except Exception as e:
         logger.warning("org connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
+    # RBAC connecteur au grain ÉQUIPE (ADR 0012 B2) : l'équipe ACTIVE peut réserver un
+    # connecteur à un sous-ensemble de ses membres — masqué pour les autres (narrowing
+    # de l'org). Backstop DUR au call-time (`require_connector_access`) ; ici ergonomie
+    # (best-effort, fail-OPEN).
+    try:
+        g_deny = access.group_rbac_denied_connectors(sub, access.current_group(sub))
+        if g_deny:
+            to_hide |= {
+                n for n in all_names
+                if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+                and c.name in g_deny
+            }
+    except Exception as e:
+        logger.warning("group connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
     # Sélection marketplace (ADR 0019, B5) : masque les tools d'un connecteur que
     # le membre a mis en PAUSE (state='paused'). `not_selected` reste visible à ce
     # barreau (rétro-compatible ; le flip du défaut « non-sélectionné = masqué » =

@@ -15,11 +15,8 @@ dependencies = [
     # avait régressé à v1.17.0 via un commit concurrent, v1.19.0 le restaure) ;
     # v1.17.0 = fixes Unipile API v2 ; v1.15.0 = cursor limit override
     # unipile_relations (#179) ; 1.14 = status_code.
-    # ⚠️ Pin sur le SHA du commit oto-core (== tag v1.22.0 côté oto-core, sur la
-    # branche claude/github-issue-160-49gmbe) : la création du tag distant est
-    # bloquée par la policy de cette session (push refs/tags/* → 403). Au merge
-    # d'oto-core, pousser le tag v1.22.0 et repointer ce pin sur `@v1.22.0`.
-    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@821c79b0029914ba91928c94f4ffe33b559f4b2a",
+    # v1.22.0 = AiArkClient (oto.tools.aiark, requalification mount→API #160).
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.22.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

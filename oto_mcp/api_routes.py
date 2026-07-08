@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                   Response, StreamingResponse)
 
-from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
+from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from . import auth_hooks
@@ -1210,18 +1210,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
-        # On ne renvoie JAMAIS l'api_key brute — masque + 4 derniers chars.
-        keys = []
-        for k in db.list_platform_keys():
-            ak = k.get("api_key") or ""
-            keys.append({
-                "id": k["id"],
-                "provider": k["provider"],
-                "label": k["label"],
-                "api_key_tail": ak[-4:] if len(ak) >= 4 else "",
-                "created_at": k["created_at"],
-            })
-        return _json(request, {"platform_keys": keys})
+        # ADR 0044 §F : instances scope PLATFORM du coffre unifié (plus platform_keys). Le
+        # secret n'est JAMAIS déchiffré/renvoyé — identité (provider, label, set_at) seulement.
+        return _json(request, {"platform_keys": credentials_store.list_platform_credentials()})
 
     async def admin_platform_key_create(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1242,11 +1233,19 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_provider")
         if not label or not api_key:
             return _json_error(request, 400, "missing_fields")
+        # ADR 0044 §F : la clé plateforme est une instance scope PLATFORM du coffre unifié
+        # (fin de platform_keys). La version v1/v2 voyage dans `meta` (débloque le v2
+        # plateforme sans env global) — même forme que la clé member/org unipile.
+        meta = {}
+        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
+            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
         try:
-            key_id = db.create_platform_key(provider, label, api_key)
-        except ValueError:
-            return _json_error(request, 409, "duplicate_label")
-        return _json(request, {"id": key_id, "provider": provider, "label": label})
+            credentials_store.set_credential(credentials_store.PLATFORM, label, provider,
+                                             api_key, set_by=sub, meta=meta)
+        except ValueError as e:
+            return _json_error(request, 400, "invalid_platform_provider", str(e))
+        return _json(request, {"provider": provider, "label": label,
+                               "api_version": meta.get("api_version", "v1")})
 
     async def admin_platform_key_delete(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1254,14 +1253,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
-        try:
-            key_id = int(request.path_params["key_id"])
-        except (ValueError, KeyError):
-            return _json_error(request, 400, "invalid_id")
-        if not db.get_platform_key(key_id):
+        provider = (request.path_params.get("provider") or "").strip()
+        label = (request.path_params.get("label") or "").strip()
+        # ADR 0044 §F : supprime l'instance plateforme (ses grants vivent sur sa ligne
+        # share_down/meta → partent avec elle, pas d'orphelin).
+        if not credentials_store.clear_credential(credentials_store.PLATFORM, label, provider):
             return _json_error(request, 404, "unknown_key")
-        db.delete_platform_key(key_id)
-        return _json(request, {"ok": True, "id": key_id})
+        return _json(request, {"ok": True, "provider": provider, "label": label})
 
     async def admin_tokens_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1721,8 +1719,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),
         Route("/api/admin/platform-keys", admin_platform_key_create, methods=["POST"]),
         Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/platform-keys/{key_id}", admin_platform_key_delete, methods=["DELETE"]),
-        Route("/api/admin/platform-keys/{key_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/platform-keys/{provider}/{label}", admin_platform_key_delete, methods=["DELETE"]),
+        Route("/api/admin/platform-keys/{provider}/{label}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),

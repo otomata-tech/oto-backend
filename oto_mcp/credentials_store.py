@@ -121,6 +121,86 @@ def list_platform_instances(provider: str) -> list[dict]:
              "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
              "meta": r["meta"] or {}} for r in rows]
 
+
+def list_platform_credentials(provider: "str | None" = None) -> list[dict]:
+    """ADR 0044 §F : clés plateforme (instances scope PLATFORM), SANS secret — pour la
+    surface admin (remplace db.list_platform_keys_meta)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, entity_id AS label, set_at FROM connector_credentials "
+            "WHERE entity_type=%s" + (" AND connector=%s" if provider else "") +
+            " ORDER BY connector, set_at DESC",
+            (PLATFORM, provider) if provider else (PLATFORM,)).fetchall()
+    return [{"provider": r["connector"], "label": r["label"], "set_at": r["set_at"]}
+            for r in rows]
+
+
+def _latest_platform_label(conn, provider: str) -> "str | None":
+    r = conn.execute(
+        "SELECT entity_id FROM connector_credentials WHERE entity_type=%s AND connector=%s "
+        "ORDER BY set_at DESC LIMIT 1", (PLATFORM, provider)).fetchone()
+    return r["entity_id"] if r else None
+
+
+def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
+                   label: "str | None" = None) -> None:
+    """ADR 0044 §F R4 : accorde l'accès plateforme à `scope` (`user:<sub>` | `org:<id>`) sur
+    l'instance du `provider` (label = clé la plus récente par défaut) — remplace
+    grant_platform_key/grant_org_platform_key. Non free-tier ⟹ ajoute au `share_down`
+    (mode 'closed'). Free-tier (`platform_key_open`) ⟹ accès déjà ouvert à tous : on ne pose
+    QUE le quota (`meta.rate_limit_by[scope]`). Le quota s'applique dans les deux cas."""
+    con = connectors.REGISTRY.get(provider)
+    free_tier = bool(con and getattr(con, "platform_key_open", False))
+    with _connect() as conn:
+        label = label or _latest_platform_label(conn, provider)
+        if label is None:
+            raise ValueError(f"aucune instance plateforme pour {provider!r}")
+        row = conn.execute(
+            "SELECT share_mode, share_down, meta FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (PLATFORM, label, provider)).fetchone()
+        down, meta, mode = list(row["share_down"] or []), dict(row["meta"] or {}), row["share_mode"]
+        if not free_tier:
+            mode = "closed"
+            if scope not in down:
+                down.append(scope)
+        rlb = dict(meta.get("rate_limit_by") or {})
+        if daily_quota is not None:
+            rlb[scope] = daily_quota
+        if rlb:
+            meta["rate_limit_by"] = rlb
+        conn.execute(
+            "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
+            "meta=%s::jsonb, version=version+1 "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (mode, json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+
+
+def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> None:
+    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by)."""
+    with _connect() as conn:
+        label = label or _latest_platform_label(conn, provider)
+        if label is None:
+            return
+        row = conn.execute(
+            "SELECT share_down, meta FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (PLATFORM, label, provider)).fetchone()
+        if not row:
+            return
+        down = [s for s in (row["share_down"] or []) if s != scope]
+        meta = dict(row["meta"] or {})
+        rlb = dict(meta.get("rate_limit_by") or {})
+        rlb.pop(scope, None)
+        if rlb:
+            meta["rate_limit_by"] = rlb
+        else:
+            meta.pop("rate_limit_by", None)
+        conn.execute(
+            "UPDATE connector_credentials SET share_down=%s::jsonb, meta=%s::jsonb, "
+            "version=version+1 WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
 # refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /

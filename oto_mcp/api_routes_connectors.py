@@ -217,12 +217,14 @@ def make_routes(
             return err
         if not access.is_super_admin(sub):
             return json_error(request, 403, "forbidden")
-        pks = db.list_platform_keys("unipile")
-        if not pks:
+        from . import credentials_store
+        insts = credentials_store.list_platform_instances("unipile")  # ADR 0044 §F : coffre unifié
+        if not insts:
             return json_response(request, {"configured": False, "seats": [],
                                            "instance_dsn": None, "orphan_count": 0})
+        api_key = credentials_store.get_credential(credentials_store.PLATFORM, insts[0]["label"], "unipile")
         from oto.tools.unipile import UnipileClient
-        client = UnipileClient(api_key=pks[0]["api_key"])  # dsn=None → env/api25 (instance plateforme)
+        client = UnipileClient(api_key=api_key)  # dsn=None → env/api25 (instance plateforme)
         try:
             instance = await asyncio.to_thread(client.list_accounts)
         except Exception as e:

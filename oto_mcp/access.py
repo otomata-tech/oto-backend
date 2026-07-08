@@ -1208,13 +1208,30 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     for c in connectors.REGISTRY.values():
         if c.name in out["providers"] or c.secret_kind != "cookie":
             continue
+        shareable = c.name in ORG_SHAREABLE_PROVIDERS
         st = (credentials_store.credential_status(
                   credentials_store.MEMBER,
                   credentials_store.member_id(active_org, sub), c.name)
               if active_org is not None else None)
+        # Sessions partagées (connecteur org-partageable) : équipe active puis org.
+        # Miroir de la cascade de résolution (membre > groupe > org).
+        grp_st = (credentials_store.credential_status("group", str(active_group), c.name)
+                  if shareable and active_group is not None else None)
+        org_st = (credentials_store.credential_status("org", str(active_org), c.name)
+                  if shareable and active_org is not None else None)
         meta = (st or {}).get("meta") or {}
+        # `mode` = niveau gagnant de la cascade (membre > groupe > org), pour que la
+        # carte dise sous quelle session on résout — comme les connecteurs keyés.
+        if st:
+            mode = "user"
+        elif grp_st:
+            mode = "group"
+        elif org_st:
+            mode = "org"
+        else:
+            mode = "forbidden"
         out["providers"][c.name] = {
-            "mode": "user" if st else "forbidden",
+            "mode": mode,
             "user_key_configured": st is not None,
             "session_set_at": st["set_at"] if st else None,
             # Identité/cible par défaut du sélecteur ADR 0024 (pennylaneged : la
@@ -1222,7 +1239,12 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             # affiche sans lister (le listing = une session Browserbase louée).
             "identity_id": meta.get("default_identity_id"),
             "identity_label": meta.get("default_identity_label"),
-            "org_secret_configured": False,
+            # Sessions partagées (une par scope) : présence + horodatage, pour que la
+            # carte affiche/déconnecte chaque niveau. `session_set_at` reste le membre.
+            "group_secret_configured": grp_st is not None,
+            "group_session_set_at": grp_st["set_at"] if grp_st else None,
+            "org_secret_configured": org_st is not None,
+            "org_session_set_at": org_st["set_at"] if org_st else None,
             "platform_key_label": None,
             "quota_used_today": 0,
             "quota_daily": None,

@@ -101,25 +101,40 @@ def start(sub: str, connector: str | None = None) -> dict:
     return {"live_view_url": live, "context_id": context_id, "session_id": sess["id"]}
 
 
-def _persist(sub: str, connector: str, context_id: str, session_id: str) -> None:
+def _persist(sub: str, connector: str, context_id: str, session_id: str,
+             scope: str, group_id: "int | None") -> None:
     browserbase.release_session(session_id)        # libère → persiste le Context
-    # Scope MEMBRE (ADR 0033) : la session navigateur est un credential comme un
-    # autre — posée dans l'org de contexte, elle ne suit pas l'user dans ses autres
-    # orgs. Import lazy (access importe db comme ce module — pas de cycle, mais on
-    # reste hors du top-level par symétrie avec les autres seams).
-    from . import access
+    # La session navigateur est un credential comme un autre : elle se pose au
+    # niveau MEMBRE (ADR 0033, défaut), ÉQUIPE ou ORG (connecteur org-partageable —
+    # ex. GED cabinet partagée par la team). L'org de contexte est résolue via le
+    # seam `current_org`. Import lazy (access importe db comme ce module — pas de
+    # cycle, mais on reste hors du top-level par symétrie avec les autres seams).
+    from . import access, org_store, group_store
     org_id = access.current_org(sub)
     if org_id is None:
         raise SessionError("aucune org de contexte — reconnecte-toi et réessaie.")
-    db.set_member_api_key(sub, org_id, connector, context_id)
+    if scope == "org":
+        org_store.set_org_secret(org_id, connector, context_id, set_by=sub)
+    elif scope == "group":
+        gid = group_id if group_id is not None else access.current_group(sub)
+        if gid is None:
+            raise SessionError("aucune équipe active — sélectionne une équipe puis réessaie.")
+        group_store.set_group_secret(gid, connector, context_id, set_by=sub)
+    else:
+        db.set_member_api_key(sub, org_id, connector, context_id)
 
 
-async def finalize(sub: str, connector: str, context_id: str, session_id: str) -> bool:
+async def finalize(sub: str, connector: str, context_id: str, session_id: str,
+                   *, scope: str = "member", group_id: "int | None" = None) -> bool:
     """Vérifie le login sur la session vivante ; si OK, persiste le Context (= credential)
-    et renvoie True. False = pas encore logué (l'appelant invite à réessayer)."""
+    au niveau demandé (`scope` ∈ member|org|group) et renvoie True. False = pas encore
+    logué (l'appelant invite à réessayer). ⚠️ Le contrôle des DROITS de pose à un niveau
+    partagé (org_admin / group_admin) incombe à l'appelant (route REST / tool)."""
     verify = _REGISTRY.get(connector)
     if verify is None:
         raise SessionError(f"{connector} n'est pas un connecteur à session navigateur.")
+    if scope not in ("member", "org", "group"):
+        raise SessionError(f"scope inconnu : {scope!r}")
     # La session DOIT avoir été émise par `start()` pour CE sub (anti-IDOR) : on ne
     # persiste jamais un Context tiers passé à la main.
     key = (sub, context_id, session_id)
@@ -133,6 +148,6 @@ async def finalize(sub: str, connector: str, context_id: str, session_id: str) -
         raise SessionError("vérification de la session impossible — réessaie.")
     if not ok:
         return False
-    await asyncio.to_thread(_persist, sub, connector, context_id, session_id)
+    await asyncio.to_thread(_persist, sub, connector, context_id, session_id, scope, group_id)
     _PENDING.pop(key, None)
     return True

@@ -39,8 +39,8 @@ def test_ref_roundtrip_group_org_platform():
     assert (g.level, g.group_id, g.connector, g.account) == ("group", 3, "hunter", "")
     o = instance_refs.parse_ref(instance_refs.make_org_ref(8, "bridge", "prod"))
     assert (o.level, o.org_id, o.connector, o.account) == ("org", 8, "bridge", "prod")
-    pk = instance_refs.parse_ref(instance_refs.make_platform_ref(42))
-    assert (pk.level, pk.platform_key_id, pk.connector) == ("platform", 42, None)
+    pk = instance_refs.parse_ref(instance_refs.make_platform_ref("zoho", "main"))
+    assert (pk.level, pk.connector, pk.label) == ("platform", "zoho", "main")
 
 
 def test_ref_account_percent_encoded_roundtrip():
@@ -66,8 +66,8 @@ def test_ref_empty_account_segment_omitted():
     "bogus:1:zoho",           # level inconnu
     "member:xx:usr:zoho",     # org_id non-int
     "org:abc:zoho",           # id non-int
-    "platform:1:zoho",        # arité fausse (platform = exactement 2)
-    "platform:nope",          # id non-int
+    "platform:zoho",          # arité fausse (ADR 0044 §F : platform = 3 segments connector:label)
+    "platform:zoho:",         # segment label vide
     "member:8:sub",           # arité fausse (member = 4-5)
     "group:3",                # arité fausse (group = 3-4)
     "org:8:zoho:acc:extra",   # arité fausse
@@ -129,7 +129,8 @@ def seams(monkeypatch):
                         lambda sub, org_id=None: [])
     monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [])
     monkeypatch.setattr(ci.db, "list_org_grants", lambda org_id: [])
-    monkeypatch.setattr(ci.db, "list_platform_keys_meta",
+    # ADR 0044 §F : le free-tier de la projection lit credentials_store.list_platform_credentials.
+    monkeypatch.setattr(ci.credentials_store, "list_platform_credentials",
                         lambda provider=None: [])
     monkeypatch.setattr(ci.db, "org_restricted_connectors", lambda org_id: set())
     monkeypatch.setattr(ci.db, "member_allowed_connectors",
@@ -211,10 +212,10 @@ def test_platform_user_grant_wins_over_org_grant(seams):
     assert out["count"] == 1                     # dédup par PROVIDER (1 clé résolue max)
     (inst,) = out["instances"]
     assert inst["via"] == "user_grant"
-    assert inst["owner"] == {"type": "platform", "id": 11, "label": "main"}
+    assert inst["owner"] == {"type": "platform", "label": "main"}
     assert inst["name"] == "SerpAPI · main"
-    assert inst["daily_quota"] == 100 and inst["granted_by"] == "adm"
-    assert inst["ref"] == "platform:11"
+    assert inst["daily_quota"] == 100
+    assert inst["ref"] == "platform:serpapi:main"
     assert "secret_kind" not in inst and "config" not in inst
 
 
@@ -228,19 +229,19 @@ def test_platform_org_grant_alone(seams):
 
 
 def test_platform_free_tier_last_open_key_only(seams):
-    seams.monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [
-        # serpapi = platform_key_open → SEULE la dernière (created_at ASC) sort.
-        {"id": 21, "provider": "serpapi", "label": "old", "created_at": "2026-01-01"},
-        {"id": 22, "provider": "serpapi", "label": "open", "created_at": "2026-06-01"},
-        # zoho n'est PAS platform_key_open → pas de free_tier.
-        {"id": 23, "provider": "zoho", "label": "closed", "created_at": "2026-06-01"},
+    # ADR 0044 §F : le free-tier lit list_platform_credentials (trié set_at DESC → 1re par
+    # provider = la plus récente). serpapi = platform_key_open ; zoho non.
+    seams.monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "serpapi", "label": "open", "set_at": "2026-06-01"},
+        {"provider": "serpapi", "label": "old", "set_at": "2026-01-01"},
+        {"provider": "zoho", "label": "closed", "set_at": "2026-06-01"},
     ])
     out = _run()
     assert out["count"] == 1
     (inst,) = out["instances"]
     assert inst["via"] == "free_tier"
-    assert inst["owner"] == {"type": "platform", "id": 22, "label": "open"}
-    assert inst["created_at"] == "2026-06-01"
+    assert inst["owner"] == {"type": "platform", "label": "open"}
+    assert inst["set_at"] == "2026-06-01"
 
 
 def test_platform_free_tier_deduped_by_grant(seams):
@@ -374,10 +375,9 @@ def test_no_org_active_platform_only(seams):
         ci.db, "list_org_grants",
         lambda org_id: (_ for _ in ()).throw(AssertionError("org_grants sans org")))
     seams.monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [
-        {"platform_key_id": 11, "provider": "zoho", "label": "k",
-         "granted_at": "x", "granted_by": None, "daily_quota": None}])
-    seams.monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [
-        {"id": 22, "provider": "serpapi", "label": "open", "created_at": "y"}])
+        {"provider": "zoho", "label": "k", "daily_quota": None}])
+    seams.monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "serpapi", "label": "open", "set_at": "y"}])
     out = _run(org_id=None)
     assert {(i["level"], i["via"]) for i in out["instances"]} == \
         {("platform", "user_grant"), ("platform", "free_tier")}
@@ -399,10 +399,9 @@ def test_projection_never_decrypts(seams, monkeypatch):
     seams.vault[("group", "3")] = [_row("hunter")]
     seams.vault[("org", str(ORG))] = [_row("bridge", meta={"base_url": "https://b"})]
     seams.monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [
-        {"platform_key_id": 11, "provider": "zoho", "label": "k",
-         "granted_at": "x", "granted_by": None, "daily_quota": None}])
-    seams.monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [
-        {"id": 22, "provider": "serpapi", "label": "open", "created_at": "y"}])
+        {"provider": "zoho", "label": "k", "daily_quota": None}])
+    seams.monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "serpapi", "label": "open", "set_at": "y"}])
     out = _run()
     assert out["count"] == 5
 

@@ -46,11 +46,11 @@ _LEVELS = ("member", "group", "org", "platform")
 class InstanceRef:
     """Ref décomposé. `connector` est None pour `platform` (porté par la clé)."""
     level: str                          # member | group | org | platform
-    connector: Optional[str]            # None pour platform
+    connector: Optional[str]            # renseigné pour tous (ADR 0044 §F : plateforme aussi)
     org_id: Optional[int] = None
     sub: Optional[str] = None
     group_id: Optional[int] = None
-    platform_key_id: Optional[int] = None
+    label: Optional[str] = None         # platform : label de la clé plateforme
     account: str = ""
 
 
@@ -74,8 +74,10 @@ def make_org_ref(org_id: int, connector: str, account: str = "") -> str:
     return f"org:{org_id}:{_tail(connector, account)}"
 
 
-def make_platform_ref(platform_key_id: int) -> str:
-    return f"platform:{platform_key_id}"
+def make_platform_ref(connector: str, label: str) -> str:
+    # ADR 0044 §F : la clé plateforme est une instance du coffre (fin du surrogate
+    # platform_keys.id) → ref (connector, label), comme les autres scopes.
+    return f"platform:{quote(connector, safe='')}:{quote(label, safe='')}"
 
 
 def format_ref(r: InstanceRef) -> str:
@@ -87,7 +89,7 @@ def format_ref(r: InstanceRef) -> str:
         return make_group_ref(r.group_id, r.connector, r.account)
     if r.level == "org":
         return make_org_ref(r.org_id, r.connector, r.account)
-    return make_platform_ref(r.platform_key_id)
+    return make_platform_ref(r.connector, r.label)
 
 
 def _int(segment: str) -> int:
@@ -106,11 +108,11 @@ def parse_ref(ref: str) -> InstanceRef:
     if level not in _LEVELS or any(p == "" for p in parts):
         raise ValueError("invalid_instance_ref")
     if level == "platform":
-        # Exactement 2 segments — la clé plateforme porte déjà provider + label.
-        if len(parts) != 2:
+        # ADR 0044 §F : `platform:{connector}:{label}` (3 segments).
+        if len(parts) != 3:
             raise ValueError("invalid_instance_ref")
-        return InstanceRef(level="platform", connector=None,
-                           platform_key_id=_int(parts[1]))
+        return InstanceRef(level="platform", connector=unquote(parts[1]),
+                           label=unquote(parts[2]))
     if level == "member":
         if len(parts) not in (4, 5):
             raise ValueError("invalid_instance_ref")

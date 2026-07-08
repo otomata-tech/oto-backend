@@ -267,22 +267,26 @@ def revoke_platform_key(sub: str, platform_key_id: int) -> None:
         )
 
 
-def list_grants_for_user(sub: str) -> list[dict]:
-    """Grants détaillés d'un user — joint platform_keys pour ne pas exposer
-    l'api_key brut côté API. Renvoie id/provider/label/granted_at."""
+def _grants_for_scope(scope: str) -> list[dict]:
+    """ADR 0044 §F : grants dérivés des instances plateforme dont le `share_down` contient
+    `scope` (`user:<sub>` | `org:<id>`). Renvoie {provider, label, daily_quota} — plus de
+    surrogate platform_key_id. `share_down @> [scope]` = contenance JSONB (indexable)."""
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
-                   ug.granted_at, ug.granted_by, ug.daily_quota
-              FROM user_grants ug
-              JOIN platform_keys pk ON pk.id = ug.platform_key_id
-             WHERE ug.sub = %s
-             ORDER BY pk.provider, ug.granted_at DESC
-            """,
-            (sub,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+            "SELECT connector AS provider, entity_id AS label, meta FROM connector_credentials "
+            "WHERE entity_type = 'platform' AND share_down @> %s::jsonb ORDER BY connector",
+            (json.dumps([scope]),)).fetchall()
+    out = []
+    for r in rows:
+        rlb = (r["meta"] or {}).get("rate_limit_by") or {}
+        out.append({"provider": r["provider"], "label": r["label"],
+                    "daily_quota": rlb.get(scope)})
+    return out
+
+
+def list_grants_for_user(sub: str) -> list[dict]:
+    """Grants d'un user (ADR 0044 §F : dérivés du share_down des instances plateforme)."""
+    return _grants_for_scope(f"user:{sub}")
 
 
 def get_active_grant(sub: str, provider: str) -> Optional[dict]:
@@ -335,17 +339,8 @@ def revoke_org_platform_key(org_id: int, platform_key_id: int) -> None:
 
 
 def list_org_grants(org_id: int) -> list[dict]:
-    """Grants de clé plateforme d'une org (joint platform_keys, sans api_key brut)."""
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
-                   og.granted_at, og.granted_by, og.daily_quota
-              FROM org_grants og JOIN platform_keys pk ON pk.id = og.platform_key_id
-             WHERE og.org_id = %s ORDER BY pk.provider, og.granted_at DESC
-            """,
-            (org_id,),
-        )]
+    """Grants d'une org (ADR 0044 §F : dérivés du share_down des instances plateforme)."""
+    return _grants_for_scope(f"org:{org_id}")
 
 
 def get_active_org_grant(org_id: int, provider: str) -> Optional[dict]:

@@ -107,6 +107,8 @@ def test_append_row_existing_key_merges_not_500(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
+    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     rows = {"r1": {"member_id": "A", "x": 1}}
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
                         lambda ns_id, key, kv: "r1" if str(kv) == "A" else None)
@@ -132,6 +134,8 @@ def test_append_row_lost_race_converges(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
+    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     rows = {"winner": {"member_id": "A", "x": 1}}
     state = {"lookups": 0}
     def find(ns_id, key, kv):

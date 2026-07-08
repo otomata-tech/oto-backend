@@ -66,7 +66,6 @@ CAPABILITIES += [
                      "peer so they can use it by pinning it (instance=). `to`=peer's sub; "
                      "`revoke=true` takes it back. You only ever share your OWN key; the "
                      "borrower operates under THEIR own org context (ADR 0044 share_side)."),
-        mcp="oto_lend_instance",
         rest=RestBinding("POST", "/api/me/connectors/{connector}/lend", {"connector": "connector"}),
     ),
 ]

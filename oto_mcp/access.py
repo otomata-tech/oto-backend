@@ -657,7 +657,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                         code=INVALID_PARAMS,
                         message=(
                             f"Plusieurs comptes `{provider}` configurés dans cette org — "
-                            f"précise lequel (oto_connector_identities pour les lister)."
+                            f"précise lequel (oto_identity(op='list') pour les lister)."
                         )))
             member_key = db.get_member_api_key(sub, active_org, provider, eff)
             if eff and not member_key:
@@ -667,7 +667,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                     code=INVALID_PARAMS,
                     message=(
                         f"Compte `{eff}` introuvable pour `{provider}` — vérifie avec "
-                        f"oto_connector_identities, ou pose-le sur {_ACCOUNT_URL}."
+                        f"oto_identity(op='list'), ou pose-le sur {_ACCOUNT_URL}."
                     )))
         else:
             # Mono-compte (chemin historique inchangé) : account='' implicite.
@@ -909,7 +909,7 @@ def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential
             code=INVALID_PARAMS,
             message=(f"L'instance `{instance_refs.format_ref(ref)}` ne résout plus "
                      "(credential retiré ou compte renommé ?). Reliste avec "
-                     "oto_connector_instances — pas de repli vers une autre identité.")))
+                     "oto_instance(op='list') — pas de repli vers une autre identité.")))
     return ResolvedCredential(provider, secret, False, mode, etype, eid,
                               account=ref.account)
 

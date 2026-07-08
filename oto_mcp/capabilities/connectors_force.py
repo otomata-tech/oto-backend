@@ -65,7 +65,6 @@ CAPABILITIES += [
                     "positive visibility override on all the connector's tools for the target member "
                     "(`member` = sub or email). They see it without enabling it, and can still hide it "
                     "(oto_disable_tool lifts the override). Visibility only — NOT an access grant.",
-        mcp="oto_force_connector",
         rest=RestBinding("POST", "/api/orgs/{id}/connectors/{connector}/force", _ID_CONN),
     ),
 ]

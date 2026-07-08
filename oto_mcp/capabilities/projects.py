@@ -53,7 +53,7 @@ class ProjectInput(BaseModel):
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
     config: Optional[dict] = None      # surcharge contextuelle PRÉFAITE du lien (ADR 0032 §4) — connecteur : {identity_id?, instructions_md?} (legacy : identité dans config ; multi-binding : voir identity_ref) ; tableau : {provision?: "shared"|"empty"|"seeded"} = comment la COPIE de projet traite ce tableau (ADR 0032 §6)
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
-    instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_connector_instances) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
+    instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_instance op=list) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
     slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>). Binder un slot TABLEAU dont la procédure déclare un `schema` cible provisionne le namespace vierge avec ce schéma (ADR 0046)
 
 
@@ -454,7 +454,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 except ValueError:
                     _require(False, "invalid_instance_ref",
                              f"`instance_ref` invalide : {inp.instance_ref!r} "
-                             "(un ref s'obtient via oto_connector_instances).")
+                             "(un ref s'obtient via oto_instance(op='list')).")
                 _require(iref.connector == target_ref, "instance_mismatch",
                          f"Ce ref est une instance `{iref.connector}`, pas "
                          f"`{target_ref}` (le connecteur du lien).")
@@ -639,7 +639,7 @@ CAPABILITIES += [
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "
             "agreements by the mutuelle theme'), or `instance_ref` (a ref from "
-            "oto_connector_instances, ADR 0038 B5) to bind EXACTLY that credential — calls "
+            "oto_instance op=list, ADR 0038 B5) to bind EXACTLY that credential — calls "
             "carrying this project's token then resolve it hard, no fallback; "
             "for a tableau: {provision?: shared|empty|seeded} "
             "= how a project copy treats it (empty/seeded = each copy gets its own fresh table). "

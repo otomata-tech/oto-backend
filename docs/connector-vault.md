@@ -82,7 +82,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 Le coffre est relu comme un **listing d'instances possédées nommées** (une ligne
 `(entity_type, entity_id, connector, account)` = une instance), en **lecture pure,
 sans jamais déchiffrer** : capacité `connectors.instances.list` (MCP
-`oto_connector_instances`, REST `GET /api/me/connector-instances`,
+`oto_instance(op="list")` (console ADR 0047), REST `GET /api/me/connector-instances`,
 `capabilities/connectors_instances.py`). Agrège les 4 familles que la cascade
 résout — membre `(org, sub)` > mes groupes de l'org > org > clés plateforme
 (grants user/org + free-tier via `db.list_platform_keys_meta`, le pendant

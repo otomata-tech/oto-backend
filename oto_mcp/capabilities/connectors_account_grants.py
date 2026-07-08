@@ -82,7 +82,7 @@ def _grant(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
         # Limitation documentée : la clé du grantee doit joindre ce compte (clé
         # partagée org/plateforme = OK ; owner sur une clé BYO perso ≠ 404 à l'appel).
         "note": "Le membre autorisé opère ce compte via le sélecteur d'identité "
-                "(oto_set_connector_identity) ou un pin de projet.",
+                "(oto_identity op=set) ou un pin de projet.",
     }
 
 
@@ -108,7 +108,6 @@ CAPABILITIES += [
         description="List the connector account authorizations you granted (who may operate "
                     "your Unipile accounts, per channel) and those granted to you (accounts "
                     "you may operate). Deny-by-default: no grant = nobody but the owner.",
-        mcp="oto_list_account_grants",
         rest=RestBinding("GET", "/api/me/connector-accounts/grants"),
     ),
     Capability(
@@ -118,7 +117,6 @@ CAPABILITIES += [
                     "someone OUTSIDE your orgs, e.g. an external freelancer or agency) to OPERATE "
                     "your connected account on a channel (linkedin, whatsapp, …), acting as you. "
                     "Only the owner can grant; revocable anytime with immediate effect; audited.",
-        mcp="oto_grant_account_access",
         rest=RestBinding("POST", "/api/me/connector-accounts/{channel}/grants"),
     ),
     Capability(
@@ -127,7 +125,6 @@ CAPABILITIES += [
         description="[account owner] Revoke a member's authorization to operate your account "
                     "on a channel. Immediate: their next call under your identity fails "
                     "explicitly. Idempotent.",
-        mcp="oto_revoke_account_access",
         rest=RestBinding("DELETE", "/api/me/connector-accounts/{channel}/grants"),
     ),
 ]

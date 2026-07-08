@@ -43,8 +43,10 @@ CATALOG_TIMEOUT = 20
 
 
 def _build_transport(url: str, token: str) -> StreamableHttpTransport:
-    """URL-embedded token (e.g. AI Ark `?token={token}`) or standard Bearer header.
-    Driven by whether `{token}` appears in the mount_url."""
+    """URL-embedded token (`?token={token}`) or standard Bearer header. Driven by
+    whether `{token}` appears in the mount_url. Générique — aucun mount keyed vivant
+    aujourd'hui (AI Ark, le pilote #152, requalifié en connecteur classique #160) ;
+    la branche reste pour le prochain mount à clé-dans-l'URL."""
     if "{token}" in url:
         return StreamableHttpTransport(url.replace("{token}", token))
     return StreamableHttpTransport(url, headers={"Authorization": f"Bearer {token}"})
@@ -212,9 +214,10 @@ def _make_factory(connector: connectors.Connector):
             return Client(StreamableHttpTransport(connector.mount_url))
         return factory_noauth
 
-    # Mount keyed (API key, ex. AI Ark) : résolution via resolve_api_key (cascade
-    # BYO > platform grant > quota) plutôt que resolve_mount_token (OAuth only).
-    # Le token est injecté dans l'URL si mount_url contient `{token}`, sinon en Bearer.
+    # Mount keyed (API key) : résolution via resolve_api_key (cascade BYO > platform
+    # grant > quota) plutôt que resolve_mount_token (OAuth only). Le token est injecté
+    # dans l'URL si mount_url contient `{token}`, sinon en Bearer. Branche générique
+    # sans consommateur vivant (AI Ark, pilote #152, requalifié classique #160).
     if connector.keyed:
         async def factory_keyed() -> Client:
             if current_user_sub_from_token() is None:

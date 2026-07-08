@@ -61,6 +61,8 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Agent README personnel (niveau USER du concept agent_readme, cumulable).
 from . import agent_readme  # noqa: F401 — me.agent_readme.{get,set} (GET/PUT /api/me/agent-readme)
+# Préférence de langue de l'UI dashboard (niveau USER, REST-only).
+from . import user_locale  # noqa: F401 — me.locale.set (PUT /api/me/locale)
 # Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).
 from . import profile  # noqa: F401 — me.profile.{get,set} (GET/PUT /api/me/profile)
 # Blocs d'instructions plateforme A/B (#50) — édition admin plateforme.

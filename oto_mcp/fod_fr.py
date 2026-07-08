@@ -66,3 +66,51 @@ entreprises = _Entreprises()
 bodacc = _Bodacc()
 inpi = _Inpi()
 egapro = _Egapro()
+
+
+# --- BOAMP (marchés publics) / ACCO (accords) : index PG possédé par FOD (B2b) ---
+# Répliquent la surface des fonctions db.search_boamp/get_boamp/search_acco/... que
+# tools/fr.py consommait sur la PG backend, désormais servies par FOD.
+
+def search_boamp(query=None, descripteur=None, departement=None, date_from=None,
+                 date_to=None, type_marche=None, limit=50, offset=0) -> dict[str, Any]:
+    return _post("/api/fr/tenders/search", {
+        "query": query, "descripteur": descripteur, "departement": departement,
+        "date_from": date_from, "date_to": date_to, "type_marche": type_marche,
+        "limit": limit, "offset": offset,
+    })
+
+
+def get_boamp(idweb: str) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/tenders/{idweb}")
+
+
+def search_acco(query=None, themes=None, nature=None, siren=None, siret=None,
+                idcc=None, departement=None, date_from=None, date_to=None,
+                latest_per_siret=False, sort_by="date", sort_dir="desc",
+                limit=50, offset=0) -> dict[str, Any]:
+    return _post("/api/fr/accords/search", {
+        "query": query, "themes": themes, "nature": nature, "siren": siren,
+        "siret": siret, "idcc": idcc, "departement": departement,
+        "date_from": date_from, "date_to": date_to, "latest_per_siret": latest_per_siret,
+        "sort_by": sort_by, "sort_dir": sort_dir, "limit": limit, "offset": offset,
+    })
+
+
+def get_acco(id_or_numero: str) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/accords/{id_or_numero}")
+
+
+def acco_themes() -> list[dict[str, Any]]:
+    return _get("/api/fr/accords/themes")
+
+
+# --- INSEE SIRENE (keyé) : le backend résout la clé + track le quota, la passe à FOD ---
+# par-appel (header X-Sirene-Key) ; FOD ne la stocke pas (ADR 0028/0037). BYO ou plateforme.
+
+def insee_siret(siret: str, api_key: str) -> dict[str, Any]:
+    return _get(f"/api/fr/insee/siret/{siret}", headers={"X-Sirene-Key": api_key})
+
+
+def insee_headquarters(siren: str, api_key: str) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/insee/headquarters/{siren}", headers={"X-Sirene-Key": api_key})

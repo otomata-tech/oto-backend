@@ -23,16 +23,17 @@ from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP) -> None:
-    from france_opendata import (EpfifClient, GpuClient, InseeIrisClient,
-                                 InseeMelodiClient, QpvClient)
-    from france_opendata.georisques import GeorisquesClient
+    from .. import fod_urba
 
-    gpu = GpuClient()
-    georisques = GeorisquesClient()
-    qpv = QpvClient()
-    insee = InseeMelodiClient()
-    iris = InseeIrisClient()  # parquet IRIS bundlé, connexion DuckDB cachée
-    epfif = EpfifClient()  # instance unique → cache TTL partagé sur la durée du process
+    # Enveloppe réglementaire servie par le service FOD dédié (ADR 0028 B3) — le
+    # backend n'exécute plus ces appels (dont l'IRIS DuckDB) in-process. Objets proxy
+    # à surface identique aux clients france_opendata → seuls ces bindings changent.
+    gpu = fod_urba.gpu
+    georisques = fod_urba.georisques
+    qpv = fod_urba.qpv
+    insee = fod_urba.insee
+    iris = fod_urba.iris
+    epfif = fod_urba.epfif
 
     # --- zonage PLU/PLUi (Géoportail de l'Urbanisme) -------------------------
 

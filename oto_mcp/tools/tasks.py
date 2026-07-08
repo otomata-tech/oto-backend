@@ -1,7 +1,7 @@
 """Google Tasks — surface oto-core (TasksClient) exposée par-utilisateur, multi-compte.
 
 Même substrat que Gmail : chaque user connecte un ou plusieurs comptes Google
-sur `https://app.oto.ninja/` (flow OAuth unifié, scope `tasks` inclus). Les
+sur `https://manage.oto.cx/` (flow OAuth unifié, scope `tasks` inclus). Les
 tools `tasks_*` agissent sur le compte par défaut, ou sur le compte ciblé par
 `account` (l'adresse email). Pas de clé plateforme : accès strictement per-user.
 

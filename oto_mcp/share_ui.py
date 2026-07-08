@@ -526,10 +526,17 @@ def _connectors_from_tools(tools: list[str]) -> tuple[list[dict], list[str]]:
     if not tools:
         return [], []
     try:
-        from . import providers
+        from . import config, providers
         from .tool_visibility import namespace_of
     except Exception:  # noqa: BLE001
         return [], list(tools)
+    # Fiche connecteur = page VITRINE PUBLIQUE (`<domaine>/tools/<namespace>`, cutover
+    # ADR 0040 : prod oto.cx / preprod oto.ninja), PAS le dashboard authentifié
+    # `manage.oto.cx/connectors` — un visiteur non connecté d'un partage public y
+    # tomberait sur un mur de login. Le slug vitrine = le NAMESPACE des tools (clé de
+    # groupe du catalogue web), pas `con.name` (ex. connecteur `sirene` → tools `fr_*`
+    # → page `/tools/fr`).
+    _website = f"https://{config.project_domain()}"
 
     groups: dict[str, list[str]] = {}
     order: list[str] = []
@@ -566,7 +573,7 @@ def _connectors_from_tools(tools: list[str]) -> tuple[list[dict], list[str]]:
             "logo": logo,
             "description": (getattr(con, "description", "") or "").strip(),
             "tool_count": len(groups[ns]),
-            "href": f"{_DASHBOARD}/connectors?tab=marketplace&connector={con.name}",
+            "href": f"{_website}/tools/{ns}",
         })
     return connectors, loose
 

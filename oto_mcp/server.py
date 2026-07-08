@@ -216,6 +216,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .capabilities import registry as _cap_registry
     _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
 
+    # Contrat d'erreur uniforme rendu à l'agent (D2, #124) : réécrit toute exception
+    # de tool en McpError scrubbée + data {code, retryable, hint}. Ajouté AVANT Sentry
+    # → OUTERMOST : Sentry (plus interne) capture le vrai traceback en premier, cette
+    # enveloppe normalise en dernier (cf. ErrorEnvelopeMiddleware).
+    from .middleware import ErrorEnvelopeMiddleware
+    instance.add_middleware(ErrorEnvelopeMiddleware())
+
     # Capture des exceptions de tools vers Sentry (vrai traceback ; no-op si
     # OTO_SENTRY_DSN absent). Les erreurs de tool sont des erreurs JSON-RPC en
     # HTTP 200 → invisibles à l'intégration Starlette ; ce middleware les voit.
@@ -387,15 +394,13 @@ def main():
 
         # Boucles de fond démarrées au boot en composant le lifespan FastMCP existant
         # (mono-process → une boucle par tâche). Chacune isolée en thread (ne bloque
-        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé) /
-        # OTO_BOAMP_REFRESH_ENABLED (index BOAMP, france-opendata#3).
+        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé).
+        # (L'index BOAMP/ACCO est passé au service FOD — ADR 0028 B2b — qui porte
+        # désormais l'ingest ; plus de refresh in-process backend.)
         _bg_loops = []
         if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
             from . import scheduler
             _bg_loops.append(scheduler.run_scheduler_loop)
-        if os.environ.get("OTO_BOAMP_REFRESH_ENABLED", "1") != "0":
-            from . import boamp_refresh
-            _bg_loops.append(boamp_refresh.run_boamp_refresh_loop)
         if os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
             # échéances d'abonnement + réconciliation (ADR 0043 B3) — no-op
             # silencieux tant que STANCER_API_KEY n'est pas posée.

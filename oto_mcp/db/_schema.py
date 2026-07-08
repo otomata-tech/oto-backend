@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT,
     role TEXT NOT NULL DEFAULT 'member',  -- member | admin (opérateur) | super_admin
     avatar_url TEXT,
+    -- Préférence de langue de l'UI dashboard ('en'|'fr'). NULL = pas de préférence
+    -- explicite (le front retombe sur la langue du navigateur).
+    locale TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

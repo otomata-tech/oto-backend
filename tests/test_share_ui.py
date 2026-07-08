@@ -34,15 +34,18 @@ def test_index_lists_entities(monkeypatch):
 
 def test_index_shows_connectors_with_tooltip_and_link(monkeypatch):
     # Les tools exposés sont groupés par CONNECTEUR : pastille (logo/monogramme) +
-    # tooltip (description) + lien vers la fiche marketplace du dashboard.
+    # tooltip (description) + lien vers la fiche VITRINE PUBLIQUE (pas le dashboard
+    # authentifié — un visiteur non connecté y trouverait un mur de login).
     _wire(monkeypatch, links=[])
     monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [])
     proj = {"id": 5, "name": "P", "brief_md": "", "mcp_tools": ["fr_search", "serper_web_search"]}
     html, _ = share_ui.build_page(proj, "/", connect_url="u")
     assert "Connecteurs" in html
-    # serper_web_search → connecteur `serper` ; fr_search → connecteur `sirene`.
-    assert "connector=serper" in html
-    assert "dashboard.oto.ninja/connectors?tab=marketplace" in html
+    # serper_web_search → namespace `serper` → page vitrine /tools/serper ;
+    # fr_search → namespace `fr` (connecteur `sirene`) → /tools/fr.
+    assert "/tools/serper" in html
+    assert "/tools/fr" in html
+    assert "manage.oto.cx" not in html and "tab=marketplace" not in html
     assert 'class=conn' in html and 'data-tip=' in html  # pastille + tooltip
 
 
@@ -53,8 +56,8 @@ def test_connectors_from_tools_groups_and_derives():
     assert "serper" in names
     serper = next(c for c in conns if c["name"] == "serper")
     assert serper["tool_count"] == 2            # deux tools serper regroupés
-    assert serper["href"].endswith("connector=serper")
-    assert "connectors?tab=marketplace" in serper["href"]
+    assert serper["href"].endswith("/tools/serper")   # fiche vitrine publique (namespace)
+    assert "/connectors" not in serper["href"] and "tab=marketplace" not in serper["href"]
 
 
 def test_add_to_oto_cta_when_slug_present(monkeypatch):

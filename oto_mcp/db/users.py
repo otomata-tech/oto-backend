@@ -263,6 +263,19 @@ def set_avatar_url(sub: str, url: Optional[str]) -> None:
         )
 
 
+def set_user_locale(sub: str, locale: str) -> None:
+    """Pose la préférence de langue de l'UI dashboard ('en'|'fr').
+
+    La validation de l'énum vit dans la capacité `me.locale.set` (Input pydantic) —
+    ici on écrit la valeur telle quelle. Colonne en clair (préférence, pas un secret)."""
+    upsert_user(sub)
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET locale = %s, updated_at = NOW() WHERE sub = %s",
+            (locale, sub),
+        )
+
+
 def get_account_profile(sub: str) -> dict:
     """Fiche « situation avec oto » de l'user : {profile, updated_at}.
 

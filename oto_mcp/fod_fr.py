@@ -45,6 +45,12 @@ class _Bodacc:
                         limit: int = 20) -> dict[str, Any]:
         return _get(f"/api/fr/bodacc/{siren}", {"famille": famille, "limit": limit})
 
+    def search_batch(self, sirens: list[str], famille: Optional[str] = None,
+                     chunk_size: Optional[int] = None) -> dict[str, Any]:
+        return _post("/api/fr/bodacc/batch", {
+            "sirens": sirens, "famille": famille, "chunk_size": chunk_size,
+        })
+
 
 class _Inpi:
     def list_exercises(self, siren: str) -> list[dict[str, Any]]:

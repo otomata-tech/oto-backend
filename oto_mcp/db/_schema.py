@@ -431,7 +431,12 @@ CREATE TABLE IF NOT EXISTS resource_grants (
     resource_id TEXT NOT NULL,                                 -- id stable de la ressource
     principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'group', 'org')),
     principal_id TEXT NOT NULL,                                -- sub | group_id | org_id (texte)
+    -- ADR 0048 : le grant porte un RÔLE (lecteur/éditeur/gérant). `permission` (read/write)
+    -- reste la projection CONTENU appariée (viewer→read, editor/manager→write) — inchangée
+    -- pour tout le SQL du plan contenu (max(g.permission)/g.permission='write') ; `role`
+    -- porte en plus la GOUVERNANCE grantable (`manager` → can_govern). Source de vérité = role.
     permission TEXT NOT NULL DEFAULT 'write' CHECK (permission IN ('read', 'write')),
+    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'editor', 'manager')),
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (resource_type, resource_id, principal_type, principal_id)

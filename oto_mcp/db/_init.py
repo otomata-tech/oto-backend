@@ -292,6 +292,15 @@ def init_db() -> None:
         conn.execute("ALTER TABLE user_datastores DROP CONSTRAINT IF EXISTS user_datastores_sub_namespace_key")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
                      "ON user_datastores(owner_type, owner_id, namespace)")
+        # ADR 0048 — le grant possède un RÔLE (viewer/editor/manager). Ajout de la colonne
+        # + backfill depuis `permission` (read→viewer, write→editor ; jamais manager en
+        # backfill : la gouvernance grantable est un acte explicite). `permission` reste
+        # dérivée du rôle à l'écriture (grant_resource) — le plan contenu est inchangé.
+        conn.execute("ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS role TEXT "
+                     "NOT NULL DEFAULT 'editor'")
+        conn.execute("UPDATE resource_grants SET role = "
+                     "CASE permission WHEN 'read' THEN 'viewer' ELSE 'editor' END "
+                     "WHERE role NOT IN ('viewer', 'manager')")
         # Backfill datastore_shares → resource_grants (ADR 0030). One-shot idempotent :
         # ON CONFLICT DO NOTHING + clé stable resource_id = user_datastores.id::text.
         # On joint sur (owner_sub, namespace) pour retrouver l'id du namespace.

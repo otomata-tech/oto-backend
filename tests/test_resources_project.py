@@ -17,6 +17,8 @@ def _wire(monkeypatch):
     monkeypatch.setattr(R.ownership, "accessor_scope", lambda sub: ownership.AccessorScope(sub, [], []))
     monkeypatch.setattr(R.roles, "is_org_admin", lambda sub, oid: False)
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u1@x.co"})
+    # transfert = re-gardé sur can_transfer dans le handler (ADR 0048) — l'acteur possède PROW.
+    monkeypatch.setattr(R.ownership, "can_transfer", lambda sub, rt, rid: True)
 
 
 def test_project_is_supported():
@@ -77,3 +79,69 @@ def test_unknown_type(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         R._resources(CTX, R.ResourceInput(op="list", resource_type="nope"))
     assert e.value.code == "unsupported_resource_type"
+
+
+# ── ADR 0048 : « Partager » unifié (audience × rôle) ──────────────────────────
+
+def test_share_role_manager_grants_manager(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
+    monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
+    seen = {}
+    monkeypatch.setattr(R.ownership, "grant",
+                        lambda rt, rid, pt, pid, perm=None, granted_by=None, role=None:
+                        seen.update(rt=rt, pid=pid, role=role, perm=perm))
+    out = R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                            resource_id="7", email="u2@x.co", role="manager"))
+    assert seen["role"] == "manager" and out["role"] == "manager"
+    assert out["permission"] == "write"   # manager ⇒ write (plan contenu)
+
+
+def test_share_legacy_permission_maps_to_role(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
+    monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
+    seen = {}
+    monkeypatch.setattr(R.ownership, "grant",
+                        lambda rt, rid, pt, pid, perm=None, granted_by=None, role=None:
+                        seen.update(role=role))
+    R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                      resource_id="7", email="u2@x.co", permission="read"))
+    assert seen["role"] == "viewer"   # read → viewer (rétro-compat)
+
+
+def test_share_audience_public_publishes(monkeypatch):
+    _wire(monkeypatch)
+    row = {"id": 7, "name": "Proj", "owner_type": "org", "owner_id": "42",
+           "mcp_tools": ["fr_search"], "mcp_access": "off"}
+    monkeypatch.setattr(R.db, "get_project_by_id", lambda i: row)
+    from oto_mcp.capabilities import projects as P
+    seen = {}
+    monkeypatch.setattr(P, "publish_project_mcp",
+                        lambda sub, r, **kw: seen.update(sub=sub, **kw) or {"ok": True})
+    out = R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                            resource_id="7", audience="public"))
+    assert seen["access_mode"] == "anonymous" and seen["mcp_tools"] == ["fr_search"]
+    assert out["ok"]
+
+
+def test_share_audience_private_unpublishes(monkeypatch):
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_project_by_id", lambda i: {"id": 7})
+    from oto_mcp.capabilities import projects as P
+    seen = {}
+    monkeypatch.setattr(P, "unpublish_project_mcp",
+                        lambda sub, pid: seen.update(sub=sub, pid=pid) or {"ok": True})
+    R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                      resource_id="7", audience="private"))
+    assert seen["pid"] == 7
+
+
+def test_share_audience_public_rejected_for_datastore(monkeypatch):
+    _wire(monkeypatch)
+    with pytest.raises(AuthzDenied) as e:
+        R._resources(CTX, R.ResourceInput(op="share", resource_type="datastore_namespace",
+                                          resource_id="7", audience="secret"))
+    assert e.value.code == "publication_unsupported"

@@ -243,20 +243,41 @@ def count_datastore_rows_for_ns(ns_id: int) -> int:
         return int(row["n"]) if row else 0
 
 
+# ADR 0048 — le rôle est la source de vérité ; `permission` (plan CONTENU) en dérive.
+_ROLE_TO_PERMISSION = {"viewer": "read", "editor": "write", "manager": "write"}
+_PERMISSION_TO_ROLE = {"read": "viewer", "write": "editor"}
+
+
+def _normalize_role(role: Optional[str], permission: Optional[str]) -> str:
+    """Rôle effectif d'un grant. `role` prime ; sinon rétro-compat depuis `permission`
+    (read→viewer, write→editor) ; défaut `editor`."""
+    if role in _ROLE_TO_PERMISSION:
+        return role
+    return _PERMISSION_TO_ROLE.get(permission or "", "editor")
+
+
 def grant_resource(
     resource_type: str, resource_id: str, principal_type: str, principal_id: str,
-    permission: str = "write", granted_by: Optional[str] = None,
+    permission: Optional[str] = None, granted_by: Optional[str] = None,
+    role: Optional[str] = None,
 ) -> None:
-    """Accorde (ou met à jour) une permission à un principal sur une ressource.
-    Idempotent : ON CONFLICT met à jour la permission."""
+    """Accorde (ou met à jour) un RÔLE à un principal sur une ressource (ADR 0048).
+    `role` ∈ {viewer, editor, manager} prime ; à défaut `permission` read/write est mappé
+    (rétro-compat). `permission` (plan CONTENU) est TOUJOURS dérivée du rôle (viewer→read,
+    editor/manager→write) → tout le SQL du plan contenu reste inchangé. Idempotent :
+    ON CONFLICT met à jour rôle + permission."""
+    eff_role = _normalize_role(role, permission)
+    eff_perm = _ROLE_TO_PERMISSION[eff_role]
     with _connect() as conn:
         conn.execute(
             "INSERT INTO resource_grants "
-            "(resource_type, resource_id, principal_type, principal_id, permission, granted_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "(resource_type, resource_id, principal_type, principal_id, permission, role, granted_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (resource_type, resource_id, principal_type, principal_id) "
-            "DO UPDATE SET permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by",
-            (resource_type, resource_id, principal_type, principal_id, permission, granted_by),
+            "DO UPDATE SET permission = EXCLUDED.permission, role = EXCLUDED.role, "
+            "granted_by = EXCLUDED.granted_by",
+            (resource_type, resource_id, principal_type, principal_id,
+             eff_perm, eff_role, granted_by),
         )
 
 
@@ -277,7 +298,7 @@ def get_resource_grant(
 ) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT permission FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
+            "SELECT permission, role FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
             "AND principal_type = %s AND principal_id = %s",
             (resource_type, resource_id, principal_type, principal_id),
         ).fetchone()
@@ -289,7 +310,7 @@ def list_resource_grants(resource_type: str, resource_id: str) -> list[dict]:
     l'UI de gestion du partage."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT g.principal_type, g.principal_id, g.permission, g.granted_at, u.email "
+            "SELECT g.principal_type, g.principal_id, g.permission, g.role, g.granted_at, u.email "
             "FROM resource_grants g "
             "LEFT JOIN users u ON g.principal_type = 'user' AND u.sub = g.principal_id "
             "WHERE g.resource_type = %s AND g.resource_id = %s "

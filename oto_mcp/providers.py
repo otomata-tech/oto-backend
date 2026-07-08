@@ -707,6 +707,8 @@ _REGISTRY_LIST = [
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
+    _c("osm", ["osm"], secret_kind="none", in_default_bundle=False,
+       label="OpenStreetMap", help="points d'intérêt OSM par tag sur une zone (parkings, équipements, commerces) — recensement exhaustif via Overpass (open data)"),
     _c("frenchtech", ["frenchtech"], secret_kind="none", in_default_bundle=False,
        label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
     # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).

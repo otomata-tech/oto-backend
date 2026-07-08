@@ -401,3 +401,79 @@ def test_inventory_derives_union(monkeypatch):
     procs = out["sources"]["procedures"]
     assert {p["ref"]: p["resolved"] for p in procs} == {"42": True, "morte": False}
     assert out["sources"]["tableaux"] == [{"slot": "sortie", "namespace": "leads_q3", "ref": "9"}]
+
+
+# ── schéma CIBLE d'un slot tableau (ADR 0035 × 0046) ─────────────────────────
+
+_TARGET = {"strict": True, "key": "fact_id",
+           "fields": [{"key": "fact_id", "type": "text", "required": True},
+                      {"key": "status", "role": "status",
+                       "lifecycle": {"states": ["nouveau", "qualified"],
+                                     "transitions": {"nouveau": ["qualified"]}}}]}
+
+
+def test_slot_schema_accepted_on_tableau():
+    out = slots_mod.validate_slots([{"name": "leads", "type": "tableau", "schema": _TARGET}])
+    assert out[0]["schema"] == _TARGET
+
+
+def test_slot_schema_rejected_on_non_tableau():
+    with pytest.raises(ValueError, match="réservé au type `tableau`"):
+        slots_mod.validate_slots([{"name": "crm", "type": "connecteur", "schema": _TARGET}])
+
+
+def test_slot_schema_definition_validated():
+    with pytest.raises(ValueError, match="type inconnu"):
+        slots_mod.validate_slots([{"name": "leads", "type": "tableau",
+                               "schema": {"fields": [{"key": "x", "type": "wat"}]}}])
+
+
+def test_target_schema_for_resolves_from_linked_procedures(monkeypatch):
+    links = [{"target_type": "tableau", "target_ref": "125", "slot": "leads"},
+             {"target_type": "procedure", "target_ref": "111"}]
+    monkeypatch.setattr("oto_mcp.org_store.get_instruction_by_id",
+                        lambda i: {"slug": "qualifier-fact-pv",
+                                   "slots": [{"name": "leads", "type": "tableau",
+                                              "schema": _TARGET}]})
+    assert slots_mod.target_schema_for("leads", links) == _TARGET
+    assert slots_mod.target_schema_for("autre", links) is None
+    assert slots_mod.target_schema_for("leads", [{"target_type": "tableau",
+                                              "target_ref": "125"}]) is None
+
+
+def test_provision_on_virgin_namespace(monkeypatch):
+    import oto_mcp.slots as S
+    calls = {"set": [], "index": []}
+    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
+                        lambda i: {"id": i, "namespace": "leads-pv", "schema": None})
+    monkeypatch.setattr("oto_mcp.db.datastore_key_dup_groups", lambda i, k: [])
+    monkeypatch.setattr("oto_mcp.db.set_datastore_schema",
+                        lambda i, sc: calls["set"].append((i, sc)))
+    monkeypatch.setattr("oto_mcp.db.datastore_ensure_key_index",
+                        lambda i, k: calls["index"].append((i, k)))
+    res = S.provision_tableau_schema(125, _TARGET)
+    assert res == {"status": "provisioned"}
+    assert calls["set"] == [(125, _TARGET)] and calls["index"] == [(125, "fact_id")]
+
+
+def test_provision_conform_and_mismatch(monkeypatch):
+    import oto_mcp.slots as S
+    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
+                        lambda i: {"id": i, "namespace": "leads-pv", "schema": _TARGET})
+    assert S.provision_tableau_schema(125, _TARGET)["status"] == "conform"
+    other = {"fields": [{"key": "autre"}]}
+    res = S.provision_tableau_schema(125, other)
+    assert res["status"] == "mismatch" and "DIFFÉRENT" in res["warning"]
+
+
+def test_provision_refuses_key_on_dirty_data(monkeypatch):
+    import oto_mcp.slots as S
+    wrote = []
+    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
+                        lambda i: {"id": i, "namespace": "leads-pv", "schema": None})
+    monkeypatch.setattr("oto_mcp.db.datastore_key_dup_groups",
+                        lambda i, k: [{"value": "f1", "n": 2}])
+    monkeypatch.setattr("oto_mcp.db.set_datastore_schema",
+                        lambda i, sc: wrote.append(sc))
+    res = S.provision_tableau_schema(125, _TARGET)
+    assert res["status"] == "dirty_key" and wrote == []

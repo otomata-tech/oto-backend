@@ -60,6 +60,10 @@ def init_db() -> None:
         # ADR 0043 phase 2 (SEPA) : id du mandat Stancer (mndt_xxx) sur l'abonnement —
         # la table existait déjà (B1) quand la colonne est arrivée.
         conn.execute("ALTER TABLE org_subscriptions ADD COLUMN IF NOT EXISTS mandate_id TEXT")
+        # ADR 0046 D (datastore v2) : bail de claim de la file de travail sur les rows
+        # (data_claim_next / data_release ; NULL = libre, bail expiré = recyclable).
+        conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_by TEXT")
+        conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_until TIMESTAMPTZ")
         # « Ajouter à mon Oto » (otomata-private, canal d'acquisition) : un projet forké
         # depuis un partage public garde le pointeur vers sa source → import IDEMPOTENT
         # (on RÉCUPÈRE la copie déjà présente dans l'org au lieu d'en refaire une).

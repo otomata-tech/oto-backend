@@ -11,6 +11,7 @@ destructifs (delete_namespace, delete_row) et la création restent séparés.
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -255,13 +256,26 @@ def register(mcp: FastMCP) -> None:
 
         A typed namespace renders as readable cards/records instead of a flat table.
         `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
-        bool|json", "role"?: "title|badge|metric|status|qualif|note"}], "key"?: str}.
+        bool|json|object|list", "role"?: "title|badge|metric|status|qualif|note"}],
+        "key"?: str, "strict"?: bool}.
         The optional top-level `"key"` names the field that is the row's BUSINESS KEY
         (e.g. "email", "siren"): batch writes (`data_write` rows=…, `oto_upload_url`)
         then UPSERT on it — same key value updates the existing row instead of
-        duplicating. SOFT: no write validation — it drives rendering, dedup and tells
-        the agent what each field means. Requires write access. Pass schema=null to
-        switch back to free-table mode.
+        duplicating. Default is SOFT (rendering/dedup only, no write validation).
+        Pass schema=null to switch back to free-table mode.
+
+        STRUCTURED RECORDS (ADR 0046 — every layer opt-in):
+        - nested types: `type:"object"` + `fields:[…]` (sub-record, e.g. occupant);
+          `type:"list"` + `of:<field-def>` (list of scalars or sub-records, e.g.
+          contacts = list of {nom, titre, email}).
+        - write validation: `field.required: true`, type conformity, and
+          `field.required_when: {"<field>": "<value>"}` (e.g. deliverables required
+          when status="qualified") — active when `strict: true` or any field has
+          required/required_when. A non-conforming write FAILS naming the culprit.
+        - lifecycle: on the `role:"status"` field, `lifecycle: {states:[…],
+          transitions:{from:[to…]}, terminal?:[…]}` — unknown state or undeclared
+          transition is refused; entering a terminal state auto-releases the row's
+          work-queue claim (cf. data_claim_next).
 
         Args:
             namespace: target namespace (must exist; you must have write access).
@@ -342,6 +356,64 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` partagé en lecture seule"))
         except RowNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"row `{id}` introuvable"))
+
+    @mcp.tool()
+    def data_claim_next(namespace: str, worker: str, filter: Optional[dict] = None,
+                        lease_s: int = 900) -> dict:
+        """Atomically claim the NEXT unprocessed row of a namespace (work queue).
+
+        The primitive for draining a table with N parallel (sub-)agents without
+        collisions: picks the oldest row whose claim lease is free or expired
+        (`FOR UPDATE SKIP LOCKED`), stamps `_claimed_by`/`_claimed_until` and
+        returns it — two concurrent workers never get the same row. Returns
+        `{row: null}` when nothing is left to claim.
+
+        `worker` is a label YOU choose (e.g. "gros-conso-13") and REUSE verbatim
+        on data_release — the guard so one agent cannot release another's claim.
+        `filter` (exact {col: val}, e.g. {"status": "nouveau"}) selects what counts
+        as claimable. The claim does NOT change the row: write your progress via
+        data_write (id=…) ; writing a TERMINAL lifecycle status auto-releases the
+        claim, data_release only serves abandoning without a verdict. The lease
+        (`lease_s`, default 900s) recycles rows from dead workers.
+
+        `namespace` also accepts `slot:<name>` (table bound by the active project).
+        """
+        store = _acting_store()
+        namespace = _ns(namespace)
+        try:
+            row = store.claim_next(namespace, worker=worker, filter=filter,
+                                   lease_s=lease_s)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        except NamespaceReadOnly:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+        return {"namespace": namespace, "row": row,
+                **({} if row else {"hint": "plus rien à claim (file vide pour ce filtre, "
+                                           "ou tout est sous bail actif)"})}
+
+    @mcp.tool()
+    def data_release(namespace: str, id: str, worker: str) -> dict:
+        """Release a claimed row WITHOUT a verdict (abandon) — work-queue counterpart
+        of data_claim_next. Guarded by `worker` (same label as at claim time).
+        Writing a terminal lifecycle status already auto-releases: only call this
+        when giving up on a row so another worker can pick it before the lease
+        expires. `namespace` also accepts `slot:<name>`."""
+        store = _acting_store()
+        namespace = _ns(namespace)
+        try:
+            released = store.release_claim(namespace, id, worker=worker)
+        except NamespaceNotFound:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
+        except NamespaceReadOnly:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+        return {"namespace": namespace, "id": id, "released": released,
+                **({} if released else
+                   {"hint": "rien à libérer : pas de bail sur cette row, ou bail posé "
+                            "par un autre worker"})}
 
     @mcp.tool()
     def data_rows(
@@ -553,6 +625,19 @@ def register(mcp: FastMCP) -> None:
     def _is_scalar(v: object) -> bool:
         return isinstance(v, (str, int, float, bool)) or v is None
 
+    def _compact(v: object, limit: int = 90) -> str:
+        """Résumé 1-ligne d'une valeur imbriquée pour une cellule DataTable :
+        liste → `n × {aperçu du 1er item}` ; dict → JSON compact. Tronqué."""
+        try:
+            if isinstance(v, list):
+                head = json.dumps(v[0], ensure_ascii=False, default=str) if v else ""
+                s = f"{len(v)} × {head}" if head else "0 item"
+            else:
+                s = json.dumps(v, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            s = str(v)
+        return s if len(s) <= limit else s[: limit - 1] + "…"
+
     def _message_card(title: str, message: str) -> "Card":
         with Card() as card:
             with Column(gap=4):
@@ -569,10 +654,12 @@ def register(mcp: FastMCP) -> None:
         for r in records:
             row = {}
             for k, v in r.items():
-                if not _is_scalar(v):
-                    continue
                 if k in _META and not show_meta:
                     continue
+                if not _is_scalar(v):
+                    # Sous-record / liste (schéma v2, ADR 0046) : résumé compact au
+                    # lieu de dropper la colonne (une fiche sans ses contacts[] mentait).
+                    v = _compact(v)
                 row[k] = v
                 if k not in keys:
                     keys.append(k)

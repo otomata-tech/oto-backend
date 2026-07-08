@@ -73,7 +73,10 @@ class InstrSetInput(BaseModel):
     description: Optional[str] = None
     from_version: Optional[int] = None
     # ADR 0035 : entités requises déclarées [{name, type: tableau|connecteur|base,
-    # description?, connector?}] — référencées <slot:name> dans la prose. None = conserver.
+    # description?, connector?, schema?}] — référencées <slot:name> dans la prose.
+    # `schema` (slots tableau, ADR 0046) = schéma CIBLE du tableau attendu (fields/
+    # strict/lifecycle/key) : au binding du slot dans un projet, un namespace vierge
+    # est PROVISIONNÉ avec, un schéma différent lève un warning. None = conserver.
     slots: Optional[list] = None
     # #69 : épingle l'écriture à une org EXPLICITE (robuste au reset de session).
     # None = org active (self-service). Gardé org_admin sur l'org nommée.

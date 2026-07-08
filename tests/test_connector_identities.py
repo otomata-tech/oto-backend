@@ -131,6 +131,22 @@ def test_unipile_hosted_lists_own_accounts(monkeypatch):
     assert ids[0]["is_default"]
 
 
+def test_unipile_hosted_scopes_accounts_to_current_org(monkeypatch):
+    # Scope membre (ADR 0033 B4) : un compte connecté sous une AUTRE org n'est pas
+    # opérable dans l'org de contexte (résolution d'appel org-scopée) → il ne doit
+    # PAS être listé (faux positif « Use this account » inerte, vécu 2026-07-08 :
+    # compte d'org 2 affiché dans l'org 168 où l'option n'était même pas activée).
+    monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr(access, "current_org", lambda sub: 168)
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
+                        lambda sub: [{"account_id": "A2", "account_name": "Alexis",
+                                      "provider": "LINKEDIN", "org_id": 2}])
+    assert connector_identities.list_identities("u1", "unipile") == []
+
+
 def test_unknown_connector_slug_is_an_error():
     # Feedback #162 : slug hors catalogue ≠ « connecteur sans identités ».
     from oto_mcp.capabilities.connectors_identities import _require_known_connector

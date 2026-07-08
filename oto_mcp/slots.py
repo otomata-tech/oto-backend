@@ -84,7 +84,23 @@ def validate_slots(raw: object) -> list[dict]:
         if stype == "connecteur":
             # Le connecteur visé : champ `connector` explicite, sinon le nom du slot.
             slot["connector"] = str(connector or name).strip().lower()
-        unknown = set(item) - {"name", "type", "description", "connector"}
+        # Schéma CIBLE d'un slot tableau (ADR 0035 × 0046) : la procédure prescrit la
+        # FORME du tableau attendu (fields/strict/lifecycle/key) — plus une prescription
+        # en prose. Au binding, un namespace vierge est PROVISIONNÉ avec ce schéma ;
+        # un namespace déjà schématisé différemment lève un warning (non bloquant).
+        schema = item.get("schema")
+        if schema is not None:
+            if stype != "tableau":
+                raise ValueError(f"`slots[{i}].schema` réservé au type `tableau`.")
+            if not isinstance(schema, dict):
+                raise ValueError(f"`slots[{i}].schema` doit être un objet schéma datastore.")
+            from . import datastore_schema as dsv2
+            errors = dsv2.validate_schema_def(schema)
+            if errors:
+                raise ValueError(
+                    f"`slots[{i}].schema` invalide : " + " ; ".join(errors))
+            slot["schema"] = schema
+        unknown = set(item) - {"name", "type", "description", "connector", "schema"}
         if unknown:
             raise ValueError(f"`slots[{i}]` : champs inconnus {sorted(unknown)}.")
         out.append(slot)
@@ -159,3 +175,57 @@ def slots_check(body_md: str, slots: Optional[list]) -> dict:
     except Exception:  # noqa: BLE001 — check best-effort, jamais bloquant
         pass
     return result
+
+
+# ── Schéma cible d'un slot tableau : résolution + provisionnement (0035 × 0046) ──
+
+def target_schema_for(slot_name: str, links: list) -> Optional[dict]:
+    """Schéma CIBLE du slot `slot_name` : la déclaration `schema` d'un slot tableau
+    de même nom dans les procédures LIÉES au projet (première trouvée). None si
+    aucune procédure liée ne prescrit ce slot."""
+    from . import org_store
+    for l in links or []:
+        if l.get("target_type") != "procedure":
+            continue
+        ref = str(l.get("target_ref") or "")
+        if not ref.isdigit():
+            continue
+        instr = org_store.get_instruction_by_id(int(ref))
+        for s in (instr or {}).get("slots") or []:
+            if s.get("name") == slot_name and s.get("type") == "tableau" \
+                    and isinstance(s.get("schema"), dict):
+                return s["schema"]
+    return None
+
+
+def provision_tableau_schema(ns_id: int, target: dict) -> dict:
+    """Applique le schéma CIBLE d'un slot au namespace bindé (ADR 0035 × 0046) :
+    - namespace SANS schéma → **provisionné** (le tableau naît avec le contrat —
+      la clé métier déclarée pose aussi son index UNIQUE, sauf données déjà en
+      doublon : on ne strictifie jamais des données sales en silence) ;
+    - schéma déjà IDENTIQUE → no-op (`conform`) ;
+    - schéma DIFFÉRENT → on ne touche à rien, warning non bloquant (`mismatch`) —
+      écraser un schéma posé serait une perte silencieuse.
+    Renvoie {status: provisioned|conform|mismatch|dirty_key, warning?}."""
+    from . import db
+    ns = db.get_datastore_namespace_by_id(int(ns_id)) or {}
+    current = ns.get("schema")
+    if current:
+        if current == target:
+            return {"status": "conform"}
+        return {"status": "mismatch",
+                "warning": (f"le tableau `{ns.get('namespace')}` a déjà un schéma "
+                            "DIFFÉRENT du schéma cible déclaré par la procédure — "
+                            "binding posé tel quel ; aligne-le via data_set_schema "
+                            "si c'est voulu.")}
+    key = target.get("key")
+    key = key if isinstance(key, str) and key else None
+    if key and db.datastore_key_dup_groups(int(ns_id), key):
+        return {"status": "dirty_key",
+                "warning": (f"schéma cible non provisionné : la clé `{key}` a des "
+                            "doublons dans les rows existantes — résorbe-les puis "
+                            "pose le schéma via data_set_schema.")}
+    db.set_datastore_schema(int(ns_id), target)
+    if key:
+        db.datastore_ensure_key_index(int(ns_id), key)
+    return {"status": "provisioned"}

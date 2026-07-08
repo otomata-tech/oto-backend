@@ -1,6 +1,9 @@
-"""ADR 0044 — partage d'instance : share_down (restreindre, allowlist deny-by-default)
-+ share_side (étendre, prêt nominatif). Exerce la VRAIE logique (get_instance_sharing
-mocké avec des données), pas le fail-safe sans DB."""
+"""ADR 0044 — partage d'instance : share_side (étendre, prêt nominatif). Le cran
+`share_down` BYO (restreindre sous le niveau) a été RETIRÉ (2026-07-08) : une
+instance BYO est utilisable par tout le sous-arbre de son owner, restreindre =
+poser l'instance au bon niveau (équipe). `share_down` ne subsiste que sur les
+instances PLATFORM (liste des grantees — test_free_tier_platform_key). Exerce la
+VRAIE logique (get_instance_sharing mocké avec des données), pas le fail-safe sans DB."""
 import types
 
 import pytest
@@ -33,38 +36,37 @@ def test_sub_matches_scopes_ignores_malformed(monkeypatch):
     assert access._sub_matches_scopes("alice", ["group:notanint", "user:alice"]) is True
 
 
-# ── share_down : allowlist deny-by-default ────────────────────────────────────
+# ── guard : pin d'une instance d'ORG = ouvert à tout membre (plus d'allowlist) ─
 def _mock_sharing(monkeypatch, down, side):
     monkeypatch.setattr(credentials_store, "get_instance_sharing",
                         lambda et, eid, conn, acct="": (down, side))
 
-def test_share_down_empty_is_open(monkeypatch):
-    _mock_sharing(monkeypatch, [], [])
-    assert access._share_down_allows("org", "35", "zoho", "alice") is True
-
-def test_share_down_restricts_to_listed(monkeypatch):
-    _mock_sharing(monkeypatch, ["user:alice"], [])
-    assert access._share_down_allows("org", "35", "zoho", "alice") is True
-    assert access._share_down_allows("org", "35", "zoho", "bob") is False
-
-def test_share_down_group_scope(monkeypatch):
-    _mock_sharing(monkeypatch, ["group:2"], [])
-    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: sub == "sales_guy")
-    assert access._share_down_allows("org", "35", "zoho", "sales_guy") is True
-    assert access._share_down_allows("org", "35", "zoho", "other") is False
-
-
-# ── guard : share_down au PIN d'une instance d'org (pas de contournement) ─────
-def test_guard_org_pin_respects_share_down(monkeypatch):
+def test_guard_org_pin_open_to_any_member(monkeypatch):
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
-    _mock_sharing(monkeypatch, ["group:2"], [])
-    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: sub == "sales_guy")
     ref = instance_refs.parse_ref(instance_refs.make_org_ref(35, "zoho"))
-    # membre de l'org mais hors de l'allowlist → refus DUR au pin
-    with pytest.raises(McpError, match="réservée"):
+    # tout membre de l'org → OK, co-pose l'org de l'instance (un share_down
+    # résiduel en base est SANS effet — le cran BYO est retiré)
+    assert access.guard_instance_access("member", ref) == 35
+
+def test_guard_org_pin_rejects_non_member(monkeypatch):
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    ref = instance_refs.parse_ref(instance_refs.make_org_ref(35, "zoho"))
+    with pytest.raises(McpError, match="pas membre de l'org"):
         access.guard_instance_access("intrus", ref)
-    # membre listé → OK, co-pose l'org de l'instance
-    assert access.guard_instance_access("sales_guy", ref) == 35
+
+
+# ── guard : pin d'une instance de GROUPE = lecteurs du groupe (admin inclus) ──
+def test_guard_group_pin_reader_and_org_admin(monkeypatch):
+    # `can_read_group` escalade pour l'org_admin (roles.py) : c'est le chemin par
+    # lequel un admin d'org utilise l'instance d'une équipe de son org.
+    monkeypatch.setattr(roles, "can_read_group",
+                        lambda sub, gid: sub in ("finance_guy", "clemence_admin"))
+    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "org_id": 35})
+    ref = instance_refs.parse_ref(instance_refs.make_group_ref(2, "pennylane"))
+    assert access.guard_instance_access("finance_guy", ref) == 35
+    assert access.guard_instance_access("clemence_admin", ref) == 35
+    with pytest.raises(McpError, match="pas membre du groupe"):
+        access.guard_instance_access("other_dept", ref)
 
 
 # ── guard : share_side (prêt à un pair) ───────────────────────────────────────

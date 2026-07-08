@@ -225,6 +225,11 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- File de travail (ADR 0046 D) : bail posé par data_claim_next (SKIP LOCKED).
+    -- NULL = libre ; claimed_until < NOW() = bail expiré (row recyclable). Libéré
+    -- par data_release ou par l'entrée dans un état terminal du cycle de vie.
+    claimed_by TEXT,
+    claimed_until TIMESTAMPTZ,
     PRIMARY KEY (ns_id, row_id)
 );
 
@@ -775,7 +780,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- ADR 0044 : l'entrée du coffre EST une instance de connecteur (config possédée).
     version     INTEGER NOT NULL DEFAULT 1,   -- verrou optimiste (B1) vs last-writer-wins
-    share_down  JSONB NOT NULL DEFAULT '[]',  -- ALLOWLIST deny-by-default : [] = ouvert au sous-arbre ; ['team:5',…] = restreint aux scopes listés
+    share_down  JSONB NOT NULL DEFAULT '[]',  -- grantees des instances PLATFORM uniquement (§F) — le cran BYO « restreindre sous le niveau » est RETIRÉ (2026-07-08 : restreindre = poser l'instance au bon niveau)
     share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
     share_mode  TEXT NOT NULL DEFAULT 'open', -- ADR 0044 §F : polarité du vide de share_down. 'open' = vide→sous-arbre (BYO) ; 'closed' = vide→personne (plateforme)
     PRIMARY KEY (entity_type, entity_id, connector, account)

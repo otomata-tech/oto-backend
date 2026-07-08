@@ -44,10 +44,10 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
             (sub, email, name),
         ).fetchone()
     if row and row.get("inserted") and email:
-        # Réconciliation invitation↔signup (ADR 0013) : un invité qui s'inscrit
-        # (par n'importe quel chemin, pas seulement le lien /invite) voit son
-        # invitation en attente honorée par l'email vérifié → il saute la waitlist
-        # au lieu d'y rester coincé avec une invitation orpheline. Synchrone (une
+        # Réconciliation invitation↔signup : un invité d'org qui s'inscrit (par
+        # n'importe quel chemin, pas seulement le lien /invite) voit son invitation
+        # d'org en attente honorée par l'email vérifié → il rejoint directement
+        # l'org au lieu de rester avec une invitation orpheline. Synchrone (une
         # fois, au 1er insert) mais best-effort : un échec ne casse pas l'auth.
         try:
             from .. import org_store
@@ -60,7 +60,7 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
         memento_federation.provision_async(sub, email)
     if row and row.get("inserted"):
         # Suppression du perso (otomata-private) : tout user a TOUJOURS une org maison.
-        # Si l'inscription ne l'a pas déjà rattaché à une org (invitation/referral
+        # Si l'inscription ne l'a pas déjà rattaché à une org (invitation d'org
         # ci-dessus), on lui crée son espace. Idempotent, best-effort, hors gate email.
         try:
             from .. import org_store
@@ -105,7 +105,7 @@ _SUB_COLUMNS = [
     ("org_members", "sub"), ("org_group_members", "sub"),
     ("user_api_tokens", "sub"), ("unipile_accounts", "sub"), ("unipile_pending", "sub"),
     # attribution (soft)
-    ("users", "invited_by"), ("user_grants", "granted_by"),
+    ("user_grants", "granted_by"),
     ("orgs", "created_by"),
     ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
     ("org_groups", "created_by"), ("org_instructions", "set_by"),
@@ -136,17 +136,6 @@ def _stronger_role(a: Optional[str], b: Optional[str]) -> str:
     return (a if ra >= rb else b) or "member"
 
 
-def _merge_access_status(a: Optional[str], b: Optional[str]) -> str:
-    """Statut d'accès fusionné, sans rétrograder : `blocked` (deny explicite) prime,
-    sinon `active` prime sur `pending`."""
-    s = {a, b}
-    if "blocked" in s:
-        return "blocked"
-    if "active" in s:
-        return "active"
-    return "pending"
-
-
 def migrate_sub(old_sub: str, new_sub: str) -> bool:
     """MERGE transactionnel ancien→nouveau compte (bascule de tenant, issue #56).
     Hérite les champs d'accès de l'ancien, repointe TOUTES les tables keyed-by-sub
@@ -159,26 +148,19 @@ def migrate_sub(old_sub: str, new_sub: str) -> bool:
         old = conn.execute("SELECT * FROM users WHERE sub=%s", (old_sub,)).fetchone()
         if not old:
             return False  # déjà migré / inexistant
-        # 1. fusionner les champs d'accès SANS JAMAIS RÉTROGRADER. Une fusion ne doit
-        #    pas réduire l'accès : on prend le rôle le plus fort, le statut le plus
-        #    permissif (active > pending ; blocked reste un deny explicite), le quota
-        #    max. ⚠️ Le naïf « hérite de l'ancien » downgrade le nouveau si l'ancien est
-        #    un stub frais (member/pending) re-fusionné par-dessus un compte établi
-        #    (vécu 2026-06-23 : alexis super_admin/active repassé member/pending).
+        # 1. fusionner le rôle SANS JAMAIS RÉTROGRADER : on prend le rôle le plus
+        #    fort. ⚠️ Le naïf « hérite de l'ancien » downgrade le nouveau si l'ancien
+        #    est un stub frais (member) re-fusionné par-dessus un compte établi
+        #    (vécu 2026-06-23 : alexis super_admin repassé member).
         new = conn.execute(
-            "SELECT role, access_status, invite_quota FROM users WHERE sub=%s", (new_sub,)
+            "SELECT role FROM users WHERE sub=%s", (new_sub,)
         ).fetchone() or {}
         conn.execute(
             """UPDATE users SET
-                 role = %(role)s, access_status = %(st)s, invite_quota = %(q)s,
-                 invited_by = COALESCE(users.invited_by, %(ib)s),
-                 access_granted_at = COALESCE(users.access_granted_at, %(ag)s),
+                 role = %(role)s,
                  avatar_url = COALESCE(users.avatar_url, %(av)s), updated_at = NOW()
                WHERE sub = %(new)s""",
             {"role": _stronger_role(old["role"], new.get("role")),
-             "st": _merge_access_status(old["access_status"], new.get("access_status")),
-             "q": max(old["invite_quota"] or 0, new.get("invite_quota") or 0),
-             "ib": old.get("invited_by"), "ag": old.get("access_granted_at"),
              "av": old.get("avatar_url"), "new": new_sub},
         )
         # 2. user_account_profile + user_agent_readme (PK sub) : retirer le frais du new
@@ -244,80 +226,6 @@ def reconcile_tenant_migration(new_sub: str, email_hint: Optional[str] = None) -
     except Exception:
         logger.warning("reconcile_tenant_migration échoué pour %s", new_sub, exc_info=True)
         return False
-
-
-def grant_platform_access(sub: str, *, invited_by: Optional[str] = None,
-                          quota: Optional[int] = None) -> None:
-    """Passe le compte en 'active' (alpha). Idempotent sur access_granted_at et
-    invited_by (COALESCE — ne réécrase pas un parrain déjà posé). `quota` crédite
-    le budget referral (referral alpha) ; None = ne touche pas au quota (cas
-    org-invite : le membre obtient l'accès mais pas de budget d'invitation)."""
-    sets = ["access_status = 'active'",
-            "access_granted_at = COALESCE(access_granted_at, NOW())",
-            "updated_at = NOW()"]
-    params: list = []
-    if quota is not None:
-        sets.append("invite_quota = %s")
-        params.append(int(quota))
-    if invited_by is not None:
-        sets.append("invited_by = COALESCE(invited_by, %s)")
-        params.append(invited_by)
-    params.append(sub)
-    with _connect() as conn:
-        conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE sub = %s", tuple(params))
-
-
-def block_platform_access(sub: str) -> None:
-    """Passe le compte en 'blocked' (rejet d'un cold signup indésirable). Le compte
-    sort de la waitlist (qui ne liste que 'pending') et `session_visibility` le
-    traite comme non-'active' (allowlist onboarding only). Réversible : un
-    `grant_platform_access` ultérieur le repasse 'active'. Ne touche pas au quota."""
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET access_status = 'blocked', updated_at = NOW() WHERE sub = %s",
-            (sub,),
-        )
-
-
-def consume_invite_quota(sub: str) -> bool:
-    """Décrémente atomiquement le quota referral si > 0. True si consommé, False
-    si épuisé (WHERE invite_quota > 0 → pas de course)."""
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE users SET invite_quota = invite_quota - 1, updated_at = NOW() "
-            "WHERE sub = %s AND invite_quota > 0",
-            (sub,),
-        )
-        return (cur.rowcount or 0) > 0
-
-
-def refund_invite_quota(sub: str) -> None:
-    """Re-crédite une invitation (rollback si la création échoue après consume)."""
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET invite_quota = invite_quota + 1, updated_at = NOW() WHERE sub = %s",
-            (sub,),
-        )
-
-
-def set_invite_quota(sub: str, quota: int) -> None:
-    """Fixe le quota referral (admin top-up). Ne change pas l'access_status."""
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET invite_quota = %s, updated_at = NOW() WHERE sub = %s",
-            (int(quota), sub),
-        )
-
-
-def list_waitlist() -> list[dict]:
-    """Comptes en attente (cold signups non approuvés), du plus ancien au plus
-    récent — la file d'attente est une vue dérivée, pas une table."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT sub, email, name, created_at FROM users "
-            "WHERE access_status = 'pending' ORDER BY created_at"
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 def get_user_by_email(email: str) -> Optional[dict]:

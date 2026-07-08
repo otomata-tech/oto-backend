@@ -271,6 +271,7 @@ _CATEGORY_BY_CONNECTOR = {
     "brevo": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
+    "aiark": "Prospection",
     "serpapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
@@ -295,6 +296,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
     "zoho": "Zoho", "zohodesk": "Zoho", "zohoanalytics": "Zoho",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
+    "aiark": "AI Ark",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
     "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
@@ -381,6 +383,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com", "brightdata": "brightdata.com", "cloro": "cloro.dev",
+    "aiark": "ai-ark.com",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
     "reddit": "reddit.com",
 }

@@ -265,6 +265,7 @@ _CATEGORY_BY_CONNECTOR = {
     "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
+    "brevo": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
     "serpapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
@@ -273,6 +274,7 @@ _CATEGORY_BY_CONNECTOR = {
     "recruitee": "Recrutement", "teamtailor": "Recrutement",
     # automatisation no-code (workflows)
     "n8n": "Automatisation", "make": "Automatisation", "zapier": "Automatisation",
+    "brevoauto": "Automatisation",
 }
 
 # Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
@@ -365,6 +367,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "fullenrich": "fullenrich.com", "lemlist": "lemlist.com", "folk": "folk.app",
     "unipile": "unipile.com", "pennylane": "pennylane.com", "pennylaneged": "pennylane.com", "gocardless": "gocardless.com",
     "silae": "silae.fr", "attio": "attio.com", "crunchbase": "crunchbase.com",
+    "brevo": "brevo.com", "brevoauto": "brevo.com",
     "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
     "atlassian": "atlassian.com",
@@ -631,15 +634,17 @@ _REGISTRY_LIST = [
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase",
        help="fiches société/personne (session Browserbase)", publisher="Crunchbase",
        href="https://www.crunchbase.com/"),
-    # brevo : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
-    # (`workflow-apis.brevo.com/v1`). À distinguer de l'API publique v3
-    # (transactionnel/contacts/campagnes, clé api-key) — pas exposée ici.
+    # brevoauto : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
+    # (`workflow-apis.brevo.com/v1`). Connecteur SÉPARÉ du `brevo` keyé (API publique
+    # v3, plus bas) car le credential diffère — session navigateur ici, clé API là ;
+    # même éditeur, deux surfaces disjointes (la clé v3 n'ouvre pas l'authoring
+    # d'automations). Même partition que pennylane / pennylaneged.
     # Exécution = **Browserbase** (Chrome distant hébergé) : l'user se logue 1× via
-    # Live View (`brevo_connect_start`), sa session persiste dans un Context = le
+    # Live View (`brevoauto_connect_start`), sa session persiste dans un Context = le
     # credential per-user (coffre). Pas de browser sur la box, pas d'export de cookie.
     # personal_session (session physiologiquement per-user). Expérimental (API non
     # documentée) : hors bundle + masqué, self-activable.
-    _c("brevo", ["brevo"], auth_modes={"byo_user"}, personal_session=True,
+    _c("brevoauto", ["brevoauto"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, default_hidden=True,
        label="Brevo (automation)", help="automations marketing (session Browserbase)",
        publisher="Brevo", href="https://app.brevo.com/automation/automations"),
@@ -704,6 +709,16 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, label="HubSpot",
        help="CRM (contacts, companies, deals, tickets, notes)",
        href="https://app.hubspot.com"),
+    # brevo : API PUBLIQUE v3 (`api.brevo.com/v3`, header `api-key`). Une clé porte
+    # tout le compte (pas de scope) → byo. Ne PAS confondre avec `brevoauto`
+    # (automations, session navigateur) : surfaces disjointes, credentials distincts.
+    _c("brevo", ["brevo"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Brevo",
+       help="emailing & CRM (contacts, listes, transactionnel, campagnes, deals)",
+       publisher="Brevo", href="https://app.brevo.com",
+       # 2 modules, 1 namespace : le CRM natif est un sous-domaine distinct, sorti
+       # pour tenir la taille de fichier. `brevo_crm_*` → namespace_of = `brevo`.
+       modules=("brevo", "brevo_crm")),
     _c("apollo", ["apollo"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=20, platform_key_open=True,
        in_default_bundle=False, label="Apollo.io",

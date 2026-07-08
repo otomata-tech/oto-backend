@@ -53,6 +53,7 @@ def register(mcp: FastMCP) -> None:
     cadastre = fod_foncier.cadastre
     bdtopo = fod_foncier.bdtopo
     pvgis = fod_foncier.pvgis
+    ign = fod_foncier.ign
     enedis = fod_foncier.enedis
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
@@ -127,6 +128,31 @@ def register(mcp: FastMCP) -> None:
         or business assumptions. Null if inputs invalid or PVGIS unavailable.
         """
         return pvgis.productible(lat, lon, kwc)
+
+    # --- isochrone / zone de chalandise (IGN Géoplateforme) ------------------
+
+    @mcp.tool()
+    def foncier_isochrone(lat: float, lon: float, minutes: Optional[float] = None,
+                          metres: Optional[int] = None, mode: str = "pied",
+                          direction: str = "departure") -> dict:
+        """Reachable-area (isochrone / catchment) polygon around a point, via IGN.
+
+        The travel-time zone one can reach from (lat, lon) — the primitive for a
+        retail catchment area. Give EITHER `minutes` (time budget) OR `metres`
+        (distance budget), not both. `mode`: "pied"/pedestrian or "voiture"/car.
+        `direction`: "departure" (area reachable FROM the point) or "arrival"
+        (area FROM WHICH the point is reachable — differs by car with one-ways).
+
+        Returns the GeoJSON `geometry` (Polygon of the reachable area) plus its
+        `centroid` and `bbox`. To answer "who is > N min away from X", compute an
+        isochrone around each X and test population/points against the polygons —
+        this tool returns one zone; the coverage analysis is the caller's compose
+        step (e.g. cross with urba_iris population). Geocode the address first
+        (foncier_geocode → lat/lon).
+        """
+        prof = {"pied": "pedestrian", "voiture": "car"}.get(mode, mode)
+        return ign.isochrone(lat, lon, minutes=minutes, metres=metres,
+                             profile=prof, direction=direction)
 
     # --- permis d'urbanisme (Sit@del / SDES, API DiDo live) ------------------
 

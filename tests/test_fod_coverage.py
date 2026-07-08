@@ -56,6 +56,7 @@ FOD_NOT_EXPOSED = {
     "apicarto": _FONCIER_VIA_FOD,
     "bdtopo": _FONCIER_VIA_FOD,
     "pvgis": _FONCIER_VIA_FOD,
+    "ign": _FONCIER_VIA_FOD,  # isochrone IGN — via fod_foncier.ign (foncier_isochrone)
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,

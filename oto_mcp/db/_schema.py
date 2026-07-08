@@ -225,6 +225,11 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- File de travail (ADR 0046 D) : bail posé par data_claim_next (SKIP LOCKED).
+    -- NULL = libre ; claimed_until < NOW() = bail expiré (row recyclable). Libéré
+    -- par data_release ou par l'entrée dans un état terminal du cycle de vie.
+    claimed_by TEXT,
+    claimed_until TIMESTAMPTZ,
     PRIMARY KEY (ns_id, row_id)
 );
 

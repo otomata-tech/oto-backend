@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import db, org_store
+from .. import billing, db, org_store
 from ._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 from ._types import Capability, ResolvedCtx, RestBinding
 
@@ -88,8 +88,9 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         "secrets": org_store.list_org_secrets(inp.org_id),
         # Options payantes offertes (comp admin) au niveau ORG (couche abonnement).
         "option_comps": db.list_option_comps("org", str(inp.org_id)),
-        # Clés plateforme partagées à l'org (couche 2, grant org-level).
-        "platform_grants": db.list_org_grants(inp.org_id),
+        # Plan/abonnement de l'org (ADR 0043) — pilote le cockpit admin (forcer/
+        # retirer un plan comp). `subscribed=False` + `plans` si aucun abonnement.
+        "billing": billing.status(inp.org_id),
     }
 
 

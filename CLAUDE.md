@@ -502,7 +502,7 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 - **Sonde « tester la connexion » par connecteur** (`connector_verify.py`, registre
   calqué sur `browser_session.register`) : un connecteur enregistre une `_verify(fields)`
   qui **lève sur échec** (le message d'exception = le retour d'erreur). Capacité unique
-  `connectors.verify` (MCP `oto_verify_connector` + REST `POST /api/me/connectors/{provider}/verify`,
+  `connectors.verify` (MCP `oto_instance(op="verify")` — console ADR 0047 + REST `POST /api/me/connectors/{provider}/verify`,
   `authz=ORG_MEMBER`, `level` auto|org) → `{ok, error, elapsed_ms}`, jamais un 500 ;
   `providers.public_catalog` expose `verifiable: connector_verify.supports(name)` (front
   gate le bouton). **Une bonne sonde teste l'auth ET les scopes**, pas juste l'auth :

@@ -409,7 +409,10 @@ def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     caps = {c.key: c for c in CAPABILITIES}
     cap = caps["connectors.instances.list"]
-    assert cap.mcp == "oto_connector_instances"
+    # ADR 0047 B1 : la face MCP est portée par la console consolidée (oto_instance
+    # op=list) — cette capacité ne garde que sa face REST.
+    assert cap.mcp is None
+    assert caps["connectors.console.instance"].mcp == "oto_instance"
     (binding,) = cap.rest_bindings()
     assert (binding.verb, binding.path) == ("GET", "/api/me/connector-instances")
     assert cap.authz is SUB_ONLY

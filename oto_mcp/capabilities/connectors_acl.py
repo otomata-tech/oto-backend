@@ -132,7 +132,6 @@ CAPABILITIES += [
         authz=GROUP_MEMBER_OF("group_id"),
         description="[team] List the connector access rules of a team (which connectors are reserved, "
                     "and to which members). Team-level RBAC narrows the org's — it can only further restrict.",
-        mcp="oto_list_group_connector_access",
         rest=RestBinding("GET", "/api/groups/{id}/connectors/acl", _GID),
     ),
     Capability(
@@ -141,7 +140,6 @@ CAPABILITIES += [
         description="[team lead] Reserve a connector to a member of your team (member=<sub>). Adding the "
                     "first member makes it restricted within the team (deny-by-default) — a further "
                     "narrowing of the org, never an expansion.",
-        mcp="oto_set_group_connector_access",
         rest=RestBinding("POST", "/api/groups/{id}/connectors/{connector}/access", _GID_CONN),
     ),
     Capability(
@@ -149,7 +147,6 @@ CAPABILITIES += [
         authz=GROUP_ADMIN_OF("group_id"), refresh_visibility=True,
         description="[team lead] Remove a member from a connector's team access list. Removing the last "
                     "member reopens the connector to the whole team.",
-        mcp="oto_clear_group_connector_access",
         rest=RestBinding("DELETE", "/api/groups/{id}/connectors/{connector}/access", _GID_CONN),
     ),
     Capability(
@@ -157,7 +154,6 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"),
         description="[org admin] List the connector access rules of an org (which connectors are "
                     "restricted, and to which departments/members).",
-        mcp="oto_list_connector_access",
         rest=RestBinding("GET", "/api/orgs/{id}/connectors/acl", _ID),
     ),
     Capability(
@@ -166,7 +162,6 @@ CAPABILITIES += [
         description="[org admin] Restrict a connector to a department (principal_type='group', "
                     "principal_id=<group_id>) or a member (principal_type='user', principal_id=<sub>). "
                     "Adding the first principal makes the connector restricted (deny-by-default) for the org.",
-        mcp="oto_set_connector_access",
         rest=RestBinding("POST", "/api/orgs/{id}/connectors/{connector}/access", _ID_CONN),
     ),
     Capability(
@@ -174,7 +169,6 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"),
         description="[org admin] Remove a department/member from a connector's access list. Removing "
                     "the last principal reopens the connector to the whole org.",
-        mcp="oto_clear_connector_access",
         rest=RestBinding("DELETE", "/api/orgs/{id}/connectors/{connector}/access", _ID_CONN),
     ),
 ]

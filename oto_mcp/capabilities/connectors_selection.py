@@ -198,7 +198,7 @@ CAPABILITIES += [
                     "by default (name/label/family/category/state/…) — pass verbose=true for the "
                     "full card (doc, auth descriptor, credential fields). Filter with state="
                     "active|paused|not_selected.",
-        mcp="oto_my_connectors", rest=RestBinding("GET", "/api/me/connectors"),
+        rest=RestBinding("GET", "/api/me/connectors"),
     ),
     Capability(
         key="connectors.select", handler=_select, Input=ConnectorActionInput, authz=SUB_ONLY,
@@ -206,19 +206,19 @@ CAPABILITIES += [
                     "connector name from the catalog. Its tools do NOT mount in the current "
                     "conversation (the tool registry is frozen at open) — the response `hint` "
                     "tells you to reach them right away via oto_call, or open a new conversation.",
-        mcp="oto_select_connector", rest=RestBinding("POST", "/api/me/connectors/{name}/select"),
+        rest=RestBinding("POST", "/api/me/connectors/{name}/select"),
     ),
     Capability(
         key="connectors.pause", handler=_pause, Input=ConnectorActionInput, authz=SUB_ONLY,
         description="Pause an installed connector (state=paused): kept installed but its tools "
                     "are hidden. Resume by selecting it again.",
-        mcp="oto_pause_connector", rest=RestBinding("POST", "/api/me/connectors/{name}/pause"),
+        rest=RestBinding("POST", "/api/me/connectors/{name}/pause"),
     ),
     Capability(
         key="connectors.unselect", handler=_unselect, Input=ConnectorActionInput, authz=SUB_ONLY,
         description="Remove a connector from your workspace (back to the library). Does not touch "
                     "credentials, only your selection.",
-        mcp="oto_unselect_connector", rest=RestBinding("DELETE", "/api/me/connectors/{name}"),
+        rest=RestBinding("DELETE", "/api/me/connectors/{name}"),
     ),
     Capability(
         key="connectors.recommend", handler=_recommend, Input=RecommendInput,
@@ -226,7 +226,6 @@ CAPABILITIES += [
         description="[org admin] Set your org's baseline of recommended connectors (the ones "
                     "proposed to members in the library). Advisory — members stay free to "
                     "select/deselect. connectors = list of connector names ([] clears).",
-        mcp="oto_set_org_connectors",
         rest=RestBinding("PUT", "/api/orgs/{id}/default-connectors", _ID),
     ),
 ]

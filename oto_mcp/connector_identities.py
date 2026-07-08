@@ -98,7 +98,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
         raise ValueError(
             f"Le compte {provider.title()} qui t'était accordé n'est plus opérable "
             "(autorisation révoquée ou compte déconnecté par son propriétaire). "
-            "Resélectionne ton identité (oto_set_connector_identity ou "
+            "Resélectionne ton identité (oto_identity(op='set') ou "
             "https://manage.oto.cx/console/connectors).")
     return db.get_unipile_account_id(sub, access.current_org(sub), provider)
 

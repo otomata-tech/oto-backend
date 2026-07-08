@@ -10,7 +10,7 @@ EXCLUSIONS (assumées, documentées) :
 - résidus `entity_type='user'` (mounts oauth fédérés memento/atlassian/folkmcp)
   — hors cascade de travail by design (ADR 0033) ;
 - grants de compte #55 (`connector_account_grants` = pointeurs d'identité
-  satellites, déjà servis par `oto_list_account_grants`) — repliés en
+  satellites, déjà servis par `oto_account_access`) — repliés en
   « instances partagées » au B5 ;
 - identités distantes Unipile (`connector_identities` : les énumérer déchiffre
   la clé et appelle l'API distante) — la clé BYO elle-même EST listée comme
@@ -23,7 +23,7 @@ LIMITES (documentées) :
   dépackera à l'écriture.
 - pas de filtre activation/exposition (ADR 0031) : la résolution ne le fait pas
   non plus — l'instance existe même si le connecteur n'est pas exposé
-  (divergence assumée avec `oto_my_connectors`). Au passage la projection liste
+  (divergence assumée avec `oto_connector op=list`). Au passage la projection liste
   ce que `status_for` ignore (grant d'org, free-tier) : elle est le miroir
   honnête de ce que la résolution trouverait.
 - PAS de `wins`/`mode` (le gagnant reste dit par `status_for` — une seule
@@ -303,9 +303,8 @@ CAPABILITIES += [
             "List the connector INSTANCES (connector x auth/config) visible to you in the active "
             "org, by proximity: yours (member), your groups', the org's, then platform grants. "
             "Metadata only — the secret is never returned. `ref` is a stable opaque handle "
-            "(future binding target). Contrast with oto_connector_identities (operable accounts "
-            "of ONE connector) and oto_my_connectors (catalog of TYPES)."),
-        mcp="oto_connector_instances",
+            "(future binding target). Contrast with oto_identity (operable accounts of ONE "
+            "connector) and oto_connector op=list (catalog of TYPES)."),
         rest=RestBinding("GET", "/api/me/connector-instances"),
     ),
 ]

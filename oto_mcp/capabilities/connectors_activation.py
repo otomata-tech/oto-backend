@@ -206,7 +206,6 @@ CAPABILITIES += [
         description="List, for a team, each connector available to its org: whether the org "
                     "exposes it, whether the team has cut it, and the effective state for the "
                     "team's members. The team cockpit of connector availability.",
-        mcp="oto_group_connector_activation",
         rest=RestBinding("GET", "/api/groups/{id}/connectors/activation", _GID),
     ),
     Capability(
@@ -215,7 +214,6 @@ CAPABILITIES += [
         description="[team lead] Cut a connector for your whole team (restrict-only — a team can "
                     "only narrow what the org allows, never expose beyond it). Requires the org to "
                     "expose it. Takes effect for members whose active team is this one, next session.",
-        mcp="oto_set_group_connector_activation",
         rest=RestBinding("PUT", "/api/groups/{id}/connectors/{name}/activation", _GID),
     ),
     Capability(
@@ -223,7 +221,6 @@ CAPABILITIES += [
         authz=GROUP_ADMIN_OF("group_id"), refresh_visibility=True,
         description="[team lead] Remove your team's cut for a connector — it falls back to the "
                     "org's availability.",
-        mcp="oto_clear_group_connector_activation",
         rest=RestBinding("DELETE", "/api/groups/{id}/connectors/{name}/activation", _GID),
     ),
     Capability(
@@ -232,7 +229,6 @@ CAPABILITIES += [
         description="List, for your org, each connector's activation: the platform master switch, "
                     "your org's override (if any), the effective state, and whether the org "
                     "recommends it. The org cockpit of connector governance.",
-        mcp="oto_org_connector_activation",
         rest=RestBinding("GET", "/api/orgs/{id}/connectors/activation", _ID),
     ),
     Capability(
@@ -241,7 +237,6 @@ CAPABILITIES += [
         description="[org admin] Force a connector ON or OFF for your whole org (hard ceiling). "
                     "Enabling requires the platform to expose it (the platform ceiling is never "
                     "lifted); disabling always works. Takes effect for members on their next session.",
-        mcp="oto_set_org_connector_activation",
         rest=RestBinding("PUT", "/api/orgs/{id}/connectors/{name}/activation", _ID),
     ),
     Capability(
@@ -249,7 +244,6 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"), refresh_visibility=True,
         description="[org admin] Clear your org's activation override for a connector — it falls "
                     "back to the platform master switch.",
-        mcp="oto_clear_org_connector_activation",
         rest=RestBinding("DELETE", "/api/orgs/{id}/connectors/{name}/activation", _ID),
     ),
 ]

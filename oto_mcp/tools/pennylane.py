@@ -2,7 +2,7 @@
 
 Clé résolue par appel via `access.resolve_api_key("pennylane")` : modèle
 clé-per-user (comme Attio), pas de clé plateforme. Chaque utilisateur pose
-sa propre clé Pennylane sur `app.oto.ninja/api-keys` — sa compta n'est
+sa propre clé Pennylane sur `manage.oto.cx/api-keys` — sa compta n'est
 visible que par lui.
 
 Surface en lecture + lettrage + **écriture du flux avoir** (POC chez un client,

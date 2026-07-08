@@ -225,7 +225,7 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
 <body><div class="{wrap_cls}">
 {crumb}
 {inner}
-  <footer>Partagé via <a href="https://oto.ninja">Oto</a> — la boîte à outils d'automatisation pour agents IA.</footer>
+  <footer>Partagé via <a href="https://oto.cx">Oto</a> — la boîte à outils d'automatisation pour agents IA.</footer>
 </div>{extra_body}</body></html>"""
 
 

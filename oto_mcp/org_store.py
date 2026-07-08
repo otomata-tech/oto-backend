@@ -487,17 +487,29 @@ def _sync_mfa_mirror(org_id: int) -> None:
 
 
 def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
-    """Ajoute (ou met à jour le rôle d') un membre. Auto-promeut l'org en active
-    si c'est la 1ère adhésion du sub.
+    """Ajoute (ou met à jour le rôle d') un membre, et choisit l'org maison.
+
+    Auto-activation de l'org rejointe (`org_members.is_active`, = l'org maison lue
+    par `get_active_org`) : une org **réelle** l'emporte TOUJOURS sur l'org perso
+    silencieuse (ADR 0030/0033 : tout user a une org perso « Mon espace » créée
+    d'office → sans ça, un invité atterrit sur sa perso au lieu de sa boîte). Règle,
+    sur une **nouvelle** adhésion :
+    - aucune org active → la nouvelle devient maison ;
+    - sinon, l'org rejointe est non-perso ET l'active courante est la perso →
+      promotion (la perso cède la place) ;
+    - sinon → non-active (on ne débarque jamais un user d'une maison réelle établie).
+    Un **re-ajout** (ligne déjà présente) ne change que le rôle, jamais l'active.
 
     Contrairement à set_google_oauth (table sans index unique partiel sur le
     flag, où deux TRUE sont tolérés), org_members a l'index partiel
-    `org_members_one_active`. Le calcul make_active=(COUNT==0) est donc une
+    `org_members_one_active` (≤1 active par sub) : le calcul de make_active est une
     lecture-modification-écriture qui, sous READ COMMITTED, casserait sur deux
-    1ères adhésions concurrentes du MÊME sub (les deux liraient COUNT=0 →
-    deux is_active=TRUE → IntegrityError). On sérialise par sub via un verrou
-    advisory transactionnel ; `conn.transaction()` seul ne donne que
-    l'atomicité, pas cette sérialisation.
+    adhésions concurrentes du MÊME sub (deux is_active=TRUE → IntegrityError). On
+    sérialise par sub via un verrou advisory transactionnel ; `conn.transaction()`
+    seul ne donne que l'atomicité, pas cette sérialisation. (L'org perso est marquée
+    `personal_of` APRÈS son propre add_org_member — au 1er membre elle est donc vue
+    non-perso, ce qui est sans effet : active=None → elle devient maison de toute
+    façon.)
     """
     if org_role not in ORG_ROLES:
         raise ValueError(f"org_role invalide {org_role!r} (attendu: {ORG_ROLES})")
@@ -505,18 +517,46 @@ def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
     with _connect() as conn:
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (sub,))
-            n = conn.execute(
-                "SELECT COUNT(*) AS n FROM org_members WHERE sub = %s", (sub,)
-            ).fetchone()["n"]
-            make_active = n == 0
-            conn.execute(
-                """
-                INSERT INTO org_members (org_id, sub, org_role, is_active)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (org_id, sub) DO UPDATE SET org_role = EXCLUDED.org_role
-                """,
-                (org_id, sub, org_role, make_active),
-            )
+            existing = conn.execute(
+                "SELECT 1 FROM org_members WHERE org_id = %s AND sub = %s",
+                (org_id, sub),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE org_members SET org_role = %s WHERE org_id = %s AND sub = %s",
+                    (org_role, org_id, sub),
+                )
+            else:
+                active = conn.execute(
+                    """
+                    SELECT m.org_id, (o.personal_of IS NOT NULL) AS personal
+                      FROM org_members m JOIN orgs o ON o.id = m.org_id
+                     WHERE m.sub = %s AND m.is_active
+                    """,
+                    (sub,),
+                ).fetchone()
+                jp = conn.execute(
+                    "SELECT (personal_of IS NOT NULL) AS p FROM orgs WHERE id = %s",
+                    (org_id,),
+                ).fetchone()
+                joining_personal = bool(jp and jp["p"])
+                if active is None:
+                    make_active = True
+                elif not joining_personal and active["personal"]:
+                    conn.execute(
+                        "UPDATE org_members SET is_active = FALSE WHERE sub = %s AND org_id = %s",
+                        (sub, active["org_id"]),
+                    )
+                    make_active = True
+                else:
+                    make_active = False
+                conn.execute(
+                    """
+                    INSERT INTO org_members (org_id, sub, org_role, is_active)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (org_id, sub, org_role, make_active),
+                )
     _sync_mfa_mirror(org_id)   # pousse le nouveau membre dans l'org Logto miroir si MFA
 
 
@@ -1041,16 +1081,43 @@ def _grant_referral_access(invitee_sub: str, inviter_sub: Optional[str], source:
     return True
 
 
+def _idempotent_accept(pred: str, val, sub: str) -> Optional[dict]:
+    """Retour idempotent quand l'invitation ciblée a DÉJÀ été acceptée par le MÊME
+    sub (cas vécu : `reconcile_signup_with_invitation` la consomme au 1er getMe, puis
+    l'accept explicite la retrouve déjà utilisée → faux 410 alors que l'user est bien
+    membre). Renvoie le même dict de succès qu'une acceptation fraîche, ou None si
+    l'invitation est vraiment invalide / expirée / acceptée par un AUTRE sub."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT org_id, org_role, accepted_sub FROM org_invitations WHERE {pred}",
+            (val,),
+        ).fetchone()
+    if row and row["accepted_sub"] == sub and row["org_id"] is not None:
+        return {"org_id": row["org_id"], "org_role": row["org_role"], "referral": False}
+    return None
+
+
 def accept_invitation(token: str, sub: str) -> Optional[dict]:
-    """Accepte une invitation nominative par token mail. None si token invalide."""
+    """Accepte une invitation nominative par token mail. Idempotent si déjà acceptée
+    par le même sub ; None si token invalide/expiré/à autrui."""
+    if not token:
+        return None
     inv = get_invitation_by_token(token)
-    return _accept_invitation_row(inv, sub) if inv else None
+    if inv:
+        return _accept_invitation_row(inv, sub)
+    return _idempotent_accept("token_hash = %s", _hash_token(token), sub)
 
 
 def accept_invitation_by_code(code: str, sub: str) -> Optional[dict]:
-    """Accepte une invitation nominative par code court. None si code invalide."""
+    """Accepte une invitation nominative par code court. Idempotent si déjà acceptée
+    par le même sub ; None si code invalide/expiré/à autrui."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None
     inv = get_invitation_by_code(code)
-    return _accept_invitation_row(inv, sub) if inv else None
+    if inv:
+        return _accept_invitation_row(inv, sub)
+    return _idempotent_accept("code = %s", code, sub)
 
 
 def accept_referral(carrier: str, sub: str) -> Optional[dict]:

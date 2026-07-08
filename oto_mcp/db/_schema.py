@@ -13,18 +13,6 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT,
     name TEXT,
     role TEXT NOT NULL DEFAULT 'member',  -- member | admin (opérateur) | super_admin
-
-    -- Accès plateforme & invitation virale (ADR 0013). access_status = gate doux
-    -- (pending = waitlist, active = alpha, blocked). invite_quota = budget referral
-    -- restant. invited_by = sub du parrain (arbre viral). Non appliqué tant que le
-    -- flag OTO_ALPHA_GATE_ENABLED est off (barreaux ultérieurs).
-    access_status TEXT NOT NULL DEFAULT 'pending',
-    invite_quota INTEGER NOT NULL DEFAULT 0,
-    invited_by TEXT,
-    access_granted_at TIMESTAMPTZ,
-    -- Code referral stable, partageable au réseau (lien /invitation/<code>).
-    -- Non secret (destiné à être diffusé), lazy-généré à la 1re demande.
-    referral_code TEXT,
     avatar_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -582,16 +570,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHE
 -- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
 -- un email donné ; l'acceptation exige un compte dont l'email vérifié Logto
 -- matche (anti-transfert de lien). accepted_at NULL = en attente.
--- Invitation UNIFIÉE (ADR 0013) : org_id NULLABLE — renseigné = rejoindre cette
--- org (org-invite) ; NULL = referral alpha (l'invité crée sa propre org). Les
--- deux saveurs accordent l'accès plateforme à l'acceptation. `source` =
--- provenance (user_quota | admin_seed | org_admin).
+-- `org_id` reste NULLABLE (héritage d'anciennes lignes) mais toute invitation
+-- vivante cible une org. `source` = provenance ('org_admin').
 -- `email` NULLABLE : une invitation nominative cible un email, mais une émission
 -- « code à partager soi-même » (sans envoi mail) peut être anonyme. `code` = code
--- court lisible (lien /invitation/<carrier>/<code>), saisi/partagé à la main ;
--- c'est le secret d'accès single-use (≠ token_hash legacy du lien mail). Les
--- entrées par lien referral réutilisable sont journalisées ici (source
--- 'referral_link', accepted_*) pour l'arbre viral, sans pré-création.
+-- court lisible (lien /invitation/<code>), saisi/partagé à la main ; c'est le
+-- secret d'accès single-use (≠ token_hash legacy du lien mail).
 CREATE TABLE IF NOT EXISTS org_invitations (
     id BIGSERIAL PRIMARY KEY,
     org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,

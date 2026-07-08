@@ -514,15 +514,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         return _json(request, p)
 
     async def invite_preview_by_code(request: Request) -> JSONResponse:
-        """Aperçu PUBLIC d'une invitation par code court (/invitation/<c>/<code>)."""
+        """Aperçu PUBLIC d'une invitation d'org par code court (/invitation/<code>)."""
         p = org_store.preview_invitation_by_code(request.path_params.get("code", ""))
-        if not p:
-            return _json_error(request, 404, "invalid_or_expired")
-        return _json(request, p)
-
-    async def referral_preview(request: Request) -> JSONResponse:
-        """Aperçu PUBLIC d'un lien referral réutilisable (/invitation/<carrier>)."""
-        p = org_store.preview_referral(request.path_params.get("carrier", ""))
         if not p:
             return _json_error(request, 404, "invalid_or_expired")
         return _json(request, p)
@@ -603,11 +596,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "group_role": group_role,
             "home_group": home_group,
             "home_group_name": home_group_name,
-            "access": {
-                "status": user.get("access_status"),
-                "invites_left": user.get("invite_quota", 0),
-                "invited_by": user.get("invited_by"),
-            },
             # crunchbase = connecteur `personal_session` standard → exposé dans
             # `providers` (comme brevo), plus de bloc dédié (ADR 0026).
             # Fédération MCP (otomata#16) : statut du compte memento fédéré du user
@@ -1550,8 +1538,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/doctrines/library/{slug}", options_handler, methods=["OPTIONS"]),
         Route("/api/invitations/code/{code}", invite_preview_by_code, methods=["GET"]),
         Route("/api/invitations/code/{code}", options_handler, methods=["OPTIONS"]),
-        Route("/api/invitations/referral/{carrier}", referral_preview, methods=["GET"]),
-        Route("/api/invitations/referral/{carrier}", options_handler, methods=["OPTIONS"]),
         Route("/api/invitations/{token}", invite_preview, methods=["GET"]),
         Route("/api/invitations/{token}", options_handler, methods=["OPTIONS"]),
         Route("/api/me", me, methods=["GET"]),

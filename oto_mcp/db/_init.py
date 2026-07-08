@@ -213,43 +213,21 @@ def init_db() -> None:
         # lignes existantes (guest était un alias sans effet, cf. access.py).
         conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
         conn.execute("UPDATE users SET role = 'member' WHERE role = 'guest'")
-        # Accès plateforme & invitation virale (ADR 0013, barreau 1).
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_quota INTEGER NOT NULL DEFAULT 0")
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by TEXT")
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_granted_at TIMESTAMPTZ")
-        # access_status : backfill ONE-SHOT à la création de la colonne — les comptes
-        # existants sont pré-alpha → 'active'. Garder hors d'un ADD COLUMN ... DEFAULT
-        # (qui poserait tout le monde 'pending') ET hors d'un UPDATE inconditionnel
-        # rejoué à chaque boot (qui ré-activerait les pending et tuerait le gate).
-        _has_access = conn.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'users' AND column_name = 'access_status'"
-        ).fetchone()
-        if not _has_access:
-            conn.execute("ALTER TABLE users ADD COLUMN access_status TEXT")
-            conn.execute("UPDATE users SET access_status = 'active', access_granted_at = NOW()")
-            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET DEFAULT 'pending'")
-            conn.execute("ALTER TABLE users ALTER COLUMN access_status SET NOT NULL")
-        # L'admin bootstrap (OTO_MCP_ADMIN_SUB) ne tombe jamais en waitlist.
-        _admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
-        if _admin_sub:
-            conn.execute(
-                "UPDATE users SET access_status = 'active', "
-                "access_granted_at = COALESCE(access_granted_at, NOW()) "
-                "WHERE sub = %s AND access_status <> 'active'",
-                (_admin_sub,),
-            )
-        # Invitation unifiée (ADR 0013) : org_id nullable + source (idempotent pour
-        # les DB créées avant). NULL = referral alpha, l'invité crée sa propre org.
+        # Retrait de la waitlist alpha + referral (ADR 0013 supersédé) : inscription
+        # libre, tout compte est actif d'office. On droppe les colonnes d'accès/quota
+        # (idempotent). L'org_id de org_invitations reste nullable (héritage) ; les
+        # invitations vivantes ciblent toutes une org.
+        conn.execute("ALTER TABLE users DROP COLUMN IF EXISTS access_status")
+        conn.execute("ALTER TABLE users DROP COLUMN IF EXISTS invite_quota")
+        conn.execute("ALTER TABLE users DROP COLUMN IF EXISTS invited_by")
+        conn.execute("ALTER TABLE users DROP COLUMN IF EXISTS access_granted_at")
+        conn.execute("DROP INDEX IF EXISTS idx_users_referral_code")
+        conn.execute("ALTER TABLE users DROP COLUMN IF EXISTS referral_code")
+        # Invitation d'org : org_id nullable + source + code court partageable à la
+        # main (idempotent pour les DB créées avant). email nullable (émission sans
+        # envoi mail = code à partager soi-même).
         conn.execute("ALTER TABLE org_invitations ALTER COLUMN org_id DROP NOT NULL")
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS source TEXT")
-        # Lien referral réutilisable + invitation par code court partageable à la
-        # main (2026-06-22). referral_code = code stable par user (diffusable) ;
-        # org_invitations.code = code single-use d'une invitation nominative ;
-        # email nullable (émission sans envoi mail = code à partager soi-même).
-        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code "
-                     "ON users(referral_code) WHERE referral_code IS NOT NULL")
         conn.execute("ALTER TABLE org_invitations ALTER COLUMN email DROP NOT NULL")
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS code TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_invitations_code "

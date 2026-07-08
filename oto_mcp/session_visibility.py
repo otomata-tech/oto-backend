@@ -36,20 +36,6 @@ logger = logging.getLogger(__name__)
 # défaut is_enabled=True). Cache process, alimenté au listing.
 _KNOWN_DEFAULT_HIDDEN: set[str] = set()
 
-# Gate doux alpha (ADR 0013) : un compte non-'active' ne voit QUE ces tools —
-# accepter une invitation + méta de visibilité (anti-lockout). Tout le reste est
-# masqué tant que le compte est en waitlist.
-ALPHA_GATE_ALLOWLIST: frozenset[str] = frozenset({
-    "oto_accept_invite", "oto_list_my_tools", "oto_enable_tool",
-})
-
-
-def alpha_gate_enabled() -> bool:
-    """Cran d'enforcement du gate doux (ADR 0013, barreau 4). Off par défaut :
-    tant que le flag n'est pas posé, l'état d'accès n'a aucun effet de visibilité."""
-    return os.environ.get("OTO_ALPHA_GATE_ENABLED", "").strip().lower() in ("1", "true", "yes")
-
-
 async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     """Ensemble effectif des tools à masquer pour `(sub, org active)`.
 
@@ -162,17 +148,6 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # enforced au call-time (jamais une barrière ici).
     if not is_admin:
         to_hide |= {n for n in all_names if n.startswith("oto_admin_")}
-    # Gate doux alpha (ADR 0013, barreau 4) : si le flag est posé, un compte
-    # non-'active' (waitlist/blocked) ne voit que l'allowlist d'onboarding.
-    # Fail-OPEN (gouvernance d'accès produit) : sur glitch DB on n'enferme pas.
-    if alpha_gate_enabled():
-        try:
-            status = (db.get_user(sub) or {}).get("access_status")
-        except Exception as e:
-            logger.warning("alpha gate skipped for %s (fail-open): %s", sub, e)
-            status = "active"
-        if status not in (None, "active"):
-            to_hide |= (all_names - ALPHA_GATE_ALLOWLIST)
     return to_hide
 
 

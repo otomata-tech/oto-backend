@@ -104,8 +104,6 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     target_org = org_store.get_active_org(target)
     target_group = group_store.get_active_group(target)
     status = access.status_for(target, org=target_org, group=target_group)
-    pending_invite = (org_store.find_pending_alpha_invite_by_email(u.get("email"))
-                      if u.get("email") else None)
     orgs = org_store.list_orgs_for_user(target)
     # Messagerie Unipile PAR ORG (l'option est per-org ; un user peut être dans N orgs) :
     # un bloc par org, option/canaux calculés CONTRE cette org (jamais current_org).
@@ -114,8 +112,6 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
     return {
         "sub": target, "email": u.get("email"), "name": u.get("name"),
         "role": status["role"], "active_org": status.get("active_org"),
-        "access_status": u.get("access_status"),
-        "pending_invite": pending_invite,
         "orgs": orgs,
         "providers": status["providers"],
         "grants": db.list_grants_for_user(target),

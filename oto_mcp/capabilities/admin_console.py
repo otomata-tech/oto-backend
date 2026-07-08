@@ -9,7 +9,7 @@ faces REST historiques ne bougent pas : on retire seulement le binding `mcp=` de
 capacités d'origine.
 
 Concepts : `oto_admin_org`, `oto_admin_org_member`, `oto_admin_user`,
-`oto_admin_access`, `oto_admin_key_grant`. Hors périmètre (décision 2026-06-25) :
+`oto_admin_key_grant`. Hors périmètre (décision 2026-06-25) :
 pose de secret brut (`set_org_secret`/`set_platform_key`) = dashboard-only.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from .. import db
-from . import access_admin, orgs_admin, orgs_members, orgs_reads, users_admin
+from . import orgs_admin, orgs_members, orgs_reads, users_admin
 from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
@@ -93,22 +93,6 @@ def _user(ctx: ResolvedCtx, inp: UserAdminInput) -> dict:
     return users_admin._set_role(ctx, users_admin.SetRoleInput(target=target, role=role))
 
 
-# ── oto_admin_access : waitlist / grant / reject (gate alpha, ADR 0013) ──────
-class AccessAdminInput(BaseModel):
-    op: Literal["waitlist", "grant", "reject"]
-    sub: Optional[str] = None         # grant/reject
-    quota: Optional[int] = None       # grant (optionnel)
-
-
-def _access(ctx: ResolvedCtx, inp: AccessAdminInput) -> dict:
-    if inp.op == "waitlist":
-        return access_admin._list_waitlist(ctx, access_admin.WaitlistInput())
-    sub = _need(inp.sub, "missing_sub", f"`sub` requis pour {inp.op}.")
-    if inp.op == "grant":
-        return access_admin._grant_access(ctx, access_admin.GrantAccessInput(sub=sub, quota=inp.quota))
-    return access_admin._reject_access(ctx, access_admin.RejectAccessInput(sub=sub))
-
-
 # ── oto_admin_key_grant : list / grant / revoke · scope user|org (DROITS, pas de secret) ─
 class KeyGrantInput(BaseModel):
     op: Literal["list", "grant", "revoke"]
@@ -174,13 +158,6 @@ CAPABILITIES += [
                      "(`target` email|sub → full fiche; platform admin) / set_role (`target`, "
                      "`role` member|admin|super_admin; super admin)."),
         mcp="oto_admin_user",
-    ),
-    Capability(
-        key="admin.access", handler=_access, Input=AccessAdminInput,
-        authz=PLATFORM_ADMIN,
-        description=("Alpha access gate (platform admin). op=waitlist (pending signups) / grant "
-                     "(`sub`, optional `quota` → active + referral quota + email) / reject (`sub` → blocked)."),
-        mcp="oto_admin_access",
     ),
     Capability(
         key="admin.key_grant", handler=_key_grant, Input=KeyGrantInput,

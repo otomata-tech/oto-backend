@@ -3,8 +3,8 @@
 Vérifie les invariants de l'ADR : (1) la rédaction est ré-appliquée à l'identique du
 middleware (un outil à PII dispatché ne fuite pas), (2) les méta/spine sont refusés,
 (3) un argument invalide renvoie le schéma (handoff §3), (4) l'erreur de la cible est
-remontée en donnée, (5) le gate alpha est rejoué. On stub la résolution d'outil et la
-policy de rédaction pour ne dépendre ni du serveur réel ni de la DB.
+remontée en donnée. On stub la résolution d'outil et la policy de rédaction pour ne
+dépendre ni du serveur réel ni de la DB.
 """
 import asyncio
 
@@ -164,30 +164,6 @@ def test_unknown_tool_raises(oto_call_fn, monkeypatch):
     with pytest.raises(McpError) as ei:
         _call(oto_call_fn, [], name="fr_nexiste_pas", arguments={})
     assert "Unknown tool" in str(ei.value)
-
-
-# --- 5. gate alpha rejoué sur la cible ------------------------------------
-
-def test_alpha_gate_blocks_waitlisted(monkeypatch):
-    from oto_mcp import session_visibility
-    monkeypatch.setattr(session_visibility, "alpha_gate_enabled", lambda: True)
-    monkeypatch.setattr(db, "get_user", lambda _sub: {"access_status": "waitlist"})
-    with pytest.raises(McpError):
-        meta._enforce_alpha_gate("sub-123", "fr_ccn_search")
-
-
-def test_alpha_gate_allows_active(monkeypatch):
-    from oto_mcp import session_visibility
-    monkeypatch.setattr(session_visibility, "alpha_gate_enabled", lambda: True)
-    monkeypatch.setattr(db, "get_user", lambda _sub: {"access_status": "active"})
-    meta._enforce_alpha_gate("sub-123", "fr_ccn_search")  # ne lève pas
-
-
-def test_alpha_gate_noop_without_flag(monkeypatch):
-    from oto_mcp import session_visibility
-    monkeypatch.setattr(session_visibility, "alpha_gate_enabled", lambda: False)
-    # flag off → aucune lecture DB, aucun refus
-    meta._enforce_alpha_gate("sub-123", "fr_ccn_search")
 
 
 # --- 5bis. #186 : un tool DÉSACTIVÉ par la visibilité reste dispatchable ----

@@ -8,7 +8,7 @@ import pytest
 
 from oto_mcp.capabilities import admin_console as ac
 from oto_mcp.capabilities import (
-    access_admin, orgs_admin, orgs_members, orgs_reads, users_admin)
+    orgs_admin, orgs_members, orgs_reads, users_admin)
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
 CTX = ResolvedCtx(sub="admin", org_id=1)
@@ -70,18 +70,6 @@ def test_user_routes(monkeypatch):
     assert ac._user(CTX, ac.UserAdminInput(op="list"))["called"] == "list"
     assert ac._user(CTX, ac.UserAdminInput(op="get", target="a@b.co"))["called"] == "get"
     assert ac._user(CTX, ac.UserAdminInput(op="set_role", target="x", role="admin"))["called"] == "set_role"
-
-
-# ── oto_admin_access ─────────────────────────────────────────────────────────
-def test_access_routes(monkeypatch):
-    monkeypatch.setattr(access_admin, "_list_waitlist", _tag("waitlist"))
-    monkeypatch.setattr(access_admin, "_grant_access", _tag("grant"))
-    monkeypatch.setattr(access_admin, "_reject_access", _tag("reject"))
-    assert ac._access(CTX, ac.AccessAdminInput(op="waitlist"))["called"] == "waitlist"
-    assert ac._access(CTX, ac.AccessAdminInput(op="grant", sub="s"))["called"] == "grant"
-    with pytest.raises(AuthzDenied) as e:
-        ac._access(CTX, ac.AccessAdminInput(op="grant"))
-    assert e.value.code == "missing_sub"
 
 
 # ── oto_admin_key_grant ──────────────────────────────────────────────────────

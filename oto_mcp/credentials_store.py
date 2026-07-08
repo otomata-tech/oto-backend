@@ -44,6 +44,10 @@ ORG = "org"
 # pour la famille oauth (google + mounts memento/atlassian/folkmcp, flux dédiés) en
 # attendant leurs barreaux (B3/B4).
 MEMBER = "member"
+# Scope PLATEFORME (ADR 0044 §F) : la clé plateforme partagée EST une instance du coffre
+# (fin de la table legacy `platform_keys`). `entity_id` = le label de la clé (N par
+# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config (api_version, dsn).
+PLATFORM = "platform"
 
 
 def member_id(org_id: int, sub: str) -> str:

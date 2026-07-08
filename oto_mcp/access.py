@@ -662,10 +662,11 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
 def _sub_matches_scopes(sub: str, scopes) -> bool:
     """Vrai si `sub` appartient à l'un des scopes listés — vocabulaire COMMUN aux
     allowlists `share_down` et aux prêts `share_side` (ADR 0044), aligné sur
-    `org_connector_access` : `user:<sub>` | `group:<gid>` (appartenance réelle) |
-    `org` (tout le monde). Fail-closed par entrée (une ref malformée est ignorée,
-    jamais d'exception qui casserait la résolution)."""
-    from . import group_store
+    `org_connector_access` : `user:<sub>` | `group:<gid>` | `org:<id>` (appartenance
+    réelle) | `org` (tout le monde du sous-arbre). `org:<id>` (ADR 0044 §F) porte
+    l'ancien grant org-level d'une clé plateforme. Fail-closed par entrée (une ref
+    malformée est ignorée, jamais d'exception qui casserait la résolution)."""
+    from . import group_store, roles
     for s in scopes or []:
         if s == "org":
             return True
@@ -675,6 +676,12 @@ def _sub_matches_scopes(sub: str, scopes) -> bool:
         if kind == "group":
             try:
                 if group_store.is_group_member(sub, int(ident)):
+                    return True
+            except (ValueError, TypeError):
+                continue
+        if kind == "org":
+            try:
+                if roles.is_org_member(sub, int(ident)):
                     return True
             except (ValueError, TypeError):
                 continue

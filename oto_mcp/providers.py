@@ -1046,6 +1046,13 @@ def require_credential(entity_type: str, name: str) -> None:
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
+    elif entity_type == "platform":
+        # ADR 0044 §F : la clé plateforme est une instance du coffre, gatée sur le mode
+        # d'auth 'platform' du connecteur (le même gate que le palier plateforme de la
+        # résolution : un provider byo-only ne porte jamais de clé plateforme).
+        c = REGISTRY.get(name)
+        if not (c and "platform" in c.auth_modes):
+            raise ValueError(f"{name!r} n'accepte pas de credential plateforme (auth_modes 'platform' requis)")
     else:
         if not is_byo_user(name):
             raise ValueError(

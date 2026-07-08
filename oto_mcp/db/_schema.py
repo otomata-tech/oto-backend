@@ -794,8 +794,8 @@ CREATE TABLE IF NOT EXISTS org_group_instruction_revisions (
 -- plaintext) ; déchiffrement JIT dans resolve_api_key. meta JSONB pour les
 -- satellites (user_agent, scopes…).
 CREATE TABLE IF NOT EXISTS connector_credentials (
-    entity_type TEXT NOT NULL,            -- 'user' | 'org' | 'group'
-    entity_id   TEXT NOT NULL,            -- users.sub | orgs.id::text | org_groups.id::text
+    entity_type TEXT NOT NULL,            -- 'member' | 'user' | 'org' | 'group' | 'platform' (ADR 0044 §F)
+    entity_id   TEXT NOT NULL,            -- member:'org:sub' | user:sub | org/group:id::text | platform:label
     connector   TEXT NOT NULL,            -- nom de connecteur (registre)
     account     TEXT NOT NULL DEFAULT '', -- discriminant multi-compte ('' = mono ; ex. email Google)
     secret_enc  TEXT,                     -- enveloppe AES-256-GCM (obligatoire)
@@ -807,6 +807,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     version     INTEGER NOT NULL DEFAULT 1,   -- verrou optimiste (B1) vs last-writer-wins
     share_down  JSONB NOT NULL DEFAULT '[]',  -- ALLOWLIST deny-by-default : [] = ouvert au sous-arbre ; ['team:5',…] = restreint aux scopes listés
     share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
+    share_mode  TEXT NOT NULL DEFAULT 'open', -- ADR 0044 §F : polarité du vide de share_down. 'open' = vide→sous-arbre (BYO) ; 'closed' = vide→personne (plateforme)
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);

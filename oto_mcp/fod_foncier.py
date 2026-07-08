@@ -43,6 +43,18 @@ class _Pvgis:
         return _get("/api/foncier/pvgis/productible", {"lat": lat, "lon": lon, "kwc": kwc})
 
 
+class _Ign:
+    def isochrone(self, lat: float, lon: float, *, minutes=None, metres=None,
+                  profile: str = "pedestrian", direction: str = "departure") -> dict[str, Any]:
+        params: dict[str, Any] = {"lat": lat, "lon": lon, "profile": profile,
+                                  "direction": direction}
+        if minutes is not None:
+            params["minutes"] = minutes
+        if metres is not None:
+            params["metres"] = metres
+        return _get("/api/foncier/ign/isochrone", params)
+
+
 class _Sitadel:
     def search(self, kind: str, communes: Optional[str] = None, dept: Optional[str] = None,
                an_min: Optional[int] = None, an_max: Optional[int] = None,
@@ -101,6 +113,7 @@ ban = _Ban()
 cadastre = _Cadastre()
 bdtopo = _BdTopo()
 pvgis = _Pvgis()
+ign = _Ign()
 sitadel = _Sitadel()
 enedis = _Enedis()
 dvf = _Dvf()

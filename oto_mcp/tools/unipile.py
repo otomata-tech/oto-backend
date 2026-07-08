@@ -212,7 +212,7 @@ def unipile_client(provider: str = "LINKEDIN"):
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=f"Connecte ton compte {provider.title()} sur "
-                    "https://dashboard.oto.ninja/console/connections "
+                    "https://manage.oto.cx/console/connections "
                     "avant d'utiliser ces outils."))
     # DSN apparié à la clé BYO gagnante (chaque clé Unipile est liée à son
     # sous-domaine), tiré de la config du credential résolu. Clé plateforme →

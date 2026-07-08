@@ -106,7 +106,7 @@ def test_projection_org_admin_sees_all_departments(monkeypatch):
     monkeypatch.setattr(roles_mod, "is_org_admin", lambda sub, org: sub == "admin")
     monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [])
     monkeypatch.setattr(ci.db, "list_org_grants", lambda org: [])
-    monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [])
+    monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [])
     monkeypatch.setattr(ci.db, "org_restricted_connectors", lambda org: set())
     monkeypatch.setattr(ci.access, "is_super_admin", lambda sub: False)
 

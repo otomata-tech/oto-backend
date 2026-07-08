@@ -206,6 +206,11 @@ def init_db() -> None:
         # jusqu'à l'enforcement (deny-check cascade + garde pin).
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_down JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_side JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # ADR 0044 §F : polarité de partage explicite. 'open' = share_down vide → ouvert au
+        # sous-arbre (comportement historique, défaut inchangé pour tous les scopes BYO) ;
+        # 'closed' = share_down vide → personne (allow-list stricte, requise par le scope
+        # plateforme dont le « sous-arbre » = tout le monde). Additif, no-op tant que 'open'.
+        conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_mode TEXT NOT NULL DEFAULT 'open'")
         # GIN sur share_side pour la projection « partagé avec moi » (jsonb_exists_any /
         # `?|` = scan indexé au lieu d'un seq scan de tout le coffre).
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conn_cred_share_side ON connector_credentials USING gin (share_side)")

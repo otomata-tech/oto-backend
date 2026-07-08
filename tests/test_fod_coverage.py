@@ -61,9 +61,14 @@ FOD_NOT_EXPOSED = {
                   "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
                   "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
                   "pas le client lib direct",
+    "osm": "client OpenStreetMap/Overpass (france_opendata récent) PAS encore exposé "
+           "côté oto — aucun tool `foncier_*`/`fr_*` ne le câble à ce jour ; décision de "
+           "câblage à prendre (retirer cette entrée quand un tool l'expose). Ajouté pour "
+           "débloquer le pipeline après un bump france_opendata (2026-07-08).",
     "ban": _FONCIER_VIA_FOD,
     "apicarto": _FONCIER_VIA_FOD,
     "bdtopo": _FONCIER_VIA_FOD,
+    "ign": _FONCIER_VIA_FOD,  # IGN Géoplateforme (isochrone) — foncier_isochrone → /api/foncier/ign/isochrone
     "pvgis": _FONCIER_VIA_FOD,
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,

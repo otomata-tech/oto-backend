@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                   Response, StreamingResponse)
 
-from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, db, group_store, memento_oauth, org_store, tool_registry
+from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, group_store, memento_oauth, org_store, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from . import auth_hooks
@@ -1087,16 +1087,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         c = connectors.connector_for_provider(provider)
         if c is None or not connectors.is_byo_user(provider):
             return _json_error(request, 404, "unknown_provider")
-        from . import credentials_store
+        from . import credentials_store, roles
         org_id = access.current_org(sub)
         if org_id is None:
             return _json_error(request, 400, "no_org_context")
+        # Scope de la déconnexion (miroir de la pose) : member (défaut), org, group.
+        # Effacer un secret partagé exige d'être admin du scope.
+        scope = (request.query_params.get("scope") or "member").strip()
+        if scope == "org":
+            if not roles.is_org_admin(sub, org_id):
+                return _json_error(request, 403, "forbidden")
+            credentials_store.clear_credential(credentials_store.ORG, str(org_id), provider)
+            return _json(request, {"ok": True, "provider": provider, "scope": scope})
+        if scope == "group":
+            group_id = access.current_group(sub)
+            if group_id is None:
+                return _json_error(request, 400, "no_group_context")
+            if not roles.can_admin_group(sub, group_id):
+                return _json_error(request, 403, "forbidden")
+            credentials_store.clear_credential("group", str(group_id), provider)
+            return _json(request, {"ok": True, "provider": provider, "scope": scope})
         # Multi-compte : `?account=` cible un compte précis ('' = mono legacy).
         account = (request.query_params.get("account") or "").strip()
         credentials_store.clear_credential(
             credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
             account=account)
-        return _json(request, {"ok": True, "provider": provider, "account": account})
+        return _json(request, {"ok": True, "provider": provider, "account": account, "scope": "member"})
 
     # --- Connexion par session navigateur (brevo, crunchbase) — la VOIE PRODUIT :
     # le bouton « Connecter » du dashboard ouvre une Live View Browserbase en iframe,
@@ -1133,11 +1149,35 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         session_id = (body or {}).get("session_id")
         if not context_id or not session_id:
             return _json_error(request, 400, "missing_params")
+        # Niveau de configuration de l'instance (ADR 0038/0044) : member (défaut, ma
+        # session perso), org (partagée à toute l'org), group (partagée à l'équipe).
+        # Les niveaux partagés exigent d'être admin du scope + connecteur org-partageable.
+        scope = ((body or {}).get("scope") or "member").strip()
+        if scope not in ("member", "org", "group"):
+            return _json_error(request, 400, "invalid_scope")
+        from . import roles
+        group_id = None
+        if scope in ("org", "group"):
+            org_id = access.current_org(sub)
+            if org_id is None:
+                return _json_error(request, 400, "no_org_context")
+            if not connectors.is_org_shareable(name):
+                return _json_error(request, 400, "not_org_shareable")
+            if scope == "org":
+                if not roles.is_org_admin(sub, org_id):
+                    return _json_error(request, 403, "forbidden")
+            else:
+                group_id = access.current_group(sub)
+                if group_id is None:
+                    return _json_error(request, 400, "no_group_context")
+                if not roles.can_admin_group(sub, group_id):
+                    return _json_error(request, 403, "forbidden")
         try:
-            connected = await browser_session.finalize(sub, name, context_id, session_id)
+            connected = await browser_session.finalize(
+                sub, name, context_id, session_id, scope=scope, group_id=group_id)
         except browser_session.SessionError as e:
             return _json_error(request, 502, "session_verify_failed", str(e))
-        return _json(request, {"connected": connected})
+        return _json(request, {"connected": connected, "scope": scope})
 
     async def api_key_get(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1170,18 +1210,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
-        # On ne renvoie JAMAIS l'api_key brute — masque + 4 derniers chars.
-        keys = []
-        for k in db.list_platform_keys():
-            ak = k.get("api_key") or ""
-            keys.append({
-                "id": k["id"],
-                "provider": k["provider"],
-                "label": k["label"],
-                "api_key_tail": ak[-4:] if len(ak) >= 4 else "",
-                "created_at": k["created_at"],
-            })
-        return _json(request, {"platform_keys": keys})
+        # ADR 0044 §F : instances scope PLATFORM du coffre unifié (plus platform_keys). Le
+        # secret n'est JAMAIS déchiffré/renvoyé — identité (provider, label, set_at) seulement.
+        return _json(request, {"platform_keys": credentials_store.list_platform_credentials()})
 
     async def admin_platform_key_create(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1202,11 +1233,19 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return _json_error(request, 400, "invalid_provider")
         if not label or not api_key:
             return _json_error(request, 400, "missing_fields")
+        # ADR 0044 §F : la clé plateforme est une instance scope PLATFORM du coffre unifié
+        # (fin de platform_keys). La version v1/v2 voyage dans `meta` (débloque le v2
+        # plateforme sans env global) — même forme que la clé member/org unipile.
+        meta = {}
+        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
+            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
         try:
-            key_id = db.create_platform_key(provider, label, api_key)
-        except ValueError:
-            return _json_error(request, 409, "duplicate_label")
-        return _json(request, {"id": key_id, "provider": provider, "label": label})
+            credentials_store.set_credential(credentials_store.PLATFORM, label, provider,
+                                             api_key, set_by=sub, meta=meta)
+        except ValueError as e:
+            return _json_error(request, 400, "invalid_platform_provider", str(e))
+        return _json(request, {"provider": provider, "label": label,
+                               "api_version": meta.get("api_version", "v1")})
 
     async def admin_platform_key_delete(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1214,14 +1253,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             return err
         if not access.is_super_admin(sub):
             return _json_error(request, 403, "forbidden")
-        try:
-            key_id = int(request.path_params["key_id"])
-        except (ValueError, KeyError):
-            return _json_error(request, 400, "invalid_id")
-        if not db.get_platform_key(key_id):
+        provider = (request.path_params.get("provider") or "").strip()
+        label = (request.path_params.get("label") or "").strip()
+        # ADR 0044 §F : supprime l'instance plateforme (ses grants vivent sur sa ligne
+        # share_down/meta → partent avec elle, pas d'orphelin).
+        if not credentials_store.clear_credential(credentials_store.PLATFORM, label, provider):
             return _json_error(request, 404, "unknown_key")
-        db.delete_platform_key(key_id)
-        return _json(request, {"ok": True, "id": key_id})
+        return _json(request, {"ok": True, "provider": provider, "label": label})
 
     async def admin_tokens_list(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1681,8 +1719,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/platform-keys", admin_platform_keys_list, methods=["GET"]),
         Route("/api/admin/platform-keys", admin_platform_key_create, methods=["POST"]),
         Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),
-        Route("/api/admin/platform-keys/{key_id}", admin_platform_key_delete, methods=["DELETE"]),
-        Route("/api/admin/platform-keys/{key_id}", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/platform-keys/{provider}/{label}", admin_platform_key_delete, methods=["DELETE"]),
+        Route("/api/admin/platform-keys/{provider}/{label}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_list, methods=["GET"]),
         Route("/api/admin/users/{sub}/tokens", admin_tokens_create, methods=["POST"]),
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),

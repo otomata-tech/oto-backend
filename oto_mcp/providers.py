@@ -54,7 +54,10 @@ class Connector:
     availability: str                  # "self_serve" | "platform_granted"
     auth_modes: frozenset              # ⊆ {"byo_user","byo_org","platform"}
     keyed: bool                        # résolu via resolve_api_key (→ KEY_PROVIDERS)
-    personal_session: bool             # per-user only, jamais org
+    personal_session: bool             # catégorie « session navigateur » (Live View
+                                       # Browserbase) côté UI — ORTHOGONAL au partage :
+                                       # le niveau (user/équipe/org) suit `auth_modes`
+                                       # (`byo_org` ⇒ session partageable, ex. pennylaneged)
     secret_kind: str                   # api_key|refresh_token|oauth|cookie|none
     default_quota: int                 # 0 = illimité
     in_default_bundle: bool            # axe A : accordé d'office (bundle par défaut)
@@ -265,6 +268,7 @@ _CATEGORY_BY_CONNECTOR = {
     "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
+    "brevo": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
     "serpapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
@@ -273,6 +277,7 @@ _CATEGORY_BY_CONNECTOR = {
     "recruitee": "Recrutement", "teamtailor": "Recrutement",
     # automatisation no-code (workflows)
     "n8n": "Automatisation", "make": "Automatisation", "zapier": "Automatisation",
+    "brevoauto": "Automatisation",
 }
 
 # Éditeur (publisher) par connecteur — CURÉ. Défaut "Otomata" (connecteurs maison /
@@ -365,6 +370,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "fullenrich": "fullenrich.com", "lemlist": "lemlist.com", "folk": "folk.app",
     "unipile": "unipile.com", "pennylane": "pennylane.com", "pennylaneged": "pennylane.com", "gocardless": "gocardless.com",
     "silae": "silae.fr", "attio": "attio.com", "crunchbase": "crunchbase.com",
+    "brevo": "brevo.com", "brevoauto": "brevo.com",
     "slack": "slack.com", "whatsapp": "whatsapp.com", "google": "google.com",
     "memento": "mento.cc", "planity": "planity.com", "topograph": "topograph.co",
     "atlassian": "atlassian.com",
@@ -415,8 +421,13 @@ _REGISTRY_LIST = [
     # `fr` (APIs live SIRENE/Recherche Entreprises/INPI/BODACC/BOAMP) + `fr_stock`
     # (stock SIRENE parquet, ex-connecteur `sirene_stock`, fusionné 2026-06-22 :
     # même domaine entreprises FR, namespace fr_stock_* → namespace_of="fr").
+    # default_quota=0 (illimité) : données entreprise FR ouvertes à tous, sans
+    # crédits. La plupart des fr_* sont open-data/parquet (aucune clé) ; seuls
+    # fr_siret/fr_avis_sirene/fr_headquarters touchent la clé INSEE partagée —
+    # non métrée. Le seul plafond restant = le rate limit INSEE (30 req/min) sur
+    # la clé partagée, remonté tel quel (429) sans throttle oto.
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=200, platform_key_open=True,
+       secret_kind="api_key", default_quota=0, platform_key_open=True,
        in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr", "fr_stock")),
     # droit : jurisprudence (juris_*) + codes consolidés (loi_*) + conventions
@@ -631,15 +642,17 @@ _REGISTRY_LIST = [
        secret_kind="cookie", in_default_bundle=False, label="Crunchbase",
        help="fiches société/personne (session Browserbase)", publisher="Crunchbase",
        href="https://www.crunchbase.com/"),
-    # brevo : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
-    # (`workflow-apis.brevo.com/v1`). À distinguer de l'API publique v3
-    # (transactionnel/contacts/campagnes, clé api-key) — pas exposée ici.
+    # brevoauto : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
+    # (`workflow-apis.brevo.com/v1`). Connecteur SÉPARÉ du `brevo` keyé (API publique
+    # v3, plus bas) car le credential diffère — session navigateur ici, clé API là ;
+    # même éditeur, deux surfaces disjointes (la clé v3 n'ouvre pas l'authoring
+    # d'automations). Même partition que pennylane / pennylaneged.
     # Exécution = **Browserbase** (Chrome distant hébergé) : l'user se logue 1× via
-    # Live View (`brevo_connect_start`), sa session persiste dans un Context = le
+    # Live View (`brevoauto_connect_start`), sa session persiste dans un Context = le
     # credential per-user (coffre). Pas de browser sur la box, pas d'export de cookie.
     # personal_session (session physiologiquement per-user). Expérimental (API non
     # documentée) : hors bundle + masqué, self-activable.
-    _c("brevo", ["brevo"], auth_modes={"byo_user"}, personal_session=True,
+    _c("brevoauto", ["brevoauto"], auth_modes={"byo_user"}, personal_session=True,
        secret_kind="cookie", in_default_bundle=False, default_hidden=True,
        label="Brevo (automation)", help="automations marketing (session Browserbase)",
        publisher="Brevo", href="https://app.brevo.com/automation/automations"),
@@ -648,12 +661,17 @@ _REGISTRY_LIST = [
     # connecteur keyé `pennylane` (API publique) : credential = session navigateur,
     # pas une clé API → l'API publique ne porte aucun scope DMS. Exécution =
     # **Browserbase** : l'user se logue 1× via Live View (`pennylaneged_connect_start`),
-    # sa session persiste dans un Context = le credential per-user (coffre). Upload =
+    # sa session persiste dans un Context = le credential (coffre). Upload =
     # control plane ici (URL S3 présignée) + PUT des octets EN LOCAL (RGPD, issue #31).
     # Expérimental (API interne RE) : hors bundle + masqué, self-activable.
-    _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, default_hidden=True,
-       label="Pennylane GED", help="bac documentaire Pennylane (session Browserbase)",
+    # **byo_org** : la session peut être configurée au niveau USER, ÉQUIPE ou ORG
+    # (cas cabinet : une seule connexion Pennylane partagée par la team pour pousser
+    # dans les GED clients — cascade user > groupe > org). `personal_session=True`
+    # reste = catégorie « session navigateur » côté UI (orthogonal au partage).
+    _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user", "byo_org"},
+       personal_session=True, secret_kind="cookie", in_default_bundle=False,
+       default_hidden=True, label="Pennylane GED",
+       help="bac documentaire Pennylane (session Browserbase)",
        publisher="Pennylane", href="https://app.pennylane.com"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
     # gmail_* / tasks_*. PAS "data" : datastore est un SPINE plateforme (ADR 0016),
@@ -689,6 +707,8 @@ _REGISTRY_LIST = [
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
     _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
+    _c("osm", ["osm"], secret_kind="none", in_default_bundle=False,
+       label="OpenStreetMap", help="points d'intérêt OSM par tag sur une zone (parkings, équipements, commerces) — recensement exhaustif via Overpass (open data)"),
     _c("frenchtech", ["frenchtech"], secret_kind="none", in_default_bundle=False,
        label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
     # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).
@@ -704,6 +724,16 @@ _REGISTRY_LIST = [
        secret_kind="api_key", in_default_bundle=False, label="HubSpot",
        help="CRM (contacts, companies, deals, tickets, notes)",
        href="https://app.hubspot.com"),
+    # brevo : API PUBLIQUE v3 (`api.brevo.com/v3`, header `api-key`). Une clé porte
+    # tout le compte (pas de scope) → byo. Ne PAS confondre avec `brevoauto`
+    # (automations, session navigateur) : surfaces disjointes, credentials distincts.
+    _c("brevo", ["brevo"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key", in_default_bundle=False, label="Brevo",
+       help="emailing & CRM (contacts, listes, transactionnel, campagnes, deals)",
+       publisher="Brevo", href="https://app.brevo.com",
+       # 2 modules, 1 namespace : le CRM natif est un sous-domaine distinct, sorti
+       # pour tenir la taille de fichier. `brevo_crm_*` → namespace_of = `brevo`.
+       modules=("brevo", "brevo_crm")),
     _c("apollo", ["apollo"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=20, platform_key_open=True,
        in_default_bundle=False, label="Apollo.io",
@@ -1031,6 +1061,13 @@ def require_credential(entity_type: str, name: str) -> None:
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
+    elif entity_type == "platform":
+        # ADR 0044 §F : la clé plateforme est une instance du coffre, gatée sur le mode
+        # d'auth 'platform' du connecteur (le même gate que le palier plateforme de la
+        # résolution : un provider byo-only ne porte jamais de clé plateforme).
+        c = REGISTRY.get(name)
+        if not (c and "platform" in c.auth_modes):
+            raise ValueError(f"{name!r} n'accepte pas de credential plateforme (auth_modes 'platform' requis)")
     else:
         if not is_byo_user(name):
             raise ValueError(

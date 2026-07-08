@@ -629,6 +629,19 @@ _REGISTRY_LIST = [
        help="droit français & européen — législation + jurisprudence "
             "(Légifrance/Judilibre/CE/CC/CEDH/CJUE), MCP fédéré, sources ouvertes",
        href="https://justicelibre.org"),
+    # aiark : MCP fédéré (kind=mount) avec clé API dans l'URL (`?token={token}`).
+    # Premier connecteur keyed+mount : le token est injecté via `_build_transport`
+    # dans mount.py (URL-substitution plutôt que Bearer header). Catalogue chargé
+    # au boot dès qu'une clé est présente en DB ; refresh à chaud via
+    # `oto_admin_refresh_mount("aiark")`. platform_key_open=True : quota gratuit
+    # par user/jour si une platform key est configurée (comme kaspr/fullenrich).
+    _c("aiark", ["aiark"], kind="mount",
+       mount_url="https://api.ai-ark.com/v1/mcp?token={token}",
+       auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
+       secret_kind="api_key", default_quota=5, platform_key_open=True,
+       in_default_bundle=False, label="AI Ark",
+       help="people & company search via LinkedIn",
+       href="https://ai-ark.com"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur
@@ -1166,3 +1179,4 @@ def public_catalog() -> list[dict]:
         }
         for c in _REGISTRY_LIST
     ]
+

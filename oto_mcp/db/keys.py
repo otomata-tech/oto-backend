@@ -183,6 +183,61 @@ def member_allowed_connectors(sub: str, org_id: int) -> set:
             (org_id, sub, sub, org_id)).fetchall()}
 
 
+# ── ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) ─────────────
+def set_group_connector_access(group_id: int, connector: str, principal_sub: str,
+                               granted_by: Optional[str] = None) -> None:
+    """Autorise un MEMBRE (`sub`) sur un connecteur dans l'équipe → le rend RESTREINT
+    dans l'équipe (deny-by-default) s'il ne l'était pas. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO group_connector_access (group_id, connector, principal_sub, granted_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (group_id, connector, principal_sub) DO NOTHING
+            """,
+            (group_id, connector, principal_sub, granted_by),
+        )
+
+
+def clear_group_connector_access(group_id: int, connector: str, principal_sub: str) -> None:
+    """Retire un membre. Dernière ligne partie ⟹ connecteur ré-ouvert à toute l'équipe."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM group_connector_access WHERE group_id = %s AND connector = %s "
+            "AND principal_sub = %s",
+            (group_id, connector, principal_sub),
+        )
+
+
+def list_group_connector_access(group_id: int, connector: Optional[str] = None) -> list[dict]:
+    """ACL connecteur de l'équipe : [{connector, principal_sub, granted_by, granted_at}]."""
+    sql = ("SELECT connector, principal_sub, granted_by, granted_at "
+           "FROM group_connector_access WHERE group_id = %s")
+    args: tuple = (group_id,)
+    if connector is not None:
+        sql += " AND connector = %s"
+        args = (group_id, connector)
+    sql += " ORDER BY connector, principal_sub"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def group_restricted_connectors(group_id: int) -> set:
+    """Connecteurs RESTREINTS dans l'équipe (≥1 ligne d'ACL) — deny-by-default pour eux."""
+    with _connect() as conn:
+        return {r["connector"] for r in conn.execute(
+            "SELECT DISTINCT connector FROM group_connector_access WHERE group_id = %s",
+            (group_id,)).fetchall()}
+
+
+def group_member_allowed_connectors(sub: str, group_id: int) -> set:
+    """Connecteurs (restreints dans l'équipe) auxquels `sub` a droit (ligne à son nom)."""
+    with _connect() as conn:
+        return {r["connector"] for r in conn.execute(
+            "SELECT connector FROM group_connector_access WHERE group_id = %s AND principal_sub = %s",
+            (group_id, sub)).fetchall()}
+
+
 def list_users_with_grants() -> list[dict]:
     """Pour /api/admin/users — chaque user + ses grants (sans api_key)."""
     users = list_users()

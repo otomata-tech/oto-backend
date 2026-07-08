@@ -632,18 +632,15 @@ _REGISTRY_LIST = [
        help="droit français & européen — législation + jurisprudence "
             "(Légifrance/Judilibre/CE/CC/CEDH/CJUE), MCP fédéré, sources ouvertes",
        href="https://justicelibre.org"),
-    # aiark : MCP fédéré (kind=mount) avec clé API dans l'URL (`?token={token}`).
-    # Premier connecteur keyed+mount : le token est injecté via `_build_transport`
-    # dans mount.py (URL-substitution plutôt que Bearer header). Catalogue chargé
-    # au boot dès qu'une clé est présente en DB ; refresh à chaud via
-    # `oto_admin_refresh_mount("aiark")`.
-    # byo-only (pas de platform key) : les mounts `kind="mount"` n'ont pas de
-    # handler de tool pour appeler `record_platform_usage` après chaque appel ;
-    # le quota plateforme ne serait donc pas enforced. Ajouter platform_key_open
-    # nécessitera un mécanisme de comptage côté ProxyTool (décision à part entière).
-    _c("aiark", ["aiark"], kind="mount",
-       mount_url="https://api.ai-ark.com/v1/mcp?token={token}",
-       auth_modes={"byo_user", "byo_org"}, keyed=True,
+    # aiark : connecteur classique (kind="tools", ex-mount fédéré #152 → requalifié
+    # #160). Client REST synchrone dans oto-core (`oto.tools.aiark`), tools curés
+    # dans `tools/aiark.py` (contrat LLM), cascade de clé standard
+    # (`resolve_api_key`) + `record_platform_usage` → mode plateforme possible.
+    # v1 = endpoints synchrones (company/people search, single-person export+email,
+    # reverse-lookup, mobile phone) ; les exports en lot d'AI Ark sont async
+    # (webhook) → hors périmètre.
+    _c("aiark", ["aiark"],
+       auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key",
        in_default_bundle=False, label="AI Ark",
        help="people & company search via LinkedIn",

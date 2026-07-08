@@ -257,6 +257,50 @@ def _parse_view_user(request: Request) -> str | None:
     return raw.strip() or None
 
 
+# Ops de LECTURE des endpoints op-aware (POST `{op:…}`). Le dashboard LIT en POST
+# (`{op:'list'}`, `{op:'get'}`, …) — une garde par méthode HTTP bloquerait donc les
+# lectures. En consultation LECTURE SEULE (view-as user / inspection org opérateur),
+# seules ces ops passent sur une requête non-GET ; toute autre op — ou un POST/PUT/
+# DELETE sans op (= action/upload) — est une écriture, rejetée. Deny-by-default :
+# élargir cette liste si une vraie lecture op-aware manque.
+_READ_OPS = frozenset({
+    "list", "get", "search", "revisions", "list_changes", "inventory",
+    "list_templates", "preview", "describe", "status",
+})
+
+
+async def _peek_op(receive):
+    """Bufferise le corps de la requête, en extrait le champ `op` (JSON), et rend un
+    `receive` qui REJOUE le corps intact au handler aval. Les routes `/api/*` sont de
+    petites requêtes JSON → bufferiser est sûr (`/mcp` streaming est exclu en amont).
+    Retourne `(op | None, receive_rejoué)`."""
+    messages: list = []
+    while True:
+        msg = await receive()
+        messages.append(msg)
+        if msg.get("type") != "http.request" or not msg.get("more_body", False):
+            break
+    body = b"".join(m.get("body", b"") for m in messages if m.get("type") == "http.request")
+    op = None
+    if body:
+        try:
+            data = json.loads(body)
+            op = data.get("op") if isinstance(data, dict) else None
+        except Exception:
+            op = None
+    i = 0
+
+    async def replay():
+        nonlocal i
+        if i < len(messages):
+            m = messages[i]
+            i += 1
+            return m
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return op, replay
+
+
 class ViewAsMiddleware:
     """Middleware ASGI **brut** (pas BaseHTTPMiddleware, qui bufferiserait le
     streaming `/mcp`) : n'intervient QUE sur `/api/*` portant `X-Oto-Org`, sinon
@@ -285,13 +329,14 @@ class ViewAsMiddleware:
         if err:  # non authentifié → la route rendra son 401 ; pas de view-as
             return await self.app(scope, receive, send)
         from . import access, db, group_store, org_store, roles, session_org
+        read_only = False  # consultation en LECTURE SEULE (view-as user OU inspection org opérateur)
         if view_user:  # « voir en tant que » : opérateur plateforme + cible existe + LECTURE SEULE
             if not await run_in_threadpool(access.is_platform_operator, sub):
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
-            if request.method != "GET":  # consultation = lecture seule, jamais d'écriture en son nom
-                return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
             if view_user == sub or await run_in_threadpool(db.get_user, view_user) is None:
                 view_user = None  # cible = soi ou inconnue → pas de consultation (no-op)
+            else:
+                read_only = True
         if view_group:  # équipe consultée → valide la lecture + DÉRIVE son org parente (invariant)
             g = await run_in_threadpool(group_store.get_group, view_group)
             if g is None or not await run_in_threadpool(roles.can_read_group, sub, view_group):
@@ -304,13 +349,20 @@ class ViewAsMiddleware:
             if real_role is not None:
                 pass  # membre réel — comportement inchangé (writes gatés par le rôle)
             elif await run_in_threadpool(access.is_platform_operator, sub):
-                # Opérateur plateforme NON-membre : inspection d'une org tierce en
-                # LECTURE SEULE (même patron que le view-as user) — jamais d'écriture,
-                # même pour un super_admin (mode inspection ≠ escalade d'admin).
-                if request.method != "GET":
-                    return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
+                # Opérateur plateforme NON-membre : inspection d'une org tierce en LECTURE
+                # SEULE (même patron que le view-as user), même pour un super_admin (mode
+                # inspection ≠ escalade d'admin).
+                read_only = True
             else:
                 return await _json_error(request, 403, "forbidden")(scope, receive, send)
+        # Garde LECTURE SEULE : le dashboard LIT en POST op-aware (`{op:'list'|'get'}`),
+        # donc on ne peut pas gater par méthode. Sur une requête non-GET, on lit l'`op`
+        # du corps : seules les OPS DE LECTURE passent ; toute mutation (op d'écriture,
+        # ou write sans op) → 403. Le corps est rejoué intact au handler.
+        if read_only and request.method != "GET":
+            op, receive = await _peek_op(receive)
+            if op not in _READ_OPS:
+                return await _json_error(request, 403, "view_as_read_only")(scope, receive, send)
         usr_token = session_org.set_view_user(view_user) if view_user is not None else None
         org_token = session_org.set_view_org(view_org) if view_org is not None else None
         grp_token = session_org.set_view_group(view_group) if view_group is not None else None

@@ -636,12 +636,15 @@ _REGISTRY_LIST = [
     # Premier connecteur keyed+mount : le token est injecté via `_build_transport`
     # dans mount.py (URL-substitution plutôt que Bearer header). Catalogue chargé
     # au boot dès qu'une clé est présente en DB ; refresh à chaud via
-    # `oto_admin_refresh_mount("aiark")`. platform_key_open=True : quota gratuit
-    # par user/jour si une platform key est configurée (comme kaspr/fullenrich).
+    # `oto_admin_refresh_mount("aiark")`.
+    # byo-only (pas de platform key) : les mounts `kind="mount"` n'ont pas de
+    # handler de tool pour appeler `record_platform_usage` après chaque appel ;
+    # le quota plateforme ne serait donc pas enforced. Ajouter platform_key_open
+    # nécessitera un mécanisme de comptage côté ProxyTool (décision à part entière).
     _c("aiark", ["aiark"], kind="mount",
        mount_url="https://api.ai-ark.com/v1/mcp?token={token}",
-       auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=5, platform_key_open=True,
+       auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key",
        in_default_bundle=False, label="AI Ark",
        help="people & company search via LinkedIn",
        href="https://ai-ark.com"),

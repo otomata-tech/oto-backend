@@ -136,13 +136,12 @@ CAPABILITIES += [
     Capability(key="usage.tool_quality", handler=_tool_quality, Input=DaysInput, authz=PLATFORM_ADMIN,
                rest=RestBinding("GET", "/api/admin/usage/tool-quality")),
     Capability(key="usage.signals", handler=_signals, Input=SignalsInput, authz=PLATFORM_ADMIN,
-               mcp="oto_admin_list_signals",
                description="List usage signals (feedback/gap) reported about oto, most recent "
                            "first. Filters: signal ('tool_feedback'|'gap'), target, status "
                            "('open'|'resolved'). Platform-admin only.",
                rest=RestBinding("GET", "/api/admin/usage/signals")),
     Capability(key="usage.resolve_signal", handler=_resolve_signal, Input=ResolveSignalInput,
-               authz=PLATFORM_ADMIN, mcp="oto_admin_resolve_signal",
+               authz=PLATFORM_ADMIN,
                description="Mark a usage signal (feedback/gap) as resolved. signal_id = the "
                            "signal's id (from oto_admin list / usage.signals). note = what was "
                            "done about it. resolved=false re-opens it.",

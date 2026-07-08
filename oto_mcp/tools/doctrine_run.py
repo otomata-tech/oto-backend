@@ -4,7 +4,7 @@
 chaque appel d'outil jusqu'à `run_finish` est **attribué à ce run** par le sink
 calllog (corrélation côté serveur, l'agent ne thread rien). Un run avec `doctrine`
 = l'exécution d'une doctrine nommée (répétable) ; sans `doctrine` = un run one-shot
-(ad-hoc), même trace. Le chargement d'une doctrine reste `oto_get_doctrine`
+(ad-hoc), même trace. Le chargement d'une doctrine reste `oto_procedure(op='get')`
 (inchangé). Spine plateforme : chargé explicitement dans `register_all`, hors gate
 d'activation.
 """
@@ -68,7 +68,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             label: short human description of what this run does (always logged).
             doctrine: optional — the doctrine/skill slug being executed (as passed to
-                oto_get_doctrine). Omit for a one-shot/ad-hoc run.
+                oto_procedure op=get). Omit for a one-shot/ad-hoc run.
         """
         run_id = dr.new_run_id()
         await dr.push_run(ctx, run_id, label, doctrine)

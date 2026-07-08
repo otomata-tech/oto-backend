@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from .. import credentials_store, db
 from . import access_admin, orgs_admin, orgs_members, orgs_reads, users_admin
-from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, PLATFORM_ADMIN, SUPER_ADMIN
+from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, ORG_MEMBER_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
 
@@ -141,6 +141,62 @@ def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
     return users_admin._revoke_org_key(ctx, users_admin.OrgRevokeKeyInput(org_id=org_id, provider=provider))
 
 
+# ── oto_admin_doctrine : get / list / set / delete (org ciblée, ADR 0047 B2) ─
+class DoctrineAdminInput(BaseModel):
+    op: Literal["get", "list", "set", "delete"]
+    org_id: int
+    slug: Optional[str] = None        # get (None = base+index) / set (None = base) / delete
+    scope: Optional[str] = None       # get/list : org (défaut) | group
+    version: Optional[int] = None     # get
+    with_history: bool = False        # get
+    query: Optional[str] = None       # list
+    body_md: Optional[str] = None     # set
+    title: Optional[str] = None       # set
+    description: Optional[str] = None  # set
+    from_version: Optional[int] = None  # set (revert)
+    slots: Optional[list] = None      # set (ADR 0035)
+
+
+async def _doctrine(ctx: ResolvedCtx, inp: DoctrineAdminInput) -> dict:
+    from . import orgs_instructions as oi
+    if inp.op == "get":
+        return await oi._get_doctrine(ctx, oi.AdminDoctrineGetInput(
+            org_id=inp.org_id, slug=inp.slug, scope=inp.scope or "org",
+            version=inp.version, with_history=inp.with_history))
+    if inp.op == "list":
+        return oi._list_doctrines(ctx, oi.AdminDoctrineListInput(
+            org_id=inp.org_id, query=inp.query, scope=inp.scope))
+    if inp.op == "set":
+        return await oi._set_instruction(ctx, oi.AdminInstrSetInput(
+            org_id=inp.org_id, slug=inp.slug, body_md=inp.body_md, title=inp.title,
+            description=inp.description, from_version=inp.from_version, slots=inp.slots))
+    return oi._delete_instruction(ctx, oi.AdminSlugInput(
+        org_id=inp.org_id,
+        slug=_need(inp.slug, "missing_slug", "`slug` requis pour delete.")))
+
+
+# ── oto_admin_signal : list / resolve (boucle d'usage, ADR 0017) ─────────────
+class SignalAdminInput(BaseModel):
+    op: Literal["list", "resolve"]
+    signal: Optional[str] = None      # list : tool_feedback | gap
+    target: Optional[str] = None      # list
+    status: Optional[str] = None      # list : open | resolved | None (tous)
+    limit: int = 200                  # list
+    signal_id: Optional[int] = None   # resolve
+    note: Optional[str] = None        # resolve
+    resolved: bool = True             # resolve : False = ré-ouvrir
+
+
+def _signal(ctx: ResolvedCtx, inp: SignalAdminInput) -> dict:
+    from . import usage
+    if inp.op == "list":
+        return usage._signals(ctx, usage.SignalsInput(
+            signal=inp.signal, target=inp.target, status=inp.status, limit=inp.limit))
+    return usage._resolve_signal(ctx, usage.ResolveSignalInput(
+        signal_id=_need(inp.signal_id, "missing_signal_id", "`signal_id` requis pour resolve."),
+        note=inp.note, resolved=inp.resolved))
+
+
 CAPABILITIES += [
     Capability(
         key="admin.org", handler=_org, Input=OrgAdminInput,
@@ -187,5 +243,25 @@ CAPABILITIES += [
                      "scope=user (`target` email|sub) | org (`org_id`); grant takes optional "
                      "`daily_quota`. To POSE a raw key/secret, use the dashboard."),
         mcp="oto_admin_key_grant",
+    ),
+    Capability(
+        key="admin.doctrine", handler=_doctrine, Input=DoctrineAdminInput,
+        authz=ADMIN_BY_OP({"get": ORG_MEMBER_OF("org_id"), "list": ORG_MEMBER_OF("org_id"),
+                           "set": ORG_ADMIN_OF("org_id"), "delete": ORG_ADMIN_OF("org_id")}),
+        description=("[ADMIN] Another org's doctrine, by `org_id` (cross-org = platform "
+                     "admin). op=get (`slug` = one skill, none = base+index; `scope=group`) "
+                     "/ list (named doctrines incl. base) / set (write: omit slug = base; "
+                     "`from_version` restores; `slots` = required entities ADR 0035) / "
+                     "delete (exact `slug`, drops history)."),
+        mcp="oto_admin_doctrine",
+    ),
+    Capability(
+        key="admin.signal", handler=_signal, Input=SignalAdminInput,
+        authz=PLATFORM_ADMIN,
+        description=("Usage signals reported about oto (feedback/gap; platform admin). "
+                     "op=list (most recent first; filters `signal` tool_feedback|gap, "
+                     "`target`, `status` open|resolved) / resolve (`signal_id`, optional "
+                     "`note` = what was done; resolved=false re-opens)."),
+        mcp="oto_admin_signal",
     ),
 ]

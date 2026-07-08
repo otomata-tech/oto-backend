@@ -40,7 +40,7 @@ _KNOWN_DEFAULT_HIDDEN: set[str] = set()
 # accepter une invitation + méta de visibilité (anti-lockout). Tout le reste est
 # masqué tant que le compte est en waitlist.
 ALPHA_GATE_ALLOWLIST: frozenset[str] = frozenset({
-    "oto_accept_invite", "oto_list_my_tools", "oto_enable_tool",
+    "oto_org", "oto_list_my_tools", "oto_enable_tool",   # oto_org op=accept_invite (ADR 0047)
 })
 
 

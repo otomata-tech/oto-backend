@@ -5,12 +5,12 @@ Surface unique des guides on-demand, à trois scopes : **platform** (fichiers
 l'utilisateur). `op=list` = catalogue visible (platform ∪ org active ∪ user) ;
 `op=read(slug[,scope])` = le corps ; `op=write`/`delete(slug, scope=org|user, body_md…)`
 = éditer un guide d'org (admin d'org) ou perso (self). Distinct des PROCÉDURES
-(`oto_get_doctrine`, avec slots) — un guide est de la PROSE (ADR 0042).
+(`oto_procedure`, avec slots) — un guide est de la PROSE (ADR 0042).
 
 Spine : chargé explicitement dans `register_all`, hors gate, toujours visible
 (`PROTECTED_TOOLS`). L'index des guides visibles (plateforme ∪ org ∪ user) enrichit la
 description **par (sub, org)** au `tools/list` (`DynamicInstructionsMiddleware.on_list_tools`,
-même patron que `oto_get_doctrine`) — pas de bake statique ici (fail-open stdio = sans index).
+même patron que `oto_procedure`) — pas de bake statique ici (fail-open stdio = sans index).
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _bad(msg: str) -> McpError:
 
 def register(mcp: FastMCP) -> None:
     # L'index des guides visibles enrichit la description PER-(sub, org) au tools/list
-    # (middleware `on_list_tools`) — description statique nue ici, comme oto_get_doctrine.
+    # (middleware `on_list_tools`) — description statique nue ici, comme oto_procedure.
     @mcp.tool(description=_BASE_DESC)
     def oto_guide(op: str = "list", slug: str | None = None, scope: str | None = None,
                   body_md: str | None = None, title: str | None = None,

@@ -10,8 +10,10 @@ from oto_mcp.capabilities import registry
 
 def test_referral_and_accept_caps_present():
     mcp = {c.mcp for c in registry.caps_with_mcp()}
-    assert {"oto_referral_link", "oto_invite_to_alpha", "oto_accept_invite",
-            "oto_invite_member"} <= mcp
+    # ADR 0047 B3 : invite/accept vivent dans la console oto_org (op=invite /
+    # op=accept_invite) ; referral/alpha gardent leurs tools (retrait ADR 0013 à part).
+    assert {"oto_referral_link", "oto_invite_to_alpha", "oto_org"} <= mcp
+    assert {"oto_accept_invite", "oto_invite_member"} & mcp == set()
 
 
 def test_rest_routes_preserved():

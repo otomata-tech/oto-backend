@@ -53,6 +53,10 @@ from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,
 # famille (activation/access/connector/instance/identity/account_access) ; les modules
 # ci-dessus gardent leurs faces REST. À importer APRÈS eux.
 from . import connectors_console  # noqa: F401 — connectors.console.{activation,access,connector,instance,identity,account_access}
+# Console procédures (ADR 0047 B2) — oto_procedure (doctrine membre + bibliothèque publique).
+from . import procedure_console  # noqa: F401 — org.procedure.console
+# Console org/équipe (ADR 0047 B3) — oto_org, oto_org_settings, oto_group, oto_scheduled_emails.
+from . import org_console  # noqa: F401 — org.console + org.settings.console + group.console + org.scheduled_emails.console
 # Export du journal d'audit org-scopé (oto-backend#67) — REST-only, org_admin.
 from . import audit_log  # noqa: F401 — org.audit_log.export (GET /api/orgs/{id}/audit-log/export)
 # Gouvernance générique des ressources possédées (ADR 0030) — transfert/partage

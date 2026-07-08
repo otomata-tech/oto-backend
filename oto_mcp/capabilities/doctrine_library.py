@@ -139,16 +139,15 @@ CAPABILITIES += [
         description="Browse/search the PUBLIC doctrine library (a marketplace of skills/"
                     "templates). Each entry has an author (Otomata or a private creator). "
                     "Filter by query / category / author_kind (otomata|org). Returns metadata "
-                    "+ snippet, not the full body — use oto_get_library_doctrine for that.",
-        mcp="oto_list_library", rest=RestBinding("GET", "/api/me/doctrines/library"),
+                    "+ snippet, not the full body — use oto_procedure op=library_get for that.",
+        rest=RestBinding("GET", "/api/me/doctrines/library"),
     ),
     Capability(
         key="library.get", handler=_get, Input=LibraryGetInput, authz=SUB_ONLY,
         description="Read one public-library doctrine in full (markdown body) by its public "
-                    "slug — preview before forking it into your org with oto_fork_doctrine. "
+                    "slug — preview before forking it into your org with oto_procedure op=fork. "
                     "Also serves `unlisted` entries by exact slug (unlisted = shared by link, "
                     "never in the catalog), not a private-org secret.",
-        mcp="oto_get_library_doctrine",
         rest=RestBinding("GET", "/api/me/doctrines/library/{slug}"),
     ),
     Capability(
@@ -156,20 +155,19 @@ CAPABILITIES += [
         description="Publish one of your org's named doctrines (skills) to the PUBLIC library "
                     "so others can find and fork it. Requires org_admin of your active org. "
                     "slug = the org skill to publish ; visibility = public | unlisted.",
-        mcp="oto_publish_doctrine", rest=RestBinding("POST", "/api/me/doctrines/publish"),
+        rest=RestBinding("POST", "/api/me/doctrines/publish"),
     ),
     Capability(
         key="library.fork", handler=_fork, Input=ForkInput, authz=ORG_MEMBER,
         description="Fork (copy) a public-library doctrine into your active org as a new "
                     "versioned skill. Requires org_admin of your active org. slug = the public "
                     "entry ; new_slug optional (defaults to source slug, de-duplicated).",
-        mcp="oto_fork_doctrine", rest=RestBinding("POST", "/api/me/doctrines/fork"),
+        rest=RestBinding("POST", "/api/me/doctrines/fork"),
     ),
     Capability(
         key="library.unpublish", handler=_unpublish, Input=UnpublishInput, authz=SUB_ONLY,
         description="Remove a doctrine you published from the public library (author org_admin "
                     "or platform admin). id = the library entry id.",
-        mcp="oto_unpublish_doctrine",
         rest=RestBinding("DELETE", "/api/me/doctrines/library/{id}"),
     ),
 ]

@@ -128,7 +128,6 @@ CAPABILITIES += [
                      "hosted, resend = BYOK): per-connector senders + quiet hours, the known "
                      "email connectors, connector→transport map, and whether the org's Resend "
                      "key is set."),
-        mcp="oto_get_org_email_settings",
         rest=RestBinding("GET", "/api/orgs/{id}/email-settings", _ID),
     ),
     Capability(
@@ -145,7 +144,6 @@ CAPABILITIES += [
                      "midnight ok): emails composed inside the window are auto-deferred to the "
                      "next `end`. `clear_quiet_hours=true` removes this connector's window. "
                      "Pass any field (merge)."),
-        mcp="oto_set_org_email_settings",
         rest=RestBinding("PUT", "/api/orgs/{id}/email-settings/{connector}", _ID_CONNECTOR),
     ),
 ]

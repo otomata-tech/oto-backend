@@ -184,6 +184,23 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) ->
     return False
 
 
+def option_open(sub: str, connector: str, *, org: "int | None | object" = _UNSET,
+                group: "int | None | object" = _UNSET) -> bool:
+    """SOURCE UNIQUE de « l'option (couche 3) du connecteur est-elle levée pour `sub` ? ».
+    Le statut carte (`connectors_selection.option_ok`) ET le gate « connecter » d'unipile
+    (`status_for.subscribed`) l'appellent → ils ne peuvent plus DIVERGER (le BYO ouvrait
+    l'option ici mais pas là → carte « clé d'org » + « Bloqué » incohérente, corrigé
+    2026-07-07). Règle : pas d'option requise ⟹ ouvert ; sinon **BYO** (clé propre
+    user/groupe/org — l'user gère sa propre instance) OU **has_option** (comp admin /
+    abonnement). `org`/`group` explicites = calcul pour un tiers (fiche admin)."""
+    opt = paid_option_for(connector)
+    if opt is None:
+        return True
+    if credential_mode_for(sub, connector, org=org, group=group) in BYO_MODES:
+        return True
+    return has_option(sub, opt, org=org)
+
+
 def current_group(sub: str | None) -> Optional[int]:
     """Équipe (groupe) EFFECTIVE — mirror de `current_org` pour l'axe groupe
     (ADR 0038). Résout `jeton d'appel ?? consultation ?? maison` en TENANT

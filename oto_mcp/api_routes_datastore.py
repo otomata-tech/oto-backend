@@ -301,6 +301,41 @@ def make_routes(
             return json_error(request, 400, "invalid_filters")
         return json_response(request, page)
 
+    async def ds_aggregate(request: Request) -> JSONResponse:
+        """Agrégat serveur (ADR 0046 b1 — compteurs du cockpit) : COUNT/SUM/AVG/…
+        groupés par un champ JSONB, sans rapatrier les rows. Miroir REST du tool
+        MCP `data_aggregate` (délègue au même `store.aggregate`)."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        qp = request.query_params
+        group_by = qp.get("group_by") or None
+        metrics = None
+        raw_metrics = qp.get("metrics")
+        if raw_metrics:
+            try:
+                metrics = json.loads(raw_metrics)
+            except ValueError:
+                return json_error(request, 400, "invalid_metrics")
+        filter_eq = None
+        raw_filter = qp.get("filter")
+        if raw_filter:
+            try:
+                filter_eq = json.loads(raw_filter)
+            except ValueError:
+                return json_error(request, 400, "invalid_filter")
+            if not isinstance(filter_eq, dict):
+                return json_error(request, 400, "invalid_filter")
+        try:
+            groups = make_store(sub).aggregate(
+                namespace, group_by=group_by, metrics=metrics, filter=filter_eq)
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        except ValueError:
+            return json_error(request, 400, "invalid_aggregate")
+        return json_response(request, {"groups": groups})
+
     async def ds_get_row(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
         if err:
@@ -548,6 +583,8 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/url", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/schema", ds_set_schema, methods=["PUT"]),
         Route("/api/datastore/namespaces/{namespace}/schema", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/aggregate", ds_aggregate, methods=["GET"]),
+        Route("/api/datastore/namespaces/{namespace}/aggregate", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_list_rows, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_append, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/rows", options_handler, methods=["OPTIONS"]),

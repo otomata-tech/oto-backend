@@ -10,9 +10,10 @@ dependencies = [
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
     # on tague oto-core et on bump CE pin par PR. Bump = éditer le tag ici ; rollback
     # = revert ce commit (ramène aussi le bon oto-core). Cf. ADR 0020 (deploy/canari).
+    # v1.20.0 = client Brevo API v3 (BrevoClient) + serper census/reviews_all ;
     # v1.15.0 = cursor limit override unipile_relations (#179) ; 1.14 = status_code
     # UnipileError/ZohoAuthError (les 4xx amont wrappés sont filtrés par sentry_setup).
-    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.17.0",
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.20.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
@@ -46,7 +47,11 @@ dependencies = [
     "otomata-calllog>=0.1.1",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
-    "france-opendata[stock,sante]>=0.27.0",  # stock SIRENE + foncier + urba (zonage GPU/QPV/INSEE Mélodi/EPFIF) + santé — source unique partagée ; >=0.11 parquet SIRENE httpfs (s3://) ; >=0.12 connecteurs urba ; >=0.13 DVF+ Cerema 2014+ ; >=0.14 BOAMP ; >=0.15 DPE ADEME ; >=0.15.1 erreurs Recherche Entreprises en HTTPError (statut porté → 4xx droppé Sentry) ; >=0.16 InpiClient sur parquet Signaux Faibles (ODS bloqué datacenter, #4) ; >=0.18 ACCO accords d'entreprise (parser+crawler) ; >=0.20 filtre tranche_effectifs sur sirene_stock.search ; >=0.24 EgaproClient (index égalité F-H par SIREN) ; >=0.25 FrenchTechClient (annuaire écosystème French Tech + events/financements + French Tech Central) ; >=0.26 SitadelClient.query/search (permis DiDo /rows live, foncier_permis_search) ; >=0.27 InseeIrisClient (recensement IRIS/quartier, parquet bundlé) + fix Mélodi ARM/millésimes (deploy upgrade pip auto vu la contrainte)
+    # france-opendata : plus de dép DIRECTE (ADR 0028 extraction totale — foncier/fr/
+    # urba/sante/frenchtech + SIRENE/DILA/BOAMP/ACCO passent tous par le service FOD).
+    # Reste tirée TRANSITIVEMENT par oto-core (>=0.7.0, base sans extras) pour le seul
+    # SireneClient keyé INSEE, qui reste in-process (FOD ne porte aucun credential).
+    # Le backend n'exécute plus AUCUN DuckDB in-process → extras [stock,sante] retirés.
     "cryptography>=42",
     "boto3>=1.34",  # upload avatars/logos → Scaleway Object Storage (S3-compatible)
     "python-multipart>=0.0.9",  # parsing multipart des uploads (Starlette request.form())

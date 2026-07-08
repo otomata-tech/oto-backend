@@ -176,6 +176,28 @@ DSN par credential, sélecteur d'identité, **comptes partagés autorisés** (#5
 revalidés à chaque appel, jamais de repli silencieux).
 **Détail : `docs/unipile.md`**.
 
+> **Version API v1/v2 = propriété de la CLÉ (« selon la BYO »), pas un connecteur ni un
+> flag global (2026-07-07).** v2 est un compte/clé Unipile **distincts** (beta) : une clé
+> v1 ne marche pas en v2. La version est portée par `meta.api_version` du credential
+> (`{api_version:"v2", dsn:"api.unipile.com"}`) → `resolve_credential.config` → `unipile_client()`
+> + `unipile_connect.hosted_auth_url` routent v1/v2. **UN seul connecteur `unipile`** (surface
+> identique, `client_v2.UnipileClientV2` iso `UnipileClient`) ; absence de meta = **v1 défaut**.
+> Pose de la version : chemin **member** (`POST /api/settings/api-keys/unipile`, param `api_version`)
+> ET **org** (`org.secret.set`, param `api_version`) → dashboard : sélecteur sur le form clé d'org
+> + section « ma clé perso » du widget hosted (clé member prime sur org, cascade `resolve_credential`).
+> Deltas API v2 (base fixe `api.unipile.com/v2`, account_id-in-path, enveloppe, inbox model,
+> posts keyés URN…) dans les **docstrings de `client_v2.py`** (oto-core ≥v1.19.0). Migration = `#63`.
+
+> **Couche 3 « option » = source unique `access.option_open(sub, connector, org, group)` (2026-07-07).**
+> « L'option payante est-elle levée ? » était recopiée à 3 endroits (`connectors_selection.option_ok`
+> + `unipile.status_for.subscribed` self & admin) → divergence (le **BYO ouvre l'option** — l'user
+> gère sa propre instance — était oublié dans un seul) → carte incohérente « clé d'org (vert) +
+> Bloqué (rouge) ». Règle : pas d'option ⟹ ouvert ; sinon **BYO** OU `has_option` (comp/abonnement).
+> Le **front est backend-driven** (rend `option_ok`/`subscribed`, 0 RBAC recodée client) → il devient
+> durable car il lit un flag cohérent. **Ne jamais recoder une règle d'accès côté front** : ajouter
+> un flag backend. Le gate DUR (qui peut utiliser) reste `require_connector_access` (ADR 0025, couvre
+> le BYO — « pas de clé perso qui contourne ») ; il gate aussi la **pose** (`api_key_save` → 403).
+
 ## Monitoring des appels MCP
 
 `ToolCallLogger` (lib otomata-calllog) journalise chaque appel dans `tool_calls`

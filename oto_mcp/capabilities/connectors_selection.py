@@ -21,7 +21,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import access, connector_activation, connector_selection, db, org_store, providers, tool_registry
+from .. import access, connector_activation, connector_selection, org_store, providers, tool_registry
 from ._authz import ORG_ADMIN_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -55,16 +55,15 @@ def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
     is_admin = access.is_platform_operator(ctx.sub)
     # RBAC connecteur interne à l'org (ADR 0025) : un connecteur restreint dans l'org
     # n'apparaît dans la marketplace du membre que s'il y est autorisé (département/user).
-    # Miroir de l'enforcement call-time → la page « voir en tant que » reflète l'effet réel.
-    restricted = db.org_restricted_connectors(ctx.org_id) if ctx.org_id else set()
-    allowed = (db.member_allowed_connectors(ctx.sub, ctx.org_id)
-               if (ctx.org_id and restricted) else set())
+    # Miroir de l'enforcement call-time (seam unique `rbac_denied_connectors`, escalade
+    # super_admin + org_admin incluse) → « voir en tant que » reflète l'effet réel.
+    denied = access.rbac_denied_connectors(ctx.sub, ctx.org_id)
     out = []
     for c in providers.public_catalog():
         if c["name"] not in exposed:
             continue
-        # RBAC org : restreint + non autorisé + pas admin plateforme → masqué.
-        if c["name"] in restricted and not is_admin and c["name"] not in allowed:
+        # RBAC org : refusé au membre + pas admin plateforme → masqué.
+        if c["name"] in denied and not is_admin:
             continue
         out.append(c)
     return out

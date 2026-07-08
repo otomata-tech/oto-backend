@@ -117,18 +117,12 @@ def _platform_instance(provider: str, label: str, via: str, extra: dict) -> dict
 
 def _hidden_connectors(sub: str, org: Optional[int]) -> set:
     """Filtre RBAC ADR 0025 — MIROIR de `access.require_connector_access` en mode
-    filtre : masqué si connector ∈ restricted − allowed. Même doctrine fail-open
-    loggé que le pré-gate (gate de confort sur un listing ; la résolution réelle
-    re-gate en dur à l'appel). Sans org active : pas de filtre."""
-    if org is None:
-        return set()
+    filtre, via le seam unique `rbac_denied_connectors` (escalade super_admin +
+    org_admin incluse). Même doctrine fail-open loggé que le pré-gate (gate de
+    confort sur un listing ; la résolution réelle re-gate en dur à l'appel).
+    Sans org active : pas de filtre."""
     try:
-        if access.is_super_admin(sub):
-            return set()
-        restricted = db.org_restricted_connectors(org)
-        if not restricted:
-            return set()
-        return set(restricted) - set(db.member_allowed_connectors(sub, org))
+        return access.rbac_denied_connectors(sub, org)
     except Exception:
         logger.warning("instances: filtre RBAC indisponible (fail-open)",
                        exc_info=True)

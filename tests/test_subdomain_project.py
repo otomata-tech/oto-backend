@@ -136,8 +136,7 @@ def test_anon_resolver_platform_open_key(monkeypatch):
 def test_anon_resolver_fail_closed(monkeypatch):
     from mcp.shared.exceptions import McpError
     monkeypatch.setattr(org_store, "get_org_secret", lambda o, p: None)
-    monkeypatch.setattr(db, "get_active_org_grant", lambda o, p: None)
-    monkeypatch.setattr(db, "get_platform_api_key", lambda p: None)
+    monkeypatch.setattr(access.credentials_store, "list_platform_instances", lambda p: [])
     # want=byo → jamais de palier plateforme
     with pytest.raises(McpError):
         access._resolve_credential_anon("attio", "byo", 99)

@@ -595,18 +595,19 @@ def backfill_platform_scope() -> dict:
                               "WHERE platform_key_id=%s", (kid,)).fetchall()
             og = conn.execute("SELECT org_id, daily_quota FROM org_grants "
                               "WHERE platform_key_id=%s", (kid,)).fetchall()
-        share_down, rate_by = [], {}
-        for g in ug:
-            sc = f"user:{g['sub']}"
-            share_down.append(sc)
-            if g["daily_quota"] is not None:
-                rate_by[sc] = g["daily_quota"]
-        for g in og:
-            sc = f"org:{g['org_id']}"
-            share_down.append(sc)
-            if g["daily_quota"] is not None:
-                rate_by[sc] = g["daily_quota"]
+        # free-tier (`platform_key_open`) ⟹ accès OUVERT à tous (share_down vide) : sur ces
+        # clés le grant legacy ne portait QUE le quota (override de `daily_quota`), jamais une
+        # restriction d'accès. Non free-tier ⟹ le grant EST l'autorisation → `closed` + le
+        # grantee dans `share_down`. Le quota va dans `rate_limit_by` dans les DEUX cas.
         share_mode = "open" if getattr(con, "platform_key_open", False) else "closed"
+        share_down, rate_by = [], {}
+        for typ, ident, dq in ([("user", g["sub"], g["daily_quota"]) for g in ug]
+                               + [("org", g["org_id"], g["daily_quota"]) for g in og]):
+            sc = f"{typ}:{ident}"
+            if share_mode == "closed":
+                share_down.append(sc)
+            if dq is not None:
+                rate_by[sc] = dq
         meta = {}
         if getattr(con, "default_quota", None):
             meta["rate_limit"] = con.default_quota

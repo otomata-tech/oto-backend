@@ -16,7 +16,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .. import db, org_store
-from ._authz import ORG_ADMIN_OF
+from ._authz import ORG_ADMIN_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -69,6 +69,10 @@ class RemoveMemberInput(BaseModel):
     target: str                       # email ou sub (route {sub} → target)
 
 
+class LeaveOrgInput(BaseModel):
+    org_id: int
+
+
 def _add_member(ctx: ResolvedCtx, inp: AddMemberInput) -> dict:
     _require_org_exists(inp.org_id)
     role = _check_role(inp.role)
@@ -100,6 +104,26 @@ def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
     return {"ok": True, "org_id": inp.org_id, "sub": target_sub, "removed": True}
 
 
+def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
+    """Auto-retrait : l'appelant quitte une org dont il est membre (SUB_ONLY). Distinct
+    de `org.member.remove` (org_admin retire un TIERS). L'org active bascule côté store
+    (`remove_org_member` promeut la plus ancienne restante ; l'org perso est le repli)."""
+    _require_org_exists(inp.org_id)
+    # On ne quitte pas son espace perso (c'est le repli d'identité, jamais supprimable).
+    if org_store.is_personal_org(inp.org_id):
+        raise AuthzDenied(409, "personal_org", "On ne peut pas quitter son espace personnel.")
+    role = org_store.get_org_role(inp.org_id, ctx.sub)
+    if role is None:
+        raise AuthzDenied(404, "not_a_member", "Tu n'es pas membre de cette org.")
+    # Anti-lockout : le dernier org_admin doit nommer un successeur avant de partir.
+    if role == "org_admin" and _count_org_admins(inp.org_id) <= 1:
+        raise AuthzDenied(409, "last_org_admin",
+                          "Tu es le dernier admin — nomme un autre admin avant de quitter l'org.")
+    if not org_store.remove_org_member(inp.org_id, ctx.sub):
+        raise AuthzDenied(404, "not_a_member", "Tu n'es pas membre de cette org.")
+    return {"ok": True, "org_id": inp.org_id, "left": True}
+
+
 CAPABILITIES += [
     Capability(
         key="org.member.add", handler=_add_member, Input=AddMemberInput,
@@ -123,5 +147,12 @@ CAPABILITIES += [
         # MCP fusionné dans oto_admin_org_member(op=remove). REST conservé (dashboard).
         rest=(RestBinding("DELETE", "/api/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"}),
               RestBinding("DELETE", "/api/admin/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"})),
+    ),
+    Capability(
+        key="me.leave_org", handler=_leave_org, Input=LeaveOrgInput,
+        authz=SUB_ONLY,
+        description="Leave an org you belong to (self-removal). Refused for your personal org or if you are its last admin.",
+        # Self-service dashboard (REST-only) : quitter depuis « paramètres » de l'org.
+        rest=RestBinding("DELETE", "/api/me/orgs/{id}/membership", {"id": "org_id"}),
     ),
 ]

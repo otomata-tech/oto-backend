@@ -148,6 +148,14 @@ JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
 (`orgs.personal_of`), défauts de création = org active.
 **Détail (datastore pilote, oto_resource, migration, abolition du perso) : `docs/ownership.md`**.
 
+> **Partage unifié audience × rôle (ADR 0048).** Le grant porte un **rôle**
+> `resource_grants.role ∈ {viewer, editor, manager}` (`permission` read/write reste la
+> projection CONTENU dérivée → SQL du plan contenu inchangé). `manager` (gérant) rend la
+> **gouvernance grantable** : `can_govern = owner ∪ grant gérant ∪ escalade roles.py` ; le
+> **transfert** reste `can_transfer = owner ∪ escalade` (jamais un gérant). Surface unique
+> `oto_resource op=share` : axe **audience** (person/team/org→grant ; public/secret→publication
+> projet ; private→dépublier) × **rôle**. Rétro-compat `permission` en entrée.
+
 ## Projet — couche d'organisation (ADR 0030/0032)
 
 Conteneur de travail **possédé** : brief + liens typés (`project_links` : tableau/

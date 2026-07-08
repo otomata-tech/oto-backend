@@ -26,6 +26,11 @@ from .registry import CAPABILITIES
 
 log = logging.getLogger(__name__)
 
+# ADR 0048 — projection RÔLE ↔ permission (plan contenu) + audiences de publication.
+_PERMISSION_OF_ROLE = {"viewer": "read", "editor": "write", "manager": "write"}
+_ROLE_FROM_PERMISSION = {"read": "viewer", "write": "editor"}
+_PUBLICATION_AUDIENCE = {"public": "anonymous", "secret": "secret"}  # projets uniquement
+
 
 class ResourceInput(BaseModel):
     op: Literal["list", "get", "transfer", "share", "unshare"]
@@ -36,7 +41,18 @@ class ResourceInput(BaseModel):
     email: Optional[str] = None             # share / unshare (principal user)
     org_id: Optional[int] = None            # share / unshare (principal ORG — livraison client, #52)
     group_id: Optional[int] = None          # share / unshare (principal ÉQUIPE — groupe d'une org dont tu es membre)
-    permission: Literal["read", "write"] = "write"  # share
+    # ADR 0048 — « Partager » unifié : deux axes orthogonaux.
+    # AUDIENCE (spectrum) : où va la ressource. `person`/`team`/`org` → grant ;
+    # `public`/`secret` → publication (projets) ; `private` → dépublier. None = grant
+    # legacy (le principal vient d'email/org_id/group_id ci-dessus).
+    audience: Optional[Literal["private", "person", "team", "org",
+                               "public", "secret"]] = None
+    # RÔLE du grant (viewer=lecteur, editor=éditeur, manager=gérant/gouvernance grantable).
+    role: Optional[Literal["viewer", "editor", "manager"]] = None
+    permission: Literal["read", "write"] = "write"  # share — rétro-compat (mappé en rôle)
+    # Publication (audience public/secret/org sur un PROJET) : préciser les outils exposés.
+    mcp_slug: Optional[str] = None          # préfixe de sous-domaine (facultatif en secret)
+    mcp_tools: Optional[list[str]] = None   # allowlist figée (vide = réutilise la liste publiée)
     cascade: bool = False                   # share/transfer d'un PROJET : embarquer ses entités liées (#52)
 
 
@@ -189,7 +205,10 @@ def _grants_view(resource_type: str, resource_id: str) -> list[dict]:
                                               g.get("principal_id") or "")
     return [
         {"principal_type": g.get("principal_type"), "principal_id": g.get("principal_id"),
-         "email": g.get("email"), "label": _label(g), "permission": g.get("permission"),
+         "email": g.get("email"), "label": _label(g),
+         # ADR 0048 : `role` (viewer/editor/manager) = surface produit ; `permission`
+         # (read/write) conservé pour rétro-compat des consommateurs existants.
+         "role": g.get("role"), "permission": g.get("permission"),
          "granted_at": g.get("granted_at")}
         for g in ownership.list_grants(resource_type, resource_id)
     ]
@@ -233,7 +252,7 @@ def _share_principal(sub: str, inp: ResourceInput, *, strict: bool = True) -> tu
 
 def _cascade_project(sub: str, project_id: int, op: str, *,
                      principal: Optional[tuple[str, str]] = None,
-                     permission: str = "read",
+                     role: str = "viewer",
                      new_owner: Optional[tuple[str, str]] = None) -> list[dict]:
     """Livraison d'un projet COMPLET (#52) : répercute le geste (share/transfer) sur
     les entités liées (`project_links`). Par entité gouvernée par l'acteur :
@@ -260,9 +279,10 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
                     entry["reason"] = "not_governed"
                 elif op == "share":
                     ownership.grant("datastore_namespace", ref, principal[0], principal[1],
-                                    permission, granted_by=sub)
+                                    role=role, granted_by=sub)
                     entry["status"] = "shared"
-                    entry["permission"] = permission
+                    entry["role"] = role
+                    entry["permission"] = _PERMISSION_OF_ROLE.get(role, "write")
                 else:
                     ownership.transfer("datastore_namespace", ref, new_owner[0], new_owner[1])
                     entry["status"] = "transferred"
@@ -271,11 +291,12 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
                     entry["status"] = "skipped"
                     entry["reason"] = "not_governed"
                 elif op == "share":
-                    # READ toujours : le partagé consomme la procédure, il n'édite pas
+                    # LECTEUR toujours : le partagé consomme la procédure, il n'édite pas
                     # le master (modèle licence — oto garde la main et pousse les màj).
                     ownership.grant("doctrine", ref, principal[0], principal[1],
-                                    "read", granted_by=sub)
+                                    role="viewer", granted_by=sub)
                     entry["status"] = "shared"
+                    entry["role"] = "viewer"
                     entry["permission"] = "read"
                 elif new_owner[0] == "org":
                     copy = org_store.copy_instruction_to_org(int(ref), int(new_owner[1]),
@@ -298,6 +319,34 @@ def _cascade_project(sub: str, project_id: int, op: str, *,
             entry["reason"] = str(e)
         report.append(entry)
     return report
+
+
+def _publish_audience(ctx: ResolvedCtx, inp: ResourceInput, rid: str,
+                      access_mode: str) -> dict:
+    """Audience public/secret → PUBLICATION MCP (ADR 0048 B3). Réservé aux projets
+    (seule ressource dotée d'une mécanique de publication). Rôle forcé lecteur (le
+    lien/annuaire se consomme, ne s'édite pas). L'autz est déjà gatée (`can_govern`)."""
+    if inp.resource_type != "project":
+        raise AuthzDenied(400, "publication_unsupported",
+                          "Le partage public/secret n'existe que pour les projets.")
+    row = db.get_project_by_id(int(rid))
+    if not row:
+        raise AuthzDenied(404, "not_found", "projet introuvable.")
+    from . import projects as P
+    tools = inp.mcp_tools or list(row.get("mcp_tools") or [])
+    return P.publish_project_mcp(ctx.sub, row, access_mode=access_mode,
+                                 mcp_slug=inp.mcp_slug, mcp_tools=tools)
+
+
+def _unpublish_audience(ctx: ResolvedCtx, inp: ResourceInput, rid: str) -> dict:
+    """Audience `private` → referme la diffusion par lien/annuaire (dépublie le projet)."""
+    if inp.resource_type != "project":
+        raise AuthzDenied(400, "publication_unsupported",
+                          "La publication n'existe que pour les projets.")
+    if not db.get_project_by_id(int(rid)):
+        raise AuthzDenied(404, "not_found", "projet introuvable.")
+    from . import projects as P
+    return P.unpublish_project_mcp(ctx.sub, int(rid))
 
 
 def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
@@ -332,6 +381,12 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "transfer":
+        # Le TRANSFERT de propriété exclut le simple gérant (ADR 0048 §3) : owner ∪
+        # escalade `roles.py` seulement. Le gate capacité (`RESOURCE_GOVERN`) laisse
+        # passer un gérant (il gouverne) → on re-garde ici la structure.
+        if not ownership.can_transfer(ctx.sub, inp.resource_type, rid):
+            raise AuthzDenied(403, "forbidden",
+                              "Le transfert de propriété est réservé au propriétaire / admin.")
         # Cible : une de SES orgs (owner_type='org') OU un utilisateur (par email).
         # Transférer VERS une org exige d'en être membre (on n'envoie pas une ressource
         # dans une org où on n'est pas — comme on ne crée un namespace d'org que membre).
@@ -363,22 +418,30 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "share":
+        # ADR 0048 — « Partager » unifié : l'AUDIENCE route vers le bon mécanisme.
+        #   public/secret → publication MCP (projets) ; private → dépublication ;
+        #   person/team/org (ou legacy sans audience) → grant au principal, avec RÔLE.
+        if inp.audience in _PUBLICATION_AUDIENCE:
+            return _publish_audience(ctx, inp, rid, _PUBLICATION_AUDIENCE[inp.audience])
+        if inp.audience == "private":
+            return _unpublish_audience(ctx, inp, rid)
+        # Rôle effectif : `role` prime ; à défaut rétro-compat depuis `permission`.
+        role = inp.role or _ROLE_FROM_PERMISSION.get(inp.permission, "editor")
+        perm = _PERMISSION_OF_ROLE.get(role, "write")
         ptype, pid, plabel = _share_principal(ctx.sub, inp)
-        ownership.grant(inp.resource_type, rid, ptype, pid,
-                        inp.permission, granted_by=ctx.sub)
+        ownership.grant(inp.resource_type, rid, ptype, pid, role=role, granted_by=ctx.sub)
         out = {"ok": True, "resource_id": rid, "shared_with": plabel,
-               "principal_type": ptype, "permission": inp.permission}
+               "principal_type": ptype, "role": role, "permission": perm}
         if inp.cascade and inp.resource_type == "project":
             out["cascade"] = _cascade_project(ctx.sub, int(rid), "share",
-                                              principal=(ptype, pid),
-                                              permission=inp.permission)
+                                              principal=(ptype, pid), role=role)
             db.log_project_activity(int(rid), ctx.sub, "project.deliver",
                                     f"share → {plabel}")
         # Notifier le bénéficiaire (best-effort). UNE fois, au niveau capability —
         # jamais dans `ownership.grant` (un share en cascade y déclencherait N mails).
         if ptype == "user" and plabel:
             out["notified"] = _notify_grant(ctx.sub, inp.resource_type, rid, plabel,
-                                            event="share", permission=inp.permission)
+                                            event="share", permission=perm)
         return out
 
     # unshare
@@ -406,12 +469,18 @@ CAPABILITIES += [
         description=(
             "Govern an OWNED resource (ADR 0030) without reading its content. "
             "op=list: resources you govern (platform admins see all); op=get: owner + "
-            "shares + metadata; op=transfer: hand ownership to a user (`new_owner_email`) "
-            "OR to one of YOUR orgs (`new_owner_org`, you must be a member); the previous "
-            "owner keeps write access; op=share/unshare: grant/revoke access to a user "
-            "(`email`), to a TEAM (`group_id` — a group of an org you belong to; its "
-            "members get access) OR to a whole org (`org_id` — client delivery, no "
-            "membership required) with `permission` read|write. resource_type ∈ {datastore_namespace, "
+            "shares + metadata (each grant carries a `role`); op=transfer: hand ownership to a "
+            "user (`new_owner_email`) OR to one of YOUR orgs (`new_owner_org`, you must be a "
+            "member); the previous owner keeps editor access (transfer is owner/admin only, "
+            "never a grantee). op=share/unshare — ONE unified « Share », two axes (ADR 0048): "
+            "AUDIENCE (`audience`) = where it goes: `person` (`email`) / `team` (`group_id`, a "
+            "group of an org you belong to) / `org` (`org_id`, a whole org, client delivery) → a "
+            "grant; `public`/`secret` → PUBLISH the project (public = listed, secret = "
+            "unguessable link) with `mcp_tools` (defaults to the already-published set); "
+            "`private` → unpublish. ROLE (`role`) = what they can do: `viewer` (read), `editor` "
+            "(write), `manager` (GOVERNANCE — re-share / delete / publish, grantable, but NOT "
+            "ownership transfer); public/secret force viewer. Legacy `permission` read|write is "
+            "still accepted (mapped to viewer/editor). resource_type ∈ {datastore_namespace, "
             "project, doctrine}. DELIVER A FULL PROJECT (#52): share/transfer a project "
             "with cascade=true to carry its linked entities in one gesture — linked "
             "tableaux get the same share/transfer, linked procedures are share-granted "

@@ -23,7 +23,9 @@ def _wire(monkeypatch, *, owner, grant=None, org_ids=(), group_ids=(),
     # grant unique (ou None) — get_resource_grant matche n'importe quel principal de l'acteur
     def _get_grant(rt, rid, ptype, pid):
         if grant and grant[0] == ptype and grant[1] == pid:
-            return {"permission": grant[2]}
+            # grant = (ptype, pid, permission[, role]) — role optionnel (ADR 0048).
+            role = grant[3] if len(grant) > 3 else {"read": "viewer"}.get(grant[2], "editor")
+            return {"permission": grant[2], "role": role}
         return None
     monkeypatch.setattr(ownership.db, "get_resource_grant", _get_grant)
     # escalade roles
@@ -119,6 +121,42 @@ def test_group_owned_member_reads_admin_governs(monkeypatch):
     assert not ownership.can_govern("m", RT, RID)
     _wire(monkeypatch, owner=("group", "5"), group_admin_of={5})
     assert ownership.can_govern("chef", RT, RID)
+
+
+# --- ADR 0048 : gouvernance GRANTABLE (rôle `gérant`) + tripwire ---------------
+
+def test_manager_grant_governs_but_not_transfers(monkeypatch):
+    """Le gérant (grant role=manager) GOUVERNE (re-partage/supprime) mais ne TRANSFÈRE
+    pas la propriété (ADR 0048 §3) et n'a pas d'escalade structurelle."""
+    _wire(monkeypatch, owner=("user", "alice"), grant=("user", "bob", "write", "manager"))
+    assert ownership.can_govern("bob", RT, RID)          # gouvernance grantée
+    assert not ownership.can_transfer("bob", RT, RID)    # mais pas le transfert
+    # un gérant a aussi le contenu (manager ⇒ permission write)
+    assert ownership.can_access("bob", RT, RID, "write")
+
+
+def test_editor_grant_never_governs(monkeypatch):
+    """TRIPWIRE gouvernance : un éditeur (write, non-manager) ne gouverne JAMAIS."""
+    _wire(monkeypatch, owner=("user", "alice"), grant=("user", "bob", "write", "editor"))
+    assert ownership.can_access("bob", RT, RID, "write")
+    assert not ownership.can_govern("bob", RT, RID)
+    assert not ownership.can_transfer("bob", RT, RID)
+
+
+def test_govern_tripwire_stranger_never_governs(monkeypatch):
+    """TRIPWIRE : ni un inconnu ni un lecteur/éditeur ne gouvernent une ressource
+    qu'ils ne possèdent pas et sur laquelle ils n'ont pas de grant `gérant`."""
+    for g in (None, ("user", "bob", "read", "viewer"), ("user", "bob", "write", "editor")):
+        _wire(monkeypatch, owner=("user", "alice"), grant=g)
+        assert not ownership.can_govern("bob", RT, RID)
+
+
+def test_manager_grant_via_team(monkeypatch):
+    """Gérant accordé à une ÉQUIPE : un membre du groupe gouverne via ce grant."""
+    _wire(monkeypatch, owner=("org", "42"), grant=("group", "5", "write", "manager"),
+          group_ids=(5,))
+    assert ownership.can_govern("m", RT, RID)
+    assert not ownership.can_transfer("m", RT, RID)   # gérant ≠ org_admin
 
 
 def test_transfer_reparents_and_keeps_previous_owner_write(monkeypatch):

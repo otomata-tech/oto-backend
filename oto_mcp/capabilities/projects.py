@@ -197,6 +197,73 @@ def _gen_secret_slug(base: Optional[str]) -> str:
     return f"{prefix}-{token}" if prefix else f"mcp-{token}"
 
 
+def unpublish_project_mcp(sub: str, project_id: int) -> dict:
+    """Retire la publication MCP d'un projet. AUCUN contrôle d'autz (le caller a déjà
+    gaté `can_govern`) — réutilisé par oto_project ET le « Partager » unifié (ADR 0048)."""
+    db.set_project_mcp_publication(project_id, slug=None, access="off", tools=[])
+    db.log_project_activity(project_id, sub, "project.unpublish_mcp", None)
+    return _view(db.get_project_by_id(project_id))
+
+
+def publish_project_mcp(sub: str, row: dict, *, access_mode: str,
+                        mcp_slug: Optional[str], mcp_tools: Optional[list[str]],
+                        expose_datastore: Optional[bool] = None,
+                        expose_datastore_write: Optional[bool] = None) -> dict:
+    """Cœur de la publication MCP d'un projet (ADR 0032). AUCUN contrôle d'autz (le
+    caller a déjà gaté `can_govern`) — partagé par la capacité `oto_project` et par le
+    « Partager » unifié (`oto_resource` audience public/secret/org, ADR 0048 B3). Lève
+    `AuthzDenied` sur entrée invalide (tools vide, slug manquant, slug pris)."""
+    project_id = int(row["id"])
+    tools = [t for t in (mcp_tools or []) if t and t.strip()]
+    _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
+    # Datastore exposé (LECTURE) : DÉFAUT au partage `secret` (#193), refermable ;
+    # réservé à `secret`. L'ÉCRITURE est un opt-in additionnel séparé.
+    expose_ds = ((access_mode == "secret") if expose_datastore is None
+                 else bool(expose_datastore))
+    _require(not (expose_ds and access_mode != "secret"), "datastore_secret_only",
+             "mcp_expose_datastore est réservé à l'accès `secret` (un endpoint "
+             "`anonymous` est public, un endpoint `org` résout déjà data_* via le "
+             "membre authentifié).", 400)
+    expose_ds_write = bool(expose_datastore_write) and expose_ds
+    # Slug effectif : `secret` → non devinable (réutilise l'existant pour ne pas casser
+    # l'URL déjà distribuée) ; anonymous/org → slug saisi requis.
+    if access_mode == "secret":
+        slug = (row.get("mcp_slug") if row.get("mcp_access") == "secret" and row.get("mcp_slug")
+                else _gen_secret_slug(mcp_slug))
+    else:
+        _require(bool(mcp_slug), "missing_slug", "`mcp_slug` requis.", 400)
+        slug = mcp_slug
+    unresolvable = (_mcp_unresolvable_tools(row, tools, expose_ds)
+                    if access_mode in ("anonymous", "secret") else [])
+    try:
+        db.set_project_mcp_publication(project_id, slug=slug, access=access_mode, tools=tools,
+                                       expose_datastore=expose_ds,
+                                       expose_datastore_write=expose_ds_write)
+    except ValueError as e:
+        code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
+        _require(False, code, str(e), 409 if code == "slug_taken" else 400)
+    # Endpoint AUTHED (#44) : enregistre l'API resource Logto (audience JWT). Best-effort.
+    resource_registered = None
+    if access_mode == "org":
+        try:
+            from .. import oauth_facade
+            oauth_facade.ensure_api_resource(
+                f"https://{slug}.mcp.{config.project_domain()}/mcp",
+                name=f"oto MCP — {row.get('name') or slug}")
+            resource_registered = True
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("ensure_api_resource échoué pour %s", slug)
+            resource_registered = False
+    db.log_project_activity(project_id, sub, "project.publish_mcp", f"{access_mode}:{slug}")
+    out = _view(db.get_project_by_id(project_id))
+    if resource_registered is not None:
+        out["logto_resource_registered"] = resource_registered
+    if unresolvable:
+        out["mcp_unresolvable_tools"] = unresolvable
+    return out
+
+
 def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     sub = ctx.sub
 
@@ -536,70 +603,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",
                  "Publier un endpoint MCP est réservé au propriétaire / admin.", 403)
         if inp.op == "unpublish_mcp":
-            db.set_project_mcp_publication(int(inp.project_id), slug=None, access="off", tools=[])
-            db.log_project_activity(int(inp.project_id), sub, "project.unpublish_mcp", None)
-            return _view(db.get_project_by_id(int(inp.project_id)))
-        access_mode = inp.mcp_access or "anonymous"
-        tools = [t for t in (inp.mcp_tools or []) if t and t.strip()]
-        _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
-        # Datastore exposé (LECTURE) : DÉFAUT au partage `secret` (#193 — le vivier lié au
-        # projet doit être lisible d'emblée, sans config manuelle), explicitement
-        # refermable (mcp_expose_datastore=False). Réservé à `secret` (un endpoint
-        # `anonymous` est PUBLIC ; un endpoint `org` résout déjà data_* via le membre
-        # authentifié). L'ÉCRITURE est un opt-in ADDITIONNEL, séparé de la lecture.
-        expose_datastore = ((access_mode == "secret") if inp.mcp_expose_datastore is None
-                            else bool(inp.mcp_expose_datastore))
-        _require(not (expose_datastore and access_mode != "secret"),
-                 "datastore_secret_only",
-                 "mcp_expose_datastore est réservé à l'accès `secret` (un endpoint "
-                 "`anonymous` est public, un endpoint `org` résout déjà data_* via le "
-                 "membre authentifié).", 400)
-        expose_datastore_write = bool(inp.mcp_expose_datastore_write) and expose_datastore
-        # Slug effectif : `secret` → non devinable, généré serveur (préfixe optionnel issu
-        # du slug saisi) ; on RÉUTILISE le slug existant si l'endpoint est déjà secret
-        # (re-publier ne doit pas casser l'URL déjà distribuée). anonymous/org : slug saisi requis.
-        if access_mode == "secret":
-            slug = (row.get("mcp_slug") if row.get("mcp_access") == "secret" and row.get("mcp_slug")
-                    else _gen_secret_slug(inp.mcp_slug))
-        else:
-            _require(bool(inp.mcp_slug), "missing_slug", "`mcp_slug` requis.", 400)
-            slug = inp.mcp_slug
-        # Sonde credential-less NON bloquante (anonymous/secret) : on publie, les tools non
-        # résolubles sont exposés mais échouent proprement à l'appel — la liste remonte en warning.
-        unresolvable = (_mcp_unresolvable_tools(row, tools, expose_datastore)
-                        if access_mode in ("anonymous", "secret") else [])
-        try:
-            db.set_project_mcp_publication(int(inp.project_id), slug=slug,
-                                           access=access_mode, tools=tools,
-                                           expose_datastore=expose_datastore,
-                                           expose_datastore_write=expose_datastore_write)
-        except ValueError as e:
-            code = "slug_taken" if str(e).startswith("slug_taken") else "bad_slug"
-            _require(False, code, str(e), 409 if code == "slug_taken" else 400)
-        # Endpoint AUTHED (#44) : enregistre l'API resource Logto (audience JWT) pour que
-        # Logto émette un JWT signé pour ce sous-domaine (sinon token opaque → invalid_token).
-        # Best-effort : un échec Management API n'empêche pas la publication (loggué).
-        resource_registered = None
-        if access_mode == "org":
-            try:
-                from .. import oauth_facade
-                oauth_facade.ensure_api_resource(
-                    f"https://{slug}.mcp.{config.project_domain()}/mcp",
-                    name=f"oto MCP — {row.get('name') or slug}")
-                resource_registered = True
-            except Exception:  # noqa: BLE001
-                import logging
-                logging.getLogger(__name__).exception(
-                    "ensure_api_resource échoué pour %s", slug)
-                resource_registered = False
-        db.log_project_activity(int(inp.project_id), sub, "project.publish_mcp",
-                                f"{access_mode}:{slug}")
-        out = _view(db.get_project_by_id(int(inp.project_id)))
-        if resource_registered is not None:
-            out["logto_resource_registered"] = resource_registered
-        if unresolvable:
-            out["mcp_unresolvable_tools"] = unresolvable
-        return out
+            return unpublish_project_mcp(sub, int(inp.project_id))
+        return publish_project_mcp(
+            sub, row, access_mode=inp.mcp_access or "anonymous", mcp_slug=inp.mcp_slug,
+            mcp_tools=inp.mcp_tools, expose_datastore=inp.mcp_expose_datastore,
+            expose_datastore_write=inp.mcp_expose_datastore_write)
 
     # archive
     _require(ownership.can_govern(sub, RTYPE, rid), "forbidden",

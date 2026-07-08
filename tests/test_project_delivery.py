@@ -38,9 +38,14 @@ def _wire(monkeypatch, *, governed=("11", "77")):
     monkeypatch.setattr(R.db, "log_project_activity", lambda *a, **k: None)
     monkeypatch.setattr(R.ownership, "can_govern",
                         lambda sub, rt, rid: rid in governed)
-    monkeypatch.setattr(R.ownership, "grant",
-                        lambda rt, rid, pt, pid, perm, granted_by=None:
-                        calls["grants"].append((rt, rid, pt, pid, perm)))
+    # transfert re-gardé (ADR 0048) : le projet #7 est transférable par l'acteur.
+    monkeypatch.setattr(R.ownership, "can_transfer", lambda sub, rt, rid: True)
+    # ADR 0048 : grant est désormais keyé par RÔLE (viewer/editor/manager) ; on
+    # enregistre la permission dérivée pour garder les assertions read/write lisibles.
+    def _grant(rt, rid, pt, pid, perm=None, granted_by=None, role=None):
+        eff = perm or {"viewer": "read", "editor": "write", "manager": "write"}.get(role, "write")
+        calls["grants"].append((rt, rid, pt, pid, eff))
+    monkeypatch.setattr(R.ownership, "grant", _grant)
     monkeypatch.setattr(R.ownership, "transfer",
                         lambda rt, rid, ot, oid: calls["transfers"].append((rt, rid, ot, oid)))
     monkeypatch.setattr(R.ownership, "revoke",
@@ -173,10 +178,11 @@ def test_transfer_cascade_to_user_skips_doctrine(monkeypatch):
 def test_cascade_entity_failure_does_not_break_delivery(monkeypatch):
     calls = _wire(monkeypatch)
 
-    def _boom(rt, rid, pt, pid, perm, granted_by=None):
+    def _boom(rt, rid, pt, pid, perm=None, granted_by=None, role=None):
         if rt == "datastore_namespace":
             raise RuntimeError("pg down")
-        calls["grants"].append((rt, rid, pt, pid, perm))
+        eff = perm or {"viewer": "read", "editor": "write", "manager": "write"}.get(role, "write")
+        calls["grants"].append((rt, rid, pt, pid, eff))
     monkeypatch.setattr(R.ownership, "grant", _boom)
     out = R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
                                             resource_id="7", org_id=35, cascade=True))

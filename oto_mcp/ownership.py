@@ -183,11 +183,13 @@ def _best_grant(sub: str, resource_type: str, resource_id: str) -> Optional[str]
     return best
 
 
-# --- Plan GOUVERNANCE : can_govern (owner ∪ escalade roles.py) ----------------
+# --- Plan GOUVERNANCE : can_transfer (structure) / can_govern (grantable) ------
 
-def can_govern(sub: str, resource_type: str, resource_id: str) -> bool:
-    """Plan GOUVERNANCE : transférer / partager / révoquer / supprimer, SANS lire le
-    contenu. Owner ∪ escalade `roles.py` (platform_admin / org_admin / group_admin)."""
+def can_transfer(sub: str, resource_type: str, resource_id: str) -> bool:
+    """Gouvernance STRUCTURELLE : transfert de propriété — owner ∪ escalade `roles.py`
+    (platform_admin / org_admin / group_admin), **jamais** un simple `gérant` (ADR 0048
+    §3 : le gérant gouverne mais ne peut ni retirer l'owner ni se l'approprier). C'est
+    l'ancienne sémantique de `can_govern`, conservée pour le seul transfert."""
     owner = owner_of(resource_type, resource_id)
     if owner is None:
         return False
@@ -201,14 +203,37 @@ def can_govern(sub: str, resource_type: str, resource_id: str) -> bool:
     return False
 
 
+def _has_manager_grant(sub: str, resource_type: str, resource_id: str) -> bool:
+    """L'acteur détient-il un grant de rôle `manager` (gérant) sur la ressource, via
+    l'un de ses principals (perso / org / groupe) ? — ADR 0048, gouvernance GRANTABLE."""
+    for ptype, pid in accessor_scope(sub).principal_pairs():
+        g = db.get_resource_grant(resource_type, resource_id, ptype, pid)
+        if g is not None and g.get("role") == "manager":
+            return True
+    return False
+
+
+def can_govern(sub: str, resource_type: str, resource_id: str) -> bool:
+    """Plan GOUVERNANCE (ADR 0048) : re-partager / révoquer / supprimer / publier, SANS
+    lire le contenu. **Grantable** = owner ∪ **grant `gérant`** ∪ escalade `roles.py`. Le
+    transfert de propriété, lui, exclut le gérant → `can_transfer`."""
+    if owner_of(resource_type, resource_id) is None:
+        return False
+    return can_transfer(sub, resource_type, resource_id) \
+        or _has_manager_grant(sub, resource_type, resource_id)
+
+
 # --- Mutations ----------------------------------------------------------------
 
 def grant(
     resource_type: str, resource_id: str, principal_type: str, principal_id: str,
-    permission: str = "write", *, granted_by: Optional[str] = None,
+    permission: Optional[str] = None, *, role: Optional[str] = None,
+    granted_by: Optional[str] = None,
 ) -> None:
+    """Accorde un RÔLE (ADR 0048) à un principal. `role` ∈ {viewer, editor, manager}
+    prime ; à défaut `permission` read/write est mappé (rétro-compat)."""
     db.grant_resource(resource_type, resource_id, principal_type, principal_id,
-                      permission, granted_by)
+                      permission=permission, granted_by=granted_by, role=role)
 
 
 def revoke(

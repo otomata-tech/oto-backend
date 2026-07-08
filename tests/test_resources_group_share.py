@@ -22,9 +22,11 @@ def _wire(monkeypatch, *, member_of=(42,), group=GROUP):
     monkeypatch.setattr(R.group_store, "get_group",
                         lambda gid: dict(group) if group and gid == group["id"] else None)
     monkeypatch.setattr(R.roles, "is_org_member", lambda sub, oid: oid in member_of)
-    monkeypatch.setattr(R.ownership, "grant",
-                        lambda rt, rid, pt, pid, perm, granted_by=None:
-                        calls["grants"].append((rt, rid, pt, pid, perm)))
+    # ADR 0048 : grant keyé par RÔLE ; on enregistre la permission dérivée (assertions read/write).
+    def _grant(rt, rid, pt, pid, perm=None, granted_by=None, role=None):
+        eff = perm or {"viewer": "read", "editor": "write", "manager": "write"}.get(role, "write")
+        calls["grants"].append((rt, rid, pt, pid, eff))
+    monkeypatch.setattr(R.ownership, "grant", _grant)
     monkeypatch.setattr(R.ownership, "revoke",
                         lambda rt, rid, pt, pid: calls["revokes"].append((rt, rid, pt, pid)) or True)
     return calls

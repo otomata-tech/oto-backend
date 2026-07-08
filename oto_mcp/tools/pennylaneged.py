@@ -123,7 +123,15 @@ async def _call(app: str, path: str, method: str = "GET",
     if not (200 <= (st or 0) < 300):
         raise _err(f"Pennylane GED a renvoyé {st} : {str(res.get('data'))[:200]}",
                    code=INTERNAL_ERROR)
-    return res.get("data") or {}
+    data = res.get("data")
+    # L'API interne renvoie parfois un TABLEAU nu (ex. `/dms/items/tree`). MCP exige
+    # que le structured_content d'un tool soit un objet (dict) ou None — JAMAIS une
+    # liste (sinon `ValueError: structured_content must be a dict` → tool cassé, vu
+    # en prod sur `pennylaneged_tree`). On enveloppe toute liste sous `items` : forme
+    # uniforme et sérialisable pour l'agent.
+    if isinstance(data, list):
+        return {"items": data}
+    return data or {}
 
 
 async def _verify_session(session_id: str) -> bool:
@@ -200,10 +208,11 @@ def register(mcp: FastMCP) -> None:
         """Liste les sociétés accessibles (côté cabinet) pour résoudre le `company_id`
         cible d'une opération GED.
 
-        Tape la route interne `/crm/flow_companies` (paginée). Renvoie la réponse brute :
-        chaque société porte son `id` (= `company_id` à passer aux autres tools), son
-        `name` et son `client_code`. Le SIREN n'est pas dans cette liste — pour
-        désambiguïser un homonyme, croiser avec `/companies/{id}/context` (`reg_no`).
+        Tape la route interne `/crm/flow_companies` (paginée). Renvoie la réponse brute
+        (un tableau nu est enveloppé sous `items`) : chaque société porte son `id`
+        (= `company_id` à passer aux autres tools), son `name` et son `client_code`. Le
+        SIREN n'est pas dans cette liste — pour désambiguïser un homonyme, croiser avec
+        `/companies/{id}/context` (`reg_no`).
 
         Args:
             page: page de pagination (1-based).
@@ -221,9 +230,9 @@ def register(mcp: FastMCP) -> None:
             company_id: id de la société (cf. `pennylaneged_companies`).
             item_type: type d'items listés — `DmsFolder` (dossiers, défaut) ou `DmsFile`.
 
-        Renvoie la liste brute des items `[{id, name, itemable_type, parent_id,
-        folders_count, …}]` — utilise les `id`/`parent_id` pour cibler un `parent_id`
-        de création ou un item à supprimer.
+        Renvoie `{items: [{id, name, itemable_type, parent_id, folders_count, …}]}`
+        (l'API renvoie un tableau, enveloppé sous `items`) — utilise les `id`/`parent_id`
+        pour cibler un `parent_id` de création ou un item à supprimer.
         """
         cid = int(company_id)
         qs = urlencode({"item_type": item_type})

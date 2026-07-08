@@ -622,3 +622,37 @@ def get_usage_today(sub: str, tool: str) -> int:
             (sub, tool),
         ).fetchone()
         return int(row["count"]) if row else 0
+
+
+def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
+                           limit: int = 50) -> list[dict]:
+    """Parcours de l'agent d'UNE row du datastore (ADR 0046 b4) : les appels
+    `data_*` du calllog qui portent son `_id` (update/lecture ciblée/claim) OU la
+    valeur de sa CLÉ MÉTIER (append/batch — l'id n'existe pas encore au write),
+    joints au run (label/doctrine/outcome, ADR 0017). Fenêtre = la rétention du
+    calllog (prune 30 j) : c'est un journal de travail, pas un audit permanent.
+    Le match clé passe par `args::text ILIKE` (les args sont petits et le scan est
+    borné par `tool LIKE 'data_%'` + rétention) — une valeur de clé courte/ambiguë
+    peut sur-matcher, assumé pour un journal indicatif."""
+    limit = max(1, min(int(limit), 200))
+    clauses = ["l.kind = 'mcp'", "l.tool LIKE 'data\\_%%'"]
+    params: list[Any] = []
+    match = ["l.args->>'id' = %s"]
+    params.append(str(row_id))
+    if key_value is not None and str(key_value).strip():
+        match.append("l.args::text ILIKE %s")
+        params.append(f"%{str(key_value).strip()}%")
+    clauses.append("(" + " OR ".join(match) + ")")
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT l.created_at, l.tool, l.ok, l.error, l.sub, l.email,
+                   l.run_id, r.label AS run_label, r.doctrine, r.outcome
+            FROM tool_calls l LEFT JOIN runs r ON r.run_id = l.run_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY l.created_at DESC LIMIT %s
+            """,
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]

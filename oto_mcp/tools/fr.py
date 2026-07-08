@@ -399,6 +399,28 @@ def register(mcp: FastMCP) -> None:
         """
         return bodacc.search_by_siren(siren, famille=famille, limit=limit)
 
+    @mcp.tool()
+    def fr_events_batch(
+        sirens: list[str],
+        famille: Optional[str] = "collective",
+    ) -> dict:
+        """Check BODACC legal events for MANY companies at once (e.g. screen 700
+        SIRENs for collective proceedings) — batched into a few upstream requests.
+
+        Deterministic: returns a flat `annonces` list (one row per announcement,
+        table-friendly) plus a `synthese` block of aggregate counts
+        (sirens_avec_annonce, par_jugement_nature, …). It does NOT decide whether
+        a company is currently *in* proceedings — that requires reading each
+        annonce's `texte` (the jugement wording: "Ouvre la procédure…" vs
+        "Clôture pour…"). Read `texte` and judge per SIREN.
+
+        Args:
+            sirens: list of SIRENs (9 digits).
+            famille: BODACC family filter. Default "collective" (procédures
+                collectives). Pass None for all families (creations, sales…).
+        """
+        return bodacc.search_batch(sirens, famille=famille)
+
     # --- Appels d'offres (BOAMP, open data) ---
 
     @mcp.tool()

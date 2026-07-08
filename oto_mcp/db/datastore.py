@@ -457,8 +457,8 @@ def datastore_namespaces_with_key() -> list[dict]:
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            "WHERE ns_id = %s AND row_id = %s",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            "FROM datastore_rows WHERE ns_id = %s AND row_id = %s",
             (ns_id, row_id),
         ).fetchone()
         return dict(row) if row else None
@@ -574,8 +574,8 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
         params.extend([limit, offset])
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            f"{where} ORDER BY {order_sql}{tail}",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            f"FROM datastore_rows {where} ORDER BY {order_sql}{tail}",
             tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -598,8 +598,8 @@ def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data FROM datastore_rows "
-            f"{where} ORDER BY row_id ASC LIMIT %s",
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            f"FROM datastore_rows {where} ORDER BY row_id ASC LIMIT %s",
             tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -708,5 +708,58 @@ def datastore_delete_row(ns_id: int, row_id: str) -> bool:
         cur = conn.execute(
             "DELETE FROM datastore_rows WHERE ns_id = %s AND row_id = %s",
             (ns_id, row_id),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+# ── File de travail (ADR 0046 D) ─────────────────────────────────────────────
+# Une row se « claim » avec un BAIL (claimed_by/claimed_until) : pick atomique de
+# la prochaine row libre (bail NULL ou expiré) via FOR UPDATE SKIP LOCKED — deux
+# workers concurrents ne prennent jamais la même row, sans sérialiser la table.
+# Le bail expiré rend la row recyclable (worker mort ≠ row perdue). Libération :
+# explicite (release, gardée par worker) ou automatique à l'entrée dans un état
+# terminal du cycle de vie (côté store).
+
+def datastore_claim_next(ns_id: int, *, worker: str, lease_seconds: int = 900,
+                         filters: Optional[list] = None) -> Optional[dict]:
+    """Claim atomique de la prochaine row claimable du namespace (ordre de
+    création — row_id uuid7 monotone). `filters` = mêmes filtres whitelistés que
+    la lecture (`_ds_filter_clauses`), typiquement `[{field:'status',op:'eq',…}]`.
+    Renvoie la row (avec bail posé) ou None si plus rien à traiter."""
+    fclauses, fparams = _ds_filter_clauses(filters)
+    where = "WHERE ns_id = %s AND (claimed_until IS NULL OR claimed_until < NOW())"
+    params: list = [ns_id, *fparams]
+    for c in fclauses:
+        where += f" AND {c}"
+    with _connect() as conn:
+        picked = conn.execute(
+            f"SELECT row_id FROM datastore_rows {where} "
+            "ORDER BY row_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+            tuple(params),
+        ).fetchone()
+        if not picked:
+            return None
+        row = conn.execute(
+            "UPDATE datastore_rows SET claimed_by = %s, "
+            "claimed_until = NOW() + (%s || ' seconds')::interval "
+            "WHERE ns_id = %s AND row_id = %s "
+            "RETURNING row_id, created_at, updated_at, data, claimed_by, claimed_until",
+            (str(worker), int(lease_seconds), ns_id, picked["row_id"]),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def datastore_release_claim(ns_id: int, row_id: str, worker: Optional[str]) -> bool:
+    """Libère le bail d'une row. `worker` non-None = gardé (on ne libère pas le
+    claim d'un autre) ; None = libération inconditionnelle (chemin interne : entrée
+    en état terminal). Renvoie False si rien n'a été libéré (pas de bail, ou bail
+    d'un autre worker)."""
+    guard = "" if worker is None else " AND claimed_by = %s"
+    params: tuple = (ns_id, row_id) if worker is None else (ns_id, row_id, str(worker))
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE datastore_rows SET claimed_by = NULL, claimed_until = NULL "
+            f"WHERE ns_id = %s AND row_id = %s AND claimed_by IS NOT NULL{guard}",
+            params,
         )
         return (cur.rowcount or 0) > 0

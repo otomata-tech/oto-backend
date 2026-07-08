@@ -101,15 +101,14 @@ def _cred_instance(level: str, owner: dict, ref: str, row: dict) -> dict:
     return inst
 
 
-def _platform_instance(platform_key_id: int, provider: str, label: str,
-                       via: str, extra: dict) -> dict:
-    """Instance « clé plateforme » — pas de secret_kind/config/set_by (la config
-    d'un grant plateforme = l'environnement, cf. ResolvedCredential)."""
+def _platform_instance(provider: str, label: str, via: str, extra: dict) -> dict:
+    """Instance « clé plateforme » (ADR 0044 §F : identifiée par (connector, label),
+    plus de surrogate platform_key_id)."""
     return {
-        "ref": instance_refs.make_platform_ref(platform_key_id),
+        "ref": instance_refs.make_platform_ref(provider, label),
         "connector": provider,
         "level": "platform",
-        "owner": {"type": "platform", "id": platform_key_id, "label": label},
+        "owner": {"type": "platform", "label": label},
         "name": _instance_name(provider, None, key_label=label),
         "via": via,
         **extra,
@@ -118,18 +117,12 @@ def _platform_instance(platform_key_id: int, provider: str, label: str,
 
 def _hidden_connectors(sub: str, org: Optional[int]) -> set:
     """Filtre RBAC ADR 0025 — MIROIR de `access.require_connector_access` en mode
-    filtre : masqué si connector ∈ restricted − allowed. Même doctrine fail-open
-    loggé que le pré-gate (gate de confort sur un listing ; la résolution réelle
-    re-gate en dur à l'appel). Sans org active : pas de filtre."""
-    if org is None:
-        return set()
+    filtre, via le seam unique `rbac_denied_connectors` (escalade super_admin +
+    org_admin incluse). Même doctrine fail-open loggé que le pré-gate (gate de
+    confort sur un listing ; la résolution réelle re-gate en dur à l'appel).
+    Sans org active : pas de filtre."""
     try:
-        if access.is_super_admin(sub):
-            return set()
-        restricted = db.org_restricted_connectors(org)
-        if not restricted:
-            return set()
-        return set(restricted) - set(db.member_allowed_connectors(sub, org))
+        return access.rbac_denied_connectors(sub, org)
     except Exception:
         logger.warning("instances: filtre RBAC indisponible (fail-open)",
                        exc_info=True)
@@ -229,10 +222,8 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
             continue
         seen_providers.add(gr["provider"])
         out.append(_platform_instance(
-            gr["platform_key_id"], gr["provider"], gr.get("label") or "",
-            "user_grant",
-            {"granted_at": gr.get("granted_at"), "granted_by": gr.get("granted_by"),
-             "daily_quota": gr.get("daily_quota")}))
+            gr["provider"], gr.get("label") or "", "user_grant",
+            {"daily_quota": gr.get("daily_quota")}))
     if org is not None:
         for gr in db.list_org_grants(org):
             if (gr["provider"] in seen_providers
@@ -240,26 +231,23 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
                 continue
             seen_providers.add(gr["provider"])
             out.append(_platform_instance(
-                gr["platform_key_id"], gr["provider"], gr.get("label") or "",
-                "org_grant",
-                {"granted_at": gr.get("granted_at"),
-                 "granted_by": gr.get("granted_by"),
-                 "daily_quota": gr.get("daily_quota")}))
-    # Free-tier ADR 0031 : DERNIÈRE clé de chaque provider `platform_key_open`,
-    # utilisable sans grant. L'ordre SQL (created_at ASC) fait que la dernière
-    # rencontrée par provider = miroir exact de `get_platform_api_key`.
+                gr["provider"], gr.get("label") or "", "org_grant",
+                {"daily_quota": gr.get("daily_quota")}))
+    # Free-tier ADR 0031 : clé la plus récente de chaque provider `platform_key_open`,
+    # utilisable sans grant (ADR 0044 §F : instances scope PLATFORM du coffre unifié,
+    # triées set_at DESC → 1re rencontrée par provider = la plus récente).
     last_open: dict[str, dict] = {}
-    for k in db.list_platform_keys_meta():
+    for k in credentials_store.list_platform_credentials():
         con = providers.REGISTRY.get(k["provider"])
-        if con is not None and con.platform_key_open:
+        if con is not None and con.platform_key_open and k["provider"] not in last_open:
             last_open[k["provider"]] = k
     for k in last_open.values():
         if k["provider"] in seen_providers or not _platform_eligible(k["provider"]):
             continue
         seen_providers.add(k["provider"])
         out.append(_platform_instance(
-            k["id"], k["provider"], k.get("label") or "", "free_tier",
-            {"created_at": k.get("created_at")}))
+            k["provider"], k.get("label") or "", "free_tier",
+            {"set_at": k.get("set_at")}))
 
     # 5. PARTAGÉ AVEC MOI (ADR 0044 share_side) : instances d'AUTRES dont le
     # share_side me vise (nominatif `user:` ou via un de mes groupes). Cross-org

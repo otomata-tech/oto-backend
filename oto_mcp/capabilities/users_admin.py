@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import access, connectors, db, group_store, org_store
+from .. import access, connectors, credentials_store, db, group_store, org_store
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -50,26 +50,28 @@ class SetRoleInput(BaseModel):
     role: str
 
 
+# ADR 0044 §F R4 : le grant vise le CONNECTEUR (provider) au lieu d'un surrogate key_id
+# (la table platform_keys disparaît). L'instance ciblée = la clé plateforme du provider.
 class GrantKeyInput(BaseModel):
     target: str
-    key_id: int
+    provider: str
     daily_quota: Optional[int] = None
 
 
 class RevokeKeyInput(BaseModel):
     target: str
-    key_id: int
+    provider: str
 
 
 class OrgGrantKeyInput(BaseModel):
     org_id: int
-    key_id: int
+    provider: str
     daily_quota: Optional[int] = None
 
 
 class OrgRevokeKeyInput(BaseModel):
     org_id: int
-    key_id: int
+    provider: str
 
 
 class OptionInput(BaseModel):
@@ -134,36 +136,40 @@ def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
     return {"ok": True, "sub": target, "role": inp.role}
 
 
+def _has_platform_instance(provider: str) -> bool:
+    return bool(credentials_store.list_platform_instances(provider))
+
+
 def _grant_key(ctx: ResolvedCtx, inp: GrantKeyInput) -> dict:
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
-    if not db.get_platform_key(inp.key_id):
-        raise AuthzDenied(404, "unknown_key", f"Clé plateforme #{inp.key_id} inconnue.")
+    if not _has_platform_instance(inp.provider):
+        raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
     dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
-    db.grant_platform_key(target, inp.key_id, granted_by=ctx.sub, daily_quota=dq)
-    return {"ok": True, "sub": target, "platform_key_id": inp.key_id, "daily_quota": dq}
+    credentials_store.platform_grant(inp.provider, f"user:{target}", daily_quota=dq)
+    return {"ok": True, "sub": target, "provider": inp.provider, "daily_quota": dq}
 
 
 def _revoke_key(ctx: ResolvedCtx, inp: RevokeKeyInput) -> dict:
     target = _resolve_target(inp.target)
-    db.revoke_platform_key(target, inp.key_id)
-    return {"ok": True, "sub": target, "platform_key_id": inp.key_id}
+    credentials_store.platform_revoke(inp.provider, f"user:{target}")
+    return {"ok": True, "sub": target, "provider": inp.provider}
 
 
 def _grant_org_key(ctx: ResolvedCtx, inp: OrgGrantKeyInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    if not db.get_platform_key(inp.key_id):
-        raise AuthzDenied(404, "unknown_key", f"Clé plateforme #{inp.key_id} inconnue.")
+    if not _has_platform_instance(inp.provider):
+        raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
     dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
-    db.grant_org_platform_key(inp.org_id, inp.key_id, granted_by=ctx.sub, daily_quota=dq)
-    return {"ok": True, "org_id": inp.org_id, "platform_key_id": inp.key_id, "daily_quota": dq}
+    credentials_store.platform_grant(inp.provider, f"org:{inp.org_id}", daily_quota=dq)
+    return {"ok": True, "org_id": inp.org_id, "provider": inp.provider, "daily_quota": dq}
 
 
 def _revoke_org_key(ctx: ResolvedCtx, inp: OrgRevokeKeyInput) -> dict:
-    db.revoke_org_platform_key(inp.org_id, inp.key_id)
-    return {"ok": True, "org_id": inp.org_id, "platform_key_id": inp.key_id}
+    credentials_store.platform_revoke(inp.provider, f"org:{inp.org_id}")
+    return {"ok": True, "org_id": inp.org_id, "provider": inp.provider}
 
 
 def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
@@ -200,23 +206,21 @@ def _compose_platform_grant(ctx: ResolvedCtx, inp: OptionInput, eid: str) -> Opt
     con = connectors.connector_for_provider(inp.option)
     if not con or "platform" not in con.auth_modes:
         return None
-    keys = db.list_platform_keys(inp.option)
-    if not keys:
+    if not credentials_store.list_platform_instances(inp.option):
         # Connecteur revente sans clé plateforme posée → la comp seule resterait un
         # état mort. On le signale au lieu de le masquer (cf. feedback governance UI).
         return {"granted": False, "reason": "no_platform_key",
                 "hint": f"Aucune clé plateforme {inp.option!r} posée — pose-la au dashboard "
                         "(/platform/connectors) pour que l'option soit utilisable."}
-    key_id = keys[0]["id"]
     if inp.entity_type == "user":
-        db.grant_platform_key(eid, key_id, granted_by=ctx.sub)
+        credentials_store.platform_grant(inp.option, f"user:{eid}")  # ADR 0044 §F R4
         # État d'un TIERS → son org maison, jamais current_org du requérant
         # (seam acteur-scopé ADR 0023 ; scope membre ADR 0033).
         byo = db.has_member_api_key(eid, org_store.get_active_org(eid), inp.option)
     else:
-        db.grant_org_platform_key(int(eid), key_id, granted_by=ctx.sub)
+        credentials_store.platform_grant(inp.option, f"org:{eid}")
         byo = org_store.has_org_secret(int(eid), inp.option)
-    out = {"granted": True, "platform_key_id": key_id}
+    out = {"granted": True, "provider": inp.option}
     if byo:
         # L'entité a sa propre clé (BYO) → en résolution sa clé prime sur la
         # plateforme, et le gate d'option est court-circuité : l'option ET le
@@ -232,14 +236,9 @@ def _compose_platform_revoke(inp: OptionInput, eid: str) -> Optional[dict]:
     con = connectors.connector_for_provider(inp.option)
     if not con or "platform" not in con.auth_modes:
         return None
-    revoked = 0
-    for k in db.list_platform_keys(inp.option):
-        if inp.entity_type == "user":
-            db.revoke_platform_key(eid, k["id"])
-        else:
-            db.revoke_org_platform_key(int(eid), k["id"])
-        revoked += 1
-    return {"revoked": revoked} if revoked else None
+    scope = f"user:{eid}" if inp.entity_type == "user" else f"org:{eid}"
+    credentials_store.platform_revoke(inp.option, scope)  # ADR 0044 §F R4
+    return {"revoked": True}
 
 
 CAPABILITIES += [
@@ -269,26 +268,26 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Grant a platform key (by id) to a user, with an optional "
                     "per-day quota. target = email or sub. Never reveals the key.",
-        rest=RestBinding("POST", "/api/admin/users/{sub}/grants/{key_id}", _SUB),
+        rest=RestBinding("POST", "/api/admin/users/{sub}/grants/{provider}", _SUB),
     ),
     Capability(
         key="platform.key.revoke", handler=_revoke_key, Input=RevokeKeyInput,
         authz=SUPER_ADMIN,
-        description="[super admin] Revoke a user's grant of a platform key (by id).",
-        rest=RestBinding("DELETE", "/api/admin/users/{sub}/grants/{key_id}", _SUB),
+        description="[super admin] Revoke a user's grant of a connector's platform key.",
+        rest=RestBinding("DELETE", "/api/admin/users/{sub}/grants/{provider}", _SUB),
     ),
     Capability(
         key="platform.org.grant_key", handler=_grant_org_key, Input=OrgGrantKeyInput,
         authz=SUPER_ADMIN,
-        description="[super admin] Share a platform key (by id) with a WHOLE org — every member "
+        description="[super admin] Share a connector's platform key with a WHOLE org — every member "
                     "resolves it (metered per-member). Optional per-day quota.",
-        rest=RestBinding("POST", "/api/admin/orgs/{id}/grants/{key_id}", _ID),
+        rest=RestBinding("POST", "/api/admin/orgs/{id}/grants/{provider}", _ID),
     ),
     Capability(
         key="platform.org.revoke_key", handler=_revoke_org_key, Input=OrgRevokeKeyInput,
         authz=SUPER_ADMIN,
-        description="[super admin] Revoke an org's share of a platform key (by id).",
-        rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{key_id}", _ID),
+        description="[super admin] Revoke an org's share of a connector's platform key.",
+        rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{provider}", _ID),
     ),
     Capability(
         key="platform.option.set", handler=_set_option, Input=OptionInput,

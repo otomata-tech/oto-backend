@@ -64,6 +64,7 @@ FOD_NOT_EXPOSED = {
     "ban": _FONCIER_VIA_FOD,
     "apicarto": _FONCIER_VIA_FOD,
     "bdtopo": _FONCIER_VIA_FOD,
+    "ign": _FONCIER_VIA_FOD,  # IGN Géoplateforme (isochrone) — foncier_isochrone → /api/foncier/ign/isochrone
     "pvgis": _FONCIER_VIA_FOD,
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,

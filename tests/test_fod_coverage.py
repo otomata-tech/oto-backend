@@ -57,6 +57,9 @@ FOD_NOT_EXPOSED = {
     "bdtopo": _FONCIER_VIA_FOD,
     "pvgis": _FONCIER_VIA_FOD,
     "ign": _FONCIER_VIA_FOD,  # isochrone IGN — via fod_foncier.ign (foncier_isochrone)
+    "osm": "client OverpassClient (POIs OSM) consommé via le service FOD "
+           "(oto_mcp/fod_osm.py → /api/osm/pois) — le tool osm_pois reste exposé, "
+           "plus de client lib in-process",
     "enedis": _FONCIER_VIA_FOD,
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,

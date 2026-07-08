@@ -87,6 +87,13 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # registre → jamais gatés.
     try:
         exposed = connector_activation.exposed_connectors(active_org)
+        # Tier ÉQUIPE (ADR 0012, restrict-only) : l'équipe active peut COUPER un
+        # connecteur pour ses membres — on retranche ses coupures de l'exposé (jamais
+        # d'ajout : invariant monotone). Même régime fail-open que l'org.
+        active_group = access.current_group(sub)
+        if active_group is not None:
+            exposed = connector_activation.effective_for_group(
+                exposed, connector_activation.group_cut_connectors(active_group))
         to_hide |= {
             n for n in all_names
             if (c := connectors.connector_for_namespace(namespace_of(n))) is not None

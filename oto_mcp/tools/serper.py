@@ -7,11 +7,22 @@ Guests doivent obligatoirement poser leur propre clé.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_REQUEST
 
 from .. import access
+
+# Serper renvoie `Serper scrape <status>: <msg>` (RuntimeError nu) quand SON
+# scraper n'arrive pas à récupérer une page (JS lourd, anti-bot, page morte) :
+# c'est un échec par-URL attendu, pas un bug backend. On le convertit en erreur
+# GÉRÉE côté tool (message actionnable pour l'agent + non reporté à Sentry — la
+# taxonomie droppe les McpError d'entrée). Les 4xx Serper (crédits/clé) restent
+# propagés tels quels : ce sont de vrais problèmes de config, pas des échecs d'URL.
+_SCRAPE_STATUS = re.compile(r"Serper scrape (\d{3}):")
 
 
 def register(mcp: FastMCP) -> None:
@@ -406,4 +417,15 @@ def register(mcp: FastMCP) -> None:
             url: Page URL to scrape.
             include_markdown: Include a markdown version (default True, plus pratique pour LLM).
         """
-        return _run("scrape_page", url=url, include_markdown=include_markdown)
+        try:
+            return _run("scrape_page", url=url, include_markdown=include_markdown)
+        except RuntimeError as e:
+            m = _SCRAPE_STATUS.search(str(e))
+            if m and 500 <= int(m.group(1)) < 600:
+                raise McpError(ErrorData(
+                    code=INVALID_REQUEST,
+                    message=(f"Scrape impossible pour cette URL ({url}) : la page a "
+                             "bloqué le robot ou n'a pas pu être récupérée. Essaie une "
+                             "autre source ou serper_web_search."),
+                )) from None
+            raise

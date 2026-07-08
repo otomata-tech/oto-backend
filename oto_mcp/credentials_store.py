@@ -560,3 +560,65 @@ def backfill_member_scope() -> dict:
     if counts["migrated"] or counts["skipped"]:
         logger.info("backfill_member_scope: %s", counts)
     return counts
+
+
+def backfill_platform_scope() -> dict:
+    """ADR 0044 §F R2 : projette les clés plateforme legacy (`platform_keys`) + leurs
+    grants (`user_grants`/`org_grants`) comme instances scope PLATFORM du coffre unifié.
+    - **credential** re-chiffré (AAD legacy `platform_keys:{prov}:{label}` → nouveau AAD),
+    - **accès** dérivé : connecteur `platform_key_open` (free-tier) ⟹ `share_mode='open'` ;
+      sinon ⟹ `share_mode='closed'` + `share_down` = grants (`user:<sub>` ∪ `org:<id>`),
+    - **quota** dérivé : `meta.rate_limit` = `default_quota` du connecteur ; `meta.rate_limit_by`
+      = les `daily_quota` explicites des grants.
+    Idempotent et RE-DÉRIVÉ à chaque boot (legacy reste la vérité jusqu'au cutover lectures
+    R3 → on garde l'instance synchro avec les grants legacy pendant la fenêtre R2→R4). Peu de
+    clés plateforme ⟹ coût négligeable. Ligne indéchiffrable = laissée legacy (inerte)."""
+    counts = {"migrated": 0, "skipped": 0}
+    with _connect() as conn:
+        keys = conn.execute(
+            "SELECT id, provider, label, api_key_enc FROM platform_keys").fetchall()
+    for k in keys:
+        prov, label, kid = k["provider"], k["label"], k["id"]
+        con = connectors.REGISTRY.get(prov)
+        if con is None or "platform" not in con.auth_modes:
+            counts["skipped"] += 1
+            continue
+        try:
+            secret = crypto.decrypt(k["api_key_enc"], f"platform_keys:{prov}:{label}")
+        except Exception:
+            logger.warning("backfill_platform_scope: %s/%s indéchiffrable — laissé legacy",
+                           prov, label, exc_info=True)
+            counts["skipped"] += 1
+            continue
+        with _connect() as conn:
+            ug = conn.execute("SELECT sub, daily_quota FROM user_grants "
+                              "WHERE platform_key_id=%s", (kid,)).fetchall()
+            og = conn.execute("SELECT org_id, daily_quota FROM org_grants "
+                              "WHERE platform_key_id=%s", (kid,)).fetchall()
+        share_down, rate_by = [], {}
+        for g in ug:
+            sc = f"user:{g['sub']}"
+            share_down.append(sc)
+            if g["daily_quota"] is not None:
+                rate_by[sc] = g["daily_quota"]
+        for g in og:
+            sc = f"org:{g['org_id']}"
+            share_down.append(sc)
+            if g["daily_quota"] is not None:
+                rate_by[sc] = g["daily_quota"]
+        share_mode = "open" if getattr(con, "platform_key_open", False) else "closed"
+        meta = {}
+        if getattr(con, "default_quota", None):
+            meta["rate_limit"] = con.default_quota
+        if rate_by:
+            meta["rate_limit_by"] = rate_by
+        with _connect() as conn:
+            _upsert(conn, PLATFORM, label, prov, "", secret, "backfill_platform", meta)
+            conn.execute(
+                "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb "
+                "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+                (share_mode, json.dumps(share_down), PLATFORM, label, prov, ""))
+        counts["migrated"] += 1
+    if counts["migrated"] or counts["skipped"]:
+        logger.info("backfill_platform_scope: %s", counts)
+    return counts

@@ -47,6 +47,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS connector_activation_global
     ON connector_activation (connector) WHERE org_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS connector_activation_org
     ON connector_activation (connector, org_id) WHERE org_id IS NOT NULL;
+
+-- Tier ÉQUIPE (ADR 0012, restrict-only) : un chef d'équipe peut COUPER un connecteur
+-- pour SON équipe, jamais l'exposer au-delà de ce que l'org autorise (invariant
+-- MONOTONE — platform ⊇ org ⊇ group). On ne stocke donc que des coupures
+-- (`enabled=FALSE`) ; l'absence de ligne = hérité de l'org (pas de restriction).
+CREATE TABLE IF NOT EXISTS group_connector_activation (
+    group_id  BIGINT NOT NULL,
+    connector TEXT NOT NULL,
+    enabled   BOOLEAN NOT NULL,      -- FALSE = coupé pour l'équipe (seule valeur posée)
+    set_by    TEXT,
+    set_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, connector)
+);
 """
 
 
@@ -83,6 +96,14 @@ def _resolve(global_map: dict[str, bool], override_map: dict[str, bool]) -> set[
     exposés. Pur (pas de DB) → testable hors connexion."""
     names = set(global_map) | set(override_map)
     return {n for n in names if override_map.get(n, global_map.get(n, False))}
+
+
+def effective_for_group(exposed: set[str], group_cut: set[str]) -> set[str]:
+    """Exposition EFFECTIVE pour un membre d'une équipe = ce que l'org expose MOINS
+    les coupures de l'équipe active. Invariant MONOTONE (ADR 0012) : l'équipe ne peut
+    que RETRANCHER — jamais rendre visible un connecteur que l'org a coupé. Pur
+    (pas de DB) → testable hors connexion."""
+    return exposed - group_cut
 
 
 # --- lectures (self-managing) -----------------------------------------------
@@ -171,4 +192,60 @@ def clear_activation(connector: str, org_id: int) -> None:
         conn.execute(
             "DELETE FROM connector_activation WHERE connector = %s AND org_id = %s",
             (connector, org_id),
+        )
+
+
+# --- tier ÉQUIPE (restrict-only, ADR 0012) ----------------------------------
+
+def group_cut_connectors(group_id: int) -> set[str]:
+    """Connecteurs COUPÉS pour l'équipe (lignes `enabled=FALSE`). L'exposition
+    effective d'un membre = `exposed_connectors(org) - group_cut_connectors(équipe
+    active)` — invariant monotone : l'équipe ne peut que retrancher."""
+    from . import db
+
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT connector FROM group_connector_activation "
+            "WHERE group_id = %s AND enabled = FALSE",
+            (group_id,),
+        ).fetchall()
+    return {r["connector"] for r in rows}
+
+
+def list_group_activations(group_id: int) -> list[dict]:
+    """Lignes de coupure de l'équipe (surface admin d'équipe)."""
+    from . import db
+
+    with db._connect() as conn:
+        return conn.execute(
+            "SELECT connector, enabled, set_by, set_at FROM group_connector_activation "
+            "WHERE group_id = %s ORDER BY connector",
+            (group_id,),
+        ).fetchall()
+
+
+def set_group_activation(group_id: int, connector: str, enabled: bool,
+                         set_by: Optional[str] = None) -> None:
+    """Pose une coupure d'équipe. `enabled` DOIT être False (restrict-only) — la
+    garde métier (invariant monotone) est dans la capacité ; ici on stocke."""
+    from . import db
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO group_connector_activation (group_id, connector, enabled, set_by) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (group_id, connector) "
+            "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
+            (group_id, connector, enabled, set_by),
+        )
+
+
+def clear_group_activation(group_id: int, connector: str) -> None:
+    """Retire la coupure d'équipe → le connecteur retombe sur l'exposition de l'org."""
+    from . import db
+
+    with db._connect() as conn:
+        conn.execute(
+            "DELETE FROM group_connector_activation WHERE group_id = %s AND connector = %s",
+            (group_id, connector),
         )

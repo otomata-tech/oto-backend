@@ -17,12 +17,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .. import access, connector_activation, db, org_store, providers
-from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
+from .. import access, connector_activation, db, group_store, org_store, providers
+from ._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
-_ID = {"id": "org_id"}     # placeholder {id} → champ Input org_id
+_ID = {"id": "org_id"}      # placeholder {id} → champ Input org_id
+_GID = {"id": "group_id"}   # placeholder {id} → champ Input group_id
 
 # Couche 3 (option de connecteur, ADR 0024) : connecteur → option débloquable.
 # Aujourd'hui seul unipile (option « messagerie hébergée »). Map curée — pas de
@@ -116,7 +117,115 @@ def _org_clear(ctx: ResolvedCtx, inp: OrgActivationClearInput) -> dict:
     return {"org_id": inp.org_id, "connector": inp.name, "cleared": True}
 
 
+# ── tier ÉQUIPE (ADR 0012, restrict-only) ────────────────────────────────────
+# Un chef d'équipe (`GROUP_ADMIN_OF`) peut COUPER un connecteur pour SON équipe —
+# jamais l'exposer au-delà de ce que l'org autorise (invariant MONOTONE). L'équipe
+# n'a donc qu'un levier « couper / ré-ouvrir » ; le plancher reste org > plateforme.
+
+class GroupActivationListInput(BaseModel):
+    group_id: int
+
+
+class GroupActivationSetInput(BaseModel):
+    group_id: int
+    name: str
+    enabled: bool
+
+
+class GroupActivationClearInput(BaseModel):
+    group_id: int
+    name: str
+
+
+def _group_org_id(group_id: int) -> int:
+    g = group_store.get_group(group_id)
+    if not g:
+        raise AuthzDenied(404, "unknown_group", f"Équipe #{group_id} inconnue.")
+    return g["org_id"]
+
+
+def _group_list(ctx: ResolvedCtx, inp: GroupActivationListInput) -> dict:
+    """Pour chaque connecteur exposé à l'org de l'équipe : l'état effectif pour
+    l'équipe (org expose ET pas coupé) + si l'équipe l'a coupé. On ne liste que ce
+    que l'org rend disponible (plus une coupure éventuelle résiduelle) — pas de
+    levier inerte, cohérent avec la surface org."""
+    org_id = _group_org_id(inp.group_id)
+    exposed = connector_activation.exposed_connectors(org_id)
+    cut = connector_activation.group_cut_connectors(inp.group_id)
+    out = []
+    for name, c in providers.REGISTRY.items():
+        org_available = name in exposed
+        group_cut = name in cut
+        if not org_available and not group_cut:
+            continue
+        out.append({
+            "connector": name, "label": c.label, "help": c.help,
+            "namespaces": list(c.namespaces),
+            "org_available": org_available,
+            "group_cut": group_cut,
+            "effective": org_available and not group_cut,
+        })
+    return {"group_id": inp.group_id, "connectors": out}
+
+
+def _require_org_available(group_id: int, name: str) -> None:
+    """L'org doit exposer le connecteur pour qu'une équipe puisse le couper (sinon
+    il est déjà off — rien à restreindre). Miroir de `_require_master_exposed`."""
+    org_id = _group_org_id(group_id)
+    if name not in connector_activation.exposed_connectors(org_id):
+        raise AuthzDenied(409, "org_disabled",
+                          f"Connecteur `{name}` non disponible dans l'org — rien à couper pour l'équipe.")
+
+
+def _group_set(ctx: ResolvedCtx, inp: GroupActivationSetInput) -> dict:
+    if inp.name not in providers.REGISTRY:
+        raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
+    # Invariant MONOTONE : une équipe ne peut que RESTREINDRE. `enabled=True` (exposer
+    # au-delà de l'org) est refusé — pour ré-ouvrir, on RETIRE la coupure (clear).
+    if inp.enabled:
+        raise AuthzDenied(409, "group_cannot_expose",
+                          "Une équipe ne peut que restreindre (couper) un connecteur, jamais "
+                          "l'exposer au-delà de l'org. Pour le ré-ouvrir, retire la coupure.")
+    _require_org_available(inp.group_id, inp.name)
+    connector_activation.set_group_activation(inp.group_id, inp.name, False, set_by=ctx.sub)
+    return {"group_id": inp.group_id, "connector": inp.name, "enabled": False}
+
+
+def _group_clear(ctx: ResolvedCtx, inp: GroupActivationClearInput) -> dict:
+    """Retire la coupure d'équipe → le connecteur retombe sur l'exposition de l'org."""
+    if inp.name not in providers.REGISTRY:
+        raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
+    connector_activation.clear_group_activation(inp.group_id, inp.name)
+    return {"group_id": inp.group_id, "connector": inp.name, "cleared": True}
+
+
 CAPABILITIES += [
+    Capability(
+        key="connectors.activation.group_list", handler=_group_list, Input=GroupActivationListInput,
+        authz=GROUP_MEMBER_OF("group_id"),
+        description="List, for a team, each connector available to its org: whether the org "
+                    "exposes it, whether the team has cut it, and the effective state for the "
+                    "team's members. The team cockpit of connector availability.",
+        mcp="oto_group_connector_activation",
+        rest=RestBinding("GET", "/api/groups/{id}/connectors/activation", _GID),
+    ),
+    Capability(
+        key="connectors.activation.set_group", handler=_group_set, Input=GroupActivationSetInput,
+        authz=GROUP_ADMIN_OF("group_id"), refresh_visibility=True,
+        description="[team lead] Cut a connector for your whole team (restrict-only — a team can "
+                    "only narrow what the org allows, never expose beyond it). Requires the org to "
+                    "expose it. Takes effect for members whose active team is this one, next session.",
+        mcp="oto_set_group_connector_activation",
+        rest=RestBinding("PUT", "/api/groups/{id}/connectors/{name}/activation", _GID),
+    ),
+    Capability(
+        key="connectors.activation.clear_group", handler=_group_clear, Input=GroupActivationClearInput,
+        authz=GROUP_ADMIN_OF("group_id"), refresh_visibility=True,
+        description="[team lead] Remove your team's cut for a connector — it falls back to the "
+                    "org's availability.",
+        mcp="oto_clear_group_connector_activation",
+        rest=RestBinding("DELETE", "/api/groups/{id}/connectors/{name}/activation", _GID),
+    ),
     Capability(
         key="connectors.activation.org_list", handler=_org_list, Input=OrgActivationListInput,
         authz=ORG_MEMBER_OF("org_id"),

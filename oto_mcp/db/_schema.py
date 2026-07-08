@@ -191,6 +191,20 @@ CREATE TABLE IF NOT EXISTS org_connector_access (
     PRIMARY KEY (org_id, connector, principal_type, principal_id)
 );
 
+-- ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) : un chef d'équipe
+-- réserve un connecteur à un sous-ensemble de membres de SON équipe. Intersection
+-- avec l'ACL d'org (narrowing pur — l'équipe ne peut que RESTREINDRE davantage, jamais
+-- débloquer ce que l'org autorise). ≥1 ligne ⟹ connecteur réservé dans l'équipe ;
+-- absence ⟹ ouvert à toute l'équipe. Le principal est toujours un MEMBRE (sub).
+CREATE TABLE IF NOT EXISTS group_connector_access (
+    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
+    connector TEXT NOT NULL,
+    principal_sub TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, connector, principal_sub)
+);
+
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
 -- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de

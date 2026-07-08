@@ -117,7 +117,7 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
              if a.get("org_id") == o}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
-    subscribed = byo or access.has_option(sub, "unipile", org=org)
+    subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
     # Version d'API de la clé RÉSOLUE (v1/v2 selon la BYO) pour l'affichage carte.
     # Self seulement (pas de résolution cross-contexte pour un tiers) ; best-effort.
     api_version = "v1"
@@ -152,7 +152,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         by = {a["provider"]: a for a in accts if a.get("org_id") == oid}
         out.append({
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
-            "subscribed": byo or access.has_option(sub, "unipile", org=oid),
+            "subscribed": access.option_open(sub, "unipile", org=oid),  # source unique
             "mode": mode, "byo": byo,
             "channels": _channels_from(by),
             "option_source": {

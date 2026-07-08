@@ -103,3 +103,14 @@ def get_acco(id_or_numero: str) -> Optional[dict[str, Any]]:
 
 def acco_themes() -> list[dict[str, Any]]:
     return _get("/api/fr/accords/themes")
+
+
+# --- INSEE SIRENE (keyé) : le backend résout la clé + track le quota, la passe à FOD ---
+# par-appel (header X-Sirene-Key) ; FOD ne la stocke pas (ADR 0028/0037). BYO ou plateforme.
+
+def insee_siret(siret: str, api_key: str) -> dict[str, Any]:
+    return _get(f"/api/fr/insee/siret/{siret}", headers={"X-Sirene-Key": api_key})
+
+
+def insee_headquarters(siren: str, api_key: str) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/insee/headquarters/{siren}", headers={"X-Sirene-Key": api_key})

@@ -6,8 +6,17 @@ et le fait que `register(mcp)` l'enregistre dans `connector_verify` (→ catalog
 
 import pytest
 
-from oto_mcp import connector_verify
+from oto_mcp import connector_verify, credentials_store
 from oto_mcp.tools import unipile
+
+
+def _fields(secret: str) -> dict:
+    """Champs EXACTEMENT comme la capacité verify les produit (unpack_secret sur le
+    schéma déclaré — champ dérivé de secret_kind='api_key' = `key`, PAS `api_key`).
+    Coupler le test au vrai unpack empêche le drift sonde↔schéma (vécu 2026-07-08 :
+    la sonde lisait `api_key`, les tests stubbaient la même forme fausse → sonde
+    aveugle en prod, « clé absente » systémique)."""
+    return credentials_store.unpack_secret("unipile", secret)
 
 
 class _FakeClient:
@@ -27,7 +36,7 @@ def _patch_client(monkeypatch, accounts):
 
 def test_verify_ok_when_accounts_present(monkeypatch):
     _patch_client(monkeypatch, [{"id": "acc-1", "type": "LINKEDIN"}])
-    assert unipile._verify({"api_key": "k"}) is None   # succès = ne lève pas
+    assert unipile._verify(_fields("k")) is None   # succès = ne lève pas
 
 
 def test_verify_raises_without_api_key():
@@ -39,7 +48,7 @@ def test_verify_raises_without_api_key():
 def test_verify_raises_when_no_account_connected(monkeypatch):
     _patch_client(monkeypatch, [])
     with pytest.raises(ValueError) as e:
-        unipile._verify({"api_key": "k"})
+        unipile._verify(_fields("k"))
     assert "aucun compte connecté" in str(e.value)
 
 
@@ -51,7 +60,7 @@ def test_verify_propagates_provider_error(monkeypatch):
     import oto.tools.unipile as core
     monkeypatch.setattr(core, "make_unipile_client", lambda **kw: _Boom())
     with pytest.raises(RuntimeError) as e:
-        unipile._verify({"api_key": "dead"})
+        unipile._verify(_fields("dead"))
     assert "401" in str(e.value)
 
 

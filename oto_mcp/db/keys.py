@@ -89,264 +89,31 @@ def has_member_api_key(sub: str, org_id: Optional[int], provider: str,
         account=account)
 
 
-def _pk_aad(provider: str, label: str) -> str:
-    return f"platform_keys:{provider}:{label}"
-
-
-def _pk_encrypt(provider: str, label: str, api_key: str) -> str:
-    """Enveloppe AES-256-GCM à écrire. crypto.encrypt lève si master key absente
-    (pas de stockage plaintext)."""
-    from .. import crypto
-    return crypto.encrypt(api_key, _pk_aad(provider, label))
-
-
-def _pk_reveal(row: dict, provider: str) -> Optional[str]:
-    """api_key en clair depuis une ligne platform_keys : déchiffre `api_key_enc`.
-    Chiffrement obligatoire (pas de plaintext) → un échec LÈVE, jamais de
-    fallback silencieux."""
-    enc = row.get("api_key_enc")
-    if not enc:
-        return None
-    from .. import crypto
-    return crypto.decrypt(enc, _pk_aad(provider, row["label"]))
-
-
-def list_platform_keys(provider: Optional[str] = None) -> list[dict]:
-    """Liste les platform keys. **Inclut `api_key`** (déchiffré) — réservé à
-    l'admin backend, jamais retourné via /api (la route admin masque ce champ).
-    """
-    sql = "SELECT id, provider, label, api_key_enc, created_at FROM platform_keys"
-    params: tuple = ()
-    if provider:
-        sql += " WHERE provider = %s"
-        params = (provider,)
-    sql += " ORDER BY provider, created_at"
+def _grants_for_scope(scope: str) -> list[dict]:
+    """ADR 0044 §F : grants dérivés des instances plateforme dont le `share_down` contient
+    `scope` (`user:<sub>` | `org:<id>`). Renvoie {provider, label, daily_quota} — plus de
+    surrogate platform_key_id. `share_down @> [scope]` = contenance JSONB (indexable)."""
     with _connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
+        rows = conn.execute(
+            "SELECT connector AS provider, entity_id AS label, meta FROM connector_credentials "
+            "WHERE entity_type = 'platform' AND share_down @> %s::jsonb ORDER BY connector",
+            (json.dumps([scope]),)).fetchall()
     out = []
     for r in rows:
-        d = dict(r)
-        d["api_key"] = _pk_reveal(d, d["provider"])
-        d.pop("api_key_enc", None)
-        out.append(d)
+        rlb = (r["meta"] or {}).get("rate_limit_by") or {}
+        out.append({"provider": r["provider"], "label": r["label"],
+                    "daily_quota": rlb.get(scope)})
     return out
 
 
-def list_platform_keys_meta(provider: Optional[str] = None) -> list[dict]:
-    """Métadonnées des clés plateforme SANS déchiffrement (id, provider, label,
-    created_at) — projection instances (ADR 0038 B4). Contrairement à
-    `list_platform_keys`, ne SELECTionne JAMAIS `api_key_enc`."""
-    sql = "SELECT id, provider, label, created_at FROM platform_keys"
-    params: tuple = ()
-    if provider:
-        sql += " WHERE provider = %s"
-        params = (provider,)
-    # Même ordre que list_platform_keys → la dernière par provider = la clé
-    # active du free-tier (miroir de get_platform_api_key).
-    sql += " ORDER BY provider, created_at"
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-
-def get_platform_api_key(provider: str) -> Optional[dict]:
-    """Clé plateforme la plus récente d'un provider, déchiffrée (free-tier ADR 0031).
-    Renvoie {api_key, label} ou None — utilisée SANS grant pour les connecteurs
-    `platform_key_open` (quota gratuit per-user appliqué dans resolve_credential)."""
-    keys = list_platform_keys(provider)  # ORDER BY created_at ASC → dernière = la + récente
-    if not keys:
-        return None
-    k = keys[-1]
-    return {"api_key": k["api_key"], "label": k["label"]}
-
-
-def get_platform_key(key_id: int) -> Optional[dict]:
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT id, provider, label, api_key_enc, created_at "
-            "FROM platform_keys WHERE id = %s",
-            (key_id,),
-        ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["api_key"] = _pk_reveal(d, d["provider"])
-    d.pop("api_key_enc", None)
-    return d
-
-
-def create_platform_key(provider: str, label: str, api_key: str) -> int:
-    """Crée une platform key. Renvoie l'id ; lève ValueError sur (provider, label) duplicata."""
-    _check_provider(provider)
-    if not label or not api_key:
-        raise ValueError("label et api_key requis")
-    enc = _pk_encrypt(provider, label, api_key)
-    with _connect() as conn:
-        try:
-            row = conn.execute(
-                "INSERT INTO platform_keys (provider, label, api_key_enc) "
-                "VALUES (%s, %s, %s) RETURNING id",
-                (provider, label, enc),
-            ).fetchone()
-        except psycopg.errors.UniqueViolation as e:
-            raise ValueError(f"({provider}, {label}) existe déjà") from e
-        return int(row["id"])
-
-
-def upsert_platform_key(provider: str, label: str, api_key: str) -> int:
-    """Crée ou met à jour la clé pour (provider, label). Idempotent — utilisé
-    par le bootstrap des env vars au démarrage.
-    """
-    _check_provider(provider)
-    enc = _pk_encrypt(provider, label, api_key)
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            INSERT INTO platform_keys (provider, label, api_key_enc)
-            VALUES (%s, %s, %s)
-            ON CONFLICT(provider, label) DO UPDATE SET
-                api_key_enc = EXCLUDED.api_key_enc
-            RETURNING id
-            """,
-            (provider, label, enc),
-        ).fetchone()
-        return int(row["id"])
-
-
-def delete_platform_key(key_id: int) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM platform_keys WHERE id = %s", (key_id,))
-
-
-def grant_platform_key(
-    sub: str,
-    platform_key_id: int,
-    granted_by: Optional[str] = None,
-    daily_quota: Optional[int] = None,
-) -> None:
-    upsert_user(sub)
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_grants (sub, platform_key_id, granted_at, granted_by, daily_quota)
-            VALUES (%s, %s, NOW(), %s, %s)
-            ON CONFLICT(sub, platform_key_id) DO UPDATE SET
-                granted_at = NOW(),
-                granted_by = EXCLUDED.granted_by,
-                daily_quota = EXCLUDED.daily_quota
-            """,
-            (sub, platform_key_id, granted_by, daily_quota),
-        )
-
-
-def revoke_platform_key(sub: str, platform_key_id: int) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "DELETE FROM user_grants WHERE sub = %s AND platform_key_id = %s",
-            (sub, platform_key_id),
-        )
-
-
 def list_grants_for_user(sub: str) -> list[dict]:
-    """Grants détaillés d'un user — joint platform_keys pour ne pas exposer
-    l'api_key brut côté API. Renvoie id/provider/label/granted_at."""
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
-                   ug.granted_at, ug.granted_by, ug.daily_quota
-              FROM user_grants ug
-              JOIN platform_keys pk ON pk.id = ug.platform_key_id
-             WHERE ug.sub = %s
-             ORDER BY pk.provider, ug.granted_at DESC
-            """,
-            (sub,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_active_grant(sub: str, provider: str) -> Optional[dict]:
-    """Grant à utiliser pour ce (user, provider) — le plus récemment granté
-    s'il y en a plusieurs. Renvoie {platform_key_id, label, api_key} ou None.
-    """
-    _check_provider(provider)
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.label, pk.api_key_enc,
-                   ug.daily_quota
-              FROM user_grants ug
-              JOIN platform_keys pk ON pk.id = ug.platform_key_id
-             WHERE ug.sub = %s AND pk.provider = %s
-             ORDER BY ug.granted_at DESC
-             LIMIT 1
-            """,
-            (sub, provider),
-        ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["api_key"] = _pk_reveal(d, provider)   # déchiffre JIT (resolve_api_key)
-    d.pop("api_key_enc", None)
-    return d
-
-
-def grant_org_platform_key(org_id: int, platform_key_id: int,
-                           granted_by: Optional[str] = None,
-                           daily_quota: Optional[int] = None) -> None:
-    """Partage une clé plateforme à TOUTE l'org (couche 2). Miroir org de grant_platform_key."""
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO org_grants (org_id, platform_key_id, granted_at, granted_by, daily_quota)
-            VALUES (%s, %s, NOW(), %s, %s)
-            ON CONFLICT(org_id, platform_key_id) DO UPDATE SET
-                granted_at = NOW(), granted_by = EXCLUDED.granted_by,
-                daily_quota = EXCLUDED.daily_quota
-            """,
-            (org_id, platform_key_id, granted_by, daily_quota),
-        )
-
-
-def revoke_org_platform_key(org_id: int, platform_key_id: int) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM org_grants WHERE org_id = %s AND platform_key_id = %s",
-                     (org_id, platform_key_id))
+    """Grants d'un user (ADR 0044 §F : dérivés du share_down des instances plateforme)."""
+    return _grants_for_scope(f"user:{sub}")
 
 
 def list_org_grants(org_id: int) -> list[dict]:
-    """Grants de clé plateforme d'une org (joint platform_keys, sans api_key brut)."""
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.provider, pk.label,
-                   og.granted_at, og.granted_by, og.daily_quota
-              FROM org_grants og JOIN platform_keys pk ON pk.id = og.platform_key_id
-             WHERE og.org_id = %s ORDER BY pk.provider, og.granted_at DESC
-            """,
-            (org_id,),
-        )]
-
-
-def get_active_org_grant(org_id: int, provider: str) -> Optional[dict]:
-    """Grant de clé plateforme de l'org pour `provider` (le plus récent), ou None.
-    Miroir org de get_active_grant — résout la clé plateforme partagée à l'org."""
-    _check_provider(provider)
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT pk.id AS platform_key_id, pk.label, pk.api_key_enc, og.daily_quota
-              FROM org_grants og JOIN platform_keys pk ON pk.id = og.platform_key_id
-             WHERE og.org_id = %s AND pk.provider = %s
-             ORDER BY og.granted_at DESC LIMIT 1
-            """,
-            (org_id, provider),
-        ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["api_key"] = _pk_reveal(d, provider)
-    d.pop("api_key_enc", None)
-    return d
+    """Grants d'une org (ADR 0044 §F : dérivés du share_down des instances plateforme)."""
+    return _grants_for_scope(f"org:{org_id}")
 
 
 # ── RBAC connecteur interne à l'org (ADR 0025) ──────────────────────────────
@@ -414,6 +181,61 @@ def member_allowed_connectors(sub: str, org_id: int) -> set:
                         WHERE m.sub = %s AND g.org_id = %s)))
             """,
             (org_id, sub, sub, org_id)).fetchall()}
+
+
+# ── ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) ─────────────
+def set_group_connector_access(group_id: int, connector: str, principal_sub: str,
+                               granted_by: Optional[str] = None) -> None:
+    """Autorise un MEMBRE (`sub`) sur un connecteur dans l'équipe → le rend RESTREINT
+    dans l'équipe (deny-by-default) s'il ne l'était pas. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO group_connector_access (group_id, connector, principal_sub, granted_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (group_id, connector, principal_sub) DO NOTHING
+            """,
+            (group_id, connector, principal_sub, granted_by),
+        )
+
+
+def clear_group_connector_access(group_id: int, connector: str, principal_sub: str) -> None:
+    """Retire un membre. Dernière ligne partie ⟹ connecteur ré-ouvert à toute l'équipe."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM group_connector_access WHERE group_id = %s AND connector = %s "
+            "AND principal_sub = %s",
+            (group_id, connector, principal_sub),
+        )
+
+
+def list_group_connector_access(group_id: int, connector: Optional[str] = None) -> list[dict]:
+    """ACL connecteur de l'équipe : [{connector, principal_sub, granted_by, granted_at}]."""
+    sql = ("SELECT connector, principal_sub, granted_by, granted_at "
+           "FROM group_connector_access WHERE group_id = %s")
+    args: tuple = (group_id,)
+    if connector is not None:
+        sql += " AND connector = %s"
+        args = (group_id, connector)
+    sql += " ORDER BY connector, principal_sub"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def group_restricted_connectors(group_id: int) -> set:
+    """Connecteurs RESTREINTS dans l'équipe (≥1 ligne d'ACL) — deny-by-default pour eux."""
+    with _connect() as conn:
+        return {r["connector"] for r in conn.execute(
+            "SELECT DISTINCT connector FROM group_connector_access WHERE group_id = %s",
+            (group_id,)).fetchall()}
+
+
+def group_member_allowed_connectors(sub: str, group_id: int) -> set:
+    """Connecteurs (restreints dans l'équipe) auxquels `sub` a droit (ligne à son nom)."""
+    with _connect() as conn:
+        return {r["connector"] for r in conn.execute(
+            "SELECT connector FROM group_connector_access WHERE group_id = %s AND principal_sub = %s",
+            (group_id, sub)).fetchall()}
 
 
 def list_users_with_grants() -> list[dict]:

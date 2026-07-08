@@ -265,7 +265,7 @@ def credentials_for(sub: str, account: Optional[str] = None):
         suffix = f" pour {account}" if account else ""
         raise RuntimeError(
             f"Aucun compte Google connecté{suffix}. Connecte-le sur "
-            "https://app.oto.ninja/ (section Google)."
+            "https://manage.oto.cx/ (section Google)."
         )
 
     from google.oauth2.credentials import Credentials

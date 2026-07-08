@@ -1,7 +1,7 @@
 """Google Calendar — surface oto-core (CalendarClient) exposée par-utilisateur, multi-compte.
 
 Même substrat que Gmail/Tasks : chaque user connecte un ou plusieurs comptes
-Google sur `https://app.oto.ninja/` (flow OAuth unifié, scope `calendar` inclus).
+Google sur `https://manage.oto.cx/` (flow OAuth unifié, scope `calendar` inclus).
 Les tools `calendar_*` agissent sur le compte par défaut, ou sur le compte ciblé
 par le paramètre `account` (l'adresse email). Pas de clé plateforme : accès
 strictement per-user via OAuth.

@@ -315,6 +315,23 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- « ajoute une note sur ce contact » → `hubspot_create_note`"
         )),
     ),
+    "brevo": (
+        DocSection(kind="prerequisite", title="ta clé api brevo (v3)", body_md=(
+            "brevo s'authentifie via une **clé api v3**. dans [ton compte brevo](https://app.brevo.com), va dans **paramètres → smtp & api → clés api**, génère une clé (elle porte tout le compte, pas de scope).\n"
+            "- copie la clé (elle commence par `xkeysib-`)\n"
+            "- colle-la dans oto sur ton compte (`/account`), connecteur **brevo**\n"
+            "- byo uniquement : ta clé ou celle partagée de ton org, pas de clé plateforme\n"
+            "- à ne pas confondre avec **brevo (automation)**, un connecteur distinct pour les scénarios d'automation (connexion par session navigateur)"
+        )),
+        DocSection(kind="usage", title="emailing & crm depuis claude", body_md=(
+            "gère ta base contacts, tes envois et ton crm brevo.\n"
+            "- « ajoute jean à la liste newsletter » → `brevo_upsert_contact` / `brevo_list_membership`\n"
+            "- « envoie cet email à marie » → `brevo_send_email` (transactionnel unitaire)\n"
+            "- « prépare une campagne pour la liste clients » → `brevo_create_campaign` (brouillon ; l'envoi de masse se déclenche dans l'ui)\n"
+            "- « combien d'ouvertures sur ma dernière campagne » → `brevo_campaigns` (statistics)\n"
+            "- « crée un deal à 10k€ » → `brevo_crm_create` (entity `deals`)"
+        )),
+    ),
     "notion": (
         DocSection(kind="prerequisite", title="ton token d'intégration notion", body_md=(
             "notion s'ouvre via une **intégration interne**. crée-la sur [notion.so/my-integrations](https://www.notion.so/my-integrations), récupère l'**internal integration token**.\n"
@@ -539,7 +556,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "il te faut une clé **harvest api** greenhouse.\n"
             "- dans greenhouse, va dans **configure → dev center → api credentials** et crée une clé de type *harvest*\n"
             "- donne-lui les permissions candidats/jobs/applications/users\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [greenhouse.io](https://www.greenhouse.io)\n"
             "- ⚠️ les écritures (créer un candidat, ajouter une note) exigent un `on_behalf_of` = l'id d'un utilisateur greenhouse, récupéré via `greenhouse_users`"
         )),
@@ -555,7 +572,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api lever", body_md=(
             "il te faut une clé **api lever**.\n"
             "- dans lever, va dans **settings → integrations and API → API credentials** et génère une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [lever.co](https://www.lever.co)\n"
             "- ⚠️ les écritures (créer un candidat, ajouter une note) exigent un `perform_as` = l'id d'un utilisateur lever, récupéré via `lever_users`"
         )),
@@ -571,7 +588,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api ashby", body_md=(
             "il te faut une clé **api ashby**.\n"
             "- dans ashby, va dans **admin → integrations → API** et crée une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [ashbyhq.com](https://www.ashbyhq.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(
@@ -586,7 +603,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="prerequisite", title="ta clé api teamtailor", body_md=(
             "il te faut une clé **api teamtailor**.\n"
             "- dans teamtailor, va dans **settings → integrations → API keys** et génère une clé\n"
-            "- colle-la dans tes [clés de connecteurs](https://app.oto.ninja/) (ou laisse ton org partager la sienne)\n"
+            "- colle-la dans tes [clés de connecteurs](https://manage.oto.cx/) (ou laisse ton org partager la sienne)\n"
             "- doc éditeur : [teamtailor.com](https://www.teamtailor.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(
@@ -602,7 +619,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "recruitee demande **deux champs** :\n"
             "- `api_token` — ton token api personnel (recruitee, **settings → apps & plugins → personal API tokens**)\n"
             "- `company_id` — l'identifiant de ta société recruitee (visible dans l'url de ton espace, ex. `recruitee.com/c/<company_id>`)\n"
-            "renseigne les deux dans tes [clés de connecteurs](https://app.oto.ninja/).\n"
+            "renseigne les deux dans tes [clés de connecteurs](https://manage.oto.cx/).\n"
             "- doc éditeur : [recruitee.com](https://www.recruitee.com)"
         )),
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(

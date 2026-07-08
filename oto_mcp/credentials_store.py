@@ -44,6 +44,10 @@ ORG = "org"
 # pour la famille oauth (google + mounts memento/atlassian/folkmcp, flux dédiés) en
 # attendant leurs barreaux (B3/B4).
 MEMBER = "member"
+# Scope PLATEFORME (ADR 0044 §F) : la clé plateforme partagée EST une instance du coffre
+# (fin de la table legacy `platform_keys`). `entity_id` = le label de la clé (N par
+# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config (api_version, dsn).
+PLATFORM = "platform"
 
 
 def member_id(org_id: int, sub: str) -> str:
@@ -101,6 +105,101 @@ def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
             "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
             tuple(params))
     return (cur.rowcount or 0) > 0
+
+
+def list_platform_instances(provider: str) -> list[dict]:
+    """ADR 0044 §F : les instances scope PLATEFORM d'un `provider` (label + partage +
+    meta), SANS secret (le gagnant est déchiffré à part via `get_credential`, chemin chaud
+    léger). Trié récent d'abord (miroir de l'ancien « la clé plateforme la plus récente »).
+    C'est la source de la résolution du palier plateforme depuis le cutover R3."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id AS label, share_mode, share_down, share_side, meta "
+            "FROM connector_credentials WHERE entity_type=%s AND connector=%s "
+            "ORDER BY set_at DESC", (PLATFORM, provider)).fetchall()
+    return [{"label": r["label"], "share_mode": r["share_mode"],
+             "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
+             "meta": r["meta"] or {}} for r in rows]
+
+
+def list_platform_credentials(provider: "str | None" = None) -> list[dict]:
+    """ADR 0044 §F : clés plateforme (instances scope PLATFORM), SANS secret — pour la
+    surface admin (remplace db.list_platform_keys_meta)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, entity_id AS label, set_at FROM connector_credentials "
+            "WHERE entity_type=%s" + (" AND connector=%s" if provider else "") +
+            " ORDER BY connector, set_at DESC",
+            (PLATFORM, provider) if provider else (PLATFORM,)).fetchall()
+    return [{"provider": r["connector"], "label": r["label"], "set_at": r["set_at"]}
+            for r in rows]
+
+
+def _latest_platform_label(conn, provider: str) -> "str | None":
+    r = conn.execute(
+        "SELECT entity_id FROM connector_credentials WHERE entity_type=%s AND connector=%s "
+        "ORDER BY set_at DESC LIMIT 1", (PLATFORM, provider)).fetchone()
+    return r["entity_id"] if r else None
+
+
+def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
+                   label: "str | None" = None) -> None:
+    """ADR 0044 §F R4 : accorde l'accès plateforme à `scope` (`user:<sub>` | `org:<id>`) sur
+    l'instance du `provider` (label = clé la plus récente par défaut) — remplace
+    grant_platform_key/grant_org_platform_key. Non free-tier ⟹ ajoute au `share_down`
+    (mode 'closed'). Free-tier (`platform_key_open`) ⟹ accès déjà ouvert à tous : on ne pose
+    QUE le quota (`meta.rate_limit_by[scope]`). Le quota s'applique dans les deux cas."""
+    con = connectors.REGISTRY.get(provider)
+    free_tier = bool(con and getattr(con, "platform_key_open", False))
+    with _connect() as conn:
+        label = label or _latest_platform_label(conn, provider)
+        if label is None:
+            raise ValueError(f"aucune instance plateforme pour {provider!r}")
+        row = conn.execute(
+            "SELECT share_mode, share_down, meta FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (PLATFORM, label, provider)).fetchone()
+        down, meta, mode = list(row["share_down"] or []), dict(row["meta"] or {}), row["share_mode"]
+        if not free_tier:
+            mode = "closed"
+            if scope not in down:
+                down.append(scope)
+        rlb = dict(meta.get("rate_limit_by") or {})
+        if daily_quota is not None:
+            rlb[scope] = daily_quota
+        if rlb:
+            meta["rate_limit_by"] = rlb
+        conn.execute(
+            "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
+            "meta=%s::jsonb, version=version+1 "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (mode, json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+
+
+def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> None:
+    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by)."""
+    with _connect() as conn:
+        label = label or _latest_platform_label(conn, provider)
+        if label is None:
+            return
+        row = conn.execute(
+            "SELECT share_down, meta FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (PLATFORM, label, provider)).fetchone()
+        if not row:
+            return
+        down = [s for s in (row["share_down"] or []) if s != scope]
+        meta = dict(row["meta"] or {})
+        rlb = dict(meta.get("rate_limit_by") or {})
+        rlb.pop(scope, None)
+        if rlb:
+            meta["rate_limit_by"] = rlb
+        else:
+            meta.pop("rate_limit_by", None)
+        conn.execute(
+            "UPDATE connector_credentials SET share_down=%s::jsonb, meta=%s::jsonb, "
+            "version=version+1 WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
 
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google/memento) y vit en clair (le
@@ -555,4 +654,67 @@ def backfill_member_scope() -> dict:
         counts["migrated"] += 1
     if counts["migrated"] or counts["skipped"]:
         logger.info("backfill_member_scope: %s", counts)
+    return counts
+
+
+def backfill_platform_scope() -> dict:
+    """ADR 0044 §F R2 : projette les clés plateforme legacy (`platform_keys`) + leurs
+    grants (`user_grants`/`org_grants`) comme instances scope PLATFORM du coffre unifié.
+    - **credential** re-chiffré (AAD legacy `platform_keys:{prov}:{label}` → nouveau AAD),
+    - **accès** dérivé : connecteur `platform_key_open` (free-tier) ⟹ `share_mode='open'` ;
+      sinon ⟹ `share_mode='closed'` + `share_down` = grants (`user:<sub>` ∪ `org:<id>`),
+    - **quota** dérivé : `meta.rate_limit` = `default_quota` du connecteur ; `meta.rate_limit_by`
+      = les `daily_quota` explicites des grants.
+    Idempotent et RE-DÉRIVÉ à chaque boot (legacy reste la vérité jusqu'au cutover lectures
+    R3 → on garde l'instance synchro avec les grants legacy pendant la fenêtre R2→R4). Peu de
+    clés plateforme ⟹ coût négligeable. Ligne indéchiffrable = laissée legacy (inerte)."""
+    counts = {"migrated": 0, "skipped": 0}
+    with _connect() as conn:
+        keys = conn.execute(
+            "SELECT id, provider, label, api_key_enc FROM platform_keys").fetchall()
+    for k in keys:
+        prov, label, kid = k["provider"], k["label"], k["id"]
+        con = connectors.REGISTRY.get(prov)
+        if con is None or "platform" not in con.auth_modes:
+            counts["skipped"] += 1
+            continue
+        try:
+            secret = crypto.decrypt(k["api_key_enc"], f"platform_keys:{prov}:{label}")
+        except Exception:
+            logger.warning("backfill_platform_scope: %s/%s indéchiffrable — laissé legacy",
+                           prov, label, exc_info=True)
+            counts["skipped"] += 1
+            continue
+        with _connect() as conn:
+            ug = conn.execute("SELECT sub, daily_quota FROM user_grants "
+                              "WHERE platform_key_id=%s", (kid,)).fetchall()
+            og = conn.execute("SELECT org_id, daily_quota FROM org_grants "
+                              "WHERE platform_key_id=%s", (kid,)).fetchall()
+        # free-tier (`platform_key_open`) ⟹ accès OUVERT à tous (share_down vide) : sur ces
+        # clés le grant legacy ne portait QUE le quota (override de `daily_quota`), jamais une
+        # restriction d'accès. Non free-tier ⟹ le grant EST l'autorisation → `closed` + le
+        # grantee dans `share_down`. Le quota va dans `rate_limit_by` dans les DEUX cas.
+        share_mode = "open" if getattr(con, "platform_key_open", False) else "closed"
+        share_down, rate_by = [], {}
+        for typ, ident, dq in ([("user", g["sub"], g["daily_quota"]) for g in ug]
+                               + [("org", g["org_id"], g["daily_quota"]) for g in og]):
+            sc = f"{typ}:{ident}"
+            if share_mode == "closed":
+                share_down.append(sc)
+            if dq is not None:
+                rate_by[sc] = dq
+        meta = {}
+        if getattr(con, "default_quota", None):
+            meta["rate_limit"] = con.default_quota
+        if rate_by:
+            meta["rate_limit_by"] = rate_by
+        with _connect() as conn:
+            _upsert(conn, PLATFORM, label, prov, "", secret, "backfill_platform", meta)
+            conn.execute(
+                "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb "
+                "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+                (share_mode, json.dumps(share_down), PLATFORM, label, prov, ""))
+        counts["migrated"] += 1
+    if counts["migrated"] or counts["skipped"]:
+        logger.info("backfill_platform_scope: %s", counts)
     return counts

@@ -41,6 +41,14 @@ from ..auth_hooks import current_user_sub_from_token
 log = logging.getLogger("oto_mcp.tools.mount")
 CATALOG_TIMEOUT = 20
 
+
+def _build_transport(url: str, token: str) -> StreamableHttpTransport:
+    """URL-embedded token (e.g. AI Ark `?token={token}`) or standard Bearer header.
+    Driven by whether `{token}` appears in the mount_url."""
+    if "{token}" in url:
+        return StreamableHttpTransport(url.replace("{token}", token))
+    return StreamableHttpTransport(url, headers={"Authorization": f"Bearer {token}"})
+
 # Noms d'outils fédérés actuellement enregistrés, par connecteur — pour pouvoir
 # les retirer/re-poser au refresh à chaud (oto_admin_refresh_mount) sans restart.
 _REGISTERED: dict[str, set[str]] = {}
@@ -181,8 +189,7 @@ def _fetch_catalog(connector: connectors.Connector) -> list:
             return []
 
         async def _list():
-            client = Client(StreamableHttpTransport(
-                connector.mount_url, headers={"Authorization": f"Bearer {token}"}))
+            client = Client(_build_transport(connector.mount_url, token))
             async with client:
                 return await client.list_tools()
 
@@ -205,6 +212,21 @@ def _make_factory(connector: connectors.Connector):
             return Client(StreamableHttpTransport(connector.mount_url))
         return factory_noauth
 
+    # Mount keyed (API key, ex. AI Ark) : résolution via resolve_api_key (cascade
+    # BYO > platform grant > quota) plutôt que resolve_mount_token (OAuth only).
+    # Le token est injecté dans l'URL si mount_url contient `{token}`, sinon en Bearer.
+    if connector.keyed:
+        async def factory_keyed() -> Client:
+            if current_user_sub_from_token() is None:
+                raise McpError(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=(f"Connecteur `{connector.name}` indisponible en "
+                             f"stdio local (credential per-user serveur requis)."),
+                ))
+            key, _ = access.resolve_api_key(connector.name)
+            return Client(_build_transport(connector.mount_url, key))
+        return factory_keyed
+
     async def factory() -> Client:
         # Garde d'accès = la résolution du token : `resolve_mount_token` lève si le
         # user n'a pas connecté son compte fédéré (OAuth per-user). Plus de
@@ -216,8 +238,7 @@ def _make_factory(connector: connectors.Connector):
                          f"stdio local (credential per-user serveur requis)."),
             ))
         token = access.resolve_mount_token(connector.name)  # lève si non connecté
-        return Client(StreamableHttpTransport(
-            connector.mount_url, headers={"Authorization": f"Bearer {token}"}))
+        return Client(_build_transport(connector.mount_url, token))
 
     return factory
 
@@ -306,3 +327,4 @@ def register(mcp: FastMCP) -> None:
             return await _asyncio.to_thread(refresh, mcp, connector)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+

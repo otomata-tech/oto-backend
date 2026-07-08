@@ -84,23 +84,33 @@ def test_resolve_credential_config_from_meta_dsn(monkeypatch):
     assert rc.config.get("dsn") == "api6.unipile.com:13616"
 
 
-def test_resolve_credential_platform_has_no_config(monkeypatch):
+def test_resolve_credential_platform_config_from_meta(monkeypatch):
+    # ADR 0044 §F : la clé plateforme EST une instance du coffre (entity_type=PLATFORM) → sa
+    # config (api_version/dsn) voyage via `meta`. Corrige le bug historique « config vide »
+    # (qui empêchait de mettre une clé plateforme en v2 sans env global).
+    meta = {"api_version": "v2", "dsn": "api.unipile.com"}
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
     monkeypatch.setattr(access.db, "get_member_api_key", lambda s, o, p: None)
     monkeypatch.setattr(access, "current_group", lambda s: None)
     monkeypatch.setattr(access, "current_org", lambda s: None)
-    monkeypatch.setattr(access.db, "get_active_grant",
-                        lambda s, p: {"api_key": "PK", "label": "plat", "daily_quota": None})
+    monkeypatch.setattr(access.credentials_store, "list_platform_instances",
+                        lambda p: [{"label": "plat", "share_mode": "closed",
+                                    "share_down": ["user:u1"], "share_side": [], "meta": meta}])
+    monkeypatch.setattr(access.credentials_store, "get_credential",
+                        lambda et, eid, p, account="": "PK")
+    monkeypatch.setattr(access.credentials_store, "get_credential_with_meta",
+                        lambda et, eid, p, account="": {"secret": "PK", "meta": meta, "set_at": None})
     monkeypatch.setattr(access.db, "get_usage_today", lambda s, p: 0)
     rc = access.resolve_credential("unipile", want="auto")
-    assert rc.is_platform and rc.mode == "platform" and rc.entity_type is None
-    assert rc.config == {}
+    assert rc.is_platform and rc.mode == "platform"
+    assert rc.entity_type == access.credentials_store.PLATFORM
+    assert rc.config.get("api_version") == "v2" and rc.config.get("dsn") == "api.unipile.com"
 
 
 def test_resolve_credential_byo_skips_platform(monkeypatch):
-    # want="byo" : aucun byo posé → lève SANS consulter le grant plateforme.
+    # want="byo" : aucun byo posé → lève SANS consulter le palier plateforme.
     _wire(monkeypatch, user=None, group=None, org=None)
-    monkeypatch.setattr(access.db, "get_active_grant",
-                        lambda s, p: pytest.fail("platform consulté en mode byo"))
+    monkeypatch.setattr(access, "_resolve_platform_grant",
+                        lambda *a, **k: pytest.fail("platform consulté en mode byo"))
     with pytest.raises(McpError):
         access.resolve_credential("unipile", want="byo")

@@ -27,10 +27,20 @@ from typing import Any, Optional
 
 from psycopg.errors import UniqueViolation
 
+from . import datastore_schema as dsv2
 from . import db, ownership
 
 
-_META_COLS = ("_id", "_created_at", "_updated_at")
+_META_COLS = ("_id", "_created_at", "_updated_at", "_claimed_by", "_claimed_until")
+
+
+class RowValidationError(ValueError):
+    """Écriture refusée par le schéma strict / le cycle de vie (ADR 0046 B/C).
+    Le message liste les champs fautifs — actionnable, jamais un refus muet."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("écriture refusée par le schéma : " + " ; ".join(errors))
 
 
 class InvalidCursor(ValueError):
@@ -65,10 +75,11 @@ def _dashboard_url() -> str:
     return os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
 
 
-def _ns_url(namespace: str) -> str:
+def _ns_url(ns_id: int) -> str:
     """Deep-link vers la vue datastore du dashboard (surface d'édition canonique
-    tant que l'export tiers — otomata#29 — n'existe pas)."""
-    return f"{_dashboard_url()}/console/data?ns={namespace}"
+    tant que l'export tiers — otomata#29 — n'existe pas). Par ID (`/data/<id>`,
+    BIGSERIAL stable au renommage) — l'adressage `?ns=<nom>` est déprécié."""
+    return f"{_dashboard_url()}/data/{int(ns_id)}"
 
 
 class NamespaceNotFound(Exception):
@@ -190,14 +201,44 @@ class DatastorePg:
     @staticmethod
     def _row_to_dict(row: dict) -> dict:
         """Ligne `datastore_rows` → row API (`_id`/`_created_at`/`_updated_at` à
-        plat + champs user)."""
+        plat + champs user). Le bail de claim (ADR 0046 D) n'apparaît que s'il est
+        posé (les lectures ordinaires ne le SELECTent pas → absent, pas None)."""
         data = row.get("data") or {}
-        return {
+        out = {
             "_id": row["row_id"],
             "_created_at": row["created_at"],
             "_updated_at": row["updated_at"],
             **{k: v for k, v in data.items() if k not in _META_COLS},
         }
+        if row.get("claimed_by") is not None:
+            out["_claimed_by"] = row["claimed_by"]
+            out["_claimed_until"] = row.get("claimed_until")
+        return out
+
+    # --- schéma v2 : validation d'écriture + cycle de vie (ADR 0046) ---------
+
+    def _schema_of(self, ns_id: int) -> Optional[dict]:
+        return (db.get_datastore_namespace_by_id(ns_id) or {}).get("schema")
+
+    @staticmethod
+    def _check_row(schema: Optional[dict], merged: dict, *,
+                   prev_status=None) -> None:
+        """Valide la row TELLE QU'ÉCRITE (résultat mergé). No-op si le schéma ne
+        déclare ni strict/required ni lifecycle (défaut 0016 soft)."""
+        errors = dsv2.validate_row(schema, merged, prev_status=prev_status)
+        if errors:
+            raise RowValidationError(errors)
+
+    @staticmethod
+    def _release_if_terminal(schema: Optional[dict], ns_id: int, row_id: str,
+                             merged: dict) -> None:
+        """Entrée dans un état terminal du cycle de vie ⇒ le bail de claim tombe
+        (fin de traitement, façon log_exploration_attempt). Best-effort."""
+        sf = dsv2.status_field(schema)
+        if not sf:
+            return
+        if dsv2.is_terminal_status(schema, merged.get(sf.get("key"))):
+            db.datastore_release_claim(ns_id, row_id, None)
 
     # --- namespace lifecycle -------------------------------------------------
 
@@ -213,7 +254,7 @@ class DatastorePg:
             "id": ns_id,
             "namespace": n["namespace"],
             "created_at": n.get("created_at"),
-            "url": _ns_url(n["namespace"]),
+            "url": _ns_url(ns_id),
             "shared": shared,
             "owner_type": n.get("owner_type"),
             "owner_id": n.get("owner_id"),
@@ -276,10 +317,10 @@ class DatastorePg:
             owner_type, owner_id = self._default_owner()
         oid = owner_id if owner_id is not None else self.sub
         try:
-            db.create_datastore_namespace(owner_type, oid, namespace)
+            ns_id = db.create_datastore_namespace(owner_type, oid, namespace)
         except ValueError as e:
             raise NamespaceExists(str(e))
-        return {"namespace": namespace, "url": _ns_url(namespace)}
+        return {"namespace": namespace, "id": ns_id, "url": _ns_url(ns_id)}
 
     def delete_namespace(self, namespace: str) -> None:
         ns_id = self._resolve(namespace)
@@ -301,7 +342,7 @@ class DatastorePg:
             db.rename_datastore_namespace_by_id(ns_id, new_name)
         except ValueError as e:
             raise NamespaceExists(str(e))
-        return {"id": ns_id, "namespace": new_name, "url": _ns_url(new_name)}
+        return {"id": ns_id, "namespace": new_name, "url": _ns_url(ns_id)}
 
     def resolve_ns_id(self, namespace: str) -> int:
         """ns_id d'un namespace visible par l'acteur (lève `NamespaceNotFound`).
@@ -316,8 +357,7 @@ class DatastorePg:
         return self._resolve(namespace, write=True)
 
     def get_url(self, namespace: str) -> str:
-        self._resolve(namespace)  # 404 si inconnu
-        return _ns_url(namespace)
+        return _ns_url(self._resolve(namespace))  # 404 si inconnu
 
     # --- mode typé (ADR 0032 §6 / 0029, B6) ----------------------------------
 
@@ -336,6 +376,9 @@ class DatastorePg:
         ns_id = self._resolve(namespace, write=True)
         if schema is not None and not isinstance(schema, dict):
             raise ValueError("schema doit être un objet {fields:[...]} ou null")
+        def_errors = dsv2.validate_schema_def(schema)
+        if def_errors:
+            raise ValueError("schéma invalide : " + " ; ".join(def_errors))
         new_key = (schema or {}).get("key")
         new_key = new_key if isinstance(new_key, str) and new_key else None
         if new_key:
@@ -359,6 +402,7 @@ class DatastorePg:
     def append_row(self, namespace: str, data: dict) -> dict:
         ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
+        self._check_row(self._schema_of(ns_id), user_data)
         row = db.datastore_insert_row(ns_id, _new_id(), user_data)
         return self._row_to_dict(row)
 
@@ -375,7 +419,15 @@ class DatastorePg:
             self._active_scope_cache = None  # invalide le cache (le ns créé est dans l'org active)
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
+        schema = self._schema_of(ns_id)
+        if dsv2.validation_active(schema) or dsv2.lifecycle_of(schema):
+            prev = db.datastore_get_row(ns_id, row_id)  # remplacement intégral → prev pour la transition
+            sk = (dsv2.status_field(schema) or {}).get("key")
+            prev_status = ((prev or {}).get("data") or {}).get(sk) if sk else None
+            self._check_row(schema, user_data, prev_status=prev_status)
         row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)
+        if not inserted:
+            self._release_if_terminal(schema, ns_id, row_id, user_data)
         return self._row_to_dict(row), inserted
 
     def declared_key(self, namespace: str) -> Optional[str]:
@@ -395,7 +447,12 @@ class DatastorePg:
 
     def _write_rows_to_ns(self, ns_id: int, rows: list, *, key: Optional[str]) -> dict:
         """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
-        d'org — matérialisation d'un upload signé, où l'org de session est absente)."""
+        d'org — matérialisation d'un upload signé, où l'org de session est absente).
+        Le schéma v2 (validation/lifecycle, ADR 0046) s'applique à CHAQUE row du
+        lot, sur son résultat mergé — une row fautive fait échouer le lot avec le
+        champ en cause (pas d'écriture partielle silencieuse au-delà)."""
+        schema = self._schema_of(ns_id)
+        status_key = (dsv2.status_field(schema) or {}).get("key")
         inserted, updated, ids = 0, 0, []
         for data in rows:
             if not isinstance(data, dict):
@@ -407,11 +464,15 @@ class DatastorePg:
                 if existing_id is not None:
                     cur = db.datastore_get_row(ns_id, existing_id)
                     merged = dict((cur or {}).get("data") or {})
+                    prev_status = merged.get(status_key) if status_key else None
                     merged.update(user_data)
+                    self._check_row(schema, merged, prev_status=prev_status)
                     db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                    self._release_if_terminal(schema, ns_id, existing_id, merged)
                     updated += 1
                     ids.append(existing_id)
                     continue
+            self._check_row(schema, user_data)
             try:
                 row = db.datastore_insert_row(ns_id, _new_id(), user_data)
             except UniqueViolation:
@@ -430,8 +491,11 @@ class DatastorePg:
                     raise  # violation inexpliquée → erreur franche, pas de repli muet
                 cur = db.datastore_get_row(ns_id, existing_id)
                 merged = dict((cur or {}).get("data") or {})
+                prev_status = merged.get(status_key) if status_key else None
                 merged.update(user_data)
+                self._check_row(schema, merged, prev_status=prev_status)
                 db.datastore_update_row(ns_id, existing_id, merged, _now_iso())
+                self._release_if_terminal(schema, ns_id, existing_id, merged)
                 updated += 1
                 ids.append(existing_id)
                 continue
@@ -535,12 +599,43 @@ class DatastorePg:
         if not existing:
             raise RowNotFound(row_id)
         data = dict(existing.get("data") or {})
+        schema = self._schema_of(ns_id)
+        status_key = (dsv2.status_field(schema) or {}).get("key")
+        prev_status = data.get(status_key) if status_key else None
         for k, v in patch.items():
             if k in _META_COLS:
                 continue
             data[k] = v
+        # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
+        # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
+        self._check_row(schema, data, prev_status=prev_status)
         row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
+        self._release_if_terminal(schema, ns_id, row_id, data)
         return self._row_to_dict(row)
+
+    # --- file de travail (ADR 0046 D) -----------------------------------------
+
+    def claim_next(self, namespace: str, *, worker: str,
+                   filter: Optional[dict] = None, lease_s: int = 900) -> Optional[dict]:
+        """Pick + claim atomique de la prochaine row claimable (bail NULL ou
+        expiré), `FOR UPDATE SKIP LOCKED` — N workers drainent sans collision.
+        `filter` = filtre exact `{col: val}` (ex. {"status": "nouveau"}). Renvoie
+        la row (avec `_claimed_by`/`_claimed_until`) ou None (file vide)."""
+        worker = (worker or "").strip()
+        if not worker:
+            raise ValueError("worker requis (libellé stable rejoué sur release)")
+        ns_id = self._resolve(namespace, write=True)
+        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        row = db.datastore_claim_next(ns_id, worker=worker,
+                                      lease_seconds=int(lease_s), filters=filters)
+        return self._row_to_dict(row) if row else None
+
+    def release_claim(self, namespace: str, row_id: str, *, worker: str) -> bool:
+        """Libère le bail (abandon sans verdict). Gardé par `worker` — on ne
+        libère pas le claim d'un autre. L'entrée dans un état terminal libère
+        déjà automatiquement (pas besoin d'appeler release après)."""
+        ns_id = self._resolve(namespace, write=True)
+        return db.datastore_release_claim(ns_id, row_id, str(worker))
 
     def delete_row(self, namespace: str, row_id: str) -> None:
         ns_id = self._resolve(namespace, write=True)

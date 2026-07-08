@@ -91,28 +91,27 @@ def test_key_grant_routes(monkeypatch):
     monkeypatch.setattr(users_admin, "_grant_org_key", _tag("org_grant"))
     monkeypatch.setattr(users_admin, "_revoke_org_key", _tag("org_revoke"))
     assert ac._key_grant(CTX, ac.KeyGrantInput(
-        op="grant", scope="user", target="x", key_id=3))["called"] == "user_grant"
+        op="grant", scope="user", target="x", provider="apollo"))["called"] == "user_grant"
     assert ac._key_grant(CTX, ac.KeyGrantInput(
-        op="grant", scope="org", org_id=2, key_id=3))["called"] == "org_grant"
+        op="grant", scope="org", org_id=2, provider="apollo"))["called"] == "org_grant"
     with pytest.raises(AuthzDenied) as e:
         ac._key_grant(CTX, ac.KeyGrantInput(op="grant", scope="user", target="x"))
-    assert e.value.code == "missing_key"
+    assert e.value.code == "missing_provider"
 
 
 def test_key_grant_list_never_reveals_secret(monkeypatch):
-    monkeypatch.setattr(ac.db, "list_platform_keys", lambda provider=None: [
-        {"id": 918, "provider": "apollo", "label": "otomata-apollo",
-         "api_key": "SECRET-should-not-leak", "created_at": "2026-07-03 00:00:00"},
+    # ADR 0044 §F : list depuis les instances scope PLATFORM (provider, label, set_at), 0 secret.
+    monkeypatch.setattr(ac.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "apollo", "label": "otomata-apollo", "set_at": "2026-07-03 00:00:00"},
     ])
     out = ac._key_grant(CTX, ac.KeyGrantInput(op="list"))
     assert out["count"] == 1
     key = out["keys"][0]
-    assert key == {"key_id": 918, "provider": "apollo", "label": "otomata-apollo",
-                   "created_at": "2026-07-03 00:00:00"}
+    assert key == {"provider": "apollo", "label": "otomata-apollo", "set_at": "2026-07-03 00:00:00"}
     assert "api_key" not in key  # le secret ne transite JAMAIS dans le contexte LLM
 
 
 def test_key_grant_missing_scope(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
-        ac._key_grant(CTX, ac.KeyGrantInput(op="grant", key_id=3))
+        ac._key_grant(CTX, ac.KeyGrantInput(op="grant"))
     assert e.value.code == "missing_scope"

@@ -122,9 +122,12 @@ def test_anon_resolve_dispatch(monkeypatch):
 
 def test_anon_resolver_platform_open_key(monkeypatch):
     monkeypatch.setattr(org_store, "get_org_secret", lambda o, p: None)
-    monkeypatch.setattr(db, "get_active_org_grant", lambda o, p: None)
-    monkeypatch.setattr(db, "get_platform_api_key",
-                        lambda p: {"api_key": "PLATKEY", "label": "plat"})
+    # ADR 0044 §F R3 : instance plateforme 'open' (free-tier) servie à l'anon.
+    monkeypatch.setattr(access.credentials_store, "list_platform_instances",
+                        lambda p: [{"label": "plat", "share_mode": "open", "share_down": [],
+                                    "share_side": [], "meta": {}}])
+    monkeypatch.setattr(access.credentials_store, "get_credential",
+                        lambda et, eid, p, account="": "PLATKEY")
     # serper est platform_key_open dans le registre → clé plateforme ouverte servie
     rc = access._resolve_credential_anon("serper", "auto", 99)
     assert rc.key == "PLATKEY" and rc.is_platform is True
@@ -133,8 +136,7 @@ def test_anon_resolver_platform_open_key(monkeypatch):
 def test_anon_resolver_fail_closed(monkeypatch):
     from mcp.shared.exceptions import McpError
     monkeypatch.setattr(org_store, "get_org_secret", lambda o, p: None)
-    monkeypatch.setattr(db, "get_active_org_grant", lambda o, p: None)
-    monkeypatch.setattr(db, "get_platform_api_key", lambda p: None)
+    monkeypatch.setattr(access.credentials_store, "list_platform_instances", lambda p: [])
     # want=byo → jamais de palier plateforme
     with pytest.raises(McpError):
         access._resolve_credential_anon("attio", "byo", 99)

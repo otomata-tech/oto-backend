@@ -374,11 +374,23 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 2 ressources** par délégation de l'org :
+Un groupe **gouverne 3 ressources** par délégation de l'org :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
 - **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
   sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **gouvernance de connecteur (ADR 0012 B1/B2, restrict-only — 08/07/2026)** — le chef
+  d'équipe peut, pour SON équipe : **couper** un connecteur (`group_connector_activation`,
+  coupures seules) et **réserver** un connecteur à des membres (`group_connector_access`).
+  **INVARIANT MONOTONE** : l'équipe ne peut que RÉTRÉCIR ce que l'org expose, jamais élargir
+  (platform ⊇ org ⊇ group). Dispo = **visibilité** (`session_visibility`, fail-open,
+  `connector_activation.effective_for_group`/`group_cut_connectors`). Accès = **gate DUR** :
+  seam `access.group_rbac_denied_connectors` (mirror de `rbac_denied_connectors`, bypass
+  super/org_admin/group_admin) ; `require_connector_access` = `org_block OR grp_block` à
+  **fail-open INDÉPENDANT par palier** (un hoquet DB d'équipe ne désactive pas l'org).
+  Capacités `connectors.activation.{group_list,set_group,clear_group}` +
+  `connectors.acl.{group_list,group_grant,group_revoke}` (GROUP_*). REST
+  `/api/groups/{id}/connectors[/{name}]/activation` + `.../access`.
 
 **Groupe actif** : ≤1 par sub (`org_group_members.is_active`, index partiel),
 **invariant** = appartient à l'org active. `set_active_group` pose aussi l'org
@@ -544,6 +556,14 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 # crée un env éphémère SANS les deps projet (piège, ModuleNotFoundError). Recette :
 uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
+
+# Tester un CLONE scratchpad (livraison par PR, tree /data/oto stale) SANS réinstaller les
+# deps : réutiliser le venv local (deps+pytest présents) en forçant PYTHONPATH sur le clone
+# → `oto_mcp` résolu depuis le clone (PYTHONPATH prime sur l'editable install) = ton code :
+#   PYTHONPATH=<clone> OTO_CONFIG_DISABLE_SOPS=1 /data/oto/backend/.venv/bin/python -m pytest -q <clone>/tests/...
+# Convention : tester la LOGIQUE PURE (helpers hors DB, ex. `effective_for_group`,
+# `_connector_blocked`/seams) + les gardes de capacité par stub ; le chemin SQL est vérifié
+# au déploiement (le job `test` du CI tourne le vrai suite avec toutes les deps).
 
 # Deploy — push main déclenche `.github/workflows/deploy.yml` : workflow unique
 # CI/CD (job `test` pytest → job `deploy` `needs: test`). Deploy = SSH box dédiée :

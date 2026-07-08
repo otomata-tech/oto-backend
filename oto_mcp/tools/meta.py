@@ -79,24 +79,6 @@ async def _resolve_tool(ctx: Context, name: str):
     return None
 
 
-def _enforce_alpha_gate(sub: Optional[str], name: str) -> None:
-    """Rejoue le gate alpha (ADR 0013) sur la cible d'`oto_call` : un compte non
-    'active' ne peut dispatcher que l'allowlist d'onboarding. No-op si le flag est
-    off, pas de sub, ou cible allowlistée. Fail-OPEN sur glitch DB (comme
-    `session_visibility`)."""
-    from ..session_visibility import ALPHA_GATE_ALLOWLIST, alpha_gate_enabled
-    if not sub or not alpha_gate_enabled() or name in ALPHA_GATE_ALLOWLIST:
-        return
-    try:
-        status = (db.get_user(sub) or {}).get("access_status")
-    except Exception:
-        status = "active"
-    if status not in (None, "active"):
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=f"Compte en attente d'activation — `{name}` indisponible via oto_call."))
-
-
 async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool,
                              error: Optional[str], duration_ms: int) -> None:
     """Journalise l'appel dispatché SOUS LE NOM CIBLE (ADR 0036 §5 / 0017) : sans ça
@@ -266,11 +248,6 @@ def register(mcp: FastMCP) -> None:
                 code=INVALID_PARAMS,
                 message=f"`{name}` est un outil méta/spine — appelle-le directement, "
                         "pas via oto_call."))
-
-        # Gate alpha (ADR 0013) — SEUL gate sans backstop call-time (fail-open
-        # visibilité pure) : oto_call doit le rejouer, sinon un compte waitlisté
-        # atteindrait tout le catalogue via le dispatch.
-        _enforce_alpha_gate(sub, name)
 
         tool = await _resolve_tool(ctx, name)
         if tool is None:

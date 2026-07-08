@@ -14,8 +14,7 @@ from . import orgs_field_filters  # noqa: F401 — org.field_filters.{get,set} (
 from . import orgs_email_settings  # noqa: F401 — org.email_settings.{get,set} (envoi per-org)
 from . import orgs_mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
-from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept} + platform.invite.alpha
-from . import access_admin  # noqa: F401 — platform.access.{waitlist,grant,set_quota} (ADR 0013)
+from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept}
 from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
 # Sous-palier groupe (ADR 0012) — départements/équipes + chef d'équipe.
 from . import groups  # noqa: F401 — group.create/list/list_mine/use/clear/get/update/delete
@@ -47,8 +46,8 @@ from . import connectors_force  # noqa: F401 — connectors.force.member (MCP vi
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
 from . import connectors_instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
-# de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin, access_admin).
-from . import admin_console  # noqa: F401 — admin.{org,org_member,user,access,key_grant}
+# de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin).
+from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_grant,doctrine,signal}
 # Console connecteurs consolidée (ADR 0047 B1, fusion *_op) — porte les 6 tools MCP de la
 # famille (activation/access/connector/instance/identity/account_access) ; les modules
 # ci-dessus gardent leurs faces REST. À importer APRÈS eux.

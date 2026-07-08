@@ -324,38 +324,65 @@ def resolve_slot_tableau(name: str) -> str:
     return ns
 
 
+def _connector_blocked(provider: str, org_restricted: set, org_allowed: set,
+                       grp_restricted: set, grp_allowed: set) -> bool:
+    """Verdict DUR **pur** (testable, ADR 0025 + 0012 B2) : `provider` est bloqué si
+    l'ORG le restreint sans autoriser le membre, OU (narrowing d'ÉQUIPE) si l'équipe
+    active le restreint sans l'autoriser. INVARIANT MONOTONE : l'équipe ne peut
+    qu'AJOUTER une restriction — jamais débloquer ce que l'org autorise (le terme
+    équipe est un OR, il ne peut que passer un `False` à `True`)."""
+    org_block = provider in org_restricted and provider not in org_allowed
+    grp_block = provider in grp_restricted and provider not in grp_allowed
+    return org_block or grp_block
+
+
+def _access_block(provider: str, sub: str, scope_fn, restricted_fn, allowed_fn, label: str) -> bool:
+    """Un cran du RBAC connecteur (org OU équipe), avec fail-open INDÉPENDANT : bloqué
+    si le scope actif restreint `provider` sans autoriser `sub`. `allowed_fn` n'est
+    requêté que si le connecteur est restreint (chemin efficient). Fail-open PROPRE au
+    cran → un hoquet de la DB d'équipe ne désactive pas l'enforcement d'org (et
+    inversement)."""
+    try:
+        scope = scope_fn(sub)
+        if scope is None or provider not in restricted_fn(scope):
+            return False
+        return provider not in allowed_fn(sub, scope)
+    except Exception as e:
+        # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de credential
+        # → ne doit pas casser tous les connecteurs sur un hoquet DB. Pas de bypass
+        # exploitable (la résolution qui suit retape la DB et échoue pareil ; la
+        # visibilité masque déjà le connecteur restreint). On LOGUE (un silence avait
+        # masqué un bug `r[0]` 2026-06-25) → fail-open persistant = régression visible.
+        logger.warning("require_connector_access %s fail-open %s/%s: %s", label, sub, provider, e)
+        return False
+
+
 def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
-    """Backstop call-time du RBAC connecteur interne à l'org (ADR 0025) : si
-    `provider` est RESTREINT dans l'org active du `sub` et que `sub` n'y est pas
-    autorisé (département/user), lève. **DUR** — appelé dans `resolve_credential`
+    """Backstop call-time du RBAC connecteur (ADR 0025 org + 0012 B2 équipe) : si
+    `provider` est RESTREINT dans l'org active OU dans l'ÉQUIPE active du `sub` et que
+    `sub` n'y est pas autorisé, lève. **DUR** — appelé dans `resolve_credential`
     (couvre keyed + fields + BYO : pas de clé perso qui contourne). super_admin
-    bypasse ; pas d'org active → restriction non applicable ; stdio local (sub=None)
-    = accès complet."""
+    bypasse ; pas d'org/équipe active → restriction non applicable ; stdio local
+    (sub=None) = accès complet. L'équipe ne peut que RESTREINDRE davantage (monotone —
+    le verdict est `org_block OR grp_block`, cf. `_connector_blocked`)."""
     sub = sub or current_user_sub_from_token()
     if sub is None:
         return
     try:
         if is_super_admin(sub):
             return
-        org = current_org(sub)
-        if org is None or provider not in db.org_restricted_connectors(org):
-            return  # pas d'org, ou connecteur ouvert dans l'org
-        allowed = provider in db.member_allowed_connectors(sub, org)
     except Exception as e:
-        # FAIL-OPEN sur erreur infra : ce gate tourne sur CHAQUE résolution de
-        # credential → ne doit pas casser tous les connecteurs sur un hoquet DB.
-        # Pas de bypass exploitable : la résolution qui suit retape la DB et échoue
-        # pareil ; et la visibilité masque déjà le connecteur restreint. On LOGUE
-        # (un silence avait masqué un bug `r[0]` 2026-06-25) → un fail-open persistant
-        # = une régression visible, pas un trou muet.
-        logger.warning("require_connector_access fail-open %s/%s: %s", sub, provider, e)
-        return
-    if not allowed:
+        logger.warning("require_connector_access super-check fail-open %s: %s", sub, e)
+    org_block = _access_block(provider, sub, current_org,
+                              db.org_restricted_connectors, db.member_allowed_connectors, "org")
+    grp_block = _access_block(provider, sub, current_group,
+                              db.group_restricted_connectors, db.group_member_allowed_connectors, "group")
+    if org_block or grp_block:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 f"Le connecteur `{provider}` est réservé à certaines équipes/personnes "
-                f"de ton organisation. Demande l'accès à un admin de ton org."
+                f"de ton organisation. Demande l'accès à un admin de ton org (ou de ton équipe)."
             ),
         ))
 

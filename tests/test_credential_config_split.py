@@ -108,9 +108,9 @@ def test_resolve_credential_platform_config_from_meta(monkeypatch):
 
 
 def test_resolve_credential_byo_skips_platform(monkeypatch):
-    # want="byo" : aucun byo posé → lève SANS consulter le grant plateforme.
+    # want="byo" : aucun byo posé → lève SANS consulter le palier plateforme.
     _wire(monkeypatch, user=None, group=None, org=None)
-    monkeypatch.setattr(access.db, "get_active_grant",
-                        lambda s, p: pytest.fail("platform consulté en mode byo"))
+    monkeypatch.setattr(access, "_resolve_platform_grant",
+                        lambda *a, **k: pytest.fail("platform consulté en mode byo"))
     with pytest.raises(McpError):
         access.resolve_credential("unipile", want="byo")

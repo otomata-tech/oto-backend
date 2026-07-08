@@ -246,10 +246,9 @@ def test_platform_free_tier_last_open_key_only(seams):
 
 def test_platform_free_tier_deduped_by_grant(seams):
     seams.monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [
-        {"platform_key_id": 22, "provider": "serpapi", "label": "open",
-         "granted_at": "2026-07-01", "granted_by": None, "daily_quota": None}])
-    seams.monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [
-        {"id": 22, "provider": "serpapi", "label": "open", "created_at": "2026-06-01"}])
+        {"provider": "serpapi", "label": "open", "daily_quota": None}])
+    seams.monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "serpapi", "label": "open", "set_at": "2026-06-01"}])
     out = _run()
     assert out["count"] == 1
     assert out["instances"][0]["via"] == "user_grant"   # priorité au grant
@@ -260,10 +259,9 @@ def test_platform_no_free_tier_phantom_after_rotation(seams):
     # la cascade ne résout qu'UNE clé plateforme par provider → pas de free-tier
     # fantôme en plus du grant (dédup par PROVIDER, revue B4).
     seams.monkeypatch.setattr(ci.db, "list_grants_for_user", lambda sub: [
-        {"platform_key_id": 11, "provider": "serpapi", "label": "old",
-         "granted_at": "2026-07-01", "granted_by": None, "daily_quota": None}])
-    seams.monkeypatch.setattr(ci.db, "list_platform_keys_meta", lambda provider=None: [
-        {"id": 22, "provider": "serpapi", "label": "new", "created_at": "2026-06-01"}])
+        {"provider": "serpapi", "label": "old", "daily_quota": None}])
+    seams.monkeypatch.setattr(ci.credentials_store, "list_platform_credentials", lambda provider=None: [
+        {"provider": "serpapi", "label": "new", "set_at": "2026-06-01"}])
     out = _run()
     assert out["count"] == 1
     assert out["instances"][0]["via"] == "user_grant"
@@ -390,7 +388,6 @@ def test_projection_never_decrypts(seams, monkeypatch):
         raise AssertionError("decrypt appelé pendant la projection")
     monkeypatch.setattr(credentials_store, "get_credential", _boom)
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", _boom)
-    monkeypatch.setattr(db_keys, "_pk_reveal", _boom)
     monkeypatch.setattr(crypto, "decrypt", _boom)
     # Fixtures des 4 familles — le handler complet déroule sans lever.
     seams.vault[_member_key()] = [_row("zoho", "alexandra")]

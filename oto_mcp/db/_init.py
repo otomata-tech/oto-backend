@@ -25,9 +25,14 @@ def init_db() -> None:
         # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
         _drop_legacy_org_subscriptions(conn)
         conn.execute(_SCHEMA)
+        # ADR 0044 §F R5 : clés plateforme + grants migrés en instances du coffre unifié
+        # (connector_credentials scope PLATFORM + share_down/meta.rate_limit) → DROP des 3
+        # tables legacy (plus ni lues ni écrites). Idempotent, no-op après le 1er boot.
+        conn.execute("DROP TABLE IF EXISTS user_grants")
+        conn.execute("DROP TABLE IF EXISTS org_grants")
+        conn.execute("DROP TABLE IF EXISTS platform_keys")
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
-        conn.execute("ALTER TABLE user_grants ADD COLUMN IF NOT EXISTS daily_quota INTEGER")
         # ADR 0032 §2 : le lien projet→entité porte un `role` (pourquoi cette entité est ici).
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # ADR 0032 §4 (B2) : surcharge contextuelle préfaite du lien (connecteur → identité/instructions).
@@ -404,7 +409,6 @@ def init_db() -> None:
         conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE connector_credentials DROP CONSTRAINT IF EXISTS connector_credentials_pkey")
         conn.execute("ALTER TABLE connector_credentials ADD PRIMARY KEY (entity_type, entity_id, connector, account)")
-        conn.execute("ALTER TABLE platform_keys ADD COLUMN IF NOT EXISTS api_key_enc TEXT")
         # TTL opt-in des tokens API (audit 2026-06-13) : NULL = non-expirant.
         conn.execute("ALTER TABLE user_api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
         _drop_legacy_plaintext_stores(conn)
@@ -508,9 +512,8 @@ def _drop_legacy_plaintext_stores(conn: psycopg.Connection) -> None:
     `project_oto_connector_vault`). Idempotent (IF EXISTS) — no-op sur une DB
     fraîche (on-prem). Le chiffrement est désormais obligatoire : plus aucun
     chemin plaintext (writers/reveal en chiffré-seul)."""
-    # connector_credentials.secret (plaintext interne du coffre) + platform_keys.api_key
+    # connector_credentials.secret (plaintext interne du coffre)
     conn.execute("ALTER TABLE connector_credentials DROP COLUMN IF EXISTS secret")
-    conn.execute("ALTER TABLE platform_keys DROP COLUMN IF EXISTS api_key")
     # Colonnes legacy users.<provider>_api_key + sessions linkedin/crunchbase.
     for col in ("serper_api_key", "hunter_api_key", "sirene_api_key", "attio_api_key",
                 "lemlist_api_key", "kaspr_api_key", "pennylane_api_key", "slack_api_key",

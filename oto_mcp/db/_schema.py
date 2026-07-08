@@ -174,36 +174,6 @@ CREATE TABLE IF NOT EXISTS user_agent_readme (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS platform_keys (
-    id BIGSERIAL PRIMARY KEY,
-    provider TEXT NOT NULL,
-    label TEXT NOT NULL,
-    api_key_enc TEXT,                      -- enveloppe AES-256-GCM (chiffrement obligatoire)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(provider, label)
-);
-
-CREATE TABLE IF NOT EXISTS user_grants (
-    sub TEXT NOT NULL,
-    platform_key_id BIGINT NOT NULL,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by TEXT,
-    PRIMARY KEY (sub, platform_key_id),
-    FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
-);
-
--- Grant de clé plateforme au niveau ORG (couche 2 du modèle de connecteur) : partager
--- la clé plateforme à TOUS les membres d'une org, sans grant per-user. Miroir de
--- user_grants au grain org ; résolu par access.resolve_api_key (cran org platform-grant,
--- après le grant user). quota = per-membre (réutilise get_usage_today(sub)).
-CREATE TABLE IF NOT EXISTS org_grants (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    platform_key_id BIGINT NOT NULL REFERENCES platform_keys(id) ON DELETE CASCADE,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by TEXT,
-    daily_quota INTEGER,
-    PRIMARY KEY (org_id, platform_key_id)
-);
 
 -- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
 -- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne

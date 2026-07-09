@@ -435,16 +435,27 @@ class DatastorePg:
         en appliquant le schéma v2 (ADR 0046) au résultat mergé : validation avec
         `prev_status` (transition de lifecycle) puis release du claim si l'état
         devient terminal. Renvoie la row brute persistée. Corps commun à l'append
-        unitaire et au batch."""
+        unitaire et au batch.
+
+        Le read-merge-write est ATOMIQUE (verrou de ligne, #197) : le get + le
+        merge + l'update tournent dans une seule transaction `FOR UPDATE`, sinon
+        deux writes concurrents de la même clé (même row_id) s'écrasaient
+        mutuellement (last-writer-wins) et perdaient des champs silencieusement."""
         if schema is None:
             schema = self._schema_of(ns_id)
-        cur = db.datastore_get_row(ns_id, row_id)
-        merged = dict((cur or {}).get("data") or {})
         sk = (dsv2.status_field(schema) or {}).get("key")
-        prev_status = merged.get(sk) if sk else None
-        merged.update(user_data)
-        self._check_row(schema, merged, prev_status=prev_status)
-        row = db.datastore_update_row(ns_id, row_id, merged, _now_iso()) or cur
+
+        def _apply(current: dict) -> dict:
+            merged = dict(current or {})
+            prev_status = merged.get(sk) if sk else None
+            merged.update(user_data)
+            self._check_row(schema, merged, prev_status=prev_status)
+            return merged
+
+        result = db.datastore_merge_row_locked(ns_id, row_id, _apply, _now_iso())
+        if result is None:
+            raise RowNotFound(row_id)  # supprimée entre le lookup et le verrou (course)
+        row, merged = result
         self._release_if_terminal(schema, ns_id, row_id, merged)
         return row
 

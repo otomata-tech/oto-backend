@@ -140,8 +140,15 @@ def _unipile_client(sub: str):
     if access.credential_mode_for(sub, "unipile") not in access.BYO_MODES:
         return None  # revente (clé plateforme) → hosted-auth, pas de sélecteur
     rc = access.resolve_credential("unipile", want="byo", sub=sub)
-    from oto.tools.unipile import UnipileClient
-    return UnipileClient(api_key=rc.key, dsn=rc.config.get("dsn"))
+    import os
+    from oto.tools.unipile import make_unipile_client
+    # make_unipile_client (pas UnipileClient v1 en dur) : une clé v2 vit sur un
+    # tenant/endpoint distinct → dsn + api_version appariés à la clé, sinon
+    # list_accounts() interroge le mauvais tenant (vide/erroné) (#194).
+    return make_unipile_client(
+        api_key=rc.key, dsn=rc.config.get("dsn"),
+        api_version=(rc.config.get("api_version")
+                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
 
 
 def _unipile_list(sub: str) -> list[dict]:

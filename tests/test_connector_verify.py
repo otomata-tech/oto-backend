@@ -19,7 +19,7 @@ from oto_mcp.tools import zoho
 # --- registre -----------------------------------------------------------------
 
 def test_registry_register_supports_probe_for():
-    def probe(fields):  # noqa: ARG001
+    def probe(fields, config=None):  # noqa: ARG001
         return None
     connector_verify.register("_ut_x", probe)
     assert connector_verify.supports("_ut_x")
@@ -34,26 +34,42 @@ def _ctx():
     return ResolvedCtx(sub="user-1", org_id=42)
 
 
-def _run(inp, *, fields=None, monkeypatch=None):
-    """Exécute le handler avec _fields_for court-circuité (level=auto)."""
+def _run(inp, *, fields=None, config=None, monkeypatch=None):
+    """Exécute le handler avec _fields_and_config_for court-circuité (level=auto)."""
     if fields is not None:
         monkeypatch.setattr(
             cv.access, "resolve_credential",
-            lambda *a, **k: types.SimpleNamespace(fields=fields),
+            lambda *a, **k: types.SimpleNamespace(fields=fields, config=config or {}),
         )
     return asyncio.run(cv._verify(_ctx(), inp))
 
 
 def test_verify_ok(monkeypatch):
-    connector_verify.register("_ut_ok", lambda fields: None)
+    connector_verify.register("_ut_ok", lambda fields, config=None: None)
     res = _run(cv.VerifyInput(provider="_ut_ok"), fields={"k": "v"}, monkeypatch=monkeypatch)
     assert res["ok"] is True
     assert res["provider"] == "_ut_ok"
     assert "elapsed_ms" in res
 
 
+def test_verify_threads_config_to_probe(monkeypatch):
+    """La config non-secrète (dsn/api_version) est passée à la sonde (#194) : une
+    sonde vers un endpoint versionné (unipile v1/v2) doit la lire, sinon elle teste
+    la clé contre le mauvais tenant."""
+    seen = {}
+
+    def probe(fields, config=None):  # noqa: ARG001
+        seen["config"] = config
+    connector_verify.register("_ut_cfg", probe)
+    res = _run(cv.VerifyInput(provider="_ut_cfg"), fields={"k": "v"},
+               config={"api_version": "v2", "dsn": "api.unipile.com"},
+               monkeypatch=monkeypatch)
+    assert res["ok"] is True
+    assert seen["config"] == {"api_version": "v2", "dsn": "api.unipile.com"}
+
+
 def test_verify_failure_returns_error_not_500(monkeypatch):
-    def bad(fields):  # noqa: ARG001
+    def bad(fields, config=None):  # noqa: ARG001
         raise ValueError("clé refusée par le provider")
     connector_verify.register("_ut_bad", bad)
     res = _run(cv.VerifyInput(provider="_ut_bad"), fields={"k": "v"}, monkeypatch=monkeypatch)
@@ -62,7 +78,7 @@ def test_verify_failure_returns_error_not_500(monkeypatch):
 
 
 def test_verify_mcperror_message_is_extracted(monkeypatch):
-    def bad(fields):  # noqa: ARG001
+    def bad(fields, config=None):  # noqa: ARG001
         raise McpError(ErrorData(code=INVALID_PARAMS, message="data center manquant"))
     connector_verify.register("_ut_mcp", bad)
     res = _run(cv.VerifyInput(provider="_ut_mcp"), fields={"k": "v"}, monkeypatch=monkeypatch)
@@ -77,7 +93,7 @@ def test_verify_unsupported_provider_raises_authz():
 
 
 def test_verify_async_probe_awaited(monkeypatch):
-    async def aprobe(fields):  # noqa: ARG001
+    async def aprobe(fields, config=None):  # noqa: ARG001
         return None
     connector_verify.register("_ut_async", aprobe)
     res = _run(cv.VerifyInput(provider="_ut_async"), fields={"k": "v"}, monkeypatch=monkeypatch)

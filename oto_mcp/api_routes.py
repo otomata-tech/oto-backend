@@ -474,6 +474,21 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     async def options_handler(request: Request) -> Response:
         return Response(status_code=204, headers=_cors_headers(request.headers.get("origin")))
 
+    async def favicon(request: Request) -> Response:
+        """Favicon de marque servi sur mcp.oto.cx (mark canonique, aligné oto.cx).
+
+        L'endpoint MCP n'a pas de page HTML racine → un navigateur/annuaire qui
+        sonde `/favicon.svg` ou `/favicon.ico` tombait sur un 404 (aucune icône
+        de marque). On sert le mark Otomata (source unique `brand.py`) sur les
+        deux chemins.
+        """
+        from . import brand
+        return Response(
+            brand.FAVICON_SVG,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
     async def mcp_catalog(request: Request) -> JSONResponse:
         """Liste publique des tools MCP exposés — alimente l'autodoc oto.ninja.
 
@@ -1639,6 +1654,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     )
 
     return [
+        Route("/favicon.svg", favicon, methods=["GET"]),
+        Route("/favicon.ico", favicon, methods=["GET"]),
         Route("/api/mcp/catalog", mcp_catalog, methods=["GET"]),
         Route("/api/mcp/catalog", options_handler, methods=["OPTIONS"]),
         Route("/api/connectors", connectors_catalog, methods=["GET"]),

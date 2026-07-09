@@ -23,7 +23,7 @@ from fastmcp import FastMCP
 from .. import access, connector_verify
 
 
-def _verify(fields: dict) -> None:
+def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde, non utilisé ici)
     """Sonde « tester la connexion » : la clé authentifie-t-elle vraiment ?
 
     `GET /account` est sans effet de bord et refusé (401) par une clé invalide.

@@ -35,12 +35,23 @@ class FakeDB:
         self.rows[row_id] = dict(data)
         return {"row_id": row_id, "data": dict(data), "created_at": "t", "updated_at": updated_at}
 
+    def datastore_merge_row_locked(self, ns_id, row_id, apply_fn, updated_at):
+        # Sémantique du seam réel (verrou de ligne, #197) : get -> apply_fn -> update
+        # atomiques ; ici séquentiel sur le store mémoire.
+        if row_id not in self.rows:
+            return None
+        merged = apply_fn(dict(self.rows[row_id]))
+        self.rows[row_id] = dict(merged)
+        return ({"row_id": row_id, "data": dict(merged), "created_at": "t",
+                 "updated_at": updated_at}, merged)
+
 
 @pytest.fixture
 def store(monkeypatch):
     fake = FakeDB()
     for name in ("datastore_insert_row", "datastore_find_row_id_by_key",
-                 "datastore_get_row", "datastore_update_row"):
+                 "datastore_get_row", "datastore_update_row",
+                 "datastore_merge_row_locked"):
         monkeypatch.setattr(D.db, name, getattr(fake, name))
     # v2 (ADR 0046) : le batch lit le schéma du namespace (validation/lifecycle
     # opt-in) — None = soft, comportement 0016 inchangé pour ces tests.

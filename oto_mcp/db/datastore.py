@@ -724,6 +724,40 @@ def datastore_update_row(ns_id: int, row_id: str, data: dict, updated_at: str) -
         return dict(row) if row else None
 
 
+def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: str):
+    """MERGE ATOMIQUE d'une row par son `row_id`, sous verrou de ligne (#197).
+
+    Dans UNE transaction : verrouille la row (`SELECT … FOR UPDATE`), applique
+    `apply_fn(current_data) -> merged` SOUS le verrou, puis écrit `merged`. Deux
+    writes concurrents de la MÊME row (deux upserts de la même clé métier
+    résolvent le même row_id via find_row_id_by_key) se **sérialisent** → plus de
+    merge perdu : l'ancien `get_row` + merge Python + `update_row` sur deux
+    connexions autocommit séparées était last-writer-wins (~30-35 % des merges
+    écrasés sous forte concurrence). Renvoie `(row, merged)` ou `None` si la row
+    n'existe plus (course de suppression). `apply_fn` peut lever (validation) →
+    la transaction rollback, l'exception est propagée.
+    """
+    with _connect() as conn:
+        with conn.transaction():
+            locked = conn.execute(
+                "SELECT data FROM datastore_rows WHERE ns_id = %s AND row_id = %s FOR UPDATE",
+                (ns_id, row_id),
+            ).fetchone()
+            if locked is None:
+                return None
+            current = locked["data"]
+            if not isinstance(current, dict):
+                current = json.loads(current) if current else {}
+            merged = apply_fn(current)
+            row = conn.execute(
+                "UPDATE datastore_rows SET data = %s::jsonb, updated_at = %s::timestamptz "
+                "WHERE ns_id = %s AND row_id = %s "
+                "RETURNING row_id, created_at, updated_at, data",
+                (json.dumps(merged), updated_at, ns_id, row_id),
+            ).fetchone()
+            return dict(row), merged
+
+
 def datastore_delete_row(ns_id: int, row_id: str) -> bool:
     with _connect() as conn:
         cur = conn.execute(

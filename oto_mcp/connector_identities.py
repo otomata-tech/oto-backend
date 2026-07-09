@@ -81,6 +81,25 @@ def _google_select(sub: str, identity_id: str) -> dict:
 # --- Unipile : 1 clé → N identités distantes (BYO-only) ---------------------
 # + comptes ACCORDÉS par leur propriétaire (#55, tout mode — y compris revente).
 
+def _own_unipile_account_id(sub: str, provider: str) -> str | None:
+    """Compte Unipile connecté PROPRE de `sub` sur ce canal — org de contexte
+    d'abord, puis (issue #172, piste A) l'org de mon instance PERSONNELLE cross-org.
+    Un compte de messagerie hébergé étant PAR-PERSONNE (`personal_cross_org`), mon
+    LinkedIn connecté dans une autre org me suit ici : le fallback vise la MÊME org
+    que la clé qui résout (`access.personal_instance_org`) → clé et compte restent
+    appariés (pas de clé d'ici + compte de là-bas). None si aucun."""
+    from . import access, connectors, db
+    org = access.current_org(sub)
+    acc = db.get_unipile_account_id(sub, org, provider)
+    if acc:
+        return acc
+    if connectors.is_personal_cross_org("unipile"):
+        pio = access.personal_instance_org(sub, "unipile", exclude_org=org)
+        if pio is not None:
+            return db.get_unipile_account_id(sub, pio, provider)
+    return None
+
+
 def resolve_operated_account_id(sub: str, provider: str) -> str | None:
     """Compte Unipile opéré par `sub` sur ce canal (LE point de résolution #55).
 
@@ -89,8 +108,9 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
     dur). Pointeur invalide → `ValueError` EXPLICITE, jamais de repli silencieux
     sur le compte propre : l'agent croirait agir comme le owner et agirait comme
     soi (un message parti sous la mauvaise identité est irréversible).
-    Pas de pointeur → compte connecté propre (ou None)."""
-    from . import access, db
+    Pas de pointeur → compte connecté propre (org de contexte OU instance perso
+    cross-org, #172)."""
+    from . import db
     op = db.get_operated_account(sub, provider)
     if op:
         if op["account_id"] in db.granted_accounts_for(sub, provider):
@@ -100,18 +120,18 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
             "(autorisation révoquée ou compte déconnecté par son propriétaire). "
             "Resélectionne ton identité (oto_identity(op='set') ou "
             "https://manage.oto.cx/console/connectors).")
-    return db.get_unipile_account_id(sub, access.current_org(sub), provider)
+    return _own_unipile_account_id(sub, provider)
 
 
 def _unipile_chosen(sub: str, provider: str) -> str | None:
     """Compte effectivement opéré pour l'affichage `is_default` (pointeur valide
     sinon compte propre) — version fail-soft de `resolve_operated_account_id`
     (une liste d'identités ne doit pas lever sur un pointeur orphelin)."""
-    from . import access, db
+    from . import db
     op = db.get_operated_account(sub, provider)
     if op and op["account_id"] in db.granted_accounts_for(sub, provider):
         return op["account_id"]
-    return db.get_unipile_account_id(sub, access.current_org(sub), provider)
+    return _own_unipile_account_id(sub, provider)
 
 
 def _unipile_client(sub: str):

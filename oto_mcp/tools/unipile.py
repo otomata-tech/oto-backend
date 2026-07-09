@@ -293,7 +293,8 @@ def register(mcp: FastMCP) -> None:
     connector_verify.register("unipile", _verify)
 
     @mcp.tool()
-    async def unipile_connect_start(channel: str = "linkedin") -> dict:
+    async def unipile_connect_start(channel: str = "linkedin",
+                                    force: bool = False) -> dict:
         """Démarre la connexion d'un compte de messagerie hébergé (LinkedIn par
         défaut) et renvoie une **`url`** d'auth Unipile à transmettre à l'utilisateur.
 
@@ -303,15 +304,21 @@ def register(mcp: FastMCP) -> None:
         Vérifie l'état avec `oto_instance(op='verify', connector='unipile')`. C'est LE
         point d'entrée d'onboarding messagerie depuis l'agent (feedback #131).
 
+        Un compte de messagerie est PAR-PERSONNE : s'il est déjà connecté dans une
+        autre de tes orgs, il te suit ici (inutile de reconnecter) et cet appel
+        refuse par défaut pour éviter un doublon. Ne passe `force=True` que pour
+        connecter un compte RÉELLEMENT différent.
+
         Args:
             channel: canal à connecter — linkedin (défaut), whatsapp, telegram,
                 instagram, messenger, twitter.
+            force: connecter malgré un compte déjà lié à ce canal ailleurs (#172).
         """
         from .. import unipile_connect
 
         sub = access.current_user_sub_or_raise()
         try:
-            out = await unipile_connect.hosted_auth_url(sub, channel)
+            out = await unipile_connect.hosted_auth_url(sub, channel, force=force)
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
         out["instructions"] = (

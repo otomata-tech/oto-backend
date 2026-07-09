@@ -605,6 +605,28 @@ def first_entity_with(entity_type: str, connector: str,
         return row["entity_id"] if row else None
 
 
+def list_member_orgs_for(sub: str, connector: str) -> list[int]:
+    """Org ids où `sub` détient un credential MEMBRE pour `connector`, triés récent
+    d'abord (`set_at` DESC). Base de l'instance PERSONNELLE cross-org (issue #172,
+    piste A) : `member_id = f'{org}:{sub}'` → on extrait l'org du préfixe. Le `LIKE`
+    ne PRÉSÉLECTIONNE que le suffixe `:sub` (index sur (entity_type, connector)) ;
+    le filtre EXACT est refait en Python (un `sub` qui serait le suffixe d'un autre
+    ne passe pas). Mono/multi-compte confondus (une org apparaît une fois)."""
+    esc = sub.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT entity_id, MAX(set_at) AS set_at FROM connector_credentials "
+            "WHERE entity_type=%s AND connector=%s AND entity_id LIKE %s ESCAPE '\\' "
+            "GROUP BY entity_id ORDER BY set_at DESC",
+            (MEMBER, connector, f"%:{esc}")).fetchall()
+    out: list[int] = []
+    for r in rows:
+        org_s, _, rsub = str(r["entity_id"]).partition(":")
+        if rsub == sub and org_s.isdigit():
+            out.append(int(org_s))
+    return out
+
+
 def backfill_member_scope() -> dict:
     """One-shot idempotent (boot, ADR 0033) : chaque credential per-user hors famille
     oauth passe du scope `('user', sub)` au scope `('member', '{home_org}:{sub}')`.

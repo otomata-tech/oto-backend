@@ -184,6 +184,19 @@ DSN par credential, sélecteur d'identité, **comptes partagés autorisés** (#5
 revalidés à chaque appel, jamais de repli silencieux).
 **Détail : `docs/unipile.md`**.
 
+> **Instance PERSONNELLE cross-org (#172, amende ADR 0033).** Un compte de messagerie
+> hébergé est **par-personne** → flag registre `Connector.personal_cross_org=True`
+> (unipile). La clé membre d'un `sub` posée dans UNE org **le suit dans toutes ses orgs**
+> (résolution de proximité, pas seulement le pin `instance=` d'ADR 0038) : seam unique
+> déterministe `access.personal_instance_org` (org perso > plus récente) partagé par la
+> clé (`_resolve_credential_impl`, retombe cross-org AVANT groupe/org/plateforme quand la
+> clé LOCALE manque — même sub = zéro usurpation), le miroir de statut (`credential_mode_for`/
+> `unipile_api_key_for`) ET le compte (`connector_identities._own_unipile_account_id`, MÊME
+> org que la clé → appariés). Surfacé pinnable par `oto_instance(op='list')`
+> (`via='personal_cross_org'`). **Garde-fou** : `unipile_connect_start`/`POST /api/unipile/connect`
+> refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e
+> connexion du même canal déjà lié dans une AUTRE org (anti-doublon `account_id`).
+
 > **Version API v1/v2 = propriété de la CLÉ (« selon la BYO »), pas un connecteur ni un
 > flag global (2026-07-07).** v2 est un compte/clé Unipile **distincts** (beta) : une clé
 > v1 ne marche pas en v2. La version est portée par `meta.api_version` du credential

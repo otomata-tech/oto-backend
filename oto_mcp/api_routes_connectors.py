@@ -145,9 +145,13 @@ def make_routes(
         from . import unipile_connect
         try:
             out = await unipile_connect.hosted_auth_url(
-                sub, str(body.get("channel") or "linkedin"))
+                sub, str(body.get("channel") or "linkedin"),
+                force=bool(body.get("force")))
         except unipile_connect.ConnectRefused as e:
-            return json_error(request, e.status, e.message if e.status == 502 else e.code)
+            # 502 (échec amont) et 409 (doublon cross-org, #172) portent un message
+            # actionnable → on le renvoie ; les autres exposent leur code machine.
+            detail = e.message if e.status in (409, 502) else e.code
+            return json_error(request, e.status, detail)
         return json_response(request, {"url": out["url"]})
 
     async def unipile_webhook(request: Request) -> JSONResponse:

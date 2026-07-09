@@ -39,6 +39,22 @@ def test_verify_ok_when_accounts_present(monkeypatch):
     assert unipile._verify(_fields("k")) is None   # succès = ne lève pas
 
 
+def test_verify_passes_config_dsn_and_version_to_client(monkeypatch):
+    """La config (dsn/api_version appariés à la clé) est transmise au client — sans
+    ça une clé v2 est testée contre l'endpoint v1 par défaut → 401 sur une clé
+    pourtant valide (#194)."""
+    seen = {}
+    import oto.tools.unipile as core
+
+    def _mk(**kw):
+        seen.update(kw)
+        return _FakeClient([{"id": "acc-1"}])
+    monkeypatch.setattr(core, "make_unipile_client", _mk)
+    unipile._verify(_fields("k"), {"api_version": "v2", "dsn": "api.unipile.com"})
+    assert seen["api_version"] == "v2"
+    assert seen["dsn"] == "api.unipile.com"
+
+
 def test_verify_raises_without_api_key():
     with pytest.raises(ValueError) as e:
         unipile._verify({})

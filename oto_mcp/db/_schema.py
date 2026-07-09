@@ -163,6 +163,20 @@ CREATE TABLE IF NOT EXISTS user_agent_readme (
 );
 
 
+-- Acceptation des documents légaux par utilisateur (gate frontend LegalGate, ADR
+-- billing/legal). Une ligne par (sub, doc) = la DERNIÈRE version acceptée ; un bump
+-- de version dans `legal_docs.CURRENT_DOCS` la rend « outstanding » jusqu'à ré-accept.
+-- La source de vérité des docs (version/label/url) vit en CODE (`legal_docs.py`),
+-- miroir de `oto-websites/web/src/legal` — cette table ne trace QUE le consentement.
+CREATE TABLE IF NOT EXISTS legal_acceptances (
+    sub TEXT NOT NULL,
+    doc_slug TEXT NOT NULL,
+    version TEXT NOT NULL,
+    accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sub, doc_slug)
+);
+
+
 -- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
 -- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne
 -- pour (org_id, connector) ⟹ connecteur RESTREINT dans l'org (deny-by-default) ;

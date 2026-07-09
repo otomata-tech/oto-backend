@@ -25,22 +25,27 @@ class VerifyInput(BaseModel):
     level: Literal["auto", "org"] = "auto"     # auto = credential effectif ; org = clé de l'org
 
 
-def _fields_for(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
-    """Champs déchiffrés à sonder selon le niveau demandé.
+def _fields_and_config_for(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict]:
+    """(champs déchiffrés, config non-secrète) à sonder selon le niveau demandé.
+
+    `config` = satellites NON-secrets appariés à la clé (meta public : dsn/api_version
+    unipile…) — une sonde vers un endpoint versionné DOIT en tenir compte.
 
     - `auto` (carte user) : le credential EFFECTIF (cascade user > équipe > org >
       plateforme). `emit_on_failure=False` : une sonde ne doit pas polluer le monitoring.
     - `org` (carte org) : la clé DE L'ORG active/consultée spécifiquement (une clé perso
       la masquerait dans la cascade). `ctx.org_id` est injecté par l'authz (IDOR-safe)."""
     if inp.level == "org":
-        secret = credentials_store.get_credential("org", str(ctx.org_id), inp.provider)
-        if not secret:
+        row = credentials_store.get_credential_with_meta("org", str(ctx.org_id), inp.provider)
+        if not row:
             raise AuthzDenied(400, "no_org_credential",
                               "aucune clé d'org posée pour ce connecteur.")
-        return credentials_store.unpack_secret(inp.provider, secret)
-    return access.resolve_credential(
+        return (credentials_store.unpack_secret(inp.provider, row["secret"]),
+                credentials_store.public_meta(row.get("meta")))
+    rc = access.resolve_credential(
         inp.provider, want="auto", sub=ctx.sub, emit_on_failure=False,
-    ).fields
+    )
+    return rc.fields, rc.config
 
 
 async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
@@ -48,10 +53,10 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     if probe is None:
         raise AuthzDenied(400, "verify_unavailable",
                           f"pas de test de connexion pour « {inp.provider} ».")
-    fields = _fields_for(ctx, inp)
+    fields, config = _fields_and_config_for(ctx, inp)
     started = time.monotonic()
     try:
-        res = probe(fields)
+        res = probe(fields, config)
         if inspect.isawaitable(res):
             await res
     except Exception as e:  # noqa: BLE001 — l'erreur d'auth EST le résultat

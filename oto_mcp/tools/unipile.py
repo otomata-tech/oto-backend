@@ -227,12 +227,13 @@ def unipile_client(provider: str = "LINKEDIN"):
                                api_version=api_version)
 
 
-def _verify(fields: dict) -> None:
+def _verify(fields: dict, config: dict | None = None) -> None:
     """Sonde de connexion Unipile (#133) : `list_accounts()` sur la clé résolue.
 
     Teste l'auth ET le contenu d'un coup — un endpoint compte-agnostique donc pas
-    besoin d'account_id (la sonde ne reçoit que les champs du credential, pas la
-    config/dsn). On distingue trois cas :
+    besoin d'account_id. ⚠️ `config` (dsn/api_version appariés à la clé) est REQUIS
+    pour une clé v2 : sans lui la sonde tape l'endpoint v1 par défaut → 401 sur une
+    clé v2 pourtant valide (#194). On distingue trois cas :
     - clé absente → message actionnable (ne devrait pas arriver : `_fields_for`
       résout le credential en amont, mais on garde le garde-fou) ;
     - clé morte / refusée → `UnipileError` (401/4xx) laissée remonter telle quelle
@@ -248,7 +249,13 @@ def _verify(fields: dict) -> None:
     api_key = fields.get("key")
     if not api_key:
         raise ValueError("clé API Unipile absente.")
-    client = make_unipile_client(api_key=api_key)  # dsn=None → défaut Otomata
+    cfg = config or {}
+    # dsn + version APPARIÉS à la clé (une clé v2 vit sur un tenant distinct) : sans
+    # ça la sonde tapait toujours le défaut v1/api25 → 401 sur toute clé v2 (#194).
+    client = make_unipile_client(
+        api_key=api_key, dsn=cfg.get("dsn"),
+        api_version=(cfg.get("api_version")
+                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
     accounts = client.list_accounts()
     if not accounts:
         raise ValueError(

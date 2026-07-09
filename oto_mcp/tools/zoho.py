@@ -67,7 +67,7 @@ def _zoho_error_hint(exc: Exception) -> str:
     return f"échec de connexion Zoho : {exc}"
 
 
-def _verify(fields: dict) -> None:
+def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde, non utilisé ici)
     """Sonde SANS effet de bord, en DEUX temps (auth PUIS scope) :
 
     1. **refresh du token OAuth** : valide client_id + client_secret + refresh_token +

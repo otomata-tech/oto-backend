@@ -16,10 +16,13 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Optional, Union
 
-# probe(fields) -> None : lève une exception sur échec d'authentification (son message
-# est rendu au client). Sync OU async (la capacité awaite si besoin). `fields` = champs
-# DÉCHIFFRÉS du credential (client_id/secret/refresh_token/data_center pour zoho).
-Probe = Callable[[dict], Union[None, Awaitable[None]]]
+# probe(fields, config) -> None : lève une exception sur échec d'authentification (son
+# message est rendu au client). Sync OU async (la capacité awaite si besoin). `fields` =
+# champs DÉCHIFFRÉS du credential (client_id/secret/refresh_token/data_center pour zoho) ;
+# `config` = satellites NON-secrets appariés à la clé gagnante (meta public : dsn/
+# api_version unipile…). Une sonde qui parle à un endpoint VERSIONNÉ (unipile v1/v2) DOIT
+# lire `config`, sinon elle teste la clé contre le mauvais tenant (401 sur une clé valide).
+Probe = Callable[[dict, dict], Union[None, Awaitable[None]]]
 
 _REGISTRY: dict[str, Probe] = {}
 

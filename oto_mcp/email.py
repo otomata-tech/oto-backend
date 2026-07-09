@@ -124,17 +124,21 @@ _WRAP = 'font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;color:#2
 _FAINT = 'color:#7a6c50;font-size:13px'
 
 
-def send_invite_email(to: str, org_name: str, invite_url: str,
+def send_invite_email(to: str, target_name: str | None, invite_url: str,
                       inviter: str | None = None) -> bool:
-    """Email d'invitation à rejoindre une org. True si envoyé, False sinon.
+    """Email d'invitation à rejoindre oto. True si envoyé, False sinon.
 
-    Voix funnel : FR, vouvoiement + minuscules (alignée sur le dashboard)."""
+    `target_name` = ce qu'on rejoint (nom d'org OU d'équipe) ; None = invitation
+    plateforme (onboarding pur → « rejoindre oto »). Voix funnel : FR, vouvoiement +
+    minuscules (alignée sur le dashboard)."""
     lead = f"{_esc(inviter)} vous invite" if inviter else "vous êtes invité·e"
-    subject = f"invitation à rejoindre {org_name} sur oto"
+    where = f"<strong>{_esc(target_name)}</strong> sur oto" if target_name else "oto"
+    subject = (f"invitation à rejoindre {target_name} sur oto" if target_name
+               else "invitation à rejoindre oto")
     html = (
         f'<div style="{_WRAP}">'
-        f'<p>{lead} à rejoindre <strong>{_esc(org_name)}</strong> sur oto.</p>'
-        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">rejoindre l\'équipe</a></p>'
+        f'<p>{lead} à rejoindre {where}.</p>'
+        f'<p><a href="{_esc(invite_url)}" style="{_BTN}">rejoindre</a></p>'
         f'<p style="{_FAINT}">ou collez ce lien : {_esc(invite_url)}</p>'
         f'</div>'
     )

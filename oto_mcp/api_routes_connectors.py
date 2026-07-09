@@ -76,6 +76,7 @@ def make_routes(
                 "namespaces": list(c.namespaces),
                 "enabled": glob.get(name),  # None = jamais posé = OFF
                 "overrides": overrides.get(name, []),
+                "paid_option": access.paid_option_for(name),  # couche 3 (ADR 0044 §H) ou None
             }
             for name, c in providers.REGISTRY.items()
         ]
@@ -256,9 +257,120 @@ def make_routes(
             "orphan_count": sum(1 for s in seats if s["orphan"]),
         })
 
+    async def platform_access(request: Request) -> JSONResponse:
+        """[super_admin] Accès PLATEFORME d'un connecteur (ADR 0044 §H) : les orgs et
+        membres à qui la plateforme ouvre ce connecteur — grantees de la clé plateforme
+        (`share_down` des instances scope PLATFORM, §F) ∪ bénéficiaires de l'option comp
+        (couche 3). Vue connecteur-centrique UNIQUE (remplace les leviers dispersés
+        /platform/orgs · /platform/users). Aucun secret."""
+        sub, err = await _admin(request)
+        if err:
+            return err
+        provider = request.path_params["provider"]
+        if provider not in providers.REGISTRY:
+            return json_error(request, 404, "unknown_connector")
+        from . import credentials_store
+        option = access.paid_option_for(provider)
+
+        acc: dict[str, dict] = {}
+
+        def touch(scope: str, sid: str) -> dict:
+            k = f"{scope}:{sid}"
+            if k not in acc:
+                acc[k] = {"scope": scope, "id": sid, "has_key": False, "has_option": False}
+            return acc[k]
+
+        insts = credentials_store.list_platform_instances(provider)
+        open_tier = any(i["share_mode"] == "open" for i in insts)
+        for inst in insts:
+            for g in inst["share_down"]:
+                scope, _, sid = str(g).partition(":")
+                if scope in ("user", "org") and sid:
+                    touch(scope, sid)["has_key"] = True
+        if option:
+            for c in db.list_option_comps_for_option(option):
+                if c["entity_type"] in ("user", "org"):
+                    touch(c["entity_type"], str(c["entity_id"]))["has_option"] = True
+
+        out = []
+        for rec in acc.values():
+            if rec["scope"] == "org":
+                o = org_store.get_org(int(rec["id"])) if rec["id"].isdigit() else None
+                rec["label"] = o["name"] if o else f"org #{rec['id']}"
+                rec["logo_url"] = org_store.effective_logo_url(o) if o else None
+            else:
+                u = db.get_user(rec["id"])
+                rec["label"] = (u.get("name") or u.get("email") or rec["id"]) if u else rec["id"]
+                rec["email"] = u.get("email") if u else None
+            out.append(rec)
+        out.sort(key=lambda r: (r["scope"], (r["label"] or "").lower()))
+        return json_response(request, {
+            "connector": provider,
+            "paid_option": option,          # None = pas d'option payante (couche 3)
+            "platform_key": bool(insts),    # une clé plateforme existe (couche 2)
+            "open_tier": open_tier,         # free-tier : ouvert à tous sans grant
+            "beneficiaries": out,
+        })
+
+    async def set_platform_access(request: Request) -> JSONResponse:
+        """[super_admin] Acte UNIQUE « accès plateforme » (ADR 0044 §H) : ouvre/ferme
+        l'accès plateforme d'une org ou d'un membre à un connecteur = pose ENSEMBLE
+        l'option comp (couche 3) ET le grant de la clé plateforme (couche 2) — ce que
+        le backend couplait déjà, exposé en un geste. L'effet suit le connecteur :
+        option payante ⟹ comp (+ clé si mode-plateforme) ; keyé sans option ⟹ grant
+        de clé seul. Body: {scope:'org'|'user', id, on:bool}."""
+        sub, err = await _admin(request)
+        if err:
+            return err
+        if not access.is_super_admin(sub):
+            return json_error(request, 403, "forbidden")
+        provider = request.path_params["provider"]
+        if provider not in providers.REGISTRY:
+            return json_error(request, 404, "unknown_connector")
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error(request, 400, "invalid_body")
+        scope = body.get("scope")
+        sid = str(body.get("id", "")).strip()
+        on = bool(body.get("on"))
+        if scope not in ("org", "user") or not sid:
+            return json_error(request, 400, "invalid_body")
+        # existence (pas de grant vers un fantôme)
+        if scope == "org":
+            if not sid.isdigit() or not org_store.get_org(int(sid)):
+                return json_error(request, 404, "unknown_org")
+        elif not db.get_user(sid):
+            return json_error(request, 404, "unknown_user")
+
+        from . import credentials_store
+        option = access.paid_option_for(provider)
+        has_key = bool(credentials_store.list_platform_instances(provider))
+        if not option and not has_key:
+            # ni option payante ni clé plateforme → rien à ouvrir côté plateforme
+            return json_error(request, 400, "no_platform_access")
+        gscope = f"{scope}:{sid}"
+        if on:
+            if option:
+                db.set_option_comp(scope, sid, option, granted_by=sub)
+            if has_key:
+                credentials_store.platform_grant(provider, gscope)
+        else:
+            if option:
+                db.clear_option_comp(scope, sid, option)
+            if has_key:
+                credentials_store.platform_revoke(provider, gscope)
+        return json_response(request, {
+            "ok": True, "connector": provider, "scope": scope, "id": sid, "on": on,
+            "paid_option": option, "platform_key": has_key,
+        })
+
     return [
         Route("/api/admin/unipile/seats", unipile_platform_seats, methods=["GET"]),
         Route("/api/admin/unipile/seats", options_handler, methods=["OPTIONS"]),
+        Route("/api/admin/connectors/{provider}/platform-access", platform_access, methods=["GET"]),
+        Route("/api/admin/connectors/{provider}/platform-access", set_platform_access, methods=["POST"]),
+        Route("/api/admin/connectors/{provider}/platform-access", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/connectors/activation", list_activation, methods=["GET"]),
         Route("/api/admin/connectors/activation", set_activation, methods=["POST"]),
         Route("/api/admin/connectors/activation", clear_override, methods=["DELETE"]),

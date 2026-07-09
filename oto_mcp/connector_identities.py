@@ -144,11 +144,40 @@ def _unipile_client(sub: str):
     return UnipileClient(api_key=rc.key, dsn=rc.config.get("dsn"))
 
 
+def _unipile_live_status_map(sub: str) -> dict:
+    """Statut LIVE des comptes hébergés, lu sur la clé PLATEFORME Unipile :
+    `{account_id: status}`.
+
+    Le mode revente / hosted-auth persiste les comptes en DB et n'interroge PAS
+    Unipile → un compte réellement mort (checkpoint, credentials expirés, révoqué
+    par l'utilisateur) affichait « ok » à tort (#201). Le vrai statut n'est lisible
+    qu'en listant les comptes de l'abonnement (`list_accounts().sources[].status`).
+    Fail-soft : `{}` si indisponible (l'appelant retombe sur « ok », comportement
+    d'avant — jamais de régression d'affichage sur une panne de lecture)."""
+    from . import access
+    try:
+        rc = access.resolve_credential("unipile", want="auto", sub=sub)
+        from oto.tools.unipile import make_unipile_client
+        cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"),
+                                  api_version=rc.config.get("api_version", "v1"))
+        return {a.get("id"): (a.get("sources") or [{}])[0].get("status")
+                for a in cli.list_accounts() if a.get("id")}
+    except Exception:
+        return {}
+
+
 def _unipile_list(sub: str) -> list[dict]:
     from . import db
     granted = [g for g in db.list_account_grants_to(sub) if g.get("active")]
     out = []
     cli = _unipile_client(sub)
+    # Statut live des comptes hébergés (clé plateforme), résolu au plus une fois et
+    # seulement si un compte non-BYO le requiert (#201). Fail-soft → "ok".
+    _live: dict = {}
+    def _live_status(account_id: str) -> str:
+        if "map" not in _live:
+            _live["map"] = _unipile_live_status_map(sub)
+        return _live["map"].get(account_id) or "ok"
     if cli is not None:  # BYO : les comptes de la clé (liste existante)
         try:
             accounts = cli.list_accounts()
@@ -183,7 +212,7 @@ def _unipile_list(sub: str) -> list[dict]:
             out.append({
                 "id": a["account_id"],
                 "label": a.get("account_name") or a["account_id"],
-                "status": "ok",
+                "status": _live_status(a["account_id"]),
                 "is_default": a["account_id"] == _unipile_chosen(sub, a["provider"]),
                 "channel": a["provider"],
             })
@@ -203,7 +232,7 @@ def _unipile_list(sub: str) -> list[dict]:
         out.append({
             "id": g["account_id"],
             "label": f"{g.get('account_name') or g['account_id']} — compte de {who}",
-            "status": "ok",
+            "status": _live_status(g["account_id"]),
             "is_default": g["account_id"] == _unipile_chosen(sub, g["provider"]),
             "channel": g["provider"],
             "granted": True,

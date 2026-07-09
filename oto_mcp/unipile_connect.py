@@ -42,9 +42,14 @@ def _default_limit() -> int:
         return 5
 
 
-async def hosted_auth_url(sub: str, channel: str = "linkedin") -> dict:
+async def hosted_auth_url(sub: str, channel: str = "linkedin",
+                          force: bool = False) -> dict:
     """Génère l'URL hosted-auth où l'user connecte SON compte (canal donné) —
-    mêmes gates que la face dashboard. Renvoie `{url, channel}`."""
+    mêmes gates que la face dashboard. Renvoie `{url, channel}`.
+
+    `force=True` outrepasse le garde-fou anti-doublon cross-org (issue #172) : par
+    défaut, si `sub` a déjà connecté ce canal dans une AUTRE org, on refuse (le
+    compte est PAR-PERSONNE et suit désormais l'utilisateur cross-org)."""
     provider = str(channel or "linkedin").upper()
     if provider not in CHANNELS:
         raise ConnectRefused(400, "invalid_channel",
@@ -60,6 +65,26 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin") -> dict:
     if org_id is None:
         raise ConnectRefused(400, "no_org_context",
                              "Aucune org de contexte — impossible de rattacher le compte.")
+    # Garde-fou anti-doublon (issue #172, piste C) : un compte de messagerie hébergé
+    # est intrinsèquement PAR-PERSONNE. Si `sub` a déjà connecté CE canal dans une
+    # AUTRE org (autre tenant Unipile), reconnecter créerait un 2e `account_id` pour
+    # le MÊME login → les deux sessions hébergées se disputent le cookie (rotation
+    # `li_at`) → dégradation silencieuse. On refuse avec un chemin actionnable :
+    # l'instance personnelle suit désormais l'utilisateur cross-org (piste A), inutile
+    # de reconnecter ; `force=True` pour un compte RÉELLEMENT distinct. (Reconnexion
+    # dans la MÊME org = remplacement, non concernée : filtrée par `org_id`.)
+    if not force:
+        elsewhere = [a for a in db.list_unipile_accounts(sub)
+                     if a.get("provider") == provider and a.get("org_id") != org_id]
+        if elsewhere:
+            other = elsewhere[0]
+            who = other.get("account_name") or other["account_id"]
+            raise ConnectRefused(
+                409, "unipile_already_connected_elsewhere",
+                f"Tu as déjà un compte {provider.lower()} connecté (« {who} ») dans "
+                "une autre de tes orgs. Il te suit désormais dans toutes tes orgs — "
+                "inutile de reconnecter, utilise-le directement. Pour connecter un "
+                "compte RÉELLEMENT différent, relance avec force=true.")
     platform_seat = not byo
     # Gate OPTION (couche 3) : hébergé sans option accordée = refus.
     if not byo and not access.has_option(sub, "unipile"):

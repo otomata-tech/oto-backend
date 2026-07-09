@@ -278,6 +278,36 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
         inst["via"] = "shared_with_me"
         out.append(inst)
 
+    # 6. PERSONNELLES CROSS-ORG (issue #172, piste A) : mes instances membre d'un
+    # connecteur PAR-PERSONNE (unipile) posées dans une AUTRE org me suivent — la
+    # résolution de proximité les trouve depuis n'importe quelle org (cf.
+    # `access.personal_instance_org`), donc la liste DOIT les montrer, sinon le manque
+    # #1 (« rien ne signale que j'ai déjà une instance perso ailleurs » → on reconnecte
+    # → doublon). Pinnable (`guard_instance_access` : ma propre ligne, org où je suis
+    # membre). Dédup par ref (déjà listée si l'org de contexte EST l'org porteuse).
+    try:
+        for provider in providers.PERSONAL_CROSS_ORG_PROVIDERS:
+            for other_org in credentials_store.list_member_orgs_for(sub, provider):
+                if org is not None and other_org == org:
+                    continue
+                for row in credentials_store.list_credentials(
+                        credentials_store.MEMBER,
+                        credentials_store.member_id(other_org, sub)):
+                    if row["connector"] != provider:
+                        continue
+                    ref = instance_refs.make_member_ref(other_org, sub, provider,
+                                                        row.get("account") or "")
+                    if ref in existing_refs:
+                        continue
+                    existing_refs.add(ref)
+                    inst = _cred_instance("member", {"type": "user", "id": sub},
+                                          ref, row)
+                    inst["via"] = "personal_cross_org"
+                    out.append(inst)
+    except Exception:
+        logger.warning("instances: 'perso cross-org' indisponible (fail-open)",
+                       exc_info=True)
+
     # Filtre RBAC (ADR 0025, fail-open loggé) puis filtres d'input.
     hidden = _hidden_connectors(sub, org)
     if hidden:

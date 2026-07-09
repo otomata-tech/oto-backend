@@ -16,6 +16,35 @@ membre ADR 0033 B4 : le binding vaut dans l'org de contexte, un canal se connect
 org). Même gate d'option par org que LinkedIn (comp admin `access.has_option` ; plus
 de paiement).
 
+> **Instance PERSONNELLE cross-org (issue #172, amende ADR 0033).** Un compte de
+> messagerie hébergé est intrinsèquement **par-personne** (le login LinkedIn/WhatsApp
+> EST l'humain, pas l'appartenance) → le connecteur `unipile` porte le flag registre
+> **`Connector.personal_cross_org=True`**. Conséquence : la clé membre d'un `sub` posée
+> dans UNE org **le suit dans TOUTES ses orgs** (résolution de proximité, pas seulement
+> le pin `instance=` d'ADR 0038). Mécanique — **même seam déterministe**
+> `access.personal_instance_org(sub, connector)` (org PERSO d'abord, sinon la clé la plus
+> récente ; exclut l'org de contexte) partagé par les points de résolution, pour que
+> **clé ET compte restent appariés** (jamais la clé d'ici + le compte de là-bas) :
+> 1. **clé** — `_resolve_credential_impl` : quand la clé membre LOCALE manque, un
+>    connecteur `personal_cross_org` retombe sur ma clé membre d'une autre org (mode
+>    `user`, `entity_id='{org_porteuse}:{sub}'`) AVANT les paliers partagés/plateforme.
+>    Même `sub` ⟹ **zéro usurpation** ; ne mord qu'en l'absence de clé locale (nul impact
+>    mono-org / déjà keyé). `credential_mode_for` + `unipile_api_key_for` **miroitent**
+>    (sinon l'UI/le connect verrait « platform » là où la résolution trouve ma clé perso).
+> 2. **compte** — `connector_identities._own_unipile_account_id` (sous
+>    `resolve_operated_account_id`) : l'`account_id` du canal manquant dans l'org de
+>    contexte est cherché dans la MÊME org perso que la clé.
+> 3. **surface** — `oto_instance(op='list')` liste mes instances membre d'un connecteur
+>    `personal_cross_org` posées ailleurs (`via='personal_cross_org'`), pinnables — sinon
+>    « rien ne signale que j'ai déjà une instance perso ailleurs → je reconnecte → doublon ».
+>
+> **Garde-fou au connect (piste C)** : `unipile_connect.hosted_auth_url` refuse (409
+> `unipile_already_connected_elsewhere`) si `sub` a déjà connecté CE canal dans une AUTRE
+> org (2e `account_id` pour le même login = sessions hébergées qui se disputent le cookie
+> `li_at` → dégradation) — sauf `force=True` (compte réellement distinct). Reconnexion
+> **même org** = remplacement, non concernée. Threadé `unipile_connect_start(force=)` +
+> `POST /api/unipile/connect {force}`.
+
 > **Baileys archivé** (ex-WhatsApp self-hosted) : wrappers backend retirés
 > (`tools/whatsapp.py` réécrit Unipile, `pairing.py` + routes `/api/whatsapp/pair/*`
 > supprimés). L'engine Baileys survit dans **oto-core** (`oto/tools/whatsapp/` + Node)

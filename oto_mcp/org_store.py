@@ -798,17 +798,27 @@ def count_orgs_created_by(sub: str) -> int:
         ).fetchone()["n"]
 
 
-def create_invitation(org_id: int, email: Optional[str], org_role: str, invited_by: str,
-                      ttl_days: int = 7, source: Optional[str] = None) -> tuple[int, str, str]:
-    """Crée une invitation d'org nominative. `email` est OPTIONNEL : sans email,
-    l'émetteur partage le code lui-même (pas d'envoi mail). Renvoie
-    (id, token plaintext, code court) — token pour le lien mail legacy (seul son hash
-    est persisté), code pour le lien /invitation/<code> partageable."""
+def create_invitation(org_id: Optional[int], email: Optional[str], org_role: str, invited_by: str,
+                      ttl_days: int = 7, source: Optional[str] = None,
+                      group_id: Optional[int] = None,
+                      group_role: Optional[str] = None) -> tuple[int, str, str]:
+    """Crée une invitation nominative. **Scope dérivé** des cibles (feature cascade
+    plateforme/org/équipe, comme les connecteurs) :
+    - `org_id=None, group_id=None` → invitation **plateforme** (onboarding pur : à
+      l'acceptation l'invité a juste son compte + org perso) ;
+    - `org_id` seul → invitation **org** (rejoint l'org) ;
+    - `org_id` + `group_id` → invitation **équipe** (rejoint l'org PUIS l'équipe avec
+      `group_role`).
+    `email` est OPTIONNEL : sans email, l'émetteur partage le code lui-même (pas d'envoi
+    mail). Renvoie (id, token plaintext, code court) — token pour le lien mail legacy
+    (seul son hash est persisté), code pour le lien /invitation/<code> partageable."""
     email = (email or "").strip().lower() or None
     if email is not None and "@" not in email:
         raise ValueError("email invalide")
     if org_role not in ORG_ROLES:
         raise ValueError(f"org_role invalide {org_role!r}")
+    if group_id is not None and org_id is None:
+        raise ValueError("une invitation d'équipe exige l'org parente (org_id)")
     token = "inv_" + secrets.token_urlsafe(32)
     with _connect() as conn:
         for _ in range(8):
@@ -819,53 +829,114 @@ def create_invitation(org_id: int, email: Optional[str], org_role: str, invited_
             row = conn.execute(
                 """
                 INSERT INTO org_invitations
-                    (org_id, email, org_role, token_hash, code, invited_by, source, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+                    (org_id, email, org_role, token_hash, code, invited_by, source,
+                     group_id, group_role, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        NOW() + (%s || ' days')::interval)
                 RETURNING id
                 """,
                 (org_id, email, org_role, _hash_token(token), code, invited_by, source,
-                 str(int(ttl_days))),
+                 group_id, group_role, str(int(ttl_days))),
             ).fetchone()
             return int(row["id"]), token, code
         raise RuntimeError("impossible de générer un code d'invitation unique")
 
 
-def list_invitations(org_id: int) -> list[dict]:
-    """Invitations en attente (non acceptées, non expirées)."""
+# Listing enrichi : chaque ligne porte de quoi afficher le scope (nom d'org/équipe)
+# + un `scope` dérivé ('platform'|'org'|'team'), commun aux 3 niveaux de la cascade.
+_INV_LIST_SELECT = """
+    SELECT i.id, i.email, i.code, i.org_role, i.group_role, i.org_id, i.group_id,
+           i.invited_by, i.source, i.created_at, i.expires_at,
+           o.name AS org_name, g.name AS group_name
+      FROM org_invitations i
+      LEFT JOIN orgs       o ON o.id = i.org_id
+      LEFT JOIN org_groups g ON g.id = i.group_id
+     WHERE {pred} AND i.accepted_at IS NULL AND i.expires_at > NOW()
+     ORDER BY i.created_at DESC
+"""
+
+
+def _scope_of(r: dict) -> str:
+    if r.get("group_id") is not None:
+        return "team"
+    if r.get("org_id") is not None:
+        return "org"
+    return "platform"
+
+
+def _list_invitations(pred: str, *args) -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, email, code, org_role, invited_by, created_at, expires_at
-              FROM org_invitations
-             WHERE org_id = %s AND accepted_at IS NULL AND expires_at > NOW()
-             ORDER BY created_at DESC
-            """,
-            (org_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        rows = conn.execute(_INV_LIST_SELECT.format(pred=pred), args).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["scope"] = _scope_of(d)
+        out.append(d)
+    return out
+
+
+def list_invitations(org_id: int) -> list[dict]:
+    """Invitations d'ORG en attente (hors invitations d'équipe, qui vivent sur l'écran
+    équipe). Non acceptées, non expirées."""
+    return _list_invitations("i.org_id = %s AND i.group_id IS NULL", org_id)
+
+
+def list_group_invitations(group_id: int) -> list[dict]:
+    """Invitations d'ÉQUIPE en attente pour ce groupe."""
+    return _list_invitations("i.group_id = %s", group_id)
+
+
+def list_platform_invitations() -> list[dict]:
+    """Invitations émises PAR LA PLATEFORME (source='platform_admin'), tous scopes —
+    onboarding pur (org_id NULL) ou rattachement direct à une org choisie par l'admin."""
+    return _list_invitations("i.source = 'platform_admin'")
 
 
 def revoke_invitation(org_id: int, inv_id: int) -> bool:
     with _connect() as conn:
         cur = conn.execute(
-            "DELETE FROM org_invitations WHERE org_id = %s AND id = %s AND accepted_at IS NULL",
+            "DELETE FROM org_invitations WHERE org_id = %s AND group_id IS NULL "
+            "AND id = %s AND accepted_at IS NULL",
             (org_id, inv_id),
         )
         return (cur.rowcount or 0) > 0
 
 
+def revoke_group_invitation(group_id: int, inv_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_invitations WHERE group_id = %s AND id = %s "
+            "AND accepted_at IS NULL",
+            (group_id, inv_id),
+        )
+        return (cur.rowcount or 0) > 0
+
+
+def revoke_platform_invitation(inv_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_invitations WHERE id = %s AND source = 'platform_admin' "
+            "AND accepted_at IS NULL",
+            (inv_id,),
+        )
+        return (cur.rowcount or 0) > 0
+
+
 def _preview_from_row(r: dict) -> dict:
-    return {"email": r.get("email"),
-            "inviter": r.get("inviter"), "org_name": r.get("org_name")}
+    return {"email": r.get("email"), "inviter": r.get("inviter"),
+            "org_name": r.get("org_name"), "group_name": r.get("group_name"),
+            "scope": _scope_of(r)}
 
 
 _PREVIEW_SELECT = """
-    SELECT i.email, i.org_id,
+    SELECT i.email, i.org_id, i.group_id,
            COALESCE(u.name, u.email) AS inviter,
-           o.name AS org_name
+           o.name AS org_name,
+           g.name AS group_name
       FROM org_invitations i
-      LEFT JOIN users u ON u.sub = i.invited_by
-      LEFT JOIN orgs  o ON o.id  = i.org_id
+      LEFT JOIN users      u ON u.sub = i.invited_by
+      LEFT JOIN orgs       o ON o.id  = i.org_id
+      LEFT JOIN org_groups g ON g.id  = i.group_id
      WHERE {pred} AND i.accepted_at IS NULL AND i.expires_at > NOW()
 """
 
@@ -913,7 +984,8 @@ def _get_invitation(pred: str, val) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             f"""
-            SELECT id, org_id, email, org_role, invited_by, source, expires_at
+            SELECT id, org_id, email, org_role, group_id, group_role,
+                   invited_by, source, expires_at
               FROM org_invitations
              WHERE {pred} AND accepted_at IS NULL AND expires_at > NOW()
             """,
@@ -939,11 +1011,13 @@ def _idempotent_accept(pred: str, val, sub: str) -> Optional[dict]:
     l'invitation est vraiment invalide / expirée / acceptée par un AUTRE sub."""
     with _connect() as conn:
         row = conn.execute(
-            f"SELECT org_id, org_role, accepted_sub FROM org_invitations WHERE {pred}",
+            f"SELECT org_id, org_role, group_id, group_role, accepted_sub "
+            f"FROM org_invitations WHERE {pred}",
             (val,),
         ).fetchone()
-    if row and row["accepted_sub"] == sub and row["org_id"] is not None:
-        return {"org_id": row["org_id"], "org_role": row["org_role"]}
+    if row and row["accepted_sub"] == sub:
+        return {"org_id": row.get("org_id"), "org_role": row.get("org_role"),
+                "group_id": row.get("group_id"), "group_role": row.get("group_role")}
     return None
 
 
@@ -971,13 +1045,28 @@ def accept_invitation_by_code(code: str, sub: str) -> Optional[dict]:
 
 
 def _accept_invitation_row(inv: dict, sub: str) -> dict:
-    """Cœur de l'acceptation d'une invitation d'org à partir d'une ligne déjà résolue
-    (par token, code OU email lors d'une réconciliation de signup) : ajoute le membre
-    et bascule l'org active."""
-    add_org_member(inv["org_id"], sub, inv["org_role"])
-    set_active_org(sub, inv["org_id"])
+    """Cœur de l'acceptation d'une invitation à partir d'une ligne déjà résolue (par
+    token, code OU email lors d'une réconciliation de signup). Selon le scope :
+    - **org** (org_id présent) → ajoute le membre d'org + bascule l'org active ;
+    - **équipe** (group_id présent) → ajoute AUSSI l'équipe (avec `group_role`) et la
+      rend active (l'org parente est jointe d'abord — invariant équipe ⊂ org) ;
+    - **plateforme** (ni l'un ni l'autre) → l'invité a déjà son compte + org perso au
+      signup ; l'acceptation ne fait que marquer l'invitation consommée (attribution).
+    """
+    org_id = inv.get("org_id")
+    if org_id is not None:
+        add_org_member(org_id, sub, inv["org_role"])
+        set_active_org(sub, org_id)
+    group_id = inv.get("group_id")
+    if group_id is not None:
+        # Import paresseux : org_store n'importe PAS group_store au niveau module
+        # (group_store dépend d'org_store → cycle). À l'appel, les deux sont chargés.
+        from . import group_store
+        group_store.add_group_member(group_id, sub, inv.get("group_role") or "group_member")
+        group_store.set_active_group(sub, group_id)
     _mark_invitation_accepted(inv["id"], sub)
-    return {"org_id": inv["org_id"], "org_role": inv["org_role"]}
+    return {"org_id": org_id, "org_role": inv.get("org_role"),
+            "group_id": group_id, "group_role": inv.get("group_role")}
 
 
 def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
@@ -992,7 +1081,7 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, org_id, org_role, invited_by
+            SELECT id, org_id, org_role, group_id, group_role, invited_by
               FROM org_invitations
              WHERE accepted_at IS NULL AND expires_at > NOW() AND lower(email) = %s
              ORDER BY created_at DESC

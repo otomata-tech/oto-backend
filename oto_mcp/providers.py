@@ -109,6 +109,14 @@ class Connector:
     # descripteur `auth.method` vaut "hosted" → la carte rend le widget dédié sans
     # cas par nom côté front.
     hosted_auth: bool = False
+    # Instance PERSONNELLE cross-org (issue #172, ADR 0033 amendé) : le credential
+    # est intrinsèquement PAR-PERSONNE — un compte de messagerie hébergé (unipile :
+    # le login LinkedIn/WhatsApp EST l'humain, pas l'appartenance). Sa clé membre
+    # posée dans UNE org suit alors le `sub` dans TOUTES ses orgs (résolution de
+    # proximité, pas seulement pin `instance=`) : « même email = instance dispo dans
+    # chaque org ». Sans ce flag, un credential membre reste strictement `(sub, org)`
+    # (ADR 0033) — la valeur par défaut ne change rien pour les ~autres connecteurs.
+    personal_cross_org: bool = False
 
     @property
     def org_shareable(self) -> bool:
@@ -395,7 +403,8 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        default_hidden=False, platform_key_open=False, label="", help="", href=None,
        publisher="", logo_url=None, kind="tools", mount_url=None,
        mount_strip_prefix=None,
-       credential_fields=(), modules=(), hosted_auth=False) -> Connector:
+       credential_fields=(), modules=(), hosted_auth=False,
+       personal_cross_org=False) -> Connector:
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -407,6 +416,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         mount_url=mount_url, mount_strip_prefix=mount_strip_prefix,
         credential_fields=tuple(credential_fields),
         modules=tuple(modules), hosted_auth=hosted_auth,
+        personal_cross_org=personal_cross_org,
     )
 
 
@@ -493,7 +503,7 @@ _REGISTRY_LIST = [
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", hosted_auth=True,
+       secret_kind="api_key", hosted_auth=True, personal_cross_org=True,
        in_default_bundle=False, label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
@@ -1107,6 +1117,18 @@ def is_byo_user(name: str) -> bool:
 def is_org_shareable(name: str) -> bool:
     c = REGISTRY.get(name)
     return bool(c and c.org_shareable)
+
+
+def is_personal_cross_org(name: str) -> bool:
+    """Le connecteur porte-t-il une instance PERSONNELLE cross-org (issue #172) ?
+    Vrai ⟹ la clé membre d'un `sub` posée dans une org le suit dans toutes ses
+    orgs (résolution de proximité). Défaut False (ADR 0033 : scope `(sub, org)`)."""
+    c = REGISTRY.get(name)
+    return bool(c and c.personal_cross_org)
+
+
+PERSONAL_CROSS_ORG_PROVIDERS: frozenset = frozenset(
+    c.name for c in _REGISTRY_LIST if c.personal_cross_org)
 
 
 def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, str | None]:

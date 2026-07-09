@@ -526,6 +526,26 @@ def _is_multi_account(provider: str) -> bool:
     return con is not None and con.auth_multi_account
 
 
+def personal_instance_org(sub: str, provider: str,
+                          exclude_org: Optional[int] = None) -> Optional[int]:
+    """Org portant l'instance PERSONNELLE cross-org de `sub` pour un connecteur
+    par-personne (issue #172, piste A ; `Connector.personal_cross_org`), ou None.
+
+    Déterministe (jamais de choix muet entre deux identités du MÊME humain) : l'org
+    PERSO d'abord (une seule par sub, ADR 0030) si elle porte une clé membre, sinon
+    la plus RÉCEMMENT posée. `exclude_org` écarte l'org de contexte (déjà testée en
+    amont par le palier membre local). Sûr par construction : même `sub` ⟹ zéro
+    usurpation — on ne fait que retrouver SA propre clé posée ailleurs."""
+    orgs = [o for o in credentials_store.list_member_orgs_for(sub, provider)
+            if o != exclude_org]
+    if not orgs:
+        return None
+    personal = org_store.get_personal_org(sub)
+    if personal is not None and personal in orgs:
+        return personal
+    return orgs[0]  # set_at DESC → la plus récente
+
+
 def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
     """Le scope de `scopes` qui vise `sub` sur une instance PLATEFORME, ou None (ADR 0044
     §F). `user:<sub>` prime (le plus spécifique) ; `org:<id>` gaté sur l'org **ACTIVE**
@@ -676,6 +696,24 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         return ResolvedCredential(provider, member_key, False, "user",
                                   credentials_store.MEMBER,
                                   credentials_store.member_id(active_org, sub), account=eff)
+
+    # Instance PERSONNELLE cross-org (issue #172, piste A ; amende ADR 0033). Pour un
+    # connecteur intrinsèquement PAR-PERSONNE (`personal_cross_org` — unipile hosted :
+    # le compte de messagerie EST l'humain, pas l'appartenance), ma clé membre posée
+    # dans une AUTRE org me suit ici : c'est MON identité propre (mode 'user', MÊME
+    # sub → zéro usurpation), donc elle prime sur les paliers PARTAGÉS (groupe/org) et
+    # plateforme — comme la clé membre locale. Ne mord QU'EN L'ABSENCE de clé membre
+    # locale (au-dessus) : aucun impact sur les users mono-org ni ceux déjà keyés dans
+    # l'org de contexte. Mono-compte seulement (une identité par-personne, pas de
+    # désambiguïsation de compte cross-org). Org gagnante déterministe (perso > récente).
+    if connectors.is_personal_cross_org(provider) and not _is_multi_account(provider):
+        pio = personal_instance_org(sub, provider, exclude_org=active_org)
+        if pio is not None:
+            personal_key = db.get_member_api_key(sub, pio, provider)
+            if personal_key:
+                return ResolvedCredential(provider, personal_key, False, "user",
+                                          credentials_store.MEMBER,
+                                          credentials_store.member_id(pio, sub))
 
     # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
     # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
@@ -1015,6 +1053,15 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
     key = db.get_member_api_key(sub, active_org, "unipile")
     if key:
         return key
+    # Instance personnelle cross-org (issue #172) : ma clé unipile posée dans une
+    # autre org me suit (miroir de resolve_credential — le connect ne doit pas croire
+    # « pas de BYO » alors que la résolution trouve ma clé perso ailleurs).
+    if connectors.is_personal_cross_org("unipile"):
+        pio = personal_instance_org(sub, "unipile", exclude_org=active_org)
+        if pio is not None:
+            personal_key = db.get_member_api_key(sub, pio, "unipile")
+            if personal_key:
+                return personal_key
     if active_org is not None:
         org_key = org_store.get_org_secret(active_org, "unipile")
         if org_key:
@@ -1045,6 +1092,13 @@ def credential_mode_for(sub: str, provider: str, *,
     # pour un tiers (org explicite), dans SON org, jamais celle du requérant.
     if db.has_member_api_key(sub, o, provider):
         return "user"
+    # Instance personnelle cross-org (issue #172) : miroir EXACT de la cascade de
+    # résolution — sans ça l'UI/le connect verrait « platform » là où la résolution
+    # trouve MA clé perso d'une autre org (divergence = UI qui ment). Même sub.
+    if connectors.is_personal_cross_org(provider):
+        pio = personal_instance_org(sub, provider, exclude_org=o)
+        if pio is not None and db.has_member_api_key(sub, pio, provider):
+            return "user"
     if provider in ORG_SHAREABLE_PROVIDERS:
         if g is not None and group_store.has_group_secret(g, provider):
             return "group"

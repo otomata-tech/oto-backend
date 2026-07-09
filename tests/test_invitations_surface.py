@@ -1,9 +1,12 @@
-"""Surface d'invitation d'org (émission unifiée + code court).
+"""Surface d'invitation (feature cascade plateforme/org/équipe + code court).
 
 Niveau contrat (sans DB) : présence des capacités MCP/REST consommées par
 oto-dashboard et la forme des inputs (toggle mail, email optionnel, accept
-par token/code). Cf. capabilities/orgs_invites.py.
+par token/code). Cf. capabilities/{orgs,groups,platform}_invites.py.
 """
+import pytest
+
+from oto_mcp import org_store
 from oto_mcp.capabilities import orgs_invites as oi
 from oto_mcp.capabilities import registry
 
@@ -13,6 +16,9 @@ def test_invite_caps_present():
     # ADR 0047 B3 : invite/accept vivent dans la console oto_org (op=invite /
     # op=accept_invite) ; referral/alpha sont RETIRÉS (ADR 0013 supersédé).
     assert "oto_org" in mcp
+    # Feature cascade : invite d'équipe via oto_group (op=invite), invite plateforme
+    # via oto_admin_invite (op=create/list/revoke).
+    assert "oto_admin_invite" in mcp
     assert {"oto_referral_link", "oto_invite_to_alpha",
             "oto_accept_invite", "oto_invite_member"} & mcp == set()
 
@@ -23,8 +29,37 @@ def test_rest_routes_preserved():
         ("POST", "/api/me/invitations/accept"),
         ("POST", "/api/orgs/{id}/invitations"),
         ("GET", "/api/orgs/{id}/invitations"),
+        # Cascade équipe + plateforme.
+        ("POST", "/api/groups/{id}/invitations"),
+        ("GET", "/api/groups/{id}/invitations"),
+        ("DELETE", "/api/groups/{id}/invitations/{inv}"),
+        ("POST", "/api/admin/invitations"),
+        ("GET", "/api/admin/invitations"),
+        ("DELETE", "/api/admin/invitations/{inv}"),
     ]:
         assert vp in pairs, vp
+
+
+def test_group_console_has_invite_op():
+    from oto_mcp.capabilities import org_console
+    ops = org_console.GroupInput.model_fields["op"].annotation
+    # Literal[...] — l'op 'invite' doit être admissible.
+    assert "invite" in getattr(ops, "__args__", ())
+
+
+def test_scope_derived_from_targets():
+    # Le scope d'une invitation est DÉRIVÉ des cibles (comme la cascade connecteurs).
+    assert org_store._scope_of({"org_id": None, "group_id": None}) == "platform"
+    assert org_store._scope_of({"org_id": 1, "group_id": None}) == "org"
+    assert org_store._scope_of({"org_id": 1, "group_id": 2}) == "team"
+
+
+def test_team_invite_requires_parent_org():
+    # Une invitation d'équipe SANS org parente est incohérente (invariant équipe ⊂ org)
+    # → rejet avant tout accès DB.
+    with pytest.raises(ValueError):
+        org_store.create_invitation(None, "x@y.z", "org_member", invited_by="s",
+                                    group_id=7, group_role="group_member")
 
 
 def test_send_email_toggle_defaults_true_email_optional():

@@ -26,6 +26,8 @@ from .providers import (  # noqa: F401  (ré-export rétrocompat, ADR 0010)
     require_credential,
     is_byo_user,
     is_org_shareable,
+    is_personal_cross_org,
+    PERSONAL_CROSS_ORG_PROVIDERS,
     org_secret_meta,
     public_catalog,
 )

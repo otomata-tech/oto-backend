@@ -58,6 +58,10 @@ def _wire(monkeypatch, *, user=None, group=None, org=None, meta=None,
     monkeypatch.setattr(access.credentials_store, "list_accounts", lambda *a, **k: [])
     monkeypatch.setattr(access, "current_group", lambda sub: active_group)
     monkeypatch.setattr(access, "current_org", lambda sub: active_org)
+    # #172 : pas d'instance perso cross-org ici (ces tests visent org/plateforme).
+    monkeypatch.setattr(access.credentials_store, "list_member_orgs_for",
+                        lambda sub, con: [])
+    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: None)
     monkeypatch.setattr(access.group_store, "get_group_secret", lambda gid, prov: group)
     monkeypatch.setattr(access.org_store, "get_org_secret", lambda oid, prov: org)
     monkeypatch.setattr(
@@ -93,6 +97,8 @@ def test_resolve_credential_platform_config_from_meta(monkeypatch):
     monkeypatch.setattr(access.db, "get_member_api_key", lambda s, o, p: None)
     monkeypatch.setattr(access, "current_group", lambda s: None)
     monkeypatch.setattr(access, "current_org", lambda s: None)
+    monkeypatch.setattr(access, "personal_instance_org",
+                        lambda sub, con, exclude_org=None: None)  # #172 : pas d'instance perso
     monkeypatch.setattr(access.credentials_store, "list_platform_instances",
                         lambda p: [{"label": "plat", "share_mode": "closed",
                                     "share_down": ["user:u1"], "share_side": [], "meta": meta}])

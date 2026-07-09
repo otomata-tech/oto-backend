@@ -20,12 +20,16 @@ class _FakeClient:
         return "https://account.unipile.com/auth?token=xyz"
 
 
-def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0, limit=None):
+def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0,
+          limit=None, connected=None):
     monkeypatch.setattr(access, "unipile_api_key_for", lambda sub: "KEY")
     monkeypatch.setattr(access, "credential_mode_for",
                         lambda sub, prov: "org" if byo else "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: org)
     monkeypatch.setattr(access, "has_option", lambda sub, opt: option)
+    # Garde-fou anti-doublon cross-org (#172) : comptes déjà connectés du sub, tous
+    # canaux/orgs confondus. [] par défaut ⇒ garde-fou inerte (chemins existants).
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: connected or [])
     monkeypatch.setattr("oto_mcp.db.get_unipile_account",
                         lambda sub, org_id, prov: existing)
     monkeypatch.setattr("oto_mcp.db.get_org_unipile_limit", lambda org_id: limit)
@@ -98,4 +102,42 @@ def test_byo_skips_option_and_cap(monkeypatch):
     monkeypatch.setattr(access, "resolve_credential",
                         lambda prov, want=None, sub=None, emit_on_failure=True: _RC())
     out = _run(hosted_auth_url("u1"))
+    assert out["url"]
+
+
+# --- Garde-fou anti-doublon cross-org (#172, piste C) ------------------------
+
+def test_refuses_when_same_channel_connected_in_another_org(monkeypatch):
+    # Le sub a déjà LinkedIn connecté dans l'org 2 → connecter dans l'org 39
+    # créerait un 2e account_id pour le même login (rotation du cookie). Refus 409.
+    _wire(monkeypatch, org=39, connected=[
+        {"provider": "LINKEDIN", "account_id": "OLD", "account_name": "laportealexis",
+         "org_id": 2}])
+    with pytest.raises(ConnectRefused) as e:
+        _run(hosted_auth_url("u1", "linkedin"))
+    assert e.value.code == "unipile_already_connected_elsewhere"
+    assert e.value.status == 409 and "laportealexis" in e.value.message
+
+
+def test_force_bypasses_cross_org_guard(monkeypatch):
+    # force=True honore une reconnexion délibérée (compte réellement distinct).
+    _wire(monkeypatch, org=39, connected=[
+        {"provider": "LINKEDIN", "account_id": "OLD", "org_id": 2}])
+    out = _run(hosted_auth_url("u1", "linkedin", force=True))
+    assert out["url"]
+
+
+def test_same_org_reconnect_not_blocked_by_guard(monkeypatch):
+    # Un compte du MÊME canal dans l'org de contexte = remplacement, pas un doublon.
+    _wire(monkeypatch, org=39, existing={"account_id": "A1"}, connected=[
+        {"provider": "LINKEDIN", "account_id": "A1", "org_id": 39}])
+    out = _run(hosted_auth_url("u1", "linkedin"))
+    assert out["url"]
+
+
+def test_guard_channel_scoped(monkeypatch):
+    # LinkedIn connecté ailleurs ne bloque pas la connexion d'un canal DIFFÉRENT.
+    _wire(monkeypatch, org=39, connected=[
+        {"provider": "LINKEDIN", "account_id": "OLD", "org_id": 2}])
+    out = _run(hosted_auth_url("u1", "whatsapp"))
     assert out["url"]

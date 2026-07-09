@@ -246,6 +246,15 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS code TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_invitations_code "
                      "ON org_invitations(code) WHERE code IS NOT NULL")
+        # Invitation = feature cascade plateforme/org/équipe : le scope est dérivé des
+        # cibles (org_id NULL = plateforme, org_id seul = org, org_id+group_id = équipe).
+        # `org_groups` existe déjà (créée par _SCHEMA ci-dessus) → la FK passe. Ajout via
+        # ALTER (comme `code`), pas dans _SCHEMA (ordre de création des tables).
+        conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS group_id BIGINT "
+                     "REFERENCES org_groups(id) ON DELETE CASCADE")
+        conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS group_role TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invitations_group "
+                     "ON org_invitations(group_id) WHERE group_id IS NOT NULL")
         # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
         # Datastore = spine natif PG (ADR 0016) : `spreadsheet_id` devient une

@@ -15,10 +15,13 @@ from . import orgs_email_settings  # noqa: F401 — org.email_settings.{get,set}
 from . import orgs_mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,accept}
+# Invitation PLATEFORME (feature cascade, sommet) — onboarding admin, org cible optionnelle.
+from . import platform_invites  # noqa: F401 — platform.invite.{create,list,revoke}
 from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
 # Sous-palier groupe (ADR 0012) — départements/équipes + chef d'équipe.
 from . import groups  # noqa: F401 — group.create/list/list_mine/use/clear/get/update/delete
 from . import groups_members  # noqa: F401 — group.member.{add,set_role,remove}
+from . import groups_invites  # noqa: F401 — group.invite.{create,list,revoke} (invitation d'équipe)
 from . import groups_secrets  # noqa: F401 — group.secret.{set,delete}
 from . import groups_doctrine  # noqa: F401 — group.instruction.{list,get,set,delete,versions,revert}
 # Signaux d'usage (ADR 0017) — feedback volontaire sur un outil + remontée des manques.

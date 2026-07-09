@@ -68,26 +68,42 @@ class InviteAcceptInput(BaseModel):
     code: str | None = None
 
 
+# --- Émission partagée (cascade plateforme/org/équipe) ----------------------
+
+def emit_invitation(ctx: ResolvedCtx, *, org_id: int | None, email: str | None,
+                    send_email: bool, source: str, role: str,
+                    target_name: str | None,
+                    group_id: int | None = None,
+                    group_role: str | None = None) -> dict:
+    """Cœur partagé d'émission d'une invitation, commun aux 3 niveaux de la cascade
+    (plateforme/org/équipe). Crée la ligne (scope dérivé des cibles), forge le lien
+    `/invitation/<code>` et, si demandé, envoie le mail (`target_name` = ce qu'on
+    rejoint, None = plateforme → « rejoindre oto »)."""
+    email_addr = _norm_email(email, required=send_email)
+    _, _token, code = org_store.create_invitation(
+        org_id, email_addr, role, invited_by=ctx.sub, ttl_days=_INVITE_TTL_DAYS,
+        source=source, group_id=group_id, group_role=group_role)
+    share_url = _nominal_url(code)
+    emailed = False
+    if send_email and email_addr:
+        inviter = (db.get_user(ctx.sub) or {}).get("email")
+        emailed = email.send_invite_email(
+            email_addr, target_name, _nominal_url(code, email_addr), inviter)
+    return {"ok": True, "email": email_addr, "role": group_role or role, "code": code,
+            "invite_url": share_url, "emailed": emailed}
+
+
 # --- Handlers ---------------------------------------------------------------
 
 def _invite_create(ctx: ResolvedCtx, inp: InviteCreateInput) -> dict:
     if inp.role not in org_store.ORG_ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide : {inp.role!r}.")
-    email_addr = _norm_email(inp.email, required=inp.send_email)
     org = org_store.get_org(inp.org_id)
     if not org:
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    _, _token, code = org_store.create_invitation(
-        inp.org_id, email_addr, inp.role, invited_by=ctx.sub,
-        ttl_days=_INVITE_TTL_DAYS, source="org_admin")
-    share_url = _nominal_url(code)
-    emailed = False
-    if inp.send_email and email_addr:
-        inviter = (db.get_user(ctx.sub) or {}).get("email")
-        emailed = email.send_invite_email(
-            email_addr, org["name"], _nominal_url(code, email_addr), inviter)
-    return {"ok": True, "email": email_addr, "role": inp.role, "code": code,
-            "invite_url": share_url, "emailed": emailed}
+    return emit_invitation(ctx, org_id=inp.org_id, email=inp.email,
+                           send_email=inp.send_email, source="org_admin",
+                           role=inp.role, target_name=org["name"])
 
 
 def _invite_list(ctx: ResolvedCtx, inp: InviteListInput) -> dict:
@@ -111,9 +127,10 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
         raise AuthzDenied(400, "missing_token", "Aucun token ni code d'invitation fourni.")
     if not res:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide, expirée ou déjà utilisée.")
-    org = org_store.get_org(res["org_id"])
-    return {"ok": True, "org_id": res["org_id"], "org_role": res["org_role"],
-            "active_org": res["org_id"], "name": org["name"] if org else None}
+    org = org_store.get_org(res["org_id"]) if res.get("org_id") else None
+    return {"ok": True, "org_id": res.get("org_id"), "org_role": res.get("org_role"),
+            "group_id": res.get("group_id"), "group_role": res.get("group_role"),
+            "active_org": res.get("org_id"), "name": org["name"] if org else None}
 
 
 CAPABILITIES += [

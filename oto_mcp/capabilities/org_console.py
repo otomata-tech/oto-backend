@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from . import (
     groups,
     groups_doctrine,
+    groups_invites,
     groups_members,
     orgs,
     orgs_email_settings,
@@ -140,13 +141,15 @@ def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 # ── oto_group : create / list / add_member / remove_member / set_instruction ─
 class GroupInput(BaseModel):
-    op: Literal["create", "list", "add_member", "remove_member", "set_instruction"]
+    op: Literal["create", "list", "add_member", "remove_member", "set_instruction", "invite"]
     org_id: Optional[int] = None           # create
-    group_id: Optional[int] = None         # add/remove/set_instruction
+    group_id: Optional[int] = None         # add/remove/set_instruction/invite
     name: Optional[str] = None             # create
     description: Optional[str] = None      # create / set_instruction
     target: Optional[str] = None           # add/remove : sub ou email
-    role: Optional[str] = None             # add : group_member (défaut) | group_admin
+    role: Optional[str] = None             # add/invite : group_member (défaut) | group_admin
+    email: Optional[str] = None            # invite : destinataire (None = lien à partager)
+    send_email: bool = True                # invite
     slug: Optional[str] = None             # set_instruction
     body_md: Optional[str] = None          # set_instruction
     title: Optional[str] = None            # set_instruction
@@ -172,6 +175,10 @@ def _group(ctx: ResolvedCtx, inp: GroupInput) -> dict:
         return groups_members._remove_member(ctx, groups_members.RemoveGroupMemberInput(
             group_id=gid,
             target=_need(inp.target, "missing_target", "`target` (sub ou email) requis.")))
+    if inp.op == "invite":
+        return groups_invites._invite_create(ctx, groups_invites.GroupInviteCreateInput(
+            group_id=gid, email=inp.email, role=inp.role or "group_member",
+            send_email=inp.send_email))
     return groups_doctrine._set(ctx, groups_doctrine.InstrSetInput(
         group_id=gid,
         slug=_need(inp.slug, "missing_slug", "`slug` requis pour set_instruction."),
@@ -234,15 +241,19 @@ CAPABILITIES += [
             "create": ORG_ADMIN_OF("org_id"), "list": SUB_ONLY,
             "add_member": GROUP_ADMIN_OF("group_id"),
             "remove_member": GROUP_ADMIN_OF("group_id"),
+            "invite": GROUP_ADMIN_OF("group_id"),
             "set_instruction": GROUP_ADMIN_OF("group_id"),
         }),
         description=(
             "Teams (departments) of an org. op=create (`org_id`, `name`; org admin) / list "
             "(the teams of your active org + your role in each) / add_member (`group_id`, `target` sub|email, optional "
-            "`role` group_member|group_admin; team lead) / remove_member (`group_id`, "
-            "`target`) / set_instruction (`group_id`, `slug`, `body_md` — the team's "
-            "doctrine, served on top of the org's). To switch team, use oto_use_group. "
-            "Team shared secrets are set on the dashboard (never via MCP)."),
+            "`role` group_member|group_admin; team lead — target must already be in the org) / "
+            "invite (`group_id`, optional `email` + `role` group_member|group_admin, "
+            "send_email=false returns the link — invites a NEW person into the team, joining "
+            "the org too on accept) / remove_member (`group_id`, `target`) / set_instruction "
+            "(`group_id`, `slug`, `body_md` — the team's doctrine, served on top of the "
+            "org's). To switch team, use oto_use_group. Team shared secrets are set on the "
+            "dashboard (never via MCP)."),
         mcp="oto_group",
     ),
     Capability(

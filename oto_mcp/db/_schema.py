@@ -563,12 +563,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHE
 -- chiffré `connector_credentials` (entity_type='org'), pas dans une table dédiée.
 
 
--- Invitations d'équipe (onboarding SaaS). Le token plaintext n'est jamais
--- stocké (seulement son hash, comme user_api_tokens). Une invitation vaut pour
--- un email donné ; l'acceptation exige un compte dont l'email vérifié Logto
--- matche (anti-transfert de lien). accepted_at NULL = en attente.
--- `org_id` reste NULLABLE (héritage d'anciennes lignes) mais toute invitation
--- vivante cible une org. `source` = provenance ('org_admin').
+-- Invitations (onboarding SaaS). Le token plaintext n'est jamais stocké
+-- (seulement son hash, comme user_api_tokens). accepted_at NULL = en attente.
+-- **Feature cascade plateforme/org/équipe** (comme les connecteurs) : le SCOPE est
+-- dérivé des cibles → `org_id` NULL = invitation plateforme (onboarding pur) ;
+-- `org_id` seul = invitation d'org ; `org_id`+`group_id` = invitation d'équipe
+-- (colonnes `group_id`/`group_role` ajoutées par ALTER dans _init, après org_groups).
+-- `org_id` NULLABLE (plateforme + héritage). `source` = provenance
+-- ('org_admin' | 'group_admin' | 'platform_admin').
 -- `email` NULLABLE : une invitation nominative cible un email, mais une émission
 -- « code à partager soi-même » (sans envoi mail) peut être anonyme. `code` = code
 -- court lisible (lien /invitation/<code>), saisi/partagé à la main ; c'est le

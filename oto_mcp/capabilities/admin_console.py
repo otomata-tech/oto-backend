@@ -19,7 +19,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from .. import credentials_store, db
-from . import orgs_admin, orgs_members, orgs_reads, users_admin
+from . import orgs_admin, orgs_members, orgs_reads, platform_invites, users_admin
 from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, ORG_MEMBER_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
@@ -159,6 +159,27 @@ async def _doctrine(ctx: ResolvedCtx, inp: DoctrineAdminInput) -> dict:
         slug=_need(inp.slug, "missing_slug", "`slug` requis pour delete.")))
 
 
+# ── oto_admin_invite : create / list / revoke (invitation plateforme, cascade) ─
+class InviteAdminInput(BaseModel):
+    op: Literal["create", "list", "revoke"]
+    email: Optional[str] = None       # create : destinataire (None = lien à partager)
+    org_id: Optional[int] = None      # create : org cible optionnelle (None = onboarding pur)
+    role: Optional[str] = None        # create : org_member (défaut) | org_admin (si org_id)
+    send_email: bool = True           # create
+    invite_id: Optional[int] = None   # revoke
+
+
+def _invite(ctx: ResolvedCtx, inp: InviteAdminInput) -> dict:
+    if inp.op == "list":
+        return platform_invites._invite_list(ctx, platform_invites._NoInput())
+    if inp.op == "create":
+        return platform_invites._invite_create(ctx, platform_invites.PlatformInviteCreateInput(
+            email=inp.email, org_id=inp.org_id, role=inp.role or "org_member",
+            send_email=inp.send_email))
+    return platform_invites._invite_revoke(ctx, platform_invites.PlatformInviteRevokeInput(
+        invite_id=_need(inp.invite_id, "missing_invite_id", "`invite_id` requis pour revoke.")))
+
+
 # ── oto_admin_signal : list / resolve (boucle d'usage, ADR 0017) ─────────────
 class SignalAdminInput(BaseModel):
     op: Literal["list", "resolve"]
@@ -231,6 +252,16 @@ CAPABILITIES += [
                      "`from_version` restores; `slots` = required entities ADR 0035) / "
                      "delete (exact `slug`, drops history)."),
         mcp="oto_admin_doctrine",
+    ),
+    Capability(
+        key="admin.invite", handler=_invite, Input=InviteAdminInput,
+        authz=PLATFORM_ADMIN,
+        description=("Invite users to the oto platform (feature cascade, platform tier). "
+                     "op=create (optional `email` + `org_id` to attach directly to an org "
+                     "with `role` org_member|org_admin — omit org_id for pure onboarding; "
+                     "send_email=false returns the link only) / list (pending platform "
+                     "invitations) / revoke (`invite_id`). Platform admin."),
+        mcp="oto_admin_invite",
     ),
     Capability(
         key="admin.signal", handler=_signal, Input=SignalAdminInput,

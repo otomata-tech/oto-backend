@@ -139,9 +139,11 @@ class _RowConn:
 def test_accept_by_code_idempotent_same_sub(monkeypatch):
     monkeypatch.setattr(org_store, "get_invitation_by_code", lambda code: None)  # consommée
     monkeypatch.setattr(org_store, "_connect",
-                        lambda: _RowConn({"org_id": 7, "org_role": "org_member", "accepted_sub": "u1"}))
+                        lambda: _RowConn({"org_id": 7, "org_role": "org_member",
+                                          "group_id": None, "group_role": None,
+                                          "accepted_sub": "u1"}))
     assert org_store.accept_invitation_by_code("ABC", "u1") == {
-        "org_id": 7, "org_role": "org_member"}
+        "org_id": 7, "org_role": "org_member", "group_id": None, "group_role": None}
 
 
 def test_accept_by_code_not_idempotent_other_sub(monkeypatch):

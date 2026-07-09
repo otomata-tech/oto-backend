@@ -272,7 +272,7 @@ _CATEGORY_BY_CONNECTOR = {
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
     "aiark": "Prospection",
-    "serpapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
+    "serpapi": "Prospection", "searchapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
     "recruitee": "Recrutement", "teamtailor": "Recrutement",
@@ -298,7 +298,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "aiark": "AI Ark",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
-    "brightdata": "Bright Data", "cloro": "Cloro",
+    "searchapi": "SearchApi", "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
     # open-data FR → éditeur = la source publique
     "sirene": "INSEE", "culture": "Ministère de la Culture",
@@ -382,7 +382,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "frenchtech": "lafrenchtech.com",
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
-    "serpapi": "serpapi.com", "brightdata": "brightdata.com", "cloro": "cloro.dev",
+    "serpapi": "serpapi.com", "searchapi": "searchapi.io", "brightdata": "brightdata.com", "cloro": "cloro.dev",
     "aiark": "ai-ark.com",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
     "reddit": "reddit.com",
@@ -856,6 +856,15 @@ _REGISTRY_LIST = [
        in_default_bundle=False, label="SerpApi",
        help="recherche multi-moteurs (Google verticals, Bing, YouTube, Walmart, Amazon, jobs…)",
        href="https://serpapi.com"),
+    # searchapi : recherche multi-moteurs via SearchApi.io (verticaux Google +
+    # YouTube/Bing/Amazon/… + jobs/news/maps/scholar). keyed api_key, platform-
+    # eligible (clé plateforme + quota daily, comme serper/serpapi). Client HTTP
+    # auto-contenu (pas de dép oto-core).
+    _c("searchapi", ["searchapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
+       secret_kind="api_key", default_quota=200, platform_key_open=True,
+       in_default_bundle=False, label="SearchApi",
+       help="recherche multi-moteurs (Google verticals, YouTube, Bing, jobs, news, maps, scholar…)",
+       href="https://www.searchapi.io"),
     # brightdata : scraping & SERP via réseau proxy Bright Data. COQUILLE VIDE —
     # connecteur câblé (clé platform + quota) mais produits (SERP/Unlocker/Datasets)
     # pas encore implémentés (tools/brightdata.py n'expose aucun tool pour l'instant).

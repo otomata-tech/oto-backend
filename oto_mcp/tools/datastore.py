@@ -18,7 +18,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, ownership
+from .. import access, datastore_schema as dsv2, db, ownership
 from ..datastore import (
     InvalidCursor,
     NamespaceExists,
@@ -645,11 +645,44 @@ def register(mcp: FastMCP) -> None:
                 Text(message)
         return card
 
-    def _rows_table(records: list, *, show_meta: bool) -> None:
+    # ── conscience du schéma v2 (ADR 0046) ───────────────────────────────────
+    # Un namespace typé porte des fields imbriqués (`object`/`list` → occupant{},
+    # contacts[], signaux[]) + des rôles `title`/`status` (+ lifecycle). La table
+    # plate collapsait tout ça en `n × {...}` : une fiche perdait sa structure. On
+    # rend donc (1) la liste avec les colonnes DANS L'ORDRE du schéma, (2) une
+    # fiche seule en détail — sous-records dépliés en sous-tables.
+    def _fdefs(schema: Optional[dict]) -> list:
+        return [f for f in (schema or {}).get("fields") or [] if isinstance(f, dict)]
+
+    def _role_key(schema: Optional[dict], role: str) -> Optional[str]:
+        for f in _fdefs(schema):
+            if f.get("role") == role and f.get("key"):
+                return f["key"]
+        return None
+
+    def _ordered_keys(schema: Optional[dict], present: list) -> list:
+        """Clés présentes réordonnées selon l'ordre de déclaration du schéma ;
+        les clés hors-schéma (dont les méta) sont appendues en fin. Sans schéma =
+        ordre d'apparition inchangé (comportement 0016)."""
+        decl = [f["key"] for f in _fdefs(schema) if f.get("key")]
+        if not decl:
+            return list(present)
+        seen, out = set(), []
+        for k in decl:
+            if k in present and k not in seen:
+                out.append(k); seen.add(k)
+        for k in present:
+            if k not in seen:
+                out.append(k); seen.add(k)
+        return out
+
+    def _rows_table(records: list, *, show_meta: bool,
+                    schema: Optional[dict] = None) -> None:
         """Rend une liste de dicts en DataTable triable/cherchable (cellules
         scalaires uniquement). Les colonnes méta (`_id`/`_created_at`/
         `_updated_at`) sont masquées par défaut pour une vue épurée — `data_rows`
-        les expose en JSON quand il faut agir (ex. `_id` pour un update)."""
+        les expose en JSON quand il faut agir (ex. `_id` pour un update). Avec un
+        `schema` v2, les colonnes suivent l'ORDRE de déclaration des fields."""
         rows, keys = [], []
         for r in records:
             row = {}
@@ -664,13 +697,103 @@ def register(mcp: FastMCP) -> None:
                 if k not in keys:
                     keys.append(k)
             rows.append(row)
+        if schema is not None:
+            keys = _ordered_keys(schema, keys)
         cols = [DataTableColumn(key=k, header=_label(k), sortable=True) for k in keys]
         DataTable(columns=cols, rows=rows, search=True, paginated=len(rows) > 20, pageSize=20)
+
+    def _status_line(schema: Optional[dict], value: object) -> None:
+        """Ligne « Statut : X » enrichie du cycle de vie : (terminal) ou les
+        suites autorisées, pour que l'agent sache quoi faire ensuite."""
+        txt = f"Statut : {value}"
+        lc = dsv2.lifecycle_of(schema)
+        if lc:
+            if dsv2.is_terminal_status(schema, value):
+                txt += " (terminal)"
+            else:
+                nxt = (lc.get("transitions") or {}).get(str(value))
+                nxt = nxt if isinstance(nxt, list) else ([nxt] if nxt else [])
+                if nxt:
+                    txt += f" — suites : {', '.join(str(s) for s in nxt)}"
+        Text(txt)
+
+    def _render_composite(key: str, value: object, fdef: Optional[dict]) -> None:
+        """Déplie un field imbriqué : `list` de sous-records → sous-DataTable ;
+        `list` de scalaires → puces ; `object` → paires clé/valeur. C'est le cœur
+        de l'adaptation v2 (avant, un `contacts[]` finissait en `3 × {...}`)."""
+        ftype = (fdef or {}).get("type")
+        Heading(_label(key))
+        if ftype == "list" or isinstance(value, list):
+            items = value if isinstance(value, list) else []
+            if not items:
+                Text("(vide)")
+            elif all(isinstance(it, dict) for it in items):
+                _rows_table(items, show_meta=True,
+                            schema=(fdef or {}).get("of"))
+            else:
+                for it in items:
+                    Text(f"· {it if _is_scalar(it) else _compact(it, 200)}")
+        elif ftype == "object" or isinstance(value, dict):
+            d = value if isinstance(value, dict) else {}
+            if not d:
+                Text("(vide)")
+            else:
+                for k, v in d.items():
+                    Text(f"{_label(k)} : {v if _is_scalar(v) else _compact(v, 200)}")
+
+    def _fiche_card(record: dict, schema: Optional[dict], url: str,
+                    *, show_meta: bool) -> "Card":
+        """Vue DÉTAIL d'UNE fiche : titre (role=title), statut+lifecycle, scalaires
+        en clé/valeur, puis chaque sous-record déplié. La valeur de v2."""
+        by_key = {f["key"]: f for f in _fdefs(schema) if f.get("key")}
+        title_key = _role_key(schema, "title")
+        status_key = _role_key(schema, "status")
+        biz_key = (schema or {}).get("key")
+        title = (record.get(title_key) if title_key else None) \
+            or (record.get(biz_key) if biz_key else None) \
+            or record.get("_id") or "Fiche"
+        scalars, composites = [], []
+        for k in _ordered_keys(schema, list(record.keys())):
+            if k in (title_key, status_key):
+                continue
+            if k in _META and not show_meta:
+                continue
+            v = record.get(k)
+            fdef = by_key.get(k)
+            ftype = (fdef or {}).get("type")
+            if ftype in ("object", "list") or (fdef is None and not _is_scalar(v)):
+                composites.append((k, v, fdef))
+            else:
+                scalars.append((k, v))
+        with Card() as card:
+            with Column(gap=4):
+                Heading(str(title))
+                if status_key and record.get(status_key) is not None:
+                    _status_line(schema, record.get(status_key))
+                for k, v in scalars:
+                    Text(f"{_label(k)} : {'' if v is None else v}")
+                Text(f"éditer : {url}")
+                for k, v, fdef in composites:
+                    _render_composite(k, v, fdef)
+        return card
+
+    def _pick_fiche(rows: list, schema: Optional[dict], row: str) -> Optional[dict]:
+        """Retrouve UNE fiche par `row` : match sur `_id`, la clé métier déclarée
+        (`schema.key`), ou la valeur du field titre — le repère naturel pour l'agent."""
+        biz_key = (schema or {}).get("key")
+        title_key = _role_key(schema, "title")
+        target = str(row)
+        for r in rows:
+            for probe in ("_id", biz_key, title_key):
+                if probe and str(r.get(probe)) == target:
+                    return r
+        return None
 
     @mcp.tool(app=True)
     def data_app(
         namespace: str | None = None,
         filter: Optional[dict] = None,
+        row: str | None = None,
         limit: int = 100,
         show_meta: bool = False,
     ):  # pas d'annotation de retour `-> Card` : avec `from __future__ import
@@ -685,14 +808,24 @@ def register(mcp: FastMCP) -> None:
         namespaces. WITH `namespace` = a sortable/searchable table of its rows,
         with an optional exact-match `filter` (same shape as `data_rows`).
 
+        Schema-aware (datastore v2, ADR 0046): a typed namespace renders its
+        columns in the declared field order, and a SINGLE fiche is shown in a
+        detail view — nested `object`/`list` fields (e.g. `contacts[]`, `signaux[]`)
+        are expanded as sub-tables instead of a `"3 × {...}"` blob, and the
+        `status` field shows its lifecycle (terminal / next allowed states). The
+        detail view opens automatically when `filter` narrows to one row, or on
+        demand with `row`.
+
         Use when the user wants to *see* and explore datastore content (e.g. a
-        watch-list) without leaving the chat. For raw JSON use `data_rows`; to
-        edit a row, follow the dashboard link shown on the card.
+        watch-list or a lead fiche) without leaving the chat. For raw JSON use
+        `data_rows`; to edit a row, follow the dashboard link shown on the card.
 
         Args:
             namespace: target namespace ; omit = list all your namespaces.
             filter: dict `{column: value}` exact match to pre-filter rows,
                 e.g. `{"priorite": "P1"}`.
+            row: open ONE fiche in detail view — matched against `_id`, the
+                declared business key (`schema.key`), or the title field value.
             limit: max rows rendered (default 100).
             show_meta: also show the `_id`/`_created_at`/`_updated_at` columns
                 (hidden by default).
@@ -711,6 +844,7 @@ def register(mcp: FastMCP) -> None:
                 )
             index = [
                 {"namespace": s["namespace"],
+                 "structure": "typée" if _fdefs(s.get("schema")) else "libre",
                  "partage": "oui" if s.get("shared") else "non",
                  "lien": s.get("url", "")}
                 for s in spaces
@@ -725,18 +859,34 @@ def register(mcp: FastMCP) -> None:
         try:
             rows = store.list_rows(namespace, filter=filter, limit=limit)
             url = store.get_url(namespace)
+            schema = store.get_schema(namespace)
         except NamespaceNotFound:
             return _message_card(
                 "Namespace introuvable",
                 f"Aucun namespace « {namespace} » sur ton compte.",
             )
+
+        # Vue DÉTAIL d'une fiche : `row` explicite, ou `filter` qui isole 1 ligne.
+        fiche = None
+        if row is not None:
+            fiche = _pick_fiche(rows, schema, row)
+            if fiche is None:
+                return _message_card(
+                    "Fiche introuvable",
+                    f"Aucune fiche « {row} » dans « {namespace} ».",
+                )
+        elif filter and len(rows) == 1:
+            fiche = rows[0]
+        if fiche is not None:
+            return _fiche_card(fiche, schema, url, show_meta=show_meta)
+
         suffix = f" (filtre {filter})" if filter else ""
         with Card() as card:
             with Column(gap=4):
                 Heading(namespace)
                 Text(f"{len(rows)} ligne(s){suffix} · éditer : {url}")
                 if rows:
-                    _rows_table(rows, show_meta=show_meta)
+                    _rows_table(rows, show_meta=show_meta, schema=schema)
                 elif filter:
                     Text("Aucune ligne pour ce filtre.")
                 else:

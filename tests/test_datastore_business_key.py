@@ -13,6 +13,20 @@ import oto_mcp.datastore as dsm
 from oto_mcp.datastore import DatastorePg
 
 
+def _fake_merge_locked(rows):
+    """Stub de `db.datastore_merge_row_locked` (seam verrou de ligne #197) sur un
+    dict `rows` en mémoire : reproduit get -> apply_fn -> update de façon
+    séquentielle. Renvoie (row, merged) ou None si la row n'existe pas."""
+    def merge_locked(ns_id, row_id, apply_fn, updated_at):
+        if row_id not in rows:
+            return None
+        merged = apply_fn(dict(rows[row_id]))
+        rows[row_id] = dict(merged)
+        return ({"row_id": row_id, "created_at": "t0", "updated_at": updated_at,
+                 "data": dict(merged)}, merged)
+    return merge_locked
+
+
 @pytest.fixture()
 def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
@@ -74,10 +88,8 @@ def race(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data: (_ for _ in ()).throw(
                             UniqueViolation("duplicate key ds_bkey_7")))
-    monkeypatch.setattr(dsm.db, "datastore_get_row",
-                        lambda ns_id, rid: {"row_id": rid, "data": dict(state["rows"][rid])})
-    monkeypatch.setattr(dsm.db, "datastore_update_row",
-                        lambda ns_id, rid, data, ts: state["rows"].__setitem__(rid, data))
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked",
+                        _fake_merge_locked(state["rows"]))
     monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
                         lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     return st, state
@@ -112,13 +124,7 @@ def test_append_row_existing_key_merges_not_500(monkeypatch):
     rows = {"r1": {"member_id": "A", "x": 1}}
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
                         lambda ns_id, key, kv: "r1" if str(kv) == "A" else None)
-    monkeypatch.setattr(dsm.db, "datastore_get_row",
-                        lambda ns_id, rid: {"row_id": rid, "created_at": "t0",
-                                            "updated_at": "t0", "data": dict(rows[rid])})
-    def _update(ns_id, rid, data, ts):
-        rows[rid] = data
-        return {"row_id": rid, "created_at": "t0", "updated_at": ts, "data": dict(data)}
-    monkeypatch.setattr(dsm.db, "datastore_update_row", _update)
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", _fake_merge_locked(rows))
     # insert ne doit JAMAIS être atteint (la clé existe) — le câbler à un raise le prouve
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("insert appelé")))
@@ -145,13 +151,7 @@ def test_append_row_lost_race_converges(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data: (_ for _ in ()).throw(
                             UniqueViolation("duplicate key ds_bkey_7")))
-    monkeypatch.setattr(dsm.db, "datastore_get_row",
-                        lambda ns_id, rid: {"row_id": rid, "created_at": "t0",
-                                            "updated_at": "t0", "data": dict(rows[rid])})
-    def _update(ns_id, rid, data, ts):
-        rows[rid] = data
-        return {"row_id": rid, "created_at": "t0", "updated_at": ts, "data": dict(data)}
-    monkeypatch.setattr(dsm.db, "datastore_update_row", _update)
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", _fake_merge_locked(rows))
 
     out = st.append_row("t", {"member_id": "A", "y": 2})
     assert out["_id"] == "winner"

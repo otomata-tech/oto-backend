@@ -131,6 +131,42 @@ def test_unipile_hosted_lists_own_accounts(monkeypatch):
     assert ids[0]["is_default"]
 
 
+def test_unipile_hosted_reflects_live_status(monkeypatch):
+    # #201 : un compte hébergé réellement mort côté Unipile (checkpoint, creds
+    # expirés, révoqué) ne doit PLUS afficher « ok » en dur — on reflète le statut
+    # live (list_accounts().sources[].status), résolu via la clé plateforme.
+    monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
+                        lambda sub: [{"account_id": "H1", "account_name": "JB",
+                                      "provider": "LINKEDIN", "org_id": 39}])
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, ch: "H1")
+    monkeypatch.setattr(connector_identities, "_unipile_live_status_map",
+                        lambda sub: {"H1": "credentials"})
+    ids = connector_identities.list_identities("u1", "unipile")
+    assert ids[0]["status"] == "credentials"
+
+
+def test_unipile_hosted_status_failsoft_ok(monkeypatch):
+    # Lecture live indisponible (panne / clé absente) → fallback « ok », jamais de
+    # régression d'affichage (comportement d'avant préservé).
+    monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
+    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
+                        lambda sub: [{"account_id": "H1", "account_name": "JB",
+                                      "provider": "LINKEDIN", "org_id": 39}])
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, ch: "H1")
+    monkeypatch.setattr(connector_identities, "_unipile_live_status_map", lambda sub: {})
+    ids = connector_identities.list_identities("u1", "unipile")
+    assert ids[0]["status"] == "ok"
+
+
 def test_unipile_hosted_scopes_accounts_to_current_org(monkeypatch):
     # Scope membre (ADR 0033 B4) : un compte connecté sous une AUTRE org n'est pas
     # opérable dans l'org de contexte (résolution d'appel org-scopée) → il ne doit

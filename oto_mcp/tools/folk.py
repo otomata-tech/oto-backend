@@ -24,6 +24,27 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+def _merge_group_ids(current_groups, add, remove) -> list[dict]:
+    """Fusionne la liste de groupes d'un record Folk et renvoie la liste COMPLÈTE
+    au format API (`[{"id": ...}]`).
+
+    L'API Folk est en *replace-all* sur les champs-listes (un PATCH `groups`
+    écrase la liste entière) : pour ajouter/retirer un groupe sans perdre les
+    autres, il faut relire les groupes actuels et renvoyer l'union résultante.
+    Préserve l'ordre et déduplique.
+    """
+    remove_set = set(remove or [])
+    result: list[str] = []
+    for g in (current_groups or []):
+        gid = g.get("id") if isinstance(g, dict) else g
+        if gid and gid not in remove_set and gid not in result:
+            result.append(gid)
+    for gid in (add or []):
+        if gid not in remove_set and gid not in result:
+            result.append(gid)
+    return [{"id": gid} for gid in result]
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.folk.client import FolkClient
 
@@ -112,8 +133,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def folk_update(
-        entity: str, id: str, fields: dict,
+        entity: str, id: str, fields: Optional[dict] = None,
         group_id: Optional[str] = None, object_type: str = "deals",
+        add_to_groups: Optional[list[str]] = None,
+        remove_from_groups: Optional[list[str]] = None,
     ) -> dict:
         """Update a Folk record (PATCH — only the given fields change).
 
@@ -121,7 +144,8 @@ def register(mcp: FastMCP) -> None:
             entity: "person", "company" or "deal".
             id: the record ID (the deal_id for a deal).
             fields: Folk API field names, camelCase (e.g. {"jobTitle": "CTO"},
-                {"industry": "SaaS"}, ou champs custom d'un deal).
+                {"industry": "SaaS"}, ou champs custom d'un deal). Optionnel si
+                seuls `add_to_groups`/`remove_from_groups` sont fournis.
                 **Champs CUSTOM d'une person/company** (ex. Status d'un groupe) :
                 les passer SOUS `customFieldValues`, keyés par group_id —
                 `{"customFieldValues": {"<group_id>": {"Status": "Follow-up"}}}`.
@@ -132,8 +156,28 @@ def register(mcp: FastMCP) -> None:
                 le passer pour person/company (sans effet, source d'erreur) — pour
                 leurs champs custom, utiliser `customFieldValues` ci-dessus.
             object_type: nom de la collection (défaut "deals"), `deal` seulement.
+            add_to_groups / remove_from_groups: rattacher/détacher une **person** ou
+                **company** À des groupes (folk_list_groups pour les IDs), sans
+                toucher ses autres groupes. L'API Folk étant en *replace-all* sur
+                `groups` (un PATCH direct écraserait les autres groupes), le serveur
+                relit les groupes actuels et écrit l'union. Ne pas passer `groups`
+                dans `fields` en même temps.
         """
         c = _client()
+        fields = dict(fields or {})
+        if add_to_groups or remove_from_groups:
+            if entity not in ("person", "company"):
+                raise _bad("add_to_groups/remove_from_groups ne valent que pour "
+                           "entity='person' ou 'company'.")
+            if "groups" in fields:
+                raise _bad("Ne pas passer 'groups' dans fields en même temps que "
+                           "add_to_groups/remove_from_groups.")
+            current = c.get_person(id) if entity == "person" else c.get_company(id)
+            fields["groups"] = _merge_group_ids(
+                current.get("groups"), add_to_groups, remove_from_groups)
+        if not fields:
+            raise _bad("Rien à mettre à jour : fournir `fields` et/ou "
+                       "add_to_groups/remove_from_groups.")
         if entity == "person":
             return c.update_person(id, **fields)
         if entity == "company":

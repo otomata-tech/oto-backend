@@ -17,6 +17,8 @@ import html
 
 from markdown_it import MarkdownIt
 
+from . import brand
+
 # Rendu CommonMark SÛR (html=False = HTML brut échappé, pas exécuté), réutilisé (stateless).
 _MD = MarkdownIt("commonmark", {"html": False})
 
@@ -27,6 +29,7 @@ def _shell(*, title: str, inner: str) -> str:
 <html lang=fr><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
 <title>{safe_title} · Oto</title>
+{brand.FAVICON_LINK}
 <meta name=description content="Document partagé via Oto.">
 <meta name=robots content="noindex">
 <link rel=preconnect href="https://fonts.googleapis.com">

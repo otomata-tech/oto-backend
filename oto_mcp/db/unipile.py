@@ -210,6 +210,18 @@ def list_option_comps(entity_type: str, entity_id: str) -> list[str]:
         )]
 
 
+def list_option_comps_for_option(option: str) -> list[dict]:
+    """Bénéficiaires (entity_type, entity_id) d'une option donnée (comp) — l'inverse de
+    `list_option_comps`, pour la vue admin connecteur-centrique (ADR 0044 §H : « qui a
+    droit à ce connecteur au niveau plateforme »)."""
+    with _connect() as conn:
+        return [{"entity_type": r["entity_type"], "entity_id": r["entity_id"],
+                 "granted_at": r["granted_at"]} for r in conn.execute(
+            "SELECT entity_type, entity_id, granted_at FROM option_comps WHERE option=%s",
+            (option,),
+        )]
+
+
 def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None,
                            provider: str = "LINKEDIN", platform_seat: bool = False) -> None:
     """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au

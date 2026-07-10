@@ -11,7 +11,14 @@ On monkeypatche les seams (access/group_store/db/ownership), pas de DB.
 import pytest
 
 import oto_mcp.datastore as D
-from oto_mcp import access, group_store
+from oto_mcp import access, group_store, roles
+
+
+@pytest.fixture(autouse=True)
+def _member_by_default(monkeypatch):
+    # ADR 0049 : `_active_scope` escalade l'org_admin (tous les groupes de l'org) —
+    # défaut des tests = simple membre ; les tests admin surchargent.
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, oid: False)
 
 
 OWNED = {"id": 1, "namespace": "leads", "owner_type": "org", "owner_id": "99",
@@ -50,13 +57,27 @@ def test_list_namespaces_scopes_groups_on_active_org(monkeypatch):
     out = D.make_store("u1").list_namespaces()
 
     assert rec["groups_for"] == ("u1", 99)          # le filtre org est bien passé
-    assert rec["owners"] == [("org", "99")]         # contenu possédé = org active seule
+    # ADR 0049 (cadrage 10/07) : le contenu possédé = org active + MES équipes de cette
+    # org (un tableau team-owned se liste sans grant, comme un projet de pôle).
+    assert rec["owners"] == [("org", "99"), ("group", "5")]
     assert rec["granted_to"] == ("u1", [99], [5])   # grants org active + mes groupes de cette org
 
     by_id = {e["id"]: e for e in out}
     assert by_id[1]["shared"] is False and by_id[1]["can_write"] is True
     assert by_id[2]["shared"] is True and by_id[2]["permission"] == "read"
     assert by_id[2]["can_write"] is False
+
+
+def test_list_namespaces_org_admin_sees_all_team_tableaux(monkeypatch):
+    # Gouvernance inaliénable (ADR 0049) : l'org_admin liste les tableaux de TOUS les
+    # pôles de son org, même sans en être membre — même règle que `oto_project op=list`.
+    rec = {}
+    _wire(monkeypatch, rec, groups=())
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, oid: True)
+    monkeypatch.setattr(group_store, "list_groups",
+                        lambda org_id: [{"id": 5, "org_id": org_id}, {"id": 6, "org_id": org_id}])
+    D.make_store("adm").list_namespaces()
+    assert rec["owners"] == [("org", "99"), ("group", "5"), ("group", "6")]
 
 
 def test_org_store_lists_owned_without_sub(monkeypatch):

@@ -112,6 +112,9 @@ def resolve_datastore_ns(
             "WHERE (d.namespace = %(ns)s OR d.id = %(nsid)s) AND ("
             "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"
             "  OR (d.owner_type = 'org'  AND d.owner_id = ANY(%(org)s))"
+            # ADR 0049 (cadrage 10/07) : team-owned = visible dans le contexte de l'org
+            # parente (le caller passe mes équipes — ou toutes celles de l'org si admin).
+            "  OR (d.owner_type = 'group' AND d.owner_id = ANY(%(grp)s))"
             "  OR EXISTS ("
             "       SELECT 1 FROM resource_grants g"
             "        WHERE g.resource_type = 'datastore_namespace' AND g.resource_id = d.id::text"

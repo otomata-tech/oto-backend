@@ -209,21 +209,19 @@ CREATE TABLE IF NOT EXISTS group_connector_access (
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
--- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de
--- l'ancien modèle per-sub (nullable, DROP différé Phase H) ; `spreadsheet_id`/
--- `owner_email` sont des reliques Sheets (nullable, DROP différé).
+-- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H B1 (cadrage 10/07) :
+-- le code ne référence PLUS les reliques (`sub` per-sub, `spreadsheet_id`/`owner_email`
+-- Sheets) — leurs colonnes existent encore sur la base vivante, DROP en B2 une fois
+-- ce code promu en prod (DB partagée canari/prod : dropper avant casserait le boot prod).
 -- ⚠️ Les INDEX sur owner_type/owner_id NE sont PAS créés ici : sur une base
 -- existante, `CREATE TABLE IF NOT EXISTS` est un no-op et ces colonnes n'existent
 -- pas encore quand `_SCHEMA` s'exécute (ajoutées plus bas par ALTER). Index +
 -- contrainte d'unicité owner créés dans init_db APRÈS l'ALTER (couvre fresh ET existant).
 CREATE TABLE IF NOT EXISTS user_datastores (
     id BIGSERIAL PRIMARY KEY,
-    sub TEXT,
     owner_type TEXT NOT NULL DEFAULT 'user',
     owner_id TEXT,
     namespace TEXT NOT NULL,
-    spreadsheet_id TEXT,
-    owner_email TEXT,
     -- Mode TYPÉ optionnel (ADR 0032 §6 / 0029) : NULL = table libre (colonnes
     -- découvertes des rows) ; sinon un schéma déclaré
     -- {fields:[{key,label?,type?,role?}]} où role ∈ title|badge|metric|status|
@@ -249,17 +247,8 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     PRIMARY KEY (ns_id, row_id)
 );
 
-CREATE TABLE IF NOT EXISTS datastore_shares (
-    id BIGSERIAL PRIMARY KEY,
-    owner_sub TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    spreadsheet_id TEXT,
-    shared_with_sub TEXT NOT NULL,
-    permission TEXT NOT NULL DEFAULT 'write',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(owner_sub, namespace, shared_with_sub)
-);
-CREATE INDEX IF NOT EXISTS idx_datastore_shares_recipient ON datastore_shares(shared_with_sub, namespace);
+-- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — n'est plus
+--  créée ni référencée : Phase H B1. La table vivante sera DROPpée en B2, post-promotion.)
 
 -- Projet = couche d'organisation (modèle produit 2026-06-27). Conteneur de travail
 -- POSSÉDÉ (owner_type/owner_id, ADR 0030) : nom + brief (doc d'entrée inline pour

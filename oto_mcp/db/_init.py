@@ -255,28 +255,18 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS group_role TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invitations_group "
                      "ON org_invitations(group_id) WHERE group_id IS NOT NULL")
-        # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
-        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
-        # Datastore = spine natif PG (ADR 0016) : `spreadsheet_id` devient une
-        # relique Sheets (nullable, plus écrite). DROP des colonnes Sheets différé
-        # post-backfill — ici on lève juste le NOT NULL pour que les créations PG
-        # natives passent. Idempotent.
-        conn.execute("ALTER TABLE user_datastores ALTER COLUMN spreadsheet_id DROP NOT NULL")
-        conn.execute("ALTER TABLE datastore_shares ALTER COLUMN spreadsheet_id DROP NOT NULL")
-        # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par
-        # la ressource. `owner_type` défaut 'user' (classeur perso, l'existant) ;
-        # `owner_id` = sub pour un user, org.id::text pour un classeur d'org.
-        # Backfill owner_id ← sub (idempotent : ne touche que les lignes non backfillées).
+        # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par la
+        # ressource (`owner_type` défaut 'user', `owner_id` = sub | org.id | group.id).
+        # Phase H **B1** (cadrage 10/07) : les migrations reliques du cutover (ALTER
+        # Sheets, backfill owner←sub, backfill datastore_shares→resource_grants, drop
+        # du NOT NULL de `sub`) ont toutes TOURNÉ en prod — retirées du boot, le code
+        # ne référence plus `sub`/`spreadsheet_id`/`owner_email` ni `datastore_shares`.
+        # **B2** (les DROP effectifs) ne part QUE ce code promu en prod : la DB est
+        # PARTAGÉE canari/prod — dropper avant casserait le boot du code prod actuel.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'user'")
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_id TEXT")
-        conn.execute("UPDATE user_datastores SET owner_id = sub WHERE owner_id IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_datastores_owner "
                      "ON user_datastores(owner_type, owner_id)")
-        # Swap de contrainte (ADR 0030) : la clé logique passe de (sub, namespace) à
-        # (owner_type, owner_id, namespace) — requis pour les classeurs org-owned.
-        # `sub` devient une relique nullable (DROP de la colonne différé à la Phase H).
-        conn.execute("ALTER TABLE user_datastores ALTER COLUMN sub DROP NOT NULL")
-        conn.execute("ALTER TABLE user_datastores DROP CONSTRAINT IF EXISTS user_datastores_sub_namespace_key")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
                      "ON user_datastores(owner_type, owner_id, namespace)")
         # ADR 0048 — le grant possède un RÔLE (viewer/editor/manager). Ajout de la colonne
@@ -288,18 +278,6 @@ def init_db() -> None:
         conn.execute("UPDATE resource_grants SET role = "
                      "CASE permission WHEN 'read' THEN 'viewer' ELSE 'editor' END "
                      "WHERE role NOT IN ('viewer', 'manager')")
-        # Backfill datastore_shares → resource_grants (ADR 0030). One-shot idempotent :
-        # ON CONFLICT DO NOTHING + clé stable resource_id = user_datastores.id::text.
-        # On joint sur (owner_sub, namespace) pour retrouver l'id du namespace.
-        conn.execute(
-            "INSERT INTO resource_grants "
-            "(resource_type, resource_id, principal_type, principal_id, permission, granted_at) "
-            "SELECT 'datastore_namespace', d.id::text, 'user', s.shared_with_sub, "
-            "       s.permission, s.created_at "
-            "FROM datastore_shares s "
-            "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
-            "ON CONFLICT DO NOTHING"
-        )
         # Préférence de langue de l'UI dashboard (2026-07-07) : NULL = pas de
         # préférence explicite (le front retombe sur la langue du navigateur).
         # Validée à 'en'|'fr' en amont (capacité me.locale.set) ; colonne libre.

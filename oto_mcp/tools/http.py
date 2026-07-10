@@ -8,10 +8,12 @@ l'API **directement**. L'org configure sur la carte HTTP : `base_url`, `auth_mod
 
 Adaptateur mince (ADR 0037) : le moteur (auth + forward) vit dans oto-core
 (`oto.tools.http`) ; ici on résout le credential d'org et on traduit les erreurs
-en McpError. Lecture seule (GET). C'est un « nœud HTTP » (webhook sortant) : la
-protection SSRF est un contrôle d'egress réseau au niveau plateforme, pas du code
-par-connecteur (comme Zapier/Make/n8n). Étant un tool MCP ordinaire, le résultat
-repasse par la rédaction de champs (FieldRedactionMiddleware) comme tout connecteur.
+en McpError. Deux tools : `http_get` (lecture) et `http_post` (POST avec corps
+JSON — recherche paginée, écritures). C'est un « nœud HTTP » (comme n8n/Zapier) :
+la protection SSRF est un contrôle d'egress réseau au niveau plateforme, pas du
+code par-connecteur ; ce qu'un POST est autorisé à faire relève de l'API cible
+(et, derrière un bridge, de SA propre allowlist). Étant des tools MCP ordinaires,
+le résultat repasse par la rédaction de champs (FieldRedactionMiddleware).
 """
 from __future__ import annotations
 
@@ -49,6 +51,33 @@ def register(mcp: FastMCP) -> None:
         client = _client()
         try:
             return client.get(path, params)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else 502
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"API cible : HTTP {status}"))
+
+    @mcp.tool(
+        name="http_post",
+        description=(
+            "Appel HTTP POST vers l'API configurée pour ton org (connecteur `http`). "
+            "`path` = chemin relatif à la base_url (commence par /). `body` = corps "
+            "JSON (dict/list). `params` = query params optionnels. L'auth configurée "
+            "est injectée automatiquement. À utiliser pour les endpoints qui exigent "
+            "un POST (recherche paginée, opérations d'écriture) ; ce que le POST est "
+            "autorisé à faire dépend de l'API cible."
+        ),
+    )
+    def http_post(path: str, body: dict | list | None = None,
+                  params: dict | None = None) -> dict:
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="`path` doit commencer par / (chemin relatif à base_url).",
+            ))
+        client = _client()
+        try:
+            return client.post(path, json=body, params=params)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         except requests.HTTPError as e:

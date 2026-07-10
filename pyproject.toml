@@ -16,7 +16,7 @@ dependencies = [
     # v1.17.0 = fixes Unipile API v2 ; v1.15.0 = cursor limit override
     # unipile_relations (#179) ; 1.14 = status_code.
     # v1.22.0 = AiArkClient (oto.tools.aiark, requalification mount→API #160).
-    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.23.0",
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v1.24.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

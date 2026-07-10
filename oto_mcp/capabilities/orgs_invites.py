@@ -13,7 +13,8 @@ import os
 
 from pydantic import BaseModel
 
-from .. import db, email, oauth_facade, org_store
+from .. import db, oauth_facade, org_store
+from .. import email as email_mod  # alias : le param `email` d'emit_invitation masquerait le module
 from ._authz import ORG_ADMIN_OF, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -87,7 +88,7 @@ def emit_invitation(ctx: ResolvedCtx, *, org_id: int | None, email: str | None,
     emailed = False
     if send_email and email_addr:
         inviter = (db.get_user(ctx.sub) or {}).get("email")
-        emailed = email.send_invite_email(
+        emailed = email_mod.send_invite_email(
             email_addr, target_name, _nominal_url(code, email_addr), inviter)
     return {"ok": True, "email": email_addr, "role": group_role or role, "code": code,
             "invite_url": share_url, "emailed": emailed}

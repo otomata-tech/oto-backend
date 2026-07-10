@@ -742,35 +742,9 @@ CREATE INDEX IF NOT EXISTS idx_org_group_members_sub ON org_group_members(sub);
 CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
     ON org_group_members(sub) WHERE is_active;
 
--- Doctrine + skills d'un GROUPE (miroir d'org_instructions au grain groupe).
--- Servie en COMPLÉMENT de la doctrine d'org par oto_procedure(op='get') quand l'user a
--- un groupe actif. Même modèle versionné (slug réservé 'claude_md' = base ;
--- autres = skills). En clair (prose, hors coffre chiffré).
-CREATE TABLE IF NOT EXISTS org_group_instructions (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    slug TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    body_md TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-    set_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, slug)
-);
-CREATE INDEX IF NOT EXISTS idx_org_group_instructions_group ON org_group_instructions(group_id);
-
-CREATE TABLE IF NOT EXISTS org_group_instruction_revisions (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    slug TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    body_md TEXT NOT NULL,
-    set_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, slug, version)
-);
+-- (Les procédures d'ÉQUIPE vivent dans `org_instructions` avec owner_type='group'
+--  depuis la fusion du chantier procédures — cadrage 10/07, Lot B/C. Les tables
+--  jumelles org_group_instructions/+revisions sont DROPpées en Lot C.)
 
 -- Coffre unique des credentials per-entité (user OU org OU group) : clés API,
 -- sessions linkedin/crunchbase, OAuth Google multi-compte, platform keys.

@@ -166,8 +166,15 @@ class DatastorePg:
                 self._active_scope_cache = ([], [])
             else:
                 org = int(oid)
-                groups = [int(g["group_id"])
-                          for g in group_store.list_groups_for_user(self.sub, org)]
+                # ADR 0049 (cadrage 10/07) : les groupes du contexte = mes équipes dans
+                # l'org active — ou TOUS les groupes de l'org pour un org_admin (même
+                # escalade que `roles.can_read_group`, alignée sur `oto_project op=list`).
+                from . import roles
+                if roles.is_org_admin(self.sub, org):
+                    groups = [int(g["id"]) for g in group_store.list_groups(org)]
+                else:
+                    groups = [int(g["group_id"])
+                              for g in group_store.list_groups_for_user(self.sub, org)]
                 self._active_scope_cache = ([org], groups)
         return self._active_scope_cache
 
@@ -275,20 +282,21 @@ class DatastorePg:
         2026-07-01). Dédupliqués par id (priorité possédé). La résolution PAR NOM
         (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
         namespace d'une autre org ne se résout plus hors de son org non plus."""
-        from . import access, group_store
+        from . import access
         if self.acting_org is not None:
             owner = ("org", str(self.acting_org))
-            org, org_ids, group_ids = int(self.acting_org), [int(self.acting_org)], []
         else:
             owner = ownership.active_owner(access.current_org(self.sub))
             if owner is None:
                 return []
-            org = int(owner[1])
-            org_ids = [org]
-            group_ids = [int(g["group_id"])
-                         for g in group_store.list_groups_for_user(self.sub, org)]
+        # ADR 0049 (cadrage 10/07) : les tableaux TEAM-OWNED de l'org active sont listés
+        # comme les org-owned. `_active_scope` est la source unique du jeu de groupes
+        # (mes équipes, ou TOUS les groupes de l'org pour un org_admin — même règle que
+        # `oto_project op=list`) ; le scope reste borné à l'org active.
+        org_ids, group_ids = self._active_scope()
+        owned = [owner] + [("group", str(g)) for g in group_ids]
         out: dict[int, dict] = {}
-        for n in db.list_datastore_namespaces_for_owners([owner]):
+        for n in db.list_datastore_namespaces_for_owners(owned):
             out[int(n["id"])] = self._entry(n, shared=False)
         for n in db.list_datastore_namespaces_granted_to(self.sub, org_ids, group_ids):
             if int(n["id"]) in out:

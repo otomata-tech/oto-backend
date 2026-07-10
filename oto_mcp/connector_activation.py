@@ -2,26 +2,27 @@
 
 **Déclaration (registre `providers.py`) ≠ activation (cette table).** Un connecteur
 déclaré en code ne s'expose PAS du seul fait d'être déclaré : il faut une ligne
-d'activation. Deux niveaux, l'org primant sur le global :
+d'activation. Résolution, l'échelle des scopes primant du plus proche au plus large :
 
-    exposé(connector, org) = override_org si défini, sinon master global, sinon OFF
+    exposé(connector, org)  = override_org si défini, sinon master plateforme, sinon OFF
+    effectif(membre équipe) = exposé(org) − coupures de l'équipe (restrict-only)
 
-- **master global**  : ligne `(connector, org_id=NULL)` — interrupteur plateforme.
-- **override d'org**  : ligne `(connector, org_id=<id>)` — force ON/OFF pour une org,
-  par-dessus le global.
-- **aucune ligne**    : OFF (deny-by-default — un nouveau connecteur reste inerte
-  jusqu'à activation explicite par un admin).
+**Table UNIQUE `connector_availability`** (chantier ACL, cadrage 10/07 — fusion de
+l'ex-paire `connector_activation` + `group_connector_activation`) : le grain est une
+COLONNE de scope, pas une table par grain.
 
-**Seed unique** à la création de la table : les connecteurs ALORS au registre sont
-activés (ON global) — snapshot de l'état au moment où le cran est introduit, pour
-ne rien changer au comportement existant. Une fois la table peuplée, le boot n'y
-touche plus : les connecteurs déclarés APRÈS (foncier, santé…) restent OFF tant
-qu'un admin ne les active pas.
+- **('platform', '')**      : master plateforme (interrupteur global).
+- **('org', <org_id>)**     : override d'org — force ON/OFF par-dessus le master.
+- **('group', <group_id>)** : coupure d'équipe — `enabled=FALSE` UNIQUEMENT
+  (invariant MONOTONE ADR 0012 : l'équipe retranche, n'expose jamais ; la garde
+  métier vit dans la capacité).
+- **aucune ligne**          : OFF au niveau org (deny-by-default), hérité au niveau équipe.
 
-NB barreau **B1** (ADR 0010) : table + helpers seuls, aucun appelant ne lit encore
-`is_exposed`/`exposed_connectors` — canari de déploiement (même discipline que le
-palier org en son temps). Le câblage (catalogue `/api/connectors`, chargement des
-tools) suit en B2/B3 ; la surface admin (set/clear) en B4.
+**Seed unique** (lignes platform) : les connecteurs au registre AU MOMENT de
+l'introduction du cran sont activés ; les suivants restent OFF jusqu'à activation
+explicite. **Copie legacy au boot** (gardée `to_regclass`, newer-wins sur `set_at`) :
+les deux tables historiques sont recopiées tant qu'elles existent — elles tombent
+en B2 une fois ce code promu (DB partagée canari/prod).
 
 Convention : les lectures/écritures sont **self-managing** (ouvrent leur propre
 connexion, comme `db.*` et `org_store.*`). Seuls `init_schema`/`seed_initial`
@@ -34,31 +35,14 @@ from __future__ import annotations
 from typing import Optional
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS connector_activation (
-    connector TEXT NOT NULL,            -- nom de connecteur (registre providers.py)
-    org_id    BIGINT,                   -- NULL = master switch plateforme ; sinon override d'org
-    enabled   BOOLEAN NOT NULL,
-    set_by    TEXT,
-    set_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
--- org_id nullable → pas de PRIMARY KEY (PG impose NOT NULL sur une PK). Unicité
--- garantie par deux index partiels (même pattern que org_members_one_active).
-CREATE UNIQUE INDEX IF NOT EXISTS connector_activation_global
-    ON connector_activation (connector) WHERE org_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS connector_activation_org
-    ON connector_activation (connector, org_id) WHERE org_id IS NOT NULL;
-
--- Tier ÉQUIPE (ADR 0012, restrict-only) : un chef d'équipe peut COUPER un connecteur
--- pour SON équipe, jamais l'exposer au-delà de ce que l'org autorise (invariant
--- MONOTONE — platform ⊇ org ⊇ group). On ne stocke donc que des coupures
--- (`enabled=FALSE`) ; l'absence de ligne = hérité de l'org (pas de restriction).
-CREATE TABLE IF NOT EXISTS group_connector_activation (
-    group_id  BIGINT NOT NULL,
-    connector TEXT NOT NULL,
-    enabled   BOOLEAN NOT NULL,      -- FALSE = coupé pour l'équipe (seule valeur posée)
-    set_by    TEXT,
-    set_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, connector)
+CREATE TABLE IF NOT EXISTS connector_availability (
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('platform','org','group')),
+    scope_id   TEXT NOT NULL DEFAULT '',   -- '' pour platform ; org.id / group.id en texte sinon
+    connector  TEXT NOT NULL,              -- nom de connecteur (registre providers.py)
+    enabled    BOOLEAN NOT NULL,
+    set_by     TEXT,
+    set_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (scope_type, scope_id, connector)
 );
 """
 
@@ -66,25 +50,54 @@ CREATE TABLE IF NOT EXISTS group_connector_activation (
 # --- schéma (reçoit le conn de la transaction init_db) ----------------------
 
 def init_schema(conn) -> None:
-    """Crée la table + index. Idempotent. Appelé par `db.init_db` dans la même
-    transaction que le reste du schéma."""
+    """Crée la table unifiée + recopie les tables legacy si elles existent encore.
+    Idempotent. Appelé par `db.init_db` dans la même transaction que le reste."""
     conn.execute(_SCHEMA)
+    _copy_legacy(conn)
+
+
+def _copy_legacy(conn) -> None:
+    """Copie legacy → unifiée, à CHAQUE boot tant que les tables legacy existent
+    (fenêtre canari/prod : la prod écrit encore les legacy jusqu'à promotion —
+    newer-wins sur `set_at` rattrape ses écritures au boot suivant). Gardée
+    `to_regclass` : après le DROP (B2), no-op — un boot ne casse jamais."""
+    if conn.execute("SELECT to_regclass('connector_activation') AS t").fetchone()["t"]:
+        conn.execute("""
+            INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by, set_at)
+            SELECT CASE WHEN org_id IS NULL THEN 'platform' ELSE 'org' END,
+                   COALESCE(org_id::text, ''), connector, enabled, set_by, set_at
+              FROM connector_activation
+            ON CONFLICT (scope_type, scope_id, connector) DO UPDATE
+               SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = EXCLUDED.set_at
+             WHERE EXCLUDED.set_at > connector_availability.set_at
+        """)
+    if conn.execute("SELECT to_regclass('group_connector_activation') AS t").fetchone()["t"]:
+        conn.execute("""
+            INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by, set_at)
+            SELECT 'group', group_id::text, connector, enabled, set_by, set_at
+              FROM group_connector_activation
+            ON CONFLICT (scope_type, scope_id, connector) DO UPDATE
+               SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = EXCLUDED.set_at
+             WHERE EXCLUDED.set_at > connector_availability.set_at
+        """)
 
 
 def seed_initial(conn) -> None:
-    """Seed unique : si la table est vide, active (ON global) tous les connecteurs
-    du registre courant — snapshot de l'état à l'introduction du cran. Ne tourne
-    qu'une fois (table peuplée → no-op), pour que les connecteurs futurs restent
-    OFF (deny-by-default). `ON CONFLICT DO NOTHING` couvre un boot concurrent."""
-    n = conn.execute("SELECT COUNT(*) AS n FROM connector_activation").fetchone()["n"]
+    """Seed unique : si aucune ligne PLATFORM n'existe (ni copiée du legacy, ni déjà
+    seedée), active (master ON) tous les connecteurs du registre courant — snapshot
+    de l'état à l'introduction du cran. `ON CONFLICT DO NOTHING` couvre un boot
+    concurrent. ⚠️ Le guard porte sur les lignes platform SEULEMENT : vider la table
+    par erreur re-seederait tout à ON (documenté au cadrage — ne pas la vider)."""
+    n = conn.execute("SELECT COUNT(*) AS n FROM connector_availability "
+                     "WHERE scope_type = 'platform'").fetchone()["n"]
     if n:
         return
     from . import providers  # registre source unique (pur, pas d'import oto_mcp)
 
     for name in providers.REGISTRY:
         conn.execute(
-            "INSERT INTO connector_activation (connector, org_id, enabled, set_by) "
-            "VALUES (%s, NULL, TRUE, %s) ON CONFLICT DO NOTHING",
+            "INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by) "
+            "VALUES ('platform', '', %s, TRUE, %s) ON CONFLICT DO NOTHING",
             (name, "seed"),
         )
 
@@ -92,7 +105,7 @@ def seed_initial(conn) -> None:
 # --- résolution (pure) ------------------------------------------------------
 
 def _resolve(global_map: dict[str, bool], override_map: dict[str, bool]) -> set[str]:
-    """Applique `override d'org > master global > OFF`. Renvoie les connecteurs
+    """Applique `override d'org > master plateforme > OFF`. Renvoie les connecteurs
     exposés. Pur (pas de DB) → testable hors connexion."""
     names = set(global_map) | set(override_map)
     return {n for n in names if override_map.get(n, global_map.get(n, False))}
@@ -109,89 +122,90 @@ def effective_for_group(exposed: set[str], group_cut: set[str]) -> set[str]:
 # --- lectures (self-managing) -----------------------------------------------
 
 def is_exposed(connector: str, org_id: Optional[int] = None) -> bool:
-    """exposé = override d'org si défini, sinon master global, sinon OFF."""
+    """exposé = override d'org si défini, sinon master plateforme, sinon OFF."""
     from . import db
 
     with db._connect() as conn:
         if org_id is not None:
             row = conn.execute(
-                "SELECT enabled FROM connector_activation WHERE connector = %s AND org_id = %s",
-                (connector, org_id),
+                "SELECT enabled FROM connector_availability "
+                "WHERE scope_type = 'org' AND scope_id = %s AND connector = %s",
+                (str(org_id), connector),
             ).fetchone()
             if row is not None:
                 return bool(row["enabled"])
         row = conn.execute(
-            "SELECT enabled FROM connector_activation WHERE connector = %s AND org_id IS NULL",
+            "SELECT enabled FROM connector_availability "
+            "WHERE scope_type = 'platform' AND connector = %s",
             (connector,),
         ).fetchone()
         return bool(row["enabled"]) if row is not None else False
 
 
 def exposed_connectors(org_id: Optional[int] = None) -> set[str]:
-    """Ensemble des connecteurs exposés (résout override d'org vs global en un
+    """Ensemble des connecteurs exposés (résout override d'org vs master en un
     scan). Pour filtrer le catalogue / le chargement en une requête."""
     from . import db
 
     with db._connect() as conn:
         rows = conn.execute(
-            "SELECT connector, org_id, enabled FROM connector_activation "
-            "WHERE org_id IS NULL OR org_id = %s",
-            (org_id,),
+            "SELECT scope_type, connector, enabled FROM connector_availability "
+            "WHERE scope_type = 'platform' OR (scope_type = 'org' AND scope_id = %s)",
+            (str(org_id) if org_id is not None else "",),
         ).fetchall()
     global_map: dict[str, bool] = {}
     override_map: dict[str, bool] = {}
     for r in rows:
-        target = override_map if r["org_id"] is not None else global_map
+        target = override_map if r["scope_type"] == "org" else global_map
         target[r["connector"]] = bool(r["enabled"])
     return _resolve(global_map, override_map)
 
 
 def list_activations() -> list[dict]:
-    """Toutes les lignes (master global + overrides d'org), pour la surface admin."""
+    """Toutes les lignes master plateforme + overrides d'org, pour la surface admin.
+    Projection HISTORIQUE conservée : `org_id` (None = master) — les appelants
+    (REST admin) n'ont pas bougé à l'unification."""
     from . import db
 
     with db._connect() as conn:
-        return conn.execute(
-            "SELECT connector, org_id, enabled, set_by, set_at FROM connector_activation "
-            "ORDER BY connector, org_id NULLS FIRST"
+        rows = conn.execute(
+            "SELECT scope_type, scope_id, connector, enabled, set_by, set_at "
+            "FROM connector_availability WHERE scope_type IN ('platform', 'org') "
+            "ORDER BY connector, (scope_type <> 'platform'), scope_id"
         ).fetchall()
+    return [{"connector": r["connector"],
+             "org_id": None if r["scope_type"] == "platform" else int(r["scope_id"]),
+             "enabled": r["enabled"], "set_by": r["set_by"], "set_at": r["set_at"]}
+            for r in rows]
 
 
 # --- écritures (surface admin, B4) ------------------------------------------
 
 def set_activation(connector: str, enabled: bool, org_id: Optional[int] = None,
                    set_by: Optional[str] = None) -> None:
-    """Pose/maj l'activation : master global si `org_id` None, sinon override d'org.
-    Upsert via les index partiels (cf. _SCHEMA)."""
+    """Pose/maj l'activation : master plateforme si `org_id` None, sinon override d'org."""
     from . import db
 
+    scope_type, scope_id = ("platform", "") if org_id is None else ("org", str(org_id))
     with db._connect() as conn:
-        if org_id is None:
-            conn.execute(
-                "INSERT INTO connector_activation (connector, org_id, enabled, set_by) "
-                "VALUES (%s, NULL, %s, %s) "
-                "ON CONFLICT (connector) WHERE org_id IS NULL "
-                "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
-                (connector, enabled, set_by),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO connector_activation (connector, org_id, enabled, set_by) "
-                "VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (connector, org_id) WHERE org_id IS NOT NULL "
-                "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
-                (connector, org_id, enabled, set_by),
-            )
+        conn.execute(
+            "INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (scope_type, scope_id, connector) "
+            "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
+            (scope_type, scope_id, connector, enabled, set_by),
+        )
 
 
 def clear_activation(connector: str, org_id: int) -> None:
-    """Supprime un override d'org → le connecteur retombe sur le master global."""
+    """Supprime un override d'org → le connecteur retombe sur le master plateforme."""
     from . import db
 
     with db._connect() as conn:
         conn.execute(
-            "DELETE FROM connector_activation WHERE connector = %s AND org_id = %s",
-            (connector, org_id),
+            "DELETE FROM connector_availability "
+            "WHERE scope_type = 'org' AND scope_id = %s AND connector = %s",
+            (str(org_id), connector),
         )
 
 
@@ -205,9 +219,9 @@ def group_cut_connectors(group_id: int) -> set[str]:
 
     with db._connect() as conn:
         rows = conn.execute(
-            "SELECT connector FROM group_connector_activation "
-            "WHERE group_id = %s AND enabled = FALSE",
-            (group_id,),
+            "SELECT connector FROM connector_availability "
+            "WHERE scope_type = 'group' AND scope_id = %s AND enabled = FALSE",
+            (str(group_id),),
         ).fetchall()
     return {r["connector"] for r in rows}
 
@@ -217,11 +231,11 @@ def list_group_activations(group_id: int) -> list[dict]:
     from . import db
 
     with db._connect() as conn:
-        return conn.execute(
-            "SELECT connector, enabled, set_by, set_at FROM group_connector_activation "
-            "WHERE group_id = %s ORDER BY connector",
-            (group_id,),
-        ).fetchall()
+        return [dict(r) for r in conn.execute(
+            "SELECT connector, enabled, set_by, set_at FROM connector_availability "
+            "WHERE scope_type = 'group' AND scope_id = %s ORDER BY connector",
+            (str(group_id),),
+        ).fetchall()]
 
 
 def set_group_activation(group_id: int, connector: str, enabled: bool,
@@ -232,11 +246,11 @@ def set_group_activation(group_id: int, connector: str, enabled: bool,
 
     with db._connect() as conn:
         conn.execute(
-            "INSERT INTO group_connector_activation (group_id, connector, enabled, set_by) "
-            "VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (group_id, connector) "
+            "INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by) "
+            "VALUES ('group', %s, %s, %s, %s) "
+            "ON CONFLICT (scope_type, scope_id, connector) "
             "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
-            (group_id, connector, enabled, set_by),
+            (str(group_id), connector, enabled, set_by),
         )
 
 
@@ -246,6 +260,7 @@ def clear_group_activation(group_id: int, connector: str) -> None:
 
     with db._connect() as conn:
         conn.execute(
-            "DELETE FROM group_connector_activation WHERE group_id = %s AND connector = %s",
-            (group_id, connector),
+            "DELETE FROM connector_availability "
+            "WHERE scope_type = 'group' AND scope_id = %s AND connector = %s",
+            (str(group_id), connector),
         )

@@ -68,7 +68,7 @@ async def _resolve_tool(ctx: Context, name: str):
     docstring fastmcp). ⚠️ `list_tools(run_middleware=False)` ne suffit PAS : il
     applique quand même `apply_session_transforms` + filtre `is_enabled` → un tool
     masqué par la visibilité de LA SESSION (connecteur non activé au handshake,
-    default_hidden) était introuvable au dispatch — l'échappatoire `oto_call`/
+    non-sélectionné) était introuvable au dispatch — l'échappatoire `oto_call`/
     `oto_tool_schema` répondait « Unknown tool » (#186, régression du passage à la
     visibilité native fastmcp)."""
     from fastmcp.server.providers.base import Provider

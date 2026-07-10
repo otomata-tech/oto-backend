@@ -9,8 +9,8 @@ jamais dans le namespace → montrable au catalogue sans nom client.
 AUCUN code ni credential client ici : le coffre plateforme ne tient que le moyen
 d'appeler le pont — champs standard `base_url`/`token`/`label` du connecteur
 `bridge` (cascade membre > groupe > org via `resolve_credential_fields`). La
-visibilité suit le régime commun (activation × masque user, default_hidden →
-self-activable) ; l'exécution lève proprement sans credential. L'identité de
+visibilité suit le régime commun (activation × sélection 0019/0050 — hors socle,
+installable depuis la library) ; l'exécution lève proprement sans credential. L'identité de
 l'appelant est forwardée (`X-Oto-Sub`) pour que l'audit trail vive côté bridge.
 
 (Le legacy per-namespace data-driven — découverte `meta.base_url`, tools

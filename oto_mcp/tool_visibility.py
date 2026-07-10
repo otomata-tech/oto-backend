@@ -2,9 +2,10 @@
 
 **Masqués par défaut** mais **self-activables** (`oto_enable_tool`) — simple
 découvrabilité, pas un contrôle d'accès : pour des surfaces verbeuses/spécifiques
-sans enjeu de sécurité. Deux grains : DEFAULT_HIDDEN_TOOLS (noms individuels) et
-DEFAULT_HIDDEN_NAMESPACES (namespaces entiers, DÉRIVÉ du registre — champ
-`default_hidden` des connecteurs, ex. attio).
+sans enjeu de sécurité. Un seul grain : DEFAULT_HIDDEN_TOOLS (noms individuels).
+Le grain CONNECTEUR (ex-`default_hidden` du registre) a été retiré (ADR 0050) —
+un connecteur hors du socle `default_active` est simplement non-installé
+(sélection 0019, régime strict) et se réinstalle depuis la library.
 
 Modèle de visibilité effective : un tool est visible sauf s'il est désactivé
 (toggle perso) ou masqué par défaut ; `enabled_override` prime pour rendre visible
@@ -13,8 +14,6 @@ ADR 0025, credential) est appliquée AILLEURS — la visibilité n'est PAS une b
 de sécurité (ADR 0031).
 """
 from __future__ import annotations
-
-from . import connectors
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
 # `email_send` : envoi d'email per-org. Autz DYNAMIQUE dans le handler (membre de
@@ -25,7 +24,6 @@ from . import connectors
 # utile en qualif sociale type Mūcho) — masquée pour ne pas charger la toolbox `fr`
 # par défaut ; activable à la demande (oto_enable_tool fr_egapro_declaration).
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send", "fr_egapro_declaration"})
-DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
 # plus se déverrouiller (lister/activer un tool) — plus l'identité `oto_whoami`
@@ -85,7 +83,7 @@ def is_testable(name: str) -> bool:
 
 
 def is_default_hidden(name: str) -> bool:
-    return name in DEFAULT_HIDDEN_TOOLS or namespace_of(name) in DEFAULT_HIDDEN_NAMESPACES
+    return name in DEFAULT_HIDDEN_TOOLS
 
 
 def is_tool_visible(

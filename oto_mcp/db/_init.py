@@ -100,20 +100,11 @@ def init_db() -> None:
             "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
             "FROM user_agent_readme WHERE COALESCE(body_md, '') <> '' "
             "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortent de
-        # `*_instructions` (qui ne gardent que les PROCÉDURES + versioning) vers `guides`.
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'org', org_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'group', group_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_group_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortis de
+        # `*_instructions` vers `guides` — backfills one-shot RETIRÉS (cadrage 10/07,
+        # chantier procédures B1) : ils ont tourné en prod à chaque boot depuis le
+        # 06/07, et celui d'équipe lisait `org_group_instructions` (jumelle vouée au
+        # DROP — un boot post-drop aurait cassé).
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).
@@ -144,6 +135,23 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE doctrine_library ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # Chantier procédures (cadrage 10/07) B1 : la procédure devient une ressource
+        # possédée par un SCOPE — colonnes owner_type/owner_id sur la table ET ses
+        # revisions ('org' aujourd'hui ; les lignes GROUP arrivent en B2 par fusion
+        # d'org_group_instructions, ids tirés d'org_instructions_id_seq). Le nouvel
+        # ARBITRE d'unicité est (owner_type, owner_id, slug) : le code écrit dessus dès
+        # B1 ; la PK legacy (org_id, slug) ne tombe qu'en B2, une fois ce code PROMU en
+        # prod (DB partagée canari/prod — la prod actuelle fait ON CONFLICT (org_id, slug)).
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instructions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instructions_owner_slug "
+                     "ON org_instructions(owner_type, owner_id, slug)")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instruction_revisions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instruction_revisions_owner "
+                     "ON org_instruction_revisions(owner_type, owner_id, slug, version)")
         # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
         # (deux procédures liées partageant `sortie` partagent le binding). Unicité
         # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).
@@ -257,18 +265,22 @@ def init_db() -> None:
                      "ON org_invitations(group_id) WHERE group_id IS NOT NULL")
         # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par la
         # ressource (`owner_type` défaut 'user', `owner_id` = sub | org.id | group.id).
-        # Phase H **B1** (cadrage 10/07) : les migrations reliques du cutover (ALTER
-        # Sheets, backfill owner←sub, backfill datastore_shares→resource_grants, drop
-        # du NOT NULL de `sub`) ont toutes TOURNÉ en prod — retirées du boot, le code
-        # ne référence plus `sub`/`spreadsheet_id`/`owner_email` ni `datastore_shares`.
-        # **B2** (les DROP effectifs) ne part QUE ce code promu en prod : la DB est
-        # PARTAGÉE canari/prod — dropper avant casserait le boot du code prod actuel.
+        # Phase H (cadrage 10/07) — B1 (promu prod 10/07) a purgé toute référence aux
+        # reliques du cutover ; **B2** (ci-dessous) droppe les objets morts. Idempotent,
+        # sûr sur la DB partagée : plus aucun code (canari NI prod) ne les lit.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'user'")
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_datastores_owner "
                      "ON user_datastores(owner_type, owner_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
                      "ON user_datastores(owner_type, owner_id, namespace)")
+        # Phase H B2 : DROP des reliques per-sub/Sheets (ADR 0016/0030, différé depuis
+        # le cutover). `datastore_shares` = remplacée par resource_grants (backfillée
+        # à chaque boot depuis 0030, données longtemps migrées).
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS sub")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS spreadsheet_id")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS owner_email")
+        conn.execute("DROP TABLE IF EXISTS datastore_shares")
         # ADR 0048 — le grant possède un RÔLE (viewer/editor/manager). Ajout de la colonne
         # + backfill depuis `permission` (read→viewer, write→editor ; jamais manager en
         # backfill : la gouvernance grantable est un acte explicite). `permission` reste
@@ -400,12 +412,38 @@ def init_db() -> None:
         from .. import connector_activation as _conn_act
         _conn_act.init_schema(conn)
         _conn_act.seed_initial(conn)
+        # Chantier ACL (cadrage 10/07, B1) : copie legacy → `connector_acl` unifiée,
+        # à CHAQUE boot tant que les tables legacy existent (fenêtre canari/prod :
+        # la prod écrit encore les legacy jusqu'à promotion). Gardée `to_regclass` :
+        # après le DROP (B2), no-op. Grants immutables → DO NOTHING suffit (une
+        # révocation prod pendant la fenêtre ressuscite jusqu'à promotion — assumé,
+        # fenêtre de quelques minutes).
+        if conn.execute("SELECT to_regclass('org_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'org', org_id::text, connector, principal_type, principal_id, "
+                "       granted_by, granted_at FROM org_connector_access "
+                "ON CONFLICT DO NOTHING")
+        if conn.execute("SELECT to_regclass('group_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'group', group_id::text, connector, 'user', principal_sub, "
+                "       granted_by, granted_at FROM group_connector_access "
+                "ON CONFLICT DO NOTHING")
         # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
         # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
         # (capacité connectors.me/select/pause) et le masquage pause au middleware
         # suivent en B3/B4/B5.
         from .. import connector_selection as _conn_sel
         _conn_sel.init_schema(conn)
+        # ADR 0050 : passage au régime nominal « non-sélectionné = masqué ».
+        # Backfill ONE-SHOT (sentinelle) des (sub, org) pré-existants avec ce
+        # qu'ils VOYAIENT (exposé − ex-default_hidden) — zéro changement de
+        # toolbox pour l'existant ; les pairs créés ensuite reçoivent le SOCLE
+        # curé au seed lazy (session_visibility).
+        _conn_sel.backfill_preexisting(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         from .usage import prune_tool_calls

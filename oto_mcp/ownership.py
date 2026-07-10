@@ -320,9 +320,10 @@ register_kind(
 
 
 # --- Kind `doctrine` (épic « couverture des autres types », prérequis #52) ----
-# Une doctrine est TOUJOURS un objet d'org : son owner DÉRIVE d'`org_instructions.
-# org_id` (pas de colonnes owner_* — « derive don't duplicate »). resource_id =
-# l'id surrogate stable (ADR 0032 « stop using slug »). Le partage (grant read à
+# L'owner d'une doctrine est porté par `org_instructions.owner_type/owner_id`
+# (chantier procédures, cadrage 10/07 — 'org', et 'group' à la fusion B2 des
+# procédures d'équipe ; il dérivait d'`org_id` avant). resource_id = l'id
+# surrogate stable (ADR 0032 « stop using slug »). Le partage (grant read à
 # une org cliente) rend la doctrine lisible cross-org par id via oto_procedure(op='get').
 
 def _doctrine_owner(rid: str) -> Optional[tuple[str, str]]:
@@ -331,7 +332,9 @@ def _doctrine_owner(rid: str) -> Optional[tuple[str, str]]:
     row = org_store.get_instruction_by_id(int(rid))
     if row is None:
         return None
-    return ("org", str(row["org_id"]))
+    if row.get("owner_type"):
+        return (str(row["owner_type"]), str(row["owner_id"]))
+    return ("org", str(row["org_id"]))   # filet pré-backfill
 
 
 def _doctrine_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> None:

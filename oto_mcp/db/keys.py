@@ -116,7 +116,9 @@ def list_org_grants(org_id: int) -> list[dict]:
     return _grants_for_scope(f"org:{org_id}")
 
 
-# ── RBAC connecteur interne à l'org (ADR 0025) ──────────────────────────────
+# ── RBAC connecteur (ADR 0025 org + ADR 0012 B2 équipe) — table UNIQUE ──────
+# `connector_acl(scope_type, scope_id, …)` (chantier ACL, cadrage 10/07). Les
+# signatures ci-dessous sont INCHANGÉES : seuls les prédicats ont bougé.
 def set_connector_access(org_id: int, connector: str, principal_type: str,
                          principal_id: str, granted_by: Optional[str] = None) -> None:
     """Autorise un principal (groupe/user) sur un connecteur dans l'org → le rend
@@ -124,11 +126,11 @@ def set_connector_access(org_id: int, connector: str, principal_type: str,
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO org_connector_access (org_id, connector, principal_type, principal_id, granted_by)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (org_id, connector, principal_type, principal_id) DO NOTHING
+            INSERT INTO connector_acl (scope_type, scope_id, connector, principal_type, principal_id, granted_by)
+            VALUES ('org', %s, %s, %s, %s, %s)
+            ON CONFLICT (scope_type, scope_id, connector, principal_type, principal_id) DO NOTHING
             """,
-            (org_id, connector, principal_type, str(principal_id), granted_by),
+            (str(org_id), connector, principal_type, str(principal_id), granted_by),
         )
 
 
@@ -138,20 +140,20 @@ def clear_connector_access(org_id: int, connector: str, principal_type: str,
     le connecteur redevient OUVERT à toute l'org (absence ⟹ non restreint)."""
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM org_connector_access WHERE org_id = %s AND connector = %s "
-            "AND principal_type = %s AND principal_id = %s",
-            (org_id, connector, principal_type, str(principal_id)),
+            "DELETE FROM connector_acl WHERE scope_type = 'org' AND scope_id = %s "
+            "AND connector = %s AND principal_type = %s AND principal_id = %s",
+            (str(org_id), connector, principal_type, str(principal_id)),
         )
 
 
 def list_connector_access(org_id: int, connector: Optional[str] = None) -> list[dict]:
     """ACL connecteur de l'org : [{connector, principal_type, principal_id, granted_at}]."""
     sql = ("SELECT connector, principal_type, principal_id, granted_by, granted_at "
-           "FROM org_connector_access WHERE org_id = %s")
-    args: tuple = (org_id,)
+           "FROM connector_acl WHERE scope_type = 'org' AND scope_id = %s")
+    args: tuple = (str(org_id),)
     if connector is not None:
         sql += " AND connector = %s"
-        args = (org_id, connector)
+        args = (str(org_id), connector)
     sql += " ORDER BY connector, principal_type, principal_id"
     with _connect() as conn:
         return [dict(r) for r in conn.execute(sql, args).fetchall()]
@@ -161,8 +163,9 @@ def org_restricted_connectors(org_id: int) -> set:
     """Connecteurs RESTREINTS dans l'org (≥1 ligne d'ACL) — deny-by-default pour eux."""
     with _connect() as conn:
         return {r["connector"] for r in conn.execute(
-            "SELECT DISTINCT connector FROM org_connector_access WHERE org_id = %s",
-            (org_id,)).fetchall()}
+            "SELECT DISTINCT connector FROM connector_acl "
+            "WHERE scope_type = 'org' AND scope_id = %s",
+            (str(org_id),)).fetchall()}
 
 
 def member_allowed_connectors(sub: str, org_id: int) -> set:
@@ -172,18 +175,18 @@ def member_allowed_connectors(sub: str, org_id: int) -> set:
     with _connect() as conn:
         return {r["connector"] for r in conn.execute(
             """
-            SELECT DISTINCT a.connector FROM org_connector_access a
-             WHERE a.org_id = %s AND (
+            SELECT DISTINCT a.connector FROM connector_acl a
+             WHERE a.scope_type = 'org' AND a.scope_id = %s AND (
                    (a.principal_type = 'user' AND a.principal_id = %s)
                 OR (a.principal_type = 'group' AND a.principal_id IN (
                        SELECT m.group_id::text FROM org_group_members m
                          JOIN org_groups g ON g.id = m.group_id
                         WHERE m.sub = %s AND g.org_id = %s)))
             """,
-            (org_id, sub, sub, org_id)).fetchall()}
+            (str(org_id), sub, sub, org_id)).fetchall()}
 
 
-# ── ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) ─────────────
+# ── grain ÉQUIPE (restrict-only) : mêmes fonctions, scope 'group' ────────────
 def set_group_connector_access(group_id: int, connector: str, principal_sub: str,
                                granted_by: Optional[str] = None) -> None:
     """Autorise un MEMBRE (`sub`) sur un connecteur dans l'équipe → le rend RESTREINT
@@ -191,11 +194,11 @@ def set_group_connector_access(group_id: int, connector: str, principal_sub: str
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO group_connector_access (group_id, connector, principal_sub, granted_by)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (group_id, connector, principal_sub) DO NOTHING
+            INSERT INTO connector_acl (scope_type, scope_id, connector, principal_type, principal_id, granted_by)
+            VALUES ('group', %s, %s, 'user', %s, %s)
+            ON CONFLICT (scope_type, scope_id, connector, principal_type, principal_id) DO NOTHING
             """,
-            (group_id, connector, principal_sub, granted_by),
+            (str(group_id), connector, principal_sub, granted_by),
         )
 
 
@@ -203,21 +206,23 @@ def clear_group_connector_access(group_id: int, connector: str, principal_sub: s
     """Retire un membre. Dernière ligne partie ⟹ connecteur ré-ouvert à toute l'équipe."""
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM group_connector_access WHERE group_id = %s AND connector = %s "
-            "AND principal_sub = %s",
-            (group_id, connector, principal_sub),
+            "DELETE FROM connector_acl WHERE scope_type = 'group' AND scope_id = %s "
+            "AND connector = %s AND principal_type = 'user' AND principal_id = %s",
+            (str(group_id), connector, principal_sub),
         )
 
 
 def list_group_connector_access(group_id: int, connector: Optional[str] = None) -> list[dict]:
-    """ACL connecteur de l'équipe : [{connector, principal_sub, granted_by, granted_at}]."""
-    sql = ("SELECT connector, principal_sub, granted_by, granted_at "
-           "FROM group_connector_access WHERE group_id = %s")
-    args: tuple = (group_id,)
+    """ACL connecteur de l'équipe : [{connector, principal_sub, granted_by, granted_at}].
+    Projection historique conservée (`principal_sub`) — surface REST inchangée."""
+    sql = ("SELECT connector, principal_id AS principal_sub, granted_by, granted_at "
+           "FROM connector_acl WHERE scope_type = 'group' AND scope_id = %s "
+           "AND principal_type = 'user'")
+    args: tuple = (str(group_id),)
     if connector is not None:
         sql += " AND connector = %s"
-        args = (group_id, connector)
-    sql += " ORDER BY connector, principal_sub"
+        args = (str(group_id), connector)
+    sql += " ORDER BY connector, principal_id"
     with _connect() as conn:
         return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
@@ -226,16 +231,18 @@ def group_restricted_connectors(group_id: int) -> set:
     """Connecteurs RESTREINTS dans l'équipe (≥1 ligne d'ACL) — deny-by-default pour eux."""
     with _connect() as conn:
         return {r["connector"] for r in conn.execute(
-            "SELECT DISTINCT connector FROM group_connector_access WHERE group_id = %s",
-            (group_id,)).fetchall()}
+            "SELECT DISTINCT connector FROM connector_acl "
+            "WHERE scope_type = 'group' AND scope_id = %s",
+            (str(group_id),)).fetchall()}
 
 
 def group_member_allowed_connectors(sub: str, group_id: int) -> set:
     """Connecteurs (restreints dans l'équipe) auxquels `sub` a droit (ligne à son nom)."""
     with _connect() as conn:
         return {r["connector"] for r in conn.execute(
-            "SELECT connector FROM group_connector_access WHERE group_id = %s AND principal_sub = %s",
-            (group_id, sub)).fetchall()}
+            "SELECT connector FROM connector_acl WHERE scope_type = 'group' "
+            "AND scope_id = %s AND principal_type = 'user' AND principal_id = %s",
+            (str(group_id), sub)).fetchall()}
 
 
 def list_users_with_grants() -> list[dict]:

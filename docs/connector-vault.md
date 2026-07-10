@@ -24,8 +24,8 @@ Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), 
 ## Registre — source unique (`connectors.py`)
 
 Module pur (aucun import oto_mcp, comme `tool_visibility.py`). Une dataclass `Connector` par connecteur, 3 axes orthogonaux :
-- **A. Disponibilité** : `availability` ∈ {`self_serve`, `platform_granted`} ; `in_default_bundle`. platform_granted = grant-only (deny-by-default, ex. `mm`, `gocardless`).
-- **B. Visibilité** : `in_default_preset` (affiché+activé par le preset de base).
+- **A. Disponibilité** : `availability` ∈ {`self_serve`, `platform_granted`}. platform_granted = grant-only (deny-by-default, ex. `mm`, `gocardless`).
+- **B. Visibilité** : `default_active` (ADR 0050 — SOCLE curé installé d'office dans la sélection d'un nouveau (sub, org) ; le reste du catalogue = library installable).
 - **C. Credential** : `auth_modes` ⊆ {`byo_user`, `byo_org`, `platform`} ; `keyed` (résolu via `resolve_api_key`) ; `secret_kind` (api_key/basic_auth/fields/refresh_token/oauth/cookie/none) ; `personal_session` ; `env_secret_name` ; `default_quota`.
 - **Modèle de saisie multi-champs** (ADR 0011) : `secret_fields` (propriété) = schéma de saisie du credential — `credential_fields` explicites (`CredentialField` name/label/secret/reveal) ou dérivés du `secret_kind` (`api_key`=1 champ `key` ; `basic_auth`=`email`+`password`). Vide pour `cookie`/`oauth`/`none` (flux dédiés). SOURCE UNIQUE du formulaire dashboard, de l'endpoint `/api/settings/api-keys`, de `status_for` et du packing — zéro branche par connecteur (ex. Silae = 3 champs déclarés, aucun code spécifique).
 - **Chargement** : `Connector.modules` = modules `tools/<m>.py` à importer (kind="tools" ; défaut = nom du provider). Voir §Chargement dérivé.

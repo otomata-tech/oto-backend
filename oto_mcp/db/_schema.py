@@ -177,42 +177,35 @@ CREATE TABLE IF NOT EXISTS legal_acceptances (
 );
 
 
--- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
--- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne
--- pour (org_id, connector) ⟹ connecteur RESTREINT dans l'org (deny-by-default) ;
--- absence ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user.
--- DUR : enforced en visibilité (session_visibility) + au call-time (resolve_credential
--- via access.require_connector_access). Ouvert par défaut = zéro disruption.
-CREATE TABLE IF NOT EXISTS org_connector_access (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+-- RBAC connecteur — table UNIQUE `connector_acl` (chantier ACL, cadrage 10/07 :
+-- fusion d'org_connector_access + group_connector_access ; le grain est une COLONNE
+-- de scope, pas une table par grain). Sémantique INCHANGÉE par scope :
+-- · scope 'org' (ADR 0025) : l'org_admin réserve un connecteur à un sous-ensemble de
+--   son org. ≥1 ligne pour (scope, connector) ⟹ RESTREINT (deny-by-default) ; absence
+--   ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user. DUR :
+--   enforced en visibilité + au call-time (access.require_connector_access) ;
+--   l'escalade org_admin transcende (0044 §G). Ouvert par défaut = zéro disruption.
+-- · scope 'group' (ADR 0012 B2, restrict-only) : narrowing pur de l'ACL d'org — le
+--   principal est toujours un MEMBRE ('user', sub) ; l'équipe restreint davantage,
+--   ne débloque jamais ce que l'org autorise.
+-- (Les tables legacy vivent encore en base jusqu'au B2 — copiées au boot par _init,
+--  DROP une fois ce code promu en prod : DB partagée canari/prod.)
+CREATE TABLE IF NOT EXISTS connector_acl (
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'group')),
+    scope_id TEXT NOT NULL,       -- org.id / group.id en texte
     connector TEXT NOT NULL,
     principal_type TEXT NOT NULL CHECK (principal_type IN ('group', 'user')),
     principal_id TEXT NOT NULL,   -- group_id (en texte) ou sub
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, connector, principal_type, principal_id)
-);
-
--- ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) : un chef d'équipe
--- réserve un connecteur à un sous-ensemble de membres de SON équipe. Intersection
--- avec l'ACL d'org (narrowing pur — l'équipe ne peut que RESTREINDRE davantage, jamais
--- débloquer ce que l'org autorise). ≥1 ligne ⟹ connecteur réservé dans l'équipe ;
--- absence ⟹ ouvert à toute l'équipe. Le principal est toujours un MEMBRE (sub).
-CREATE TABLE IF NOT EXISTS group_connector_access (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    connector TEXT NOT NULL,
-    principal_sub TEXT NOT NULL,
-    granted_by TEXT,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, connector, principal_sub)
+    PRIMARY KEY (scope_type, scope_id, connector, principal_type, principal_id)
 );
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
--- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H B1 (cadrage 10/07) :
--- le code ne référence PLUS les reliques (`sub` per-sub, `spreadsheet_id`/`owner_email`
--- Sheets) — leurs colonnes existent encore sur la base vivante, DROP en B2 une fois
--- ce code promu en prod (DB partagée canari/prod : dropper avant casserait le boot prod).
+-- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H (cadrage 10/07)
+-- TERMINÉE : les reliques per-sub/Sheets (`sub`, `spreadsheet_id`, `owner_email`,
+-- table `datastore_shares`) sont purgées du code (B1, promu prod) et DROPpées (B2).
 -- ⚠️ Les INDEX sur owner_type/owner_id NE sont PAS créés ici : sur une base
 -- existante, `CREATE TABLE IF NOT EXISTS` est un no-op et ces colonnes n'existent
 -- pas encore quand `_SCHEMA` s'exécute (ajoutées plus bas par ALTER). Index +
@@ -247,8 +240,8 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     PRIMARY KEY (ns_id, row_id)
 );
 
--- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — n'est plus
---  créée ni référencée : Phase H B1. La table vivante sera DROPpée en B2, post-promotion.)
+-- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — DROPpée
+--  en Phase H B2, 10/07.)
 
 -- Projet = couche d'organisation (modèle produit 2026-06-27). Conteneur de travail
 -- POSSÉDÉ (owner_type/owner_id, ADR 0030) : nom + brief (doc d'entrée inline pour
@@ -630,15 +623,19 @@ CREATE TABLE IF NOT EXISTS guides (
     UNIQUE (scope, owner_id, slug)
 );
 
--- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
--- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
--- 'claude_md' = la doctrine de base servie d'office par oto_procedure(op='get'), les
--- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
--- pas un credential → hors coffre chiffré). Même principe d'accès que les
--- secrets d'org : résolu par l'org active du sub (get_active_org). `version` est
+-- Procédures (doctrines/skills) — table UNIQUE, possédée par un SCOPE (chantier
+-- procédures, cadrage 10/07) : `owner_type/owner_id` ('org' = procédure d'org,
+-- 'group' = procédure d'équipe à la fusion B2 d'org_group_instructions ; `org_id`
+-- reste l'org PARENTE dans les deux cas — dénormalisé, FK + prédicats). Chaque
+-- procédure est identifiée par `slug` dans son scope ; l'unicité vivante =
+-- (owner_type, owner_id, slug) (index unique posé par _init ; la PK legacy
+-- (org_id, slug) tombe en B2). En CLAIR (prose, hors coffre). `version` est
 -- incrémenté à chaque écriture, qui archive un snapshot dans la table sœur.
+-- (Le readme `claude_md` vit dans `guides`, ADR 0042 — plus une ligne d'ici.)
 CREATE TABLE IF NOT EXISTS org_instructions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL DEFAULT 'org',
+    owner_id TEXT,
     slug TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
@@ -656,8 +653,12 @@ CREATE TABLE IF NOT EXISTS org_instructions (
 CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);
 
 -- Historique : un snapshot par version posée (revert + audit). Append-only.
+-- Porte le même scope owner que la table vivante (unicité vivante :
+-- (owner_type, owner_id, slug, version), index unique posé par _init).
 CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL DEFAULT 'org',
+    owner_id TEXT,
     slug TEXT NOT NULL,
     version INTEGER NOT NULL,
     title TEXT NOT NULL DEFAULT '',

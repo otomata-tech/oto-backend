@@ -412,6 +412,26 @@ def init_db() -> None:
         from .. import connector_activation as _conn_act
         _conn_act.init_schema(conn)
         _conn_act.seed_initial(conn)
+        # Chantier ACL (cadrage 10/07, B1) : copie legacy → `connector_acl` unifiée,
+        # à CHAQUE boot tant que les tables legacy existent (fenêtre canari/prod :
+        # la prod écrit encore les legacy jusqu'à promotion). Gardée `to_regclass` :
+        # après le DROP (B2), no-op. Grants immutables → DO NOTHING suffit (une
+        # révocation prod pendant la fenêtre ressuscite jusqu'à promotion — assumé,
+        # fenêtre de quelques minutes).
+        if conn.execute("SELECT to_regclass('org_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'org', org_id::text, connector, principal_type, principal_id, "
+                "       granted_by, granted_at FROM org_connector_access "
+                "ON CONFLICT DO NOTHING")
+        if conn.execute("SELECT to_regclass('group_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'group', group_id::text, connector, 'user', principal_sub, "
+                "       granted_by, granted_at FROM group_connector_access "
+                "ON CONFLICT DO NOTHING")
         # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
         # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
         # (capacité connectors.me/select/pause) et le masquage pause au middleware

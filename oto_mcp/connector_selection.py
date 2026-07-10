@@ -183,15 +183,19 @@ def backfill_preexisting(conn) -> None:
         return
     from .connector_activation import _resolve
 
+    # Table UNIFIÉE `connector_availability` (chantier ACL, cadrage 10/07) — peuplée
+    # AVANT ce backfill par `connector_activation.init_schema` (copie legacy) : cf.
+    # l'ordre des appels dans db._init. Ne pas relire la table legacy (tombe en B2).
     rows = conn.execute(
-        "SELECT connector, org_id, enabled FROM connector_activation").fetchall()
+        "SELECT scope_type, scope_id, connector, enabled FROM connector_availability "
+        "WHERE scope_type IN ('platform', 'org')").fetchall()
     global_map: dict[str, bool] = {}
     overrides: dict[int, dict[str, bool]] = {}
     for r in rows:
-        if r["org_id"] is None:
+        if r["scope_type"] == "platform":
             global_map[r["connector"]] = bool(r["enabled"])
         else:
-            overrides.setdefault(r["org_id"], {})[r["connector"]] = bool(r["enabled"])
+            overrides.setdefault(int(r["scope_id"]), {})[r["connector"]] = bool(r["enabled"])
     # Tous les couples (sub, org) susceptibles d'un profil de visibilité : les
     # memberships + la sentinelle perso/globale org_id=0 (ADR 0015) — moins les
     # pairs déjà seedés.

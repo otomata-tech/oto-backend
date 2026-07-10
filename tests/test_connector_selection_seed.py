@@ -43,7 +43,8 @@ class _FakeConn:
         self._last = (sql, params)
         if sql.startswith("SELECT 1 FROM connector_selection_seeded"):
             return _Cur(one={"?": 1} if self.sentinel_present else None)
-        if sql.startswith("SELECT connector, org_id, enabled"):
+        # Table unifiée `connector_availability` (chantier ACL, cadrage 10/07).
+        if sql.startswith("SELECT scope_type, scope_id, connector, enabled"):
             return _Cur(all_=self.activation)
         if sql.startswith("SELECT sub, org_id FROM org_members"):
             return _Cur(all_=self.pairs)
@@ -75,11 +76,11 @@ def test_backfill_noop_when_sentinel_present():
 
 def test_backfill_seeds_previously_visible_and_marks_sentinel():
     activation = [
-        {"connector": "serper", "org_id": None, "enabled": True},
-        {"connector": "aiark", "org_id": None, "enabled": True},
-        {"connector": "attio", "org_id": None, "enabled": True},   # ex-default_hidden
-        {"connector": "zoho", "org_id": None, "enabled": False},
-        {"connector": "aiark", "org_id": 7, "enabled": False},     # override org 7
+        {"connector": "serper", "scope_type": "platform", "scope_id": "", "enabled": True},
+        {"connector": "aiark", "scope_type": "platform", "scope_id": "", "enabled": True},
+        {"connector": "attio", "scope_type": "platform", "scope_id": "", "enabled": True},   # ex-default_hidden
+        {"connector": "zoho", "scope_type": "platform", "scope_id": "", "enabled": False},
+        {"connector": "aiark", "scope_type": "org", "scope_id": "7", "enabled": False},      # override org 7
     ]
     pairs = [{"sub": "u1", "org_id": 7}, {"sub": "u2", "org_id": 0}]
     conn = _FakeConn(activation=activation, pairs=pairs)

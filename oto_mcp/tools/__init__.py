@@ -54,6 +54,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import datastore
     datastore.register(mcp)
 
+    # Docs app — variante MCP App rendue d'`oto_doc` (lecture/parcours des pages d'un
+    # projet + KB d'org). Spine, hors gate d'activation ; ne s'enregistre que si
+    # l'extra prefab_ui est présent (import gardé dans le module).
+    from . import docs_app
+    docs_app.register(mcp)
+
     # Runs / déroulés (ADR 0017) — verbes run_start/finish (spine). Le run_id posé
     # en état de session est stampé sur chaque tool_call par le sink calllog. Pas
     # de dépendance externe.

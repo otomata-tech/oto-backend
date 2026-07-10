@@ -190,6 +190,12 @@ def init_db() -> None:
                   JOIN org_groups og ON og.id = r.group_id
                 ON CONFLICT (owner_type, owner_id, slug, version) DO NOTHING
             """)
+        # Lot C (le Lot B est PROMU prod — plus aucun code ne lit/écrit les jumelles) :
+        # DROP, juste après la copie finale ci-dessus (même boot → la dernière écriture
+        # prod de la fenêtre est rattrapée). Les copies gardées to_regclass restent :
+        # no-op permanents, filet des environnements en retard.
+        conn.execute("DROP TABLE IF EXISTS org_group_instruction_revisions")
+        conn.execute("DROP TABLE IF EXISTS org_group_instructions")
         # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
         # (deux procédures liées partageant `sortie` partagent le binding). Unicité
         # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).

@@ -120,8 +120,7 @@ _SUB_COLUMNS = [
     ("orgs", "created_by"),
     ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
     ("org_groups", "created_by"), ("org_instructions", "set_by"),
-    ("org_instruction_revisions", "set_by"), ("org_group_instructions", "set_by"),
-    ("org_group_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
+    ("org_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
 ]
 
 

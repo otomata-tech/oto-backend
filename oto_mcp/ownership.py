@@ -91,6 +91,17 @@ def visible_in_org(sub: str, org_id: Optional[int],
     o = owner_of(resource_type, resource_id)
     if o is not None and (str(o[0]), str(o[1])) == owner:
         return True
+    # ADR 0049 : une ressource GROUP-owned appartient au contexte de son org PARENTE —
+    # visible ici ssi le groupe est dans cette org ET l'acteur peut le lire (membre du
+    # groupe, ou escalade org_admin/platform via `roles.can_read_group`).
+    if o is not None and str(o[0]) == "group":
+        g = group_store.get_group(int(o[1]))
+        if (g is not None and org_id is not None and int(g["org_id"]) == int(org_id)
+                and roles.can_read_group(sub, int(o[1]))):
+            return True
+    # ADR 0049 : le cran PLATFORM (bibliothèque) est lisible dans tout contexte.
+    if o is not None and str(o[0]) == "platform":
+        return True
     return any(db.get_resource_grant(resource_type, resource_id, pt, pid) is not None
                for pt, pid in active_org_principals(sub, org_id))
 
@@ -134,6 +145,10 @@ def _owner_match_content(sub: str, owner_type: str, owner_id: str) -> bool:
         return roles.is_org_member(sub, int(owner_id))
     if owner_type == "group":
         return roles.can_read_group(sub, int(owner_id))
+    if owner_type == "platform":
+        # ADR 0049 : cran bibliothèque — l'ÉCRITURE owner-match est réservée à l'admin
+        # plateforme ; la lecture universelle vit dans `can_access` (want-aware).
+        return roles.is_platform_admin(sub)
     return False
 
 
@@ -143,6 +158,11 @@ def can_access(sub: str, resource_type: str, resource_id: str, want: str = "read
     owner = owner_of(resource_type, resource_id)
     if owner is None:
         return False
+    # ADR 0049 : une ressource PLATFORM-owned (bibliothèque) est lisible par tout
+    # utilisateur authentifié — un modèle est fait pour être lu et copié. L'écriture
+    # reste l'owner-match (admin plateforme) ou un grant write.
+    if owner[0] == "platform" and want == "read":
+        return True
     if _owner_match_content(sub, owner[0], owner[1]):
         return True
     best = _best_grant(sub, resource_type, resource_id)
@@ -200,6 +220,8 @@ def can_transfer(sub: str, resource_type: str, resource_id: str) -> bool:
         return roles.is_org_admin(sub, int(owner_id))
     if owner_type == "group":
         return roles.can_admin_group(sub, int(owner_id))
+    if owner_type == "platform":
+        return roles.is_platform_admin(sub)   # ADR 0049 : bibliothèque = gouvernance plateforme
     return False
 
 

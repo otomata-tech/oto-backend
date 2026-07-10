@@ -48,6 +48,14 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    # ADR 0049 : défauts neutres — pas d'escalade admin, membre des équipes qu'il vise,
+    # aucun groupe dans l'org active. Les tests dédiés surchargent.
+    monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: False)
+    monkeypatch.setattr(P.roles, "is_platform_admin", lambda sub: False)
+    monkeypatch.setattr(P.roles, "can_read_group", lambda sub, gid: True)
+    monkeypatch.setattr(P.group_store, "get_group",
+                        lambda gid: {"id": gid, "org_id": 99, "name": "pôle"})
+    monkeypatch.setattr(P.group_store, "list_groups", lambda org_id: [])
     monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
     monkeypatch.setattr(P.db, "list_project_activity",
                         lambda pid, limit=50: [{"sub": "u1", "action": "project.create",
@@ -110,6 +118,39 @@ def test_create_org_requires_membership(seams, monkeypatch):
 def test_create_org_ok(seams):
     P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="org", owner_id="5"))
     assert seams["create"][0][:2] == ("org", "5")
+
+
+def test_create_group_owned(seams):
+    # ADR 0049 : projet de PÔLE — owner=('group', id), créable par un lecteur du groupe.
+    P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert seams["create"][0][:2] == ("group", "5")
+
+
+def test_create_group_requires_membership(seams, monkeypatch):
+    monkeypatch.setattr(P.roles, "can_read_group", lambda sub, gid: False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert e.value.code == "forbidden"
+
+
+def test_create_group_unknown_group(seams, monkeypatch):
+    monkeypatch.setattr(P.group_store, "get_group", lambda gid: None)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert e.value.code == "unknown_group"
+
+
+def test_create_platform_requires_platform_admin(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="platform"))
+    assert e.value.code == "forbidden"
+
+
+def test_create_platform_owned(seams, monkeypatch):
+    # ADR 0049 : projet BIBLIOTHÈQUE — sentinelle owner=('platform', 'platform').
+    monkeypatch.setattr(P.roles, "is_platform_admin", lambda sub: True)
+    P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="platform"))
+    assert seams["create"][0][:2] == ("platform", "platform")
 
 
 def test_create_missing_name(seams):
@@ -216,10 +257,30 @@ def test_update_publish_template_ok(seams):
     assert out["is_template"] is False   # vue reflète ROW (stub) — publication persistée côté db
 
 
+def test_list_includes_my_group_projects(seams, monkeypatch):
+    # ADR 0049 : les projets des pôles dont je suis membre (dans l'org active) sont
+    # listés à côté des projets d'org — le scope reste borné à l'org active.
+    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [{"group_id": 5}])
+    P._project(CTX, P.ProjectInput(op="list"))
+    assert seams["list_owners"] == [[("org", "99"), ("group", "5")]]
+
+
+def test_list_org_admin_sees_all_org_groups(seams, monkeypatch):
+    # Gouvernance inaliénable : l'org_admin liste les projets de TOUS les pôles de son org.
+    monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: True)
+    monkeypatch.setattr(P.group_store, "list_groups",
+                        lambda org_id: [{"id": 5}, {"id": 6}])
+    P._project(CTX, P.ProjectInput(op="list"))
+    assert seams["list_owners"] == [[("org", "99"), ("group", "5"), ("group", "6")]]
+
+
 def test_list_templates(seams):
     out = P._project(CTX, P.ProjectInput(op="list_templates"))
     assert [p["id"] for p in out["projects"]] == [7]
     assert out["projects"][0]["is_template"] is True
+    # ADR 0049 : la bibliothèque PLATEFORME est toujours dans le scope des modèles.
+    assert ("platform", "platform") in seams["list_owners"][0]
 
 
 def test_copy(seams):

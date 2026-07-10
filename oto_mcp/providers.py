@@ -1091,8 +1091,9 @@ def require_keyed(name: str) -> None:
 def require_credential(entity_type: str, name: str) -> None:
     """Lève si le connecteur ne peut PAS porter un credential à ce niveau d'entité.
     user → doit accepter `byo_user` (clé API keyed OU secret de session :
-    linkedin/crunchbase/google/slack…) ; org → doit être org-partageable (byo_org,
-    ex. mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
+    linkedin/crunchbase/google/slack…) ; group → org-partageable OU byo_user (une
+    équipe délègue l'org, ADR 0012) ; org → doit être org-partageable (byo_org,
+    ex. http/mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
@@ -1103,7 +1104,17 @@ def require_credential(entity_type: str, name: str) -> None:
         c = REGISTRY.get(name)
         if not (c and "platform" in c.auth_modes):
             raise ValueError(f"{name!r} n'accepte pas de credential plateforme (auth_modes 'platform' requis)")
-    else:
+    elif entity_type == "group":
+        # Un GROUPE est une délégation de l'org (ADR 0012) : ce qui est
+        # org-partageable est posable au niveau équipe (miroir EXACT du palier
+        # groupe de la résolution, gaté `ORG_SHAREABLE_PROVIDERS`, pas byo_user).
+        # Un byo_user pur (sessions linkedin/google) reste posable en équipe aussi.
+        # ⚠️ NE PAS exiger byo_user ici : un connecteur org-only (http « un par
+        # département », #183) DOIT pouvoir poser son secret d'équipe sans devenir
+        # byo_user (ce qui réactiverait à tort le palier membre — cf. access.py).
+        if not (is_org_shareable(name) or is_byo_user(name)):
+            raise ValueError(f"{name!r} n'accepte pas de credential de groupe")
+    else:  # user
         if not is_byo_user(name):
             raise ValueError(
                 f"{name!r} n'accepte pas de credential per-user (byo_user requis)")

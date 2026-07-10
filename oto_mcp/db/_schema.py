@@ -635,7 +635,7 @@ CREATE TABLE IF NOT EXISTS guides (
 CREATE TABLE IF NOT EXISTS org_instructions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     owner_type TEXT NOT NULL DEFAULT 'org',
-    owner_id TEXT,
+    owner_id TEXT NOT NULL,
     slug TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
@@ -648,7 +648,9 @@ CREATE TABLE IF NOT EXISTS org_instructions (
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, slug)
+    -- PK NOMMÉE : le DROP de la PK legacy (org_id, slug) dans _init cible
+    -- `org_instructions_pkey` — un nom distinct protège l'install fraîche.
+    CONSTRAINT org_instructions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);
 
@@ -658,7 +660,7 @@ CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);
 CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     owner_type TEXT NOT NULL DEFAULT 'org',
-    owner_id TEXT,
+    owner_id TEXT NOT NULL,
     slug TEXT NOT NULL,
     version INTEGER NOT NULL,
     title TEXT NOT NULL DEFAULT '',
@@ -667,7 +669,7 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     slots JSONB NOT NULL DEFAULT '[]'::jsonb,
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, slug, version)
+    CONSTRAINT org_instruction_revisions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug, version)
 );
 
 -- Bibliothèque PUBLIQUE de doctrines (marketplace de skills/templates). Chaque

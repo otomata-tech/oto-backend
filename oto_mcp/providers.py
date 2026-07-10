@@ -928,7 +928,7 @@ _REGISTRY_LIST = [
     # oto_http.build_auth). Lecture seule (GET), garde-fou anti-SSRF sur l'hôte.
     # À DISTINGUER du bridge (credential hors plateforme) : ici la clé est confiée
     # à oto — pas de custody côté client.
-    _c("http", ["http"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
+    _c("http", ["http"], auth_modes={"byo_org"}, secret_kind="fields",
        in_default_bundle=False, default_hidden=True, label="HTTP",
        help="connecte n'importe quelle API HTTP à oto : renseigne l'URL de base, "
             "le mode d'auth (bearer / clé en header ou query / basic / oauth2) et "

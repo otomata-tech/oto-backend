@@ -287,6 +287,11 @@ def _base_readme(group_id: int, version: Optional[int]) -> Optional[dict]:
             "created_at": st["updated_at"], "updated_at": st["updated_at"]}
 
 
+# Chantier procédures (cadrage 10/07, B2) : les procédures d'équipe vivent dans la
+# table UNIFIÉE `org_instructions` (owner_type='group', owner_id=group_id::text,
+# org_id=org parente) — la jumelle org_group_instructions est fusionnée (copie au
+# boot, DROP en Lot C). Signatures et formes de sortie INCHANGÉES.
+
 def get_group_instruction(group_id: int, slug: str,
                           version: Optional[int] = None) -> Optional[dict]:
     slug = normalize_slug(slug)
@@ -295,28 +300,29 @@ def get_group_instruction(group_id: int, slug: str,
     with _connect() as conn:
         if version is None:
             row = conn.execute(
-                "SELECT group_id, slug, title, description, body_md, version, set_by, "
-                "created_at, updated_at FROM org_group_instructions "
-                "WHERE group_id = %s AND slug = %s",
-                (group_id, slug),
+                "SELECT %s AS group_id, id, slug, title, description, body_md, version, "
+                "set_by, created_at, updated_at FROM org_instructions "
+                "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s",
+                (group_id, str(group_id), slug),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT group_id, slug, title, description, body_md, version, set_by, "
-                "created_at FROM org_group_instruction_revisions "
-                "WHERE group_id = %s AND slug = %s AND version = %s",
-                (group_id, slug, version),
+                "SELECT %s AS group_id, slug, title, description, body_md, version, "
+                "set_by, created_at FROM org_instruction_revisions "
+                "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s AND version = %s",
+                (group_id, str(group_id), slug, version),
             ).fetchone()
         return dict(row) if row else None
 
 
 def list_group_instructions(group_id: int, include_base: bool = False) -> list[dict]:
-    where = "group_id = %s" if include_base else "group_id = %s AND slug <> %s"
-    params: tuple = (group_id,) if include_base else (group_id, BASE_SLUG)
+    where = ("owner_type = 'group' AND owner_id = %s" if include_base
+             else "owner_type = 'group' AND owner_id = %s AND slug <> %s")
+    params: tuple = (str(group_id),) if include_base else (str(group_id), BASE_SLUG)
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT slug, title, description, version, updated_at "
-            f"FROM org_group_instructions WHERE {where} ORDER BY slug",
+            f"SELECT id, slug, title, description, version, updated_at "
+            f"FROM org_instructions WHERE {where} ORDER BY slug",
             params,
         ).fetchall()
         return [dict(r) for r in rows]
@@ -329,11 +335,11 @@ def search_group_instructions(group_id: int, query: str,
         return []
     like = f"%{q}%"
     base_filter = "" if include_base else "AND slug <> %s "
-    head: tuple = (group_id,) if include_base else (group_id, BASE_SLUG)
+    head: tuple = (str(group_id),) if include_base else (str(group_id), BASE_SLUG)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT slug, title, description, body_md, version, updated_at "
-            "FROM org_group_instructions WHERE group_id = %s " + base_filter +
+            "SELECT id, slug, title, description, body_md, version, updated_at "
+            "FROM org_instructions WHERE owner_type = 'group' AND owner_id = %s " + base_filter +
             "AND (title ILIKE %s OR description ILIKE %s OR body_md ILIKE %s) "
             "ORDER BY (title ILIKE %s) DESC, (description ILIKE %s) DESC, updated_at DESC",
             head + (like, like, like, like, like),
@@ -361,37 +367,47 @@ def set_group_instruction(group_id: int, slug: str, body_md: str,
         from . import guide_store
         guide_store.set_init_guide("group", group_id, body_md)
         return 1
+    grp = get_group(group_id)
+    if grp is None:
+        raise ValueError(f"groupe #{group_id} inconnu")
+    org_id = int(grp["org_id"])   # org PARENTE (dénormalisée sur la table unifiée)
     with _connect() as conn:
         with conn.transaction():
+            # Même famille de clé de verrou que l'org ('oi:org:{id}:{slug}') —
+            # sérialisation par (scope, slug) sur la table unifiée.
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
-                         (f"gi:{group_id}:{slug}",))
+                         (f"oi:group:{group_id}:{slug}",))
             cur = conn.execute(
-                "SELECT version, title, description FROM org_group_instructions "
-                "WHERE group_id = %s AND slug = %s",
-                (group_id, slug),
+                "SELECT version, title, description FROM org_instructions "
+                "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s",
+                (str(group_id), slug),
             ).fetchone()
             new_version = (cur["version"] + 1) if cur else 1
             new_title = title if title is not None else (cur["title"] if cur else "")
             new_desc = description if description is not None else (cur["description"] if cur else "")
             conn.execute(
                 """
-                INSERT INTO org_group_instructions
-                    (group_id, slug, title, description, body_md, version, set_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (group_id, slug) DO UPDATE SET
+                INSERT INTO org_instructions
+                    (org_id, owner_type, owner_id, slug, title, description, body_md,
+                     slots, version, set_by, updated_at)
+                VALUES (%s, 'group', %s, %s, %s, %s, %s, '[]'::jsonb, %s, %s, NOW())
+                ON CONFLICT (owner_type, owner_id, slug) DO UPDATE SET
                     title = EXCLUDED.title, description = EXCLUDED.description,
                     body_md = EXCLUDED.body_md, version = EXCLUDED.version,
                     set_by = EXCLUDED.set_by, updated_at = NOW()
                 """,
-                (group_id, slug, new_title, new_desc, body_md, new_version, set_by),
+                (org_id, str(group_id), slug, new_title, new_desc, body_md,
+                 new_version, set_by),
             )
             conn.execute(
                 """
-                INSERT INTO org_group_instruction_revisions
-                    (group_id, slug, version, title, description, body_md, set_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO org_instruction_revisions
+                    (org_id, owner_type, owner_id, slug, version, title, description,
+                     body_md, set_by)
+                VALUES (%s, 'group', %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (group_id, slug, new_version, new_title, new_desc, body_md, set_by),
+                (org_id, str(group_id), slug, new_version, new_title, new_desc,
+                 body_md, set_by),
             )
             return new_version
 
@@ -402,9 +418,9 @@ def list_group_instruction_versions(group_id: int, slug: str) -> list[dict]:
         return []                                  # readme sans historique (ADR 0042)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT version, title, set_by, created_at FROM org_group_instruction_revisions "
-            "WHERE group_id = %s AND slug = %s ORDER BY version DESC",
-            (group_id, slug),
+            "SELECT version, title, set_by, created_at FROM org_instruction_revisions "
+            "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s ORDER BY version DESC",
+            (str(group_id), slug),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -414,12 +430,14 @@ def delete_group_instruction(group_id: int, slug: str) -> bool:
     with _connect() as conn:
         with conn.transaction():
             cur = conn.execute(
-                "DELETE FROM org_group_instructions WHERE group_id = %s AND slug = %s",
-                (group_id, slug),
+                "DELETE FROM org_instructions "
+                "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s",
+                (str(group_id), slug),
             )
             removed = (cur.rowcount or 0) > 0
             conn.execute(
-                "DELETE FROM org_group_instruction_revisions WHERE group_id = %s AND slug = %s",
-                (group_id, slug),
+                "DELETE FROM org_instruction_revisions "
+                "WHERE owner_type = 'group' AND owner_id = %s AND slug = %s",
+                (str(group_id), slug),
             )
     return removed

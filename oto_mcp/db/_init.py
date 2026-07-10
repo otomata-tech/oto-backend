@@ -152,6 +152,44 @@ def init_db() -> None:
         conn.execute("UPDATE org_instruction_revisions SET owner_id = org_id::text WHERE owner_id IS NULL")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instruction_revisions_owner "
                      "ON org_instruction_revisions(owner_type, owner_id, slug, version)")
+        # Chantier procédures B2 (le B1 est PROMU prod — la prod écrit sur l'arbitre
+        # owner) : la PK legacy (org_id, slug) tombe → les lignes GROUP peuvent
+        # coexister avec les lignes org de la même org parente. Puis FUSION de la
+        # jumelle : copie des procédures d'équipe (ids tirés d'org_instructions_id_seq
+        # — la MÊME séquence, zéro collision avec les refs project_links/grants), à
+        # CHAQUE boot tant que la jumelle existe (newer-wins : rattrape les écritures
+        # prod de la fenêtre) ; slots='[]' (colonne absente côté équipe). Le DROP de
+        # la jumelle = Lot C, une fois CE code promu (la prod Lot A la lit encore).
+        conn.execute("ALTER TABLE org_instructions ALTER COLUMN owner_id SET NOT NULL")
+        conn.execute("ALTER TABLE org_instruction_revisions ALTER COLUMN owner_id SET NOT NULL")
+        conn.execute("ALTER TABLE org_instructions DROP CONSTRAINT IF EXISTS org_instructions_pkey")
+        conn.execute("ALTER TABLE org_instruction_revisions DROP CONSTRAINT IF EXISTS org_instruction_revisions_pkey")
+        if conn.execute("SELECT to_regclass('org_group_instructions') AS t").fetchone()["t"]:
+            conn.execute("""
+                INSERT INTO org_instructions
+                    (id, org_id, owner_type, owner_id, slug, title, description,
+                     body_md, slots, version, set_by, created_at, updated_at)
+                SELECT nextval('org_instructions_id_seq'), og.org_id, 'group',
+                       g.group_id::text, g.slug, g.title, g.description, g.body_md,
+                       '[]'::jsonb, g.version, g.set_by, g.created_at, g.updated_at
+                  FROM org_group_instructions g JOIN org_groups og ON og.id = g.group_id
+                ON CONFLICT (owner_type, owner_id, slug) DO UPDATE SET
+                    title = EXCLUDED.title, description = EXCLUDED.description,
+                    body_md = EXCLUDED.body_md, version = EXCLUDED.version,
+                    set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at
+                 WHERE EXCLUDED.updated_at > org_instructions.updated_at
+            """)
+        if conn.execute("SELECT to_regclass('org_group_instruction_revisions') AS t").fetchone()["t"]:
+            conn.execute("""
+                INSERT INTO org_instruction_revisions
+                    (org_id, owner_type, owner_id, slug, version, title, description,
+                     body_md, slots, set_by, created_at)
+                SELECT og.org_id, 'group', r.group_id::text, r.slug, r.version, r.title,
+                       r.description, r.body_md, '[]'::jsonb, r.set_by, r.created_at
+                  FROM org_group_instruction_revisions r
+                  JOIN org_groups og ON og.id = r.group_id
+                ON CONFLICT (owner_type, owner_id, slug, version) DO NOTHING
+            """)
         # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
         # (deux procédures liées partageant `sortie` partagent le binding). Unicité
         # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).
@@ -432,6 +470,13 @@ def init_db() -> None:
                 "SELECT 'group', group_id::text, connector, 'user', principal_sub, "
                 "       granted_by, granted_at FROM group_connector_access "
                 "ON CONFLICT DO NOTHING")
+        # Chantier ACL B2 (le B1 est PROMU prod — plus AUCUN code ne lit les 4 tables
+        # legacy, les copies ci-dessus sont gardées to_regclass) : DROP. Dernière
+        # copie exécutée juste avant, même boot — rien ne se perd.
+        conn.execute("DROP TABLE IF EXISTS org_connector_access")
+        conn.execute("DROP TABLE IF EXISTS group_connector_access")
+        conn.execute("DROP TABLE IF EXISTS connector_activation")
+        conn.execute("DROP TABLE IF EXISTS group_connector_activation")
         # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
         # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
         # (capacité connectors.me/select/pause) et le masquage pause au middleware

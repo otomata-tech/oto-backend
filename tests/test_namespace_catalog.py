@@ -38,13 +38,15 @@ def test_spine_concepts_present():
 
 def test_availability_annotations():
     cat = providers.render_namespace_catalog()
-    # un opt-in gaté est annoté (ne pas faire croire qu'il est appelable d'office)
-    assert "apollo_* — Apollo.io" in cat
-    line = next(l for l in cat.splitlines() if l.startswith("• apollo_*"))
-    assert "à activer" in line
-    # un connecteur du bundle par défaut n'a pas l'annotation « à activer »
-    serper = next(l for l in cat.splitlines() if l.startswith("• serper_*"))
-    assert "à activer" not in serper
+    # un connecteur HORS SOCLE (ADR 0050) est annoté (ne pas faire croire qu'il
+    # est appelable d'office — il s'installe depuis la library, ou oto_call).
+    assert "hubspot_* — HubSpot" in cat
+    line = next(l for l in cat.splitlines() if l.startswith("• hubspot_*"))
+    assert "hors socle" in line
+    # un connecteur du socle `default_active` n'a pas l'annotation
+    for prefix in ("• serper_*", "• apollo_*"):
+        socle = next(l for l in cat.splitlines() if l.startswith(prefix))
+        assert "hors socle" not in socle
 
 
 def test_injected_into_server_instructions():

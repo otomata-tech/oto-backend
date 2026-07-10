@@ -15,26 +15,18 @@ Deux appelants :
 from __future__ import annotations
 
 import logging
-import os
 
 from fastmcp.server.transforms.visibility import disable_components, reset_visibility
 
 from . import (access, connector_activation, connector_selection, connectors,
-               credentials_store, db)
+               credentials_store, db, providers)
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
     effective_disabled,
-    is_default_hidden,
     namespace_of,
 )
 
 logger = logging.getLogger(__name__)
-
-# Backstop FAIL-CLOSED : noms masqués-par-défaut vus lors d'un list_tools réussi.
-# Si le listing échoue, on les réinjecte dans `all_names` pour qu'ils restent
-# candidats au masquage (la denylist fastmcp les laisserait visibles sinon —
-# défaut is_enabled=True). Cache process, alimenté au listing.
-_KNOWN_DEFAULT_HIDDEN: set[str] = set()
 
 
 async def compute_hidden_tools(ctx, sub: str) -> set[str]:
@@ -60,12 +52,11 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     try:
         all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
         all_names = {t.name for t in all_tools}
-        _KNOWN_DEFAULT_HIDDEN.update(n for n in all_names if is_default_hidden(n))
     except Exception as e:
         logger.warning("Cannot list tools for %s: %s", sub, e)
-        # repli FAIL-CLOSED : disabled explicites + masqués-par-défaut connus
+        # repli FAIL-CLOSED : disabled explicites + masqués-par-défaut
         # (sinon ils resteraient visibles, denylist incomplète).
-        all_names = disabled | DEFAULT_HIDDEN_TOOLS | _KNOWN_DEFAULT_HIDDEN
+        all_names = disabled | DEFAULT_HIDDEN_TOOLS
     to_hide = effective_disabled(all_names, disabled, enabled_override)
     # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
     # l'org de la session — à chaud, per-org. Fail-OPEN (gouvernance d'exposition,
@@ -120,48 +111,28 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
             }
     except Exception as e:
         logger.warning("group connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
-    # Sélection marketplace (ADR 0019, B5) : masque les tools d'un connecteur que
-    # le membre a mis en PAUSE (state='paused'). `not_selected` reste visible à ce
-    # barreau (rétro-compatible ; le flip du défaut « non-sélectionné = masqué » =
-    # B6). Derrière flag `OTO_CONNECTOR_SELECTION_ENABLED`, fail-OPEN.
-    if os.environ.get("OTO_CONNECTOR_SELECTION_ENABLED"):
-        try:
-            _strict = bool(os.environ.get("OTO_CONNECTOR_SELECTION_STRICT"))
-            # B6 : seed lazy à la 1re session sous le régime strict — pré-remplit la
-            # sélection avec l'exposé courant (le membre garde tout ; seuls les
-            # connecteurs exposés APRÈS le seed restent à installer depuis la library).
-            if _strict and not connector_selection.is_seeded(sub, prof_org):
-                connector_selection.seed_active(
-                    sub, connector_activation.exposed_connectors(active_org), prof_org)
-            _sel = connector_selection.list_selection(sub, prof_org)
-            # B5 : un connecteur en PAUSE masque ses outils. B6 (strict) : un
-            # connecteur NON-sélectionné les masque aussi (`_st is None`).
-            to_hide |= {
-                n for n in all_names
-                if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
-                and ((_st := _sel.get(c.name)) == connector_selection.PAUSED
-                     or (_strict and _st is None))
-            }
-            # Un connecteur explicitement sélectionné 'active' DÉMASQUE ses outils
-            # masqués-par-défaut : le choix marketplace explicite (ADR 0019) prime sur
-            # l'anti-encombrement legacy `default_hidden` (ADR 0011) — redondant/
-            # contradictoire en régime de sélection (`not_selected` déclutre déjà). Sans
-            # ça, poser une carte sur « active » n'affiche rien pour un connecteur
-            # default_hidden (pennylaneged/brevo). On respecte un toggle-off perso
-            # explicite (`disabled`) et on ne retouche jamais paused/not-selected
-            # (masqués au-dessus, jamais dans `_active_sel`).
-            _active_sel = {
-                name for name, st in _sel.items() if st == connector_selection.ACTIVE
-            }
-            if _active_sel:
-                to_hide -= {
-                    n for n in all_names
-                    if is_default_hidden(n) and n not in disabled
-                    and (c := connectors.connector_for_namespace(namespace_of(n))) is not None
-                    and c.name in _active_sel
-                }
-        except Exception as e:
-            logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
+    # Sélection marketplace (ADR 0019/0050) : régime NOMINAL « non-sélectionné =
+    # masqué ». Un connecteur en PAUSE ou non-installé masque ses tools. Le seed
+    # de la 1re session d'un (sub, org) installe le SOCLE curé (`default_active`
+    # ∩ exposé) — les pairs pré-0050 ont été backfillés avec leur visible d'alors
+    # (db._init). Fail-OPEN sur glitch (ergonomie, jamais une barrière : les gates
+    # call-time restent) ; `oto_call` = échappatoire d'appel ponctuel d'un tool
+    # non listé (ADR 0036).
+    try:
+        if not connector_selection.is_seeded(sub, prof_org):
+            connector_selection.seed_active(
+                sub,
+                providers.DEFAULT_ACTIVE_CONNECTORS
+                & connector_activation.exposed_connectors(active_org),
+                prof_org)
+        _sel = connector_selection.list_selection(sub, prof_org)
+        to_hide |= {
+            n for n in all_names
+            if (c := connectors.connector_for_namespace(namespace_of(n))) is not None
+            and _sel.get(c.name) != connector_selection.ACTIVE
+        }
+    except Exception as e:
+        logger.warning("selection visibility skipped for %s (fail-open): %s", sub, e)
     # Tools réservés au platform admin (`oto_admin_*`) : masqués aux non-admins.
     # Inutiles à un user normal (l'autz les refuse à l'appel) → ils ne font
     # qu'alourdir le contexte. Visibilité seulement ; l'autz PLATFORM_ADMIN reste

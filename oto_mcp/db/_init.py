@@ -100,20 +100,11 @@ def init_db() -> None:
             "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
             "FROM user_agent_readme WHERE COALESCE(body_md, '') <> '' "
             "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortent de
-        # `*_instructions` (qui ne gardent que les PROCÉDURES + versioning) vers `guides`.
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'org', org_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'group', group_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_group_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortis de
+        # `*_instructions` vers `guides` — backfills one-shot RETIRÉS (cadrage 10/07,
+        # chantier procédures B1) : ils ont tourné en prod à chaque boot depuis le
+        # 06/07, et celui d'équipe lisait `org_group_instructions` (jumelle vouée au
+        # DROP — un boot post-drop aurait cassé).
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).
@@ -144,6 +135,23 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE doctrine_library ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # Chantier procédures (cadrage 10/07) B1 : la procédure devient une ressource
+        # possédée par un SCOPE — colonnes owner_type/owner_id sur la table ET ses
+        # revisions ('org' aujourd'hui ; les lignes GROUP arrivent en B2 par fusion
+        # d'org_group_instructions, ids tirés d'org_instructions_id_seq). Le nouvel
+        # ARBITRE d'unicité est (owner_type, owner_id, slug) : le code écrit dessus dès
+        # B1 ; la PK legacy (org_id, slug) ne tombe qu'en B2, une fois ce code PROMU en
+        # prod (DB partagée canari/prod — la prod actuelle fait ON CONFLICT (org_id, slug)).
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instructions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instructions_owner_slug "
+                     "ON org_instructions(owner_type, owner_id, slug)")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instruction_revisions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instruction_revisions_owner "
+                     "ON org_instruction_revisions(owner_type, owner_id, slug, version)")
         # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
         # (deux procédures liées partageant `sortie` partagent le binding). Unicité
         # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).
@@ -410,6 +418,12 @@ def init_db() -> None:
         # suivent en B3/B4/B5.
         from .. import connector_selection as _conn_sel
         _conn_sel.init_schema(conn)
+        # ADR 0050 : passage au régime nominal « non-sélectionné = masqué ».
+        # Backfill ONE-SHOT (sentinelle) des (sub, org) pré-existants avec ce
+        # qu'ils VOYAIENT (exposé − ex-default_hidden) — zéro changement de
+        # toolbox pour l'existant ; les pairs créés ensuite reçoivent le SOCLE
+        # curé au seed lazy (session_visibility).
+        _conn_sel.backfill_preexisting(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         from .usage import prune_tool_calls

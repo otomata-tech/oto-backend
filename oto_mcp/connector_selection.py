@@ -119,7 +119,7 @@ def unselect(sub: str, connector: str, org_id: int = 0) -> bool:
         return (cur.rowcount or 0) > 0
 
 
-# --- transition vers le régime strict « non-sélectionné = masqué » (B6) -------
+# --- seed initial d'un (sub, org) — socle curé (ADR 0050) ---------------------
 
 def is_seeded(sub: str, org_id: int = 0) -> bool:
     """True si ce (sub, org) a déjà reçu sa sélection initiale (cf. `seed_active`)."""
@@ -133,15 +133,16 @@ def is_seeded(sub: str, org_id: int = 0) -> bool:
     return row is not None
 
 
-def seed_active(sub: str, exposed: set[str], org_id: int = 0) -> None:
-    """Seed de transition (one-shot par (sub, org)) : marque `active` tout connecteur
-    actuellement EXPOSÉ pour ce membre, puis pose la marque `seeded`. No-behavior-change
-    au flip (le membre garde l'exposé courant) ; seuls les connecteurs exposés APRÈS le
-    seed restent non-sélectionnés (→ à installer depuis la library). Idempotent."""
+def seed_active(sub: str, connectors: set[str], org_id: int = 0) -> None:
+    """Sélection initiale d'un (sub, org) (one-shot, marque `seeded`) : installe
+    `connectors` en `active`. L'appelant décide le contenu — régime nominal =
+    le SOCLE curé `default_active ∩ exposé` (ADR 0050, `session_visibility`).
+    Le reste de l'exposé démarre non-sélectionné (→ library). Idempotent, ne
+    réécrit jamais une sélection existante."""
     from . import db
 
     with db._connect() as conn:
-        for name in exposed:
+        for name in connectors:
             conn.execute(
                 "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
                 "VALUES (%s, %s, %s, 'active') ON CONFLICT (sub, org_id, connector) DO NOTHING",
@@ -152,3 +153,68 @@ def seed_active(sub: str, exposed: set[str], org_id: int = 0) -> None:
             "ON CONFLICT (sub, org_id) DO NOTHING",
             (sub, org_id),
         )
+
+
+# --- migration ADR 0050 : backfill one-shot des pairs pré-existants -----------
+
+# Connecteurs `default_hidden` AU MOMENT du retrait du flag (ADR 0050 B3) — fait
+# historique figé dans la migration : le backfill reconstitue ce que chaque membre
+# VOYAIT (l'exposé de son org moins ces masqués), pas l'exposé brut.
+_BACKFILL_HIDDEN = frozenset(
+    {"attio", "brevoauto", "pennylaneged", "resend", "scaleway", "http", "bridge"})
+# Sentinelle du one-shot (jamais un sub réel — les subs Logto sont alphanumériques).
+# Posée dans `connector_selection_seeded` après la passe : le backfill ne rejoue
+# JAMAIS, car un pair créé APRÈS lui doit recevoir le SOCLE au seed lazy, pas
+# l'exposé historique.
+_BACKFILL_MARK = "#adr0050-backfill"
+
+
+def backfill_preexisting(conn) -> None:
+    """One-shot ADR 0050 (reçoit le `conn` de la transaction `db.init_db`) : au
+    passage au régime nominal « non-sélectionné = masqué », chaque (sub, org) DÉJÀ
+    existant et jamais seedé reçoit en sélection `active` ce qu'il VOYAIT (exposé
+    de l'org − ex-`default_hidden`) — zéro changement de toolbox pour l'existant.
+    Les pairs déjà seedés (régime strict testé en canari) gardent leurs choix."""
+    done = conn.execute(
+        "SELECT 1 FROM connector_selection_seeded WHERE sub = %s AND org_id = 0",
+        (_BACKFILL_MARK,),
+    ).fetchone()
+    if done:
+        return
+    from .connector_activation import _resolve
+
+    rows = conn.execute(
+        "SELECT connector, org_id, enabled FROM connector_activation").fetchall()
+    global_map: dict[str, bool] = {}
+    overrides: dict[int, dict[str, bool]] = {}
+    for r in rows:
+        if r["org_id"] is None:
+            global_map[r["connector"]] = bool(r["enabled"])
+        else:
+            overrides.setdefault(r["org_id"], {})[r["connector"]] = bool(r["enabled"])
+    # Tous les couples (sub, org) susceptibles d'un profil de visibilité : les
+    # memberships + la sentinelle perso/globale org_id=0 (ADR 0015) — moins les
+    # pairs déjà seedés.
+    pairs = conn.execute(
+        "SELECT sub, org_id FROM org_members "
+        "UNION SELECT sub, 0 FROM users "
+        "EXCEPT SELECT sub, org_id FROM connector_selection_seeded").fetchall()
+    for p in pairs:
+        exposed = _resolve(global_map, overrides.get(p["org_id"], {}))
+        for name in sorted(exposed - _BACKFILL_HIDDEN):
+            conn.execute(
+                "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
+                "VALUES (%s, %s, %s, 'active') "
+                "ON CONFLICT (sub, org_id, connector) DO NOTHING",
+                (p["sub"], p["org_id"], name),
+            )
+        conn.execute(
+            "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, %s) "
+            "ON CONFLICT (sub, org_id) DO NOTHING",
+            (p["sub"], p["org_id"]),
+        )
+    conn.execute(
+        "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, 0) "
+        "ON CONFLICT (sub, org_id) DO NOTHING",
+        (_BACKFILL_MARK,),
+    )

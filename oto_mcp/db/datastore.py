@@ -804,6 +804,20 @@ def datastore_claim_next(ns_id: int, *, worker: str, lease_seconds: int = 900,
         return dict(row) if row else None
 
 
+def datastore_claimed_rows(ns_id: int) -> list[dict]:
+    """Rows sous bail de file de travail (ADR 0046 D) — la vue « en cours » du
+    dashboard. Bail actif OU expiré confondus (le consommateur tranche sur
+    `claimed_until`), plus ancien bail d'abord."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until "
+            "FROM datastore_rows WHERE ns_id = %s AND claimed_by IS NOT NULL "
+            "ORDER BY claimed_until ASC",
+            (ns_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def datastore_release_claim(ns_id: int, row_id: str, worker: Optional[str]) -> bool:
     """Libère le bail d'une row. `worker` non-None = gardé (on ne libère pas le
     claim d'un autre) ; None = libération inconditionnelle (chemin interne : entrée

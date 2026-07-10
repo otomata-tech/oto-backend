@@ -600,14 +600,19 @@ class DatastorePg:
         return db.datastore_count_rows(ns_id, filters=filters)
 
     def aggregate(self, namespace: str, *, group_by: Optional[str] = None,
-                  metrics: Optional[list] = None, filter: Optional[dict] = None) -> list[dict]:
+                  metrics: Optional[list] = None, filter: Optional[dict] = None,
+                  q: Optional[str] = None, filters: Optional[list] = None) -> list[dict]:
         """Agrégat serveur (feedback #191) : COUNT/SUM/AVG/MIN/MAX sur des champs JSONB,
         `group_by` optionnel — stats d'un vivier sans rapatrier les lignes. Délègue à
-        `db.datastore_aggregate` (filtre exact `{col: val}` poussé en SQL)."""
+        `db.datastore_aggregate`. Deux formes de filtre cumulables : `filter` exact
+        `{col: val}` (chemin MCP) et `q`/`filters` riches ({field, op, value}, mêmes
+        clauses que `page_rows`) — le dashboard agrège ainsi le MÊME jeu que sa vue
+        filtrée (tuiles metric)."""
         ns_id = self._resolve(namespace)
-        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        clauses = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        clauses.extend(filters or [])
         return db.datastore_aggregate(
-            ns_id, group_by=group_by, metrics=metrics, filters=filters)
+            ns_id, group_by=group_by, metrics=metrics, q=q, filters=clauses)
 
     def page_rows(
         self,
@@ -676,6 +681,20 @@ class DatastorePg:
         déjà automatiquement (pas besoin d'appeler release après)."""
         ns_id = self._resolve(namespace, write=True)
         return db.datastore_release_claim(ns_id, row_id, str(worker))
+
+    def queue(self, namespace: str) -> list[dict]:
+        """Vue de SUPERVISION de la file (dashboard) : les rows sous bail —
+        actif ou expiré, le consommateur tranche sur `_claimed_until`. Lecture
+        seule (aucun droit d'écriture requis)."""
+        ns_id = self._resolve(namespace)
+        return [self._row_to_dict(r) for r in db.datastore_claimed_rows(ns_id)]
+
+    def force_release(self, namespace: str, row_id: str) -> bool:
+        """Libère le bail SANS garde de worker — supervision humaine (dashboard),
+        ≠ `release_claim` (agent, gardé). Exige le droit d'écriture. False = pas
+        de bail à libérer."""
+        ns_id = self._resolve(namespace, write=True)
+        return db.datastore_release_claim(ns_id, row_id, None)
 
     def delete_row(self, namespace: str, row_id: str) -> None:
         ns_id = self._resolve(namespace, write=True)

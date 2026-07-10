@@ -18,7 +18,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import config, db, org_store, ownership, roles, session_org
+from .. import config, db, group_store, org_store, ownership, roles, session_org
 from ._authz import ORG_MEMBER, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -43,9 +43,12 @@ class ProjectInput(BaseModel):
     mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
     mcp_expose_datastore: Optional[bool] = None  # `secret` uniquement : exposer les tools data_* en LECTURE (tableaux liés au projet, sous l'autorité de l'org). None = DÉFAUT exposé au partage secret (#193) ; passer False pour refermer
     mcp_expose_datastore_write: Optional[bool] = None  # opt-in ADDITIONNEL (#193) : autoriser l'ÉCRITURE (data_write/data_set_schema) ; sans objet si la lecture n'est pas exposée — défaut False (lecture seule)
-    # create : owner du projet — 'user' (défaut, perso) ou 'org' (classeur d'équipe).
-    owner_type: Literal["user", "org"] = "user"
-    owner_id: Optional[str] = None   # org.id si owner_type='org' ; ignoré pour 'user'
+    # create : SCOPE owner du projet (ADR 0049 — échelle platform/org/group/user).
+    # 'user' (défaut) résout sur l'org ACTIVE ; 'org' = une org dont je suis membre ;
+    # 'group' = un pôle/équipe (cloisonne le projet à ses membres + admins d'org) ;
+    # 'platform' = projet bibliothèque (admin plateforme seulement).
+    owner_type: Literal["user", "org", "group", "platform"] = "user"
+    owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
     target_type: Optional[Literal["tableau", "procedure", "connecteur", "doc"]] = None
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | doc.id (page Documents)
@@ -275,6 +278,22 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             _require(roles.is_org_member(sub, int(inp.owner_id)), "forbidden",
                      "Tu n'es pas membre de cette org.", 403)
             owner_type, owner_id = "org", str(inp.owner_id)
+        elif inp.owner_type == "group":
+            # ADR 0049 : projet de PÔLE — cloisonné aux membres du groupe (+ escalade
+            # org_admin, inaliénable). Créer = être du pôle ou l'administrer.
+            _require(inp.owner_id, "missing_owner",
+                     "`owner_id` (group) requis pour un projet d'équipe.")
+            gid = int(inp.owner_id)
+            _require(group_store.get_group(gid) is not None, "unknown_group",
+                     f"Groupe #{gid} inconnu.", 404)
+            _require(roles.can_read_group(sub, gid), "forbidden",
+                     "Tu n'es pas membre de cette équipe.", 403)
+            owner_type, owner_id = "group", str(gid)
+        elif inp.owner_type == "platform":
+            # ADR 0049 : projet BIBLIOTHÈQUE — gouverné par la plateforme, lisible de tous.
+            _require(roles.is_platform_admin(sub), "forbidden",
+                     "Un projet plateforme est réservé aux admins plateforme.", 403)
+            owner_type, owner_id = "platform", "platform"
         else:
             # Défaut = org ACTIVE de l'user (plus de perso ; ctx.org_id toujours posé).
             _require(ctx.org_id is not None, "no_active_org", "Aucune org active.", 400)
@@ -295,7 +314,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         from .. import project_audit
         owner = ownership.active_owner(ctx.org_id)
         _require(owner is not None, "no_active_org", "Aucune org active.", 400)
-        own_rows = db.list_projects_for_owners([owner])
+        # ADR 0049 : les projets de PÔLE (group-owned) de l'org active s'ajoutent aux
+        # projets d'org — pour mes équipes (membre), ou TOUS les groupes de l'org si
+        # j'en suis admin (gouvernance inaliénable, même règle que `can_read_group`).
+        # Le scope reste borné à l'org active (pas d'`owner_pairs`, ADR 0023).
+        if roles.is_org_admin(sub, int(ctx.org_id)):
+            group_ids = [int(g["id"]) for g in group_store.list_groups(int(ctx.org_id))]
+        else:
+            group_ids = [int(g["group_id"])
+                         for g in group_store.list_groups_for_user(sub, ctx.org_id)]
+        owners = [owner] + [("group", str(g)) for g in group_ids]
+        own_rows = db.list_projects_for_owners(owners)
         # Pastilles d'ÉTAT de l'index (refonte UX, ADR 0032) : nb d'entités liées +
         # partagé + « à vérifier » (audit). Le nb de grants est batché (1 requête) ; les
         # liens/audit sont par projet (les listes d'org sont petites) et best-effort.
@@ -322,7 +351,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "list_templates":
         # Modèles (is_template) lisibles par l'acteur — la bibliothèque copiable (B5a).
-        owners = ownership.accessor_scope(sub).owner_pairs()
+        # ADR 0049 : + les modèles PLATFORM-owned (bibliothèque plateforme), pour tous.
+        owners = ownership.accessor_scope(sub).owner_pairs() + [("platform", "platform")]
         return {"projects": [_view(r) for r in
                              db.list_projects_for_owners(owners, templates_only=True)]}
 

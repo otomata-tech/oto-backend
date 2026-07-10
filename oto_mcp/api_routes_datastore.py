@@ -18,7 +18,9 @@ Endpoints exposés :
 - `DELETE /api/datastore/namespaces/{ns}`       → supprime
 - `GET    /api/datastore/namespaces/{ns}/url`   → deep-link dashboard du namespace
 - `GET    /api/datastore/namespaces/{ns}/rows`  → liste les rows (filter=k:v, limit=N)
+- `GET    /api/datastore/namespaces/{ns}/queue` → rows sous bail (file de travail)
 - `POST   /api/datastore/namespaces/{ns}/rows`  → append row
+- `POST   /api/datastore/namespaces/{ns}/rows/{row_id}/release` → libère le bail (forcé)
 - `GET    /api/datastore/namespaces/{ns}/rows/{row_id}`    → fetch row
 - `PATCH  /api/datastore/namespaces/{ns}/rows/{row_id}`    → update row
 - `DELETE /api/datastore/namespaces/{ns}/rows/{row_id}`    → delete row
@@ -350,14 +352,56 @@ def make_routes(
                 return json_error(request, 400, "invalid_filter")
             if not isinstance(filter_eq, dict):
                 return json_error(request, 400, "invalid_filter")
+        # `q` + `filters` riches ({field, op, value}) = les MÊMES params que /rows :
+        # les tuiles metric du dashboard agrègent le jeu filtré affiché.
+        q = qp.get("q") or None
+        filters = None
+        raw_filters = qp.get("filters")
+        if raw_filters:
+            try:
+                filters = json.loads(raw_filters)
+            except ValueError:
+                return json_error(request, 400, "invalid_filters")
+            if not isinstance(filters, list):
+                return json_error(request, 400, "invalid_filters")
         try:
             groups = make_store(sub).aggregate(
-                namespace, group_by=group_by, metrics=metrics, filter=filter_eq)
+                namespace, group_by=group_by, metrics=metrics, filter=filter_eq,
+                q=q, filters=filters)
         except NamespaceNotFound:
             return json_error(request, 404, "namespace_not_found")
         except ValueError:
             return json_error(request, 400, "invalid_aggregate")
         return json_response(request, {"groups": groups})
+
+    async def ds_queue(request: Request) -> JSONResponse:
+        """File de travail (ADR 0046 D) — vue de supervision : les rows sous bail
+        (`_claimed_by`/`_claimed_until`), actif ou expiré. Lecture seule."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        try:
+            rows = make_store(sub).queue(namespace)
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        return json_response(request, {"rows": rows})
+
+    async def ds_release_claim(request: Request) -> JSONResponse:
+        """Libération FORCÉE du bail d'une row (supervision humaine — pas de garde
+        de worker, contrairement au tool MCP `data_release`). Exige l'écriture."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        namespace = request.path_params["namespace"]
+        row_id = request.path_params["row_id"]
+        try:
+            released = make_store(sub).force_release(namespace, row_id)
+        except NamespaceNotFound:
+            return json_error(request, 404, "namespace_not_found")
+        except NamespaceReadOnly:
+            return json_error(request, 403, "namespace_read_only")
+        return json_response(request, {"ok": True, "released": released, "id": row_id})
 
     async def ds_get_row(request: Request) -> JSONResponse:
         sub, err = await authenticate(request, verifier)
@@ -608,11 +652,15 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/schema", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/aggregate", ds_aggregate, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/aggregate", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/queue", ds_queue, methods=["GET"]),
+        Route("/api/datastore/namespaces/{namespace}/queue", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_list_rows, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows", ds_append, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/rows", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/activity", ds_row_activity, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/activity", options_handler, methods=["OPTIONS"]),
+        Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/release", ds_release_claim, methods=["POST"]),
+        Route("/api/datastore/namespaces/{namespace}/rows/{row_id}/release", options_handler, methods=["OPTIONS"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_get_row, methods=["GET"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_update_row, methods=["PATCH"]),
         Route("/api/datastore/namespaces/{namespace}/rows/{row_id}", ds_delete_row, methods=["DELETE"]),

@@ -5,7 +5,7 @@
 
 Le datastore n'est **plus scopé par `sub`** : il est le **pilote** de la primitive
 d'ownership générique. `ownership.py` est le **seam unique** : une ressource
-`(resource_type, resource_id)` est possédée par `(owner_type∈{user,group,org},
+`(resource_type, resource_id)` est possédée par `(owner_type∈{user,group,org,platform},
 owner_id)` (colonnes sur la ressource — pour le datastore : `user_datastores.owner_*`,
 `resource_id = id::text`, **stable au renommage**) ; le partage cross-type vit dans
 **`resource_grants`** (deny-by-default, remplace `datastore_shares`). Deux plans, jamais
@@ -47,6 +47,19 @@ sont des reliques nullable, **DROP différé** (Phase H) après cutover prod vé
 > est un acte explicite). Tests purs + **tripwire gouvernance** (`test_ownership.py` :
 > un lecteur/éditeur/inconnu ne gouverne JAMAIS). Front : sélecteur de rôle
 > lecteur/éditeur/gérant (`lib/resourceRole.ts`).
+
+> **Échelle 4 crans (ADR 0049, 2026-07-10).** Le projet rejoint l'échelle
+> platform/org/group/user — **la visibilité DÉCOULE de l'ownership**, aucun mécanisme
+> de restriction (leçon 0044 §G : restreindre = poser la ressource au bon scope).
+> **group-owned** : création `oto_project(op=create, owner_type='group')` (garde
+> `can_read_group`), listé dans l'org PARENTE (membres du pôle ; org_admin = tous les
+> pôles de son org), `visible_in_org` mappe le groupe sur son org ; transfert cible
+> `new_owner_group` (`oto_resource op=transfer`). **platform-owned** (`owner_id=
+> 'platform'`, sentinelle comme les guides) : le cran BIBLIOTHÈQUE — `can_access`
+> read = tout utilisateur authentifié (un modèle est fait pour être copié), write/
+> govern/transfer = admin plateforme ; `op=list_templates` inclut toujours l'owner
+> platform. Non-fait : la publication MCP d'un projet group/platform-owned reste
+> org-centrique (l'endpoint sert sous l'autorité d'une org).
 
 > **Suppression du « perso » (2026-06-30, amende ADR 0015/0023/0030).** Plus d'état
 > **org-less** (`org_id=0` / `current_org`=None) : **tout user est TOUJOURS dans une org**.

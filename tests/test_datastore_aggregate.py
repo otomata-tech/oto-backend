@@ -46,6 +46,28 @@ def test_aggregate_default_metrics_none_passthrough(monkeypatch):
     assert seen["metrics"] is None
 
 
+def test_aggregate_combines_exact_filter_and_rich_filters(monkeypatch):
+    """`filter` exact (MCP) + `q`/`filters` riches (dashboard, mêmes clauses que
+    /rows) se CUMULENT — les tuiles metric agrègent le jeu filtré affiché."""
+    seen = {}
+
+    def _fake_agg(ns_id, *, group_by=None, metrics=None, q=None, filters=None, limit=1000):
+        seen.update(q=q, filters=filters)
+        return []
+
+    monkeypatch.setattr(D.db, "datastore_aggregate", _fake_agg)
+    s = D.DatastorePg("u1")
+    monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)
+
+    s.aggregate("vivier", filter={"statut": "qualified"},
+                q="lyon", filters=[{"field": "bp", "op": "gte", "value": "100"}])
+    assert seen["q"] == "lyon"
+    assert seen["filters"] == [
+        {"field": "statut", "op": "eq", "value": "qualified"},
+        {"field": "bp", "op": "gte", "value": "100"},
+    ]
+
+
 # ── construction SQL pure (_build_aggregate), sans PG ──
 
 from oto_mcp.db import datastore as DB  # noqa: E402

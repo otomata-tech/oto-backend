@@ -209,10 +209,9 @@ CREATE TABLE IF NOT EXISTS group_connector_access (
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
--- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H B1 (cadrage 10/07) :
--- le code ne référence PLUS les reliques (`sub` per-sub, `spreadsheet_id`/`owner_email`
--- Sheets) — leurs colonnes existent encore sur la base vivante, DROP en B2 une fois
--- ce code promu en prod (DB partagée canari/prod : dropper avant casserait le boot prod).
+-- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H (cadrage 10/07)
+-- TERMINÉE : les reliques per-sub/Sheets (`sub`, `spreadsheet_id`, `owner_email`,
+-- table `datastore_shares`) sont purgées du code (B1, promu prod) et DROPpées (B2).
 -- ⚠️ Les INDEX sur owner_type/owner_id NE sont PAS créés ici : sur une base
 -- existante, `CREATE TABLE IF NOT EXISTS` est un no-op et ces colonnes n'existent
 -- pas encore quand `_SCHEMA` s'exécute (ajoutées plus bas par ALTER). Index +
@@ -247,8 +246,8 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     PRIMARY KEY (ns_id, row_id)
 );
 
--- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — n'est plus
---  créée ni référencée : Phase H B1. La table vivante sera DROPpée en B2, post-promotion.)
+-- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — DROPpée
+--  en Phase H B2, 10/07.)
 
 -- Projet = couche d'organisation (modèle produit 2026-06-27). Conteneur de travail
 -- POSSÉDÉ (owner_type/owner_id, ADR 0030) : nom + brief (doc d'entrée inline pour

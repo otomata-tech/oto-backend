@@ -257,18 +257,22 @@ def init_db() -> None:
                      "ON org_invitations(group_id) WHERE group_id IS NOT NULL")
         # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par la
         # ressource (`owner_type` défaut 'user', `owner_id` = sub | org.id | group.id).
-        # Phase H **B1** (cadrage 10/07) : les migrations reliques du cutover (ALTER
-        # Sheets, backfill owner←sub, backfill datastore_shares→resource_grants, drop
-        # du NOT NULL de `sub`) ont toutes TOURNÉ en prod — retirées du boot, le code
-        # ne référence plus `sub`/`spreadsheet_id`/`owner_email` ni `datastore_shares`.
-        # **B2** (les DROP effectifs) ne part QUE ce code promu en prod : la DB est
-        # PARTAGÉE canari/prod — dropper avant casserait le boot du code prod actuel.
+        # Phase H (cadrage 10/07) — B1 (promu prod 10/07) a purgé toute référence aux
+        # reliques du cutover ; **B2** (ci-dessous) droppe les objets morts. Idempotent,
+        # sûr sur la DB partagée : plus aucun code (canari NI prod) ne les lit.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'user'")
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_datastores_owner "
                      "ON user_datastores(owner_type, owner_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
                      "ON user_datastores(owner_type, owner_id, namespace)")
+        # Phase H B2 : DROP des reliques per-sub/Sheets (ADR 0016/0030, différé depuis
+        # le cutover). `datastore_shares` = remplacée par resource_grants (backfillée
+        # à chaque boot depuis 0030, données longtemps migrées).
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS sub")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS spreadsheet_id")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS owner_email")
+        conn.execute("DROP TABLE IF EXISTS datastore_shares")
         # ADR 0048 — le grant possède un RÔLE (viewer/editor/manager). Ajout de la colonne
         # + backfill depuis `permission` (read→viewer, write→editor ; jamais manager en
         # backfill : la gouvernance grantable est un acte explicite). `permission` reste

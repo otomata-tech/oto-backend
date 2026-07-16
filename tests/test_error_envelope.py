@@ -188,3 +188,38 @@ def test_middleware_upstream_carries_hint_and_retryable():
     assert err.data["oto"]["code"] == "rate_limited"
     assert err.data["oto"]["retryable"] is True
     assert err.data["oto"]["hint"]
+
+
+# --- refus de dispatch fastmcp : outil non monté (vécu 2026-07-16, #224/#225) --
+
+def test_unknown_tool_of_known_connector_is_actionable():
+    from fastmcp.exceptions import NotFoundError
+    info = classify(NotFoundError("Unknown tool: 'zoho_records'"))
+    assert info.code == "tool_not_mounted"
+    assert info.retryable is False
+    assert "zoho" in info.message           # nomme le connecteur à installer
+    assert "oto_call" in info.hint          # la voie immédiate sans installation
+    assert "oto_connector" in info.hint     # la voie durable (installer)
+    assert jsonrpc_code(info) == INVALID_PARAMS
+
+
+def test_unknown_tool_of_unknown_namespace_stays_unknown():
+    from fastmcp.exceptions import NotFoundError
+    info = classify(NotFoundError("Unknown tool: 'frobnicate_thing'"))
+    assert info.code == "unknown_tool"
+    assert "oto_list_my_tools" in info.hint
+    assert jsonrpc_code(info) == INVALID_PARAMS
+
+
+def test_unknown_tool_walks_exception_chain():
+    from fastmcp.exceptions import NotFoundError
+    exc = _chained(RuntimeError("wrapper"), NotFoundError("Unknown tool: 'zoho_modules'"))
+    assert classify(exc).code == "tool_not_mounted"
+
+
+def test_unknown_tool_is_expected_not_sentry_reported():
+    from fastmcp.exceptions import NotFoundError
+    from oto_mcp.error_taxonomy import _is_expected_error
+    assert _is_expected_error(NotFoundError("Unknown tool: 'zoho_records'")) is True
+    # une NotFoundError SANS le motif « Unknown tool » reste un bug reporté
+    assert _is_expected_error(NotFoundError("prompt introuvable")) is False

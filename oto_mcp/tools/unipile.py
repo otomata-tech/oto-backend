@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,6 +30,19 @@ _FEED_NS = "linkedin-feed"          # namespace datastore per-user
 _FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
 _FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
 _FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
+
+
+def _canonical_li_identifier(identifier: str) -> str:
+    """Canonicalise un `public_identifier` LinkedIn (vanity slug) : LinkedIn le
+    génère TOUJOURS en ASCII (translittère les accents à la création, p. ex.
+    `nicolas-chéhanne` → `nicolas-chehanne`). Un slug accentué saisi par l'agent
+    fait renvoyer à l'API Unipile un 403 « Insufficient permissions » TROMPEUR
+    (#180) → on retire les diacritiques avant l'appel. No-op sur un slug déjà ASCII
+    ou un provider_id opaque (`ACoAA…`, sans accent) — idempotent."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", identifier)
+        if not unicodedata.combining(c)
+    )
 
 
 def _feed_ttl_seconds() -> int:
@@ -376,7 +390,7 @@ def register(mcp: FastMCP) -> None:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
         """
-        return unipile_client().get_profile(identifier, sections=sections)
+        return unipile_client().get_profile(_canonical_li_identifier(identifier), sections=sections)
 
     @mcp.tool()
     def unipile_company(identifier: str) -> dict:
@@ -385,7 +399,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             identifier: slug ou id de la page société.
         """
-        return unipile_client().get_company(identifier)
+        return unipile_client().get_company(_canonical_li_identifier(identifier))
 
     @mcp.tool()
     def unipile_chats(limit: int = 20, cursor: Optional[str] = None,

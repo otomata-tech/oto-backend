@@ -324,10 +324,10 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 ## Agent readme (cumulable) & procédures — ex-« doctrines & instructions d'org »
 
 Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **injectée à
-chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
-(`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
-slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
-`oto_procedure`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org** →
+**équipe active** → **user** (les 4 étages vivent dans `guides` delivery='init' depuis
+la convergence 0042 — les slugs `claude_md` sont SORTIS des tables de procédures ;
+l'étage user historique était `user_agent_readme(sub PK, body_md)`,
 capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
 dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
@@ -395,14 +395,20 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 3 ressources** par délégation de l'org :
+Un groupe **gouverne 3 ressources** par délégation de l'org (⚠️ **substrat unifié le
+10/07/2026** — chantiers du cadrage objets/visibilité : plus de tables jumelles par
+grain, le scope est une COLONNE ; migrations vivantes sur la DB partagée = playbook
+**`docs/live-migrations.md`**) :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
-- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
-  sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **doctrine & skills** — table UNIFIÉE `org_instructions` (`owner_type='group'`,
+  `owner_id=group_id`, `org_id`=org parente ; ex-jumelle `org_group_instructions`
+  DROPpée) ; `oto_procedure(op='get')` sert org **puis** groupe actif (complément,
+  chaque skill taggée `scope`). Les procédures d'équipe ont un `id` (ownership 0030).
 - **gouvernance de connecteur (ADR 0012 B1/B2, restrict-only — 08/07/2026)** — le chef
-  d'équipe peut, pour SON équipe : **couper** un connecteur (`group_connector_activation`,
-  coupures seules) et **réserver** un connecteur à des membres (`group_connector_access`).
+  d'équipe peut, pour SON équipe : **couper** un connecteur (lignes scope 'group' de
+  `connector_availability`, coupures seules) et **réserver** un connecteur à des membres
+  (lignes scope 'group' de `connector_acl`).
   **INVARIANT MONOTONE** : l'équipe ne peut que RÉTRÉCIR ce que l'org expose, jamais élargir
   (platform ⊇ org ⊇ group). Dispo = **visibilité** (`session_visibility`, fail-open,
   `connector_activation.effective_for_group`/`group_cut_connectors`). Accès = **gate DUR** :
@@ -646,3 +652,4 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/email.md` — envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours.
 - `docs/event-loop-perf.md` — les 2 modes de gel mono-loop + protections + recettes py-spy/aiodebug.
 - `docs/redaction.md` — **rédaction de champs** : middleware unique (FieldRedactionMiddleware), rien par défaut + templates 1-clic, **schéma OBSERVÉ** (capture passive `connector_schemas` — passthrough d'API tierces → on observe au lieu de déclarer), dry-run preview, moteur `FieldFilter` (oto-core).
+- `docs/live-migrations.md` — **migrations vivantes sur la DB partagée canari/prod** : la danse en N lots promus, copies `to_regclass` newer-wins, bascule d'arbitre ON CONFLICT avant drop de PK, PK nommées, pièges (fail-open des gates, `gh pr merge` avant le guard, absorption de WIP).

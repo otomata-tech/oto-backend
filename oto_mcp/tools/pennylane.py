@@ -142,6 +142,26 @@ def register(mcp: FastMCP) -> None:
         return _client().get_supplier_invoices(max_pages=max_pages)
 
     @mcp.tool()
+    def pennylane_list_suppliers(max_pages: Optional[int] = None) -> list:
+        """Liste les fournisseurs (id + nom). Sert à retrouver le `supplier_id` d'un
+        fournisseur EXISTANT à réutiliser dans pennylane_import_supplier_invoice (qui
+        exige un supplier_id). Paginé ; max_pages limite le volume."""
+        return _client().list_suppliers(max_pages=max_pages)
+
+    @mcp.tool()
+    def pennylane_create_supplier(name: str, fields: Optional[dict] = None) -> dict:
+        """Crée un fournisseur — à faire avant de saisir la facture d'achat d'un
+        NOUVEAU fournisseur (pennylane_import_supplier_invoice exige un supplier_id
+        existant). Renvoie le fournisseur créé (avec son id).
+
+        Args:
+            name: raison sociale du fournisseur (obligatoire).
+            fields: autres champs Pennylane optionnels (ex. {"vat_number": "FR…",
+                "reg_no": "123456789", "emails": ["compta@exemple.fr"]}).
+        """
+        return _client().create_supplier(name, **(fields or {}))
+
+    @mcp.tool()
     def pennylane_transactions(max_pages: Optional[int] = None,
                                period_start: Optional[str] = None,
                                period_end: Optional[str] = None,

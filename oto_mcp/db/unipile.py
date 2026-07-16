@@ -250,6 +250,28 @@ def resolve_unipile_pending(nonce: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def list_unipile_pending_for_sub(sub: str) -> list[dict]:
+    """Pendings VIVANTS (<1h) d'un `sub` → `[{nonce, org_id, provider,
+    platform_seat, created_at}]`, du plus ancien au plus récent. Base de la
+    réconciliation poll-and-bind (le webhook hosted-auth v2 n'étant pas livré)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT nonce, org_id, provider, platform_seat, created_at "
+            "FROM unipile_pending WHERE sub = %s "
+            "AND created_at >= NOW() - INTERVAL '1 hour' ORDER BY created_at",
+            (sub,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def bound_unipile_account_ids() -> set:
+    """Tous les `account_id` déjà liés (toutes orgs/subs) — pour exclure un compte
+    déjà attribué lors de la réconciliation (jamais rebinder un siège d'un tiers)."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT DISTINCT account_id FROM unipile_accounts").fetchall()
+    return {r["account_id"] for r in rows}
+
+
 def backfill_unipile_member_scope() -> dict:
     """One-shot idempotent (boot, ADR 0033 B4) : `unipile_accounts` passe au grain
     (sub, org, provider). Historique : `org_id` = « org porteuse du SIÈGE plateforme »

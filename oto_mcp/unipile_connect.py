@@ -131,3 +131,88 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     if not url:
         raise ConnectRefused(502, "unipile_link_empty", "unipile_link_empty")
     return {"url": url, "channel": ch}
+
+
+# --- Réconciliation poll-and-bind (webhook v2 non livré) ---------------------
+# Le hosted-auth v2 ne rappelle pas notre `notify_url` (le webhook est configuré au
+# niveau de l'APPLICATION Unipile, pas par lien) et le compte ne porte pas notre
+# nonce → on ne peut pas corréler au retour du webhook. À la place : au retour de
+# connexion, on LISTE les comptes Unipile et on lie au `sub` le compte le plus
+# récent, NON déjà lié, du bon provider, créé APRÈS son pending (le floor évite de
+# rebinder un siège pré-existant d'un tiers). Idempotent, best-effort.
+
+def _parse_dt(v):
+    """Parse une date Unipile ('2026-07-16 11:00:49.019235+00') ou un datetime PG
+    en `datetime` aware (UTC par défaut). None si illisible."""
+    from datetime import datetime, timezone
+    import re as _re
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    s = str(v).strip()
+    if "T" not in s and " " in s:
+        s = s.replace(" ", "T", 1)
+    # normaliser un offset "+00" / "+0000" en "+00:00" (fromisoformat 3.10 strict)
+    m = _re.search(r'([+-]\d{2})(\d{2})?$', s)
+    if m and ":" not in s[m.start():]:
+        s = s[:m.start()] + m.group(1) + ":" + (m.group(2) or "00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def reconcile_pending(sub: str) -> dict:
+    """Lie le(s) compte(s) fraîchement connecté(s) par `sub` sans dépendre du
+    webhook. No-op si pas de pending / pas de clé / pas de nouveau compte.
+    Renvoie `{bound: bool, accounts: [{account_id, name, org_id}]}`."""
+    from datetime import timedelta
+    pendings = db.list_unipile_pending_for_sub(sub)
+    if not pendings:
+        return {"bound": False, "accounts": []}
+    try:
+        rc = access.resolve_credential("unipile", want="auto", sub=sub,
+                                       emit_on_failure=False)
+    except McpError:
+        return {"bound": False, "accounts": []}
+    from oto.tools.unipile import make_unipile_client
+    dsn = None if rc.is_platform else rc.config.get("dsn")
+    client = make_unipile_client(api_key=rc.key, dsn=dsn)
+    try:
+        accounts = client.list_accounts()
+    except Exception:  # noqa: BLE001 — best-effort, jamais fatal pour le statut
+        logger.warning("reconcile unipile: list_accounts échoué", exc_info=True)
+        return {"bound": False, "accounts": []}
+    taken = db.bound_unipile_account_ids()
+    bound = []
+    for pend in pendings:
+        provider = (pend.get("provider") or "LINKEDIN").upper()
+        floor = _parse_dt(pend.get("created_at"))
+        cand = []
+        for a in accounts:
+            aid = a.get("id")
+            if not aid or aid in taken:
+                continue
+            if (a.get("provider") or a.get("type") or "").upper() != provider:
+                continue
+            created = _parse_dt(a.get("created_at"))
+            # créé après le pending (marge 5 min d'horloge) ; date illisible → on garde
+            if floor is None or created is None or created >= floor - timedelta(minutes=5):
+                cand.append((created, a))
+        if not cand:
+            continue
+        from datetime import datetime, timezone
+        cand.sort(key=lambda t: t[0] or datetime.min.replace(tzinfo=timezone.utc))
+        chosen = cand[-1][1]
+        db.set_unipile_account(sub, chosen["id"], account_name=chosen.get("name"),
+                               org_id=pend["org_id"], provider=provider,
+                               platform_seat=bool(pend.get("platform_seat")))
+        db.resolve_unipile_pending(pend["nonce"])
+        taken.add(chosen["id"])
+        bound.append({"account_id": chosen["id"], "name": chosen.get("name"),
+                      "org_id": pend["org_id"]})
+        logger.info("reconcile unipile: bound sub=%s account_id=%s org=%s",
+                    sub, chosen["id"], pend["org_id"])
+    return {"bound": bool(bound), "accounts": bound}

@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+from fastmcp.exceptions import NotFoundError
 from mcp.shared.exceptions import McpError
 from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST
 from pydantic import ValidationError
@@ -89,13 +90,45 @@ def _is_arg_validation_error(exc) -> bool:
     return False
 
 
+_UNKNOWN_TOOL = re.compile(r"Unknown tool: '([^']+)'")
+
+
+def _unknown_tool_name(exc) -> Optional[str]:
+    """Nom de l'outil si la chaîne porte le refus de dispatch fastmcp « Unknown
+    tool » — l'outil n'est pas monté dans CETTE session (connecteur non installé,
+    sélection ADR 0019/0050, ou tool masqué). La visibilité filtre `tools/list`,
+    pas `tools/call` : un agent peut toujours TENTER un nom (il le déduit d'un
+    ref d'instance, du catalogue, d'une conversation) → le refus serveur doit
+    être actionnable, pas un 500 opaque (vécu 2026-07-16, signaux #224/#225 :
+    deux agents ont conclu à un bug credential). None sinon."""
+    for e in _chain(exc):
+        if isinstance(e, NotFoundError):
+            m = _UNKNOWN_TOOL.search(str(e))
+            if m:
+                return m.group(1)
+    return None
+
+
+def _connector_of_tool(name: str) -> Optional[str]:
+    """Connecteur propriétaire du namespace de `name`, si le registre le connaît.
+    Import paresseux — la taxonomie reste importable seule (et sans cycle)."""
+    try:
+        from . import providers
+        from .tool_visibility import namespace_of
+        con = providers.connector_for_namespace(namespace_of(name))
+        return con.name if con else None
+    except Exception:
+        return None
+
+
 def _is_expected_error(exc) -> bool:
     """Erreur gérée, à NE PAS reporter à Sentry : 4xx amont OU refus d'entrée/config
-    user OU args rejetés. Les vraies exceptions code (5xx, KeyError, InvalidTag…)
-    restent reportées."""
+    user OU args rejetés OU outil non monté (condition de toolbox, pas un bug).
+    Les vraies exceptions code (5xx, KeyError, InvalidTag…) restent reportées."""
     return (_is_managed_connector_error(exc)
             or _is_user_input_error(exc)
-            or _is_arg_validation_error(exc))
+            or _is_arg_validation_error(exc)
+            or _unknown_tool_name(exc) is not None)
 
 
 # --- Enveloppe d'erreur rendue à l'agent (D2) --------------------------------
@@ -173,6 +206,24 @@ def classify(exc) -> ErrorInfo:
         return ErrorInfo("invalid_input", False,
                          "Arguments invalides — vérifie les paramètres de l'outil.")
 
+    # (2b) Refus de dispatch fastmcp : l'outil est enregistré côté serveur mais pas
+    # monté dans CETTE session (connecteur non installé / masqué). Rendu actionnable
+    # avec les deux voies : `oto_call` (immédiat, sans installation — ADR 0036) ou
+    # l'installation du connecteur. Sans ça : « Erreur interne du serveur ».
+    name = _unknown_tool_name(exc)
+    if name:
+        con = _connector_of_tool(name)
+        if con:
+            return ErrorInfo(
+                "tool_not_mounted", False,
+                f"L'outil `{name}` n'est pas monté dans ta session : le connecteur "
+                f"`{con}` n'est pas installé dans ta toolbox (ou l'outil y est masqué).",
+                f"appelle-le immédiatement via oto_call(name='{name}', args={{…}}) ; "
+                f"ou installe le connecteur — oto_connector(op='select', name='{con}') "
+                f"— et ouvre une nouvelle conversation pour le voir listé")
+        return ErrorInfo("unknown_tool", False, f"Outil `{name}` inconnu.",
+                         "vérifie le nom exact avec oto_list_my_tools")
+
     # (3) Statut HTTP amont.
     sc = upstream_status_in_chain(exc)
     if sc is not None:
@@ -210,6 +261,9 @@ def classify(exc) -> ErrorInfo:
 
 
 def jsonrpc_code(info: ErrorInfo) -> int:
-    """Code JSON-RPC de la `McpError` rendue : INVALID_PARAMS pour un refus d'entrée,
-    INTERNAL_ERROR sinon (le discriminant fin vit dans `data.oto.code`)."""
-    return INVALID_PARAMS if info.code == "invalid_input" else INTERNAL_ERROR
+    """Code JSON-RPC de la `McpError` rendue : INVALID_PARAMS pour un refus d'entrée
+    (arguments, outil non monté/inconnu — l'agent doit changer son APPEL, pas
+    réessayer), INTERNAL_ERROR sinon (le discriminant fin vit dans `data.oto.code`)."""
+    return (INVALID_PARAMS
+            if info.code in ("invalid_input", "tool_not_mounted", "unknown_tool")
+            else INTERNAL_ERROR)

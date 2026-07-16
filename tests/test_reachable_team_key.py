@@ -4,7 +4,9 @@ Vécu 2026-07-16 (Zoho / movinmotion) : la clé vivait sur l'équipe sales (3 me
 0 actif) → la cascade ne résout que le groupe ACTIF, l'user voyait « pas de clé »
 sec et le drawer un faux message RBAC. Couvre :
 - `access.reachable_team_key` : équipe dont le sub est membre + secret présent ;
-- `_team_key_hint` injecté dans les erreurs « rien ne résout » de la résolution ;
+- `access.reachable_instances` + `_reachable_hint` : les instances à portée
+  (équipes membres + autres orgs) remontées dans les erreurs « rien ne résout »,
+  geste de pin per-call (`group=`/`org=`/`instance=`) en tête ;
 - `status_for` : miroir de cascade des providers `fields` (group/org, ex-user-only)
   + champ `team_key_group` quand mode=forbidden.
 """
@@ -19,11 +21,13 @@ SALES = {"group_id": 2, "org_id": 35, "name": "sales",
          "group_role": "group_member", "is_active": False, "joined_at": "2026-07-03"}
 
 
-def _wire_reachable(monkeypatch, *, groups=(SALES,), secret_groups=(2,)):
+def _wire_reachable(monkeypatch, *, groups=(SALES,), secret_groups=(2,), orgs=()):
     monkeypatch.setattr(access.group_store, "list_groups_for_user",
                         lambda sub, org_id=None: list(groups))
     monkeypatch.setattr(access.group_store, "has_group_secret",
                         lambda gid, prov: gid in secret_groups)
+    monkeypatch.setattr(access.org_store, "list_orgs_for_user",
+                        lambda sub: list(orgs))
 
 
 # --- reachable_team_key --------------------------------------------------------
@@ -57,6 +61,20 @@ def test_reachable_team_key_best_effort_on_db_error(monkeypatch):
 
 # --- erreur actionnable de résolution ------------------------------------------
 
+def test_reachable_instances_lists_teams_and_other_orgs(monkeypatch):
+    _wire_reachable(monkeypatch,
+                    orgs=[{"org_id": 35, "name": "movinmotion"},
+                          {"org_id": 167, "name": "Movinmotion Test"}])
+    monkeypatch.setattr(access.org_store, "has_org_secret",
+                        lambda oid, prov: oid == 167)
+    monkeypatch.setattr(access.db, "has_member_api_key", lambda *a, **k: False)
+    items = access.reachable_instances("u1", 35, "zoho")
+    assert {"kind": "group", "id": 2, "name": "sales"} in items
+    assert {"kind": "org", "id": 167, "name": "Movinmotion Test"} in items
+    # l'org ambiante (35) n'est jamais listée : elle est déjà dans la cascade
+    assert not any(i["kind"] == "org" and i["id"] == 35 for i in items)
+
+
 def test_resolution_failure_mentions_reachable_team(monkeypatch):
     monkeypatch.setattr(access, "require_connector_access", lambda *a, **k: None)
     monkeypatch.setattr(access.session_org, "current_call_instance", lambda: None)
@@ -69,8 +87,30 @@ def test_resolution_failure_mentions_reachable_team(monkeypatch):
     _wire_reachable(monkeypatch)
     with pytest.raises(McpError) as e:
         access._resolve_credential_impl("zoho", "byo", "u1")
+    # le geste per-call (jeton d'appel) d'abord, le ref d'instance en repli
+    assert "group=2" in str(e.value)
     assert "sales" in str(e.value)
-    assert "group:2:zoho" in str(e.value)
+    assert "instance=group:2:zoho" in str(e.value)
+
+
+def test_resolution_failure_lists_other_org(monkeypatch):
+    monkeypatch.setattr(access, "require_connector_access", lambda *a, **k: None)
+    monkeypatch.setattr(access.session_org, "current_call_instance", lambda: None)
+    monkeypatch.setattr(access, "project_pinned_instance", lambda prov: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: 35)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(access.db, "get_member_api_key", lambda *a, **k: None)
+    monkeypatch.setattr(access.credentials_store, "list_accounts", lambda *a, **k: [])
+    monkeypatch.setattr(access.org_store, "get_org_secret", lambda oid, prov: None)
+    _wire_reachable(monkeypatch, secret_groups=(),
+                    orgs=[{"org_id": 167, "name": "Movinmotion Test"}])
+    monkeypatch.setattr(access.org_store, "has_org_secret",
+                        lambda oid, prov: oid == 167)
+    monkeypatch.setattr(access.db, "has_member_api_key", lambda *a, **k: False)
+    with pytest.raises(McpError) as e:
+        access._resolve_credential_impl("zoho", "byo", "u1")
+    assert "org=167" in str(e.value)
+    assert "Movinmotion Test" in str(e.value)
 
 
 def test_resolution_failure_plain_without_team(monkeypatch):
@@ -85,7 +125,7 @@ def test_resolution_failure_plain_without_team(monkeypatch):
     _wire_reachable(monkeypatch, secret_groups=())
     with pytest.raises(McpError) as e:
         access._resolve_credential_impl("zoho", "byo", "u1")
-    assert "NB :" not in str(e.value)
+    assert "à portée" not in str(e.value)
 
 
 # --- status_for : miroir cascade des providers fields + team_key_group ---------
@@ -93,6 +133,7 @@ def test_resolution_failure_plain_without_team(monkeypatch):
 def _wire_status(monkeypatch, *, member=False, group_secret=False, org_secret=False,
                  active_group=None):
     monkeypatch.setattr(access, "get_user_role", lambda sub: "member")
+    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: None)
     monkeypatch.setattr(access.db, "has_member_api_key",
                         lambda sub, org, prov: member)
     monkeypatch.setattr(access.db, "get_usage_today", lambda sub, prov: 0)

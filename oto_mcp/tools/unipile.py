@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,6 +30,19 @@ _FEED_NS = "linkedin-feed"          # namespace datastore per-user
 _FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
 _FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
 _FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
+
+
+def _canonical_li_identifier(identifier: str) -> str:
+    """Canonicalise un `public_identifier` LinkedIn (vanity slug) : LinkedIn le
+    génère TOUJOURS en ASCII (translittère les accents à la création, p. ex.
+    `nicolas-chéhanne` → `nicolas-chehanne`). Un slug accentué saisi par l'agent
+    fait renvoyer à l'API Unipile un 403 « Insufficient permissions » TROMPEUR
+    (#180) → on retire les diacritiques avant l'appel. No-op sur un slug déjà ASCII
+    ou un provider_id opaque (`ACoAA…`, sans accent) — idempotent."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", identifier)
+        if not unicodedata.combining(c)
+    )
 
 
 def _feed_ttl_seconds() -> int:
@@ -110,14 +124,23 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
     `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
     contexte view-as/session du requérant (anti-fuite, cf. access._UNSET).
-    Scope membre (ADR 0033 B4) : les canaux montrés = ceux rattachés à l'org de
-    contexte (les bindings des autres orgs n'existent pas ici)."""
+    Scope membre (ADR 0033 B4) : les canaux liés à l'org de contexte, PLUS — si cette
+    org résout via la clé PLATEFORME — le siège plateforme cross-org (#221 : un compte
+    hébergé est par-personne, il suit le sub dans toutes ses orgs)."""
     o = access.current_org(sub) if org is access._UNSET else org
-    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)
-             if a.get("org_id") == o}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
+    all_accts = db.list_unipile_accounts(sub)
+    accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
+    # Siège plateforme cross-org (#221) : si l'org de contexte résout via la clé
+    # PLATEFORME **et** que l'option y est ouverte (usable), on montre le siège hébergé
+    # de la personne (le plus récent) pour les canaux non liés ici. Un compte BYO d'une
+    # autre org reste apparié à sa clé (exclu). Sans option → pas de faux « connecté ».
+    if mode == "platform" and subscribed:
+        for a in sorted((x for x in all_accts if x.get("platform_seat")),
+                        key=lambda x: str(x.get("connected_at") or ""), reverse=True):
+            accts.setdefault(a["provider"], a)
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
@@ -368,7 +391,7 @@ def register(mcp: FastMCP) -> None:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
         """
-        return unipile_client().get_profile(identifier, sections=sections)
+        return unipile_client().get_profile(_canonical_li_identifier(identifier), sections=sections)
 
     @mcp.tool()
     def unipile_company(identifier: str) -> dict:
@@ -377,7 +400,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             identifier: slug ou id de la page société.
         """
-        return unipile_client().get_company(identifier)
+        return unipile_client().get_company(_canonical_li_identifier(identifier))
 
     @mcp.tool()
     def unipile_chats(limit: int = 20, cursor: Optional[str] = None,

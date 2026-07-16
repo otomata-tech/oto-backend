@@ -83,11 +83,15 @@ def _google_select(sub: str, identity_id: str) -> dict:
 
 def _own_unipile_account_id(sub: str, provider: str) -> str | None:
     """Compte Unipile connecté PROPRE de `sub` sur ce canal — org de contexte
-    d'abord, puis (issue #172, piste A) l'org de mon instance PERSONNELLE cross-org.
-    Un compte de messagerie hébergé étant PAR-PERSONNE (`personal_cross_org`), mon
-    LinkedIn connecté dans une autre org me suit ici : le fallback vise la MÊME org
-    que la clé qui résout (`access.personal_instance_org`) → clé et compte restent
-    appariés (pas de clé d'ici + compte de là-bas). None si aucun."""
+    d'abord, puis (connecteur PAR-PERSONNE, `personal_cross_org`) un fallback
+    cross-org. Deux cas de cross-org :
+    - **BYO** (#172) : la clé membre me suit dans une autre org → je prends le compte
+      dans la MÊME org que la clé (`personal_instance_org`) → clé et compte appariés ;
+    - **siège plateforme** (#221) : pas de clé membre à suivre, mais si l'org de
+      contexte résout via la clé PLATEFORME partagée (org-agnostique), mon siège
+      hébergé me suit dans toutes mes orgs (`db.any_unipile_account_id`). Le garde
+      `mode == 'platform'` évite de renvoyer un siège plateforme sous une clé BYO
+      d'org (où il ne matcherait pas). None si aucun."""
     from . import access, connectors, db
     org = access.current_org(sub)
     acc = db.get_unipile_account_id(sub, org, provider)
@@ -96,7 +100,15 @@ def _own_unipile_account_id(sub: str, provider: str) -> str | None:
     if connectors.is_personal_cross_org("unipile"):
         pio = access.personal_instance_org(sub, "unipile", exclude_org=org)
         if pio is not None:
-            return db.get_unipile_account_id(sub, pio, provider)
+            acc = db.get_unipile_account_id(sub, pio, provider)
+            if acc:
+                return acc
+        # Siège plateforme cross-org (#221) — uniquement si l'org de contexte résout
+        # BIEN via la clé plateforme (le siège n'est utilisable que sous elle).
+        if access.credential_mode_for(sub, "unipile") == "platform":
+            acc = db.any_unipile_account_id(sub, provider)
+            if acc:
+                return acc
     return None
 
 

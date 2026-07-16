@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, file_content
 
 
 def register(mcp: FastMCP) -> None:
@@ -111,6 +111,35 @@ def register(mcp: FastMCP) -> None:
         result = client.history(channel, limit=limit, cursor=cursor)
         _record_if_platform(is_platform)
         return result
+
+    @mcp.tool()
+    def slack_download_file(file_id: str) -> dict:
+        """Download a file attached to a Slack message, by its file id.
+
+        Get `file_id` from the `files[]` of a message returned by
+        `slack_read_history`. The response depends on the file:
+        - **small text** (Markdown/JSON/CSV/plain, ≤256 KB) → returned INLINE:
+          `{encoding: "text", content}` — read it directly.
+        - **binary or large** (zip, image, PDF…) → uploaded to temporary storage
+          and returned as a short-lived signed URL: `{encoding: "url", url,
+          expires_in}` (seconds). Fetch the URL to get the bytes.
+
+        Args:
+            file_id: Slack file id (e.g. F0BG…), from a message's `files[].id`.
+
+        Returns {filename, mimeType, size, encoding, content|url, expires_in?}.
+        """
+        client, is_platform = _client()
+        blob = client.fetch_file(file_id)
+        sub = access.current_user_sub_or_raise()
+        try:
+            out = file_content.render_for_agent(
+                blob["data"], blob["filename"], blob["mimetype"],
+                sub=sub, prefix="slack-files")
+        except file_content.MediaUnavailable as e:
+            raise ValueError(str(e))
+        _record_if_platform(is_platform)
+        return out
 
     @mcp.tool()
     def slack_find_user_by_email(email: str) -> dict:

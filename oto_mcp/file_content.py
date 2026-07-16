@@ -36,3 +36,39 @@ def as_text(data: bytes, mime: str) -> Optional[str]:
     if looks_text or "\x00" not in s:
         return s
     return None
+
+
+class MediaUnavailable(RuntimeError):
+    """Le stockage temporaire (S3) requis pour servir un binaire/gros fichier en
+    URL signée est indisponible — l'appelant traduit en erreur de tool."""
+
+
+def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix: str) -> dict:
+    """Rendu d'un contenu de fichier pour un agent MCP — **home unique** de la
+    règle inline-vs-URL (ex-duplication gmail/drive/slack).
+
+    - petit contenu textuel (≤ `INLINE_TEXT_CAP`) → INLINE
+      `{encoding: "text", content}` (l'agent le lit) ;
+    - binaire ou volumineux → dépôt privé S3 + **URL signée temporaire**
+      `{encoding: "url", url, expires_in}` (`media_store.upload_private`).
+
+    `prefix` = préfixe de clé S3 (`gmail-attachments`, `drive-files`,
+    `slack-files`…) ; `sub` = propriétaire du dépôt. **Appel BLOQUANT** (I/O S3) :
+    invoquer depuis un handler sync (threadpool) ou via `asyncio.to_thread`.
+    Lève `MediaUnavailable` si le stockage est absent (S3 non configuré).
+    """
+    out = {"filename": filename, "mimeType": mime, "size": len(data)}
+    text = as_text(data, mime)
+    if text is not None and len(data) <= INLINE_TEXT_CAP:
+        out.update(encoding="text", content=text)
+        return out
+    from . import media_store
+    try:
+        url = media_store.upload_private(prefix, sub, data, mime, filename)
+    except media_store.MediaError as e:
+        raise MediaUnavailable(
+            f"Fichier binaire/volumineux ({len(data)} octets) : stockage temporaire "
+            f"indisponible pour produire une URL ({e}). Configurer OTO_MCP_S3_*."
+        )
+    out.update(encoding="url", url=url, expires_in=media_store.presign_expiry())
+    return out

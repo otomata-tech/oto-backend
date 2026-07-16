@@ -80,22 +80,13 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             raise _bad(str(e))
         data, filename, mime = f["data"], f["filename"], f["mimeType"]
-        out = {"filename": filename, "mimeType": mime, "size": len(data)}
-        text = file_content.as_text(data, mime)
-        if text is not None and len(data) <= file_content.INLINE_TEXT_CAP:
-            out.update(encoding="text", content=text)
-            return out
-        from .. import media_store
         sub = access.current_user_sub_or_raise()
         try:
-            url = await asyncio.to_thread(
-                media_store.upload_private, "drive-files", sub, data, mime, filename)
-        except media_store.MediaError as e:
-            raise _bad(
-                f"Fichier binaire/volumineux ({len(data)} octets) : stockage "
-                f"temporaire indisponible pour produire une URL ({e}).")
-        out.update(encoding="url", url=url, expires_in=media_store.presign_expiry())
-        return out
+            return await asyncio.to_thread(
+                file_content.render_for_agent, data, filename, mime,
+                sub=sub, prefix="drive-files")
+        except file_content.MediaUnavailable as e:
+            raise _bad(str(e))
 
     @mcp.tool()
     async def drive_metadata(file_id: str, account: Optional[str] = None) -> dict:

@@ -117,27 +117,13 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             raise _bad(str(e))
         data, filename, mime = att["data"], att["filename"], att["mimeType"]
-        out = {"filename": filename, "mimeType": mime, "size": len(data)}
-
-        text = file_content.as_text(data, mime)
-        if text is not None and len(data) <= file_content.INLINE_TEXT_CAP:
-            out.update(encoding="text", content=text)
-            return out
-
-        # binaire ou trop gros → stockage temporaire + URL signée
-        from .. import media_store
         sub = access.current_user_sub_or_raise()
         try:
-            url = await asyncio.to_thread(
-                media_store.upload_private, "gmail-attachments", sub, data, mime, filename)
-        except media_store.MediaError as e:
-            raise _bad(
-                f"Pièce jointe binaire/volumineuse ({len(data)} octets) : stockage "
-                f"temporaire indisponible pour produire une URL ({e}). "
-                "Configurer OTO_MCP_S3_* pour récupérer ce type de fichier."
-            )
-        out.update(encoding="url", url=url, expires_in=media_store.presign_expiry())
-        return out
+            return await asyncio.to_thread(
+                file_content.render_for_agent, data, filename, mime,
+                sub=sub, prefix="gmail-attachments")
+        except file_content.MediaUnavailable as e:
+            raise _bad(str(e))
 
     @mcp.tool()
     async def gmail_list_drafts(max_results: int = 20, account: Optional[str] = None) -> dict:

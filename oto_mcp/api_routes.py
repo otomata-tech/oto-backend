@@ -1063,12 +1063,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 return _json_error(
                     request, 409, "account_required",
                     "Ce connecteur a déjà des comptes nommés — précise `account`.")
+        # Verify-avant-persist (#106) : si le connecteur expose une sonde, on TESTE la
+        # connexion avec les champs candidats AVANT d'écrire — un credential qui
+        # n'authentifie pas n'est jamais persisté (l'erreur remonte à la SAISIE, pas au
+        # 1er appel d'outil, plus tard et hors contexte). `config` vide : les
+        # connecteurs de ce chemin (zoho/brevo…) portent tout dans `fields` ; le dsn
+        # unipile passe par un flux dédié, pas api_key_save. Sans sonde → pose directe.
+        from . import connector_verify
+        verified = False
+        if connector_verify.supports(provider):
+            try:
+                await connector_verify.run(provider, fields)
+            except McpError as e:
+                return _json_error(request, 400, "verify_failed", e.error.message)
+            except Exception as e:  # noqa: BLE001 — l'échec d'auth EST le résultat
+                return _json_error(request, 400, "verify_failed", str(e))
+            verified = True
         secret = credentials_store.pack_secret(provider, fields)
+        meta = None
+        if verified:
+            from datetime import datetime, timezone
+            meta = {"verified_at": datetime.now(timezone.utc).isoformat()}
         credentials_store.set_credential(
             credentials_store.MEMBER, eid, provider, secret, set_by=sub,
-            account=account)
+            account=account, meta=meta)
         return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
-                               "account": account})
+                               "account": account, "verified": verified})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

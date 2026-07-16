@@ -93,7 +93,7 @@ grants/quota, platform keys, providers byo-only).
 > = seam `current_org`, à la pose comme à la résolution.
 > **Détail (helpers db, state HMAC google, migration) : `docs/roles-and-resolution.md` §Scope MEMBRE**.
 
-**Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
+**Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only). **La cascade elle-même = walker unique `access.walk_cascade`** (sonde présence /api/me vs fetch résolution) — ne jamais la recopier dans un call-site, contrat gardé par `test_cascade_walker.py` ; détail : `docs/roles-and-resolution.md` §Walker.
 
 ## REST API (consommée par le dashboard / oto.ninja)
 
@@ -260,6 +260,10 @@ l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
 backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = doctrine oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
+Un appel sur un tool HORS toolbox de session (la visibilité filtre `tools/list`,
+pas `tools/call`) = erreur **GÉRÉE actionnable** `tool_not_mounted`
+(`error_taxonomy` : oto_call immédiat / `oto_connector op=select`), droppée de
+Sentry — plus jamais un « Erreur interne du serveur » opaque (vécu 16/07, #224/#225).
 
 ## Onboarding = un projet « Découverte » (ADR 0032 §7)
 

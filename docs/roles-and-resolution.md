@@ -37,13 +37,29 @@ Le rôle (`users.role`) décide de l'accès à l'admin UI, sur **3 paliers**
 > Les `admin` historiques (= tout-puissants) ont été migrés → `super_admin`
 > (`scripts/migrate_admin_to_super.py`). Un `admin` aujourd'hui = opérateur.
 
-L'accès aux clés API se décide par `user_grants` explicites (admin grante
-manuellement via `/api/admin/users/{sub}/grants/{key_id}`). Résolution par
-appel (`resolve_api_key`) :
+Résolution par appel (`resolve_api_key` / `resolve_credential`) :
 
-1. User key posée sur `/account` → prise directement, sans quota.
-2. Grant explicite dans `user_grants` → platform key avec quota.
-3. Ni l'un ni l'autre → McpError actionnable pointant vers `/account`.
+1. Clé **membre** (sub, org de contexte — ADR 0033) → directe, sans quota.
+2. Instance **personnelle cross-org** (#172, providers `personal_cross_org`).
+3. Secret d'**équipe active**, puis d'**org active** (providers org-shareables).
+4. Instance **plateforme** (grant/free-tier, ADR 0044 §F) avec quota.
+5. Rien → McpError actionnable + **instances à portée** (voir walker ci-dessous).
+
+## Walker de cascade — source unique (2026-07-16)
+
+La cascade ci-dessus vit dans **`access.walk_cascade`** (générateur paramétré
+par sonde : `PRESENCE_PROBE` sans déchiffrement pour `/api/me`, `FETCH_PROBE`
+qui ne déchiffre que le gagnant). Les 6 consommateurs (`_resolve_credential_impl`,
+`credential_mode_for`, `status_for` ×2, `_resolve_credential_anon`,
+`connector_resolvable_for_org`) en sont des traductions minces — **ne jamais
+recopier la cascade dans un call-site** : chaque copie divergeait et faisait
+mentir une surface (vécu 16/07). Contrat gardé par `tests/test_cascade_walker.py`
+(ordre des barreaux, gates, accord présence/fetch). Les pins (`instance=`/
+`project=`, ADR 0038) court-circuitent AVANT la marche ; `group` se passe en
+lazy (callable) côté fetch. Échec « rien ne résout » : l'erreur remonte les
+**instances à portée** (`access.reachable_instances` — équipes dont le sub est
+membre, autres orgs) avec le geste per-call en tête (`group=`/`org=`/`instance=`) ;
+le drawer reçoit le même signal via `status_for.team_key_group`.
 
 Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
 au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`

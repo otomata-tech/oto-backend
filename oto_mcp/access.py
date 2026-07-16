@@ -744,6 +744,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             message=(
                 f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
                 f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+                + _team_key_hint(sub, active_org, provider)
             ),
         ))
 
@@ -768,6 +769,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                 f"Aucune clé `{provider}` configurée pour toi. Soit pose "
                 f"ta propre clé sur {_ACCOUNT_URL} (section {provider.capitalize()}), "
                 f"soit demande à un admin de te grant un accès à une clé plateforme."
+                + _team_key_hint(sub, active_org, provider)
             ),
         ))
 
@@ -1076,6 +1078,38 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
     return None
 
 
+def reachable_team_key(sub: str, org: Optional[int], provider: str) -> Optional[dict]:
+    """Équipe de `org` dont `sub` est MEMBRE et qui détient un secret `provider`.
+    La cascade ne lit que le groupe ACTIF : une clé d'équipe non activée existe
+    « à portée » mais ne résout pas — invisible pour l'user (vécu Zoho/movinmotion
+    2026-07-16 : clé sur l'équipe sales, 3 membres, 0 actif → « pas de clé » sec).
+    Sert l'erreur actionnable de résolution + le hint `team_key_group` de
+    `status_for` (drawer). Best-effort : ne lève jamais (un hint ne casse pas
+    une résolution ni un /api/me)."""
+    if org is None or provider not in ORG_SHAREABLE_PROVIDERS:
+        return None
+    try:
+        for g in group_store.list_groups_for_user(sub, org):
+            if group_store.has_group_secret(g["group_id"], provider):
+                return {"id": g["group_id"], "name": g["name"]}
+    except Exception:
+        return None
+    return None
+
+
+def _team_key_hint(sub: str, org: Optional[int], provider: str) -> str:
+    """Suffixe actionnable pour les erreurs « rien ne résout » : pointe la clé
+    d'équipe à portée quand il y en a une. Chaîne vide sinon."""
+    tk = reachable_team_key(sub, org, provider)
+    if not tk:
+        return ""
+    return (
+        f" NB : une clé `{provider}` existe sur ton équipe « {tk['name']} » — "
+        f"active-la (oto_use_group group_id={tk['id']}) ou passe par un projet "
+        f"qui binde son instance (ref group:{tk['id']}:{provider})."
+    )
+
+
 def credential_mode_for(sub: str, provider: str, *,
                         org: "int | None | object" = _UNSET,
                         group: "int | None | object" = _UNSET) -> str:
@@ -1256,25 +1290,47 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             # limit 0 = illimité (convention default_quota) → None pour que l'UI
             # affiche « ∞ », pas « /0 » (qui se lit comme un quota épuisé).
             "quota_daily": (limit or None) if grant else None,
+            # Clé d'équipe « à portée » (membre d'une équipe qui a le secret, sans
+            # l'avoir active) : rien ne résout mais une clé existe → l'UI doit le
+            # dire au lieu d'un « pas de clé » sec.
+            "team_key_group": (reachable_team_key(sub, active_org, provider)
+                               if mode == "forbidden" else None),
         }
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
     # multi-champs, ADR 0011) : mounts basic_auth (planity) ET clients in-process
-    # multi-secrets (silae). Pas de quota ni de grant — le credential EST le grant
-    # (cf. resolve_mount_token / resolve_credential_fields). `user` si posé, sinon
-    # `forbidden`. Permet au dashboard d'afficher « configuré / remove » comme une clé.
+    # multi-secrets (silae, zoho). Pas de quota ni de grant — le credential EST le
+    # grant (cf. resolve_mount_token / resolve_credential_fields). Miroir de la
+    # cascade byo user > groupe actif > org (un provider `fields` org-shareable
+    # résout par le secret d'équipe/org — l'ex-check user-only affichait
+    # `forbidden` avec une clé d'org qui résolvait, l'UI mentait ; corrigé
+    # 2026-07-16). Permet au dashboard d'afficher « configuré / remove ».
     for c in connectors.REGISTRY.values():
         if (c.name in out["providers"] or not c.secret_fields
                 or "byo_user" not in c.auth_modes):
             continue
-        has = db.has_member_api_key(sub, active_org, c.name)
+        shareable = c.name in ORG_SHAREABLE_PROVIDERS
+        user_has = db.has_member_api_key(sub, active_org, c.name)
+        group_has = (
+            group_store.has_group_secret(active_group, c.name)
+            if active_group is not None and shareable else False
+        )
+        org_has = (
+            org_store.has_org_secret(active_org, c.name)
+            if active_org is not None and shareable else False
+        )
+        mode = ("user" if user_has else "group" if group_has
+                else "org" if org_has else "forbidden")
         out["providers"][c.name] = {
-            "mode": "user" if has else "forbidden",
-            "user_key_configured": has,
-            "org_secret_configured": False,
+            "mode": mode,
+            "user_key_configured": user_has,
+            "group_secret_configured": group_has,
+            "org_secret_configured": org_has,
             "platform_key_label": None,
             "quota_used_today": 0,
             "quota_daily": None,
+            "team_key_group": (reachable_team_key(sub, active_org, c.name)
+                               if mode == "forbidden" else None),
         }
 
     # Connecteurs à SESSION navigateur (`personal_session`, secret_kind="cookie" :

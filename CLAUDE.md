@@ -462,6 +462,15 @@ bâti), `foncier_comparables_app` (ventes comparables DVF autour d'une adresse),
 tools JSON ; rendu **défensif** (colonnes dérivées des clés réelles) pour ne pas
 dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 
+Depuis, deux apps **spine** (hors gate) : `data_app` (datastore — table + fiche v2
+schema-aware, `tools/datastore.py`) et `oto_doc_app` (pages/docs + KB, lecture
+seule, `tools/docs_app.py`). ⚠️ Gotcha récurrent : **pas d'annotation de retour
+`-> Card`** sur un tool `app=True` (hints résolus contre les globals du module au
+build du schéma, or l'import prefab_ui est local à `register()` → NameError fatal
+au boot, vécu #69). **Doc consommable par les agents = guide plateforme
+`oto_mcp/guides/mcp-apps.md`** (servi par `oto_guide`, inventaire + quand app vs
+JSON + replis) — c'est la source à tenir à jour quand une app s'ajoute.
+
 ## Conventions
 
 - Nouveau connecteur = (1) un fichier `tools/<service>.py` exposant `register(mcp)`,

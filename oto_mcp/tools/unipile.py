@@ -110,14 +110,22 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
     `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
     contexte view-as/session du requérant (anti-fuite, cf. access._UNSET).
-    Scope membre (ADR 0033 B4) : les canaux montrés = ceux rattachés à l'org de
-    contexte (les bindings des autres orgs n'existent pas ici)."""
+    Scope membre (ADR 0033 B4) : les canaux liés à l'org de contexte, PLUS — si cette
+    org résout via la clé PLATEFORME — le siège plateforme cross-org (#221 : un compte
+    hébergé est par-personne, il suit le sub dans toutes ses orgs)."""
     o = access.current_org(sub) if org is access._UNSET else org
-    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)
-             if a.get("org_id") == o}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
+    all_accts = db.list_unipile_accounts(sub)
+    accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
+    # Siège plateforme cross-org (#221) : si l'org de contexte résout via la clé
+    # PLATEFORME, on montre le siège hébergé de la personne (le plus récent) pour les
+    # canaux non liés ici. Un compte BYO d'une autre org reste apparié à sa clé (exclu).
+    if mode == "platform":
+        for a in sorted((x for x in all_accts if x.get("platform_seat")),
+                        key=lambda x: str(x.get("connected_at") or ""), reverse=True):
+            accts.setdefault(a["provider"], a)
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)

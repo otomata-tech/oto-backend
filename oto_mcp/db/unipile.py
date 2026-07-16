@@ -57,6 +57,22 @@ def get_unipile_account_id(sub: str, org_id: Optional[int],
     return row["account_id"] if row else None
 
 
+def any_unipile_account_id(sub: str, provider: str = "LINKEDIN") -> Optional[str]:
+    """Siège PLATEFORME du `sub` sur ce canal dans N'IMPORTE quelle org (le plus
+    récent), ou None. Un compte hébergé est PAR-PERSONNE et vit sur la clé plateforme
+    partagée (org-agnostique) → il suit le sub cross-org (#221). Restreint à
+    `platform_seat=True` : un compte BYO reste apparié à la clé de son org
+    (`personal_instance_org`), on ne le remonte pas ici."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT account_id FROM unipile_accounts "
+            "WHERE sub = %s AND provider = %s AND platform_seat = true "
+            "ORDER BY connected_at DESC LIMIT 1",
+            (sub, provider),
+        ).fetchone()
+    return row["account_id"] if row else None
+
+
 def get_unipile_feed_synced_at(sub: str, org_id: Optional[int],
                                provider: str = "LINKEDIN") -> Optional[str]:
     """Horodatage (string ISO via row factory) du dernier sync du feed, ou None

@@ -22,6 +22,9 @@ def _wire_platform(monkeypatch, *, grants, own=None):
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
     monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, prov: None)
+    # #221 : siège plateforme cross-org (le compte propre du test EST un siège plateforme).
+    monkeypatch.setattr("oto_mcp.db.any_unipile_account_id",
+                        lambda sub, prov="LINKEDIN": (own[0]["account_id"] if own else None))
     # #172 : pas d'instance perso cross-org ici (le compte propre suffit au test).
     monkeypatch.setattr(access, "personal_instance_org",
                         lambda sub, con, exclude_org=None: None)

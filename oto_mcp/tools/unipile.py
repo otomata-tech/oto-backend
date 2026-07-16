@@ -134,9 +134,10 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     all_accts = db.list_unipile_accounts(sub)
     accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
     # Siège plateforme cross-org (#221) : si l'org de contexte résout via la clé
-    # PLATEFORME, on montre le siège hébergé de la personne (le plus récent) pour les
-    # canaux non liés ici. Un compte BYO d'une autre org reste apparié à sa clé (exclu).
-    if mode == "platform":
+    # PLATEFORME **et** que l'option y est ouverte (usable), on montre le siège hébergé
+    # de la personne (le plus récent) pour les canaux non liés ici. Un compte BYO d'une
+    # autre org reste apparié à sa clé (exclu). Sans option → pas de faux « connecté ».
+    if mode == "platform" and subscribed:
         for a in sorted((x for x in all_accts if x.get("platform_seat")),
                         key=lambda x: str(x.get("connected_at") or ""), reverse=True):
             accts.setdefault(a["provider"], a)

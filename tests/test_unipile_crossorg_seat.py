@@ -48,3 +48,12 @@ def test_status_no_seat_when_byo_mode(monkeypatch):
     monkeypatch.setattr(access, "option_open", lambda s, p, **k: True)
     monkeypatch.setattr(db, "list_unipile_accounts", lambda s: _ROWS)
     assert unipile.status_for("sub1")["channels"]["linkedin"]["connected"] is False
+
+
+def test_status_no_seat_when_not_subscribed(monkeypatch):
+    # platform mode mais option fermée → pas de faux « connecté » (carte cohérente)
+    monkeypatch.setattr(access, "current_org", lambda s: 43)
+    monkeypatch.setattr(access, "credential_mode_for", lambda s, p, **k: "platform")
+    monkeypatch.setattr(access, "option_open", lambda s, p, **k: False)
+    monkeypatch.setattr(db, "list_unipile_accounts", lambda s: _ROWS)
+    assert unipile.status_for("sub1")["channels"]["linkedin"]["connected"] is False

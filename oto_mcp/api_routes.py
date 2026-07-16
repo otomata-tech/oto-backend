@@ -1064,19 +1064,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                     request, 409, "account_required",
                     "Ce connecteur a déjà des comptes nommés — précise `account`.")
         secret = credentials_store.pack_secret(provider, fields)
-        # Version d'API portée par le credential (v1/v2 « selon la BYO ») : pour
-        # unipile, choisir v2 range {api_version, dsn} dans le meta (lu par
-        # resolve_credential → config → unipile_client / hosted-auth). Absence de
-        # meta = défaut v1 ; un re-set en v1 remet meta à {} (EXCLUDED.meta).
-        meta = None
-        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
-            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
         credentials_store.set_credential(
             credentials_store.MEMBER, eid, provider, secret, set_by=sub,
-            account=account, meta=meta)
+            account=account)
         return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
-                               "account": account,
-                               "api_version": (meta or {}).get("api_version", "v1")})
+                               "account": account})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1237,18 +1229,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not label or not api_key:
             return _json_error(request, 400, "missing_fields")
         # ADR 0044 §F : la clé plateforme est une instance scope PLATFORM du coffre unifié
-        # (fin de platform_keys). La version v1/v2 voyage dans `meta` (débloque le v2
-        # plateforme sans env global) — même forme que la clé member/org unipile.
-        meta = {}
-        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
-            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
+        # (fin de platform_keys).
         try:
             credentials_store.set_credential(credentials_store.PLATFORM, label, provider,
-                                             api_key, set_by=sub, meta=meta)
+                                             api_key, set_by=sub)
         except ValueError as e:
             return _json_error(request, 400, "invalid_platform_provider", str(e))
-        return _json(request, {"provider": provider, "label": label,
-                               "api_version": meta.get("api_version", "v1")})
+        return _json(request, {"provider": provider, "label": label})
 
     async def admin_platform_key_delete(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

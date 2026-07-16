@@ -101,20 +101,17 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
             raise ConnectRefused(429, "unipile_account_limit_reached",
                                  "Plafond de comptes hébergés atteint pour l'org.")
     from oto.tools.unipile import make_unipile_client
-    # Version d'API + DSN portés par le credential (v1/v2 selon la BYO) : le meta de
-    # la clé gagnante (`config.api_version`/`config.dsn`) décide — une clé v2 génère
-    # un lien hosted-auth v2 (base `api.unipile.com`), une clé v1 reste en v1. Repli
-    # env `OTO_UNIPILE_API_VERSION`, défaut v1.
-    dsn, api_version = None, os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"
-    if byo:  # DSN/version appariés à la clé BYO (la plateforme reste sur défaut env)
+    # DSN porté par le credential BYO gagnant (`config.dsn`) ; la plateforme reste
+    # sur le défaut oto-core (api.unipile.com).
+    dsn = None
+    if byo:
         try:
             cfg = access.resolve_credential(
                 "unipile", want="byo", sub=sub, emit_on_failure=False).config
             dsn = cfg.get("dsn")
-            api_version = cfg.get("api_version") or api_version
         except McpError:
             pass
-    client = make_unipile_client(api_key=api_key, dsn=dsn, api_version=api_version)
+    client = make_unipile_client(api_key=api_key, dsn=dsn)
     public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
     dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
     nonce = secrets.token_urlsafe(24)

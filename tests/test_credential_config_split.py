@@ -90,9 +90,8 @@ def test_resolve_credential_config_from_meta_dsn(monkeypatch):
 
 def test_resolve_credential_platform_config_from_meta(monkeypatch):
     # ADR 0044 §F : la clé plateforme EST une instance du coffre (entity_type=PLATFORM) → sa
-    # config (api_version/dsn) voyage via `meta`. Corrige le bug historique « config vide »
-    # (qui empêchait de mettre une clé plateforme en v2 sans env global).
-    meta = {"api_version": "v2", "dsn": "api.unipile.com"}
+    # config non-secrète (dsn) voyage via `meta`. Corrige le bug historique « config vide ».
+    meta = {"dsn": "api.unipile.com"}
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
     monkeypatch.setattr(access.db, "get_member_api_key", lambda s, o, p: None)
     monkeypatch.setattr(access, "current_group", lambda s: None)
@@ -110,7 +109,7 @@ def test_resolve_credential_platform_config_from_meta(monkeypatch):
     rc = access.resolve_credential("unipile", want="auto")
     assert rc.is_platform and rc.mode == "platform"
     assert rc.entity_type == access.credentials_store.PLATFORM
-    assert rc.config.get("api_version") == "v2" and rc.config.get("dsn") == "api.unipile.com"
+    assert rc.config.get("dsn") == "api.unipile.com"
 
 
 def test_resolve_credential_byo_skips_platform(monkeypatch):

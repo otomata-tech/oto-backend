@@ -1,9 +1,9 @@
 """Unipile — LinkedIn & WhatsApp hébergés (recherche / scrape / messagerie).
 
 Clé résolue par appel via `access.resolve_api_key("unipile")` (keyed, cascade
-user > org). Le dsn (`api<NN>.unipile.com:port`) et l'account_id LinkedIn sont
-résolus côté client (env `UNIPILE_DSN`, défaut api25 ; auto-résolution du 1er
-compte LINKEDIN connecté).
+user > org). Le dsn (API v2 : gateway `api.unipile.com`) et l'account_id LinkedIn
+sont résolus côté client (env `UNIPILE_DSN`, défaut api.unipile.com ;
+auto-résolution du 1er compte LINKEDIN connecté).
 
 Pourquoi à côté du connecteur browser `linkedin` : la session vit chez Unipile
 (vrai Chrome + proxy résidentiel), ce qui contourne l'empreinte TLS et
@@ -118,21 +118,10 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
-    # Version d'API de la clé RÉSOLUE (v1/v2 selon la BYO) pour l'affichage carte.
-    # Self seulement (pas de résolution cross-contexte pour un tiers) ; best-effort.
-    api_version = "v1"
-    if org is access._UNSET:
-        try:
-            api_version = access.resolve_credential(
-                "unipile", want="auto", sub=sub, emit_on_failure=False
-            ).config.get("api_version") or "v1"
-        except Exception:  # noqa: BLE001 — affichage, jamais bloquant
-            pass
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
-        "api_version": api_version,  # v1|v2 de la clé résolue (info carte)
         "channels": _channels_from(accts),
     }
 
@@ -214,26 +203,17 @@ def unipile_client(provider: str = "LINKEDIN"):
             message=f"Connecte ton compte {provider.title()} sur "
                     "https://manage.oto.cx/console/connections "
                     "avant d'utiliser ces outils."))
-    # DSN apparié à la clé BYO gagnante (chaque clé Unipile est liée à son
-    # sous-domaine), tiré de la config du credential résolu. Clé plateforme →
-    # DSN env/défaut (instance Otomata).
+    # DSN tiré de la config du credential résolu (défaut api.unipile.com côté
+    # oto-core). Clé plateforme → DSN env/défaut (instance Otomata).
     dsn = None if rc.is_platform else rc.config.get("dsn")
-    # Version d'API : v1 par défaut (prod). Opt-in v2 par la config du credential
-    # (`api_version`) — la v2 Unipile impose un compte/clé dédiés, donc la bascule
-    # suit la clé — sinon repli sur l'env `OTO_UNIPILE_API_VERSION` (bascule globale).
-    api_version = (rc.config.get("api_version")
-                   or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1")
-    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn,
-                               api_version=api_version)
+    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn)
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
     """Sonde de connexion Unipile (#133) : `list_accounts()` sur la clé résolue.
 
     Teste l'auth ET le contenu d'un coup — un endpoint compte-agnostique donc pas
-    besoin d'account_id. ⚠️ `config` (dsn/api_version appariés à la clé) est REQUIS
-    pour une clé v2 : sans lui la sonde tape l'endpoint v1 par défaut → 401 sur une
-    clé v2 pourtant valide (#194). On distingue trois cas :
+    besoin d'account_id. On distingue trois cas :
     - clé absente → message actionnable (ne devrait pas arriver : `_fields_for`
       résout le credential en amont, mais on garde le garde-fou) ;
     - clé morte / refusée → `UnipileError` (401/4xx) laissée remonter telle quelle
@@ -250,12 +230,8 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     if not api_key:
         raise ValueError("clé API Unipile absente.")
     cfg = config or {}
-    # dsn + version APPARIÉS à la clé (une clé v2 vit sur un tenant distinct) : sans
-    # ça la sonde tapait toujours le défaut v1/api25 → 401 sur toute clé v2 (#194).
-    client = make_unipile_client(
-        api_key=api_key, dsn=cfg.get("dsn"),
-        api_version=(cfg.get("api_version")
-                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
+    # dsn apparié à la clé (défaut api.unipile.com côté oto-core).
+    client = make_unipile_client(api_key=api_key, dsn=cfg.get("dsn"))
     accounts = client.list_accounts()
     if not accounts:
         raise ValueError(

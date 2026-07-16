@@ -213,7 +213,7 @@ def make_routes(
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:
         """[super_admin] Sièges de la **clé plateforme** unipile : tous les comptes
-        présents sur l'instance partagée (Otomata, api25), réconciliés avec leur
+        présents sur l'instance partagée (Otomata, api.unipile.com), réconciliés avec leur
         propriétaire oto via `unipile_accounts`. Un compte sur l'instance NON mappé =
         **orphelin** (créé puis user churné → coûte ~5 €/mois pour rien). Révèle
         l'ownership cross-user → super_admin only. Ne renvoie aucun secret."""
@@ -229,7 +229,7 @@ def make_routes(
                                            "instance_dsn": None, "orphan_count": 0})
         api_key = credentials_store.get_credential(credentials_store.PLATFORM, insts[0]["label"], "unipile")
         from oto.tools.unipile import UnipileClient
-        client = UnipileClient(api_key=api_key)  # dsn=None → env/api25 (instance plateforme)
+        client = UnipileClient(api_key=api_key)  # dsn=None → env/api.unipile.com (instance plateforme)
         try:
             instance = await asyncio.to_thread(client.list_accounts)
         except Exception as e:

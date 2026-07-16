@@ -140,15 +140,10 @@ def _unipile_client(sub: str):
     if access.credential_mode_for(sub, "unipile") not in access.BYO_MODES:
         return None  # revente (clé plateforme) → hosted-auth, pas de sélecteur
     rc = access.resolve_credential("unipile", want="byo", sub=sub)
-    import os
     from oto.tools.unipile import make_unipile_client
-    # make_unipile_client (pas UnipileClient v1 en dur) : une clé v2 vit sur un
-    # tenant/endpoint distinct → dsn + api_version appariés à la clé, sinon
-    # list_accounts() interroge le mauvais tenant (vide/erroné) (#194).
-    return make_unipile_client(
-        api_key=rc.key, dsn=rc.config.get("dsn"),
-        api_version=(rc.config.get("api_version")
-                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
+    # dsn apparié à la clé (défaut api.unipile.com côté oto-core) — une clé qui vit
+    # sur un tenant distinct porte son dsn dans la config du credential.
+    return make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"))
 
 
 def _unipile_live_status_map(sub: str) -> dict:
@@ -165,8 +160,7 @@ def _unipile_live_status_map(sub: str) -> dict:
     try:
         rc = access.resolve_credential("unipile", want="auto", sub=sub)
         from oto.tools.unipile import make_unipile_client
-        cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"),
-                                  api_version=rc.config.get("api_version", "v1"))
+        cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"))
         return {a.get("id"): (a.get("sources") or [{}])[0].get("status")
                 for a in cli.list_accounts() if a.get("id")}
     except Exception:

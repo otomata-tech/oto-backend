@@ -494,11 +494,11 @@ _REGISTRY_LIST = [
     # api_key (résolu via resolve_api_key, cascade user > org). byo_user (BYO) OU
     # byo_org (l'org pose l'abonnement Otomata, ses membres connectent leur LinkedIn
     # par hosted-auth). Dans le socle (ADR 0050) : usage cœur — l'option payante
-    # (couche 3) gate l'usage plateforme, le BYO reste libre. Le **dsn**
-    # (sous-domaine dédié `api<NN>.unipile.com:port`) est résolu côté client (env
-    # `UNIPILE_DSN`, défaut api25 = celui d'Otomata) — PAS un champ de credential
-    # tant qu'un BYO sur un autre sous-domaine n'existe pas (déféré ; single-field
-    # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
+    # (couche 3) gate l'usage plateforme, le BYO reste libre. Le **dsn** (API v2 :
+    # gateway `api.unipile.com`) est résolu côté client (env `UNIPILE_DSN`, défaut
+    # api.unipile.com = celui d'Otomata) — PAS un champ de credential tant qu'un BYO
+    # sur un autre endpoint n'existe pas (déféré ; single-field = compatible avec le
+    # stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
@@ -952,23 +952,11 @@ _REGISTRY_LIST = [
        )),
 
     # --- bridge universel (ADR 0034, amende 0003/0011) ------------------------
-    # UN connecteur générique pour tout pont vers un middleware distant qui détient
-    # le credential métier (bridge ADR 0003). L'identité du service ponté vit dans
-    # la CONFIG d'org (base_url + label, privés) — jamais dans le namespace, donc
-    # montrable au catalogue sans nom client. oto ne stocke que l'endpoint + le
-    # token M2M. Tools bridge_describe/bridge_call (namespace fixe, barreau B2).
-    _c("bridge", ["bridge"], kind="remote", auth_modes={"byo_org"},
-       secret_kind="fields",        label="Bridge",
-       help="pont universel vers ton propre service distant (middleware) : le "
-            "service détient tes credentials métier, oto ne stocke que son URL "
-            "et un token d'accès",
-       credential_fields=(
-           CredentialField("base_url", "URL du bridge", secret=False, reveal=True,
-                           help="endpoint HTTPS de ton service (ex. https://bridge.acme.com)"),
-           CredentialField("token", "Token M2M", secret=True),
-           CredentialField("label", "Nom affiché", secret=False, reveal=True,
-                           help="ex. « Back-office Acme » — visible de ta seule org"),
-       )),
+    # (Connecteur `bridge` RETIRÉ le 2026-07-16, ADR 0037 / oto-backend#108 :
+    #  subsumé par le connecteur `http` générique — un bridge n'est qu'une API HTTP
+    #  que le back-office re-expose, jointe via http_get/http_post. Le pilote MM a
+    #  migré bridge→http. Le concept « remote data-driven » (base_url sur un provider
+    #  hors registre) subsiste dans org_secret_meta, sans entrée de catalogue.)
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}

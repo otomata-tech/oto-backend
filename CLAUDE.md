@@ -516,19 +516,19 @@ JSON + replis) — c'est la source à tenir à jour quand une app s'ajoute.
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
-  **`bridge` universel** (ADR 0034, amende 0003/0011) — UNE entrée générique au
-  registre (`kind="remote"`), tools fixes `bridge_describe`/`bridge_call`
-  (`tools/remote.py`). L'identité du service ponté vit dans la **CONFIG d'org**
-  (champs standard `base_url`/`token`/`label`, `resolve_credential_fields`),
-  **jamais dans le namespace** → montrable au catalogue sans nom client (l'ex-fuite
-  /tools/mm venait du namespace-par-client). Le bridge distant détient le
-  credential métier (contrat ADR 0003 §4 inchangé : `/describe`+`/call`, bearer
-  M2M, lecture seule bornée côté bridge, audit `X-Oto-Sub`). Visibilité = régime
-  commun (activation × sélection 0019/0050 — hors socle, installable depuis la
-  library) ; sans credential, l'exécution lève proprement. Pilote : le bridge back-office
-  Movinmotion (repo privé), migré du legacy per-namespace `mm_*` le 2026-07-02
-  (découverte `meta.base_url`, règle de visibilité dédiée et
-  `resolve_remote_credential` retirés en B4).
+  **`http` générique** (ADR 0037, amende 0034/0003/0011). Le connecteur historique
+  **`bridge`** (`kind="remote"`, tools `bridge_describe`/`bridge_call`,
+  `tools/remote.py`) a été **RETIRÉ le 2026-07-16** (oto-backend#108) : un bridge
+  n'est qu'une **API HTTP** que le service distant re-expose → l'org configure sur
+  la carte `http` son `base_url` (endpoint du bridge) + `auth_mode=bearer` + `token`
+  M2M (`credential_fields`, jamais dans le namespace → catalogue sans nom client),
+  et l'agent appelle `http_get`/`http_post`. Le service distant détient le credential
+  métier (contrat ADR 0003 §4 : bearer M2M, politique bornée côté bridge, audit
+  `X-Oto-Sub`). Visibilité = régime commun (activation × sélection 0019/0050 — hors
+  socle, installable). Pilote : le **bridge back-office Movinmotion** (repo privé),
+  migré `bridge`→`http` le 2026-07-16 (credential au groupe finance, réseau VPC
+  privé). Le concept « remote data-driven » (base_url sur un provider hors registre)
+  subsiste dans `org_secret_meta`, mais **sans entrée de catalogue** `kind="remote"`.
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne

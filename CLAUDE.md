@@ -197,6 +197,20 @@ revalidés à chaque appel, jamais de repli silencieux).
 > refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e
 > connexion du même canal déjà lié dans une AUTRE org (anti-doublon `account_id`).
 
+> **Siège plateforme cross-org (#221, 2026-07-16, LIVE PROD).** Le cross-org #172 ci-dessus
+> était accroché à la **clé MEMBRE** (`personal_instance_org` → `list_member_orgs_for`) →
+> un user sur la **clé PLATEFORME partagée** (donc SANS clé membre) tombait à travers : son
+> siège hébergé, pourtant par-personne, ne le suivait QUE dans les orgs où une ligne
+> `unipile_accounts` existait → « je connecte mais ça reste sur Connect » ailleurs. Fix :
+> le **siège plateforme suit le sub cross-org** — `db.any_unipile_account_id(sub, provider)`
+> (siège `platform_seat=True` le plus récent, toutes orgs) est un fallback dans
+> `_own_unipile_account_id` (résolution outils) ET `status_for` (affichage), **gardé sur
+> `credential_mode_for == 'platform'` ET `subscribed`** (l'org de contexte résout la clé
+> plateforme ET a l'option) → jamais un siège sous une clé BYO (mismatch) ni un faux
+> « connecté » sans option. ⚠️ **`db.list_unipile_accounts` doit renvoyer `platform_seat`**
+> (le SELECT l'omettait → filtre cross-org muet ; bug masqué par les stubs unitaires,
+> attrapé en test empirique — cf. la leçon « stubs cachent la forme de row » ci-dessus).
+
 > **API v2 = seul chemin (V1 COUPÉ, 2026-07-16, LIVE PROD).** La migration des comptes
 > en v2 étant bouclée, **v1 est retiré du code** : oto-core **≥v1.26.0** n'a plus qu'**une
 > classe `UnipileClient` (v2)** (`client_v2.py` fusionné dans `client.py` ; `UnipileClientV2`

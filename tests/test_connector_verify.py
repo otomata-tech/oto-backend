@@ -53,19 +53,19 @@ def test_verify_ok(monkeypatch):
 
 
 def test_verify_threads_config_to_probe(monkeypatch):
-    """La config non-secrète (dsn/api_version) est passée à la sonde (#194) : une
-    sonde vers un endpoint versionné (unipile v1/v2) doit la lire, sinon elle teste
-    la clé contre le mauvais tenant."""
+    """La config non-secrète (dsn) est passée à la sonde (#194) : une sonde vers un
+    endpoint dont l'hôte dépend de la clé (unipile, tenant BYO) doit la lire, sinon
+    elle teste la clé contre le mauvais tenant."""
     seen = {}
 
     def probe(fields, config=None):  # noqa: ARG001
         seen["config"] = config
     connector_verify.register("_ut_cfg", probe)
     res = _run(cv.VerifyInput(provider="_ut_cfg"), fields={"k": "v"},
-               config={"api_version": "v2", "dsn": "api.unipile.com"},
+               config={"dsn": "api.unipile.com"},
                monkeypatch=monkeypatch)
     assert res["ok"] is True
-    assert seen["config"] == {"api_version": "v2", "dsn": "api.unipile.com"}
+    assert seen["config"] == {"dsn": "api.unipile.com"}
 
 
 def test_verify_failure_returns_error_not_500(monkeypatch):

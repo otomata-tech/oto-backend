@@ -46,7 +46,7 @@ ORG = "org"
 MEMBER = "member"
 # Scope PLATEFORME (ADR 0044 §F) : la clé plateforme partagée EST une instance du coffre
 # (fin de la table legacy `platform_keys`). `entity_id` = le label de la clé (N par
-# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config (api_version, dsn).
+# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config non-secrète (dsn…).
 PLATFORM = "platform"
 
 

@@ -425,10 +425,10 @@ _REGISTRY_LIST = [
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     _c("serper", ["serper"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=200, platform_key_open=True,
-       default_active=True, label="Serper", help="recherche web", href="https://serper.dev"),
+       label="Serper", help="recherche web", href="https://serper.dev"),
     _c("hunter", ["hunter"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
-       default_active=True, label="Hunter.io", help="emails", href="https://hunter.io"),
+       label="Hunter.io", help="emails", href="https://hunter.io"),
     # `fr` (APIs live SIRENE/Recherche Entreprises/INPI/BODACC/BOAMP) + `fr_stock`
     # (stock SIRENE parquet, ex-connecteur `sirene_stock`, fusionné 2026-06-22 :
     # même domaine entreprises FR, namespace fr_stock_* → namespace_of="fr").
@@ -439,13 +439,13 @@ _REGISTRY_LIST = [
     # la clé partagée, remonté tel quel (429) sans throttle oto.
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=0, platform_key_open=True,
-       default_active=True, label="INSEE SIRENE", help="données entreprise FR",
+       label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr", "fr_stock")),
     # droit : jurisprudence (juris_*) + codes consolidés (loi_*) + conventions
     # collectives (ccn_*), servis par le service FOD (fod_juris/loi/ccn). Extrait
     # de `sirene`/`fr` (n'était pas de l'INSEE : DILA/Justice/Légifrance). Open
     # data, sans clé. 3 namespaces → 1 carte « Info légale FR ».
-    _c("droit", ["juris", "loi", "ccn"], secret_kind="none", default_active=True,
+    _c("droit", ["juris", "loi", "ccn"], secret_kind="none",
        label="Info légale FR",
        help="jurisprudence, codes consolidés, conventions collectives (open data DILA/Légifrance)",
        href="https://www.legifrance.gouv.fr", modules=("droit",)),
@@ -460,7 +460,7 @@ _REGISTRY_LIST = [
        label="Lemlist", help="cold outreach", href="https://app.lemlist.com"),
     _c("kaspr", ["kaspr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
-       default_active=True, label="Kaspr", help="enrichissement", href="https://app.kaspr.io"),
+       label="Kaspr", help="enrichissement", href="https://app.kaspr.io"),
     _c("pennylane", ["pennylane"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
        label="Pennylane", help="compta", href="https://app.pennylane.com"),
@@ -471,7 +471,7 @@ _REGISTRY_LIST = [
     # implicite = celui des tokens posés. Fallback de lecture du credential legacy
     # (token unique pré-multichamps) dans tools/slack.py.
     _c("slack", ["slack"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
-       personal_session=False, default_active=True, label="Slack",
+       personal_session=False, label="Slack",
        help="messagerie Slack (bot token xoxb- et/ou user token xoxp-)",
        href="https://slack.com", credential_fields=(
            CredentialField("bot_token", "Bot token (xoxb-)", secret=True,
@@ -481,19 +481,19 @@ _REGISTRY_LIST = [
        )),
     _c("fullenrich", ["fullenrich"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
-       default_active=True, label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
+       label="FullEnrich", help="enrichissement waterfall", href="https://app.fullenrich.com"),
     # folk : né APRÈS le coffre — pas de colonne legacy users.folk_api_key,
     # le coffre connector_credentials est canonique. byo-only (pas de clé
     # plateforme) ; compte partagé équipe = credential de l'org Otomata.
     _c("folk", ["folk"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
-       default_active=True, label="Folk", help="CRM", href="https://app.folk.app"),
+       label="Folk", help="CRM", href="https://app.folk.app"),
     # unipile : LinkedIn hébergé (recherche/scrape/messagerie) via l'API Unipile.
     # La session LinkedIn vit chez Unipile (vrai Chrome + proxy résidentiel) →
     # contourne empreinte TLS + isolation de session du browser local (#5). Keyed
     # api_key (résolu via resolve_api_key, cascade user > org). byo_user (BYO) OU
     # byo_org (l'org pose l'abonnement Otomata, ses membres connectent leur LinkedIn
-    # par hosted-auth). Dans le socle (ADR 0050) : usage cœur — l'option payante
+    # par hosted-auth). Hors socle (comme tout le catalogue, 16/07) ; l'option payante
     # (couche 3) gate l'usage plateforme, le BYO reste libre. Le **dsn** (API v2 :
     # gateway `api.unipile.com`) est résolu côté client (env `UNIPILE_DSN`, défaut
     # api.unipile.com = celui d'Otomata) — PAS un champ de credential tant qu'un BYO
@@ -503,7 +503,7 @@ _REGISTRY_LIST = [
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", hosted_auth=True, personal_cross_org=True,
-       default_active=True, label="Messagerie hébergée (Unipile)",
+       label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
        modules=("unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter")),
@@ -527,7 +527,8 @@ _REGISTRY_LIST = [
     # propriété du domaine est garantie par Resend (la clé ne peut envoyer que depuis
     # les domaines vérifiés dans le compte Resend de l'org) → zéro logique domaine côté oto.
     _c("resend", ["resend"], auth_modes={"byo_org"}, keyed=True,
-       secret_kind="api_key",        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
+       secret_kind="api_key",
+       label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
     # scaleway : email transactionnel via le compte Scaleway TEM DE L'ORG (BYO, comme resend).
     # L'org amène sa clé (secret_key + project_id) ; l'API TEM n'envoie que depuis les domaines
@@ -566,7 +567,8 @@ _REGISTRY_LIST = [
     # hors socle → opt-in, pas imposé. L'org MM
     # y pose le token de son compte de service pour le POC avoirs (doctrine d'une org client).
     _c("gocardless", ["gocardless"], availability="self_serve",
-       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",        label="GoCardless", help="prélèvements SEPA (lecture)"),
+       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
+       label="GoCardless", help="prélèvements SEPA (lecture)"),
     # (Ponts vers un service distant : voir l'entrée `bridge` universelle en fin
     # de registre — ADR 0034. L'ex-modèle remote data-driven per-namespace,
     # découvert de `meta.base_url` sans entrée au registre, a été retiré en B4 ;
@@ -618,7 +620,8 @@ _REGISTRY_LIST = [
     # dans le bearer (planity-mcp le décode et rejoue la chaîne d'auth Planity).
     _c("planity", ["planity"], kind="mount",
        mount_url="https://planity-mcp.oto.zone/mcp",
-       auth_modes={"byo_user"}, secret_kind="basic_auth",        label="Planity",
+       auth_modes={"byo_user"}, secret_kind="basic_auth",
+       label="Planity",
        help="agenda + caisse Planity (RDV, clients, CA, stats) — MCP fédéré",
        href="https://planity-mcp.oto.zone"),
     # justicelibre : MCP fédéré (kind=mount) SANS auth — endpoint hébergé PUBLIC
@@ -632,7 +635,8 @@ _REGISTRY_LIST = [
     # `_db_activated_mounts`). Hors bundle par défaut.
     _c("justicelibre", ["justicelibre"], kind="mount",
        mount_url="https://justicelibre.org/mcp",
-       auth_modes=frozenset(), secret_kind="none",        label="JusticeLibre",
+       auth_modes=frozenset(), secret_kind="none",
+       label="JusticeLibre",
        help="droit français & européen — législation + jurisprudence "
             "(Légifrance/Judilibre/CE/CC/CEDH/CJUE), MCP fédéré, sources ouvertes",
        href="https://justicelibre.org"),
@@ -673,7 +677,8 @@ _REGISTRY_LIST = [
     # personal_session (session physiologiquement per-user). Expérimental (API non
     # documentée) : hors socle, installable depuis la library.
     _c("brevoauto", ["brevoauto"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie",        label="Brevo (automation)", help="automations marketing (session Browserbase)",
+       secret_kind="cookie",
+       label="Brevo (automation)", help="automations marketing (session Browserbase)",
        publisher="Brevo", href="https://app.brevo.com/automation/automations"),
     # pennylaneged : GED (bac documentaire) Pennylane via l'API PRIVÉE de la SPA
     # (`app.pennylane.com/companies/{cid}/dms`, cookie + CSRF tournant). DISTINCT du
@@ -688,7 +693,8 @@ _REGISTRY_LIST = [
     # dans les GED clients — cascade user > groupe > org). `personal_session=True`
     # reste = catégorie « session navigateur » côté UI (orthogonal au partage).
     _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user", "byo_org"},
-       personal_session=True, secret_kind="cookie",        label="Pennylane GED",
+       personal_session=True, secret_kind="cookie",
+       label="Pennylane GED",
        help="bac documentaire Pennylane (session Browserbase)",
        publisher="Pennylane", href="https://app.pennylane.com"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
@@ -697,7 +703,7 @@ _REGISTRY_LIST = [
     # par l'activation (cf. middleware.py « tools plateforme … data … jamais gatés »).
     _c("google", ["gmail", "tasks", "calendar", "sheets", "drive", "chat"],
        auth_modes={"byo_user"},
-       personal_session=True, secret_kind="oauth", default_active=True,
+       personal_session=True, secret_kind="oauth",
        label="Google", help="Gmail + Tasks + Calendar + Sheets + Drive + Chat (OAuth)",
        modules=("gmail", "tasks", "calendar", "sheets", "drive", "chat")),
 
@@ -714,22 +720,24 @@ _REGISTRY_LIST = [
        label="Reddit", help="recherche & lecture de posts/subreddits (API publique)"),
     # Grèce : lookup entité via registre GEMI (autocomplete) + VIES. Open data,
     # sans clé. Inerte tant que non activé en DB (deny-by-default), comme foncier/sante.
-    _c("gr", ["gr"], secret_kind="none",        label="Data GR", help="entreprises Grèce — registre GEMI + VIES (open data)"),
+    _c("gr", ["gr"], secret_kind="none",
+       label="Data GR", help="entreprises Grèce — registre GEMI + VIES (open data)"),
     # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant
     # que non activés en DB (connector_activation) — register_all gate dessus,
     # donc absents du seed initial → OFF par défaut (deny-by-default).
-    _c("foncier", ["foncier"], secret_kind="none", default_active=True,
+    _c("foncier", ["foncier"], secret_kind="none",
        label="Foncier", help="géocodage, cadastre, bâti, risques/ICPE, solaire, immobilier (open data)"),
-    _c("urba", ["urba"], secret_kind="none", default_active=True,
+    _c("urba", ["urba"], secret_kind="none",
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
-    _c("sante", ["sante"], secret_kind="none", default_active=True,
+    _c("sante", ["sante"], secret_kind="none",
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
-    _c("osm", ["osm"], secret_kind="none", default_active=True,
+    _c("osm", ["osm"], secret_kind="none",
        label="OpenStreetMap", help="points d'intérêt OSM par tag sur une zone (parkings, équipements, commerces) — recensement exhaustif via Overpass (open data)"),
-    _c("frenchtech", ["frenchtech"], secret_kind="none",        label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
+    _c("frenchtech", ["frenchtech"], secret_kind="none",
+       label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
     # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).
     # Complète fr_* (identité légale) par l'empreinte numérique. Pas de scan intrusif.
-    _c("infosec", ["infosec"], secret_kind="none", default_active=True,
+    _c("infosec", ["infosec"], secret_kind="none",
        label="Infosec", help="empreinte numérique d'un domaine : whois/RDAP, DNS, posture e-mail (SPF/DMARC), sous-domaines (CT), TLS, headers de sécurité (recon passif)"),
 
     # --- connecteurs API tiers (clients oto-core déjà écrits, câblés 2026-06-19) ---
@@ -752,11 +760,11 @@ _REGISTRY_LIST = [
        modules=("brevo", "brevo_crm")),
     _c("apollo", ["apollo"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=20, platform_key_open=True,
-       default_active=True, label="Apollo.io",
+       label="Apollo.io",
        help="prospection B2B (organizations, people, job postings)",
        href="https://app.apollo.io"),
     _c("zerobounce", ["zerobounce"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", default_active=True, label="ZeroBounce",
+       secret_kind="api_key", label="ZeroBounce",
        help="vérification de délivrabilité email", href="https://www.zerobounce.net"),
     _c("hithorizons", ["hithorizons"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", label="HitHorizons",
@@ -853,7 +861,7 @@ _REGISTRY_LIST = [
     # eligible (clé plateforme + quota daily, comme serper).
     _c("serpapi", ["serpapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=200, platform_key_open=True,
-       default_active=True, label="SerpApi",
+       label="SerpApi",
        help="recherche multi-moteurs (Google verticals, Bing, YouTube, Walmart, Amazon, jobs…)",
        href="https://serpapi.com"),
     # searchapi : recherche multi-moteurs via SearchApi.io (verticaux Google +
@@ -985,6 +993,10 @@ ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
 # Socle curé (ADR 0050) : les connecteurs installés d'office (state='active') au
 # seed de la sélection d'un NOUVEAU (sub, org). Le reste de l'exposé = library.
+# ⚠️ Politique actuelle (décision 16/07) : socle VIDE — aucun connecteur n'est
+# pré-installé ; l'agent guide l'utilisateur depuis les tools spine (`oto_connector`
+# op=list/select, `oto_call`) et le catalogue injecté. Le mécanisme reste : poser
+# default_active=True sur un connecteur le remettrait au départ.
 DEFAULT_ACTIVE_CONNECTORS: frozenset = frozenset(
     c.name for c in _REGISTRY_LIST if c.default_active
 )
@@ -1018,8 +1030,6 @@ def _availability_tag(c: "Connector") -> str:
     bits: list[str] = []
     if c.hosted_auth:
         bits.append("compte à connecter")
-    if not c.default_active and c.kind == "tools":
-        bits.append("hors socle — à installer depuis la library, ou oto_call ponctuel")
     return f" ({'; '.join(bits)})" if bits else ""
 
 

@@ -47,12 +47,16 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 
 **Un outil non listé ? Appelle-le quand même via `oto_call`.** `oto_call(name, arguments)` est le pont universel : il exécute par son nom N'IMPORTE quel outil du catalogue — un outil masqué, un outil de FOD, ou un connecteur que tu VIENS d'activer. ⚠️ Activer un connecteur en cours de conversation ne monte PAS ses outils dans la session (le registre est figé à l'ouverture, et claude.ai n'applique pas le rechargement à chaud) : n'en conclus JAMAIS « la capacité n'existe pas ». Appelle-le tout de suite via `oto_call(name="<connecteur>_…", arguments={…})`, ou invite l'utilisateur à ouvrir une NOUVELLE conversation pour les voir montés. (Un sous-agent que tu lances hérite du même registre figé → lui aussi passe par `oto_call`.)
 
+**Le compte démarre nu : les connecteurs s'INSTALLENT.** Un nouvel espace n'a AUCUN connecteur pré-installé — c'est le régime normal, pas une panne. Si la toolbox ne montre (presque) que des outils `oto_*`/`data_*`, ton rôle est de GUIDER : comprends ce que l'utilisateur veut faire, repère les capacités correspondantes dans le catalogue de namespaces ci-dessous (ou `oto_connector(op='list')` pour l'état par connecteur), propose-en 2-3 pertinentes et installe-les (`oto_connector(op='select', name=…)`). N'attends pas le remontage : exécute tout de suite via `oto_call`. Les capacités open data (`fr_*`, `foncier_*`, `juris_*`…) et à free tier (serper, hunter…) marchent sans aucune configuration ; celles à clé ou à compte se connectent sur le dashboard — dis-le simplement, ne simule jamais un résultat.
+
 **Slots : la procédure déclare, le projet binde.** Une procédure déclare ses entités requises en slots nommés et sa prose les référence `<slot:name>` — jamais un nom d'instance en dur. Le projet fait la correspondance nom→instance via ses liens (`oto_project(op=link, …, slot='name')`). Tu adresses le tableau d'un slot avec `namespace='slot:<name>'` sur les tools `data_*`. Si un slot ne résout pas (pas de projet actif, ou nom non bindé), l'appel est REFUSÉ avec la marche à suivre : **matérialise le contexte d'abord** — demande quel projet (ou crées-en un), et pour chaque slot binde une ressource existante ou crée-la ; ne choisis JAMAIS une table « probable » à la place d'un binding manquant."""
 
 # En-tête du catalogue de namespaces (dérivé du registre), appendé au bloc A.
 _CATALOG_HEADER = (
-    "Namespaces (capacités appelables ; certaines « à activer » selon la config de ton "
-    "org — leurs outils apparaissent une fois activées) :"
+    "Namespaces — le catalogue COMPLET des capacités de la plateforme. Aucune n'est "
+    "installée d'office : celles absentes de ta toolbox s'installent via "
+    "`oto_connector(op='select', name=…)` (durable) ou s'appellent ponctuellement via "
+    "`oto_call` :"
 )
 
 # En-têtes des agent README cumulés (bloc C), du général au spécifique.

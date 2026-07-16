@@ -7,23 +7,26 @@ SOCLE `default_active`, le backfill one-shot reconstitue le VISIBLE d'avant
 """
 from oto_mcp import connector_selection, providers
 
-# Tripwire de curation : le socle est un choix PRODUIT explicite — le faire
-# évoluer = éditer cette liste EN MÊME TEMPS que le registre (pas d'ajout qui
-# élargit le départ de tous les nouveaux comptes par accident).
-_SOCLE = {
-    "serper", "serpapi", "sirene", "droit", "foncier", "urba", "sante", "osm",
-    "google", "hunter", "kaspr", "fullenrich", "apollo", "zerobounce",
-    "unipile", "folk", "slack", "infosec",
-}
+# Tripwire de curation : le socle est un choix PRODUIT explicite — décision du
+# 16/07 : socle VIDE (aucun connecteur pré-installé ; l'agent guide depuis les
+# tools spine + le catalogue injecté). Y remettre un connecteur = l'assumer ici
+# EN MÊME TEMPS que le registre (pas d'élargissement du départ par accident).
+_SOCLE: set[str] = set()
 
 
 def test_default_active_socle_is_the_curated_set():
     assert set(providers.DEFAULT_ACTIVE_CONNECTORS) == _SOCLE
 
 
-def test_socle_connectors_exist_in_registry():
-    names = {c.name for c in providers._REGISTRY_LIST}
-    assert providers.DEFAULT_ACTIVE_CONNECTORS <= names
+def test_naked_account_guidance_is_injected():
+    """Le compte nu n'est viable que si l'agent est GUIDÉ : le bloc A statique doit
+    porter le mode d'emploi (installer via oto_connector op=select, pont oto_call)
+    et l'en-tête du catalogue doit dire que rien n'est installé d'office."""
+    from oto_mcp import instructions
+    surface = instructions.render()
+    assert "Le compte démarre nu" in surface
+    assert "oto_connector(op='select'" in surface
+    assert "Aucune n'est installée d'office" in surface
 
 
 # ── backfill one-shot (faux conn : rejoue le contrat SQL sans PG) ──────────────

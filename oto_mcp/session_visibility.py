@@ -113,11 +113,13 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
         logger.warning("group connector RBAC visibility skipped for %s (fail-open): %s", sub, e)
     # Sélection marketplace (ADR 0019/0050) : régime NOMINAL « non-sélectionné =
     # masqué ». Un connecteur en PAUSE ou non-installé masque ses tools. Le seed
-    # de la 1re session d'un (sub, org) installe le SOCLE curé (`default_active`
-    # ∩ exposé) — les pairs pré-0050 ont été backfillés avec leur visible d'alors
-    # (db._init). Fail-OPEN sur glitch (ergonomie, jamais une barrière : les gates
-    # call-time restent) ; `oto_call` = échappatoire d'appel ponctuel d'un tool
-    # non listé (ADR 0036).
+    # de la 1re session d'un (sub, org) installe le socle `default_active` ∩ exposé
+    # — VIDE depuis le 16/07 : un nouveau compte démarre SANS connecteurs installés,
+    # l'agent guide depuis les tools spine + le catalogue injecté (bloc A). Les
+    # pairs pré-0050 ont été backfillés avec leur visible d'alors (db._init).
+    # Fail-OPEN sur glitch (ergonomie, jamais une barrière : les gates call-time
+    # restent) ; `oto_call` = échappatoire d'appel ponctuel d'un tool non listé
+    # (ADR 0036).
     try:
         if not connector_selection.is_seeded(sub, prof_org):
             connector_selection.seed_active(

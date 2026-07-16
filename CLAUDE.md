@@ -197,17 +197,33 @@ revalidés à chaque appel, jamais de repli silencieux).
 > refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e
 > connexion du même canal déjà lié dans une AUTRE org (anti-doublon `account_id`).
 
-> **Version API v1/v2 = propriété de la CLÉ (« selon la BYO »), pas un connecteur ni un
-> flag global (2026-07-07).** v2 est un compte/clé Unipile **distincts** (beta) : une clé
-> v1 ne marche pas en v2. La version est portée par `meta.api_version` du credential
-> (`{api_version:"v2", dsn:"api.unipile.com"}`) → `resolve_credential.config` → `unipile_client()`
-> + `unipile_connect.hosted_auth_url` routent v1/v2. **UN seul connecteur `unipile`** (surface
-> identique, `client_v2.UnipileClientV2` iso `UnipileClient`) ; absence de meta = **v1 défaut**.
-> Pose de la version : chemin **member** (`POST /api/settings/api-keys/unipile`, param `api_version`)
-> ET **org** (`org.secret.set`, param `api_version`) → dashboard : sélecteur sur le form clé d'org
-> + section « ma clé perso » du widget hosted (clé member prime sur org, cascade `resolve_credential`).
-> Deltas API v2 (base fixe `api.unipile.com/v2`, account_id-in-path, enveloppe, inbox model,
-> posts keyés URN…) dans les **docstrings de `client_v2.py`** (oto-core ≥v1.19.0). Migration = `#63`.
+> **API v2 = seul chemin (V1 COUPÉ, 2026-07-16, LIVE PROD).** La migration des comptes
+> en v2 étant bouclée, **v1 est retiré du code** : oto-core **≥v1.26.0** n'a plus qu'**une
+> classe `UnipileClient` (v2)** (`client_v2.py` fusionné dans `client.py` ; `UnipileClientV2`
+> + `make_unipile_client(api_version=)` supprimés) ; `DEFAULT_DSN = api.unipile.com` (gateway
+> v2 unifié). **Plus AUCUN plumbing `api_version`** côté backend (construction client, pose de
+> clé member/org/plateforme, carte `status_for`) ni de sélecteur dashboard. Le `dsn` par-clé
+> (`meta.dsn`) reste lu (défaut = gateway v2). Deltas API v2 (account_id-in-path, enveloppe
+> `{data,next_cursor}` normalisée `items`/`cursor`, inbox model, posts keyés URN, `inmail-credits`)
+> = **docstrings de `client.py`** oto-core.
+>
+> **Hosted-auth v2 : webhook non livré → réconciliation poll-and-bind.** Le hosted-auth v2 ne
+> rappelle **pas** notre `notify_url` (webhook au niveau APP Unipile, pas par-lien) et le compte
+> connecté **ne porte pas notre nonce** → le compte se crée chez Unipile mais n'est jamais
+> enregistré côté oto (pending qui traîne). Fix **webhook-indépendant** : `unipile_connect.reconcile_pending(sub)`
+> liste les comptes Unipile et lie au sub le plus **récent, non déjà lié, du bon provider, créé
+> APRÈS son pending** (floor = anti-rebind d'un siège tiers). **Self-heal** dans `GET /api/me/unipile`
+> (no-op sans pending, donc sans appel Unipile) + endpoint explicite `POST /api/me/unipile/reconcile`.
+> Le webhook `POST /api/unipile/webhook` (handler v1 `CREATION_SUCCESS`) reste mais **dormant** (le v2
+> ne l'alimente pas) — utile seulement si on branche `account.disconnected` (détection de déco, non fait).
+>
+> **Consolidation « tout en clé plateforme » (2026-07-16).** Clé plateforme rotée en v2 (scope
+> PLATFORM, label `env`) ; tous les BYO unipile supprimés ; **option comp** posée pour les orgs
+> concernées (`db.set_option_comp("org",id,"unipile")`). ⚠️ **GOTCHA share (ADR 0044 §F)** :
+> `share_mode='open'` n'ouvre à tous que si **`share_down` est VIDE** (`_platform_instance_usable` :
+> `(not down) or granted`) — sinon seule l'allowlist passe (sinon `404 unipile_not_configured`, la
+> clé plateforme ne résout pas). Free-tier réel = `open` + `share_down=[]`, l'option couche 3 gardant
+> qui peut connecter.
 
 > **Couche 3 « option » = source unique `access.option_open(sub, connector, org, group)` (2026-07-07).**
 > « L'option payante est-elle levée ? » était recopiée à 3 endroits (`connectors_selection.option_ok`

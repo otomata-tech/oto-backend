@@ -116,12 +116,13 @@ def get_unipile_account(sub: str, org_id: Optional[int],
 
 def list_unipile_accounts(sub: str) -> list[dict]:
     """Tous les comptes Unipile connectés du user, tous canaux confondus
-    (`[{provider, account_id, account_name, org_id, connected_at}]`) — pour le dashboard.
-    `org_id` = l'org à laquelle le compte est rattaché (ventilation par org, fiche admin)."""
+    (`[{provider, account_id, account_name, org_id, platform_seat, connected_at}]`) —
+    pour le dashboard. `org_id` = l'org à laquelle le compte est rattaché (ventilation
+    par org, fiche admin) ; `platform_seat` = siège de la clé plateforme (cross-org #221)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT provider, account_id, account_name, org_id, connected_at FROM unipile_accounts "
-            "WHERE sub = %s ORDER BY provider", (sub,)
+            "SELECT provider, account_id, account_name, org_id, platform_seat, connected_at "
+            "FROM unipile_accounts WHERE sub = %s ORDER BY provider", (sub,)
         ).fetchall()
     return [dict(r) for r in rows]
 

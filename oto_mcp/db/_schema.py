@@ -21,6 +21,23 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Palier organization (= périmètre / store serveur) — table RACINE, définie en
+-- tête car des tables plus bas la référencent (`unipile_accounts` etc.) : sur une
+-- base VIERGE, PostgreSQL crée les tables dans l'ordre du DDL et une FK vers une
+-- table non encore créée échoue (`relation "orgs" does not exist`, #151). Détail
+-- du palier (appartenance, credentials) au bloc org_members plus bas.
+CREATE TABLE IF NOT EXISTS orgs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    logo_url TEXT,
+    domain TEXT,
+    industry TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS usage (
     sub TEXT NOT NULL,
     tool TEXT NOT NULL,
@@ -521,24 +538,12 @@ CREATE TABLE IF NOT EXISTS unipile_operated_accounts (
     PRIMARY KEY (sub, provider)
 );
 
--- Palier organization (= périmètre / store serveur). Une org possède des
--- credentials propres (coffre `connector_credentials`, entity_type='org') et
--- des opérateurs (org_members). Source de vérité de l'appartenance = ces tables, résolues par
--- `sub` — JAMAIS un claim du token
--- Logto (le token MCP ne porte que sub). Cf. project_oto_mcp_org_tier.
--- NB barreau 1 : tables seules, aucun helper ne les lit encore (canari de
--- déploiement). Le câblage (resolve_api_key, visibilité, meta-tools) suit.
-CREATE TABLE IF NOT EXISTS orgs (
-    id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    logo_url TEXT,
-    domain TEXT,
-    industry TEXT NOT NULL DEFAULT '',
-    location TEXT NOT NULL DEFAULT '',
-    created_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Palier organization : la table `orgs` est définie en TÊTE du schéma (près de
+-- `users`, tables racines) — cf. la note là-bas (#151). Une org possède des
+-- credentials propres (coffre `connector_credentials`, entity_type='org') et des
+-- opérateurs (org_members) ; source de vérité de l'appartenance = ces tables,
+-- résolues par `sub` — JAMAIS un claim du token Logto (le token MCP ne porte que
+-- sub). Cf. project_oto_mcp_org_tier.
 
 -- org_role : 'org_admin' | 'org_member' (validé en code, pas par CHECK, comme
 -- users.role). is_active = org courante du sub (au plus une TRUE par sub,

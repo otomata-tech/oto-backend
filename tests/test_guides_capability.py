@@ -1,5 +1,5 @@
-"""Capacité REST `me.guides.*` (ADR 0042) : autz par scope (org_admin / self /
-platform-refusé) + délégation à guide_store. Seams guide_store/roles monkeypatchés."""
+"""Capacité REST `me.guides.*` (ADR 0042, tout-DB 2026-07-16) : autz par scope
+(platform_admin / org_admin / self) + délégation à guide_store. Seams monkeypatchés."""
 import pytest
 
 from oto_mcp.capabilities import guides as G
@@ -26,6 +26,7 @@ def store(monkeypatch):
     monkeypatch.setattr(G.guide_store, "delete_guide", _del)
     import oto_mcp.roles as roles
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: sub == "admin")
+    monkeypatch.setattr(roles, "is_platform_admin", lambda sub: sub == "superadmin")
     return calls
 
 
@@ -64,9 +65,17 @@ def test_set_org_without_active_org(store):
     assert e.value.status == 400 and e.value.code == "no_active_org"
 
 
-def test_set_platform_rejected(store):
-    with pytest.raises(AuthzDenied) as e:
+def test_set_platform_requires_platform_admin(store):
+    with pytest.raises(AuthzDenied) as e:                     # u1 n'est pas platform_admin
         G._set(_ctx(), G.GuideSetInput(scope="platform", slug="s", body_md="b"))
+    assert e.value.status == 403
+    G._set(_ctx(sub="superadmin"), G.GuideSetInput(scope="platform", slug="s", body_md="b"))
+    assert store["set"][:3] == ("platform", "platform", "s")  # owner = 'platform'
+
+
+def test_set_unknown_scope_rejected(store):
+    with pytest.raises(AuthzDenied) as e:
+        G._set(_ctx(), G.GuideSetInput(scope="group", slug="s", body_md="b"))
     assert e.value.status == 400 and e.value.code == "bad_scope"
 
 

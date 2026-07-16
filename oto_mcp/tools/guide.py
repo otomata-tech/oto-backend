@@ -1,10 +1,10 @@
 """oto_guide — guides d'usage d'oto, chargés à la demande (ADR 0041/0042).
 
-Surface unique des guides on-demand, à trois scopes : **platform** (fichiers
-`oto_mcp/guides/*.md`, versionnés en PR), **org** et **user** (DB, écrits par l'org /
-l'utilisateur). `op=list` = catalogue visible (platform ∪ org active ∪ user) ;
-`op=read(slug[,scope])` = le corps ; `op=write`/`delete(slug, scope=org|user, body_md…)`
-= éditer un guide d'org (admin d'org) ou perso (self). Distinct des PROCÉDURES
+Surface unique des guides on-demand, à trois scopes **tous en DB** (tout-DB
+2026-07-16 ; les fichiers `oto_mcp/guides/*.md` ne sont plus que des seeds de boot).
+`op=list` = catalogue visible (platform ∪ org active ∪ user) ; `op=read(slug[,scope])`
+= le corps ; `op=write`/`delete(slug, scope=platform|org|user, body_md…)` = éditer,
+gaté par scope (platform_admin / org_admin / self). Distinct des PROCÉDURES
 (`oto_procedure`, avec slots) — un guide est de la PROSE (ADR 0042).
 
 Spine : chargé explicitement dans `register_all`, hors gate, toujours visible
@@ -25,9 +25,9 @@ _BASE_DESC = (
     "Load or author an oto usage guide (a how-to, PROSE — not a procedure) on demand. "
     "op=list → the catalog you can see (platform ∪ your org ∪ your own) [{slug, scope, "
     "title, description}] ; op=read (slug, optional scope) → its markdown body ; "
-    "op=write / delete (slug, scope=org|user, body_md, title?, description?) → author a "
-    "guide for your ORG (org admin) or YOURSELF (scope=user). Platform guides are files "
-    "(edited via PR). Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load).")
+    "op=write / delete (slug, scope=platform|org|user, body_md, title?, description?) → "
+    "author a guide for the PLATFORM (platform admin), your ORG (org admin) or YOURSELF "
+    "(scope=user). Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load).")
 
 
 def _bad(msg: str) -> McpError:
@@ -70,8 +70,12 @@ def register(mcp: FastMCP) -> None:
                 if not roles.is_org_admin(sub, org_id):
                     raise _bad("réservé à un admin de l'org (guide de scope org).")
                 owner_id = str(org_id)
+            elif sc == "platform":
+                if not roles.is_platform_admin(sub):
+                    raise _bad("réservé à l'admin plateforme (guide de scope platform).")
+                owner_id = guide_store.PLATFORM_OWNER
             else:
-                raise _bad("scope éditable = org | user (platform = fichiers, édités en PR).")
+                raise _bad("scope éditable = platform | org | user.")
 
             if op == "delete":
                 deleted = guide_store.delete_guide(sc, owner_id, slug)

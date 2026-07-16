@@ -467,9 +467,15 @@ schema-aware, `tools/datastore.py`) et `oto_doc_app` (pages/docs + KB, lecture
 seule, `tools/docs_app.py`). ⚠️ Gotcha récurrent : **pas d'annotation de retour
 `-> Card`** sur un tool `app=True` (hints résolus contre les globals du module au
 build du schéma, or l'import prefab_ui est local à `register()` → NameError fatal
-au boot, vécu #69). **Doc consommable par les agents = guide plateforme
-`oto_mcp/guides/mcp-apps.md`** (servi par `oto_guide`, inventaire + quand app vs
-JSON + replis) — c'est la source à tenir à jour quand une app s'ajoute.
+au boot, vécu #69). **Doc consommable par les agents = guide plateforme `mcp-apps`**
+(servi par `oto_guide`, inventaire + quand app vs JSON + replis) — à tenir à jour
+quand une app s'ajoute. ⚠️ **Guides = tout-DB (2026-07-16)** : la table `guides` est
+la source de vérité des TROIS scopes on-demand (platform/org/user) ; les fichiers
+`oto_mcp/guides/*.md` ne sont que des **seeds de boot** (`seed_platform_guides`,
+idempotent, n'écrase jamais une ligne DB). Écriture platform = platform_admin
+(MCP `oto_guide op=write scope=platform` / REST `PUT /api/me/guides/platform/{slug}`
+/ dashboard `/platform/instructions`). Une édition durable doit AUSSI retoucher le
+fichier seed (sinon un environnement neuf naît avec l'ancien texte).
 
 ## Conventions
 

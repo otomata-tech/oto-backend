@@ -1,5 +1,6 @@
-"""Guides on-demand scopés (ADR 0042 B5) : platform (fichiers) ∪ org ∪ user (DB),
-+ write/delete avec autz. Seams DB/auth monkeypatchés."""
+"""Guides on-demand scopés (ADR 0042 B5, tout-DB 2026-07-16) : platform ∪ org ∪ user,
+tous en DB, + write/delete avec autz par scope (platform_admin / org_admin / self).
+Seams DB/auth monkeypatchés."""
 import pytest
 
 from oto_mcp import guide_store as G
@@ -37,16 +38,18 @@ def db(monkeypatch):
 
 
 def test_list_merges_platform_org_user(db):
+    db.set_guide_db("platform", "platform", "bulk-load", "corps", "Bulk", "d")
     db.set_guide_db("org", "42", "process-x", "corps", "Process X", "d")
     db.set_guide_db("user", "u1", "mon-truc", "corps", "Mon truc", "d")
     out = G.list_guides_for(sub="u1", org_id=42)
     by = {(g["scope"], g["slug"]) for g in out}
-    assert ("platform", "bulk-load") in by      # fichier livré
+    assert ("platform", "bulk-load") in by      # DB, plus un fichier
     assert ("org", "process-x") in by
     assert ("user", "mon-truc") in by
 
 
 def test_read_scoped_search_order(db):
+    db.set_guide_db("platform", "platform", "bulk-load", "CORPS PF", "", "")
     db.set_guide_db("org", "42", "only-org", "CORPS ORG", "", "")
     g = G.read_guide_scoped("only-org", org_id=42, sub="u1")
     assert g["scope"] == "org" and g["body_md"] == "CORPS ORG"
@@ -63,13 +66,16 @@ def test_read_scoped_explicit_scope(db):
 
 def test_set_guide_validates(db):
     with pytest.raises(G.GuideError):
-        G.set_guide("platform", "x", "s", "b")          # platform non éditable
+        G.set_guide("group", "7", "s", "b")             # scope inconnu du on-demand
     with pytest.raises(G.GuideError):
         G.set_guide("org", "42", "Bad Slug", "b")       # slug invalide
     with pytest.raises(G.GuideError):
         G.set_guide("user", "u1", "ok", "   ")          # corps vide
     out = G.set_guide("org", "42", "ok-slug", "corps", "T", "D")
     assert out == {"slug": "ok-slug", "scope": "org", "title": "T", "description": "D"}
+    # platform est désormais éditable au niveau STORE (l'autz vit dans les surfaces)
+    out = G.set_guide("platform", G.PLATFORM_OWNER, "pf-slug", "corps", "T", "D")
+    assert out["scope"] == "platform"
 
 
 # ── tool oto_guide : autz inline ──
@@ -89,6 +95,7 @@ def tool(monkeypatch):
     import oto_mcp.roles as roles
     monkeypatch.setattr(access, "current_org", lambda sub: 42)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: sub == "admin")
+    monkeypatch.setattr(roles, "is_platform_admin", lambda sub: False)
     calls = {}
     monkeypatch.setattr(G, "list_guides_for", lambda sub, org: [{"slug": "z", "scope": "user"}])
 
@@ -124,10 +131,15 @@ def test_tool_write_org_requires_admin(tool, monkeypatch):
     assert out["scope"] == "org" and tool._calls["set"][0][1] == "42"   # owner = org id
 
 
-def test_tool_write_platform_rejected(tool):
+def test_tool_write_platform_requires_platform_admin(tool, monkeypatch):
     from mcp.shared.exceptions import McpError
-    with pytest.raises(McpError):
+    with pytest.raises(McpError):                       # u1 n'est pas platform_admin
         tool.fn(op="write", slug="x", body_md="y", scope="platform")
+    monkeypatch.setattr(__import__("oto_mcp.roles", fromlist=["x"]),
+                        "is_platform_admin", lambda sub: True)
+    out = tool.fn(op="write", slug="x", body_md="y", scope="platform")
+    assert out["scope"] == "platform"
+    assert tool._calls["set"][0][1] == G.PLATFORM_OWNER   # owner = 'platform'
 
 
 def test_tool_delete(tool):

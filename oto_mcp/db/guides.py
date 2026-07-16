@@ -61,6 +61,20 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
         return dict(row)
 
 
+def seed_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
+                  title: str = "", description: str = "") -> None:
+    """Pose le défaut d'un guide ON-DEMAND s'il n'existe pas (boot, idempotent).
+    Ne touche JAMAIS une ligne déjà posée/éditée (les fichiers `guides/*.md` sont
+    des seeds, la DB est la source de vérité éditable)."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO guides (scope, owner_id, slug, title, description, body_md, delivery) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 'on-demand') "
+            "ON CONFLICT (scope, owner_id, slug) DO NOTHING",
+            (scope, str(owner_id), slug, title, description, body_md),
+        )
+
+
 def delete_guide_db(scope: str, owner_id: str, slug: str) -> bool:
     with _connect() as conn:
         cur = conn.execute(

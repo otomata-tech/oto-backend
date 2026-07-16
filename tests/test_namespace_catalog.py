@@ -38,15 +38,13 @@ def test_spine_concepts_present():
 
 def test_availability_annotations():
     cat = providers.render_namespace_catalog()
-    # un connecteur HORS SOCLE (ADR 0050) est annoté (ne pas faire croire qu'il
-    # est appelable d'office — il s'installe depuis la library, ou oto_call).
-    assert "hubspot_* — HubSpot" in cat
-    line = next(l for l in cat.splitlines() if l.startswith("• hubspot_*"))
-    assert "hors socle" in line
-    # un connecteur du socle `default_active` n'a pas l'annotation
-    for prefix in ("• serper_*", "• apollo_*"):
-        socle = next(l for l in cat.splitlines() if l.startswith(prefix))
-        assert "hors socle" not in socle
+    # Socle VIDE (16/07) : plus d'annotation par-ligne « hors socle » (elle taguerait
+    # tout = bruit) — le régime est dit UNE fois dans l'en-tête (_CATALOG_HEADER).
+    assert "hors socle" not in cat
+    assert "à activer" not in cat
+    # seule annotation restante : le compte à connecter (hosted auth)
+    unipile = next(l for l in cat.splitlines() if l.startswith("• unipile_*"))
+    assert "compte à connecter" in unipile
 
 
 def test_injected_into_server_instructions():

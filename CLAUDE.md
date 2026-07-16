@@ -300,7 +300,7 @@ par Scaleway) + `resend` (BYOK). `email_send` = spine qui route
 
 Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) + `user_enabled_tools(sub, tool_name)` (override positif). **Les presets de tools (snapshots nommés + baselines org/équipe) ont été retirés** — la visibilité ne dépend plus que des défauts plateforme et des toggles perso.
 
-**Sélection par membre = régime NOMINAL « non-sélectionné = masqué » (ADR 0019/0050).** La toolbox d'un membre = les connecteurs qu'il a **installés** (`user_selected_connectors`, per (sub, org)). Au premier profil d'un (sub, org), `session_visibility` seed le **SOCLE curé** `providers.DEFAULT_ACTIVE_CONNECTORS` (champ `default_active` du registre, ~18) ∩ exposé ; le reste de l'exposé = library installable (capacité `connectors.select`, dashboard). Les pairs pré-0050 ont été backfillés une fois avec leur visible d'alors (`connector_selection.backfill_preexisting`, sentinelle `#adr0050-backfill`). Un connecteur activé pour l'org APRÈS le seed arrive dans la library, pas dans la toolbox. Le grain CONNECTEUR `default_hidden` et les flags `OTO_CONNECTOR_SELECTION_*` ont été **retirés** (0050). **Masqués par défaut, grain OUTIL** (`is_default_hidden` = `DEFAULT_HIDDEN_TOOLS` seul : `email_send`, `fr_egapro_declaration`) : self-activables. Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Sortir un connecteur du départ = ne PAS le mettre dans le socle `default_active` ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
+**Sélection par membre = régime NOMINAL « non-sélectionné = masqué » (ADR 0019/0050).** La toolbox d'un membre = les connecteurs qu'il a **installés** (`user_selected_connectors`, per (sub, org)). Au premier profil d'un (sub, org), `session_visibility` seed le socle `providers.DEFAULT_ACTIVE_CONNECTORS` ∩ exposé — **VIDE depuis le 16/07** (décision produit : un nouveau compte démarre SANS connecteurs installés ; l'agent guide depuis les tools spine — `oto_connector` op=list/select, `oto_call` — et le catalogue injecté au bloc A) ; tout l'exposé = library installable (capacité `connectors.select`, dashboard). Les pairs pré-0050 ont été backfillés une fois avec leur visible d'alors (`connector_selection.backfill_preexisting`, sentinelle `#adr0050-backfill`). Un connecteur activé pour l'org APRÈS le seed arrive dans la library, pas dans la toolbox. Le grain CONNECTEUR `default_hidden` et les flags `OTO_CONNECTOR_SELECTION_*` ont été **retirés** (0050). **Masqués par défaut, grain OUTIL** (`is_default_hidden` = `DEFAULT_HIDDEN_TOOLS` seul : `email_send`, `fr_egapro_declaration`) : self-activables. Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Sortir un connecteur du départ = ne PAS le mettre dans le socle `default_active` ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
 
 Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_call`, `oto_tool_schema`. **`PROTECTED_TOOLS`** (`tool_visibility.py`, source unique) = quatre familles jamais masquables (default-hidden inclus) **ni désactivables** : méta-toolset + identité (`oto_list_my_tools`/`oto_enable_tool`/`oto_whoami`/`oto_profile`), échappatoires de contexte (`oto_use_org`/`oto_clear_org`/`oto_list_orgs`/`oto_use_group`/`oto_clear_group` — anti-lockout, vécu Sentry 2026-06-30), boucle d'usage (`feedback`/`run_start`/`run_finish` — mandatés par les instructions plateforme ADR 0017 : un toggle qui les masque rend le gap invisible), **dispatch universel** (`oto_call`/`oto_tool_schema` — ADR 0036 : appeler par son nom un outil NON listé (FOD, connecteur non activé) le temps d'un appel, sans muter la visibilité ; exécution par `Tool.run` HORS middleware → gates call-time intactes + rédaction ré-appliquée via `redaction.py`). Garde des deux faces (2026-07-02) : `oto_disable_tool` refuse, `POST /api/me/tools/{name}` → 400 `protected_tool` ; `GET /api/me/tools` expose `protected:bool` (toggle inerte dashboard).
 
@@ -324,10 +324,10 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 ## Agent readme (cumulable) & procédures — ex-« doctrines & instructions d'org »
 
 Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **injectée à
-chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
-(`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
-slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
-`oto_procedure`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org** →
+**équipe active** → **user** (les 4 étages vivent dans `guides` delivery='init' depuis
+la convergence 0042 — les slugs `claude_md` sont SORTIS des tables de procédures ;
+l'étage user historique était `user_agent_readme(sub PK, body_md)`,
 capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
 dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
@@ -395,14 +395,20 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 3 ressources** par délégation de l'org :
+Un groupe **gouverne 3 ressources** par délégation de l'org (⚠️ **substrat unifié le
+10/07/2026** — chantiers du cadrage objets/visibilité : plus de tables jumelles par
+grain, le scope est une COLONNE ; migrations vivantes sur la DB partagée = playbook
+**`docs/live-migrations.md`**) :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
-- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
-  sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **doctrine & skills** — table UNIFIÉE `org_instructions` (`owner_type='group'`,
+  `owner_id=group_id`, `org_id`=org parente ; ex-jumelle `org_group_instructions`
+  DROPpée) ; `oto_procedure(op='get')` sert org **puis** groupe actif (complément,
+  chaque skill taggée `scope`). Les procédures d'équipe ont un `id` (ownership 0030).
 - **gouvernance de connecteur (ADR 0012 B1/B2, restrict-only — 08/07/2026)** — le chef
-  d'équipe peut, pour SON équipe : **couper** un connecteur (`group_connector_activation`,
-  coupures seules) et **réserver** un connecteur à des membres (`group_connector_access`).
+  d'équipe peut, pour SON équipe : **couper** un connecteur (lignes scope 'group' de
+  `connector_availability`, coupures seules) et **réserver** un connecteur à des membres
+  (lignes scope 'group' de `connector_acl`).
   **INVARIANT MONOTONE** : l'équipe ne peut que RÉTRÉCIR ce que l'org expose, jamais élargir
   (platform ⊇ org ⊇ group). Dispo = **visibilité** (`session_visibility`, fail-open,
   `connector_activation.effective_for_group`/`group_cut_connectors`). Accès = **gate DUR** :
@@ -456,6 +462,21 @@ bâti), `foncier_comparables_app` (ventes comparables DVF autour d'une adresse),
 tools JSON ; rendu **défensif** (colonnes dérivées des clés réelles) pour ne pas
 dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 
+Depuis, deux apps **spine** (hors gate) : `data_app` (datastore — table + fiche v2
+schema-aware, `tools/datastore.py`) et `oto_doc_app` (pages/docs + KB, lecture
+seule, `tools/docs_app.py`). ⚠️ Gotcha récurrent : **pas d'annotation de retour
+`-> Card`** sur un tool `app=True` (hints résolus contre les globals du module au
+build du schéma, or l'import prefab_ui est local à `register()` → NameError fatal
+au boot, vécu #69). **Doc consommable par les agents = guide plateforme `mcp-apps`**
+(servi par `oto_guide`, inventaire + quand app vs JSON + replis) — à tenir à jour
+quand une app s'ajoute. ⚠️ **Guides = tout-DB (2026-07-16)** : la table `guides` est
+la source de vérité des TROIS scopes on-demand (platform/org/user) ; les fichiers
+`oto_mcp/guides/*.md` ne sont que des **seeds de boot** (`seed_platform_guides`,
+idempotent, n'écrase jamais une ligne DB). Écriture platform = platform_admin
+(MCP `oto_guide op=write scope=platform` / REST `PUT /api/me/guides/platform/{slug}`
+/ dashboard `/platform/instructions`). Une édition durable doit AUSSI retoucher le
+fichier seed (sinon un environnement neuf naît avec l'ancien texte).
+
 ## Conventions
 
 - Nouveau connecteur = (1) un fichier `tools/<service>.py` exposant `register(mcp)`,
@@ -501,19 +522,19 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
-  **`bridge` universel** (ADR 0034, amende 0003/0011) — UNE entrée générique au
-  registre (`kind="remote"`), tools fixes `bridge_describe`/`bridge_call`
-  (`tools/remote.py`). L'identité du service ponté vit dans la **CONFIG d'org**
-  (champs standard `base_url`/`token`/`label`, `resolve_credential_fields`),
-  **jamais dans le namespace** → montrable au catalogue sans nom client (l'ex-fuite
-  /tools/mm venait du namespace-par-client). Le bridge distant détient le
-  credential métier (contrat ADR 0003 §4 inchangé : `/describe`+`/call`, bearer
-  M2M, lecture seule bornée côté bridge, audit `X-Oto-Sub`). Visibilité = régime
-  commun (activation × sélection 0019/0050 — hors socle, installable depuis la
-  library) ; sans credential, l'exécution lève proprement. Pilote : le bridge back-office
-  Movinmotion (repo privé), migré du legacy per-namespace `mm_*` le 2026-07-02
-  (découverte `meta.base_url`, règle de visibilité dédiée et
-  `resolve_remote_credential` retirés en B4).
+  **`http` générique** (ADR 0037, amende 0034/0003/0011). Le connecteur historique
+  **`bridge`** (`kind="remote"`, tools `bridge_describe`/`bridge_call`,
+  `tools/remote.py`) a été **RETIRÉ le 2026-07-16** (oto-backend#108) : un bridge
+  n'est qu'une **API HTTP** que le service distant re-expose → l'org configure sur
+  la carte `http` son `base_url` (endpoint du bridge) + `auth_mode=bearer` + `token`
+  M2M (`credential_fields`, jamais dans le namespace → catalogue sans nom client),
+  et l'agent appelle `http_get`/`http_post`. Le service distant détient le credential
+  métier (contrat ADR 0003 §4 : bearer M2M, politique bornée côté bridge, audit
+  `X-Oto-Sub`). Visibilité = régime commun (activation × sélection 0019/0050 — hors
+  socle, installable). Pilote : le **bridge back-office Movinmotion** (repo privé),
+  migré `bridge`→`http` le 2026-07-16 (credential au groupe finance, réseau VPC
+  privé). Le concept « remote data-driven » (base_url sur un provider hors registre)
+  subsiste dans `org_secret_meta`, mais **sans entrée de catalogue** `kind="remote"`.
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne
@@ -646,3 +667,4 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/email.md` — envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours.
 - `docs/event-loop-perf.md` — les 2 modes de gel mono-loop + protections + recettes py-spy/aiodebug.
 - `docs/redaction.md` — **rédaction de champs** : middleware unique (FieldRedactionMiddleware), rien par défaut + templates 1-clic, **schéma OBSERVÉ** (capture passive `connector_schemas` — passthrough d'API tierces → on observe au lieu de déclarer), dry-run preview, moteur `FieldFilter` (oto-core).
+- `docs/live-migrations.md` — **migrations vivantes sur la DB partagée canari/prod** : la danse en N lots promus, copies `to_regclass` newer-wins, bascule d'arbitre ON CONFLICT avant drop de PK, PK nommées, pièges (fail-open des gates, `gh pr merge` avant le guard, absorption de WIP).

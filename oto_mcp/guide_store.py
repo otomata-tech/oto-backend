@@ -1,19 +1,19 @@
-"""Guides d'usage d'oto — how-to PLATEFORME chargés à la demande (oto-backend#111).
+"""Guides d'usage d'oto — how-to chargés à la demande (oto-backend#111, ADR 0042).
 
-Un guide = un fichier markdown `oto_mcp/guides/<slug>.md` avec un front-matter
-minimal :
-
-    ---
-    title: Charger un gros volume (réseau, export…)
-    description: déléguer à un sous-agent, reçu léger, oto_call
-    ---
-    <corps markdown>
+**Source de vérité = la table `guides` (DB), pour TOUS les scopes** — platform, org,
+user (bascule 2026-07-16 : le scope platform était fichiers-PR, il est désormais
+éditable en ligne comme les autres, gaté platform_admin). Les fichiers
+`oto_mcp/guides/<slug>.md` (front-matter `title`/`description` + corps) ne sont plus
+que des **seeds** : semés au boot s'ils n'existent pas en DB (`seed_platform_guides`,
+idempotent, n'écrase JAMAIS une ligne éditée), pour provisionner un environnement
+neuf. Droits : lecture = tout authentifié (platform) / org active / self ; écriture =
+platform_admin / org_admin / self.
 
 Distinct des **doctrines nommées** (procédures d'ORG, per-org DB, `oto_procedure`,
-avec slots/versions/publish) : les guides sont **transverses, plateforme, read-only,
-versionnés avec le code** (revus en PR). C'est le pendant des « claude docs » : la
-notion d'« instructions server » a deux étages — toujours-injecté (bloc A/C) vs
-chargé-à-la-demande (guides / doctrines), découvert par un index sans coût de prompt.
+avec slots/versions/publish) et des readmes INIT (delivery='init', injectés au
+handshake) : la notion d'« instructions server » a deux étages — toujours-injecté
+(bloc A/C) vs chargé-à-la-demande (guides / doctrines), découvert par un index sans
+coût de prompt.
 """
 from __future__ import annotations
 
@@ -42,38 +42,34 @@ def _parse(text: str) -> tuple[dict, str]:
     return meta, m.group(2).strip()
 
 
-def _path_for(slug: str) -> Optional[Path]:
-    if not _SLUG_RE.match(slug or ""):
-        return None                       # anti-traversal : slug strict, jamais de `/`
-    p = _GUIDES_DIR / f"{slug}.md"
-    return p if p.is_file() else None
-
-
-def list_guides() -> list[dict]:
-    """`[{slug, title, description}]` trié par slug — sans les corps. '' si dossier absent."""
+def list_file_guides() -> list[dict]:
+    """SEEDS fichiers : `[{slug, title, description, body_md}]` trié par slug.
+    Ne sert plus qu'au seed de boot (`seed_platform_guides`) — la lecture live
+    passe par la DB."""
     if not _GUIDES_DIR.is_dir():
         return []
     out = []
     for p in sorted(_GUIDES_DIR.glob("*.md")):
         try:
-            meta, _ = _parse(p.read_text(encoding="utf-8"))
+            meta, body = _parse(p.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             logger.warning("guide illisible: %s", p.name, exc_info=True)
             continue
         out.append({"slug": p.stem,
                     "title": meta.get("title") or p.stem,
-                    "description": meta.get("description") or ""})
+                    "description": meta.get("description") or "",
+                    "body_md": body})
     return out
 
 
-def read_guide(slug: str) -> Optional[dict]:
-    """`{slug, title, description, body_md}` ou None si slug inconnu/invalide."""
-    p = _path_for(slug)
-    if p is None:
-        return None
-    meta, body = _parse(p.read_text(encoding="utf-8"))
-    return {"slug": slug, "title": meta.get("title") or slug,
-            "description": meta.get("description") or "", "body_md": body}
+def seed_platform_guides() -> None:
+    """Sème les guides plateforme depuis les fichiers `guides/*.md` (boot, idempotent) :
+    un slug déjà en DB n'est JAMAIS réécrit — la DB est la source de vérité éditable,
+    le fichier n'est que le contenu initial d'un environnement neuf."""
+    from . import db
+    for g in list_file_guides():
+        db.seed_guide_db("platform", PLATFORM_OWNER, g["slug"],
+                         g["body_md"], g["title"], g["description"])
 
 
 # Prose INIT dans `guides` (delivery='init'). Slugs canoniques par scope :
@@ -146,7 +142,7 @@ def seed_init_guide(scope: str, ident: Optional[str], body_md: str) -> None:
     db.seed_init_guide_db(scope, owner, slug, body_md)
 
 
-# --- Guides ON-DEMAND scopés (ADR 0042 B5) : platform=fichiers, org/user=DB ---------
+# --- Guides ON-DEMAND scopés (ADR 0042 B5, tout-DB 2026-07-16) ----------------------
 
 class GuideError(ValueError):
     """Écriture de guide invalide (slug mal formé, scope non éditable…)."""
@@ -157,10 +153,12 @@ def _slug_ok(slug: str) -> bool:
 
 
 def list_guides_for(sub: Optional[str] = None, org_id: Optional[int] = None) -> list[dict]:
-    """Guides on-demand VISIBLES par le caller : plateforme (fichiers) ∪ org active (DB)
-    ∪ user (DB). Chaque entrée porte son `scope`. Sans les corps."""
-    out = [{**g, "scope": "platform"} for g in list_guides()]
+    """Guides on-demand VISIBLES par le caller : plateforme ∪ org active ∪ user —
+    tout en DB. Chaque entrée porte son `scope`. Sans les corps."""
     from . import db
+    out = [{"slug": g["slug"], "scope": "platform", "title": g["title"],
+            "description": g["description"]}
+           for g in db.list_guides_db("platform", PLATFORM_OWNER)]
     if org_id is not None:
         out += [{"slug": g["slug"], "scope": "org", "title": g["title"],
                  "description": g["description"]} for g in db.list_guides_db("org", str(org_id))]
@@ -177,9 +175,10 @@ def read_guide_scoped(slug: str, *, scope: Optional[str] = None,
     from . import db
     for sc in ([scope] if scope else ["platform", "org", "user"]):
         if sc == "platform":
-            g = read_guide(slug)                       # fichiers
+            g = db.get_guide_db("platform", PLATFORM_OWNER, slug)
             if g:
-                return {**g, "scope": "platform"}
+                return {"slug": slug, "scope": "platform", "title": g["title"],
+                        "description": g["description"], "body_md": g["body_md"]}
         elif sc == "org" and org_id is not None:
             g = db.get_guide_db("org", str(org_id), slug)
             if g:
@@ -195,10 +194,11 @@ def read_guide_scoped(slug: str, *, scope: Optional[str] = None,
 
 def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
               title: str = "", description: str = "") -> dict:
-    """Crée/met à jour un guide on-demand (scope `org`|`user` seulement — `platform` =
-    fichiers, édités en PR). Slug strict. Renvoie `{slug, scope, title, description}`."""
-    if scope not in ("org", "user"):
-        raise GuideError("scope éditable = org | user (platform = fichiers, PR).")
+    """Crée/met à jour un guide on-demand (scope `platform`|`org`|`user` — l'AUTZ par
+    scope est du ressort de l'appelant : platform_admin / org_admin / self). Slug
+    strict. Renvoie `{slug, scope, title, description}`."""
+    if scope not in ("platform", "org", "user"):
+        raise GuideError("scope éditable = platform | org | user.")
     if not _slug_ok(slug):
         raise GuideError("slug invalide (min. `^[a-z0-9][a-z0-9-]*$`).")
     if not (body_md or "").strip():
@@ -211,8 +211,8 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
 
 
 def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
-    if scope not in ("org", "user"):
-        raise GuideError("scope éditable = org | user.")
+    if scope not in ("platform", "org", "user"):
+        raise GuideError("scope éditable = platform | org | user.")
     from . import db
     return db.delete_guide_db(scope, str(owner_id), slug)
 

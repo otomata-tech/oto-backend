@@ -2,8 +2,8 @@
 
 Miroir REST de l'outil MCP `oto_guide` (tools/guide.py) : même cœur `guide_store`,
 thin adapter d'autz par SCOPE. Le dashboard (REST-only) peut ainsi lister / lire /
-rédiger / supprimer les guides on-demand d'ORG (org_admin) et PERSO (self). Les guides
-PLATEFORME restent des fichiers (`guides/*.md`, PR) — lisibles, non éditables ici.
+rédiger / supprimer les guides on-demand PLATEFORME (platform_admin), d'ORG (org_admin)
+et PERSO (self) — tout-DB 2026-07-16, les fichiers `guides/*.md` = seeds de boot.
 
 Distinct des readmes INIT (delivery='init', injectés au handshake — édités par
 `me.agent_readme` / `platform.instructions`) et des PROCÉDURES (org_instructions, slots).
@@ -38,23 +38,26 @@ class GuideSetInput(BaseModel):
 
 
 def _owner_for_write(ctx: ResolvedCtx, scope: str) -> str:
-    """Le owner_id d'écriture pour `scope`, avec autz. org → org_admin de l'org active ;
-    user → self ; platform (fichiers/PR) → refusé. Lève AuthzDenied."""
+    """Le owner_id d'écriture pour `scope`, avec autz. platform → platform_admin ;
+    org → org_admin de l'org active ; user → self. Lève AuthzDenied."""
+    from .. import roles
     if scope == "user":
         return ctx.sub
     if scope == "org":
         if ctx.org_id is None:
             raise AuthzDenied(400, "no_active_org", "Aucune org active — vois `oto_use_org`.")
-        from .. import roles
         if not roles.is_org_admin(ctx.sub, ctx.org_id):
             raise AuthzDenied(403, "forbidden", "Réservé à un admin de l'org (guide d'org).")
         return str(ctx.org_id)
-    raise AuthzDenied(400, "bad_scope",
-                      "scope éditable = org | user (les guides plateforme sont des fichiers, édités en PR).")
+    if scope == "platform":
+        if not roles.is_platform_admin(ctx.sub):
+            raise AuthzDenied(403, "forbidden", "Réservé à l'admin plateforme (guide plateforme).")
+        return guide_store.PLATFORM_OWNER
+    raise AuthzDenied(400, "bad_scope", "scope éditable = platform | org | user.")
 
 
 def _list(ctx: ResolvedCtx, inp: _NoInput) -> dict:
-    """Catalogue des guides on-demand visibles : plateforme (fichiers) ∪ org active ∪ perso."""
+    """Catalogue des guides on-demand visibles : plateforme ∪ org active ∪ perso (DB)."""
     return {"guides": guide_store.list_guides_for(ctx.sub, ctx.org_id)}
 
 
@@ -83,7 +86,7 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
 
 
 # REST-only : la face MCP est déjà servie par l'outil spine `oto_guide` (tools/guide.py).
-# Autz = SUB_ONLY (authentifié) + garde par SCOPE inline (org_admin / self / platform-refusé)
+# Autz = SUB_ONLY (authentifié) + garde par SCOPE inline (platform_admin / org_admin / self)
 # — comme l'outil MCP ; le combinateur ne peut pas dériver l'org d'un champ `scope` libre.
 CAPABILITIES += [
     Capability(
@@ -98,12 +101,12 @@ CAPABILITIES += [
     ),
     Capability(
         key="me.guides.set", handler=_set, Input=GuideSetInput, authz=SUB_ONLY, mcp=None,
-        description="Create/update an on-demand guide (scope=org|user).",
+        description="Create/update an on-demand guide (scope=platform|org|user).",
         rest=RestBinding("PUT", "/api/me/guides/{scope}/{slug}"),
     ),
     Capability(
         key="me.guides.delete", handler=_delete, Input=GuideRefInput, authz=SUB_ONLY, mcp=None,
-        description="Delete an on-demand guide (scope=org|user).",
+        description="Delete an on-demand guide (scope=platform|org|user).",
         rest=RestBinding("DELETE", "/api/me/guides/{scope}/{slug}"),
     ),
 ]

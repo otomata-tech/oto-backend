@@ -359,6 +359,9 @@ def register(mcp: FastMCP) -> None:
             company: Employeur(s) — noms ou ids de facette.
             location: Localisation(s) — noms ou ids de facette.
             industry: filtre secteur — dict `{include?: [...], exclude?: [...]}` (noms ou ids).
+                ⚠️ `exclude` n'est PAS supporté par `api="classic"` (lève une erreur) :
+                LinkedIn classic n'accepte qu'une liste de secteurs à INCLURE. Pour
+                exclure un secteur, utilise `api="sales_navigator"` ou `"recruiter"`.
             network_distance: degré de relation — `[1]`=1er degré (tes relations N1),
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,

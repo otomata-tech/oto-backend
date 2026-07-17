@@ -748,7 +748,9 @@ def _use_project(ctx: ResolvedCtx, inp: UseProjectInput) -> dict:
         "how_to": (f"Aucun état de session (ADR 0038) : passe `project={inp.project_id}` "
                    "sur CHAQUE appel de travail fait pour ce projet (connecteurs et "
                    "data_* l'acceptent — l'org du projet, ses slots et ses identités "
-                   "préfaites en découlent)."),
+                   f"préfaites en découlent). Puis recharge le contexte de l'org du "
+                   f"projet (readme d'org+équipe, guides, procédures — figé à la "
+                   f"connexion) via `oto_context(project={inp.project_id})`."),
     }
 
 

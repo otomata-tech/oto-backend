@@ -9,6 +9,7 @@ contexte, option messagerie hébergée, plafond de sièges), nonce de corrélati
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import secrets
@@ -20,6 +21,9 @@ from . import access, db
 logger = logging.getLogger(__name__)
 
 CHANNELS = ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER", "TWITTER")
+# Produits LinkedIn premium activables à la connexion (`config.linkedin.products`,
+# oto-core ≥1.30). EXCLUSIFS : un compte n'en active qu'UN (Unipile renvoie 400 sinon).
+LINKEDIN_PREMIUM = ("recruiter", "sales_navigator")
 
 
 class ConnectRefused(Exception):
@@ -43,18 +47,35 @@ def _default_limit() -> int:
 
 
 async def hosted_auth_url(sub: str, channel: str = "linkedin",
-                          force: bool = False) -> dict:
+                          force: bool = False,
+                          premium: "str | None" = None) -> dict:
     """Génère l'URL hosted-auth où l'user connecte SON compte (canal donné) —
     mêmes gates que la face dashboard. Renvoie `{url, channel}`.
 
     `force=True` outrepasse le garde-fou anti-doublon cross-org (issue #172) : par
     défaut, si `sub` a déjà connecté ce canal dans une AUTRE org, on refuse (le
-    compte est PAR-PERSONNE et suit désormais l'utilisateur cross-org)."""
+    compte est PAR-PERSONNE et suit désormais l'utilisateur cross-org).
+
+    `premium` (LinkedIn) = `'recruiter'` | `'sales_navigator'` : produit à ACTIVER
+    au moment de la connexion. Sans lui, Unipile ne connecte que `classic` → les
+    endpoints premium répondent 403 « out of your scope » et le wizard n'offre
+    aucune case. Les deux sont exclusifs (un seul par compte). Demander un premium
+    ajoute aussi la connexion par **cookies** au wizard (recommandé par Unipile
+    pour ces produits — sans ça, seul identifiant/mot de passe est proposé)."""
     provider = str(channel or "linkedin").upper()
     if provider not in CHANNELS:
         raise ConnectRefused(400, "invalid_channel",
                              f"canal inconnu : {channel} (attendu : "
                              f"{', '.join(c.lower() for c in CHANNELS)})")
+    if premium:
+        if provider != "LINKEDIN":
+            raise ConnectRefused(400, "premium_linkedin_only",
+                                 f"`premium` ne vaut que pour LinkedIn (canal demandé : {channel}).")
+        if premium not in LINKEDIN_PREMIUM:
+            raise ConnectRefused(
+                400, "invalid_premium",
+                f"premium inconnu : {premium} (attendu : {', '.join(LINKEDIN_PREMIUM)}). "
+                "Un compte ne peut activer qu'UN produit premium.")
     api_key = access.unipile_api_key_for(sub)
     if not api_key:
         raise ConnectRefused(404, "unipile_not_configured",
@@ -119,12 +140,18 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     ch = provider.lower()
     try:
         url = await asyncio.to_thread(
-            client.hosted_auth_link,
-            name=nonce,
-            providers=[provider],
-            notify_url=f"{public}/api/unipile/webhook",
-            success_redirect_url=f"{dash}/console/connections?unipile=connected&channel={ch}",
-            failure_redirect_url=f"{dash}/console/connections?unipile=failed&channel={ch}",
+            functools.partial(
+                client.hosted_auth_link,
+                name=nonce,
+                providers=[provider],
+                notify_url=f"{public}/api/unipile/webhook",
+                success_redirect_url=f"{dash}/console/connections?unipile=connected&channel={ch}",
+                failure_redirect_url=f"{dash}/console/connections?unipile=failed&channel={ch}",
+                # produit premium demandé → `config.linkedin` (+ cookies au wizard,
+                # recommandé par Unipile pour ces produits)
+                premium=premium,
+                allow_cookies=bool(premium),
+            )
         )
     except Exception as e:
         raise ConnectRefused(502, "unipile_link_failed", f"unipile_link_failed: {e}")

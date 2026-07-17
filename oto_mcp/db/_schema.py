@@ -341,6 +341,10 @@ CREATE TABLE IF NOT EXISTS docs (
     title TEXT NOT NULL,
     body_md TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'doc',
+    -- Lot 3 Ship 2 : chapô (sous-titre curé, fallback dérivé à la lecture) + ordre
+    -- curé de la fratrie (entiers espacés ×16, réindexés atomiquement au move).
+    description TEXT,
+    position INTEGER,
     -- Partage public (gap #4a) : NULL = privé ; sinon un token aléatoire qui sert
     -- de lien public en lecture seule (/api/public/docs/{token}). Index unique créé
     -- dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).

@@ -43,6 +43,43 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Lot 3 Ship 2 : chapô + ordre curé des pages. Backfill des positions par
+        # fratrie (entiers espacés ×16, ordre historique = title) — idempotent
+        # (ne touche que les NULL ; ensuite create_doc/move_doc posent toujours).
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS description TEXT")
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS position INTEGER")
+        conn.execute("""
+            UPDATE docs d SET position = s.rn * 16
+            FROM (SELECT id, ROW_NUMBER() OVER (
+                      PARTITION BY project_id, parent_id ORDER BY title, id) AS rn
+                  FROM docs WHERE position IS NULL) s
+            WHERE d.id = s.id AND d.position IS NULL
+        """)
+        # Lot 3 Ship 1 : index FTS de la recherche transverse (GIN d'expression —
+        # PAS de colonne STORED, qui réécrirait la table sous ACCESS EXCLUSIVE).
+        # Source unique des expressions : db/search.py (index ↔ requête identiques).
+        from . import search as _search
+        for ddl in _search.index_ddl():
+            conn.execute(ddl)
+        # Lot 3 chantier 0.4 : purge du type de lien `doc` (vestige Memento — pointeur
+        # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
+        # prod au comptage du 17/07. Idempotent (0 row ensuite).
+        conn.execute("DELETE FROM project_links WHERE target_type = 'doc'")
+        # Lot 3 chantier 0.3 : le projet KB est ancré PAR ID (fin de l'identification
+        # par nom — renommable, transférable, 2 appels concurrents = 2 KB). ON DELETE
+        # SET NULL : un hard-delete du projet vide l'ancre, kb.py recrée.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS kb_project_id BIGINT "
+                     "REFERENCES projects(id) ON DELETE SET NULL")
+        # Backfill one-shot par nom (l'ancien marqueur) : pour chaque org sans ancre,
+        # le PLUS ANCIEN projet org-owned vivant nommé « Base de connaissance ».
+        conn.execute("""
+            UPDATE orgs o SET kb_project_id = p.id
+            FROM (SELECT DISTINCT ON (owner_id) owner_id, id FROM projects
+                  WHERE owner_type = 'org' AND name = 'Base de connaissance'
+                    AND archived_at IS NULL
+                  ORDER BY owner_id, id) p
+            WHERE o.kb_project_id IS NULL AND p.owner_id = o.id::text
+        """)
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
@@ -73,6 +110,17 @@ def init_db() -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS copied_from BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_copied_from "
                      "ON projects(owner_type, owner_id, copied_from) WHERE copied_from IS NOT NULL")
+        # Scope MEMBRE (ADR 0030 amendé 2026-07-17) : un projet naît possédé par
+        # (owner_type='user', owner_id=sub) — PRIVÉ au créateur — MAIS dans le CONTEXTE
+        # d'une org de travail. `context_org_id` porte cette org : elle sépare la PROPRIÉTÉ
+        # (qui = la personne) du CONTEXTE (où = l'org, pour la résolution des credentials
+        # et le scope de liste). L'identité de la plateforme est toujours `(moi, org)`.
+        # NULL = projet non-perso (contexte dérivé de l'owner org/group) OU perso legacy
+        # (résolution repli sur l'org perso, ancien comportement préservé).
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_org_id BIGINT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_member_context "
+                     "ON projects(owner_id, context_org_id) "
+                     "WHERE owner_type = 'user' AND archived_at IS NULL")
         # Retrait du partage public CHIFFRÉ zero-knowledge (`/p/p`), supplanté par le
         # partage NAVIGABLE live sur `<slug>.share.oto.cx` (share_ui). La table ne stockait
         # que du ciphertext irrécupérable (clé jamais côté serveur) → drop sûr, pas de legacy.

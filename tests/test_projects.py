@@ -22,8 +22,13 @@ ROW = {"id": 7, "owner_type": "org", "owner_id": "99", "name": "Proj", "brief_md
 def seams(monkeypatch):
     rec = {"create": [], "update": [], "archive": []}
     monkeypatch.setattr(P.db, "create_project",
-                        lambda ot, oid, name, brief, created_by=None: rec["create"].append((ot, oid, name, brief, created_by)) or 7)
+                        lambda ot, oid, name, brief, created_by=None, context_org_id=None: rec["create"].append((ot, oid, name, brief, created_by, context_org_id)) or 7)
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
+    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de l'org de contexte. Défaut =
+    # aucun ; les tests dédiés surchargent.
+    rec["member"] = []
+    monkeypatch.setattr(P.db, "list_member_projects",
+                        lambda sub, org, **k: rec["member"].append((sub, org)) or [])
     rec["list_owners"] = []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
                         lambda owners, templates_only=False: rec["list_owners"].append(owners) or (
@@ -94,11 +99,13 @@ def test_mcp_url_domain_env_driven(monkeypatch):
     assert P._mcp_url("ft", "off") is None
 
 
-def test_create_defaults_to_active_org(seams):
-    # Suppression du perso : le défaut crée dans l'ORG ACTIVE (ctx.org_id), plus en user.
+def test_create_defaults_to_personal(seams):
+    # ADR 0030 AMENDÉ (2026-07-17) : le défaut crée un projet PERSO — owner=('user', sub),
+    # PRIVÉ, dans le CONTEXTE de l'org active (context_org=99). L'org/team = partage ou
+    # transfert explicites, plus le défaut. C'est l'identité « moi, org ».
     ctx = ResolvedCtx(sub="u1", org_id=99)
     out = P._project(ctx, P.ProjectInput(op="create", name="  Proj  ", brief_md="b"))
-    assert seams["create"] == [("org", "99", "Proj", "b", "u1")]     # owner=org active
+    assert seams["create"] == [("user", "u1", "Proj", "b", "u1", 99)]   # owner=perso, contexte=org
     assert out["id"] == 7 and out["name"] == "Proj"
 
 
@@ -172,6 +179,22 @@ def test_list_without_active_org_rejected(seams):
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX_NOORG, P.ProjectInput(op="list"))   # pas d'org active
     assert e.value.code == "no_active_org"
+
+
+def test_list_includes_my_personal_projects(seams, monkeypatch):
+    # ADR 0030 amendé : mes projets PERSO de l'org de CONTEXTE apparaissent dans la liste,
+    # possédés (jamais `shared`), scopés à l'org active (`db.list_member_projects(sub, org)`).
+    mine = dict(ROW, id=71, name="Perso", owner_type="user", owner_id="u1",
+                context_org_id=99)
+    monkeypatch.setattr(P.db, "list_member_projects",
+                        lambda sub, org, **k: [mine] if (sub, org) == ("u1", 99) else [])
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="list"))
+    ids = [p["id"] for p in out["projects"]]
+    assert ids == [7, 71]                                  # org-owned + mon perso
+    perso = next(p for p in out["projects"] if p["id"] == 71)
+    assert perso["shared"] is False and perso["owner_type"] == "user"
+    assert perso["context_org_id"] == "99"                 # « moi, org » exposé
 
 
 def test_list_includes_projects_delivered_to_org(seams, monkeypatch):
@@ -354,11 +377,19 @@ def test_link(seams):
     assert out["ok"] is True and out["links"]
 
 
+def test_link_type_doc_removed(seams):
+    # Lot 3 chantier 0.4 : le type de lien `doc` (vestige Memento) est RETIRÉ —
+    # relier des pages = les backlinks [[…]] (Ship 4), pas un pointeur de rail.
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36")
+
+
 def test_link_with_role(seams):
-    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc",
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="procedure",
                                    target_ref="36", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "doc", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
+    assert seams["link"] == [(7, "procedure", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
 
 
 def test_link_connector_with_config(seams):
@@ -450,7 +481,7 @@ def test_link_missing_target(seams):
 def test_link_forbidden_without_write(seams, monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36"))
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="tableau", target_ref="36"))
     assert e.value.code == "forbidden"
 
 

@@ -29,7 +29,7 @@ from .users import upsert_user
 
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
-_PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
+_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
                  "mcp_expose_datastore_write, archived_at, created_at, updated_at")
 
@@ -42,19 +42,40 @@ _MCP_ACCESS = ("off", "anonymous", "secret", "org")
 
 def create_project(owner_type: str, owner_id: str, name: str,
                    brief_md: str = "", created_by: Optional[str] = None,
-                   copied_from: Optional[int] = None) -> int:
+                   copied_from: Optional[int] = None,
+                   context_org_id: Optional[int] = None) -> int:
     """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
     (perso) | org.id::text | group.id::text. `copied_from` = id de la source si ce projet
-    est un fork (« Ajouter à mon Oto ») → import idempotent par org."""
+    est un fork (« Ajouter à mon Oto ») → import idempotent par org. `context_org_id`
+    (ADR 0030 amendé) = l'org de CONTEXTE d'un projet perso (owner='user') — sépare la
+    propriété (la personne) du contexte de travail (l'org, pour la résolution des
+    credentials et le scope de liste) ; NULL pour un projet non-perso (contexte = owner)."""
     if owner_type == "user":
         upsert_user(owner_id)
     with _connect() as conn:
         row = conn.execute(
-            "INSERT INTO projects (owner_type, owner_id, name, brief_md, created_by, copied_from) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (owner_type, owner_id, name, brief_md, created_by, copied_from),
+            "INSERT INTO projects (owner_type, owner_id, context_org_id, name, brief_md, created_by, copied_from) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (owner_type, owner_id, context_org_id, name, brief_md, created_by, copied_from),
         ).fetchone()
         return int(row["id"])
+
+
+def list_member_projects(sub: str, org_id: int, *,
+                         include_archived: bool = False) -> list[dict]:
+    """Projets PERSO de l'acteur (owner=('user', sub)) DANS le contexte de l'org `org_id`
+    (scope membre `(sub, org)`, ADR 0030 amendé). Privés à leur propriétaire, listés dans
+    LEUR org de contexte (pas un fourre-tout cross-org). Le contexte `(moi, org)` est la
+    demi-identité qui manquait : un projet perso créé « chez movinmotion » remonte chez
+    movinmotion, pas chez otomata. Filtre `context_org_id = org_id` (les perso legacy à
+    contexte NULL n'y apparaissent pas — ils vivent dans l'org perso)."""
+    sql = (f"SELECT {_PROJECT_COLS} FROM projects "
+           "WHERE owner_type = 'user' AND owner_id = %s AND context_org_id = %s ")
+    if not include_archived:
+        sql += "AND archived_at IS NULL "
+    sql += "ORDER BY updated_at DESC"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (sub, org_id)).fetchall()]
 
 
 def find_copied_project(owner_type: str, owner_id: str, src_id: int) -> Optional[dict]:
@@ -357,19 +378,6 @@ def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> N
                 l["title"] = t
 
 
-def _apply_doc_titles(links: list[dict], meta_by_id: dict[int, dict]) -> None:
-    """Attache le TITRE et le `doc_project_id` à chaque lien `doc` (page Documents,
-    résolue depuis le doc_id porté par `target_ref`). Le project_id du doc sert le
-    deep-link (la page vit dans SON projet — souvent la KB de l'org). Pur (mutation en
-    place). Ref non numérique / doc disparu → pas de clés (le lien reste, best-effort)."""
-    for l in links:
-        if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit():
-            m = meta_by_id.get(int(l["target_ref"]))
-            if m is not None:
-                l["title"] = m["title"]
-                l["doc_project_id"] = m["project_id"]
-
-
 def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
@@ -427,30 +435,31 @@ def list_project_links(project_id: int) -> list[dict]:
                 "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
             ).fetchall()
             _apply_procedure_titles(out, {r["id"]: r["title"] for r in drows})
-        # Idem pour les pages Documents des liens `doc` : titre + project_id (deep-link).
-        doc_link_ids = [int(l["target_ref"]) for l in out
-                        if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit()]
-        if doc_link_ids:
-            grows = conn.execute(
-                "SELECT id, title, project_id FROM docs WHERE id = ANY(%s)", (doc_link_ids,),
-            ).fetchall()
-            _apply_doc_titles(out, {r["id"]: {"title": r["title"], "project_id": r["project_id"]}
-                                    for r in grows})
+        # (Le type de lien `doc` — pointeur manuel vers une page — a été RETIRÉ, lot 3
+        # chantier 0.4 : relier des pages = les backlinks `[[…]]` de Ship 4, pas un
+        # pointeur de rail. Les liens existants ont été purgés en migration.)
         return out
 
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
-_DOC_COLS = ("id, project_id, parent_id, title, body_md, kind, public_token, "
+_DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, public_token, "
              "created_by, created_at, updated_at")
 
 
 def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
-               body_md: str = "", kind: str = "doc", created_by: Optional[str] = None) -> int:
+               body_md: str = "", kind: str = "doc", created_by: Optional[str] = None,
+               description: Optional[str] = None) -> int:
+    # `position` : fin de fratrie (MAX+16, même transaction) — l'ordre curé (Ship 2)
+    # est posé dès la création, le tri (parent_id, position, title) reste stable.
     with _connect() as conn:
         row = conn.execute(
-            "INSERT INTO docs (project_id, parent_id, title, body_md, kind, created_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (project_id, parent_id, title, body_md, kind, created_by),
+            "INSERT INTO docs (project_id, parent_id, title, body_md, kind, created_by, description, position) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, "
+            "  COALESCE((SELECT MAX(position) FROM docs "
+            "            WHERE project_id = %s AND parent_id IS NOT DISTINCT FROM %s), 0) + 16) "
+            "RETURNING id",
+            (project_id, parent_id, title, body_md, kind, created_by, description,
+             project_id, parent_id),
         ).fetchone()
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
         return int(row["id"])
@@ -492,7 +501,7 @@ def list_docs_for_project(project_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT {_DOC_COLS} FROM docs WHERE project_id = %s "
-            "ORDER BY parent_id NULLS FIRST, title", (project_id,),
+            "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title", (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -539,12 +548,17 @@ def search_docs_in_project(project_id: int, query: str, *, limit: int = 20) -> l
 
 def update_doc(doc_id: int, *, title: Optional[str] = None,
                body_md: Optional[str] = None, kind: Optional[str] = None,
-               edited_by: Optional[str] = None) -> None:
+               edited_by: Optional[str] = None,
+               description: Optional[str] = None) -> None:
     sets: list[str] = []
     params: list = []
     if title is not None:
         sets.append("title = %s")
         params.append(title)
+    if description is not None:
+        # Chapô (Ship 2) — '' efface (retour au fallback dérivé à la lecture).
+        sets.append("description = %s")
+        params.append(description)
     if body_md is not None:
         sets.append("body_md = %s")
         params.append(body_md)
@@ -630,10 +644,113 @@ def delete_doc(doc_id: int) -> None:
         conn.execute("DELETE FROM docs WHERE id = %s", (doc_id,))
 
 
-def move_doc(doc_id: int, new_parent_id: Optional[int]) -> None:
+def move_doc(doc_id: int, new_parent_id: Optional[int],
+             *, position: Optional[int] = None) -> None:
+    """Reparente ET/OU réordonne (Ship 2). `position` = INDEX cible (0-based) dans la
+    fratrie de destination ; None = fin. La fratrie est RÉINDEXÉE atomiquement
+    (entiers espacés ×16, même transaction) — aucune collision possible, le
+    tie-break `title` du tri ne joue que sur des données pré-backfill."""
     with _connect() as conn:
+        row = conn.execute("SELECT project_id FROM docs WHERE id = %s", (doc_id,)).fetchone()
+        if row is None:
+            return
+        pid = row["project_id"]
         conn.execute("UPDATE docs SET parent_id = %s, updated_at = NOW() WHERE id = %s",
                      (new_parent_id, doc_id))
+        sibs = conn.execute(
+            "SELECT id FROM docs WHERE project_id = %s "
+            "AND parent_id IS NOT DISTINCT FROM %s AND id <> %s "
+            "ORDER BY position NULLS LAST, title, id",
+            (pid, new_parent_id, doc_id)).fetchall()
+        ids = [r["id"] for r in sibs]
+        idx = len(ids) if position is None else max(0, min(int(position), len(ids)))
+        ids.insert(idx, doc_id)
+        for i, did in enumerate(ids):
+            conn.execute("UPDATE docs SET position = %s WHERE id = %s", ((i + 1) * 16, did))
+
+
+def derive_description(body_md: str, cap: int = 140) -> str:
+    """Chapô DÉRIVÉ du corps (fallback à la LECTURE — jamais stocké, on ne duplique
+    pas la source) : première ligne de PROSE (headings/code/tables sautés), markdown
+    strippé, cap ~140. « Vide plutôt que déchet » : rien de probant ⇒ ''."""
+    for line in (body_md or "").splitlines():
+        t = line.strip()
+        if not t or t.startswith(("#", "```", "|", "---", "===")):
+            continue
+        t = re.sub(r"`{1,3}([^`]*)`{1,3}", r"\1", t)      # code inline → contenu
+        t = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", t)        # image → rien
+        t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)    # [texte](url) → texte
+        t = re.sub(r"^\s*(?:[-+*]|\d+\.)\s+", "", t)      # puce de liste
+        t = re.sub(r"[*_~>]", "", t)                      # emphase / quote
+        t = " ".join(t.split())
+        if len(t) < 8:
+            continue
+        return t[:cap] + ("…" if len(t) > cap else "")
+    return ""
+
+
+def project_spine(project_id: int, *, from_doc: Optional[int] = None,
+                  depth: int = 2, max_nodes: int = 200) -> dict:
+    """L'ÉPINE d'un projet (Ship 2) — l'arbre des pages dans l'ORDRE CURÉ, borné en
+    profondeur ET en nombre de nœuds : la carte que l'agent lit pour se repérer
+    (c'est le `load` de Memento). Chaque nœud = {id, title, description(fallback
+    dérivé), children?, more?} ; `more` = nb d'enfants coupés (le DRILL `from_doc`
+    descend une branche). Une requête, assemblage Python (arbres petits)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, parent_id, title, description, body_md FROM docs "
+            "WHERE project_id = %s "
+            "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title",
+            (project_id,)).fetchall()
+    by_parent: dict = {}
+    by_id: dict = {}
+    for r in rows:
+        by_id[r["id"]] = r
+        by_parent.setdefault(r["parent_id"], []).append(r)
+    budget = {"n": 0}
+
+    def _node(r: dict, d: int) -> dict:
+        budget["n"] += 1
+        out = {"id": r["id"], "title": r["title"],
+               "description": r["description"] or derive_description(r["body_md"])}
+        kids = by_parent.get(r["id"], [])
+        if not kids:
+            return out
+        if d <= 0 or budget["n"] >= max_nodes:
+            out["more"] = _count_subtree(r["id"])
+            return out
+        shown = []
+        for k in kids:
+            if budget["n"] >= max_nodes:
+                out["more"] = len(kids) - len(shown)
+                break
+            shown.append(_node(k, d - 1))
+        out["children"] = shown
+        return out
+
+    def _count_subtree(did) -> int:
+        n = 0
+        stack = [did]
+        while stack:
+            for k in by_parent.get(stack.pop(), []):
+                n += 1
+                stack.append(k["id"])
+        return n
+
+    if from_doc is not None:
+        root = by_id.get(int(from_doc))
+        roots = [root] if root is not None else []
+    else:
+        roots = by_parent.get(None, [])
+    tree = []
+    for r in roots:
+        if budget["n"] >= max_nodes:
+            break
+        tree.append(_node(r, max(depth, 1)))
+    out = {"pages": len(rows), "root_doc": from_doc, "tree": tree}
+    if len(tree) < len(roots):
+        out["more_roots"] = len(roots) - len(tree)
+    return out
 
 
 # --- Journal d'activité du projet (incrément 5) ------------------------------

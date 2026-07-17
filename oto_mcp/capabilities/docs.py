@@ -37,6 +37,8 @@ class DocInput(BaseModel):
     title: Optional[str] = None
     body_md: Optional[str] = None
     kind: Optional[Literal["doc", "note", "source"]] = None
+    description: Optional[str] = None  # chapô (Ship 2) — '' efface (fallback dérivé)
+    position: Optional[int] = None     # move : INDEX cible (0-based) dans la fratrie
     request_id: Optional[int] = None   # resolve_change
     message: Optional[str] = None      # request_change : note libre du demandeur
     accept: Optional[bool] = None      # resolve_change : True = accepter (applique), False = refuser
@@ -54,8 +56,8 @@ def _can(sub: str, project_id: int, want: str) -> bool:
 
 def _view(row: dict) -> dict:
     out = {k: row.get(k) for k in
-           ("id", "project_id", "parent_id", "title", "body_md", "kind",
-            "created_at", "updated_at")}
+           ("id", "project_id", "parent_id", "title", "description", "position",
+            "body_md", "kind", "created_at", "updated_at")}
     tok = row.get("public_token")
     out["public"] = bool(tok)
     out["public_url"] = _public_doc_url(tok) if tok else None
@@ -74,7 +76,8 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
             _require(parent and parent["project_id"] == inp.project_id, "bad_parent",
                      "Parent invalide (autre projet ou inexistant).")
         did = db.create_doc(int(inp.project_id), inp.title.strip(), parent_id=inp.parent_id,
-                            body_md=inp.body_md or "", kind=(inp.kind or "doc"), created_by=sub)
+                            body_md=inp.body_md or "", kind=(inp.kind or "doc"), created_by=sub,
+                            description=inp.description)
         db.log_project_activity(int(inp.project_id), sub, "doc.create", inp.title.strip())
         return _view(db.get_doc_by_id(did))
 
@@ -85,11 +88,21 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                 "docs": [_view(d) for d in db.list_docs_for_project(int(inp.project_id))]}
 
     if inp.op == "search":
+        # DÉPRÉCIÉ (lot 3 Ship 1) : rerouté sur le chemin UNIQUE de recherche
+        # (`oto_search` scope=project kinds=page) — un seul verbe, un seul code.
+        # Forme de sortie conservée-approchée (`results`), + le pointeur.
         _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
         _require(inp.query and inp.query.strip(), "missing_query", "`query` requis.")
         _require(_can(sub, inp.project_id, "read"), "forbidden", "Accès refusé.", 403)
+        from .. import search as search_mod
+        out = search_mod.search(sub, ctx.org_id, inp.query.strip(),
+                                scope="project", project_id=int(inp.project_id),
+                                kinds=["page"])
         return {"project_id": inp.project_id, "query": inp.query.strip(),
-                "results": db.search_docs_in_project(int(inp.project_id), inp.query.strip())}
+                "deprecated": "utilise oto_search (scope=project) — même chemin, toutes sources",
+                "results": [{"id": h["ref"], "project_id": h.get("project_id"),
+                             "title": h["title"], "snippet": h.get("passage") or "",
+                             "updated_at": h.get("updated_at")} for h in out["hits"]]}
 
     # ops par doc_id (résolvent le projet pour l'autz)
     _require(inp.doc_id is not None, "missing_doc", "`doc_id` requis.")
@@ -154,7 +167,8 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     if inp.op == "update":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         db.update_doc(int(inp.doc_id), title=(inp.title.strip() if inp.title else None),
-                      body_md=inp.body_md, kind=inp.kind, edited_by=sub)
+                      body_md=inp.body_md, kind=inp.kind, edited_by=sub,
+                      description=inp.description)
         db.log_project_activity(pid, sub, "doc.update", row.get("title"))
         return _view(db.get_doc_by_id(int(inp.doc_id)))
 
@@ -164,7 +178,8 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         db.log_project_activity(pid, sub, "doc.delete", row.get("title"))
         return {"ok": True, "id": inp.doc_id, "deleted": True}
 
-    # move — nouveau parent dans le MÊME projet (cycle profond non gardé en v1).
+    # move — nouveau parent dans le MÊME projet (cycle profond non gardé en v1) ET/OU
+    # réordonnancement (Ship 2 : `position` = index cible, la fratrie est réindexée).
     _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
     if inp.parent_id is not None:
         _require(int(inp.parent_id) != int(inp.doc_id), "bad_parent",
@@ -172,7 +187,10 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         parent = db.get_doc_by_id(int(inp.parent_id))
         _require(parent and parent["project_id"] == pid, "bad_parent",
                  "Parent invalide (autre projet ou inexistant).")
-    db.move_doc(int(inp.doc_id), inp.parent_id)
+    # `parent_id` absent + `position` posé = réordonner DANS la fratrie courante.
+    target_parent = inp.parent_id if inp.parent_id is not None else (
+        row.get("parent_id") if inp.position is not None else None)
+    db.move_doc(int(inp.doc_id), target_parent, position=inp.position)
     return _view(db.get_doc_by_id(int(inp.doc_id)))
 
 

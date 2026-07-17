@@ -76,6 +76,53 @@ def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, st
         for g in group_store.list_groups_for_user(sub, org_id)]
 
 
+def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
+    """Owners du CONTEXTE projet de l'org active (lot 3 Ship 1, factorisation du
+    scoping d'`oto_project op=list`) : l'org active + ses pôles (ADR 0049 — mes
+    équipes, ou TOUTES si org_admin, même règle que `can_read_group`). Parité
+    gardée par tripwire (`test_search_scope_tripwire`)."""
+    owner = active_owner(org_id)
+    if owner is None:
+        return []
+    if roles.is_org_admin(sub, int(org_id)):        # type: ignore[arg-type]
+        gids = [int(g["id"]) for g in group_store.list_groups(int(org_id))]  # type: ignore[arg-type]
+    else:
+        gids = [int(g["group_id"]) for g in group_store.list_groups_for_user(sub, org_id)]
+    return [owner] + [("group", str(g)) for g in gids]
+
+
+def accessible_project_ids(sub: str, org_id: Optional[int],
+                           want: str = "read") -> list[int]:
+    """Ids des projets accessibles DANS l'org active — le scoping ENSEMBLISTE
+    d'`op=list` factorisé (lot 3) : owned par le contexte (org + pôles) ∪ partagés
+    aux principals du contexte. Sert la recherche (`want='read'`) et l'inbox
+    (`want='write'` : seuls les grants write s'ajoutent). **Jamais `can_access`**
+    (cross-org par construction) — cf. invariants du plan lot 3."""
+    owners = project_scope_owners(sub, org_id)
+    if not owners:
+        return []
+    ids = [int(r["id"]) for r in db.list_projects_for_owners(owners)]
+    seen = set(ids)
+    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de CETTE org (`context_org`),
+    # possédés → read+write. En PARITÉ STRICTE avec `oto_project op=list` (même seam
+    # `db.list_member_projects`) — sinon « cherchable ⇔ lisible » ment (tripwire
+    # `test_search_scope_tripwire`). org_id non-None ici (owners non vide).
+    for r in db.list_member_projects(sub, int(org_id)):  # type: ignore[arg-type]
+        rid = int(r["id"])
+        if rid not in seen:
+            ids.append(rid)
+            seen.add(rid)
+    for r in db.list_projects_granted_to(active_org_principals(sub, org_id)):
+        rid = int(r["id"])
+        if rid in seen:
+            continue
+        if want == "write" and r.get("permission") != "write":
+            continue
+        ids.append(rid)
+        seen.add(rid)
+    return ids
+
+
 def visible_in_org(sub: str, org_id: Optional[int],
                    resource_type: str, resource_id: str) -> bool:
     """Une ressource possédée est-elle visible DANS le contexte de l'org `org_id` ?
@@ -90,6 +137,11 @@ def visible_in_org(sub: str, org_id: Optional[int],
         return False
     o = owner_of(resource_type, resource_id)
     if o is not None and (str(o[0]), str(o[1])) == owner:
+        return True
+    # Scope MEMBRE (ADR 0030 amendé) : ma ressource perso (owner=('user', sub)) m'est
+    # visible dans tout contexte où je suis — c'est la MIENNE, jamais une fuite cross-org
+    # (le plan de LISTE, lui, la range dans son org de contexte via `list_member_projects`).
+    if o is not None and str(o[0]) == "user" and str(o[1]) == sub:
         return True
     # ADR 0049 : une ressource GROUP-owned appartient au contexte de son org PARENTE —
     # visible ici ssi le groupe est dans cette org ET l'acteur peut le lire (membre du

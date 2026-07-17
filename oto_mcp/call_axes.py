@@ -167,13 +167,26 @@ def _is_project_scopable_tool(name: str) -> bool:
     return ns == "data" or providers.connector_for_namespace(ns) is not None
 
 
-def _resolve_project_org_guarded(sub: str, pid: int, subdomain_org: Optional[int]) -> Optional[int]:
-    """Garde d'accès + dérivation de l'org propriétaire du projet (chemin DB sync,
-    appelé en threadpool). Lève une McpError actionnable si l'acteur n'a pas accès en
-    lecture (privacy-by-default ADR 0030 — jamais is_org_member), si le projet n'existe
-    pas, ou s'il échappe au lock de sous-domaine. L'org dérivée est co-posée pour que
-    credentials/redaction/datastore résolvent sous l'org du projet."""
-    from . import group_store, org_store, ownership
+def _resolve_project_context_guarded(
+    sub: str, pid: int, subdomain_org: Optional[int],
+) -> tuple[Optional[int], Optional[int]]:
+    """Garde d'accès + dérivation du CONTEXTE (org, groupe) propriétaire du projet
+    (chemin DB sync, appelé en threadpool). Lève une McpError actionnable si l'acteur
+    n'a pas accès en lecture (privacy-by-default ADR 0030 — jamais is_org_member), si le
+    projet n'existe pas, ou s'il échappe au lock de sous-domaine.
+
+    L'org dérivée est co-posée pour que credentials/redaction/datastore résolvent sous
+    l'org du projet. **Pour un projet d'ÉQUIPE (owner_type='group'), le groupe
+    propriétaire est co-posé** (2e valeur) : ouvrir le projet résout alors la cascade de
+    credentials de cette équipe (`group_secret`) de façon DÉTERMINISTE — indépendante du
+    groupe actif de l'utilisateur (c'est le fond de #218 : « projet et credentials au
+    même niveau »). Symétrique de l'org déjà co-posée, PAS l'inverse (jamais poser un
+    groupe sur un projet org-owned — restreindre/positionner = poser le projet au bon
+    scope, cf. transfert `oto_resource op=transfer new_owner_group`). Gardé
+    `can_read_group` : cohérent avec l'invariant que `current_group` suppose sur l'axe
+    d'appel (membre du groupe ou escalade org_admin) → un bénéficiaire d'un simple partage
+    de projet, hors de l'équipe, n'hérite pas de ses credentials."""
+    from . import db, group_store, org_store, ownership, roles
     if not ownership.can_access(sub, "project", str(pid), "read"):
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -184,15 +197,24 @@ def _resolve_project_org_guarded(sub: str, pid: int, subdomain_org: Optional[int
         raise McpError(ErrorData(
             code=INVALID_PARAMS, message=f"Projet #{pid} introuvable."))
     owner_type, owner_id = owner
+    group: Optional[int] = None
     if owner_type == "org":
         org = int(owner_id)
     elif owner_type == "group":
-        g = group_store.get_group(int(owner_id))
+        gid = int(owner_id)
+        g = group_store.get_group(gid)
         org = g.get("org_id") if g else None
+        if roles.can_read_group(sub, gid):
+            group = gid
     elif owner_type == "user":
-        # Projet perso : l'org co-posée est l'org PERSO du PROPRIÉTAIRE (jamais
-        # int(sub) — le sub n'est pas un id d'org).
-        org = org_store.get_personal_org(owner_id)
+        # Projet perso (ADR 0030 amendé) : l'org co-posée = son org de CONTEXTE
+        # (`context_org_id` — « moi, org » : un projet perso créé chez movinmotion
+        # résout les credentials movinmotion, pas l'org perso). Repli sur l'org PERSO
+        # du propriétaire pour les perso LEGACY sans contexte (jamais int(sub) — le sub
+        # n'est pas un id d'org).
+        prow = db.get_project_by_id(int(pid))
+        ctx_org = prow.get("context_org_id") if prow else None
+        org = int(ctx_org) if ctx_org is not None else org_store.get_personal_org(owner_id)
     else:
         org = None
     if subdomain_org is not None and org is not None and org != subdomain_org:
@@ -200,21 +222,24 @@ def _resolve_project_org_guarded(sub: str, pid: int, subdomain_org: Optional[int
             code=INVALID_PARAMS,
             message=(f"Le projet #{pid} appartient à une autre org que celle de ce "
                      "endpoint (verrou de sous-domaine) — impossible de l'activer ici.")))
-    return org
+    return org, group
 
 
 async def _pin_project(value: object) -> list[UndoEntry]:
-    """Épingle le projet de l'appel + co-pose l'org dérivée. Rejette l'anonyme AVANT
-    toute pose. Garde `can_access` en threadpool (DB sur le chemin inbound chaud)."""
+    """Épingle le projet de l'appel + co-pose l'org dérivée (+ le groupe propriétaire
+    pour un projet d'équipe). Rejette l'anonyme AVANT toute pose. Garde `can_access` en
+    threadpool (DB sur le chemin inbound chaud)."""
     if value is None:
         return []
     pid = require_axis_int(value, "project")
     sub = require_axis_sub("project")
     cand = session_org.current_subdomain_candidate()
-    org = await run_in_threadpool(_resolve_project_org_guarded, sub, pid, cand)
+    org, group = await run_in_threadpool(_resolve_project_context_guarded, sub, pid, cand)
     undo: list[UndoEntry] = []
     if org is not None:
         undo.append((session_org.reset_call_org, session_org.set_call_org(org)))
+    if group is not None:
+        undo.append((session_org.reset_call_group, session_org.set_call_group(group)))
     undo.append((session_org.reset_call_project, session_org.set_call_project(pid)))
     return undo
 
@@ -226,10 +251,11 @@ PROJECT = CallAxis(
         "title": "Project",
         "description": (
             "Projet dans le cadre duquel exécuter CET appel (id, cf. `oto_project "
-            "op=list`) — le jeton PRIMAIRE : scope l'action sur l'org du projet, résout "
-            "les `slot:<nom>` contre ses bindings et épingle ses identités connecteur "
-            "préfaites. À passer sur CHAQUE appel fait pour un projet (aucun état de "
-            "session ne le retient)."
+            "op=list`) — le jeton PRIMAIRE : scope l'action sur l'org du projet (et sur "
+            "son ÉQUIPE si le projet appartient à une équipe → ses secrets d'équipe "
+            "résolvent), résout les `slot:<nom>` contre ses bindings et épingle ses "
+            "identités connecteur préfaites. À passer sur CHAQUE appel fait pour un "
+            "projet (aucun état de session ne le retient)."
         ),
     },
     applies=_is_project_scopable_tool,

@@ -91,6 +91,32 @@ def get_boamp(idweb: str) -> Optional[dict[str, Any]]:
     return _get(f"/api/fr/tenders/{idweb}")
 
 
+def search_aides(insee=None, code_postal=None, effectif=None, nature=None,
+                 echeance_avant=None, q=None, limit=50, offset=0) -> dict[str, Any]:
+    import httpx
+
+    try:
+        return _post("/api/fr/aides/search", {
+            "insee": insee, "code_postal": code_postal, "effectif": effectif,
+            "nature": nature, "echeance_avant": echeance_avant, "q": q,
+            "limit": limit, "offset": offset,
+        })
+    except httpx.HTTPStatusError as e:
+        # 400 métier du service (commune/CP inconnu du référentiel) : re-lever le
+        # detail actionnable, pas le message httpx générique.
+        if e.response.status_code == 400:
+            try:
+                detail = e.response.json().get("detail", e.response.text)
+            except Exception:
+                detail = e.response.text
+            raise ValueError(detail) from e
+        raise
+
+
+def get_aide(id_aid: str) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/aides/{id_aid}")
+
+
 def search_acco(query=None, themes=None, nature=None, siren=None, siret=None,
                 idcc=None, departement=None, date_from=None, date_to=None,
                 latest_per_siret=False, sort_by="date", sort_dir="desc",

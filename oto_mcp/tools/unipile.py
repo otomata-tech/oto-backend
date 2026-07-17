@@ -124,28 +124,38 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
     `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
     contexte view-as/session du requérant (anti-fuite, cf. access._UNSET).
-    Scope membre (ADR 0033 B4) : les canaux liés à l'org de contexte, PLUS — si cette
-    org résout via la clé PLATEFORME — le siège plateforme cross-org (#221 : un compte
-    hébergé est par-personne, il suit le sub dans toutes ses orgs)."""
+    Scope membre (ADR 0033 B4) : `channels` = les canaux liés à CETTE org (le binding
+    est un acte par org — modèle explicite, fin du fallback silencieux #221).
+    `elsewhere` = la PROPOSITION : canaux non liés ici dont le sub a un siège
+    plateforme vivant dans une autre org (même clé partagée ⟹ adoptable au connect)."""
     o = access.current_org(sub) if org is access._UNSET else org
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
     all_accts = db.list_unipile_accounts(sub)
     accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
-    # Siège plateforme cross-org (#221) : si l'org de contexte résout via la clé
-    # PLATEFORME **et** que l'option y est ouverte (usable), on montre le siège hébergé
-    # de la personne (le plus récent) pour les canaux non liés ici. Un compte BYO d'une
-    # autre org reste apparié à sa clé (exclu). Sans option → pas de faux « connecté ».
+    # Adoption possible ? (mode platform = même clé partout ; l'option gate le connect)
+    elsewhere: dict = {}
     if mode == "platform" and subscribed:
-        for a in sorted((x for x in all_accts if x.get("platform_seat")),
+        for a in sorted((x for x in all_accts
+                         if x.get("platform_seat") and x.get("org_id") != o),
                         key=lambda x: str(x.get("connected_at") or ""), reverse=True):
-            accts.setdefault(a["provider"], a)
+            if a["provider"] not in accts:
+                elsewhere.setdefault(a["provider"], {
+                    "account_id": a["account_id"],
+                    "account_name": a.get("account_name"),
+                    "org_id": a.get("org_id"),
+                })
+    front_by_provider = {prov: front for front, prov in UNIPILE_CHANNELS.items()}
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
         "channels": _channels_from(accts),
+        # par canal front : compte du sub connecté AILLEURS, adoptable ici en un clic
+        # (le bouton Connect adopte côté backend — l'UI peut l'annoncer).
+        "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
+                      if p in front_by_provider},
     }
 
 
@@ -356,6 +366,14 @@ def register(mcp: FastMCP) -> None:
                                                         premium=premium)
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
+        if out.get("adopted"):
+            # Binding-par-org : le compte déjà connecté ailleurs (même clé partagée)
+            # vient d'être lié à l'org courante — aucun lien à ouvrir.
+            out["instructions"] = (
+                f"Compte {out.get('channel', channel)} déjà connecté ailleurs : il vient "
+                "d'être activé pour cette org — rien d'autre à faire, les outils sont "
+                "utilisables immédiatement.")
+            return out
         out["instructions"] = (
             f"Transmets `url` à l'utilisateur : il ouvre le lien, connecte son compte "
             f"{out.get('channel', channel)}, et la liaison se finalise seule "

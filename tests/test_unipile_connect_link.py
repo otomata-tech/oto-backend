@@ -30,6 +30,16 @@ def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0
     # Garde-fou anti-doublon cross-org (#172) : comptes déjà connectés du sub, tous
     # canaux/orgs confondus. [] par défaut ⇒ garde-fou inerte (chemins existants).
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: connected or [])
+    # Adoption (binding-par-org) : siège plateforme du sub dans une autre org, dérivé
+    # de `connected` (platform_seat=True seulement — un BYO n'est jamais adoptable).
+    def _seat_elsewhere(sub, prov="LINKEDIN", exclude_org=None):
+        for a in (connected or []):
+            if (a.get("provider") == prov and a.get("org_id") != exclude_org
+                    and a.get("platform_seat")):
+                return a
+        return None
+    monkeypatch.setattr("oto_mcp.db.seat_binding_elsewhere", _seat_elsewhere)
+    monkeypatch.setattr("oto_mcp.db.set_unipile_account", lambda *a, **k: None)
     monkeypatch.setattr("oto_mcp.db.get_unipile_account",
                         lambda sub, org_id, prov: existing)
     monkeypatch.setattr("oto_mcp.db.get_org_unipile_limit", lambda org_id: limit)

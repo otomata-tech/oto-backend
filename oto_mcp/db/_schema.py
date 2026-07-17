@@ -486,6 +486,12 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     -- par org — revendeur/passthrough). FALSE en BYO (l'user paie son instance).
     platform_seat BOOLEAN NOT NULL DEFAULT FALSE,
     connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- SOFT disconnect : la ligne survit (disconnected_at posé) au lieu d'être
+    -- supprimée. C'est la PREUVE DE PROPRIÉTÉ durable du compte : une reconnexion
+    -- qui RÉUTILISE le même account_id chez Unipile (comportement observé) est
+    -- rebindée déterministiquement au même sub — sans elle, l'heuristique du
+    -- poll-and-bind (compte créé APRÈS le pending) rate toute réutilisation.
+    disconnected_at TIMESTAMPTZ,
     PRIMARY KEY (sub, org_id, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id);

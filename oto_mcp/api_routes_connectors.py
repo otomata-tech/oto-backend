@@ -157,6 +157,10 @@ def make_routes(
             # actionnable → on le renvoie ; les autres exposent leur code machine.
             detail = e.message if e.status in (409, 502) else e.code
             return json_error(request, e.status, detail)
+        # Adoption (binding-par-org) : le compte connecté ailleurs a été lié ICI sans
+        # wizard → pas d'URL, le front rafraîchit ({adopted, account_name, channel}).
+        if out.get("adopted"):
+            return json_response(request, out)
         return json_response(request, {"url": out["url"]})
 
     async def unipile_webhook(request: Request) -> JSONResponse:
@@ -225,19 +229,17 @@ def make_routes(
         return json_response(request, out)
 
     async def unipile_disconnect(request: Request) -> JSONResponse:
-        """Oublie l'association compte hébergé ↔ user (ne supprime pas le compte chez
-        Unipile, juste le mapping côté oto).
-
-        **Par-personne, toutes orgs** (#221) : le compte hébergé suit le sub cross-org
-        à l'affichage/l'exécution → ne retirer que l'org courante le laissait
-        ré-apparaître via une autre org (« disconnect » sans effet visible). Ce qu'on
-        voit est ce qu'on déconnecte."""
+        """SOFT-déconnecte le canal DANS CETTE ORG (ne supprime pas le compte chez
+        Unipile ; la ligne survit comme preuve de propriété → rebind déterministe à la
+        reconnexion). Par-org : le binding est un acte par org (modèle explicite) —
+        et l'affichage ne montrant QUE les bindings de l'org courante, ce qu'on voit
+        est ce qu'on déconnecte (plus de résurgence cross-org, ex-#221)."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
         provider = str(request.query_params.get("channel") or "linkedin").upper()
-        removed = db.clear_unipile_seat(sub, provider)
-        return json_response(request, {"ok": True, "removed": removed})
+        db.clear_unipile_account(sub, access.current_org(sub), provider)
+        return json_response(request, {"ok": True})
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:
         """[super_admin] Sièges de la **clé plateforme** unipile : tous les comptes

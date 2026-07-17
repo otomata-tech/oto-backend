@@ -237,14 +237,25 @@ def register(mcp: FastMCP) -> None:
 
         Toujours créée en brouillon : finaliser ensuite avec
         `pennylane_finalize_invoice` (puis `pennylane_send_invoice`) APRÈS validation
-        humaine explicite. Le client doit exister (créer/compléter au préalable ;
-        `pennylane_update_customer` pour l'e-mail/les coordonnées).
+        humaine explicite. Le client doit exister (`pennylane_create_customer` pour
+        le créer ; `pennylane_update_customer` pour l'e-mail/les coordonnées).
+
+        ⚠️ Schéma de ligne STRICT (tout écart → 400 opaque `NotAnyOf`) — une ligne =
+        UNE des 2 formes, aucun champ hors liste :
+        - produit : `{product_id: int, quantity: number}` (le produit remplit le
+          reste ; overrides possibles : label, raw_currency_unit_price, unit, vat_rate) ;
+        - libre : `{label: str, quantity: number, unit: str,
+          raw_currency_unit_price: str, vat_rate: str}` — TOUS requis.
+        `vat_rate` = code Pennylane, jamais un pourcentage : 20 %→"FR_200",
+        10 %→"FR_100", 5,5 %→"FR_55", 2,1 %→"FR_21", exonéré→"exempt".
+        `raw_currency_unit_price` = prix unitaire HT en STRING ("700.00") ;
+        `quantity` = number (jamais une string).
 
         Args:
             customer_id: ID du client Pennylane.
             date: date d'émission (YYYY-MM-DD).
             deadline: date d'échéance (YYYY-MM-DD).
-            lines: lignes [{product_id, quantity, label?, raw_currency_unit_price?, unit?, vat_rate?}].
+            lines: lignes au schéma strict ci-dessus.
             external_reference: référence externe (anti-doublon / trace de la source).
         """
         return _client().create_customer_invoice(
@@ -269,7 +280,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             customer_id: ID du client Pennylane (complété au préalable si besoin).
             date: date de l'avoir (YYYY-MM-DD).
-            lines: lignes [{product_id, quantity, label?, raw_currency_unit_price?, unit?, vat_rate?}].
+            lines: lignes au schéma strict de `pennylane_create_invoice` (2 formes :
+                produit `{product_id, quantity}` ou libre `{label, quantity, unit,
+                raw_currency_unit_price, vat_rate}` tous requis ; vat_rate = code
+                "FR_200"/"FR_100"/…, prix HT en string, quantity en number).
             credited_invoice_id: ID de la facture d'origine créditée.
             external_reference: trace de la source (ex. id paiement GoCardless `PM…`) — anti-doublon.
         """
@@ -301,6 +315,38 @@ def register(mcp: FastMCP) -> None:
             invoice_id: ID de la facture finalisée à envoyer.
         """
         return _client().send_invoice(invoice_id)
+
+    @mcp.tool()
+    def pennylane_create_customer(
+        name: str,
+        address: str,
+        postal_code: str,
+        city: str,
+        country_alpha2: str = "FR",
+        emails: Optional[list] = None,
+        external_reference: Optional[str] = None,
+    ) -> dict:
+        """Crée un client (entreprise) dans Pennylane.
+
+        L'adresse de facturation complète est OBLIGATOIRE (API v2) — les 4 champs
+        address/postal_code/city/country_alpha2. Compléter ensuite les champs
+        additionnels (vat_number, reg_no, billing_iban…) via
+        `pennylane_update_customer`. Renvoie le client créé avec son `id` (à passer
+        en `customer_id` de `pennylane_create_invoice`).
+
+        Args:
+            name: raison sociale du client.
+            address: adresse de facturation (rue).
+            postal_code: code postal.
+            city: ville.
+            country_alpha2: pays ISO alpha-2 (défaut FR).
+            emails: e-mails du client (destinataires des factures).
+            external_reference: référence externe (anti-doublon / trace de la source).
+        """
+        return _client().create_customer(
+            name=name, emails=emails, address=address, postal_code=postal_code,
+            city=city, country_alpha2=country_alpha2,
+            external_reference=external_reference)
 
     @mcp.tool()
     def pennylane_update_customer(customer_id: int, fields: dict) -> dict:

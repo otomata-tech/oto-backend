@@ -49,18 +49,88 @@ async def test_pin_project_guards_access_and_coposes_org(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pin_project_personal_owner_uses_owner_personal_org(monkeypatch):
+async def test_pin_project_personal_owner_legacy_uses_owner_personal_org(monkeypatch):
+    # Projet perso LEGACY (context_org_id NULL) : repli sur l'org PERSO du PROPRIÉTAIRE,
+    # jamais du sub acteur — ancien comportement préservé (ADR 0030 amendé).
+    from oto_mcp import db
     monkeypatch.setattr(call_axes, "require_axis_sub", lambda axis: "actor")
     monkeypatch.setattr(session_org, "current_subdomain_candidate", lambda: None)
     monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
     monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("user", "owner-sub"))
-    # l'org co-posée = org perso du PROPRIÉTAIRE, jamais du sub acteur
+    monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid, "context_org_id": None})
     monkeypatch.setattr(org_store, "get_personal_org",
                         lambda s: 77 if s == "owner-sub" else 999)
 
     undo = await _project_axis().pin(5)
     try:
         assert session_org.current_call_org() == 77
+    finally:
+        for reset, tok in reversed(undo):
+            reset(tok)
+
+
+@pytest.mark.asyncio
+async def test_pin_project_personal_uses_context_org(monkeypatch):
+    # ADR 0030 amendé : un projet PERSO porte un `context_org_id` (« moi, org ») → l'org
+    # co-posée = SON org de contexte (movinmotion), pas l'org perso. C'est ce qui fait
+    # résoudre les credentials de l'org de travail sur un projet privé au créateur.
+    from oto_mcp import db
+    monkeypatch.setattr(call_axes, "require_axis_sub", lambda axis: "owner-sub")
+    monkeypatch.setattr(session_org, "current_subdomain_candidate", lambda: None)
+    monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
+    monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("user", "owner-sub"))
+    monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid, "context_org_id": 35})
+    # get_personal_org NE doit PAS être consulté (contexte présent) → sentinelle qui casse.
+    monkeypatch.setattr(org_store, "get_personal_org",
+                        lambda s: pytest.fail("ne doit pas retomber sur l'org perso"))
+
+    undo = await _project_axis().pin(5)
+    try:
+        assert session_org.current_call_org() == 35
+    finally:
+        for reset, tok in reversed(undo):
+            reset(tok)
+
+
+@pytest.mark.asyncio
+async def test_pin_project_team_owner_coposes_group(monkeypatch):
+    # #218 : un projet d'ÉQUIPE co-pose l'équipe propriétaire → ses secrets d'équipe
+    # résolvent à l'ouverture, de façon déterministe (pas selon le groupe actif).
+    from oto_mcp import roles
+    monkeypatch.setattr(call_axes, "require_axis_sub", lambda axis: "member")
+    monkeypatch.setattr(session_org, "current_subdomain_candidate", lambda: None)
+    monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
+    monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("group", "7"))
+    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": 7, "org_id": 35})
+    monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: True)
+
+    undo = await _project_axis().pin(5)
+    try:
+        assert session_org.current_call_project() == 5
+        assert session_org.current_call_org() == 35      # org parente co-posée
+        assert session_org.current_call_group() == 7      # équipe propriétaire co-posée
+    finally:
+        for reset, tok in reversed(undo):
+            reset(tok)
+    assert session_org.current_call_group() is None       # reset LIFO
+
+
+@pytest.mark.asyncio
+async def test_pin_project_team_owner_skips_group_for_non_member(monkeypatch):
+    # Un bénéficiaire d'un simple PARTAGE de projet, hors de l'équipe, n'hérite pas de
+    # ses credentials : le groupe n'est PAS co-posé (garde can_read_group).
+    from oto_mcp import roles
+    monkeypatch.setattr(call_axes, "require_axis_sub", lambda axis: "outsider")
+    monkeypatch.setattr(session_org, "current_subdomain_candidate", lambda: None)
+    monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
+    monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("group", "7"))
+    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": 7, "org_id": 35})
+    monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: False)
+
+    undo = await _project_axis().pin(5)
+    try:
+        assert session_org.current_call_org() == 35       # org parente quand même co-posée
+        assert session_org.current_call_group() is None    # mais pas l'équipe (hors garde)
     finally:
         for reset, tok in reversed(undo):
             reset(tok)

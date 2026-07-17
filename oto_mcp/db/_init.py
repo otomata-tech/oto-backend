@@ -110,6 +110,17 @@ def init_db() -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS copied_from BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_copied_from "
                      "ON projects(owner_type, owner_id, copied_from) WHERE copied_from IS NOT NULL")
+        # Scope MEMBRE (ADR 0030 amendé 2026-07-17) : un projet naît possédé par
+        # (owner_type='user', owner_id=sub) — PRIVÉ au créateur — MAIS dans le CONTEXTE
+        # d'une org de travail. `context_org_id` porte cette org : elle sépare la PROPRIÉTÉ
+        # (qui = la personne) du CONTEXTE (où = l'org, pour la résolution des credentials
+        # et le scope de liste). L'identité de la plateforme est toujours `(moi, org)`.
+        # NULL = projet non-perso (contexte dérivé de l'owner org/group) OU perso legacy
+        # (résolution repli sur l'org perso, ancien comportement préservé).
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_org_id BIGINT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_member_context "
+                     "ON projects(owner_id, context_org_id) "
+                     "WHERE owner_type = 'user' AND archived_at IS NULL")
         # Retrait du partage public CHIFFRÉ zero-knowledge (`/p/p`), supplanté par le
         # partage NAVIGABLE live sur `<slug>.share.oto.cx` (share_ui). La table ne stockait
         # que du ciphertext irrécupérable (clé jamais côté serveur) → drop sûr, pas de legacy.

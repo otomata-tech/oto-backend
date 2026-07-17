@@ -29,7 +29,7 @@ from .users import upsert_user
 
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
-_PROJECT_COLS = ("id, owner_type, owner_id, name, brief_md, created_by, "
+_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
                  "mcp_expose_datastore_write, archived_at, created_at, updated_at")
 
@@ -42,19 +42,40 @@ _MCP_ACCESS = ("off", "anonymous", "secret", "org")
 
 def create_project(owner_type: str, owner_id: str, name: str,
                    brief_md: str = "", created_by: Optional[str] = None,
-                   copied_from: Optional[int] = None) -> int:
+                   copied_from: Optional[int] = None,
+                   context_org_id: Optional[int] = None) -> int:
     """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
     (perso) | org.id::text | group.id::text. `copied_from` = id de la source si ce projet
-    est un fork (« Ajouter à mon Oto ») → import idempotent par org."""
+    est un fork (« Ajouter à mon Oto ») → import idempotent par org. `context_org_id`
+    (ADR 0030 amendé) = l'org de CONTEXTE d'un projet perso (owner='user') — sépare la
+    propriété (la personne) du contexte de travail (l'org, pour la résolution des
+    credentials et le scope de liste) ; NULL pour un projet non-perso (contexte = owner)."""
     if owner_type == "user":
         upsert_user(owner_id)
     with _connect() as conn:
         row = conn.execute(
-            "INSERT INTO projects (owner_type, owner_id, name, brief_md, created_by, copied_from) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (owner_type, owner_id, name, brief_md, created_by, copied_from),
+            "INSERT INTO projects (owner_type, owner_id, context_org_id, name, brief_md, created_by, copied_from) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (owner_type, owner_id, context_org_id, name, brief_md, created_by, copied_from),
         ).fetchone()
         return int(row["id"])
+
+
+def list_member_projects(sub: str, org_id: int, *,
+                         include_archived: bool = False) -> list[dict]:
+    """Projets PERSO de l'acteur (owner=('user', sub)) DANS le contexte de l'org `org_id`
+    (scope membre `(sub, org)`, ADR 0030 amendé). Privés à leur propriétaire, listés dans
+    LEUR org de contexte (pas un fourre-tout cross-org). Le contexte `(moi, org)` est la
+    demi-identité qui manquait : un projet perso créé « chez movinmotion » remonte chez
+    movinmotion, pas chez otomata. Filtre `context_org_id = org_id` (les perso legacy à
+    contexte NULL n'y apparaissent pas — ils vivent dans l'org perso)."""
+    sql = (f"SELECT {_PROJECT_COLS} FROM projects "
+           "WHERE owner_type = 'user' AND owner_id = %s AND context_org_id = %s ")
+    if not include_archived:
+        sql += "AND archived_at IS NULL "
+    sql += "ORDER BY updated_at DESC"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (sub, org_id)).fetchall()]
 
 
 def find_copied_project(owner_type: str, owner_id: str, src_id: int) -> Optional[dict]:

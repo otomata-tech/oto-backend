@@ -17,7 +17,7 @@ CTX = ResolvedCtx(sub="u1", org_id=7)
 
 @pytest.fixture
 def calls(monkeypatch):
-    rec = {"owners": [], "principals": [], "granted_want": []}
+    rec = {"owners": [], "principals": [], "granted_want": [], "member": []}
 
     monkeypatch.setattr(ownership.roles, "is_org_admin", lambda sub, org: False)
     monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
@@ -26,6 +26,12 @@ def calls(monkeypatch):
     monkeypatch.setattr(ownership.db, "list_projects_for_owners",
                         lambda owners, **k: rec["owners"].append(list(owners)) or
                         [{"id": 11}, {"id": 12}])
+    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de l'org de contexte, en PARITÉ
+    # avec op=list. `accessible_project_ids` DOIT appeler ce seam (sinon perso listable
+    # mais non cherchable → « cherchable ⇔ lisible » ment).
+    monkeypatch.setattr(ownership.db, "list_member_projects",
+                        lambda sub, org, **k: rec["member"].append((sub, org)) or
+                        [{"id": 15}])
     monkeypatch.setattr(ownership.db, "list_projects_granted_to",
                         lambda principals: rec["principals"].append(list(principals)) or
                         [{"id": 20, "permission": "read"},
@@ -35,16 +41,17 @@ def calls(monkeypatch):
 
 def test_accessible_ids_read_and_write(calls):
     ids = ownership.accessible_project_ids("u1", 7, want="read")
-    assert ids == [11, 12, 20, 21]
-    # write : seuls les grants WRITE s'ajoutent aux owned
+    # owned (org+pôles) ∪ MEMBRE (perso de l'org) ∪ grants
+    assert ids == [11, 12, 15, 20, 21]
+    # write : owned + membre (je les possède) ; seuls les GRANTS write s'ajoutent
     ids_w = ownership.accessible_project_ids("u1", 7, want="write")
-    assert ids_w == [11, 12, 21]
+    assert ids_w == [11, 12, 15, 21]
 
 
 def test_scope_parity_with_op_list(calls):
-    """PARITÉ : les owners du contexte et les principals de grants utilisés par la
-    recherche sont EXACTEMENT ceux d'`oto_project op=list` (le drift de l'un ferait
-    mentir « cherchable ⇔ lisible »)."""
+    """PARITÉ : les owners du contexte, les projets MEMBRE et les principals de grants
+    utilisés par la recherche sont EXACTEMENT ceux d'`oto_project op=list` (le drift de
+    l'un ferait mentir « cherchable ⇔ lisible »)."""
     ownership.accessible_project_ids("u1", 7)
     search_owners, search_principals = calls["owners"][-1], calls["principals"][-1]
 
@@ -54,6 +61,8 @@ def test_scope_parity_with_op_list(calls):
     # owners = org active + mes groupes ; principals = org + moi + mes groupes
     assert search_owners == [("org", "7"), ("group", "3")]
     assert search_principals == [("org", "7"), ("user", "u1"), ("group", "3")]
+    # scope MEMBRE interrogé sur (sub, org de contexte) — même seam que op=list.
+    assert calls["member"][-1] == ("u1", 7)
 
 
 def test_org_admin_sees_all_org_groups(calls, monkeypatch):

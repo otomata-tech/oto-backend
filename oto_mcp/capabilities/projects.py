@@ -105,6 +105,9 @@ def _view(row: dict) -> dict:
     return {
         "id": row["id"], "name": row["name"], "brief_md": row.get("brief_md", ""),
         "owner_type": row["owner_type"], "owner_id": row["owner_id"],
+        # Org de CONTEXTE d'un projet perso (ADR 0030 amendé) — « moi, org ». NULL sinon.
+        "context_org_id": (str(row["context_org_id"])
+                           if row.get("context_org_id") is not None else None),
         "is_template": bool(row.get("is_template")),
         # Publication MCP (ADR 0032) : présence + URLs dérivées. `secret` = partage
         # navigable `<slug>.share.oto.cx` (UI + /mcp) ; `anonymous`/`org` = `<slug>.mcp.oto.cx`.
@@ -278,6 +281,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
     if inp.op == "create":
         _require(inp.name and inp.name.strip(), "missing_name", "`name` requis.")
+        # `context_org` = l'org de CONTEXTE d'un projet PERSO (owner='user') : sépare la
+        # propriété (la personne) du contexte de travail (ADR 0030 amendé). NULL pour un
+        # projet non-perso (org/group/platform), dont le contexte se dérive de l'owner.
+        context_org: Optional[int] = None
         if inp.owner_type == "org":
             _require(inp.owner_id, "missing_owner",
                      "`owner_id` (org) requis pour un projet d'org.")
@@ -301,11 +308,15 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                      "Un projet plateforme est réservé aux admins plateforme.", 403)
             owner_type, owner_id = "platform", "platform"
         else:
-            # Défaut = org ACTIVE de l'user (plus de perso ; ctx.org_id toujours posé).
+            # Défaut = PERSO (ADR 0030 amendé 2026-07-17) : le projet naît possédé par le
+            # créateur `(user, sub)`, PRIVÉ, dans le CONTEXTE de son org active. L'org/team
+            # deviennent des cibles de partage/transfert explicites, plus le défaut. Owner
+            # = « moi » ; `context_org` = « mon org » — l'identité `(moi, org)`.
             _require(ctx.org_id is not None, "no_active_org", "Aucune org active.", 400)
-            owner_type, owner_id = "org", str(ctx.org_id)
+            owner_type, owner_id, context_org = "user", sub, int(ctx.org_id)
         pid = db.create_project(owner_type, owner_id, inp.name.strip(),
-                                inp.brief_md or "", created_by=sub)
+                                inp.brief_md or "", created_by=sub,
+                                context_org_id=context_org)
         db.log_project_activity(pid, sub, "project.create", inp.name.strip())
         return _view(db.get_project_by_id(pid))
 
@@ -331,6 +342,13 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                          for g in group_store.list_groups_for_user(sub, ctx.org_id)]
         owners = [owner] + [("group", str(g)) for g in group_ids]
         own_rows = db.list_projects_for_owners(owners)
+        # Scope MEMBRE (ADR 0030 amendé) : mes projets PERSO de CETTE org (`context_org`),
+        # possédés par moi seul → owned (jamais `shared`). Parité stricte avec la recherche
+        # (`accessible_project_ids` appelle le même `db.list_member_projects`) : « cherchable
+        # ⇔ lisible » (tripwire `test_search_scope_tripwire`).
+        _seen_own = {r["id"] for r in own_rows}
+        own_rows += [r for r in db.list_member_projects(sub, int(ctx.org_id))
+                     if r["id"] not in _seen_own]
         # Pastilles d'ÉTAT de l'index (refonte UX, ADR 0032) : nb d'entités liées +
         # partagé + « à vérifier » (audit). Le nb de grants est batché (1 requête) ; les
         # liens/audit sont par projet (les listes d'org sont petites) et best-effort.
@@ -623,6 +641,26 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                         out["warning"] = res["warning"]
             except Exception:  # noqa: BLE001 — provisionnement opportuniste
                 pass
+        # #218/#219 — lier un connecteur « aveugle » à un projet ORG-owned : si le
+        # credential n'existe qu'au niveau d'une équipe de l'org (donc irrésoluble en
+        # contexte projet), WARNING immédiat pointant le remède (transfert à l'équipe /
+        # instance_ref). Non bloquant : on lie, mais l'intention incohérente est dite.
+        if (inp.op == "link" and inp.target_type == "connecteur"
+                and row.get("owner_type") == "org"):
+            try:
+                from .. import project_audit
+                new_link = next((l for l in out["links"]
+                                 if l.get("target_type") == "connecteur"
+                                 and l.get("target_ref") == target_ref
+                                 and l.get("identity_ref") == identity_ref), None)
+                why = (project_audit._unresolvable_connector_why(
+                    str(target_ref), int(row["owner_id"]), new_link)
+                    if new_link else None)
+                if why:
+                    out["unresolvable_connector"] = why
+                    out["warning"] = why
+            except Exception:  # noqa: BLE001 — warning best-effort, le link a réussi
+                pass
         # B5 — complétude au link : lier une procédure dont des slots ne sont pas
         # bindés ⇒ WARNING immédiat (non bloquant), le pendant des refs mortes 0014.
         if inp.op == "link" and inp.target_type == "procedure":
@@ -704,7 +742,13 @@ CAPABILITIES += [
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
             "project's table by that name with the data_* tools (never hardcode a namespace). "
-            "Share & transfer go through oto_resource (resource_type='project'). "
+            "Share & transfer go through oto_resource (resource_type='project') — this "
+            "includes RE-PARENTING a project in place (same id, links, runs preserved): "
+            "op=transfer new_owner_group=<id> hands it to a TEAM so the project and its "
+            "connector credentials sit at the SAME level (the team's secrets then resolve "
+            "when you open it), new_owner_org=<id> to an org, new_owner_email to a user. "
+            "(op=update only changes name/brief_md/is_template — never the owner; op=copy "
+            "makes a NEW id.) "
             "inventory = the project's DERIVED surface (union of the linked procedures' "
             "<tool:> refs + tools actually used by the project's runs, plus connectors "
             "from links & declared slots) — never retype a tool list: derive, then curate. "

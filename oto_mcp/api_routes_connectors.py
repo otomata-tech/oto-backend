@@ -225,14 +225,19 @@ def make_routes(
         return json_response(request, out)
 
     async def unipile_disconnect(request: Request) -> JSONResponse:
-        """Oublie l'association compte LinkedIn ↔ user (ne supprime pas le compte
-        chez Unipile, juste le mapping côté oto)."""
+        """Oublie l'association compte hébergé ↔ user (ne supprime pas le compte chez
+        Unipile, juste le mapping côté oto).
+
+        **Par-personne, toutes orgs** (#221) : le compte hébergé suit le sub cross-org
+        à l'affichage/l'exécution → ne retirer que l'org courante le laissait
+        ré-apparaître via une autre org (« disconnect » sans effet visible). Ce qu'on
+        voit est ce qu'on déconnecte."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
         provider = str(request.query_params.get("channel") or "linkedin").upper()
-        db.clear_unipile_account(sub, access.current_org(sub), provider)
-        return json_response(request, {"ok": True})
+        removed = db.clear_unipile_seat(sub, provider)
+        return json_response(request, {"ok": True, "removed": removed})
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:
         """[super_admin] Sièges de la **clé plateforme** unipile : tous les comptes

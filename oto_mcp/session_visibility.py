@@ -23,6 +23,7 @@ from . import (access, connector_activation, connector_selection, connectors,
 from .tool_visibility import (
     DEFAULT_HIDDEN_TOOLS,
     effective_disabled,
+    is_protected,
     namespace_of,
 )
 
@@ -141,6 +142,12 @@ async def compute_hidden_tools(ctx, sub: str) -> set[str]:
     # enforced au call-time (jamais une barrière ici).
     if not is_admin:
         to_hide |= {n for n in all_names if n.startswith("oto_admin_")}
+    # Garde anti-lockout STRUCTUREL (signal d’usage #213) : AUCUN bloc de gating ci-dessus
+    # (connecteur/RBAC/sélection/admin) ne peut masquer un tool SPINE/protégé. Jusqu'ici
+    # le spine n'était sauvé que parce que son namespace ne résolvait aucun connecteur
+    # (effet de bord fragile : un connecteur déclarant `oto`/`data` aurait tout évincé).
+    # Ici c'est explicite et robuste — source unique `is_protected`.
+    to_hide -= {n for n in all_names if is_protected(n)}
     return to_hide
 
 

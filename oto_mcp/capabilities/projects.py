@@ -53,6 +53,10 @@ class ProjectInput(BaseModel):
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
     target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
+    # Ship 2 (lot 3) — épine opt-in d'op=get : include=['spine'] + drill/bornage.
+    include: Optional[list[str]] = None
+    from_doc: Optional[int] = None     # enraciner l'épine sur un nœud (drill)
+    depth: Optional[int] = None        # profondeur (défaut 2)
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | doc.id (page Documents)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
@@ -374,13 +378,21 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     if inp.op == "get":
         from .. import project_audit
         links = db.list_project_links(int(inp.project_id))
-        return {**_view(row),
-                "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
-                "links": links,
-                # B5 : liens vérifiés comme des refs — le lien mort remonte à l'agent
-                # qui LIT le projet (brief), pas seulement à op=inventory (curation).
-                # `links` réutilisé : pas de double chargement.
-                "audit": project_audit.audit_project(int(inp.project_id), links)}
+        out = {**_view(row),
+               "can_write": ownership.can_access(sub, RTYPE, rid, "write"),
+               "links": links,
+               # B5 : liens vérifiés comme des refs — le lien mort remonte à l'agent
+               # qui LIT le projet (brief), pas seulement à op=inventory (curation).
+               # `links` réutilisé : pas de double chargement.
+               "audit": project_audit.audit_project(int(inp.project_id), links)}
+        # ÉPINE (lot 3 Ship 2) — opt-in, bornée, enracinable : l'arbre des pages dans
+        # l'ordre curé avec chapôs (fallback dérivé). C'est la CARTE que l'agent lit
+        # pour se repérer, puis oto_doc(op=get) la page — jamais op=list de tout.
+        if inp.include and "spine" in inp.include:
+            out["spine"] = db.project_spine(
+                int(inp.project_id), from_doc=inp.from_doc,
+                depth=(inp.depth if inp.depth is not None else 2))
+        return out
 
     if inp.op == "activity":
         # Chaque événement porte l'IDENTITÉ de son auteur (`actor`, résolue du sub loggé)

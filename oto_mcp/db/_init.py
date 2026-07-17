@@ -43,6 +43,18 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Lot 3 Ship 2 : chapô + ordre curé des pages. Backfill des positions par
+        # fratrie (entiers espacés ×16, ordre historique = title) — idempotent
+        # (ne touche que les NULL ; ensuite create_doc/move_doc posent toujours).
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS description TEXT")
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS position INTEGER")
+        conn.execute("""
+            UPDATE docs d SET position = s.rn * 16
+            FROM (SELECT id, ROW_NUMBER() OVER (
+                      PARTITION BY project_id, parent_id ORDER BY title, id) AS rn
+                  FROM docs WHERE position IS NULL) s
+            WHERE d.id = s.id AND d.position IS NULL
+        """)
         # Lot 3 Ship 1 : index FTS de la recherche transverse (GIN d'expression —
         # PAS de colonne STORED, qui réécrirait la table sous ACCESS EXCLUSIVE).
         # Source unique des expressions : db/search.py (index ↔ requête identiques).

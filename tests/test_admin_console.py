@@ -6,6 +6,7 @@ bon, et que l'Input consolidé exige les champs nécessaires par op.
 """
 import pytest
 
+from oto_mcp import credentials_store
 from oto_mcp.capabilities import admin_console as ac
 from oto_mcp.capabilities import (
     orgs_admin, orgs_members, orgs_reads, users_admin)
@@ -53,9 +54,33 @@ def test_org_member_routes(monkeypatch):
     assert ac._org_member(CTX, ac.OrgMemberAdminInput(op="list", org_id=1)) == {"org_id": 1, "members": ["m"]}
 
 
+def test_org_member_connectors_projection(monkeypatch):
+    # op=connectors (#186) : résout target→sub, member_id, list_credentials(MEMBER, …).
+    monkeypatch.setattr(orgs_members, "_resolve_target", lambda t: "sub_x")
+    monkeypatch.setattr(credentials_store, "member_id", lambda org, sub: f"{org}:{sub}")
+    seen = {}
+
+    def _list(entity_type, entity_id):
+        seen["args"] = (entity_type, entity_id)
+        # list_credentials ne renvoie JAMAIS de secret (meta public only)
+        return [{"connector": "zoho", "account": "", "secret_kind": "basic_auth",
+                 "set_at": "2026-07-01", "meta": {"data_center": "eu"}}]
+
+    monkeypatch.setattr(credentials_store, "list_credentials", _list)
+    out = ac._org_member(CTX, ac.OrgMemberAdminInput(op="connectors", org_id=7, target="a@b.co"))
+    assert out["org_id"] == 7 and out["sub"] == "sub_x"
+    assert seen["args"] == (credentials_store.MEMBER, "7:sub_x")
+    assert out["connectors"][0]["connector"] == "zoho"
+    # invariant : le secret chiffré n'apparaît jamais (secret_kind = métadonnée OK)
+    assert "secret_enc" not in str(out)
+
+
 def test_org_member_required_fields():
     with pytest.raises(AuthzDenied) as e:
         ac._org_member(CTX, ac.OrgMemberAdminInput(op="add", org_id=1))
+    assert e.value.code == "missing_target"
+    with pytest.raises(AuthzDenied) as e:
+        ac._org_member(CTX, ac.OrgMemberAdminInput(op="connectors", org_id=1))
     assert e.value.code == "missing_target"
     with pytest.raises(AuthzDenied) as e:
         ac._org_member(CTX, ac.OrgMemberAdminInput(op="set_role", org_id=1, target="x"))

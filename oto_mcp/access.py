@@ -645,8 +645,13 @@ class CascadeProbe:
     platform: Callable[[Optional[str], str, Optional[int]], Optional[dict]]
 
 
+# Une instance membre SUSPENDUE (lot 2 / ADR 0044 §KeyStack) est repliée dans les
+# sondes réelles : la clé existe au coffre mais la cascade la traite comme absente
+# → la résolution ET le statut sautent le barreau membre (le niveau du dessous prend
+# le relais). Elle reste listée par `oto_instance op=list` (KeyStack), réactivable.
 PRESENCE_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p) else None),
+    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p)
+                            and not db.member_instance_suspended(s, o, p) else None),
     member_cross=lambda s, o, p: (True if db.has_member_api_key(s, o, p) else None),
     group=lambda g, p: (True if group_store.has_group_secret(g, p) else None),
     org=lambda o, p: (True if org_store.has_org_secret(o, p) else None),
@@ -654,7 +659,9 @@ PRESENCE_PROBE = CascadeProbe(
 )
 
 FETCH_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((lambda k: (k, "") if k else None)(db.get_member_api_key(s, o, p))),
+    member=lambda s, o, p: ((lambda k: (k, "") if k
+                             and not db.member_instance_suspended(s, o, p) else None)(
+                                 db.get_member_api_key(s, o, p))),
     member_cross=lambda s, o, p: db.get_member_api_key(s, o, p),
     group=lambda g, p: group_store.get_group_secret(g, p),
     org=lambda o, p: org_store.get_org_secret(o, p),

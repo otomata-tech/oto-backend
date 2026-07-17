@@ -300,7 +300,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def unipile_connect_start(channel: str = "linkedin",
-                                    force: bool = False) -> dict:
+                                    force: bool = False,
+                                    premium: Optional[str] = None) -> dict:
         """Démarre la connexion d'un compte de messagerie hébergé (LinkedIn par
         défaut) et renvoie une **`url`** d'auth Unipile à transmettre à l'utilisateur.
 
@@ -315,16 +316,27 @@ def register(mcp: FastMCP) -> None:
         refuse par défaut pour éviter un doublon. Ne passe `force=True` que pour
         connecter un compte RÉELLEMENT différent.
 
+        ⚠️ **LinkedIn premium** : par défaut seul le produit `classic` est connecté.
+        Si la personne a un siège **Recruiter** ou **Sales Navigator** et veut s'en
+        servir (`unipile_search(api="recruiter"/"sales_navigator")`, `unipile_contracts`…),
+        il FAUT le demander ICI via `premium` — sinon ces APIs répondent 403 « out of
+        your scope » et il faudra tout reconnecter. Les deux sont **exclusifs**.
+
         Args:
             channel: canal à connecter — linkedin (défaut), whatsapp, telegram,
                 instagram, messenger, twitter.
             force: connecter malgré un compte déjà lié à ce canal ailleurs (#172).
+            premium: produit LinkedIn premium à activer — "recruiter" ou
+                "sales_navigator" (exclusifs, un seul par compte). À ne demander que
+                si la personne a bien le siège LinkedIn correspondant. Ajoute aussi
+                la connexion par cookies au wizard (recommandé pour ces produits).
         """
         from .. import unipile_connect
 
         sub = access.current_user_sub_or_raise()
         try:
-            out = await unipile_connect.hosted_auth_url(sub, channel, force=force)
+            out = await unipile_connect.hosted_auth_url(sub, channel, force=force,
+                                                        premium=premium)
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
         out["instructions"] = (
@@ -359,6 +371,9 @@ def register(mcp: FastMCP) -> None:
             company: Employeur(s) — noms ou ids de facette.
             location: Localisation(s) — noms ou ids de facette.
             industry: filtre secteur — dict `{include?: [...], exclude?: [...]}` (noms ou ids).
+                ⚠️ `exclude` n'est PAS supporté par `api="classic"` (lève une erreur) :
+                LinkedIn classic n'accepte qu'une liste de secteurs à INCLURE. Pour
+                exclure un secteur, utilise `api="sales_navigator"` ou `"recruiter"`.
             network_distance: degré de relation — `[1]`=1er degré (tes relations N1),
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,

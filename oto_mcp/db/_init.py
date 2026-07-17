@@ -43,6 +43,12 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Lot 3 Ship 1 : index FTS de la recherche transverse (GIN d'expression —
+        # PAS de colonne STORED, qui réécrirait la table sous ACCESS EXCLUSIVE).
+        # Source unique des expressions : db/search.py (index ↔ requête identiques).
+        from . import search as _search
+        for ddl in _search.index_ddl():
+            conn.execute(ddl)
         # Lot 3 chantier 0.4 : purge du type de lien `doc` (vestige Memento — pointeur
         # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
         # prod au comptage du 17/07. Idempotent (0 row ensuite).

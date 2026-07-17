@@ -135,6 +135,22 @@ def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINK
                      (sub, org_id, provider))
 
 
+def clear_unipile_seat(sub: str, provider: str = "LINKEDIN") -> int:
+    """Déconnecte le compte hébergé de `sub` sur ce canal **dans TOUTES ses orgs**
+    (renvoie le nb de liaisons retirées).
+
+    Un compte hébergé est PAR-PERSONNE et, depuis #221, il la SUIT cross-org à
+    l'affichage comme à l'exécution. Le disconnect doit donc être par-personne lui
+    aussi : ne retirer que la ligne de l'org courante laissait le siège ré-apparaître
+    via une autre org → « je clique disconnect et ça reste connecté » (vécu 2026-07-17).
+    Ce qu'on voit est ce qu'on déconnecte."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM unipile_accounts WHERE sub = %s AND provider = %s",
+            (sub, provider))
+    return cur.rowcount or 0
+
+
 def count_unipile_accounts_for_org(org_id: int) -> int:
     """Nombre de SIÈGES de la clé plateforme consommés par cet org (base du plafond
     anti-dérapage sur les comptes hébergés). Les comptes BYO (platform_seat=false)

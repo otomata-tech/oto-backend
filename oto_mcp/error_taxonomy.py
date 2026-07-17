@@ -90,6 +90,23 @@ def _is_arg_validation_error(exc) -> bool:
     return False
 
 
+def _is_upstream_managed_error(exc) -> bool:
+    """True si la chaîne porte une erreur de connecteur amont d'INPUT/config SANS
+    statut HTTP (oto-backend#90) : facette LinkedIn introuvable, compte non connecté,
+    param non supporté, identity_mismatch… `UnipileError` (oto-core) modélise ça — un
+    refus d'entrée user, jamais un bug backend. Les 4xx portent déjà `.status_code`
+    (couverts par `_is_managed_connector_error`) ; les erreurs RÉSEAU (message «
+    réseau ») restent reportées (transitoire, potentielle panne, hors input).
+
+    Reconnu par NOM de classe (`UnipileError`) pour ne pas coupler la taxonomie à
+    l'import d'oto-core (le module doit rester importable seul, sans cycle)."""
+    for e in _chain(exc):
+        if type(e).__name__ == "UnipileError" and getattr(e, "status_code", None) is None:
+            if "réseau" not in str(e).lower():
+                return True
+    return False
+
+
 _UNKNOWN_TOOL = re.compile(r"Unknown tool: '([^']+)'")
 
 
@@ -128,6 +145,7 @@ def _is_expected_error(exc) -> bool:
     return (_is_managed_connector_error(exc)
             or _is_user_input_error(exc)
             or _is_arg_validation_error(exc)
+            or _is_upstream_managed_error(exc)
             or _unknown_tool_name(exc) is not None)
 
 
@@ -255,6 +273,15 @@ def classify(exc) -> ErrorInfo:
     if _looks_like_timeout(exc):
         return ErrorInfo("upstream_timeout", True,
                          "Délai d'attente dépassé.", "réessaie dans un instant")
+
+    # (4b) Erreur connecteur amont GÉRÉE sans statut HTTP (UnipileError d'input/config,
+    # #90) : son message est agent-utile (« Facette introuvable… », « compte non
+    # connecté ») → on l'écho scrubbé plutôt qu'un « Erreur interne » opaque.
+    if _is_upstream_managed_error(exc):
+        for e in _chain(exc):
+            if type(e).__name__ == "UnipileError":
+                return ErrorInfo("invalid_input", False,
+                                 scrub(str(e)) or "Requête refusée par le service amont.")
 
     # (5) Reste = bug/erreur interne : PAS d'écho de str(exc) (anti-fuite).
     return ErrorInfo("internal", False, "Erreur interne du serveur.")

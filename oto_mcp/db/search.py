@@ -91,12 +91,15 @@ def search_project_briefs(q: str, project_ids: list[int], *, limit: int = 20) ->
 
 def search_procedures_fts(q: str, org_id: int, *, limit: int = 20) -> list[dict]:
     """Procédures ORG-owned de l'org active — kind=procedure. Les procédures d'ÉQUIPE
-    sont exclues V1 (écart nommé au plan : `can_read_group` par ligne, plus tard)."""
+    sont exclues V1 (écart nommé au plan : `can_read_group` par ligne, plus tard).
+    `slug <> 'claude_md'` : reliques du readme pré-convergence 0042 (le readme vit
+    dans `guides` — 3 lignes mortes constatées en prod le 17/07, purge à part)."""
     return _prose_query(
         "org_instructions", INSTR_TEXT,
         "slug, title, description, updated_at",
         "coalesce(body_md,'')",
-        "owner_type = 'org' AND owner_id = %s", (str(org_id),), q, limit)
+        "owner_type = 'org' AND owner_id = %s AND slug <> 'claude_md'",
+        (str(org_id),), q, limit)
 
 
 def search_guides_fts(q: str, org_id: Optional[int], sub: str, *, limit: int = 20) -> list[dict]:

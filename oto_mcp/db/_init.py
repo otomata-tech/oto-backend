@@ -43,6 +43,25 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Lot 3 chantier 0.4 : purge du type de lien `doc` (vestige Memento — pointeur
+        # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
+        # prod au comptage du 17/07. Idempotent (0 row ensuite).
+        conn.execute("DELETE FROM project_links WHERE target_type = 'doc'")
+        # Lot 3 chantier 0.3 : le projet KB est ancré PAR ID (fin de l'identification
+        # par nom — renommable, transférable, 2 appels concurrents = 2 KB). ON DELETE
+        # SET NULL : un hard-delete du projet vide l'ancre, kb.py recrée.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS kb_project_id BIGINT "
+                     "REFERENCES projects(id) ON DELETE SET NULL")
+        # Backfill one-shot par nom (l'ancien marqueur) : pour chaque org sans ancre,
+        # le PLUS ANCIEN projet org-owned vivant nommé « Base de connaissance ».
+        conn.execute("""
+            UPDATE orgs o SET kb_project_id = p.id
+            FROM (SELECT DISTINCT ON (owner_id) owner_id, id FROM projects
+                  WHERE owner_type = 'org' AND name = 'Base de connaissance'
+                    AND archived_at IS NULL
+                  ORDER BY owner_id, id) p
+            WHERE o.kb_project_id IS NULL AND p.owner_id = o.id::text
+        """)
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")

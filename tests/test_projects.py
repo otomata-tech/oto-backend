@@ -354,11 +354,19 @@ def test_link(seams):
     assert out["ok"] is True and out["links"]
 
 
+def test_link_type_doc_removed(seams):
+    # Lot 3 chantier 0.4 : le type de lien `doc` (vestige Memento) est RETIRÉ —
+    # relier des pages = les backlinks [[…]] (Ship 4), pas un pointeur de rail.
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36")
+
+
 def test_link_with_role(seams):
-    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc",
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="procedure",
                                    target_ref="36", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "doc", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
+    assert seams["link"] == [(7, "procedure", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
 
 
 def test_link_connector_with_config(seams):
@@ -450,7 +458,7 @@ def test_link_missing_target(seams):
 def test_link_forbidden_without_write(seams, monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36"))
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="tableau", target_ref="36"))
     assert e.value.code == "forbidden"
 
 

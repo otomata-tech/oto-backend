@@ -9,7 +9,6 @@ _PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstr
 _LINKS = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement"},
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects", "namespace": "prospects"},
-    {"target_type": "doc", "target_ref": "33", "label": "Guide"},
     {"target_type": "connecteur", "target_ref": "serper"},  # ignoré (pas navigable)
 ]
 
@@ -27,7 +26,6 @@ def test_index_lists_entities(monkeypatch):
     assert "Enrichir" in html and "/procedures/11" in html
     assert "Prospects" in html and "/data/22" in html
     assert "Notes internes" in html and "/docs/44" in html   # doc de l'arbre projet
-    assert "Guide" in html and "/docs/33" in html            # doc lié
     assert "https://x.share.oto.cx/mcp" in html               # carte brancher
     assert "serper" not in html                               # connecteur non navigable
 
@@ -182,15 +180,6 @@ def test_doc_allowed_via_project_ownership(monkeypatch):
                         lambda rid: {"title": "Notes internes", "body_md": "Contenu", "project_id": 5})
     html, status = share_ui.build_page(_PROJECT, "/docs/44", connect_url="u")
     assert status == 200 and "Notes internes" in html and "Contenu" in html
-
-
-def test_doc_allowed_via_link(monkeypatch):
-    _wire(monkeypatch)
-    # Doc d'un AUTRE projet mais explicitement lié → autorisé.
-    monkeypatch.setattr(db, "get_doc_by_id",
-                        lambda rid: {"title": "Guide", "body_md": "g", "project_id": 999})
-    html, status = share_ui.build_page(_PROJECT, "/docs/33", connect_url="u")
-    assert status == 200 and "Guide" in html
 
 
 def test_doc_foreign_unlinked_is_404(monkeypatch):

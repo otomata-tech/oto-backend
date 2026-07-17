@@ -357,19 +357,6 @@ def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> N
                 l["title"] = t
 
 
-def _apply_doc_titles(links: list[dict], meta_by_id: dict[int, dict]) -> None:
-    """Attache le TITRE et le `doc_project_id` à chaque lien `doc` (page Documents,
-    résolue depuis le doc_id porté par `target_ref`). Le project_id du doc sert le
-    deep-link (la page vit dans SON projet — souvent la KB de l'org). Pur (mutation en
-    place). Ref non numérique / doc disparu → pas de clés (le lien reste, best-effort)."""
-    for l in links:
-        if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit():
-            m = meta_by_id.get(int(l["target_ref"]))
-            if m is not None:
-                l["title"] = m["title"]
-                l["doc_project_id"] = m["project_id"]
-
-
 def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
@@ -427,15 +414,9 @@ def list_project_links(project_id: int) -> list[dict]:
                 "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
             ).fetchall()
             _apply_procedure_titles(out, {r["id"]: r["title"] for r in drows})
-        # Idem pour les pages Documents des liens `doc` : titre + project_id (deep-link).
-        doc_link_ids = [int(l["target_ref"]) for l in out
-                        if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit()]
-        if doc_link_ids:
-            grows = conn.execute(
-                "SELECT id, title, project_id FROM docs WHERE id = ANY(%s)", (doc_link_ids,),
-            ).fetchall()
-            _apply_doc_titles(out, {r["id"]: {"title": r["title"], "project_id": r["project_id"]}
-                                    for r in grows})
+        # (Le type de lien `doc` — pointeur manuel vers une page — a été RETIRÉ, lot 3
+        # chantier 0.4 : relier des pages = les backlinks `[[…]]` de Ship 4, pas un
+        # pointeur de rail. Les liens existants ont été purgés en migration.)
         return out
 
 

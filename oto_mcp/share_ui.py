@@ -600,16 +600,10 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             for l in links
             if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
         tables = (_tableau_entries(project, links) if show_data else [])
-        # Docs : pages de l'arbre du projet + docs explicitement liés.
+        # Docs : les pages de l'arbre du projet. (Le lien `doc` — pointeur manuel vers
+        # une page d'un autre projet — a été retiré, lot 3 chantier 0.4.)
         docs = [{"id": int(d["id"]), "label": d.get("title") or f"#{d['id']}"}
                 for d in db.list_docs_for_project(pid)]
-        seen = {d["id"] for d in docs}
-        for l in links:
-            if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit():
-                did = int(l["target_ref"])
-                if did not in seen:
-                    docs.append({"id": did, "label": l.get("label") or l.get("title") or f"#{did}"})
-                    seen.add(did)
         connectors, loose = _connectors_from_tools(list(project.get("mcp_tools") or []))
         # « Ajouter à mon Oto » : deep-link dashboard (login + fork/récupération gérés là-bas).
         slug = project.get("mcp_slug")
@@ -645,11 +639,10 @@ def build_page(project: dict, path: str, *, offset: int = 0,
                                columns=columns, rows=rows, total=total, offset=max(0, offset)), 200
 
         if section == "docs":
-            linked = {int(l["target_ref"]) for l in links
-                      if l.get("target_type") == "doc" and str(l.get("target_ref", "")).isdigit()}
             doc = db.get_doc_by_id(rid)
-            # Autorisé si le doc appartient à CE projet (héritage d'accès) ou lui est lié.
-            if not doc or (int(doc.get("project_id") or 0) != pid and rid not in linked):
+            # Autorisé si le doc appartient à CE projet (héritage d'accès). Le lien
+            # `doc` cross-projet a été retiré (lot 3 chantier 0.4).
+            if not doc or int(doc.get("project_id") or 0) != pid:
                 return render_not_found(), 404
             return render_prose(name=project.get("name") or "", title=doc.get("title") or "",
                                 body_md=doc.get("body_md") or "", kind_label="Document"), 200

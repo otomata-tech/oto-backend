@@ -598,6 +598,37 @@ def list_orgs_for_user(sub: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# --- Projet KB ancré par id (lot 3, chantier 0.3) ---------------------------
+# Fin de l'identification « par son NOM » (renommable → 2 KB, transfert → KB cassée) :
+# `orgs.kb_project_id` = l'ancre. kb.py résout par id + auto-répare (clear/claim).
+
+def get_kb_project_id(org_id: int) -> Optional[int]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT kb_project_id FROM orgs WHERE id = %s", (org_id,)).fetchone()
+        return int(row["kb_project_id"]) if row and row["kb_project_id"] is not None else None
+
+
+def claim_kb_project(org_id: int, project_id: int) -> bool:
+    """Pose l'ancre SI ELLE EST LIBRE (verrou optimiste de création — deux appels
+    concurrents créent chacun leur projet, un seul claim gagne, le perdant archive
+    son doublon). True = ce projet est désormais LA KB de l'org."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE orgs SET kb_project_id = %s WHERE id = %s AND kb_project_id IS NULL",
+            (project_id, org_id))
+        return (cur.rowcount or 0) > 0
+
+
+def clear_kb_project(org_id: int, expected_project_id: int) -> None:
+    """Lève une ancre PENDOUILLANTE (projet archivé/transféré hors org) — compare-and-
+    clear pour ne jamais écraser une réparation concurrente déjà re-posée."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE orgs SET kb_project_id = NULL WHERE id = %s AND kb_project_id = %s",
+            (org_id, expected_project_id))
+
+
 def get_personal_org(sub: str) -> Optional[int]:
     """Org PERSO (privée, mono-membre) de `sub`, marquée `personal_of=sub`, ou None."""
     with _connect() as conn:

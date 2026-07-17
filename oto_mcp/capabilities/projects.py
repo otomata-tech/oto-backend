@@ -26,7 +26,9 @@ from .registry import CAPABILITIES
 RTYPE = "project"
 
 
-_LINK_TYPES = ("tableau", "procedure", "connecteur", "doc")
+# « doc » RETIRÉ (lot 3 chantier 0.4, vestige Memento) : relier des pages = les
+# backlinks `[[…]]` (Ship 4), pas un pointeur manuel affiché en groupe de rail.
+_LINK_TYPES = ("tableau", "procedure", "connecteur")
 
 
 class ProjectInput(BaseModel):
@@ -50,7 +52,7 @@ class ProjectInput(BaseModel):
     owner_type: Literal["user", "org", "group", "platform"] = "user"
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur", "doc"]] = None
+    target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
     target_ref: Optional[str] = None   # datastore.id | doctrine slug | connecteur name | doc.id (page Documents)
     label: Optional[str] = None        # nom d'affichage (link)
     role: Optional[str] = None         # pourquoi cette entité est ici / son rôle dans le projet (ADR 0032 §2)
@@ -670,9 +672,8 @@ CAPABILITIES += [
             "response `warnings`. Pass project_id = source + name = target) / handoff (a copy-paste « resume in Claude » blob "
             "that pre-writes the per-call `project=` token for this project) / archive / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "
-            "(for `doc`: a Documents page id — attach a knowledge page from the org KB or "
-            "any readable project), optional label + optional "
+            "target_type tableau|procedure|connecteur + target_ref = its id/slug/name, "
+            "optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
             "= which account to act as + prose instructions to apply (e.g. 'only filter "

@@ -130,6 +130,35 @@ Stock complet (~43M établissements, parquet ~2GB) interrogé via DuckDB :
 - REST `/api/sirene/{headquarters(POST,batch),siege,etablissements,siret,search,info}` (noms de routes **inchangés** — `oto-cli`/`oto-core` en dépendent ; orthogonaux aux noms MCP).
 - Consommé par `oto-cli` (`SireneStock` HTTP client, oto-core >=1.8 — `get_headquarters_addresses` = 1 POST batch, plus N appels) — voir ADR 0001 + 0002 dans le privé `otomata-private`.
 
+## Recherche transverse & KB projets (lot 3, plan JB — suivi oto-private#67)
+
+**`oto_search`** (capacité `me.search`, MCP + `GET /api/me/search`) = LE verbe « retrouver »,
+un seul chemin de code (`search.py` orchestration RRF k=60 · `db/search.py` SQL par source +
+**expressions d'index = source unique index↔requête**, GIN d'expression, config `french` +
+repli d'accents `translate`). Sources : pages/briefs/procédures/guides (passages, ts_headline
+sur la saisie BRUTE) ∪ tableaux/fichiers/connecteurs (conteneurs, matchés en mémoire).
+**Invariant « cherchable ⇔ lisible »** : docs/briefs/fichiers scopés
+`ownership.accessible_project_ids` (factorisation du scoping d'`op=list` — JAMAIS
+`can_access`, cross-org) ; **tripwire par source = critère de merge**
+(`test_search_scope_tripwire.py`). Le catalogue connecteurs est INJECTÉ par la capacité
+(pas d'inversion de couche). `oto_doc(op=search)` = rerouté, déprécié. Fichiers matchés sur
+`filename+title+description` (jamais `summary`, colonne morte). V1 lexicale — embeddings/V2
+conditionnés au golden set (~30 requêtes JB, ≥80 % top-5).
+
+**Se repérer** : `docs.description` (chapô ; fallback DÉRIVÉ À LA LECTURE `derive_description`,
+jamais stocké) + `docs.position` (ordre curé, entiers ×16 ; `move_doc(parent?, position=INDEX)`
+réindexe la fratrie ATOMIQUEMENT) + **épine** `oto_project(op=get, include=['spine'], from_doc?,
+depth?)` bornée (N+2, plafond 200, compteurs `more`) — la carte que l'agent lit avant
+`oto_doc(op=get)`, jamais `op=list` de tout. **KB d'org ancrée PAR ID** (`orgs.kb_project_id`,
+claim optimiste anti-doublon, auto-réparation transfert/archive — le nom n'est plus un marqueur).
+Le lien `project_links.target_type='doc'` est RETIRÉ (vestige memento) ; relier des pages =
+les backlinks `[[…]]` (Ship 4, **en pause** — Ships 3-4 + V2 : voulus à terme, cf. #67).
+
+**Seam `pending_action`** (`status_hints.py`, patron connector_verify) : un connecteur à
+connexion en deux temps enregistre un hook « quelle étape manque ? » → `ProviderStatus.
+pending_action` (fail-open) que le front rend tel quel en verdict+CTA. La spécificité vit
+DANS le module connecteur (unipile : « Connecte un canal »), jamais dans le modèle commun.
+
 ## Datastore (spine natif PG, ADR 0016)
 
 Spine plateforme de stockage structuré (PG/JSONB natif, plus Google

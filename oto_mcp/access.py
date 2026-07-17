@@ -44,7 +44,7 @@ from typing import Callable, Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import connectors, credentials_store, db, group_store, org_store, session_org
+from . import connectors, credentials_store, db, group_store, org_store, session_org, status_hints
 from .auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
@@ -1477,4 +1477,13 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             "quota_used_today": 0,
             "quota_daily": None,
         }
+
+    # Étape manquante par connecteur (seam générique `pending_action`, lot 2) :
+    # « la clé résout mais il reste une étape » (unipile : lier un canal…). La
+    # spécificité vit DANS le module connecteur (hook `status_hints.register`),
+    # jamais ici. Seuls les connecteurs à hook paient le coût ; fail-open.
+    for name, entry in out["providers"].items():
+        if status_hints.has_hook(name):
+            entry["pending_action"] = status_hints.pending_action(
+                name, sub, active_org, active_group, entry)
     return out

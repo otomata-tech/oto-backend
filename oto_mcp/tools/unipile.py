@@ -21,7 +21,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connector_verify, db
+from .. import access, connector_verify, db, status_hints
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,23 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "byo": byo,
         "channels": _channels_from(accts),
     }
+
+
+def _status_pending_action(sub: str, org, group, entry: dict):
+    """Hook `status_hints` (seam générique, lot 2) : la clé résout et l'option est
+    ouverte, mais AUCUN canal n'est lié → l'étape manquante est « Connecte un
+    canal ». La spécificité hosted-account reste ICI, pas dans le modèle commun."""
+    if entry.get("mode") == "forbidden":
+        return None   # pas de clé → les verdicts « à connecter »/« option » suffisent
+    st = status_for(sub, org=org, group=group)
+    if not st["subscribed"]:
+        return None   # option fermée → le front rend déjà « option requise »
+    if any(ch["connected"] for ch in st["channels"].values()):
+        return None
+    return "Connecte un canal"
+
+
+status_hints.register("unipile", _status_pending_action)
 
 
 def admin_status_by_org(sub: str, orgs: list) -> list:

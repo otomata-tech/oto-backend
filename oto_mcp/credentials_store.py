@@ -385,6 +385,18 @@ def get_credential_with_meta(entity_type: str, entity_id: str, connector: str,
             "meta": meta, "set_at": row["set_at"]}
 
 
+def instance_suspended(entity_type: str, entity_id: str, connector: str, account: str = "") -> bool:
+    """`meta.suspended` d'une instance — lecture SANS déchiffrer (chemin cascade/status).
+    Une instance suspendue est SAUTÉE par la résolution (la cascade tombe au barreau
+    suivant) mais reste LISTÉE (KeyStack : « suspendue · Réactiver ») — ADR 0044, lot 2."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT meta->>'suspended' AS s FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (entity_type, entity_id, connector, account)).fetchone()
+    return bool(row) and row["s"] == "true"
+
+
 def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
                 patch: dict, conn=None) -> bool:
     """Merge `patch` dans `meta` (JSONB ||) SANS toucher secret/secret_enc — pour

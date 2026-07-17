@@ -76,6 +76,18 @@ def get_member_api_key(sub: str, org_id: Optional[int], provider: str,
         account=account)
 
 
+def member_instance_suspended(sub: str, org_id: Optional[int], provider: str,
+                              account: str = "") -> bool:
+    """La clé membre de CETTE org est-elle SUSPENDUE (mise de côté) ? La cascade la
+    saute alors (bascule temporaire sur le barreau du dessous) — lot 2 / ADR 0044."""
+    if org_id is None:
+        return False
+    from .. import credentials_store
+    return credentials_store.instance_suspended(
+        credentials_store.MEMBER, credentials_store.member_id(org_id, sub), provider,
+        account=account)
+
+
 def has_member_api_key(sub: str, org_id: Optional[int], provider: str,
                        account: Optional[str] = None) -> bool:
     """Présence de la clé du membre dans CETTE org, SANS déchiffrer (status_for).

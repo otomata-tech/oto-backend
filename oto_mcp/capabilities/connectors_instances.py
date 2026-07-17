@@ -42,7 +42,7 @@ from pydantic import BaseModel
 # list_org_secrets/list_group_secrets (elles écrasent account/meta/secret_kind).
 from .. import access, credentials_store, db, group_store, instance_refs, providers
 from ._authz import SUB_ONLY
-from ._types import Capability, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 logger = logging.getLogger(__name__)
@@ -91,13 +91,17 @@ def _cred_instance(level: str, owner: dict, ref: str, row: dict) -> dict:
         "name": _instance_name(row["connector"], meta.get("label"), account),
         "account": account,
         "secret_kind": row.get("secret_kind"),
-        "config": {k: v for k, v in meta.items() if k not in ("label", "is_default")},
+        "config": {k: v for k, v in meta.items() if k not in ("label", "is_default", "suspended")},
         "set_by": row.get("set_by"),
         "set_at": row.get("set_at"),
         "via": "credential",
     }
     if meta.get("is_default"):
         inst["is_default"] = True
+    # État SUSPENDU (lot 2) : instance mise de côté → sautée par la cascade, mais
+    # listée pour le KeyStack (« suspendue · Réactiver »).
+    if meta.get("suspended"):
+        inst["suspended"] = True
     return inst
 
 
@@ -336,5 +340,48 @@ CAPABILITIES += [
             "(future binding target). Contrast with oto_identity (operable accounts of ONE "
             "connector) and oto_connector op=list (catalog of TYPES)."),
         rest=RestBinding("GET", "/api/me/connector-instances"),
+    ),
+]
+
+
+class SuspendInstanceInput(BaseModel):
+    connector: str                       # type de connecteur (ex. "unipile")
+    account: str = ""                    # discrimine si plusieurs instances membre
+    suspended: bool = True               # False = réactiver
+
+
+def _suspend_instance(ctx: ResolvedCtx, inp: SuspendInstanceInput) -> dict:
+    """Suspend / réactive TA clé membre du connecteur dans l'org active (lot 2).
+    Une instance suspendue est SAUTÉE par la résolution de credential (le barreau
+    du dessous — groupe/org/plateforme — prend le relais), mais reste listée et
+    réactivable (`suspended=False`). N'écrit QUE `meta.suspended` — le secret n'est
+    jamais touché ni lu. Réservé à TA propre clé (SUB_ONLY, org du seam acteur)."""
+    sub, org = ctx.sub, ctx.org_id
+    if org is None:
+        raise AuthzDenied(400, "no_active_org",
+                          "Aucune org active pour résoudre l'instance.")
+    ok = credentials_store.update_meta(
+        credentials_store.MEMBER, credentials_store.member_id(org, sub),
+        inp.connector, inp.account, {"suspended": bool(inp.suspended)})
+    if not ok:
+        raise AuthzDenied(404, "no_instance",
+                          f"Aucune clé membre '{inp.connector}' à suspendre.")
+    return {"connector": inp.connector, "account": inp.account or None,
+            "suspended": bool(inp.suspended)}
+
+
+CAPABILITIES += [
+    Capability(
+        key="connectors.instances.suspend",
+        handler=_suspend_instance,
+        Input=SuspendInstanceInput,
+        authz=SUB_ONLY,   # ta propre clé, org du seam acteur — jamais un tiers
+        description=(
+            "Suspend or reactivate YOUR OWN member key for a connector in the active "
+            "org. A suspended instance is SKIPPED by credential resolution (the next "
+            "level down — group/org/platform — takes over) but stays listed and "
+            "reactivable (`suspended=false`). Only meta.suspended is written; the "
+            "secret is never touched."),
+        rest=RestBinding("POST", "/api/me/connector-instances/suspend"),
     ),
 ]

@@ -114,6 +114,8 @@ def test_presence_and_fetch_probes_agree(monkeypatch):
                             lambda s, o, p, *a, **k: flags.get("member", False))
         monkeypatch.setattr(access.db, "get_member_api_key",
                             lambda s, o, p, *a, **k: ("MK" if flags.get("member") else None))
+        monkeypatch.setattr(access.db, "member_instance_suspended",
+                            lambda s, o, p, *a, **k: False)
         monkeypatch.setattr(access.group_store, "has_group_secret",
                             lambda g, p: flags.get("group", False))
         monkeypatch.setattr(access.group_store, "get_group_secret",

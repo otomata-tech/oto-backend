@@ -78,6 +78,8 @@ def test_credential_mode_for_scopes_third_party_org(monkeypatch):
     monkeypatch.setattr(
         access.db, "has_member_api_key",
         lambda sub, org, prov: seen.append(org) or org == 7)
+    monkeypatch.setattr(access.db, "member_instance_suspended",
+                        lambda *a, **k: False)
     assert access.credential_mode_for("u1", "pennylane", org=7, group=None) == "user"
     assert seen == [7]
 

@@ -82,16 +82,13 @@ def _google_select(sub: str, identity_id: str) -> dict:
 # + comptes ACCORDÉS par leur propriétaire (#55, tout mode — y compris revente).
 
 def _own_unipile_account_id(sub: str, provider: str) -> str | None:
-    """Compte Unipile connecté PROPRE de `sub` sur ce canal — org de contexte
-    d'abord, puis (connecteur PAR-PERSONNE, `personal_cross_org`) un fallback
-    cross-org. Deux cas de cross-org :
-    - **BYO** (#172) : la clé membre me suit dans une autre org → je prends le compte
-      dans la MÊME org que la clé (`personal_instance_org`) → clé et compte appariés ;
-    - **siège plateforme** (#221) : pas de clé membre à suivre, mais si l'org de
-      contexte résout via la clé PLATEFORME partagée (org-agnostique), mon siège
-      hébergé me suit dans toutes mes orgs (`db.any_unipile_account_id`). Le garde
-      `mode == 'platform'` évite de renvoyer un siège plateforme sous une clé BYO
-      d'org (où il ne matcherait pas). None si aucun."""
+    """Compte Unipile connecté PROPRE de `sub` sur ce canal — le binding VIVANT de
+    l'org de contexte (le binding est un ACTE par org, modèle explicite : un siège
+    plateforme connecté ailleurs se propose à l'ADOPTION au connect, jamais en
+    fallback silencieux ici — l'ex-#221 auto a été retiré, il rendait le disconnect
+    incohérent). Seul cross-org restant : **BYO** (#172) — la clé membre me suit dans
+    une autre org → compte pris dans la MÊME org que la clé (`personal_instance_org`),
+    clé et compte appariés. None si aucun."""
     from . import access, connectors, db
     org = access.current_org(sub)
     acc = db.get_unipile_account_id(sub, org, provider)
@@ -100,15 +97,7 @@ def _own_unipile_account_id(sub: str, provider: str) -> str | None:
     if connectors.is_personal_cross_org("unipile"):
         pio = access.personal_instance_org(sub, "unipile", exclude_org=org)
         if pio is not None:
-            acc = db.get_unipile_account_id(sub, pio, provider)
-            if acc:
-                return acc
-        # Siège plateforme cross-org (#221) — uniquement si l'org de contexte résout
-        # BIEN via la clé plateforme (le siège n'est utilisable que sous elle).
-        if access.credential_mode_for(sub, "unipile") == "platform":
-            acc = db.any_unipile_account_id(sub, provider)
-            if acc:
-                return acc
+            return db.get_unipile_account_id(sub, pio, provider)
     return None
 
 

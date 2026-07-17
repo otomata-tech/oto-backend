@@ -19,9 +19,11 @@ def _acc(aid, name, provider="linkedin", created="2026-07-16 12:45:00+00"):
     return {"id": aid, "name": name, "provider": provider, "created_at": created}
 
 
-def _setup(monkeypatch, pendings, accounts, bound=None):
+def _setup(monkeypatch, pendings, accounts, bound=None, dead=None):
     monkeypatch.setattr(uc.db, "list_unipile_pending_for_sub", lambda s: pendings)
     monkeypatch.setattr(uc.db, "bound_unipile_account_ids", lambda: set(bound or []))
+    monkeypatch.setattr(uc.db, "dead_unipile_account_ids_for",
+                        lambda s, p="LINKEDIN": set(dead or []))
     monkeypatch.setattr(uc.access, "resolve_credential",
                         lambda *a, **k: types.SimpleNamespace(key="K", is_platform=True, config={}))
     import oto.tools.unipile as core
@@ -57,6 +59,26 @@ def test_excludes_account_before_floor(monkeypatch):
     calls = _setup(monkeypatch, [_pend()], [_acc("acc_old", "Seat", created="2026-07-16 11:00:00+00")])
     out = uc.reconcile_pending("sub1")
     assert out["bound"] is False
+
+
+def test_rebinds_own_dead_account_despite_floor(monkeypatch):
+    # reconnexion : Unipile RÉUTILISE le compte (antérieur au pending) — la ligne
+    # soft-déconnectée du sub est la preuve de propriété → rebind déterministe,
+    # même si l'account_id figure dans bound (les morts y sont, anti-tiers).
+    calls = _setup(monkeypatch, [_pend()],
+                   [_acc("acc_mine", "Moi", created="2026-07-16 11:00:00+00")],
+                   bound={"acc_mine"}, dead={"acc_mine"})
+    out = uc.reconcile_pending("sub1")
+    assert out["bound"] is True
+    assert out["accounts"][0]["account_id"] == "acc_mine"
+
+
+def test_never_rebinds_dead_account_of_third_party(monkeypatch):
+    # ligne morte d'un TIERS (dans bound, pas dans MES morts) + antérieure → intouchable
+    calls = _setup(monkeypatch, [_pend()],
+                   [_acc("acc_tiers", "Autre", created="2026-07-16 11:00:00+00")],
+                   bound={"acc_tiers"}, dead=set())
+    assert uc.reconcile_pending("sub1")["bound"] is False
 
 
 def test_provider_mismatch_ignored(monkeypatch):

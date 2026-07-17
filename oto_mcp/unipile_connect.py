@@ -94,25 +94,14 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # l'instance personnelle suit désormais l'utilisateur cross-org (piste A), inutile
     # de reconnecter ; `force=True` pour un compte RÉELLEMENT distinct. (Reconnexion
     # dans la MÊME org = remplacement, non concernée : filtrée par `org_id`.)
-    if not force:
-        elsewhere = [a for a in db.list_unipile_accounts(sub)
-                     if a.get("provider") == provider and a.get("org_id") != org_id]
-        if elsewhere:
-            other = elsewhere[0]
-            who = other.get("account_name") or other["account_id"]
-            raise ConnectRefused(
-                409, "unipile_already_connected_elsewhere",
-                f"Tu as déjà un compte {provider.lower()} connecté (« {who} ») dans "
-                "une autre de tes orgs. Il te suit désormais dans toutes tes orgs — "
-                "inutile de reconnecter, utilise-le directement. Pour connecter un "
-                "compte RÉELLEMENT différent, relance avec force=true.")
     platform_seat = not byo
     # Gate OPTION (couche 3) : hébergé sans option accordée = refus.
     if not byo and not access.has_option(sub, "unipile"):
         raise ConnectRefused(402, "unipile_option_required",
                              "La messagerie hébergée n'est pas activée pour ton org "
                              "(option à accorder par un admin).")
-    # Plafond de sièges hébergés (reconnexion d'un compte existant = remplacement, OK).
+    # Plafond de sièges hébergés (reconnexion d'un compte existant = remplacement, OK ;
+    # une ADOPTION ci-dessous crée un binding dans cette org → soumise au même plafond).
     if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
         limit = db.get_org_unipile_limit(org_id)
         if limit is None:
@@ -121,6 +110,39 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
             logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
             raise ConnectRefused(429, "unipile_account_limit_reached",
                                  "Plafond de comptes hébergés atteint pour l'org.")
+    # ADOPTION explicite (modèle binding-par-org) : le compte hébergé du sub vit déjà
+    # sur la clé PLATEFORME dans une autre de ses orgs → « connecter ici » n'a pas
+    # besoin du wizard, on écrit le binding pour CETTE org. Sûr : même clé partagée
+    # ⟹ l'account_id est joignable ici ; même sub ⟹ zéro usurpation. `force=True`
+    # (compte réellement différent) ou `premium` (reconnexion pour ATTACHER un
+    # produit) → wizard quand même.
+    if not force and not premium and platform_seat:
+        mine = db.seat_binding_elsewhere(sub, provider, exclude_org=org_id)
+        if mine:
+            db.set_unipile_account(sub, mine["account_id"],
+                                   account_name=mine.get("account_name"),
+                                   org_id=org_id, provider=provider, platform_seat=True)
+            logger.info("unipile adopt: sub=%s account=%s org=%s (depuis org %s)",
+                        sub, mine["account_id"], org_id, mine.get("org_id"))
+            return {"adopted": True, "channel": provider.lower(),
+                    "account_name": mine.get("account_name")}
+    # Anti-doublon BYO (issue #172) : un compte connecté sous la clé d'une AUTRE org
+    # (BYO) n'est PAS adoptable ici (un account_id n'existe que sur le tenant de la
+    # clé qui l'a créé) → reconnecter le même login créerait un 2e compte (rotation
+    # du cookie li_at, dégradation silencieuse). Refus actionnable.
+    if not force:
+        byo_elsewhere = [a for a in db.list_unipile_accounts(sub)
+                         if a.get("provider") == provider and a.get("org_id") != org_id
+                         and not a.get("platform_seat")]
+        if byo_elsewhere:
+            other = byo_elsewhere[0]
+            who = other.get("account_name") or other["account_id"]
+            raise ConnectRefused(
+                409, "unipile_already_connected_elsewhere",
+                f"Tu as déjà un compte {provider.lower()} connecté (« {who} ») dans "
+                "une autre de tes orgs, sous la clé Unipile de cette org-là (BYO) — "
+                "il n'est pas joignable ici. Pour connecter un compte différent, "
+                "relance avec force=true.")
     from oto.tools.unipile import make_unipile_client
     # DSN porté par le credential BYO gagnant (`config.dsn`) ; la plateforme reste
     # sur le défaut oto-core (api.unipile.com).
@@ -212,17 +234,27 @@ def reconcile_pending(sub: str) -> dict:
     except Exception:  # noqa: BLE001 — best-effort, jamais fatal pour le statut
         logger.warning("reconcile unipile: list_accounts échoué", exc_info=True)
         return {"bound": False, "accounts": []}
-    taken = db.bound_unipile_account_ids()
+    taken = db.bound_unipile_account_ids()  # vivants + morts (jamais le siège d'un tiers)
     bound = []
     for pend in pendings:
         provider = (pend.get("provider") or "LINKEDIN").upper()
         floor = _parse_dt(pend.get("created_at"))
+        # Rebind DÉTERMINISTE : Unipile RÉUTILISE le compte existant à la reconnexion
+        # (même account_id) — une ligne soft-déconnectée du MÊME sub est la preuve de
+        # propriété → on rebinde direct, sans heuristique (le floor raterait un compte
+        # antérieur au pending, cas vécu 2026-07-17).
+        mine_dead = db.dead_unipile_account_ids_for(sub, provider)
         cand = []
         for a in accounts:
             aid = a.get("id")
-            if not aid or aid in taken:
+            if not aid:
                 continue
             if (a.get("provider") or a.get("type") or "").upper() != provider:
+                continue
+            if aid in mine_dead:
+                cand.append((_parse_dt(a.get("created_at")), a))
+                continue  # à moi (ligne morte) → candidat sans condition de date
+            if aid in taken:
                 continue
             created = _parse_dt(a.get("created_at"))
             # créé après le pending (marge 5 min d'horloge) ; date illisible → on garde

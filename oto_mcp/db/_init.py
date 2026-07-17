@@ -33,6 +33,9 @@ def init_db() -> None:
         conn.execute("DROP TABLE IF EXISTS platform_keys")
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
+        # Soft-disconnect unipile : la ligne de binding survit (preuve de propriété
+        # durable du compte hébergé → rebind déterministe à la reconnexion).
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMPTZ")
         # ADR 0032 §2 : le lien projet→entité porte un `role` (pourquoi cette entité est ici).
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # ADR 0032 §4 (B2) : surcharge contextuelle préfaite du lien (connecteur → identité/instructions).

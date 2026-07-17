@@ -17,11 +17,23 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde, non utilisé ici)
+    """Sonde « tester la connexion » : la clé authentifie-t-elle vraiment ?
+
+    `verify_key()` (oto-core) fait un GET crédits sans effet de bord — 401 sur
+    clé invalide. Lève — le message remonte tel quel à l'UI.
+    """
+    from oto.tools.aiark.client import AiArkClient
+    AiArkClient(api_key=fields["key"]).verify_key()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.aiark.client import AiArkClient
+
+    connector_verify.register("aiark", _verify)
 
     def _client() -> tuple[AiArkClient, bool]:
         key, is_platform = access.resolve_api_key("aiark")
@@ -50,11 +62,6 @@ def register(mcp: FastMCP) -> None:
         if is_platform:
             access.record_platform_usage("aiark")
         return result
-
-    @mcp.tool()
-    def aiark_verify_key() -> dict:
-        """Verify the configured AI Ark API key — returns validity + remaining credits."""
-        return _run(lambda c: c.verify_key())
 
     @mcp.tool()
     def aiark_credits() -> dict:

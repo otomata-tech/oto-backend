@@ -13,7 +13,6 @@ from oto_mcp import providers
 from oto_mcp.tool_visibility import namespace_of
 
 EXPECTED_TOOLS = {
-    "aiark_verify_key",
     "aiark_credits",
     "aiark_company_search",
     "aiark_people_search",
@@ -61,6 +60,14 @@ def test_aiark_tools_register_under_namespace(all_tools):
     assert EXPECTED_TOOLS <= all_tools
     assert all(namespace_of(t) == "aiark"
                for t in all_tools if t.startswith("aiark_"))
+
+
+def test_aiark_verify_is_probe_not_tool(all_tools):
+    # « tester la connexion » = sonde générique (oto_instance op=verify), plus un
+    # tool MCP dédié par connecteur.
+    from oto_mcp import connector_verify
+    assert "aiark_verify_key" not in all_tools
+    assert connector_verify.supports("aiark")
 
 
 def test_aiark_async_bulk_endpoints_not_exposed(all_tools):

@@ -317,6 +317,14 @@ def register(mcp: FastMCP) -> None:
         return _client().send_invoice(invoice_id)
 
     @mcp.tool()
+    def pennylane_list_customers(max_pages: Optional[int] = None) -> list:
+        """Liste les clients (id + nom + coordonnées). Sert à résoudre un `customer_id`
+        depuis un NOM (pennylane_customer_invoices ne renvoie que `customer.{id,url}`,
+        sans nom ni filtre) — p. ex. retrouver la facture d'origine d'un client donné
+        avant de créer un avoir. Paginé ; max_pages limite le volume."""
+        return _client().list_customers(max_pages=max_pages)
+
+    @mcp.tool()
     def pennylane_create_customer(
         name: str,
         address: str,

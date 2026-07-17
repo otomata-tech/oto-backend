@@ -162,12 +162,11 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "crée une clé api dans les réglages api/intégrations de ton compte [kaspr](https://app.kaspr.io).\n"
             "- colle-la dans tes connecteurs oto sur `/account` — kaspr est **byo** (pas de clé plateforme, chacun la sienne)\n"
             "- kaspr facture en crédits : 1 par email, +1 par téléphone\n"
-            "- vérifie ta clé et tes crédits restants avec `kaspr_verify_key`"
+            "- vérifie ta clé avec `oto_instance(op='verify', connector='kaspr')`"
         )),
         DocSection(kind="usage", title="enrichir un contact depuis linkedin", body_md=(
             "récupère emails et téléphones d'une personne à partir de son profil linkedin.\n"
-            "- `kaspr_enrich_linkedin` — passe le slug (`alexis-laporte`) ou l'url linkedin complète, options `with_phone` pour les numéros\n"
-            "- `kaspr_verify_key` — état du compte + crédits restants"
+            "- `kaspr_enrich_linkedin` — passe le slug (`alexis-laporte`) ou l'url linkedin complète, options `with_phone` pour les numéros"
         )),
     ),
     "fullenrich": (

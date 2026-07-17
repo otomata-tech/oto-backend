@@ -623,6 +623,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             active_org is not None and org_role is None
             and access.is_platform_operator(sub)
         )
+        # Org perso (espace privé mono-membre) : le front adapte son vocabulaire
+        # (principe 9 du CDC connecteurs — un « solo » ne lit jamais « org »/« équipe »).
+        active_org_is_personal = (
+            active_org is not None and org_store.is_personal_org(active_org))
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».
         home_org = org_store.get_active_org(sub)
@@ -663,6 +667,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
             "active_org_readonly": active_org_readonly,
+            "active_org_is_personal": active_org_is_personal,
             "active_org_require_mfa": active_org_require_mfa,
             "home_org": home_org,
             "home_org_name": home_org_name,

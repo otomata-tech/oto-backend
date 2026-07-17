@@ -462,6 +462,66 @@ def register(mcp: FastMCP) -> None:
             return {"error": "not_found", "idweb": idweb}
         return result
 
+    # --- Aides publiques aux entreprises (data.aides-entreprises.fr, open data) ---
+
+    @mcp.tool()
+    def fr_aides_search(
+        insee: Optional[str] = None,
+        code_postal: Optional[str] = None,
+        effectif: Optional[int] = None,
+        nature: Optional[str] = None,
+        echeance_avant: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Shortlist d'aides publiques FR (subventions, prêts, garanties, AAP) pour
+        une entreprise/un projet — base data.aides-entreprises.fr (réf. État, ~2 400
+        aides actives, màj quotidienne, la base élague les périmées).
+
+        Renvoie le filtre DÉTERMINISTE (géo par hiérarchie commune→dept→région→
+        France/UE + tranche d'effectif + nature + échéance) avec l'entonnoir mesuré
+        (`funnel`). ⚠️ La pertinence SECTORIELLE ne peut PAS venir de la base (son
+        tagging profils est sur-inclusif à 99 %) ni d'un scoring lexical : c'est À
+        TOI de re-ranker la shortlist en lisant nom/objet. Règle anti-hallucination :
+        ne retiens que des `id`, puis re-rends chaque fiche via `fr_aides_get(id)` —
+        ne JAMAIS reformuler nom/objet de mémoire, citer littéralement.
+
+        Args:
+            insee: code INSEE de la commune (préféré — ex. "31555" Toulouse).
+            code_postal: à défaut d'INSEE (résolution best-effort).
+            effectif: nombre de salariés (filtre les tranches ; les aides sans
+                restriction restent).
+            nature: sous-chaîne du type d'aide ("subvention", "prêt", "garantie",
+                "avance", "exonération", "prestation"...).
+            echeance_avant: YYYY-MM-DD — aides À échéance clôturant avant la date
+                (veille AAP ; exclut les aides permanentes).
+            q: filtre lexical AND (pré-filtre grossier, PAS un tri de pertinence).
+            limit: fiches renvoyées (défaut 50 ; `count` = total filtré).
+            offset: pagination.
+        """
+        try:
+            return fod_fr.search_aides(
+                insee=insee, code_postal=code_postal, effectif=effectif, nature=nature,
+                echeance_avant=echeance_avant, q=q, limit=limit, offset=offset,
+            )
+        except ValueError as e:  # commune/CP inconnu du référentiel territoires
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+
+    @mcp.tool()
+    def fr_aides_get(id_aid: str) -> dict:
+        """Fiche COMPLÈTE brute d'une aide (source de vérité après re-rank de
+        `fr_aides_search` — objet/conditions/montant intégraux, financeurs,
+        contacts, sources officielles).
+
+        Args:
+            id_aid: identifiant de l'aide (champ `id` de fr_aides_search).
+        """
+        result = fod_fr.get_aide(id_aid)
+        if result is None:
+            return {"error": "not_found", "id_aid": id_aid}
+        return result
+
     # --- Accords d'entreprise (ACCO, open data) ---
     # Base nationale des accords collectifs (DILA), accords conclus depuis le
     # 01/09/2017. Métadonnées : qui (SIRET, raison sociale, IDCC = convention

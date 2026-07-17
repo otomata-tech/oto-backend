@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, connector_verify
 
 # La normalisation du slug LinkedIn (URL → slug nu, sinon Kaspr 500) vit dans le
 # client oto-core (`oto.tools.kaspr.client.linkedin_slug`), pas ici — logique
@@ -19,21 +19,25 @@ from .. import access
 # une erreur Kaspr en McpError actionnable.
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde, non utilisé ici)
+    """Sonde « tester la connexion » : la clé authentifie-t-elle vraiment ?
+
+    `verify_key()` (oto-core) fait un POST sentinel sans effet de bord ni crédit
+    consommé (Kaspr n'a pas de `/me`) — 401 sur clé invalide. Lève — le message
+    remonte tel quel à l'UI.
+    """
+    from oto.tools.kaspr.client import KasprClient
+    KasprClient(api_key=fields["key"]).verify_key()
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.kaspr.client import KasprClient
+
+    connector_verify.register("kaspr", _verify)
 
     def _client() -> tuple[KasprClient, bool]:
         key, is_platform = access.resolve_api_key("kaspr")
         return KasprClient(api_key=key), is_platform
-
-    @mcp.tool()
-    def kaspr_verify_key() -> dict:
-        """Verify the configured Kaspr API key — returns account info + remaining credits."""
-        client, is_platform = _client()
-        result = client.verify_key()
-        if is_platform:
-            access.record_platform_usage("kaspr")
-        return result
 
     @mcp.tool()
     def kaspr_enrich_linkedin(

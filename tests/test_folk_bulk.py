@@ -212,3 +212,130 @@ def test_singular_update_still_rejects_unknown_entity(client_cls):
 def test_singular_delete_still_rejects_unknown_entity(client_cls):
     with pytest.raises(McpError):
         _register_and_call("folk_delete", entity="note", id="nte_1")
+
+
+# --- dry_run -----------------------------------------------------------------
+
+def test_bulk_create_dry_run_makes_no_network_call(client_cls):
+    inst = _instance(client_cls)
+    r = _register_and_call(
+        "folk_bulk_create", entity="person",
+        items=[{"first_name": "A"}, {"first_name": "B"}], dry_run=True)
+    inst.create_person.assert_not_called()
+    assert r["dry_run"] is True
+    assert r["total"] == 2
+    assert r["would_create"] == [
+        {"index": 0, "would_create": {"first_name": "A"}},
+        {"index": 1, "would_create": {"first_name": "B"}}]
+    assert r["failed"] == []
+
+
+def test_singular_create_person_dry_run(client_cls):
+    inst = _instance(client_cls)
+    r = _register_and_call("folk_create_person", first_name="Ada", dry_run=True)
+    inst.create_person.assert_not_called()
+    assert r["dry_run"] is True
+    assert r["would_create"]["first_name"] == "Ada"
+
+
+def test_bulk_update_dry_run_shows_diff_and_writes_nothing(client_cls):
+    inst = _instance(client_cls)
+    inst.get_person.return_value = {"id": "per_1", "jobTitle": "CTO"}
+    r = _register_and_call(
+        "folk_bulk_update", entity="person",
+        items=[{"id": "per_1", "fields": {"jobTitle": "CEO"}}], dry_run=True)
+    inst.update_person.assert_not_called()
+    inst.get_person.assert_called_once_with("per_1")
+    assert r["dry_run"] is True
+    assert r["would_update"] == [
+        {"index": 0, "id": "per_1", "changes": {"jobTitle": {"from": "CTO", "to": "CEO"}}}]
+    assert r["failed"] == []
+
+
+def test_bulk_update_dry_run_note_entity_degrades_gracefully(client_cls):
+    inst = _instance(client_cls)
+    r = _register_and_call(
+        "folk_bulk_update", entity="note",
+        items=[{"id": "nte_1", "fields": {"content": "new text"}}], dry_run=True)
+    inst.update_note.assert_not_called()
+    assert r["would_update"] == [
+        {"index": 0, "id": "nte_1", "fields": {"content": "new text"},
+         "current_available": False}]
+
+
+def test_bulk_update_dry_run_partial_failure_still_continues(client_cls):
+    from oto.tools.common.errors import UpstreamHTTPError
+    inst = _instance(client_cls)
+    inst.get_person.side_effect = [
+        UpstreamHTTPError(404, {"message": "not found"}, service="folk"),
+        {"id": "per_2", "jobTitle": "CTO"},
+    ]
+    r = _register_and_call(
+        "folk_bulk_update", entity="person",
+        items=[{"id": "per_404", "fields": {"jobTitle": "X"}},
+               {"id": "per_2", "fields": {"jobTitle": "CEO"}}], dry_run=True)
+    assert inst.get_person.call_count == 2  # le lot continue après l'échec
+    assert len(r["would_update"]) == 1 and r["would_update"][0]["index"] == 1
+    assert len(r["failed"]) == 1 and r["failed"][0]["index"] == 0
+    inst.update_person.assert_not_called()
+
+
+def test_singular_update_dry_run(client_cls):
+    inst = _instance(client_cls)
+    inst.get_person.return_value = {"jobTitle": "CTO"}
+    r = _register_and_call(
+        "folk_update", entity="person", id="per_1",
+        fields={"jobTitle": "CEO"}, dry_run=True)
+    inst.update_person.assert_not_called()
+    assert r == {"dry_run": True, "id": "per_1",
+                 "changes": {"jobTitle": {"from": "CTO", "to": "CEO"}}}
+
+
+def test_bulk_delete_dry_run_shows_would_delete_and_writes_nothing(client_cls):
+    inst = _instance(client_cls)
+    inst.get_person.return_value = {"id": "per_1", "firstName": "Ada"}
+    r = _register_and_call(
+        "folk_bulk_delete", entity="person", ids=["per_1"], dry_run=True)
+    inst.delete_person.assert_not_called()
+    inst.get_person.assert_called_once_with("per_1")
+    assert r["dry_run"] is True
+    assert r["would_delete"] == [
+        {"index": 0, "id": "per_1", "would_delete": {"id": "per_1", "firstName": "Ada"}}]
+
+
+def test_bulk_delete_dry_run_note_entity_degrades_gracefully(client_cls):
+    inst = _instance(client_cls)
+    r = _register_and_call(
+        "folk_bulk_delete", entity="note", ids=["nte_1"], dry_run=True)
+    inst.delete_note.assert_not_called()
+    assert r["would_delete"] == [
+        {"index": 0, "id": "nte_1", "would_delete": None, "current_available": False}]
+
+
+def test_singular_delete_dry_run(client_cls):
+    inst = _instance(client_cls)
+    inst.get_company.return_value = {"id": "com_1", "name": "Acme"}
+    r = _register_and_call("folk_delete", entity="company", id="com_1", dry_run=True)
+    inst.delete_company.assert_not_called()
+    assert r == {"dry_run": True, "id": "com_1", "would_delete": {"id": "com_1", "name": "Acme"}}
+
+
+def test_bulk_add_to_group_dry_run_shows_diff_and_writes_nothing(client_cls):
+    inst = _instance(client_cls)
+    inst.get_person.return_value = {"groups": [{"id": "g1"}]}
+    r = _register_and_call(
+        "folk_bulk_add_to_group", entity="person", ids=["per_1"], group_id="g2", dry_run=True)
+    inst.update_person.assert_not_called()
+    assert r["dry_run"] is True
+    assert r["would_add"] == [
+        {"index": 0, "id": "per_1",
+         "changes": {"groups": {"from": [{"id": "g1"}], "to": [{"id": "g1"}, {"id": "g2"}]}}}]
+
+
+def test_bulk_add_to_group_dry_run_already_member_shows_noop(client_cls):
+    inst = _instance(client_cls)
+    inst.get_person.return_value = {"groups": [{"id": "g1"}]}
+    r = _register_and_call(
+        "folk_bulk_add_to_group", entity="person", ids=["per_1"], group_id="g1", dry_run=True)
+    changes = r["would_add"][0]["changes"]["groups"]
+    assert changes["from"] == changes["to"] == [{"id": "g1"}]

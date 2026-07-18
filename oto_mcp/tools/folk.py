@@ -13,6 +13,12 @@ UN record → résultat direct ; un pluriel (`items`/`ids`, ≤50) pour plusieur
 reçu allégé (compte + erreurs par item, jamais N corps de réponse complets).
 Folk n'a d'endpoint batch nulle part — le mode bulk boucle sur les méthodes
 single-record avec un petit délai de courtoisie (`_bulk_run`).
+
+⚠️ **Deux vocabulaires de champs différents cohabitent** : `folk_create` prend
+des clés Python snake_case (`first_name`, `company_id`...) ; `folk_update`
+prend les noms de champs bruts de l'API Folk en camelCase (`jobTitle`,
+`customFieldValues`...). Ne pas transposer l'un vers l'autre — voir le
+docstring de chaque tool.
 """
 from __future__ import annotations
 
@@ -66,6 +72,26 @@ _UPDATE_ENTITIES = ("person", "company", "deal", "note", "reminder")
 _DELETE_ENTITIES = ("person", "company", "deal", "note", "reminder")
 _GROUP_ENTITIES = ("person", "company")
 
+# Champs acceptés par `folk_create` par entité — miroir des paramètres nommés
+# des méthodes `FolkClient.create_*` (snake_case Python, PAS les noms de
+# champs API Folk en camelCase utilisés par `folk_update`/`fields`). Codé en
+# dur plutôt qu'introspecté via `inspect.signature` : `create_person`/
+# `create_company` acceptent `**kwargs` côté client, donc sans cette
+# allow-list explicite un champ mal orthographié/mal casé (ex. `firstName` au
+# lieu de `first_name`) serait avalé SILENCIEUSEMENT dans le payload envoyé à
+# Folk sous le mauvais nom, plutôt que de lever une erreur. Une liste codée en
+# dur reste aussi testable contre un `FolkClient` mocké (l'introspection de
+# signature ne fonctionne pas sur un Mock sans `autospec`).
+_CREATE_FIELDS = {
+    "person": {"first_name", "last_name", "emails", "phones", "job_title",
+               "company_name", "company_id", "group_ids", "urls", "description"},
+    "company": {"name", "emails", "industry"},
+    "deal": {"name", "people_ids", "company_ids", "custom_fields"},
+    "note": {"entity_id", "content", "visibility"},
+    "interaction": {"entity_id", "type", "title", "content", "date_time"},
+    "reminder": {"entity_id", "name", "recurrence_rule", "visibility"},
+}
+
 
 def _get_one(c, entity: str, id: str, group_id: Optional[str] = None,
              object_type: str = "deals"):
@@ -92,6 +118,14 @@ def _create_one(c, entity: str, group_id: Optional[str] = None,
                  object_type: str = "deals", dry_run: bool = False, **fields):
     if entity == "deal" and not group_id:
         raise _bad("group_id requis pour entity='deal'.")
+    unknown = set(fields) - _CREATE_FIELDS.get(entity, set())
+    if unknown:
+        raise _bad(
+            f"champ(s) inconnu(s) pour entity='{entity}' : {sorted(unknown)}. "
+            f"Champs acceptés : {sorted(_CREATE_FIELDS.get(entity, set()))}. "
+            f"Rappel : folk_create utilise des clés snake_case Python "
+            f"(first_name, company_id...) — PAS les noms de champs API Folk "
+            f"en camelCase (jobTitle, customFieldValues...) utilisés par folk_update.")
     if dry_run:
         preview = {"would_create": fields}
         if entity == "deal":
@@ -333,6 +367,13 @@ def register(mcp: FastMCP) -> None:
         the dry_run preview). Pass `items` (up to 50) for several (returns a
         receipt). Exactly one of `item`/`items` is required.
 
+        ⚠️ Field names here are Python **snake_case** parameter names
+        (`first_name`, `company_id`...), forwarded directly to the client —
+        NOT Folk's raw camelCase API field vocabulary (`jobTitle`,
+        `customFieldValues`...) that `folk_update`'s `fields` uses. An
+        unrecognized field name raises immediately (listing the accepted
+        ones), it is never silently dropped or sent under the wrong name.
+
         Args:
             entity: "person", "company", "deal", "note", "interaction" or "reminder".
             item: fields for ONE record — see the per-entity shape below.
@@ -346,7 +387,7 @@ def register(mcp: FastMCP) -> None:
                 (`would_create`); zero network calls.
 
         Per-entity field shape (same for `item` and each entry of `items`,
-        `*` = required):
+        `*` = required, snake_case — see the warning above):
             person: {first_name*, last_name, emails, phones, job_title,
                 company_name, company_id, group_ids, urls, description}
             company: {name*, emails, industry}
@@ -406,6 +447,11 @@ def register(mcp: FastMCP) -> None:
         `items` (up to 50, each `{"id", "fields", "add_to_groups",
         "remove_from_groups"}`) for several (returns a receipt). Exactly one
         of `id`/`items` is required.
+
+        ⚠️ Field names in `fields` are Folk's raw **camelCase** API vocabulary
+        (`jobTitle`, `customFieldValues`...), passed through as-is — a
+        DIFFERENT vocabulary from `folk_create`'s snake_case Python parameter
+        names (`first_name`, `company_id`...). Don't mix the two conventions.
 
         Args:
             entity: "person", "company", "deal", "note" or "reminder"

@@ -124,6 +124,46 @@ def test_create_deal_requires_group_id(client_cls):
     inst.create_deal.assert_not_called()
 
 
+def test_create_rejects_unknown_field_for_person(client_cls):
+    # Régression : FolkClient.create_person accepte **kwargs côté oto-core —
+    # sans l'allow-list, une clé mal casée (camelCase au lieu de snake_case)
+    # serait avalée SILENCIEUSEMENT dans le payload plutôt que rejetée ici.
+    inst = _instance(client_cls)
+    with pytest.raises(McpError, match="firstName"):
+        _register_and_call("folk_create", entity="person", item={"firstName": "Ada"})
+    inst.create_person.assert_not_called()
+
+
+def test_create_rejects_unknown_field_for_deal(client_cls):
+    # Avant l'allow-list, ceci levait un TypeError brut de create_deal (pas
+    # de **kwargs côté client) — désormais un McpError propre, même message
+    # que pour person/company.
+    inst = _instance(client_cls)
+    with pytest.raises(McpError, match="bogusField"):
+        _register_and_call("folk_create", entity="deal", group_id="g1",
+                           item={"name": "Deal A", "bogusField": 1})
+    inst.create_deal.assert_not_called()
+
+
+def test_create_rejects_unknown_field_in_dry_run_too(client_cls):
+    inst = _instance(client_cls)
+    with pytest.raises(McpError, match="firstName"):
+        _register_and_call("folk_create", entity="person",
+                           item={"firstName": "Ada"}, dry_run=True)
+    inst.create_person.assert_not_called()
+
+
+def test_create_rejects_unknown_field_in_bulk_item(client_cls):
+    # En mode bulk, une erreur de validation par item ne lève pas — elle est
+    # capturée par `_bulk_run` (comme toute erreur non-fatale) et remonte dans
+    # `failed`, sans abandonner le lot.
+    inst = _instance(client_cls)
+    r = _register_and_call("folk_create", entity="person", items=[{"firstName": "Ada"}])
+    inst.create_person.assert_not_called()
+    assert r["succeeded"] == 0
+    assert len(r["failed"]) == 1 and "firstName" in r["failed"][0]["error"]
+
+
 def test_create_solo_dry_run_makes_no_network_call(client_cls):
     inst = _instance(client_cls)
     r = _register_and_call("folk_create", entity="person", item={"first_name": "Ada"}, dry_run=True)

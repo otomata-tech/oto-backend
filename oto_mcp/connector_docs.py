@@ -294,9 +294,10 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         DocSection(kind="usage", title="ce que tu peux faire", body_md=(
             "gère ton crm folk (personnes, entreprises, deals) + notes, interactions et rappels depuis claude.\n"
             "- « trouve le contact dupont » → `folk_search` (entity `person`), puis `folk_get` pour la fiche\n"
-            "- « ajoute jean dupont, cto chez acme » → `folk_create_person`\n"
-            "- « log un appel sur ce contact » → `folk_create_interaction` (type, titre, contenu)\n"
-            "- « crée un deal dans le groupe X » → `folk_create_deal`, et `folk_list_deals` pour les lister"
+            "- « ajoute jean dupont, cto chez acme » → `folk_create` (entity `person`)\n"
+            "- « log un appel sur ce contact » → `folk_create` (entity `interaction`, type/titre/contenu)\n"
+            "- « crée un deal dans le groupe X » → `folk_create` (entity `deal`), et `folk_list_deals` pour les lister\n"
+            "- « ajoute ces 20 contacts » → `folk_create` (entity `person`, `items=[...]`) en un seul appel"
         )),
     ),
     "hubspot": (

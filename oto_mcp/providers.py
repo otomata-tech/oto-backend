@@ -275,7 +275,7 @@ _CATEGORY_BY_CONNECTOR = {
     "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
     "hithorizons": "Prospection", "phantombuster": "Prospection", "zoho": "Prospection",
-    "brevo": "Prospection",
+    "brevo": "Prospection", "salesforce": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
     "aiark": "Prospection",
@@ -302,6 +302,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "hithorizons": "HitHorizons", "phantombuster": "Phantombuster",
     "notion": "Notion", "figma": "Figma", "supabase": "Supabase",
     "zoho": "Zoho", "zohodesk": "Zoho", "zohoanalytics": "Zoho",
+    "salesforce": "Salesforce",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "aiark": "AI Ark",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
@@ -825,6 +826,25 @@ _REGISTRY_LIST = [
            CredentialField("org_id", "Org ID", secret=False),
            CredentialField("data_center", "Data center (com, eu, in, au, jp, ca, sa)",
                            secret=False, reveal=True),
+       )),
+    # salesforce : OAuth2 Connected App → credential multi-champs (ADR 0011, comme
+    # zoho), résolu via resolve_credential_fields. byo_user OU byo_org (équipe sales
+    # partage une Connected App). Pas de table de région fixe : le refresh Salesforce
+    # renvoie l'`instance_url`, `login_url` ne fait que sélectionner prod vs sandbox
+    # (ou un My Domain).
+    _c("salesforce", ["salesforce"], auth_modes={"byo_user", "byo_org"},
+       secret_kind="fields", label="Salesforce",
+       help="CRM Salesforce (Contacts, Accounts/companies, Leads, Opportunities, notes)",
+       href="https://login.salesforce.com", credential_fields=(
+           CredentialField("client_id", "Consumer Key", secret=True,
+                           help="Consumer Key de la Connected App"),
+           CredentialField("client_secret", "Consumer Secret", secret=True,
+                           help="Consumer Secret de la Connected App"),
+           CredentialField("refresh_token", "Refresh Token", secret=True),
+           CredentialField("login_url", "Login URL (prod ou sandbox)",
+                           secret=False, reveal=True,
+                           help="login.salesforce.com (prod, défaut) ou "
+                                "test.salesforce.com (sandbox)"),
        )),
 
     # --- ATS / talent sourcing (RH) — câblés 2026-06-20 ----------------------

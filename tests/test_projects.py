@@ -687,6 +687,28 @@ def test_publish_mcp_org_requires_slug(seams, monkeypatch):
     assert ei.value.code == "missing_slug"
 
 
+def test_publish_mcp_secret_allows_empty_tools(seams, monkeypatch):
+    """Partage par lien (`secret`) : liste d'outils VIDE autorisée — défaut « tout le
+    projet visible, lecture seule » (UI navigable + datastore lecture #193)."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_access="secret"))
+    (pid, _, access, tools, expose_datastore, expose_write), = rec["pub"]
+    assert pid == 7 and access == "secret" and tools == []
+    assert expose_datastore is True and expose_write is False
+
+
+def test_publish_mcp_anonymous_still_requires_tools(seams, monkeypatch):
+    """Hors `secret`, l'endpoint reste un preset d'outils : allowlist non vide requise."""
+    rec = {}
+    _patch_publish(monkeypatch, rec, unresolvable=[])
+    with pytest.raises(AuthzDenied) as ei:
+        P._project(CTX, P.ProjectInput(op="publish_mcp", project_id=7, mcp_slug="ft-pub",
+                                       mcp_access="anonymous", mcp_tools=[]))
+    assert ei.value.code == "missing_tools"
+    assert not rec.get("pub")
+
+
 def test_publish_mcp_expose_datastore_secret_persists(seams, monkeypatch):
     """Opt-in datastore en `secret` : persisté (expose_datastore=True dans la pose)."""
     rec = {}

@@ -42,7 +42,7 @@ class ProjectInput(BaseModel):
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
     mcp_slug: Optional[str] = None       # label de sous-domaine (^[a-z0-9-]{3,}$) ; en `secret`, sert de préfixe optionnel (un suffixe aléatoire est ajouté serveur)
     mcp_access: Optional[Literal["anonymous", "secret", "org"]] = None  # anonymous = sans login + listé ; secret = sans login, non listé, slug non devinable ; org = JWT + org épinglée
-    mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine)
+    mcp_tools: Optional[list[str]] = None  # allowlist figée du preset (les seuls tools exposés sur le sous-domaine) ; en `secret`, vide autorisé = tout le projet navigable en lecture seule
     mcp_expose_datastore: Optional[bool] = None  # `secret` uniquement : exposer les tools data_* en LECTURE (tableaux liés au projet, sous l'autorité de l'org). None = DÉFAUT exposé au partage secret (#193) ; passer False pour refermer
     mcp_expose_datastore_write: Optional[bool] = None  # opt-in ADDITIONNEL (#193) : autoriser l'ÉCRITURE (data_write/data_set_schema) ; sans objet si la lecture n'est pas exposée — défaut False (lecture seule)
     # create : SCOPE owner du projet (ADR 0049 — échelle platform/org/group/user).
@@ -224,10 +224,15 @@ def publish_project_mcp(sub: str, row: dict, *, access_mode: str,
     """Cœur de la publication MCP d'un projet (ADR 0032). AUCUN contrôle d'autz (le
     caller a déjà gaté `can_govern`) — partagé par la capacité `oto_project` et par le
     « Partager » unifié (`oto_resource` audience public/secret/org, ADR 0048 B3). Lève
-    `AuthzDenied` sur entrée invalide (tools vide, slug manquant, slug pris)."""
+    `AuthzDenied` sur entrée invalide (tools vide hors `secret`, slug manquant, slug pris)."""
     project_id = int(row["id"])
     tools = [t for t in (mcp_tools or []) if t and t.strip()]
-    _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
+    # `secret` = partage par lien navigable : la liste vide est AUTORISÉE — le défaut est
+    # « tout le projet visible, lecture seule » (UI navigable complète + datastore en
+    # lecture, défaut #193) ; le /mcp n'expose alors que les data_* de lecture. Les modes
+    # anonymous/org restent un ENDPOINT d'outils : allowlist non vide requise.
+    _require(bool(tools) or access_mode == "secret",
+             "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
     # Datastore exposé (LECTURE) : DÉFAUT au partage `secret` (#193), refermable ;
     # réservé à `secret`. L'ÉCRITURE est un opt-in additionnel séparé.
     expose_ds = ((access_mode == "secret") if expose_datastore is None
@@ -759,7 +764,9 @@ CAPABILITIES += [
             "`<mcp_slug>.mcp.oto.cx/mcp`, the toolset served under the OWNER ORG's credentials — "
             "`anonymous` = no login + LISTED in the public directory; `secret` = no login but "
             "UNLISTED, the slug is server-generated & unguessable (a secret URL; mcp_slug is an "
-            "optional readable prefix); `org` = Logto JWT + pins the org. For anonymous/secret, "
+            "optional readable prefix, and mcp_tools may be empty = the whole project stays "
+            "browsable read-only via the share UI, with only datastore reads on /mcp); "
+            "`org` = Logto JWT + pins the org. For anonymous/secret, "
             "tools that aren't credential-less or resolvable for the org are published anyway but "
             "FAIL cleanly at call time — they come back in `mcp_unresolvable_tools` (configure an "
             "org key or drop them). mcp_expose_datastore (SECRET only) opts the `data_*` tools "

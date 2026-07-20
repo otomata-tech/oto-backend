@@ -187,9 +187,15 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         parent = db.get_doc_by_id(int(inp.parent_id))
         _require(parent and parent["project_id"] == pid, "bad_parent",
                  "Parent invalide (autre projet ou inexistant).")
-    # `parent_id` absent + `position` posé = réordonner DANS la fratrie courante.
-    target_parent = inp.parent_id if inp.parent_id is not None else (
-        row.get("parent_id") if inp.position is not None else None)
+    # Trois intentions distinguées par `model_fields_set` (JSON null ≠ absent) :
+    # parent FOURNI (id ou null=racine) = reparenter là ; absent + `position` posé =
+    # réordonner DANS la fratrie courante ; absent + rien = racine (historique).
+    if "parent_id" in inp.model_fields_set:
+        target_parent = inp.parent_id
+    elif inp.position is not None:
+        target_parent = row.get("parent_id")
+    else:
+        target_parent = None
     db.move_doc(int(inp.doc_id), target_parent, position=inp.position)
     return _view(db.get_doc_by_id(int(inp.doc_id)))
 

@@ -121,3 +121,21 @@ def test_move_reorder_without_reparent(monkeypatch):
            D.DocInput(op="move", doc_id=3, position=0))
     # position sans parent_id ⇒ réordonner DANS la fratrie courante (parent 5 conservé)
     assert calls == {"did": 3, "parent": 5, "position": 0}
+
+
+def test_move_child_to_root_at_index(monkeypatch):
+    # parent_id=null EXPLICITE + position ⇒ racine à l'index (≠ fratrie courante) —
+    # distingué par model_fields_set (JSON null ≠ champ absent).
+    from oto_mcp.capabilities import docs as D
+    from oto_mcp.capabilities._types import ResolvedCtx
+    calls = {}
+    monkeypatch.setattr(D, "_can", lambda sub, pid, want: True)
+    monkeypatch.setattr(D.db, "get_doc_by_id",
+                        lambda did: {"id": did, "project_id": 7, "parent_id": 5,
+                                     "title": "T", "kind": "doc"})
+    monkeypatch.setattr(D.db, "move_doc",
+                        lambda did, parent, position=None: calls.update(
+                            did=did, parent=parent, position=position))
+    D._doc(ResolvedCtx(sub="u1", org_id=1),
+           D.DocInput(op="move", doc_id=3, parent_id=None, position=1))
+    assert calls == {"did": 3, "parent": None, "position": 1}

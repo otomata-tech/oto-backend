@@ -29,7 +29,7 @@ def _public_doc_url(token: str) -> str:
 
 class DocInput(BaseModel):
     op: Literal["create", "list", "search", "get", "update", "delete", "move", "revisions",
-                "request_change", "list_changes", "resolve_change", "set_public"]
+                "request_change", "list_changes", "resolve_change", "set_public", "backlinks"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move / request_change / list_changes
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -118,6 +118,18 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
         return {"doc_id": inp.doc_id,
                 "revisions": db.list_doc_revisions(int(inp.doc_id))}
+
+    if inp.op == "backlinks":
+        # « Cité par » (Ship 4) : les pages qui mentionnent celle-ci via [[…]],
+        # FILTRÉES par accès (une page d'un projet non lisible ne fuite pas).
+        _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
+        seen: dict[int, bool] = {}
+        def _readable(prj: int) -> bool:
+            if prj not in seen:
+                seen[prj] = _can(sub, prj, "read")
+            return seen[prj]
+        cites = [b for b in db.doc_backlinks(int(inp.doc_id)) if _readable(b["project_id"])]
+        return {"doc_id": inp.doc_id, "backlinks": cites, "count": len(cites)}
 
     if inp.op == "set_public":
         # Partager publiquement (ou retirer) — action d'écriture (gap #4a).

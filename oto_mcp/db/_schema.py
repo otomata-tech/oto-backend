@@ -386,6 +386,17 @@ CREATE TABLE IF NOT EXISTS doc_change_requests (
     resolved_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Backlinks [[…]] (lot 3 Ship 4) — graphe LÉGER de pages qui se citent. Table
+-- DÉRIVÉE (reconstructible par re-parse des bodies) : `from_doc` cite `to_doc`.
+-- Résolue contre le projet courant + la KB de l'org (précédence projet > KB) ;
+-- purgée en cascade au delete d'un des deux docs.
+CREATE TABLE IF NOT EXISTS doc_links (
+    from_doc BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    to_doc   BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    PRIMARY KEY (from_doc, to_doc)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_links_to ON doc_links(to_doc);
 CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté

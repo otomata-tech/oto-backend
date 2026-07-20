@@ -18,6 +18,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from ._conn import _connect
+from . import backlinks as _backlinks
 from .datastore import (
     create_datastore_namespace,
     datastore_insert_row,
@@ -462,6 +463,7 @@ def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
              project_id, parent_id),
         ).fetchone()
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+        _backlinks.refresh_links(conn, int(row["id"]), project_id, body_md)
         return int(row["id"])
 
 
@@ -580,6 +582,12 @@ def update_doc(doc_id: int, *, title: Optional[str] = None,
                 (doc_id, prior["title"], prior["body_md"], edited_by),
             )
         conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = %s", tuple(params))
+        # Backlinks (Ship 4) : re-extraire les liens sortants quand le corps change.
+        if body_md is not None:
+            pr = conn.execute("SELECT project_id FROM docs WHERE id = %s",
+                              (doc_id,)).fetchone()
+            if pr is not None:
+                _backlinks.refresh_links(conn, doc_id, pr["project_id"], body_md)
 
 
 def list_doc_revisions(doc_id: int, limit: int = 50) -> list[dict]:
@@ -640,8 +648,17 @@ def resolve_doc_change_request(request_id: int, status: str, resolved_by: Option
 
 
 def delete_doc(doc_id: int) -> None:
+    # doc_links (Ship 4) : purgée en CASCADE (from_doc ET to_doc → docs ON DELETE
+    # CASCADE) — supprimer une page retire ses liens sortants ET les mentions vers elle.
     with _connect() as conn:
         conn.execute("DELETE FROM docs WHERE id = %s", (doc_id,))
+
+
+def doc_backlinks(doc_id: int) -> list[dict]:
+    """Pages citant `doc_id` (« Cité par », Ship 4) — le filtrage d'accès est au
+    call-site (capacité)."""
+    with _connect() as conn:
+        return _backlinks.backlinks_of(conn, doc_id)
 
 
 def move_doc(doc_id: int, new_parent_id: Optional[int],

@@ -23,7 +23,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 
-from .. import access, call_axes, db, doctrine_run, redaction, session_org
+from .. import access, call_axes, db, doctrine_run, redaction
 from ..auth_hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
@@ -233,6 +233,13 @@ def register(mcp: FastMCP) -> None:
                 credentials/visibility/data for that org (ADR 0038 call token,
                 same membership guard as the flat `org=` axis). Omit for your
                 current org.
+
+        Call-context axes (ADR 0038) — `group`, `project`, `instance`, `account`,
+        `run_id` — may be included INSIDE `arguments`: they route the CALL CONTEXT
+        (which org/team/credential-instance the target resolves under), are guarded
+        exactly like on a listed tool, and are stripped before the target sees them.
+        E.g. reach a team-scoped connector via `arguments={..., "group": 3}`, or a
+        pinned instance via `"instance": "<ref from oto_instance>"`.
         """
         # Identité ambiante : le sub du JWT porte déjà l'appel (le handler cible
         # résout ses propres credentials dessus). Soft — sur stdio local il n'y a pas
@@ -256,12 +263,31 @@ def register(mcp: FastMCP) -> None:
                 message=f"Unknown tool `{name}`. Use oto_list_my_tools to see available names."))
 
         args = arguments if isinstance(arguments, dict) else {}
-        # `org=` (jeton d'appel ADR 0038) : oto_call s'exécute HORS middleware → l'axe
-        # ORG des tools plats ne s'applique pas ici. On pose `_CALL_ORG` nous-mêmes
-        # autour de `tool.run`, avec la garde partagée `resolve_org_guarded`
-        # (appartenance réelle du sub + McpError propre). Refus = AVANT dispatch.
-        org_tok = (session_org.set_call_org(await call_axes.resolve_org_guarded(org))
-                   if org is not None else None)
+        # Axes-contexte d'appel (ADR 0038). oto_call s'exécute HORS middleware → les
+        # axes des tools plats (org/group/project/instance/account/run_id) ne sont pas
+        # posés pour nous. On rejoue NOUS-MÊMES la boucle applies-gated du middleware
+        # plat (`call_axes.axes_for`, ordre AXES → le plus spécifique co-pose son org) :
+        # chaque axe présent dans `arguments` (ou le param top-level `org=`, folded
+        # ci-dessous) est GARDÉ+POSÉ puis RETIRÉ des args. Posé AVANT le try de run pour
+        # qu'un refus de garde PROPAGE (McpError) au lieu d'être capturé comme une erreur
+        # de la cible. Ferme #228 (instance/groupe d'un connecteur injoignable via
+        # oto_call — seul `org=` était honoré).
+        if org is not None:
+            args.setdefault("org", org)
+        undo: list = []
+        try:
+            for axis in call_axes.axes_for(name):
+                if axis.param in args:
+                    undo.extend(await axis.pin_for(args.pop(axis.param), name))
+        except BaseException:
+            for _reset, _tok in reversed(undo):
+                _reset(_tok)
+            raise
+        # Un axe passé pour un tool qui ne le supporte PAS (ex. instance= sur data_*,
+        # org= sur un tool non org-scopable) = jeton de contexte sans effet → écarté des
+        # args (jamais un vrai argument de la cible), pour ne pas casser sa validation.
+        for _p in (a.param for a in call_axes.AXES):
+            args.pop(_p, None)
         started = time.monotonic()
         ok, err = True, None
         try:
@@ -281,8 +307,8 @@ def register(mcp: FastMCP) -> None:
             ok, err = False, str(e)
             return {"tool": name, "ok": False, "error": str(e)}
         finally:
-            if org_tok is not None:
-                session_org.reset_call_org(org_tok)
+            for _reset, _tok in reversed(undo):
+                _reset(_tok)
             await _trace_target_call(sub, name, args, ok, err,
                                      int((time.monotonic() - started) * 1000))
 

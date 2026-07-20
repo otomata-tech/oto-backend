@@ -648,8 +648,7 @@ def list_change_requests_by_project(project_ids: list[int], *,
     if not project_ids:
         return []
     sql = (
-        "SELECT " + _DCR_COLS.replace("id,", "cr.id,").replace("doc_id,", "cr.doc_id,")
-        .replace("project_id,", "cr.project_id,") + ", "
+        "SELECT cr.id, cr.doc_id, cr.project_id, cr.proposed_parent_id, cr.proposed_kind, cr.requested_by, cr.proposed_title, cr.proposed_body_md, cr.message, cr.status, cr.resolved_by, cr.resolved_at, cr.created_at, "
         "d.title AS doc_title, "
         "COALESCE(cr.project_id, d.project_id) AS eff_project_id, p.name AS project_name "
         "FROM doc_change_requests cr "
@@ -669,8 +668,7 @@ def list_change_requests_by_requester(sub: str, *, since_days: int = 30) -> list
     de l'org active (événement « me concernant »). Fenêtre glissante = « vu »."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT " + _DCR_COLS.replace("id,", "cr.id,").replace("doc_id,", "cr.doc_id,")
-            .replace("project_id,", "cr.project_id,") + ", "
+            "SELECT cr.id, cr.doc_id, cr.project_id, cr.proposed_parent_id, cr.proposed_kind, cr.requested_by, cr.proposed_title, cr.proposed_body_md, cr.message, cr.status, cr.resolved_by, cr.resolved_at, cr.created_at, "
             "d.title AS doc_title, p.name AS project_name "
             "FROM doc_change_requests cr "
             "LEFT JOIN docs d ON d.id = cr.doc_id "

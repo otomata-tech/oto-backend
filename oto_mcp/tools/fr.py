@@ -509,15 +509,19 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
-    def fr_aides_get(id_aid: str) -> dict:
-        """Fiche COMPLÈTE brute d'une aide (source de vérité après re-rank de
+    def fr_aides_get(id_aid: str, raw: bool = False) -> dict:
+        """Fiche COMPLÈTE d'une aide (source de vérité après re-rank de
         `fr_aides_search` — objet/conditions/montant intégraux, financeurs,
-        contacts, sources officielles).
+        contacts, sources officielles). Texte décodé (entités HTML nettoyées) et
+        `cache_indexation` réduit à ses extraits utiles (natures, financeurs,
+        territoires, contacts, sources).
 
         Args:
             id_aid: identifiant de l'aide (champ `id` de fr_aides_search).
+            raw: True = enregistrement brut de la base (non décodé, volumineux ;
+                pour un consommateur qui en dépend).
         """
-        result = fod_fr.get_aide(id_aid)
+        result = fod_fr.get_aide(id_aid, raw=raw)
         if result is None:
             return {"error": "not_found", "id_aid": id_aid}
         return result

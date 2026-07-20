@@ -113,8 +113,8 @@ def search_aides(insee=None, code_postal=None, effectif=None, nature=None,
         raise
 
 
-def get_aide(id_aid: str) -> Optional[dict[str, Any]]:
-    return _get(f"/api/fr/aides/{id_aid}")
+def get_aide(id_aid: str, raw: bool = False) -> Optional[dict[str, Any]]:
+    return _get(f"/api/fr/aides/{id_aid}", {"raw": raw} if raw else None)
 
 
 def search_acco(query=None, themes=None, nature=None, siren=None, siret=None,

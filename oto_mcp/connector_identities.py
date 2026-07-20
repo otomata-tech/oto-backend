@@ -155,15 +155,33 @@ def _unipile_live_status_map(sub: str) -> dict:
     Unipile → un compte réellement mort (checkpoint, credentials expirés, révoqué
     par l'utilisateur) affichait « ok » à tort (#201). Le vrai statut n'est lisible
     qu'en listant les comptes de l'abonnement (`list_accounts().sources[].status`).
+
+    ⚠️ Mais ce `sources[].status` de compte peut LUI AUSSI rester « OK » alors que
+    la SESSION est morte (checkpoint / cookie li_at tourné) → un vrai appel se prend
+    un 401 mais la carte disait « connecté » (#236). On confirme donc la liveness
+    par une sonde `account_alive` (GET users/me → 401 = mort) et on rétrograde en
+    'disconnected'. Chemin PICKER d'identités SEUL (hors boucle /api/me chaude —
+    budget assumé, un appel users/me par compte hébergé, au clic sur le sélecteur).
     Fail-soft : `{}` si indisponible (l'appelant retombe sur « ok », comportement
-    d'avant — jamais de régression d'affichage sur une panne de lecture)."""
+    d'avant) ; sonde best-effort PAR compte (un incident garde le status de compte)."""
     from . import access
     try:
         rc = access.resolve_credential("unipile", want="auto", sub=sub)
         from oto.tools.unipile import make_unipile_client
         cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"))
-        return {a.get("id"): (a.get("sources") or [{}])[0].get("status")
-                for a in cli.list_accounts() if a.get("id")}
+        out: dict = {}
+        for a in cli.list_accounts():
+            aid = a.get("id")
+            if not aid:
+                continue
+            status = (a.get("sources") or [{}])[0].get("status")
+            try:  # sonde de vraie liveness (#236) : users/me 401 = session morte
+                if not cli.account_alive(aid):
+                    status = "disconnected"
+            except Exception:
+                pass  # best-effort : garde le status de compte sur incident sonde
+            out[aid] = status
+        return out
     except Exception:
         return {}
 

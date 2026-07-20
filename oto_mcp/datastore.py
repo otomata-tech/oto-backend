@@ -662,7 +662,21 @@ class DatastorePg:
         # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
         # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
         self._check_row(schema, data, prev_status=prev_status)
-        row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
+        try:
+            row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
+        except UniqueViolation:
+            # Un AUTRE enregistrement porte déjà cette valeur de clé métier (index
+            # UNIQUE ds_bkey_<ns_id>). Contrairement au batch write (qui converge en
+            # merge sur la row de même clé), un update ciblé sur `row_id` ne peut pas
+            # basculer silencieusement sur une autre row → erreur actionnable
+            # (ValueError → INVALID_PARAMS), jamais un 500 opaque.
+            dk = (schema or {}).get("key")
+            dkv = data.get(dk) if dk else None
+            if dk and dkv is not None:
+                raise ValueError(
+                    f"un autre enregistrement porte déjà {dk}={dkv} "
+                    "(clé métier unique) — impossible de dupliquer") from None
+            raise  # violation inexpliquée → erreur franche, pas de repli muet
         self._release_if_terminal(schema, ns_id, row_id, data)
         return self._row_to_dict(row)
 

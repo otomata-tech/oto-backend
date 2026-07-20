@@ -156,3 +156,40 @@ def test_append_row_lost_race_converges(monkeypatch):
     out = st.append_row("t", {"member_id": "A", "y": 2})
     assert out["_id"] == "winner"
     assert rows["winner"] == {"member_id": "A", "x": 1, "y": 2}
+
+
+# ── update ciblé : collision clé-métier = erreur actionnable, pas 500 ──────────
+
+def test_update_row_key_collision_raises_valueerror_not_500(monkeypatch):
+    """Régression Sentry ds_bkey_139 : un `data_write` avec `id` (update ciblé) qui
+    pousse la clé métier vers une valeur DÉJÀ tenue par une AUTRE row viole l'index
+    UNIQUE. Contrairement au batch (merge), un update ciblé ne peut pas basculer sur
+    une autre row → ValueError (→ INVALID_PARAMS actionnable), jamais un 500 opaque."""
+    st = DatastorePg("u", acting_org=35)
+    monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(dsm.db, "datastore_get_row",
+                        lambda ns_id, rid: {"data": {"siren": "111", "x": 1}})
+    monkeypatch.setattr(st, "_schema_of", lambda ns_id: {"key": "siren", "fields": []})
+    monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
+    monkeypatch.setattr(dsm.db, "datastore_update_row",
+                        lambda ns_id, rid, data, ts: (_ for _ in ()).throw(
+                            UniqueViolation("duplicate key ds_bkey_7")))
+
+    with pytest.raises(ValueError, match="siren=852238906"):
+        st.update_row("t", "row-x", {"siren": "852238906"})
+
+
+def test_update_row_unexplained_violation_reraises(monkeypatch):
+    """Violation SANS clé métier déclarée → on relève franchement (pas de repli muet)."""
+    st = DatastorePg("u", acting_org=35)
+    monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(dsm.db, "datastore_get_row",
+                        lambda ns_id, rid: {"data": {"x": 1}})
+    monkeypatch.setattr(st, "_schema_of", lambda ns_id: {"fields": []})  # pas de key
+    monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
+    monkeypatch.setattr(dsm.db, "datastore_update_row",
+                        lambda ns_id, rid, data, ts: (_ for _ in ()).throw(
+                            UniqueViolation("duplicate key ds_bkey_7")))
+
+    with pytest.raises(UniqueViolation):
+        st.update_row("t", "row-x", {"x": 2})

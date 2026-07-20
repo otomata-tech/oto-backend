@@ -418,13 +418,16 @@ def register(mcp: FastMCP) -> None:
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
                 company?, school?}`.
-            url: URL de recherche LinkedIn collée du navigateur — classic, **Sales
-                Navigator OU Recruiter** (« Perform Recruiter Search from URL »). Si
-                fournie, les autres filtres structurés sont ignorés ; passe `api=` du
-                produit de l'URL (`api="recruiter"` pour une URL Recruiter — ne PAS
-                retomber sur la people-search par keywords).
+            url: URL de recherche LinkedIn collée du navigateur (classic / Sales
+                Navigator). Si fournie, les autres filtres structurés sont ignorés ;
+                passe `api=` du produit de l'URL. ⚠️ **Recruiter-from-URL est
+                actuellement peu fiable côté Unipile** (l'endpoint pend → timeout,
+                même avec un searchContextId neuf) : pour Recruiter, préfère la
+                recherche STRUCTURÉE ci-dessous (`api="recruiter"` + keywords/facettes),
+                pas l'URL.
             api: "classic" | "sales_navigator" | "recruiter" (filtres avancés selon
-                l'abonnement LinkedIn du compte connecté).
+                l'abonnement LinkedIn du compte connecté). Recruiter/Sales Nav exigent
+                le siège premium activé au connect (sinon 403 « out of scope »).
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
         return unipile_client().search(

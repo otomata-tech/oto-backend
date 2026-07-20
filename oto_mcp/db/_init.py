@@ -16,8 +16,22 @@ from ._schema import _SCHEMA
 
 logger = logging.getLogger(__name__)
 
+# Clé d'advisory lock (arbitraire mais FIXE) sérialisant init_db entre instances
+# qui bootent en parallèle sur la MÊME base (partagée canari/prod). Cf. init_db().
+_INIT_DB_LOCK_ID = 0x0704_0D0B  # « oto init_db », 117_449_483
+
 def init_db() -> None:
     with _connect() as conn:
+        # Un SEUL migrateur à la fois. La DB est PARTAGÉE canari/prod : deux instances
+        # qui bootent en même temps exécutaient CETTE MÊME transaction de DDL (DROP/
+        # ALTER/CREATE INDEX sur les mêmes tables + leurs FK) et s'interbloquaient sur
+        # les locks catalogue (DeadlockDetected in init_db, Sentry). Un advisory lock
+        # de TRANSACTION — pris en PREMIER, relâché au commit du `with` — sérialise le
+        # boot : le 2e attend la fin du 1er, puis traverse la DDL idempotente (devenue
+        # no-op) SEUL, sans entrelacement de locks. Doit précéder tout DDL (y compris
+        # les _migrate_* ci-dessous). Le waiter est ACTIF (pas idle-in-tx) → non coupé
+        # par idle_in_transaction_session_timeout ; il attend le commit du 1er.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_INIT_DB_LOCK_ID,))
         # AVANT _SCHEMA : renomme l'ancienne tool_call_log vers le schéma canonique
         # (sinon CREATE IF NOT EXISTS poserait une tool_calls vide à côté).
         _migrate_tool_call_log(conn)

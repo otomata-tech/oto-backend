@@ -418,8 +418,11 @@ def register(mcp: FastMCP) -> None:
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
                 company?, school?}`.
-            url: URL de recherche LinkedIn/Sales Nav collée du navigateur (si fournie,
-                les autres filtres structurés sont ignorés).
+            url: URL de recherche LinkedIn collée du navigateur — classic, **Sales
+                Navigator OU Recruiter** (« Perform Recruiter Search from URL »). Si
+                fournie, les autres filtres structurés sont ignorés ; passe `api=` du
+                produit de l'URL (`api="recruiter"` pour une URL Recruiter — ne PAS
+                retomber sur la people-search par keywords).
             api: "classic" | "sales_navigator" | "recruiter" (filtres avancés selon
                 l'abonnement LinkedIn du compte connecté).
             cursor: Curseur de pagination renvoyé par un appel précédent.

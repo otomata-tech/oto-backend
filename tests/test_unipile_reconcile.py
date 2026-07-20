@@ -19,7 +19,7 @@ def _acc(aid, name, provider="linkedin", created="2026-07-16 12:45:00+00"):
     return {"id": aid, "name": name, "provider": provider, "created_at": created}
 
 
-def _setup(monkeypatch, pendings, accounts, bound=None, dead=None):
+def _setup(monkeypatch, pendings, accounts, bound=None, dead=None, alive_ids=None):
     monkeypatch.setattr(uc.db, "list_unipile_pending_for_sub", lambda s: pendings)
     monkeypatch.setattr(uc.db, "bound_unipile_account_ids", lambda: set(bound or []))
     monkeypatch.setattr(uc.db, "dead_unipile_account_ids_for",
@@ -27,8 +27,11 @@ def _setup(monkeypatch, pendings, accounts, bound=None, dead=None):
     monkeypatch.setattr(uc.access, "resolve_credential",
                         lambda *a, **k: types.SimpleNamespace(key="K", is_platform=True, config={}))
     import oto.tools.unipile as core
+    # account_alive : par défaut TOUS vivants ; `alive_ids` restreint à ceux-là
+    alive = (lambda aid: aid in alive_ids) if alive_ids is not None else (lambda aid: True)
     monkeypatch.setattr(core, "make_unipile_client",
-                        lambda **k: types.SimpleNamespace(list_accounts=lambda: accounts))
+                        lambda **k: types.SimpleNamespace(
+                            list_accounts=lambda: accounts, account_alive=alive))
     calls = {"set": [], "resolved": []}
     monkeypatch.setattr(uc.db, "set_unipile_account",
                         lambda *a, **k: calls["set"].append((a, k)))
@@ -50,6 +53,22 @@ def test_binds_newest_after_pending(monkeypatch):
 
 def test_excludes_already_bound(monkeypatch):
     calls = _setup(monkeypatch, [_pend()], [_acc("acc_new", "Me")], bound={"acc_new"})
+    out = uc.reconcile_pending("sub1")
+    assert out["bound"] is False and calls["set"] == []
+
+
+def test_skips_dead_session_prefers_alive(monkeypatch):
+    # deux candidats après le pending : le plus récent est MORT (401) → on prend le vivant
+    accounts = [_acc("acc_alive", "Sain", created="2026-07-16 12:45:00+00"),
+                _acc("acc_dead", "MortNé", created="2026-07-16 12:50:00+00")]
+    calls = _setup(monkeypatch, [_pend()], accounts, alive_ids={"acc_alive"})
+    out = uc.reconcile_pending("sub1")
+    assert out["accounts"][0]["account_id"] == "acc_alive"
+
+
+def test_binds_nothing_when_all_dead(monkeypatch):
+    accounts = [_acc("acc_dead", "MortNé", created="2026-07-16 12:50:00+00")]
+    calls = _setup(monkeypatch, [_pend()], accounts, alive_ids=set())
     out = uc.reconcile_pending("sub1")
     assert out["bound"] is False and calls["set"] == []
 

@@ -14,8 +14,13 @@ charge depuis SQLite, refresh transparent si expiré, renvoie un
 
 Setup ops :
 - Env `GOOGLE_WORKSPACE_CLIENT_ID` + `GOOGLE_WORKSPACE_CLIENT_SECRET` —
-  OAuth client de type **Web application** dans Google Cloud Console,
-  redirect URI `https://mcp.oto.ninja/api/google/oauth/callback`.
+  OAuth client de type **Web application** dans Google Cloud Console. Le backend
+  émet `{OTO_MCP_PUBLIC_URL}/api/google/oauth/callback` comme redirect URI : cette
+  URL EXACTE doit figurer dans les « Authorized redirect URIs » du client, sinon
+  Google renvoie « requête invalide » (redirect_uri_mismatch). Depuis le cutover
+  ADR 0040 (2026-07-06) le client est partagé prod + preprod → déclarer les deux :
+    - `https://mcp.oto.cx/api/google/oauth/callback`    (PROD)
+    - `https://mcp.oto.ninja/api/google/oauth/callback` (PREPROD)
 - Env `OTO_MCP_PUBLIC_URL` (déjà utilisée pour Logto) — base pour le
   redirect URI ; en local on peut override pour pointer sur localhost.
 - Env `OTO_MCP_OAUTH_STATE_SECRET` — secret HMAC pour signer le state

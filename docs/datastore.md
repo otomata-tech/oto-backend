@@ -127,8 +127,13 @@ Google pour le datastore se voit aussi demander l'accès Gmail. Choix assumé
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID** :
    - Application type : **Web application** (pas "Desktop")
    - Name : `oto-mcp datastore`
-   - Authorized redirect URIs :
-     - `https://mcp.oto.ninja/api/google/oauth/callback` (prod)
+   - Authorized redirect URIs — le backend émet
+     `{OTO_MCP_PUBLIC_URL}/api/google/oauth/callback` ; cette URL **exacte** doit
+     figurer ici, sinon Google renvoie « requête invalide » (redirect_uri_mismatch).
+     Depuis le cutover ADR 0040 (2026-07-06) le client est **partagé prod + preprod**,
+     déclarer les deux :
+     - `https://mcp.oto.cx/api/google/oauth/callback` (**PROD** — `mcp.oto.cx` depuis le cutover)
+     - `https://mcp.oto.ninja/api/google/oauth/callback` (**PREPROD** — ex-prod avant le cutover)
      - `http://localhost:9103/api/google/oauth/callback` (dev, optionnel)
 5. Copier `client_id` + `client_secret` → SOPS.
 6. Générer le state secret :

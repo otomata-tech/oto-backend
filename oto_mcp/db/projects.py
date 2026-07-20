@@ -602,19 +602,28 @@ def list_doc_revisions(doc_id: int, limit: int = 50) -> list[dict]:
 
 
 # --- Demandes de modification (gap #4b, lecture seule → propose, owner tranche) --
-_DCR_COLS = ("id, doc_id, requested_by, proposed_title, proposed_body_md, message, "
+_DCR_COLS = ("id, doc_id, project_id, proposed_parent_id, proposed_kind, requested_by, "
+             "proposed_title, proposed_body_md, message, "
              "status, resolved_by, resolved_at, created_at")
 
 
-def add_doc_change_request(doc_id: int, requested_by: Optional[str], *,
-                           proposed_title: Optional[str], proposed_body_md: str,
+def add_doc_change_request(requested_by: Optional[str], *,
+                           doc_id: Optional[int] = None,
+                           project_id: Optional[int] = None,
+                           proposed_parent_id: Optional[int] = None,
+                           proposed_kind: Optional[str] = None,
+                           proposed_title: Optional[str] = None,
+                           proposed_body_md: str = "",
                            message: Optional[str] = None) -> dict:
+    """Proposition de MODIF (`doc_id`) ou de CRÉATION (`project_id` + emplacement).
+    Ship 3 : un viewer propose, un membre en écriture tranche."""
     with _connect() as conn:
         row = conn.execute(
-            "INSERT INTO doc_change_requests (doc_id, requested_by, proposed_title, "
-            "proposed_body_md, message) VALUES (%s, %s, %s, %s, %s) "
-            f"RETURNING {_DCR_COLS}",
-            (doc_id, requested_by, proposed_title, proposed_body_md, message),
+            "INSERT INTO doc_change_requests (doc_id, project_id, proposed_parent_id, "
+            "proposed_kind, requested_by, proposed_title, proposed_body_md, message) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_DCR_COLS}",
+            (doc_id, project_id, proposed_parent_id, proposed_kind, requested_by,
+             proposed_title, proposed_body_md, message),
         ).fetchone()
         return dict(row)
 
@@ -626,6 +635,48 @@ def list_doc_change_requests(doc_id: int, *, only_pending: bool = True) -> list[
     sql += "ORDER BY created_at DESC"
     with _connect() as conn:
         return [dict(r) for r in conn.execute(sql, (doc_id,)).fetchall()]
+
+
+def list_change_requests_by_project(project_ids: list[int], *,
+                                   only_pending: bool = True) -> list[dict]:
+    """Propositions (modif ∪ création) visant un lot de projets — l'inbox « À traiter »
+    (Ship 3). Une modif est rattachée à son projet via son doc ; une création porte
+    `project_id` directement. Enrichi du titre de la page (modif) et du nom de projet."""
+    if not project_ids:
+        return []
+    sql = (
+        "SELECT " + _DCR_COLS.replace("id,", "cr.id,").replace("doc_id,", "cr.doc_id,")
+        .replace("project_id,", "cr.project_id,") + ", "
+        "d.title AS doc_title, "
+        "COALESCE(cr.project_id, d.project_id) AS eff_project_id, p.name AS project_name "
+        "FROM doc_change_requests cr "
+        "LEFT JOIN docs d ON d.id = cr.doc_id "
+        "LEFT JOIN projects p ON p.id = COALESCE(cr.project_id, d.project_id) "
+        "WHERE COALESCE(cr.project_id, d.project_id) = ANY(%s) "
+    )
+    if only_pending:
+        sql += "AND cr.status = 'pending' "
+    sql += "ORDER BY cr.created_at DESC"
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (project_ids,)).fetchall()]
+
+
+def list_change_requests_by_requester(sub: str, *, since_days: int = 30) -> list[dict]:
+    """Mes propositions RÉCEMMENT résolues (retour au proposeur, Ship 3) — indépendant
+    de l'org active (événement « me concernant »). Fenêtre glissante = « vu »."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT " + _DCR_COLS.replace("id,", "cr.id,").replace("doc_id,", "cr.doc_id,")
+            .replace("project_id,", "cr.project_id,") + ", "
+            "d.title AS doc_title, p.name AS project_name "
+            "FROM doc_change_requests cr "
+            "LEFT JOIN docs d ON d.id = cr.doc_id "
+            "LEFT JOIN projects p ON p.id = COALESCE(cr.project_id, d.project_id) "
+            "WHERE cr.requested_by = %s AND cr.status <> 'pending' "
+            "AND cr.resolved_at > NOW() - make_interval(days => %s) "
+            "ORDER BY cr.resolved_at DESC",
+            (sub, since_days)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_doc_change_request(request_id: int) -> Optional[dict]:

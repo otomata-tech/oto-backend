@@ -70,7 +70,16 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     if inp.op == "create":
         _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
         _require(inp.title and inp.title.strip(), "missing_title", "`title` requis.")
-        _require(_can(sub, inp.project_id, "write"), "forbidden", "Écriture refusée.", 403)
+        # « Les lecteurs proposent » (Ship 3) : un viewer (lecture SANS écriture) qui
+        # crée obtient une PROPOSITION de création, pas la page.
+        if not _can(sub, inp.project_id, "write"):
+            _require(_can(sub, inp.project_id, "read"), "forbidden", "Accès refusé.", 403)
+            req = db.add_doc_change_request(
+                sub, project_id=int(inp.project_id), proposed_parent_id=inp.parent_id,
+                proposed_kind=(inp.kind or "doc"),
+                proposed_title=inp.title.strip(), proposed_body_md=inp.body_md or "",
+                message=inp.message)
+            return {"status": "proposal_created", "request": req}
         if inp.parent_id is not None:
             parent = db.get_doc_by_id(int(inp.parent_id))
             _require(parent and parent["project_id"] == inp.project_id, "bad_parent",
@@ -80,6 +89,61 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                             description=inp.description)
         db.log_project_activity(int(inp.project_id), sub, "doc.create", inp.title.strip())
         return _view(db.get_doc_by_id(did))
+
+    # ── Propositions (Ship 3) — AVANT le gate doc_id : une proposition de CRÉATION a
+    # doc_id=NULL, elle serait inatteignable sinon. On résout le projet par request_id
+    # (resolve) / project_id (create-proposal, list) / doc_id (modif, legacy).
+    if inp.op == "resolve_change":
+        _require(inp.request_id is not None, "missing_request", "`request_id` requis.")
+        cr = db.get_doc_change_request(int(inp.request_id))
+        _require(cr is not None, "unknown_request", "Demande inconnue.", 404)
+        _require(cr["status"] == "pending", "already_resolved", "Demande déjà traitée.")
+        cr_pid = cr.get("project_id") or (
+            (db.get_doc_by_id(int(cr["doc_id"])) or {}).get("project_id") if cr.get("doc_id") else None)
+        _require(cr_pid is not None, "unknown_request", "Cible de la demande introuvable.", 404)
+        _require(_can(sub, cr_pid, "write"), "forbidden", "Écriture refusée.", 403)
+        if inp.accept:
+            if cr.get("doc_id"):
+                # MODIF : la page cible existe-t-elle encore ? sinon on ferme (motif).
+                if db.get_doc_by_id(int(cr["doc_id"])) is None:
+                    db.resolve_doc_change_request(int(inp.request_id), "rejected", sub)
+                    return {"ok": True, "id": inp.request_id, "accepted": False,
+                            "reason": "page supprimée"}
+                db.update_doc(int(cr["doc_id"]),
+                              title=(cr.get("proposed_title") or None),
+                              body_md=cr.get("proposed_body_md"), edited_by=sub)
+            else:
+                # CRÉATION : parent supprimé entre-temps → rattache à la racine (mention).
+                parent = cr.get("proposed_parent_id")
+                if parent is not None and db.get_doc_by_id(int(parent)) is None:
+                    parent = None
+                db.create_doc(int(cr_pid), (cr.get("proposed_title") or "Sans titre"),
+                              parent_id=parent, body_md=cr.get("proposed_body_md") or "",
+                              kind=(cr.get("proposed_kind") or "doc"), created_by=sub)
+            db.resolve_doc_change_request(int(inp.request_id), "accepted", sub)
+            db.log_project_activity(int(cr_pid), sub, "doc.change_accepted", cr.get("proposed_title"))
+        else:
+            db.resolve_doc_change_request(int(inp.request_id), "rejected", sub)
+            db.log_project_activity(int(cr_pid), sub, "doc.change_rejected", cr.get("proposed_title"))
+        return {"ok": True, "id": inp.request_id, "accepted": bool(inp.accept)}
+
+    if inp.op == "list_changes" and inp.project_id is not None:
+        # Toutes les propositions en attente d'un PROJET (drawer « Propositions (N) »).
+        _require(_can(sub, inp.project_id, "write"), "forbidden", "Écriture refusée.", 403)
+        return {"project_id": inp.project_id,
+                "requests": db.list_change_requests_by_project([int(inp.project_id)])}
+
+    if inp.op == "request_change" and inp.doc_id is None:
+        # Proposition de CRÉATION (viewer) : project_id + emplacement proposé.
+        _require(inp.project_id is not None, "missing_project", "`project_id` ou `doc_id` requis.")
+        _require(inp.title and inp.title.strip(), "missing_title", "`title` requis.")
+        _require(_can(sub, inp.project_id, "read"), "forbidden", "Accès refusé.", 403)
+        req = db.add_doc_change_request(
+            sub, project_id=int(inp.project_id), proposed_parent_id=inp.parent_id,
+            proposed_kind=(inp.kind or "doc"),
+            proposed_title=inp.title.strip(), proposed_body_md=inp.body_md or "",
+            message=inp.message)
+        return {"ok": True, "request": req}
 
     if inp.op == "list":
         _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
@@ -141,40 +205,21 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                 "public_url": _public_doc_url(token) if token else None}
 
     if inp.op == "request_change":
-        # Lecture seule → propose ; il faut au moins l'accès LECTURE au projet.
+        # MODIF (doc_id) — lecture seule → propose ; ≥ accès LECTURE au projet.
         _require(_can(sub, pid, "read"), "forbidden", "Accès refusé.", 403)
         body = inp.body_md if inp.body_md is not None else row.get("body_md", "")
         req = db.add_doc_change_request(
-            int(inp.doc_id), sub,
+            sub, doc_id=int(inp.doc_id),
             proposed_title=(inp.title.strip() if inp.title else None),
             proposed_body_md=body, message=inp.message)
         db.log_project_activity(pid, sub, "doc.change_request", row.get("title"))
         return {"ok": True, "request": req}
 
     if inp.op == "list_changes":
-        # Réservé à qui peut trancher (write) : voir les demandes en attente.
+        # Par doc (legacy — la voie par projet est gérée avant le gate).
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         return {"doc_id": inp.doc_id,
                 "requests": db.list_doc_change_requests(int(inp.doc_id))}
-
-    if inp.op == "resolve_change":
-        _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
-        _require(inp.request_id is not None, "missing_request", "`request_id` requis.")
-        cr = db.get_doc_change_request(int(inp.request_id))
-        _require(cr is not None and cr["doc_id"] == int(inp.doc_id), "unknown_request",
-                 "Demande inconnue (ou autre doc).", 404)
-        _require(cr["status"] == "pending", "already_resolved", "Demande déjà traitée.")
-        if inp.accept:
-            # Applique le contenu proposé (update_doc snapshotte la version courante, B4c).
-            db.update_doc(int(inp.doc_id),
-                          title=(cr.get("proposed_title") or None),
-                          body_md=cr.get("proposed_body_md"), edited_by=sub)
-            db.resolve_doc_change_request(int(inp.request_id), "accepted", sub)
-            db.log_project_activity(pid, sub, "doc.change_accepted", row.get("title"))
-        else:
-            db.resolve_doc_change_request(int(inp.request_id), "rejected", sub)
-            db.log_project_activity(pid, sub, "doc.change_rejected", row.get("title"))
-        return {"ok": True, "id": inp.request_id, "accepted": bool(inp.accept)}
 
     if inp.op == "update":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)

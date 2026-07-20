@@ -376,7 +376,12 @@ CREATE INDEX IF NOT EXISTS idx_doc_revisions_doc ON doc_revisions(doc_id, create
 -- `status` ∈ pending|accepted|rejected. CASCADE sur la suppression du doc.
 CREATE TABLE IF NOT EXISTS doc_change_requests (
     id BIGSERIAL PRIMARY KEY,
-    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    -- Ship 3 : `doc_id` NULL = proposition de CRÉATION (la page n'existe pas encore) ;
+    -- `project_id` porte alors le projet cible + `proposed_parent_id`/`proposed_kind`.
+    doc_id BIGINT REFERENCES docs(id) ON DELETE CASCADE,
+    project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+    proposed_parent_id BIGINT REFERENCES docs(id) ON DELETE SET NULL,
+    proposed_kind TEXT,
     requested_by TEXT,
     proposed_title TEXT,
     proposed_body_md TEXT NOT NULL DEFAULT '',
@@ -384,8 +389,11 @@ CREATE TABLE IF NOT EXISTS doc_change_requests (
     status TEXT NOT NULL DEFAULT 'pending',
     resolved_by TEXT,
     resolved_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT dcr_target CHECK (doc_id IS NOT NULL OR project_id IS NOT NULL)
 );
+CREATE INDEX IF NOT EXISTS idx_dcr_requester ON doc_change_requests(requested_by, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_dcr_project ON doc_change_requests(project_id, status);
 
 -- Backlinks [[…]] (lot 3 Ship 4) — graphe LÉGER de pages qui se citent. Table
 -- DÉRIVÉE (reconstructible par re-parse des bodies) : `from_doc` cite `to_doc`.

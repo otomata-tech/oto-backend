@@ -32,8 +32,9 @@ def seams(monkeypatch):
     # gap #4b — demandes de modif
     rec["cr_add"], rec["cr_resolve"] = [], []
     monkeypatch.setattr(D.db, "add_doc_change_request",
-                        lambda did, by, proposed_title=None, proposed_body_md="", message=None:
-                        rec["cr_add"].append((did, by, proposed_title, proposed_body_md, message))
+                        lambda by, *, doc_id=None, project_id=None, proposed_parent_id=None,
+                        proposed_kind=None, proposed_title=None, proposed_body_md="", message=None:
+                        rec["cr_add"].append((doc_id, by, proposed_title, proposed_body_md, message))
                         or {"id": 5, "status": "pending"})
     monkeypatch.setattr(D.db, "list_doc_change_requests",
                         lambda did, only_pending=True: [{"id": 5, "proposed_body_md": "new", "status": "pending"}])

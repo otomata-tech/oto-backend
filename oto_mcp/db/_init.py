@@ -43,6 +43,19 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
+        # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
+        # lignes ont doc_id). Idempotent.
+        conn.execute("ALTER TABLE doc_change_requests ALTER COLUMN doc_id DROP NOT NULL")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS proposed_parent_id BIGINT REFERENCES docs(id) ON DELETE SET NULL")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS proposed_kind TEXT")
+        conn.execute("DO $$ BEGIN "
+                     "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='dcr_target') THEN "
+                     "ALTER TABLE doc_change_requests ADD CONSTRAINT dcr_target "
+                     "CHECK (doc_id IS NOT NULL OR project_id IS NOT NULL); END IF; END $$")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dcr_requester ON doc_change_requests(requested_by, resolved_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dcr_project ON doc_change_requests(project_id, status)")
         # Lot 3 Ship 2 : chapô + ordre curé des pages. Backfill des positions par
         # fratrie (entiers espacés ×16, ordre historique = title) — idempotent
         # (ne touche que les NULL ; ensuite create_doc/move_doc posent toujours).

@@ -347,7 +347,12 @@ def register(mcp: FastMCP) -> None:
         Si la personne a un siège **Recruiter** ou **Sales Navigator** et veut s'en
         servir (`unipile_search(api="recruiter"/"sales_navigator")`, `unipile_contracts`…),
         il FAUT le demander ICI via `premium` — sinon ces APIs répondent 403 « out of
-        your scope » et il faudra tout reconnecter. Les deux sont **exclusifs**.
+        your scope ». Les deux sont **exclusifs**. Pour AJOUTER un produit à un compte
+        DÉJÀ connecté (classic seul aujourd'hui), relance avec `premium=` — et
+        `force=True` si le garde anti-doublon bloque : le siège existant est
+        **reconnecté** (produit rattaché, PAS de doublon). Si Recruiter répond quand
+        même 403 après ça, c'est côté abonnement Unipile plateforme (API Recruiter à
+        activer), pas la connexion.
 
         Args:
             channel: canal à connecter — linkedin (défaut), whatsapp, telegram,

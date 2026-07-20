@@ -158,9 +158,13 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # Activer un premium sur un compte DÉJÀ connecté = `type=reconnect` sur CE compte
     # (rattache le produit sans DOUBLON), pas un `create` (qui a produit les comptes
     # concurrents vécus). On ne reconnecte que le siège plateforme du sub (même clé
-    # partagée). `force` = compte réellement neuf → wizard `create`.
+    # partagée). ⚠️ INDÉPENDANT de `force` (#237) : l'agent passe `force=true` POUR
+    # dépasser le garde anti-doublon quand le compte est DÉJÀ connecté — c'est
+    # justement le cas où il faut RECONNECTER (rattacher Recruiter/Sales Nav au siège
+    # existant), pas créer un 2e compte. `force` ne gouverne que l'anti-doublon BYO
+    # ci-dessus ; il ne doit PLUS forcer un `create` qui perd le produit premium.
     reconnect_account = None
-    if premium and platform_seat and not force:
+    if premium and platform_seat:
         existing = db.seat_binding_elsewhere(sub, provider, exclude_org=None) \
             or ({"account_id": db.get_unipile_account_id(sub, org_id, provider)}
                 if db.get_unipile_account_id(sub, org_id, provider) else None)

@@ -116,16 +116,33 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # ⟹ l'account_id est joignable ici ; même sub ⟹ zéro usurpation. `force=True`
     # (compte réellement différent) ou `premium` (reconnexion pour ATTACHER un
     # produit) → wizard quand même.
+    dead_seat_account = None  # siège plateforme MORT (401) → à RECONNECTER via le wizard
     if not force and not premium and platform_seat:
         mine = db.seat_binding_elsewhere(sub, provider, exclude_org=org_id)
         if mine:
-            db.set_unipile_account(sub, mine["account_id"],
-                                   account_name=mine.get("account_name"),
-                                   org_id=org_id, provider=provider, platform_seat=True)
-            logger.info("unipile adopt: sub=%s account=%s org=%s (depuis org %s)",
-                        sub, mine["account_id"], org_id, mine.get("org_id"))
-            return {"adopted": True, "channel": provider.lower(),
-                    "account_name": mine.get("account_name")}
+            # Ne ré-adopter QUE si la session est VIVANTE (sonde 401). Ré-adopter un
+            # compte mort laisse l'user « connecté » sur un 401 (vécu Alexandra :
+            # disconnect→connect ré-adoptait le cadavre au lieu d'ouvrir un login).
+            # Compte mort ⟹ on tombe dans le wizard EN RECONNEXION de CE compte
+            # (type=reconnect, même account_id — pas un doublon). Fail-soft : sonde
+            # indisponible ⟹ on adopte (comportement d'avant).
+            alive = True
+            try:
+                from oto.tools.unipile import make_unipile_client
+                alive = make_unipile_client(api_key=api_key).account_alive(mine["account_id"])
+            except Exception:  # noqa: BLE001 — sonde best-effort, jamais bloquante
+                alive = True
+            if alive:
+                db.set_unipile_account(sub, mine["account_id"],
+                                       account_name=mine.get("account_name"),
+                                       org_id=org_id, provider=provider, platform_seat=True)
+                logger.info("unipile adopt: sub=%s account=%s org=%s (depuis org %s)",
+                            sub, mine["account_id"], org_id, mine.get("org_id"))
+                return {"adopted": True, "channel": provider.lower(),
+                        "account_name": mine.get("account_name")}
+            dead_seat_account = mine["account_id"]
+            logger.info("unipile adopt SKIP compte mort: sub=%s account=%s → reconnexion wizard",
+                        sub, mine["account_id"])
     # Anti-doublon BYO (issue #172) : un compte connecté sous la clé d'une AUTRE org
     # (BYO) n'est PAS adoptable ici (un account_id n'existe que sur le tenant de la
     # clé qui l'a créé) → reconnecter le même login créerait un 2e compte (rotation
@@ -163,8 +180,10 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # justement le cas où il faut RECONNECTER (rattacher Recruiter/Sales Nav au siège
     # existant), pas créer un 2e compte. `force` ne gouverne que l'anti-doublon BYO
     # ci-dessus ; il ne doit PLUS forcer un `create` qui perd le produit premium.
-    reconnect_account = None
-    if premium and platform_seat:
+    # Reconnecter (type=reconnect, PAS create) le compte existant : (1) un siège mort
+    # détecté ci-dessus, ou (2) l'activation d'un premium sur un compte déjà connecté.
+    reconnect_account = dead_seat_account
+    if not reconnect_account and premium and platform_seat:
         existing = db.seat_binding_elsewhere(sub, provider, exclude_org=None) \
             or ({"account_id": db.get_unipile_account_id(sub, org_id, provider)}
                 if db.get_unipile_account_id(sub, org_id, provider) else None)

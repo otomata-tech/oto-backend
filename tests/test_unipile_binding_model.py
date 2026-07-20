@@ -66,7 +66,8 @@ def test_own_account_no_platform_fallback(monkeypatch):
 
 # ---- adoption au connect --------------------------------------------------
 
-def _connect_env(monkeypatch, *, seat_elsewhere=SEAT, byo_rows=None):
+def _connect_env(monkeypatch, *, seat_elsewhere=SEAT, byo_rows=None, alive=True,
+                 link_calls=None):
     monkeypatch.setattr(access, "unipile_api_key_for", lambda s: "K")
     monkeypatch.setattr(access, "credential_mode_for", lambda s, p, **k: "platform")
     monkeypatch.setattr(access, "current_org", lambda s: 168)
@@ -77,6 +78,16 @@ def _connect_env(monkeypatch, *, seat_elsewhere=SEAT, byo_rows=None):
     monkeypatch.setattr(db, "seat_binding_elsewhere",
                         lambda s, p, exclude_org=None: seat_elsewhere)
     monkeypatch.setattr(db, "list_unipile_accounts", lambda s: byo_rows or [])
+    monkeypatch.setattr(db, "create_unipile_pending", lambda *a, **k: None)
+    # Client hébergé stubé : `account_alive` gouverne l'adoption (vivant) vs la
+    # reconnexion (mort) ; `hosted_auth_link` enregistre ses kwargs (reconnect_account).
+    def _link(self, **kw):
+        if link_calls is not None:
+            link_calls.append(kw)
+        return "https://auth.unipile.com/?t=x"
+    import oto.tools.unipile as core
+    monkeypatch.setattr(core, "make_unipile_client", lambda **k: type(
+        "C", (), {"account_alive": lambda self, aid: alive, "hosted_auth_link": _link})())
     written = []
     monkeypatch.setattr(db, "set_unipile_account",
                         lambda *a, **k: written.append((a, k)))
@@ -89,6 +100,17 @@ def test_connect_adopts_seat_from_other_org(monkeypatch):
     assert out["adopted"] is True and out["account_name"] == "Moi"
     (args, kwargs) = written[0]
     assert args[:2] == ("sub1", "acc_seat") and kwargs["org_id"] == 168
+
+
+def test_connect_dead_seat_reconnects_not_adopt(monkeypatch):
+    # Siège d'une autre org MORT (401) → PAS d'adoption du cadavre : wizard de
+    # RECONNEXION du même account_id (type=reconnect, pas un doublon). Vécu Alexandra.
+    links = []
+    written = _connect_env(monkeypatch, alive=False, link_calls=links)
+    out = asyncio.run(uc.hosted_auth_url("sub1", "linkedin"))
+    assert "url" in out and "adopted" not in out  # login, pas ré-adoption
+    assert written == []                            # aucun binding vers le mort
+    assert links[0]["reconnect_account"] == "acc_seat"  # reconnecte CE compte
 
 
 def test_connect_premium_skips_adoption(monkeypatch):

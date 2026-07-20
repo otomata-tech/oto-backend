@@ -392,8 +392,6 @@ CREATE TABLE IF NOT EXISTS doc_change_requests (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT dcr_target CHECK (doc_id IS NOT NULL OR project_id IS NOT NULL)
 );
-CREATE INDEX IF NOT EXISTS idx_dcr_requester ON doc_change_requests(requested_by, resolved_at);
-CREATE INDEX IF NOT EXISTS idx_dcr_project ON doc_change_requests(project_id, status);
 
 -- Backlinks [[…]] (lot 3 Ship 4) — graphe LÉGER de pages qui se citent. Table
 -- DÉRIVÉE (reconstructible par re-parse des bodies) : `from_doc` cite `to_doc`.

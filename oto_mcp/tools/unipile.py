@@ -437,6 +437,32 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def unipile_search_facets(facet_type: str, keywords: str, limit: int = 25) -> dict:
+        """Résout un NOM de filtre LinkedIn en candidats `{id, name}` à passer à
+        `unipile_search`. À utiliser AVANT une recherche structurée dès qu'un critère
+        n'est pas un simple mot-clé (compétence, secteur, localisation, employeur…).
+
+        Le choix du bon candidat est TON travail : une même saisie renvoie souvent
+        plusieurs facettes (« Microsoft Excel » → Excel, Microsoft Office, …) —
+        lis les `name` et retiens l'`id` pertinent. Puis passe-le à `unipile_search`
+        (`location`/`company`/`industry` acceptent déjà les ids ; les autres facettes
+        arrivent — cf. guide `linkedin-search`).
+
+        Args:
+            facet_type: type de facette, MAJUSCULES. Confirmés : `SKILL`, `LOCATION`,
+                `INDUSTRY`, `COMPANY`. D'autres existent (essaie `TITLE`, `SCHOOL`,
+                `FUNCTION`, `SENIORITY`, `LANGUAGE`…) — un type invalide lève une
+                erreur `Expected kind 'StringEnum'`.
+            keywords: le libellé à résoudre (ex. « Microsoft Excel », « Paris »).
+            limit: nb max de candidats (défaut 25).
+
+        Renvoie `{facet_type, candidates: [{id, name}]}`. Résolution INDÉPENDANTE du
+        produit/contrat (marche même hors Recruiter/Sales Nav).
+        """
+        cands = unipile_client().resolve_facet(str(facet_type).upper(), keywords, limit=limit)
+        return {"facet_type": str(facet_type).upper(), "candidates": cands}
+
+    @mcp.tool()
     def unipile_profile(identifier: str, sections: str = "*") -> dict:
         """Profil LinkedIn complet (carrière datée, écoles, réseau) via Unipile.
 

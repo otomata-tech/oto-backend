@@ -1,14 +1,18 @@
-name: Deploy canari
+name: Deploy preprod
 
-# Jumeau preprod de deploy.yml : test (runner HOSTED) → deploy (runner SELF-HOSTED
-# oto-platform) vers /opt/oto-mcp-canari (branche `canari`, base chiffrée oto_canari,
-# endpoint mcp-canari.oto.ninja). Staging/canari de l'ADR 0040. Ne trigge QUE sur la
-# branche `canari` → la prod (deploy.yml sur main) n'est pas impactée. La logique de
-# deploy (reset + reinstall oto-core au tag + restart + healthcheck + rollback) vit
-# dans /opt/deploy/oto-backend-canari.sh — source de vérité unique.
+# Modèle de release (ADR 0020, refonte 2026-07-20) : push sur `main` → PREPROD.
+# `main` est la branche de tronc ; tout merge/push y déploie l'environnement staging
+# (checkout /opt/oto-mcp-canari, service oto-mcp-canari, endpoint mcp-canari.oto.ninja,
+# base chiffrée oto_canari — l'ancien « canari » de l'ADR 0040, désormais alimenté par
+# main). La PROD ne se déploie QUE sur un tag `v*` (deploy.yml). La logique serveur
+# (reset origin/main + reinstall oto-core au tag + restart + healthcheck + rollback)
+# vit dans /opt/deploy/oto-backend-canari.sh — source de vérité unique.
+# Le job `test` tourne aussi sur PR vers main (= le check de validation avant merge).
 on:
   push:
-    branches: [canari]
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
 
 jobs:
@@ -27,7 +31,7 @@ jobs:
 
   deploy-preprod:
     needs: test
-    if: github.ref == 'refs/heads/canari'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, oto-platform]
     concurrency:
       group: deploy-preprod

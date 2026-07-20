@@ -28,7 +28,7 @@ DIM = 1024
 # (all-or-nothing sur le batch). On tronque en CARACTÈRES (borne prudente ~4 ch/token) ;
 # le début d'une page porte l'essentiel du sens pour la recherche. Empty → espace
 # (l'API rejette une chaîne vide).
-_MAX_CHARS = 24000
+_MAX_CHARS = 16000
 
 
 def _cap(text: str) -> str:
@@ -45,16 +45,40 @@ def _headers() -> dict:
             "Content-Type": "application/json"}
 
 
+# Budget de tokens TOTAL par requête (mistral-embed : « Too many tokens overall,
+# split into more batches » au-delà) — on découpe en sous-lots sous cette borne,
+# estimée en caractères (~4 ch/token).
+_REQ_CHAR_BUDGET = 16000
+
+
+def _batches(texts: list[str]):
+    cur: list[str] = []
+    size = 0
+    for t in texts:
+        ct = _cap(t)
+        if cur and size + len(ct) > _REQ_CHAR_BUDGET:
+            yield cur
+            cur, size = [], 0
+        cur.append(ct)
+        size += len(ct)
+    if cur:
+        yield cur
+
+
 def embed_texts(texts: list[str], *, timeout: float = 30.0) -> list[list[float]]:
-    """Batch SYNC (worker, threadpool). Ordre préservé. Lève sur échec réseau/API —
-    le worker attrape et re-tente au prochain tour (la ligne reste `dirty`)."""
+    """Batch SYNC (worker, threadpool). Ordre préservé, DÉCOUPÉ en sous-requêtes sous
+    le budget de tokens (sinon 400 « too many tokens overall »). Lève sur échec
+    réseau/API — le worker attrape et re-tente au prochain tour (la ligne reste dirty)."""
     if not texts or not enabled():
         return []
+    out: list[list[float]] = []
     with httpx.Client(timeout=timeout) as c:
-        r = c.post(_URL, headers=_headers(), json={"model": MODEL, "input": [_cap(t) for t in texts]})
-        r.raise_for_status()
-        data = r.json()["data"]
-    return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
+        for chunk in _batches(texts):
+            r = c.post(_URL, headers=_headers(), json={"model": MODEL, "input": chunk})
+            r.raise_for_status()
+            data = sorted(r.json()["data"], key=lambda d: d["index"])
+            out.extend(d["embedding"] for d in data)
+    return out
 
 
 async def embed_query(text: str, *, timeout: float = 8.0) -> Optional[list[float]]:

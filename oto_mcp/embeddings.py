@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 _URL = "https://api.mistral.ai/v1/embeddings"
 MODEL = "mistral-embed"
 DIM = 1024
+# mistral-embed plafonne à ~8192 tokens/input → un corps de page long fait 400
+# (all-or-nothing sur le batch). On tronque en CARACTÈRES (borne prudente ~4 ch/token) ;
+# le début d'une page porte l'essentiel du sens pour la recherche. Empty → espace
+# (l'API rejette une chaîne vide).
+_MAX_CHARS = 24000
+
+
+def _cap(text: str) -> str:
+    t = (text or "").strip()
+    return t[:_MAX_CHARS] if t else " "
 
 
 def enabled() -> bool:
@@ -41,7 +51,7 @@ def embed_texts(texts: list[str], *, timeout: float = 30.0) -> list[list[float]]
     if not texts or not enabled():
         return []
     with httpx.Client(timeout=timeout) as c:
-        r = c.post(_URL, headers=_headers(), json={"model": MODEL, "input": texts})
+        r = c.post(_URL, headers=_headers(), json={"model": MODEL, "input": [_cap(t) for t in texts]})
         r.raise_for_status()
         data = r.json()["data"]
     return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
@@ -55,7 +65,7 @@ async def embed_query(text: str, *, timeout: float = 8.0) -> Optional[list[float
         return None
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(_URL, headers=_headers(), json={"model": MODEL, "input": [text]})
+            r = await c.post(_URL, headers=_headers(), json={"model": MODEL, "input": [_cap(text)]})
             r.raise_for_status()
             return r.json()["data"][0]["embedding"]
     except Exception as e:  # noqa: BLE001 — dégradation gracieuse vers le lexical

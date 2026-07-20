@@ -882,9 +882,11 @@ _REGISTRY_LIST = [
        help="scraping & SERP via proxy (coquille vide — à implémenter)",
        href="https://brightdata.com"),
     # cloro : veille AI-search (ChatGPT/Gemini/Perplexity/Copilot/Grok/AI Mode) +
-    # SERP Google en JSON. keyed api_key, platform-eligible (clé + quota daily).
-    _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=50,
+    # SERP Google en JSON. keyed api_key, **BYOK** (byo user/org) — PAS de mode
+    # plateforme (décision produit : chaque org pose SA clé cloro, pas de clé oto
+    # partagée ; signaux #210-212). Sans mode platform, plus de quota daily oto.
+    _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key",
        label="Cloro",
        help="veille AI-search (ChatGPT, Gemini, Perplexity…) + SERP Google JSON",
        href="https://cloro.dev"),

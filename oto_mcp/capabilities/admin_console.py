@@ -52,9 +52,9 @@ def _org(ctx: ResolvedCtx, inp: OrgAdminInput) -> dict:
 
 # ── oto_admin_org_member : add / remove / set_role / list ────────────────────
 class OrgMemberAdminInput(BaseModel):
-    op: Literal["add", "remove", "set_role", "list"]
+    op: Literal["add", "remove", "set_role", "list", "connectors"]
     org_id: int
-    target: Optional[str] = None      # add/remove/set_role : email ou sub
+    target: Optional[str] = None      # add/remove/set_role/connectors : email ou sub
     role: Optional[str] = None        # add/set_role
 
 
@@ -62,6 +62,15 @@ def _org_member(ctx: ResolvedCtx, inp: OrgMemberAdminInput) -> dict:
     if inp.op == "list":
         return {"org_id": inp.org_id, "members": orgs_reads._members(inp.org_id)}
     target = _need(inp.target, "missing_target", "`target` (email ou sub) requis.")
+    if inp.op == "connectors":
+        # Projection admin des credentials d'un MEMBRE (scope member, ADR 0033) :
+        # connector/account/secret_kind/set_at/meta public — JAMAIS de secret
+        # (list_credentials filtre déjà par `_public_meta`). Diagnostic d'une clé
+        # byo_user qui échoue (ex. data_center Zoho absent) sans lire la DB (#186).
+        sub = orgs_members._resolve_target(target)
+        eid = credentials_store.member_id(inp.org_id, sub)
+        return {"org_id": inp.org_id, "sub": sub,
+                "connectors": credentials_store.list_credentials(credentials_store.MEMBER, eid)}
     if inp.op == "add":
         return orgs_members._add_member(ctx, orgs_members.AddMemberInput(
             org_id=inp.org_id, target=target, role=inp.role or "org_member"))
@@ -217,10 +226,13 @@ CAPABILITIES += [
         authz=ADMIN_BY_OP({"add": ORG_ADMIN_OF("org_id"),
                            "remove": ORG_ADMIN_OF("org_id"),
                            "set_role": ORG_ADMIN_OF("org_id"),
+                           "connectors": ORG_ADMIN_OF("org_id"),
                            "list": PLATFORM_ADMIN}),
         description=("Manage an org's members (org_admin of `org_id`; list = platform admin). "
                      "op=add (`target` email|sub, `role` org_member|org_admin) / remove (`target`) / "
-                     "set_role (`target`, `role`) / list. Anti-lockout on the last org_admin."),
+                     "set_role (`target`, `role`) / list / connectors (`target` — the member's "
+                     "configured connectors: connector/account/secret_kind/set_at/public meta, "
+                     "NEVER any secret — diagnose a failing byo_user key). Anti-lockout on the last org_admin."),
         mcp="oto_admin_org_member",
     ),
     Capability(

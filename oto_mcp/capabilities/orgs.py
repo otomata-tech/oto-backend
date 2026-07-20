@@ -61,6 +61,9 @@ def _use_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
         "org": org_id, "name": o["name"] if o else None, "session_state": None,
         "how_to": (f"Aucun état de session (ADR 0038) : passe `org={org_id}` sur chaque "
                    "appel scopé org (connecteurs, data_*, capacités l'acceptent). "
+                   f"Puis recharge tes instructions contextuelles de cette org (readme "
+                   f"d'org+équipe, guides, procédures — FIGÉES à la connexion, elles ne "
+                   f"suivent PAS seules) via `oto_context(org={org_id})`. "
                    "L'org par défaut (maison) ne se change que dans le dashboard — "
                    "jamais depuis l'agent."),
     }

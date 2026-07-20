@@ -18,11 +18,51 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, connector_verify, file_content
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde)
+    """Sonde « tester la connexion » Slack (signal #217) : un token peut être POSÉ,
+    authentifier, et pourtant manquer les scopes de lecture → `slack_list_channels`
+    échoue en `missing_scope` et tout le reste est inatteignable (pas d'ID de channel).
+    Deux étages, message actionnable : (1) `auth.test` passe avec TOUT token vivant
+    quels que soient ses scopes → sépare « token mort » de « token OK, scope manquant » ;
+    (2) une lecture réelle de channels (`channels:read`) — son `missing_scope` est LE
+    diagnostic qui manquait."""
+    from oto.tools.slack.client import SlackClient, SlackError
+
+    bot = (fields.get("bot_token") or "").strip() or None
+    user = (fields.get("user_token") or "").strip() or None
+    if not bot and not user:  # credential mono-champ legacy (token brut) → routé au préfixe
+        raw = next((str(v).strip() for v in fields.values() if str(v or "").strip()), "")
+        if raw.startswith("xoxb-"):
+            bot = raw
+        elif raw:
+            user = raw
+    if not bot and not user:
+        raise ValueError("aucun token Slack posé (bot_token `xoxb-` ou user_token `xoxp-`)")
+
+    client = SlackClient(bot_token=bot, user_token=user, default_as_user=bool(user))
+    try:
+        client._request("POST", "auth.test")
+    except SlackError as e:
+        raise ValueError(
+            f"token Slack invalide ({e.error}) — repose un `xoxb-`/`xoxp-` valide") from None
+    try:
+        client.list_channels(types="public_channel")
+    except SlackError as e:
+        if e.error == "missing_scope":
+            raise ValueError(
+                "token Slack authentifié mais SCOPES insuffisants : il manque "
+                "`channels:read` (sans lui, aucun ID de channel n'est découvrable → "
+                "`slack_read_history` inatteignable). Réinstalle l'app Slack avec "
+                "`channels:read`, `groups:read`, `channels:history`, `groups:history`.") from None
+        raise ValueError(f"lecture Slack échouée ({e.error})") from None
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.slack.client import SlackClient
+    connector_verify.register("slack", _verify)
 
     def _client() -> tuple[SlackClient, bool]:
         # BYO multi-champs (#25) : bot token (xoxb-) et/ou user token (xoxp-),
@@ -111,6 +151,35 @@ def register(mcp: FastMCP) -> None:
         result = client.history(channel, limit=limit, cursor=cursor)
         _record_if_platform(is_platform)
         return result
+
+    @mcp.tool()
+    def slack_download_file(file_id: str) -> dict:
+        """Download a file attached to a Slack message, by its file id.
+
+        Get `file_id` from the `files[]` of a message returned by
+        `slack_read_history`. The response depends on the file:
+        - **small text** (Markdown/JSON/CSV/plain, ≤256 KB) → returned INLINE:
+          `{encoding: "text", content}` — read it directly.
+        - **binary or large** (zip, image, PDF…) → uploaded to temporary storage
+          and returned as a short-lived signed URL: `{encoding: "url", url,
+          expires_in}` (seconds). Fetch the URL to get the bytes.
+
+        Args:
+            file_id: Slack file id (e.g. F0BG…), from a message's `files[].id`.
+
+        Returns {filename, mimeType, size, encoding, content|url, expires_in?}.
+        """
+        client, is_platform = _client()
+        blob = client.fetch_file(file_id)
+        sub = access.current_user_sub_or_raise()
+        try:
+            out = file_content.render_for_agent(
+                blob["data"], blob["filename"], blob["mimetype"],
+                sub=sub, prefix="slack-files")
+        except file_content.MediaUnavailable as e:
+            raise ValueError(str(e))
+        _record_if_platform(is_platform)
+        return out
 
     @mcp.tool()
     def slack_find_user_by_email(email: str) -> dict:

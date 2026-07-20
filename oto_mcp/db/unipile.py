@@ -37,24 +37,56 @@ def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] =
             "INSERT INTO unipile_accounts (sub, provider, account_id, account_name, org_id, platform_seat) "
             "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (sub, org_id, provider) DO UPDATE SET "
             "account_id = EXCLUDED.account_id, account_name = EXCLUDED.account_name, "
-            "platform_seat = EXCLUDED.platform_seat, connected_at = NOW()",
+            "platform_seat = EXCLUDED.platform_seat, connected_at = NOW(), "
+            "disconnected_at = NULL",  # re-binder = réactiver une ligne soft-déconnectée
             (sub, provider, account_id, account_name, org_id, platform_seat),
         )
 
 
 def get_unipile_account_id(sub: str, org_id: Optional[int],
                            provider: str = "LINKEDIN") -> Optional[str]:
-    """`account_id` Unipile du user pour ce canal DANS cette org, ou None.
-    `org_id=None` (défensif) → None, jamais un repli org-agnostique."""
+    """`account_id` Unipile du user pour ce canal DANS cette org (binding VIVANT),
+    ou None. `org_id=None` (défensif) → None, jamais un repli org-agnostique."""
     if org_id is None:
         return None
     with _connect() as conn:
         row = conn.execute(
             "SELECT account_id FROM unipile_accounts "
-            "WHERE sub = %s AND org_id = %s AND provider = %s",
+            "WHERE sub = %s AND org_id = %s AND provider = %s AND disconnected_at IS NULL",
             (sub, org_id, provider),
         ).fetchone()
     return row["account_id"] if row else None
+
+
+def seat_binding_elsewhere(sub: str, provider: str = "LINKEDIN",
+                           exclude_org: Optional[int] = None) -> Optional[dict]:
+    """Binding VIVANT du `sub` sur un SIÈGE plateforme dans une AUTRE org (le plus
+    récent), ou None — la source de l'ADOPTION explicite : « ton LinkedIn est déjà
+    connecté (via org X) — l'utiliser ici ». Restreint à `platform_seat=True` : un
+    compte BYO vit sur la clé de SON org (un account_id n'existe que sur le tenant
+    où il a été créé) → jamais proposable sous une autre clé."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT account_id, account_name, org_id FROM unipile_accounts "
+            "WHERE sub = %s AND provider = %s AND platform_seat AND disconnected_at IS NULL "
+            "AND org_id IS DISTINCT FROM %s ORDER BY connected_at DESC LIMIT 1",
+            (sub, provider, exclude_org),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def dead_unipile_account_ids_for(sub: str, provider: str = "LINKEDIN") -> set:
+    """`account_id` des bindings soft-déconnectés du `sub` sur ce canal — la preuve
+    de propriété durable : à la reconnexion, Unipile RÉUTILISE le compte existant
+    (même account_id) → le reconcile peut rebinder déterministiquement (le floor
+    heuristique rate toute réutilisation, le compte étant antérieur au pending)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT account_id FROM unipile_accounts "
+            "WHERE sub = %s AND provider = %s AND disconnected_at IS NOT NULL",
+            (sub, provider),
+        ).fetchall()
+    return {r["account_id"] for r in rows}
 
 
 def get_unipile_feed_synced_at(sub: str, org_id: Optional[int],
@@ -93,63 +125,76 @@ def get_unipile_account(sub: str, org_id: Optional[int],
     with _connect() as conn:
         row = conn.execute(
             "SELECT provider, account_id, account_name, connected_at FROM unipile_accounts "
-            "WHERE sub = %s AND org_id = %s AND provider = %s", (sub, org_id, provider)
+            "WHERE sub = %s AND org_id = %s AND provider = %s AND disconnected_at IS NULL",
+            (sub, org_id, provider)
         ).fetchone()
     return dict(row) if row else None
 
 
 def list_unipile_accounts(sub: str) -> list[dict]:
-    """Tous les comptes Unipile connectés du user, tous canaux confondus
-    (`[{provider, account_id, account_name, org_id, connected_at}]`) — pour le dashboard.
-    `org_id` = l'org à laquelle le compte est rattaché (ventilation par org, fiche admin)."""
+    """Les comptes Unipile CONNECTÉS du user (bindings vivants), tous canaux confondus
+    (`[{provider, account_id, account_name, org_id, platform_seat, connected_at}]`) —
+    pour le dashboard. `org_id` = l'org à laquelle le compte est rattaché (ventilation
+    par org, fiche admin). Les lignes soft-déconnectées sont exclues (elles ne servent
+    qu'au rebind, cf. `dead_unipile_account_ids_for`)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT provider, account_id, account_name, org_id, connected_at FROM unipile_accounts "
-            "WHERE sub = %s ORDER BY provider", (sub,)
+            "SELECT provider, account_id, account_name, org_id, platform_seat, connected_at "
+            "FROM unipile_accounts WHERE sub = %s AND disconnected_at IS NULL "
+            "ORDER BY provider", (sub,)
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINKEDIN") -> None:
+    """SOFT-déconnecte le canal dans CETTE org (la ligne survit, `disconnected_at`
+    posé) — par-org : le binding est un acte par org (modèle explicite), déconnecter
+    ICI ne touche pas les autres orgs. La ligne morte reste la preuve de propriété
+    du compte (rebind déterministe à la reconnexion, cf. `dead_unipile_account_ids_for`)."""
     if org_id is None:
         return
     with _connect() as conn:
-        conn.execute("DELETE FROM unipile_accounts WHERE sub = %s AND org_id = %s AND provider = %s",
-                     (sub, org_id, provider))
+        conn.execute(
+            "UPDATE unipile_accounts SET disconnected_at = NOW() "
+            "WHERE sub = %s AND org_id = %s AND provider = %s",
+            (sub, org_id, provider))
 
 
 def count_unipile_accounts_for_org(org_id: int) -> int:
     """Nombre de SIÈGES de la clé plateforme consommés par cet org (base du plafond
     anti-dérapage sur les comptes hébergés). Les comptes BYO (platform_seat=false)
-    ne comptent pas — l'user paie sa propre instance Unipile."""
+    et les bindings soft-déconnectés ne comptent pas."""
     with _connect() as conn:
         return conn.execute(
-            "SELECT COUNT(*) AS n FROM unipile_accounts WHERE org_id = %s AND platform_seat",
+            "SELECT COUNT(*) AS n FROM unipile_accounts "
+            "WHERE org_id = %s AND platform_seat AND disconnected_at IS NULL",
             (org_id,)
         ).fetchone()["n"]
 
 
 def list_unipile_accounts_by_org() -> list[dict]:
     """`[{org_id, provider, account_id, sub}]` des comptes consommant un SIÈGE de la
-    clé plateforme (ventilation facturation par org — les BYO sont exclus)."""
+    clé plateforme (ventilation facturation par org — BYO et déconnectés exclus)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT org_id, provider, account_id, sub FROM unipile_accounts WHERE platform_seat"
+            "SELECT org_id, provider, account_id, sub FROM unipile_accounts "
+            "WHERE platform_seat AND disconnected_at IS NULL"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def unipile_account_owners() -> list[dict]:
-    """TOUS les comptes unipile mappés → propriétaire (sub/email) + org. Pour la vue
-    admin « sièges de la clé plateforme » : réconcilier les comptes présents sur
-    l'instance partagée avec leurs propriétaires oto (account_id NON mappé = orphelin)."""
+    """Les comptes unipile mappés (bindings vivants) → propriétaire (sub/email) + org.
+    Pour la vue admin « sièges de la clé plateforme » : réconcilier les comptes présents
+    sur l'instance partagée avec leurs propriétaires oto (account_id NON mappé = orphelin)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT ua.account_id, ua.provider, ua.account_name, ua.sub, u.email, "
             "ua.org_id, o.name AS org_name, ua.connected_at, ua.platform_seat "
             "FROM unipile_accounts ua "
             "LEFT JOIN users u ON u.sub = ua.sub "
-            "LEFT JOIN orgs o ON o.id = ua.org_id"
+            "LEFT JOIN orgs o ON o.id = ua.org_id "
+            "WHERE ua.disconnected_at IS NULL"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -248,6 +293,30 @@ def resolve_unipile_pending(nonce: str) -> Optional[dict]:
             (nonce,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_unipile_pending_for_sub(sub: str) -> list[dict]:
+    """Pendings VIVANTS (<1h) d'un `sub` → `[{nonce, org_id, provider,
+    platform_seat, created_at}]`, du plus ancien au plus récent. Base de la
+    réconciliation poll-and-bind (le webhook hosted-auth v2 n'étant pas livré)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT nonce, org_id, provider, platform_seat, created_at "
+            "FROM unipile_pending WHERE sub = %s "
+            "AND created_at >= NOW() - INTERVAL '1 hour' ORDER BY created_at",
+            (sub,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def bound_unipile_account_ids() -> set:
+    """Tous les `account_id` déjà attribués — bindings vivants ET soft-déconnectés
+    (une ligne morte d'un TIERS prouve que le compte est à lui : jamais adoptable
+    par un autre au reconcile). L'appelant ré-autorise les morts du sub réclamant
+    via `dead_unipile_account_ids_for`."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT DISTINCT account_id FROM unipile_accounts").fetchall()
+    return {r["account_id"] for r in rows}
 
 
 def backfill_unipile_member_scope() -> dict:

@@ -16,13 +16,15 @@ from mcp.types import ErrorData, INVALID_REQUEST
 
 from .. import access
 
-# Serper renvoie `Serper scrape <status>: <msg>` (RuntimeError nu) quand SON
-# scraper n'arrive pas à récupérer une page (JS lourd, anti-bot, page morte) :
-# c'est un échec par-URL attendu, pas un bug backend. On le convertit en erreur
-# GÉRÉE côté tool (message actionnable pour l'agent + non reporté à Sentry — la
-# taxonomie droppe les McpError d'entrée). Les 4xx Serper (crédits/clé) restent
-# propagés tels quels : ce sont de vrais problèmes de config, pas des échecs d'URL.
-_SCRAPE_STATUS = re.compile(r"Serper scrape (\d{3}):")
+# Serper renvoie `Serper <method> <status>: <msg>` (RuntimeError nu). Deux classes
+# d'échec sont des ENTRÉES invalides, pas des bugs backend — on les convertit en
+# McpError GÉRÉE (message actionnable pour l'agent + non reporté à Sentry, la
+# taxonomie droppe les McpError d'entrée) :
+#  - **400** (générique, dans `_run`) : requête/URL invalide — param de lieu manquant
+#    (`Missing fid/cid/placeId`), URL non scrapable (`Content-Type application/json`)… ;
+#  - **5xx** du scrape (dans `serper_scrape`) : la page a bloqué le robot.
+# Les 401/402/403/429 (clé/crédits/rate) restent propagés : vrais problèmes de config.
+_SERPER_STATUS = re.compile(r"Serper \w+ (\d{3}):")
 
 
 def register(mcp: FastMCP) -> None:
@@ -34,9 +36,16 @@ def register(mcp: FastMCP) -> None:
         return SerperClient(api_key=key), is_platform
 
     def _run(method: str, **kwargs) -> dict:
-        """Résout la clé, appelle la méthode du client, compte l'usage plateforme."""
+        """Résout la clé, appelle la méthode du client, compte l'usage plateforme.
+        Un 400 Serper (entrée invalide) → McpError gérée (actionnable, hors Sentry)."""
         client, is_platform = _client()
-        result = getattr(client, method)(**kwargs)
+        try:
+            result = getattr(client, method)(**kwargs)
+        except RuntimeError as e:
+            m = _SERPER_STATUS.search(str(e))
+            if m and int(m.group(1)) == 400:
+                raise McpError(ErrorData(code=INVALID_REQUEST, message=str(e))) from None
+            raise
         if is_platform:
             access.record_platform_usage("serper")
         return result
@@ -420,7 +429,7 @@ def register(mcp: FastMCP) -> None:
         try:
             return _run("scrape_page", url=url, include_markdown=include_markdown)
         except RuntimeError as e:
-            m = _SCRAPE_STATUS.search(str(e))
+            m = _SERPER_STATUS.search(str(e))
             if m and 500 <= int(m.group(1)) < 600:
                 raise McpError(ErrorData(
                     code=INVALID_REQUEST,

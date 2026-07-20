@@ -28,8 +28,8 @@ class VerifyInput(BaseModel):
 def _fields_and_config_for(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict]:
     """(champs déchiffrés, config non-secrète) à sonder selon le niveau demandé.
 
-    `config` = satellites NON-secrets appariés à la clé (meta public : dsn/api_version
-    unipile…) — une sonde vers un endpoint versionné DOIT en tenir compte.
+    `config` = satellites NON-secrets appariés à la clé (meta public : dsn
+    unipile…) — une sonde vers un endpoint dont l'hôte dépend de la clé DOIT en tenir compte.
 
     - `auto` (carte user) : le credential EFFECTIF (cascade user > équipe > org >
       plateforme). `emit_on_failure=False` : une sonde ne doit pas polluer le monitoring.

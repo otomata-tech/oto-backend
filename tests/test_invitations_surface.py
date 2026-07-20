@@ -77,3 +77,24 @@ def test_accept_input_multiform():
 
 def test_org_invite_create_requires_org_id():
     assert oi.InviteCreateInput.model_fields["org_id"].is_required()
+
+
+def test_emit_invitation_sends_email(monkeypatch):
+    """Régression (Sentry PYTHON-STARLETTE-3N) : le param `email` d'emit_invitation
+    masquait le module `email` → AttributeError sur send_invite_email dès que
+    send_email=True, sur les 3 niveaux de la cascade."""
+    from oto_mcp import db, email
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    monkeypatch.setattr(org_store, "create_invitation",
+                        lambda *a, **k: (1, "tok", "CODE1234"))
+    monkeypatch.setattr(db, "get_user", lambda sub: {"email": "admin@org.test"})
+    sent = {}
+    monkeypatch.setattr(email, "send_invite_email",
+                        lambda to, name, url, inviter: sent.update(to=to, name=name) or True)
+    out = oi.emit_invitation(ResolvedCtx(sub="s1"), org_id=35, email="Invitee@Org.Test",
+                             send_email=True, source="org_admin", role="org_member",
+                             target_name="movinmotion")
+    assert out["emailed"] is True
+    assert sent["to"] == "invitee@org.test" and sent["name"] == "movinmotion"
+    assert out["code"] == "CODE1234" and "/invitation/CODE1234" in out["invite_url"]

@@ -38,6 +38,7 @@ class ResourceInput(BaseModel):
     resource_id: Optional[str] = None
     new_owner_email: Optional[str] = None   # transfer → un utilisateur
     new_owner_org: Optional[int] = None     # transfer → une de SES orgs (ADR 0030, owner_type='org')
+    new_owner_group: Optional[int] = None   # transfer → un pôle/équipe (ADR 0049, owner_type='group') — cloisonne la ressource à ses membres
     email: Optional[str] = None             # share / unshare (principal user)
     org_id: Optional[int] = None            # share / unshare (principal ORG — livraison client, #52)
     group_id: Optional[int] = None          # share / unshare (principal ÉQUIPE — groupe d'une org dont tu es membre)
@@ -387,10 +388,19 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         if not ownership.can_transfer(ctx.sub, inp.resource_type, rid):
             raise AuthzDenied(403, "forbidden",
                               "Le transfert de propriété est réservé au propriétaire / admin.")
-        # Cible : une de SES orgs (owner_type='org') OU un utilisateur (par email).
-        # Transférer VERS une org exige d'en être membre (on n'envoie pas une ressource
-        # dans une org où on n'est pas — comme on ne crée un namespace d'org que membre).
-        if inp.new_owner_org is not None:
+        # Cible : une de SES orgs (owner_type='org'), un de SES groupes (owner_type=
+        # 'group', ADR 0049 — poser la ressource au scope du pôle EST la restriction)
+        # OU un utilisateur (par email). Transférer VERS une org/un groupe exige d'en
+        # être membre (on n'envoie pas une ressource dans un scope où on n'est pas).
+        if inp.new_owner_group is not None:
+            gid = int(inp.new_owner_group)
+            if not roles.can_read_group(ctx.sub, gid):
+                raise AuthzDenied(403, "not_group_member",
+                                  "tu dois être membre (ou admin) de l'équipe cible pour "
+                                  "lui transférer une ressource.")
+            new_owner_type, new_owner_id = "group", str(gid)
+            new_owner_label = _owner_label("group", str(gid))
+        elif inp.new_owner_org is not None:
             org_id = int(inp.new_owner_org)
             if not roles.is_org_member(ctx.sub, org_id):
                 raise AuthzDenied(403, "not_org_member",

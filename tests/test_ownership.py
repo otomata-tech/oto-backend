@@ -176,3 +176,59 @@ def test_transfer_reparents_and_keeps_previous_owner_write(monkeypatch):
     assert calls["revoke"] == (RT, RID, "user", "bob")
     # l'ancien propriétaire user garde un accès write
     assert calls["grant"] == (RT, RID, "user", "alice", "write")
+
+
+# --- ADR 0049 : cran PLATFORM (bibliothèque) + visibilité contextuelle group ----
+
+def test_platform_owned_readable_by_all_but_not_writable(monkeypatch):
+    """Un projet bibliothèque (platform-owned) se lit par tout utilisateur authentifié
+    (fait pour être copié) ; l'écriture et la gouvernance restent plateforme."""
+    _wire(monkeypatch, owner=("platform", "platform"))
+    assert ownership.can_access("anyone", RT, RID, "read")
+    assert not ownership.can_access("anyone", RT, RID, "write")
+    assert not ownership.can_govern("anyone", RT, RID)
+    assert not ownership.can_transfer("anyone", RT, RID)
+
+
+def test_platform_owned_admin_writes_governs_transfers(monkeypatch):
+    _wire(monkeypatch, owner=("platform", "platform"), super_admin=True)
+    assert ownership.can_access("ops", RT, RID, "write")
+    assert ownership.can_govern("ops", RT, RID)
+    assert ownership.can_transfer("ops", RT, RID)
+
+
+def _wire_groups(monkeypatch, parent_org=42):
+    monkeypatch.setattr(ownership.group_store, "get_group",
+                        lambda gid: {"id": gid, "org_id": parent_org})
+    monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [])
+
+
+def test_visible_in_org_group_owned_member(monkeypatch):
+    """Un projet de pôle appartient au contexte de son org PARENTE : visible pour un
+    lecteur du groupe dans cette org, invisible depuis une autre org."""
+    _wire(monkeypatch, owner=("group", "5"), group_read_of={5})
+    _wire_groups(monkeypatch, parent_org=42)
+    assert ownership.visible_in_org("m", 42, RT, RID)
+    assert not ownership.visible_in_org("m", 43, RT, RID)
+
+
+def test_visible_in_org_group_owned_non_member_denied(monkeypatch):
+    _wire(monkeypatch, owner=("group", "5"))
+    _wire_groups(monkeypatch, parent_org=42)
+    assert not ownership.visible_in_org("x", 42, RT, RID)
+
+
+def test_visible_in_org_group_owned_org_admin_reads(monkeypatch):
+    # Gouvernance inaliénable : l'org_admin du parent lit le projet du pôle
+    # (can_read_group escalade) — pas de cran « caché aux admins » (ADR 0049 §C).
+    _wire(monkeypatch, owner=("group", "5"), group_admin_of={5})
+    _wire_groups(monkeypatch, parent_org=42)
+    assert ownership.visible_in_org("adm", 42, RT, RID)
+
+
+def test_visible_in_org_platform_everywhere(monkeypatch):
+    _wire(monkeypatch, owner=("platform", "platform"))
+    _wire_groups(monkeypatch)
+    assert ownership.visible_in_org("anyone", 42, RT, RID)
+    assert ownership.visible_in_org("anyone", 7, RT, RID)

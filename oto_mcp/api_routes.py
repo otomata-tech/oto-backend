@@ -623,6 +623,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             active_org is not None and org_role is None
             and access.is_platform_operator(sub)
         )
+        # Org perso (espace privé mono-membre) : le front adapte son vocabulaire
+        # (principe 9 du CDC connecteurs — un « solo » ne lit jamais « org »/« équipe »).
+        active_org_is_personal = (
+            active_org is not None and org_store.is_personal_org(active_org))
         # Org MAISON (défaut persistant, colonne) — exposée distinctement pour que
         # le front affiche « ton défaut » et l'action « définir comme maison ».
         home_org = org_store.get_active_org(sub)
@@ -663,6 +667,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
             "active_org_logo_url": active_org_logo_url,
             "org_role": org_role,
             "active_org_readonly": active_org_readonly,
+            "active_org_is_personal": active_org_is_personal,
             "active_org_require_mfa": active_org_require_mfa,
             "home_org": home_org,
             "home_org_name": home_org_name,
@@ -1063,20 +1068,32 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
                 return _json_error(
                     request, 409, "account_required",
                     "Ce connecteur a déjà des comptes nommés — précise `account`.")
+        # Verify-avant-persist (#106) : si le connecteur expose une sonde, on TESTE la
+        # connexion avec les champs candidats AVANT d'écrire — un credential qui
+        # n'authentifie pas n'est jamais persisté (l'erreur remonte à la SAISIE, pas au
+        # 1er appel d'outil, plus tard et hors contexte). `config` vide : les
+        # connecteurs de ce chemin (zoho/brevo…) portent tout dans `fields` ; le dsn
+        # unipile passe par un flux dédié, pas api_key_save. Sans sonde → pose directe.
+        from . import connector_verify
+        verified = False
+        if connector_verify.supports(provider):
+            try:
+                await connector_verify.run(provider, fields)
+            except McpError as e:
+                return _json_error(request, 400, "verify_failed", e.error.message)
+            except Exception as e:  # noqa: BLE001 — l'échec d'auth EST le résultat
+                return _json_error(request, 400, "verify_failed", str(e))
+            verified = True
         secret = credentials_store.pack_secret(provider, fields)
-        # Version d'API portée par le credential (v1/v2 « selon la BYO ») : pour
-        # unipile, choisir v2 range {api_version, dsn} dans le meta (lu par
-        # resolve_credential → config → unipile_client / hosted-auth). Absence de
-        # meta = défaut v1 ; un re-set en v1 remet meta à {} (EXCLUDED.meta).
         meta = None
-        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
-            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
+        if verified:
+            from datetime import datetime, timezone
+            meta = {"verified_at": datetime.now(timezone.utc).isoformat()}
         credentials_store.set_credential(
             credentials_store.MEMBER, eid, provider, secret, set_by=sub,
             account=account, meta=meta)
         return _json(request, {"ok": True, "provider": provider, "org_id": org_id,
-                               "account": account,
-                               "api_version": (meta or {}).get("api_version", "v1")})
+                               "account": account, "verified": verified})
 
     async def api_key_clear(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)
@@ -1237,18 +1254,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         if not label or not api_key:
             return _json_error(request, 400, "missing_fields")
         # ADR 0044 §F : la clé plateforme est une instance scope PLATFORM du coffre unifié
-        # (fin de platform_keys). La version v1/v2 voyage dans `meta` (débloque le v2
-        # plateforme sans env global) — même forme que la clé member/org unipile.
-        meta = {}
-        if provider == "unipile" and str(body.get("api_version") or "").lower() in ("v2", "2"):
-            meta = {"api_version": "v2", "dsn": "api.unipile.com"}
+        # (fin de platform_keys).
         try:
             credentials_store.set_credential(credentials_store.PLATFORM, label, provider,
-                                             api_key, set_by=sub, meta=meta)
+                                             api_key, set_by=sub)
         except ValueError as e:
             return _json_error(request, 400, "invalid_platform_provider", str(e))
-        return _json(request, {"provider": provider, "label": label,
-                               "api_version": meta.get("api_version", "v1")})
+        return _json(request, {"provider": provider, "label": label})
 
     async def admin_platform_key_delete(request: Request) -> JSONResponse:
         sub, err = await _authenticate(request, verifier)

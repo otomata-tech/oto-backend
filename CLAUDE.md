@@ -93,7 +93,7 @@ grants/quota, platform keys, providers byo-only).
 > = seam `current_org`, à la pose comme à la résolution.
 > **Détail (helpers db, state HMAC google, migration) : `docs/roles-and-resolution.md` §Scope MEMBRE**.
 
-**Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only).
+**Seam substrat (ADR 0024)** : `access.resolve_credential(provider, want, sub?)` marche la cascade UNE fois → `ResolvedCredential{key, is_platform, mode, config, fields}` ; `resolve_api_key`/`resolve_credential_fields` = vues minces dessus (les ~15 tools keyed inchangés). `config` = **config non-secrète appariée à la clé gagnante** (endpoint/host : `dsn` unipile, `base_url` n8n/make, `data_center` zoho — `config_fields` `secret=False` ∪ meta public) → ne JAMAIS recâbler un résolveur d'endpoint par-connecteur. `access.credential_mode_for(sub, provider)` = le `mode` sans déchiffrer (détection BYO = `mode ∈ {user,group,org}`, jamais un check user-only). **La cascade elle-même = walker unique `access.walk_cascade`** (sonde présence /api/me vs fetch résolution) — ne jamais la recopier dans un call-site, contrat gardé par `test_cascade_walker.py` ; détail : `docs/roles-and-resolution.md` §Walker.
 
 ## REST API (consommée par le dashboard / oto.ninja)
 
@@ -129,6 +129,57 @@ Stock complet (~43M établissements, parquet ~2GB) interrogé via DuckDB :
 - MCP tools `fr_stock_*` (ex-`sirene_stock_*`, fusionnés dans le connecteur `sirene` le 2026-06-22 — même domaine entreprises FR, namespace `fr`) : **`fr_stock_enrich(sirens=[...])`** (bulk — sièges d'une LISTE en UN scan), `fr_stock_siege`, `fr_stock_etablissements`, `fr_stock_siret`, `fr_stock_search` (`sieges_only=True` = siège strict). Pendant parquet des `fr_*` live.
 - REST `/api/sirene/{headquarters(POST,batch),siege,etablissements,siret,search,info}` (noms de routes **inchangés** — `oto-cli`/`oto-core` en dépendent ; orthogonaux aux noms MCP).
 - Consommé par `oto-cli` (`SireneStock` HTTP client, oto-core >=1.8 — `get_headquarters_addresses` = 1 POST batch, plus N appels) — voir ADR 0001 + 0002 dans le privé `otomata-private`.
+
+## Recherche transverse & KB projets (lot 3, plan JB — suivi oto-private#67)
+
+**`oto_search`** (capacité `me.search`, MCP + `GET /api/me/search`) = LE verbe « retrouver »,
+un seul chemin de code (`search.py` orchestration RRF k=60 · `db/search.py` SQL par source +
+**expressions d'index = source unique index↔requête**, GIN d'expression, config `french` +
+repli d'accents `translate`). Sources : pages/briefs/procédures/guides (passages, ts_headline
+sur la saisie BRUTE) ∪ tableaux/fichiers/connecteurs (conteneurs, matchés en mémoire).
+**Invariant « cherchable ⇔ lisible »** : docs/briefs/fichiers scopés
+`ownership.accessible_project_ids` (factorisation du scoping d'`op=list` — JAMAIS
+`can_access`, cross-org) ; **tripwire par source = critère de merge**
+(`test_search_scope_tripwire.py`). Le catalogue connecteurs est INJECTÉ par la capacité
+(pas d'inversion de couche). `oto_doc(op=search)` = rerouté, déprécié. Fichiers matchés sur
+`filename+title+description` (jamais `summary`, colonne morte).
+
+**Sémantique + RRF (20/07, LIVE preprod)** : fusion LEXICAL + SÉMANTIQUE des pages.
+`embeddings.py` = client Mistral `mistral-embed` (1024, même modèle que Memento →
+import sans re-embed au sunset) — **sync `embed_texts`** (worker, batch DÉCOUPÉ sous le
+budget de tokens/requête : 400 « too many tokens overall » sinon ; cap ~16k ch/input)
++ **async `embed_query`** (chemin requête). Outbox `docs.embed_dirty` (marqué à
+create/update, coût nul) + `doc_embeddings(halfvec(1024))` + index HNSW cosine ; worker
+`embed_worker` (boucle de fond composée au lifespan, embed HORS event loop via
+`run_in_threadpool`, idempotent par `content_sha`) draine. Handler `oto_search` ASYNC :
+embed la requête hors boucle → `search.search(query_embedding=…)` ajoute la source
+`page`/`matched_by='semantic'`, la fusion RRF DÉDUPLIQUE (kind,ref) + SOMME les rangs
+(une page trouvée par les deux remonte ; passage lexical conservé). **Dégradation
+gracieuse** : sans `MISTRAL_API_KEY` ou sur échec → lexical seul, jamais un prérequis.
+pgvector 0.8.2 sur otomata-main (`CREATE EXTENSION vector` AVANT `_SCHEMA` car halfvec en
+dépend). Le **golden set JB** cale désormais la QUALITÉ (plus le *si*).
+
+**Se repérer** : `docs.description` (chapô ; fallback DÉRIVÉ À LA LECTURE `derive_description`,
+jamais stocké) + `docs.position` (ordre curé, entiers ×16 ; `move_doc(parent?, position=INDEX)`
+réindexe la fratrie ATOMIQUEMENT) + **épine** `oto_project(op=get, include=['spine'], from_doc?,
+depth?)` bornée (N+2, plafond 200, compteurs `more`) — la carte que l'agent lit avant
+`oto_doc(op=get)`, jamais `op=list` de tout. **KB d'org ancrée PAR ID** (`orgs.kb_project_id`,
+claim optimiste anti-doublon, auto-réparation transfert/archive — le nom n'est plus un marqueur).
+Le lien `project_links.target_type='doc'` est RETIRÉ (vestige memento) ; relier des pages =
+les **backlinks `[[…]]`** (Ship 4, LIVE) : résolus À L'ÉCRITURE (hook `db.create/update/
+delete_doc` — JAMAIS capacité, `resolve_change` appelle db en direct), précédence projet >
+KB (`db/backlinks.py`), table dérivée `doc_links` (CASCADE 2 côtés), `oto_doc op=backlinks`
+= « Cité par » filtré accès. **Propositions modif+création + inbox** (Ship 3, LIVE) : « les
+lecteurs proposent » — un viewer (lecture sans écriture) qui crée/modifie obtient une
+PROPOSITION (`doc_change_requests`, `doc_id` nullable + `project_id` + emplacement + CHECK) ;
+le dispatch `docs.py` route resolve/list/create-proposal sur request_id/project_id **AVANT
+le gate doc_id** (une création doc_id NULL était sinon inatteignable) ; `me.inbox`
+(`GET /api/me/inbox`, 2 voies À traiter/Récent, 200-vide sans org).
+
+**Seam `pending_action`** (`status_hints.py`, patron connector_verify) : un connecteur à
+connexion en deux temps enregistre un hook « quelle étape manque ? » → `ProviderStatus.
+pending_action` (fail-open) que le front rend tel quel en verdict+CTA. La spécificité vit
+DANS le module connecteur (unipile : « Connecte un canal »), jamais dans le modèle commun.
 
 ## Datastore (spine natif PG, ADR 0016)
 
@@ -197,17 +248,47 @@ revalidés à chaque appel, jamais de repli silencieux).
 > refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e
 > connexion du même canal déjà lié dans une AUTRE org (anti-doublon `account_id`).
 
-> **Version API v1/v2 = propriété de la CLÉ (« selon la BYO »), pas un connecteur ni un
-> flag global (2026-07-07).** v2 est un compte/clé Unipile **distincts** (beta) : une clé
-> v1 ne marche pas en v2. La version est portée par `meta.api_version` du credential
-> (`{api_version:"v2", dsn:"api.unipile.com"}`) → `resolve_credential.config` → `unipile_client()`
-> + `unipile_connect.hosted_auth_url` routent v1/v2. **UN seul connecteur `unipile`** (surface
-> identique, `client_v2.UnipileClientV2` iso `UnipileClient`) ; absence de meta = **v1 défaut**.
-> Pose de la version : chemin **member** (`POST /api/settings/api-keys/unipile`, param `api_version`)
-> ET **org** (`org.secret.set`, param `api_version`) → dashboard : sélecteur sur le form clé d'org
-> + section « ma clé perso » du widget hosted (clé member prime sur org, cascade `resolve_credential`).
-> Deltas API v2 (base fixe `api.unipile.com/v2`, account_id-in-path, enveloppe, inbox model,
-> posts keyés URN…) dans les **docstrings de `client_v2.py`** (oto-core ≥v1.19.0). Migration = `#63`.
+> **Siège plateforme cross-org (#221, 2026-07-16, LIVE PROD).** Le cross-org #172 ci-dessus
+> était accroché à la **clé MEMBRE** (`personal_instance_org` → `list_member_orgs_for`) →
+> un user sur la **clé PLATEFORME partagée** (donc SANS clé membre) tombait à travers : son
+> siège hébergé, pourtant par-personne, ne le suivait QUE dans les orgs où une ligne
+> `unipile_accounts` existait → « je connecte mais ça reste sur Connect » ailleurs. Fix :
+> le **siège plateforme suit le sub cross-org** — `db.any_unipile_account_id(sub, provider)`
+> (siège `platform_seat=True` le plus récent, toutes orgs) est un fallback dans
+> `_own_unipile_account_id` (résolution outils) ET `status_for` (affichage), **gardé sur
+> `credential_mode_for == 'platform'` ET `subscribed`** (l'org de contexte résout la clé
+> plateforme ET a l'option) → jamais un siège sous une clé BYO (mismatch) ni un faux
+> « connecté » sans option. ⚠️ **`db.list_unipile_accounts` doit renvoyer `platform_seat`**
+> (le SELECT l'omettait → filtre cross-org muet ; bug masqué par les stubs unitaires,
+> attrapé en test empirique — cf. la leçon « stubs cachent la forme de row » ci-dessus).
+
+> **API v2 = seul chemin (V1 COUPÉ, 2026-07-16, LIVE PROD).** La migration des comptes
+> en v2 étant bouclée, **v1 est retiré du code** : oto-core **≥v1.26.0** n'a plus qu'**une
+> classe `UnipileClient` (v2)** (`client_v2.py` fusionné dans `client.py` ; `UnipileClientV2`
+> + `make_unipile_client(api_version=)` supprimés) ; `DEFAULT_DSN = api.unipile.com` (gateway
+> v2 unifié). **Plus AUCUN plumbing `api_version`** côté backend (construction client, pose de
+> clé member/org/plateforme, carte `status_for`) ni de sélecteur dashboard. Le `dsn` par-clé
+> (`meta.dsn`) reste lu (défaut = gateway v2). Deltas API v2 (account_id-in-path, enveloppe
+> `{data,next_cursor}` normalisée `items`/`cursor`, inbox model, posts keyés URN, `inmail-credits`)
+> = **docstrings de `client.py`** oto-core.
+>
+> **Hosted-auth v2 : webhook non livré → réconciliation poll-and-bind.** Le hosted-auth v2 ne
+> rappelle **pas** notre `notify_url` (webhook au niveau APP Unipile, pas par-lien) et le compte
+> connecté **ne porte pas notre nonce** → le compte se crée chez Unipile mais n'est jamais
+> enregistré côté oto (pending qui traîne). Fix **webhook-indépendant** : `unipile_connect.reconcile_pending(sub)`
+> liste les comptes Unipile et lie au sub le plus **récent, non déjà lié, du bon provider, créé
+> APRÈS son pending** (floor = anti-rebind d'un siège tiers). **Self-heal** dans `GET /api/me/unipile`
+> (no-op sans pending, donc sans appel Unipile) + endpoint explicite `POST /api/me/unipile/reconcile`.
+> Le webhook `POST /api/unipile/webhook` (handler v1 `CREATION_SUCCESS`) reste mais **dormant** (le v2
+> ne l'alimente pas) — utile seulement si on branche `account.disconnected` (détection de déco, non fait).
+>
+> **Consolidation « tout en clé plateforme » (2026-07-16).** Clé plateforme rotée en v2 (scope
+> PLATFORM, label `env`) ; tous les BYO unipile supprimés ; **option comp** posée pour les orgs
+> concernées (`db.set_option_comp("org",id,"unipile")`). ⚠️ **GOTCHA share (ADR 0044 §F)** :
+> `share_mode='open'` n'ouvre à tous que si **`share_down` est VIDE** (`_platform_instance_usable` :
+> `(not down) or granted`) — sinon seule l'allowlist passe (sinon `404 unipile_not_configured`, la
+> clé plateforme ne résout pas). Free-tier réel = `open` + `share_down=[]`, l'option couche 3 gardant
+> qui peut connecter.
 
 > **Couche 3 « option » = source unique `access.option_open(sub, connector, org, group)` (2026-07-07).**
 > « L'option payante est-elle levée ? » était recopiée à 3 endroits (`connectors_selection.option_ok`
@@ -244,6 +325,10 @@ l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
 backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = doctrine oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
+Un appel sur un tool HORS toolbox de session (la visibilité filtre `tools/list`,
+pas `tools/call`) = erreur **GÉRÉE actionnable** `tool_not_mounted`
+(`error_taxonomy` : oto_call immédiat / `oto_connector op=select`), droppée de
+Sentry — plus jamais un « Erreur interne du serveur » opaque (vécu 16/07, #224/#225).
 
 ## Onboarding = un projet « Découverte » (ADR 0032 §7)
 
@@ -300,7 +385,7 @@ par Scaleway) + `resend` (BYOK). `email_send` = spine qui route
 
 Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) + `user_enabled_tools(sub, tool_name)` (override positif). **Les presets de tools (snapshots nommés + baselines org/équipe) ont été retirés** — la visibilité ne dépend plus que des défauts plateforme et des toggles perso.
 
-**Masqués par défaut** (`is_default_hidden`) : invisibles par défaut sur la surface authentifiée, **self-activables**. Deux grains : `tool_visibility.py::DEFAULT_HIDDEN_TOOLS` (noms individuels) et `DEFAULT_HIDDEN_NAMESPACES` (namespaces entiers, **dérivé du registre** — champ `default_hidden` de `connectors.py`). Cas actuel : **`attio_*`** (le MCP Attio officiel est préféré ; code conservé pour implems custom). Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Masquer un connecteur entier = poser `default_hidden=True` au registre ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
+**Sélection par membre = régime NOMINAL « non-sélectionné = masqué » (ADR 0019/0050).** La toolbox d'un membre = les connecteurs qu'il a **installés** (`user_selected_connectors`, per (sub, org)). Au premier profil d'un (sub, org), `session_visibility` seed le socle `providers.DEFAULT_ACTIVE_CONNECTORS` ∩ exposé — **VIDE depuis le 16/07** (décision produit : un nouveau compte démarre SANS connecteurs installés ; l'agent guide depuis les tools spine — `oto_connector` op=list/select, `oto_call` — et le catalogue injecté au bloc A) ; tout l'exposé = library installable (capacité `connectors.select`, dashboard). Les pairs pré-0050 ont été backfillés une fois avec leur visible d'alors (`connector_selection.backfill_preexisting`, sentinelle `#adr0050-backfill`). Un connecteur activé pour l'org APRÈS le seed arrive dans la library, pas dans la toolbox. Le grain CONNECTEUR `default_hidden` et les flags `OTO_CONNECTOR_SELECTION_*` ont été **retirés** (0050). **Masqués par défaut, grain OUTIL** (`is_default_hidden` = `DEFAULT_HIDDEN_TOOLS` seul : `email_send`, `fr_egapro_declaration`) : self-activables. Règle effective (`is_tool_visible`) : override positif prime > désactivé > masqué-par-défaut > visible. `oto_enable_tool` pose l'override, `oto_disable_tool` le lève (même logique côté REST `/api/me/tools/{name}`). **Stdio local (sub=None) = accès complet**, le masquage ne vise que le multi-user. Sortir un connecteur du départ = ne PAS le mettre dans le socle `default_active` ; un tool isolé = `DEFAULT_HIDDEN_TOOLS`.
 
 Méta-tools exposés (`tools/meta.py`) : `oto_list_my_tools`, `oto_disable_tool`, `oto_enable_tool`, `oto_call`, `oto_tool_schema`. **`PROTECTED_TOOLS`** (`tool_visibility.py`, source unique) = quatre familles jamais masquables (default-hidden inclus) **ni désactivables** : méta-toolset + identité (`oto_list_my_tools`/`oto_enable_tool`/`oto_whoami`/`oto_profile`), échappatoires de contexte (`oto_use_org`/`oto_clear_org`/`oto_list_orgs`/`oto_use_group`/`oto_clear_group` — anti-lockout, vécu Sentry 2026-06-30), boucle d'usage (`feedback`/`run_start`/`run_finish` — mandatés par les instructions plateforme ADR 0017 : un toggle qui les masque rend le gap invisible), **dispatch universel** (`oto_call`/`oto_tool_schema` — ADR 0036 : appeler par son nom un outil NON listé (FOD, connecteur non activé) le temps d'un appel, sans muter la visibilité ; exécution par `Tool.run` HORS middleware → gates call-time intactes + rédaction ré-appliquée via `redaction.py`). Garde des deux faces (2026-07-02) : `oto_disable_tool` refuse, `POST /api/me/tools/{name}` → 400 `protected_tool` ; `GET /api/me/tools` expose `protected:bool` (toggle inerte dashboard).
 
@@ -324,10 +409,10 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 ## Agent readme (cumulable) & procédures — ex-« doctrines & instructions d'org »
 
 Vocabulaire produit (unbundle 2026-07) : **agent readme** = prose libre **injectée à
-chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org**
-(`org_instructions` slug réservé `claude_md`) → **équipe active** (`org_group_instructions`
-slug `claude_md`, désormais VRAIMENT injecté au handshake, plus seulement servi par
-`oto_procedure`) → **user** (table `user_agent_readme(sub PK, body_md)`, NOUVEAU —
+chaque session**, cumulée du général au spécifique — **plateforme** (bloc A) → **org** →
+**équipe active** → **user** (les 4 étages vivent dans `guides` delivery='init' depuis
+la convergence 0042 — les slugs `claude_md` sont SORTIS des tables de procédures ;
+l'étage user historique était `user_agent_readme(sub PK, body_md)`,
 capacité `me.agent_readme.{get,set}`, REST-only `GET/PUT /api/me/agent-readme`, éditée
 dashboard `/account` ; repointée par `migrate_sub`). Chaque niveau passe par `_apply_vars`
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = doctrine nommée
@@ -395,14 +480,20 @@ Les combinateurs d'autz (`capabilities/_authz.py`) délèguent à `roles`
 plus d'escalade recopiée à la main. Combinateurs : `GROUP_ADMIN_OF`,
 `GROUP_MEMBER_OF` (en plus de `ORG_*`).
 
-Un groupe **gouverne 3 ressources** par délégation de l'org :
+Un groupe **gouverne 3 ressources** par délégation de l'org (⚠️ **substrat unifié le
+10/07/2026** — chantiers du cadrage objets/visibilité : plus de tables jumelles par
+grain, le scope est une COLONNE ; migrations vivantes sur la DB partagée = playbook
+**`docs/live-migrations.md`**) :
 - **secrets partagés** — coffre `connector_credentials` (entity_type='group') ;
   cascade `resolve_api_key` = **user_key > secret groupe actif > secret org active > grant plateforme**.
-- **doctrine & skills** — `org_group_instructions` (+ revisions) ; `oto_procedure(op='get')`
-  sert org **puis** groupe actif (complément, chaque skill taggée `scope`).
+- **doctrine & skills** — table UNIFIÉE `org_instructions` (`owner_type='group'`,
+  `owner_id=group_id`, `org_id`=org parente ; ex-jumelle `org_group_instructions`
+  DROPpée) ; `oto_procedure(op='get')` sert org **puis** groupe actif (complément,
+  chaque skill taggée `scope`). Les procédures d'équipe ont un `id` (ownership 0030).
 - **gouvernance de connecteur (ADR 0012 B1/B2, restrict-only — 08/07/2026)** — le chef
-  d'équipe peut, pour SON équipe : **couper** un connecteur (`group_connector_activation`,
-  coupures seules) et **réserver** un connecteur à des membres (`group_connector_access`).
+  d'équipe peut, pour SON équipe : **couper** un connecteur (lignes scope 'group' de
+  `connector_availability`, coupures seules) et **réserver** un connecteur à des membres
+  (lignes scope 'group' de `connector_acl`).
   **INVARIANT MONOTONE** : l'équipe ne peut que RÉTRÉCIR ce que l'org expose, jamais élargir
   (platform ⊇ org ⊇ group). Dispo = **visibilité** (`session_visibility`, fail-open,
   `connector_activation.effective_for_group`/`group_cut_connectors`). Accès = **gate DUR** :
@@ -456,6 +547,21 @@ bâti), `foncier_comparables_app` (ventes comparables DVF autour d'une adresse),
 tools JSON ; rendu **défensif** (colonnes dérivées des clés réelles) pour ne pas
 dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
 
+Depuis, deux apps **spine** (hors gate) : `data_app` (datastore — table + fiche v2
+schema-aware, `tools/datastore.py`) et `oto_doc_app` (pages/docs + KB, lecture
+seule, `tools/docs_app.py`). ⚠️ Gotcha récurrent : **pas d'annotation de retour
+`-> Card`** sur un tool `app=True` (hints résolus contre les globals du module au
+build du schéma, or l'import prefab_ui est local à `register()` → NameError fatal
+au boot, vécu #69). **Doc consommable par les agents = guide plateforme `mcp-apps`**
+(servi par `oto_guide`, inventaire + quand app vs JSON + replis) — à tenir à jour
+quand une app s'ajoute. ⚠️ **Guides = tout-DB (2026-07-16)** : la table `guides` est
+la source de vérité des TROIS scopes on-demand (platform/org/user) ; les fichiers
+`oto_mcp/guides/*.md` ne sont que des **seeds de boot** (`seed_platform_guides`,
+idempotent, n'écrase jamais une ligne DB). Écriture platform = platform_admin
+(MCP `oto_guide op=write scope=platform` / REST `PUT /api/me/guides/platform/{slug}`
+/ dashboard `/platform/instructions`). Une édition durable doit AUSSI retoucher le
+fichier seed (sinon un environnement neuf naît avec l'ancien texte).
+
 ## Conventions
 
 - Nouveau connecteur = (1) un fichier `tools/<service>.py` exposant `register(mcp)`,
@@ -473,11 +579,12 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   (fichier + entrée registre) le garde vert SANS rien y toucher ; il casse seulement
   sur un **fichier orphelin** (connecteur posé mais pas déclaré → dort invisible) ou un
   **module fantôme** (faute dans `modules=`/nom). Seul un **module spine** chargé
-  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` de
-  `deploy.yml` tourne **sur les PR ET sur push main** (`on: pull_request` + `push`,
-  required check de branch protection) et installe oto-core **au tag épinglé** (runner
-  neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (`deploy` a
-  `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
+  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` tourne
+  **sur les PR ET sur push main** (`deploy-canari.yml` « Deploy preprod », `on:
+  pull_request` + `push` sur main ; required check de branch protection sur main) et
+  au **tag** (`deploy.yml` « Deploy prod »), et installe oto-core **au tag épinglé**
+  (runner neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (les
+  deux jobs `deploy` ont `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
   vérifie STATIQUEMENT que chaque `_client().<m>()` d'un tool existe sur la classe
   oto-core épinglée (un tool en avance de phase sur son oto-core casse la PR au lieu
   d'atteindre la prod — leçon `folk_get_user`).
@@ -501,19 +608,19 @@ dépendre d'un nom de champ. Gatés par le connecteur (namespace `foncier`).
   Surface admin `/api/admin/connectors/activation`
   (`api_routes_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
-  **`bridge` universel** (ADR 0034, amende 0003/0011) — UNE entrée générique au
-  registre (`kind="remote"`), tools fixes `bridge_describe`/`bridge_call`
-  (`tools/remote.py`). L'identité du service ponté vit dans la **CONFIG d'org**
-  (champs standard `base_url`/`token`/`label`, `resolve_credential_fields`),
-  **jamais dans le namespace** → montrable au catalogue sans nom client (l'ex-fuite
-  /tools/mm venait du namespace-par-client). Le bridge distant détient le
-  credential métier (contrat ADR 0003 §4 inchangé : `/describe`+`/call`, bearer
-  M2M, lecture seule bornée côté bridge, audit `X-Oto-Sub`). Visibilité = régime
-  commun (activation × masque, `default_hidden` → self-activable) ; sans
-  credential, l'exécution lève proprement. Pilote : le bridge back-office
-  Movinmotion (repo privé), migré du legacy per-namespace `mm_*` le 2026-07-02
-  (découverte `meta.base_url`, règle de visibilité dédiée et
-  `resolve_remote_credential` retirés en B4).
+  **`http` générique** (ADR 0037, amende 0034/0003/0011). Le connecteur historique
+  **`bridge`** (`kind="remote"`, tools `bridge_describe`/`bridge_call`,
+  `tools/remote.py`) a été **RETIRÉ le 2026-07-16** (oto-backend#108) : un bridge
+  n'est qu'une **API HTTP** que le service distant re-expose → l'org configure sur
+  la carte `http` son `base_url` (endpoint du bridge) + `auth_mode=bearer` + `token`
+  M2M (`credential_fields`, jamais dans le namespace → catalogue sans nom client),
+  et l'agent appelle `http_get`/`http_post`. Le service distant détient le credential
+  métier (contrat ADR 0003 §4 : bearer M2M, politique bornée côté bridge, audit
+  `X-Oto-Sub`). Visibilité = régime commun (activation × sélection 0019/0050 — hors
+  socle, installable). Pilote : le **bridge back-office Movinmotion** (repo privé),
+  migré `bridge`→`http` le 2026-07-16 (credential au groupe finance, réseau VPC
+  privé). Le concept « remote data-driven » (base_url sur un provider hors registre)
+  subsiste dans `org_secret_meta`, mais **sans entrée de catalogue** `kind="remote"`.
 - **Tool API-keyé = déclarer le connecteur dans le registre `connectors.py`**
   (avec `keyed=True` + `auth_modes`) — `KEY_PROVIDERS` et tout le reste en
   dérivent. Le coffre `connector_credentials` est générique (pas de colonne
@@ -586,22 +693,26 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # `_connector_blocked`/seams) + les gardes de capacité par stub ; le chemin SQL est vérifié
 # au déploiement (le job `test` du CI tourne le vrai suite avec toutes les deps).
 
-# Deploy — push main déclenche `.github/workflows/deploy.yml` : workflow unique
-# CI/CD (job `test` pytest → job `deploy` `needs: test`). Deploy = SSH box dédiée :
-# git reset --hard origin/main + pip install -e . + **force-reinstall oto-core
-# depuis le tag pinné** (lu du pyproject ; pip saute sinon une dép VCS déjà
-# présente) + restart + **smoke HTTP** (GET 200 /.well-known/oauth-authorization-server)
-# + **rollback auto** vers le commit précédent si install/restart/smoke échoue. Le
-# restart relance start-encrypted (refetch master key). ⚠️ start-encrypted.sh
-# untracked → survit au git reset.
+# Deploy — modèle tronc unique (refonte 2026-07-20, ADR 0020) :
+#   push `main`  → PREPROD (« Deploy preprod », deploy-canari.yml, script serveur
+#                  oto-backend-canari.sh : git reset --hard origin/main → preprod)
+#   tag  `v*`    → PROD    (« Deploy prod », deploy.yml, script serveur
+#                  oto-backend.sh <tag> : git reset --hard <tag> → prod)
+# Le deploy (les deux) = SSH box dédiée via runner self-hosted : reset au ref +
+# pip install -e . + **force-reinstall oto-core depuis le tag pinné** (lu du
+# pyproject ; pip saute sinon une dép VCS déjà présente) + restart + **smoke HTTP**
+# (GET 200 /.well-known/oauth-authorization-server) + **rollback auto** si
+# install/restart/smoke échoue. Le restart relance start-encrypted (refetch master
+# key). ⚠️ start-encrypted.sh untracked → survit au git reset.
 #
-# ⚠️ CANARI (ADR 0040) : le travail se pousse sur `canari` (→ preprod). Un push
-# canari déclenche PLUSIEURS workflows — le VRAI deploy preprod est **« Deploy
-# canari »** (job `deploy-preprod`). Le workflow **« CI/CD »** a un job `deploy`
-# GATÉ sur `main` → il apparaît **`skipped`** sur un push canari : NE PAS le
-# confondre avec un deploy raté. Suivre `gh run watch` sur le run *Deploy
-# canari*, pas *CI/CD* (ni *guard-main*).
-git push origin main
+# Preprod = travailler sur `main`, commit, push : deploy preprod auto (gate
+# `needs: test`). Claude Code (web) ouvre ses PR sur main → merge = deploy preprod.
+git push origin main            # → PREPROD
+
+# Prod = acte explicite : taguer un commit de main + pousser le tag.
+git tag v1.2.3 && git push origin v1.2.3   # → PROD (tags v* immuables, ruleset)
+# ⚠️ `canari` est DÉPRÉCIÉE (ne déploie plus) : un checkout encore dessus doit
+# passer sur main (`git checkout main`). guard-main + sync-main-to-canari retirés.
 
 # Logs
 ssh -i ~/.ssh/alexis root@<box> "journalctl -u oto-mcp -f"
@@ -646,3 +757,4 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 - `docs/email.md` — envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours.
 - `docs/event-loop-perf.md` — les 2 modes de gel mono-loop + protections + recettes py-spy/aiodebug.
 - `docs/redaction.md` — **rédaction de champs** : middleware unique (FieldRedactionMiddleware), rien par défaut + templates 1-clic, **schéma OBSERVÉ** (capture passive `connector_schemas` — passthrough d'API tierces → on observe au lieu de déclarer), dry-run preview, moteur `FieldFilter` (oto-core).
+- `docs/live-migrations.md` — **migrations vivantes sur la DB partagée canari/prod** : la danse en N lots promus, copies `to_regclass` newer-wins, bascule d'arbitre ON CONFLICT avant drop de PK, PK nommées, pièges (fail-open des gates, `gh pr merge` avant le guard, absorption de WIP).

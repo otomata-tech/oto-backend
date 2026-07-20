@@ -166,8 +166,15 @@ class DatastorePg:
                 self._active_scope_cache = ([], [])
             else:
                 org = int(oid)
-                groups = [int(g["group_id"])
-                          for g in group_store.list_groups_for_user(self.sub, org)]
+                # ADR 0049 (cadrage 10/07) : les groupes du contexte = mes équipes dans
+                # l'org active — ou TOUS les groupes de l'org pour un org_admin (même
+                # escalade que `roles.can_read_group`, alignée sur `oto_project op=list`).
+                from . import roles
+                if roles.is_org_admin(self.sub, org):
+                    groups = [int(g["id"]) for g in group_store.list_groups(org)]
+                else:
+                    groups = [int(g["group_id"])
+                              for g in group_store.list_groups_for_user(self.sub, org)]
                 self._active_scope_cache = ([org], groups)
         return self._active_scope_cache
 
@@ -275,20 +282,21 @@ class DatastorePg:
         2026-07-01). Dédupliqués par id (priorité possédé). La résolution PAR NOM
         (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
         namespace d'une autre org ne se résout plus hors de son org non plus."""
-        from . import access, group_store
+        from . import access
         if self.acting_org is not None:
             owner = ("org", str(self.acting_org))
-            org, org_ids, group_ids = int(self.acting_org), [int(self.acting_org)], []
         else:
             owner = ownership.active_owner(access.current_org(self.sub))
             if owner is None:
                 return []
-            org = int(owner[1])
-            org_ids = [org]
-            group_ids = [int(g["group_id"])
-                         for g in group_store.list_groups_for_user(self.sub, org)]
+        # ADR 0049 (cadrage 10/07) : les tableaux TEAM-OWNED de l'org active sont listés
+        # comme les org-owned. `_active_scope` est la source unique du jeu de groupes
+        # (mes équipes, ou TOUS les groupes de l'org pour un org_admin — même règle que
+        # `oto_project op=list`) ; le scope reste borné à l'org active.
+        org_ids, group_ids = self._active_scope()
+        owned = [owner] + [("group", str(g)) for g in group_ids]
         out: dict[int, dict] = {}
-        for n in db.list_datastore_namespaces_for_owners([owner]):
+        for n in db.list_datastore_namespaces_for_owners(owned):
             out[int(n["id"])] = self._entry(n, shared=False)
         for n in db.list_datastore_namespaces_granted_to(self.sub, org_ids, group_ids):
             if int(n["id"]) in out:
@@ -600,14 +608,19 @@ class DatastorePg:
         return db.datastore_count_rows(ns_id, filters=filters)
 
     def aggregate(self, namespace: str, *, group_by: Optional[str] = None,
-                  metrics: Optional[list] = None, filter: Optional[dict] = None) -> list[dict]:
+                  metrics: Optional[list] = None, filter: Optional[dict] = None,
+                  q: Optional[str] = None, filters: Optional[list] = None) -> list[dict]:
         """Agrégat serveur (feedback #191) : COUNT/SUM/AVG/MIN/MAX sur des champs JSONB,
         `group_by` optionnel — stats d'un vivier sans rapatrier les lignes. Délègue à
-        `db.datastore_aggregate` (filtre exact `{col: val}` poussé en SQL)."""
+        `db.datastore_aggregate`. Deux formes de filtre cumulables : `filter` exact
+        `{col: val}` (chemin MCP) et `q`/`filters` riches ({field, op, value}, mêmes
+        clauses que `page_rows`) — le dashboard agrège ainsi le MÊME jeu que sa vue
+        filtrée (tuiles metric)."""
         ns_id = self._resolve(namespace)
-        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        clauses = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        clauses.extend(filters or [])
         return db.datastore_aggregate(
-            ns_id, group_by=group_by, metrics=metrics, filters=filters)
+            ns_id, group_by=group_by, metrics=metrics, q=q, filters=clauses)
 
     def page_rows(
         self,
@@ -649,7 +662,21 @@ class DatastorePg:
         # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
         # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
         self._check_row(schema, data, prev_status=prev_status)
-        row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
+        try:
+            row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
+        except UniqueViolation:
+            # Un AUTRE enregistrement porte déjà cette valeur de clé métier (index
+            # UNIQUE ds_bkey_<ns_id>). Contrairement au batch write (qui converge en
+            # merge sur la row de même clé), un update ciblé sur `row_id` ne peut pas
+            # basculer silencieusement sur une autre row → erreur actionnable
+            # (ValueError → INVALID_PARAMS), jamais un 500 opaque.
+            dk = (schema or {}).get("key")
+            dkv = data.get(dk) if dk else None
+            if dk and dkv is not None:
+                raise ValueError(
+                    f"un autre enregistrement porte déjà {dk}={dkv} "
+                    "(clé métier unique) — impossible de dupliquer") from None
+            raise  # violation inexpliquée → erreur franche, pas de repli muet
         self._release_if_terminal(schema, ns_id, row_id, data)
         return self._row_to_dict(row)
 
@@ -676,6 +703,20 @@ class DatastorePg:
         déjà automatiquement (pas besoin d'appeler release après)."""
         ns_id = self._resolve(namespace, write=True)
         return db.datastore_release_claim(ns_id, row_id, str(worker))
+
+    def queue(self, namespace: str) -> list[dict]:
+        """Vue de SUPERVISION de la file (dashboard) : les rows sous bail —
+        actif ou expiré, le consommateur tranche sur `_claimed_until`. Lecture
+        seule (aucun droit d'écriture requis)."""
+        ns_id = self._resolve(namespace)
+        return [self._row_to_dict(r) for r in db.datastore_claimed_rows(ns_id)]
+
+    def force_release(self, namespace: str, row_id: str) -> bool:
+        """Libère le bail SANS garde de worker — supervision humaine (dashboard),
+        ≠ `release_claim` (agent, gardé). Exige le droit d'écriture. False = pas
+        de bail à libérer."""
+        ns_id = self._resolve(namespace, write=True)
+        return db.datastore_release_claim(ns_id, row_id, None)
 
     def delete_row(self, namespace: str, row_id: str) -> None:
         ns_id = self._resolve(namespace, write=True)

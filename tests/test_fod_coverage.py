@@ -81,6 +81,7 @@ FOD_NOT_EXPOSED = {
     "bodacc": _FR_VIA_FOD,
     "inpi": _FR_VIA_FOD,
     "egapro": _FR_VIA_FOD,
+    "aides": _FR_VIA_FOD,  # aides publiques (fod_fr.search_aides → /api/fr/aides/*)
     # SIRENE INSEE (KEYÉ) : passthrough via FOD — le backend résout la clé (vault,
     # BYO ou plateforme) + track le quota et la passe à FOD par-appel (header
     # X-Sirene-Key) ; l'appel INSEE tourne sur FOD, la clé n'y est pas stockée.

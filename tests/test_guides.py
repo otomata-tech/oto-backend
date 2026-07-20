@@ -1,4 +1,9 @@
-"""Guides d'usage (oto-backend#111) : store fichiers + tool oto_guide."""
+"""Guides d'usage (oto-backend#111, tout-DB 2026-07-16) : seeds fichiers + tool oto_guide.
+
+Les fichiers `guides/*.md` ne sont plus la surface de lecture : ils sont les SEEDS
+du boot (`seed_platform_guides`, idempotent). Ici on prouve le parsing, la lecture
+des seeds livrés, et le seed idempotent (DO NOTHING simulé).
+"""
 from oto_mcp import guide_store as G
 
 
@@ -14,32 +19,37 @@ def test_parse_without_front_matter():
     assert meta == {} and body == "juste du texte"
 
 
-# ── store sur le vrai dossier guides/ (bulk-load.md livré) ──
+# ── seeds sur le vrai dossier guides/ (bulk-load.md, mcp-apps.md livrés) ──
 
-def test_list_includes_bulk_load():
-    slugs = {g["slug"] for g in G.list_guides()}
-    assert "bulk-load" in slugs
-    g = next(g for g in G.list_guides() if g["slug"] == "bulk-load")
-    assert g["title"] and g["description"]        # front-matter lu
-
-
-def test_read_returns_body_without_front_matter():
-    g = G.read_guide("bulk-load")
-    assert g and "sous-agent" in g["body_md"]
-    assert not g["body_md"].startswith("---")     # front-matter retiré
+def test_file_seeds_include_shipped_guides():
+    by_slug = {g["slug"]: g for g in G.list_file_guides()}
+    assert "bulk-load" in by_slug and "mcp-apps" in by_slug
+    g = by_slug["bulk-load"]
+    assert g["title"] and g["description"]            # front-matter lu
+    assert "sous-agent" in g["body_md"]
+    assert not g["body_md"].startswith("---")         # front-matter retiré
 
 
-def test_read_unknown_is_none():
-    assert G.read_guide("nope-inexistant") is None
+def test_seed_platform_guides_never_overwrites(monkeypatch):
+    seeded = []
+
+    def fake_seed(scope, owner, slug, body_md, title="", description=""):
+        seeded.append((scope, owner, slug))
+
+    import oto_mcp.db as db
+    monkeypatch.setattr(db, "seed_guide_db", fake_seed)
+    G.seed_platform_guides()
+    # tous les fichiers passent par le seed DO-NOTHING, scope/owner plateforme
+    assert ("platform", G.PLATFORM_OWNER, "bulk-load") in seeded
+    assert ("platform", G.PLATFORM_OWNER, "mcp-apps") in seeded
 
 
-def test_slug_is_traversal_safe():
-    assert G.read_guide("../secrets") is None      # slug strict → pas de path traversal
-    assert G.read_guide("a/b") is None
-    assert G._path_for("../etc/passwd") is None
-
-
-def test_index_lists_guides():
+def test_index_lists_guides(monkeypatch):
+    import oto_mcp.db as db
+    monkeypatch.setattr(db, "list_guides_db",
+                        lambda scope, owner: [{"slug": "bulk-load", "title": "T",
+                                               "description": "D"}]
+                        if scope == "platform" else [])
     idx = G.guides_index_md()
     assert "bulk-load" in idx and "oto_guide" in idx
 

@@ -598,6 +598,37 @@ def list_orgs_for_user(sub: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# --- Projet KB ancré par id (lot 3, chantier 0.3) ---------------------------
+# Fin de l'identification « par son NOM » (renommable → 2 KB, transfert → KB cassée) :
+# `orgs.kb_project_id` = l'ancre. kb.py résout par id + auto-répare (clear/claim).
+
+def get_kb_project_id(org_id: int) -> Optional[int]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT kb_project_id FROM orgs WHERE id = %s", (org_id,)).fetchone()
+        return int(row["kb_project_id"]) if row and row["kb_project_id"] is not None else None
+
+
+def claim_kb_project(org_id: int, project_id: int) -> bool:
+    """Pose l'ancre SI ELLE EST LIBRE (verrou optimiste de création — deux appels
+    concurrents créent chacun leur projet, un seul claim gagne, le perdant archive
+    son doublon). True = ce projet est désormais LA KB de l'org."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE orgs SET kb_project_id = %s WHERE id = %s AND kb_project_id IS NULL",
+            (project_id, org_id))
+        return (cur.rowcount or 0) > 0
+
+
+def clear_kb_project(org_id: int, expected_project_id: int) -> None:
+    """Lève une ancre PENDOUILLANTE (projet archivé/transféré hors org) — compare-and-
+    clear pour ne jamais écraser une réparation concurrente déjà re-posée."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE orgs SET kb_project_id = NULL WHERE id = %s AND kb_project_id = %s",
+            (org_id, expected_project_id))
+
+
 def get_personal_org(sub: str) -> Optional[int]:
     """Org PERSO (privée, mono-membre) de `sub`, marquée `personal_of=sub`, ou None."""
     with _connect() as conn:
@@ -1069,6 +1100,27 @@ def _accept_invitation_row(inv: dict, sub: str) -> dict:
             "group_id": group_id, "group_role": inv.get("group_role")}
 
 
+def list_pending_invitations_for_email(email: str) -> list[dict]:
+    """Invitations en attente ADRESSÉES à cet email (inbox « À traiter », Ship 3 G1) —
+    lecture seule, sans accepter. Cross-org par construction (une invitation à rejoindre
+    une org vise quelqu'un qui n'en est pas encore membre) → hors scope org active."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, org_id, group_id, invited_by, created_at, code "
+            "FROM org_invitations WHERE accepted_at IS NULL AND expires_at > NOW() "
+            "AND lower(email) = %s ORDER BY created_at DESC", (email,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            o = get_org(int(d["org_id"])) if d.get("org_id") else None
+            d["org_name"] = o["name"] if o else None
+            out.append(d)
+        return out
+
+
 def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     """Honore une invitation d'org par l'EMAIL au signup : si un nouvel inscrit a une
     invitation d'org en attente pour son email vérifié, on l'accepte automatiquement
@@ -1147,14 +1199,14 @@ def get_instruction(org_id: int, slug: str, version: Optional[int] = None) -> Op
             row = conn.execute(
                 "SELECT id, org_id, slug, title, description, body_md, slots, version, set_by, "
                 "created_at, updated_at FROM org_instructions "
-                "WHERE org_id = %s AND slug = %s",
+                "WHERE owner_type = 'org' AND org_id = %s AND slug = %s",
                 (org_id, slug),
             ).fetchone()
         else:
             row = conn.execute(
                 "SELECT org_id, slug, title, description, body_md, slots, version, set_by, "
                 "created_at FROM org_instruction_revisions "
-                "WHERE org_id = %s AND slug = %s AND version = %s",
+                "WHERE owner_type = 'org' AND org_id = %s AND slug = %s AND version = %s",
                 (org_id, slug, version),
             ).fetchone()
         return dict(row) if row else None
@@ -1163,7 +1215,11 @@ def get_instruction(org_id: int, slug: str, version: Optional[int] = None) -> Op
 def list_instructions(org_id: int, include_base: bool = False) -> list[dict]:
     """Métadonnées des instructions (SANS body) = l'index des skills. Exclut la
     doctrine de base sauf `include_base` (surface admin)."""
-    where = "org_id = %s" if include_base else "org_id = %s AND slug <> %s"
+    # `owner_type='org'` : post-fusion (chantier procédures, cadrage 10/07) la table
+    # porte aussi les lignes GROUP (org_id = org parente) — une liste d'org ne doit
+    # jamais les ratisser.
+    where = ("owner_type = 'org' AND org_id = %s" if include_base
+             else "owner_type = 'org' AND org_id = %s AND slug <> %s")
     params: tuple = (org_id,) if include_base else (org_id, BASE_SLUG)
     with _connect() as conn:
         rows = conn.execute(
@@ -1179,7 +1235,8 @@ def list_instruction_bodies(org_id: int) -> list[dict]:
     dériver les références d'outils `<tool:slug>` (compteur « doctrine-only », ADR 0024)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT slug, body_md FROM org_instructions WHERE org_id = %s AND slug <> %s",
+            "SELECT slug, body_md FROM org_instructions "
+            "WHERE owner_type = 'org' AND org_id = %s AND slug <> %s",
             (org_id, BASE_SLUG),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1197,7 +1254,7 @@ def search_instructions(org_id: int, query: str, include_base: bool = False) -> 
     with _connect() as conn:
         rows = conn.execute(
             "SELECT id, slug, title, description, body_md, version, updated_at "
-            "FROM org_instructions WHERE org_id = %s " + base_filter +
+            "FROM org_instructions WHERE owner_type = 'org' AND org_id = %s " + base_filter +
             "AND (title ILIKE %s OR description ILIKE %s OR body_md ILIKE %s) "
             "ORDER BY (title ILIKE %s) DESC, (description ILIKE %s) DESC, updated_at DESC",
             head + (like, like, like, like, like),
@@ -1229,10 +1286,12 @@ def set_instruction(org_id: int, slug: str, body_md: str, title: Optional[str] =
         return 1
     with _connect() as conn:
         with conn.transaction():
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"oi:{org_id}:{slug}",))
+            # Verrou + arbitre sur la clé OWNER (chantier procédures B1) : la PK legacy
+            # (org_id, slug) tombe en B2 — l'unicité vivante est (owner_type, owner_id, slug).
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"oi:org:{org_id}:{slug}",))
             cur = conn.execute(
                 "SELECT version, title, description, slots FROM org_instructions "
-                "WHERE org_id = %s AND slug = %s",
+                "WHERE owner_type = 'org' AND org_id = %s AND slug = %s",
                 (org_id, slug),
             ).fetchone()
             new_version = (cur["version"] + 1) if cur else 1
@@ -1243,23 +1302,27 @@ def set_instruction(org_id: int, slug: str, body_md: str, title: Optional[str] =
             conn.execute(
                 """
                 INSERT INTO org_instructions
-                    (org_id, slug, title, description, body_md, slots, version, set_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (org_id, slug) DO UPDATE SET
+                    (org_id, owner_type, owner_id, slug, title, description, body_md, slots,
+                     version, set_by, updated_at)
+                VALUES (%s, 'org', %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (owner_type, owner_id, slug) DO UPDATE SET
                     title = EXCLUDED.title, description = EXCLUDED.description,
                     body_md = EXCLUDED.body_md, slots = EXCLUDED.slots,
                     version = EXCLUDED.version,
                     set_by = EXCLUDED.set_by, updated_at = NOW()
                 """,
-                (org_id, slug, new_title, new_desc, body_md, new_slots, new_version, set_by),
+                (org_id, str(org_id), slug, new_title, new_desc, body_md, new_slots,
+                 new_version, set_by),
             )
             conn.execute(
                 """
                 INSERT INTO org_instruction_revisions
-                    (org_id, slug, version, title, description, body_md, slots, set_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (org_id, owner_type, owner_id, slug, version, title, description,
+                     body_md, slots, set_by)
+                VALUES (%s, 'org', %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (org_id, slug, new_version, new_title, new_desc, body_md, new_slots, set_by),
+                (org_id, str(org_id), slug, new_version, new_title, new_desc, body_md,
+                 new_slots, set_by),
             )
             return new_version
 
@@ -1273,7 +1336,7 @@ def list_instruction_versions(org_id: int, slug: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT version, title, set_by, created_at FROM org_instruction_revisions "
-            "WHERE org_id = %s AND slug = %s ORDER BY version DESC",
+            "WHERE owner_type = 'org' AND org_id = %s AND slug = %s ORDER BY version DESC",
             (org_id, slug),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1285,11 +1348,13 @@ def delete_instruction(org_id: int, slug: str) -> bool:
     with _connect() as conn:
         with conn.transaction():
             cur = conn.execute(
-                "DELETE FROM org_instructions WHERE org_id = %s AND slug = %s", (org_id, slug)
+                "DELETE FROM org_instructions "
+                "WHERE owner_type = 'org' AND org_id = %s AND slug = %s", (org_id, slug)
             )
             removed = (cur.rowcount or 0) > 0
             conn.execute(
-                "DELETE FROM org_instruction_revisions WHERE org_id = %s AND slug = %s",
+                "DELETE FROM org_instruction_revisions "
+                "WHERE owner_type = 'org' AND org_id = %s AND slug = %s",
                 (org_id, slug),
             )
     return removed
@@ -1297,16 +1362,18 @@ def delete_instruction(org_id: int, slug: str) -> bool:
 
 # --- doctrine = ressource possédée (ADR 0030, épic « couverture des autres types »,
 # livraison de projet #52) : l'identité PUBLIQUE d'une doctrine est son `id` surrogate
-# (ADR 0032 « stop using slug ») ; son propriétaire DÉRIVE de `org_id` (pas de colonne
-# owner_* : une doctrine est toujours un objet d'org). Ces fonctions alimentent le kind
-# `doctrine` d'`ownership.py` + la cascade de livraison d'un projet (`oto_resource`).
+# (ADR 0032 « stop using slug ») ; son propriétaire est porté par `owner_type/owner_id`
+# (chantier procédures, cadrage 10/07 — 'org' aujourd'hui, 'group' à la fusion B2 ; il
+# dérivait d'`org_id` avant). Ces fonctions alimentent le kind `doctrine`
+# d'`ownership.py` + la cascade de livraison d'un projet (`oto_resource`).
 
 def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
     """Une instruction par son id surrogate (identité publique). None si absente."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, org_id, slug, title, description, body_md, slots, version, set_by, "
-            "created_at, updated_at FROM org_instructions WHERE id = %s",
+            "SELECT id, org_id, owner_type, owner_id, slug, title, description, body_md, "
+            "slots, version, set_by, created_at, updated_at "
+            "FROM org_instructions WHERE id = %s",
             (instruction_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -1318,7 +1385,8 @@ def _free_instruction_slug(conn, org_id: int, slug: str) -> str:
     candidate = slug
     for i in range(2, 100):
         row = conn.execute(
-            "SELECT 1 FROM org_instructions WHERE org_id = %s AND slug = %s",
+            "SELECT 1 FROM org_instructions "
+            "WHERE owner_type = 'org' AND org_id = %s AND slug = %s",
             (org_id, candidate),
         ).fetchone()
         if row is None:
@@ -1357,9 +1425,9 @@ def reparent_instruction(instruction_id: int, new_org_id: int) -> str:
     with _connect() as conn:
         dest_slug = _free_instruction_slug(conn, new_org_id, src["slug"])
         conn.execute(
-            "UPDATE org_instructions SET org_id = %s, slug = %s, updated_at = NOW() "
-            "WHERE id = %s",
-            (new_org_id, dest_slug, instruction_id),
+            "UPDATE org_instructions SET org_id = %s, owner_type = 'org', owner_id = %s, "
+            "slug = %s, updated_at = NOW() WHERE id = %s",
+            (new_org_id, str(new_org_id), dest_slug, instruction_id),
         )
     # L'historique suit dans un second temps (hors transaction principale) : une
     # collision de revisions chez la cible ne doit pas annuler le transfert — il
@@ -1367,9 +1435,12 @@ def reparent_instruction(instruction_id: int, new_org_id: int) -> str:
     try:
         with _connect() as conn:
             conn.execute(
-                "UPDATE org_instruction_revisions SET org_id = %s, slug = %s "
-                "WHERE org_id = %s AND slug = %s",
-                (new_org_id, dest_slug, src["org_id"], src["slug"]),
+                "UPDATE org_instruction_revisions SET org_id = %s, owner_type = 'org', "
+                "owner_id = %s, slug = %s "
+                "WHERE owner_type = %s AND owner_id = %s AND slug = %s",
+                (new_org_id, str(new_org_id), dest_slug,
+                 src.get("owner_type") or "org", src.get("owner_id") or str(src["org_id"]),
+                 src["slug"]),
             )
     except Exception:
         _log.warning("reparent_instruction: historique laissé chez la source "
@@ -1385,7 +1456,8 @@ def list_instructions_for_orgs(org_ids: list[int]) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT id, org_id, slug, title, description, version, updated_at "
-            "FROM org_instructions WHERE org_id = ANY(%s) AND slug <> %s ORDER BY org_id, slug",
+            "FROM org_instructions "
+            "WHERE owner_type = 'org' AND org_id = ANY(%s) AND slug <> %s ORDER BY org_id, slug",
             (org_ids, BASE_SLUG),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1396,7 +1468,7 @@ def list_all_instructions() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT id, org_id, slug, title, description, version, updated_at "
-            "FROM org_instructions WHERE slug <> %s ORDER BY org_id, slug",
+            "FROM org_instructions WHERE owner_type = 'org' AND slug <> %s ORDER BY org_id, slug",
             (BASE_SLUG,),
         ).fetchall()
         return [dict(r) for r in rows]

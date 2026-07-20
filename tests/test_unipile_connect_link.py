@@ -30,6 +30,16 @@ def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0
     # Garde-fou anti-doublon cross-org (#172) : comptes déjà connectés du sub, tous
     # canaux/orgs confondus. [] par défaut ⇒ garde-fou inerte (chemins existants).
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: connected or [])
+    # Adoption (binding-par-org) : siège plateforme du sub dans une autre org, dérivé
+    # de `connected` (platform_seat=True seulement — un BYO n'est jamais adoptable).
+    def _seat_elsewhere(sub, prov="LINKEDIN", exclude_org=None):
+        for a in (connected or []):
+            if (a.get("provider") == prov and a.get("org_id") != exclude_org
+                    and a.get("platform_seat")):
+                return a
+        return None
+    monkeypatch.setattr("oto_mcp.db.seat_binding_elsewhere", _seat_elsewhere)
+    monkeypatch.setattr("oto_mcp.db.set_unipile_account", lambda *a, **k: None)
     monkeypatch.setattr("oto_mcp.db.get_unipile_account",
                         lambda sub, org_id, prov: existing)
     monkeypatch.setattr("oto_mcp.db.get_org_unipile_limit", lambda org_id: limit)
@@ -141,3 +151,25 @@ def test_guard_channel_scoped(monkeypatch):
         {"provider": "LINKEDIN", "account_id": "OLD", "org_id": 2}])
     out = _run(hosted_auth_url("u1", "whatsapp"))
     assert out["url"]
+
+
+# --- #237 : premium reconnecte le siège existant, MÊME avec force=true --------
+
+def test_premium_reconnects_existing_seat_even_with_force(monkeypatch):
+    # L'agent passe force=true POUR dépasser l'anti-doublon (compte déjà connecté) →
+    # ajouter Recruiter doit RECONNECTER le siège (rattache le produit), pas créer un
+    # 2e compte (type=create qui perdait le premium et donnait le 403 Recruiter).
+    _wire(monkeypatch, org=39, connected=[
+        {"provider": "LINKEDIN", "account_id": "SEAT1", "org_id": 39,
+         "platform_seat": True}])
+    _run(hosted_auth_url("u1", "linkedin", force=True, premium="recruiter"))
+    assert _FakeClient.last_kwargs["reconnect_account"] == "SEAT1"
+    assert _FakeClient.last_kwargs["premium"] == "recruiter"
+
+
+def test_plain_force_still_creates_new_account(monkeypatch):
+    # Sans premium, force=true reste un create (compte réellement neuf) : pas de reconnect.
+    _wire(monkeypatch, org=39, connected=[
+        {"provider": "LINKEDIN", "account_id": "OLD", "org_id": 2, "platform_seat": True}])
+    _run(hosted_auth_url("u1", "linkedin", force=True))
+    assert _FakeClient.last_kwargs["reconnect_account"] is None

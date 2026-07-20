@@ -147,12 +147,20 @@ def make_routes(
         try:
             out = await unipile_connect.hosted_auth_url(
                 sub, str(body.get("channel") or "linkedin"),
-                force=bool(body.get("force")))
+                force=bool(body.get("force")),
+                # `premium` = 'recruiter' | 'sales_navigator' : produit LinkedIn à
+                # ACTIVER à la connexion (sinon classic seul → 403 sur ces APIs).
+                premium=(str(body["premium"]).strip().lower()
+                         if body.get("premium") else None))
         except unipile_connect.ConnectRefused as e:
             # 502 (échec amont) et 409 (doublon cross-org, #172) portent un message
             # actionnable → on le renvoie ; les autres exposent leur code machine.
             detail = e.message if e.status in (409, 502) else e.code
             return json_error(request, e.status, detail)
+        # Adoption (binding-par-org) : le compte connecté ailleurs a été lié ICI sans
+        # wizard → pas d'URL, le front rafraîchit ({adopted, account_name, channel}).
+        if out.get("adopted"):
+            return json_response(request, out)
         return json_response(request, {"url": out["url"]})
 
     async def unipile_webhook(request: Request) -> JSONResponse:
@@ -194,16 +202,38 @@ def make_routes(
         return JSONResponse({"ok": True})
 
     async def unipile_status(request: Request) -> JSONResponse:
-        """Statut de connexion Unipile per-user (pour le dashboard)."""
+        """Statut de connexion Unipile per-user (pour le dashboard). **Self-heal** :
+        le webhook hosted-auth v2 n'étant pas livré, on réconcilie (poll-and-bind)
+        les comptes fraîchement connectés au chargement du statut — no-op sans
+        pending (donc sans appel Unipile). Best-effort : jamais fatal pour le statut."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
+        from . import unipile_connect
+        try:
+            await asyncio.to_thread(unipile_connect.reconcile_pending, sub)
+        except Exception:  # noqa: BLE001 — réconciliation opportuniste, jamais bloquante
+            logger.warning("unipile status: reconcile best-effort échoué", exc_info=True)
         from .tools import unipile
         return json_response(request, unipile.status_for(sub))
 
+    async def unipile_reconcile(request: Request) -> JSONResponse:
+        """Poll-and-bind explicite (webhook v2 non livré) : lie le compte que `sub`
+        vient de connecter. Le dashboard peut l'appeler au retour du hosted-auth
+        (`?unipile=connected`). Idempotent."""
+        sub, err = await authenticate(request, verifier)
+        if err:
+            return err
+        from . import unipile_connect
+        out = await asyncio.to_thread(unipile_connect.reconcile_pending, sub)
+        return json_response(request, out)
+
     async def unipile_disconnect(request: Request) -> JSONResponse:
-        """Oublie l'association compte LinkedIn ↔ user (ne supprime pas le compte
-        chez Unipile, juste le mapping côté oto)."""
+        """SOFT-déconnecte le canal DANS CETTE ORG (ne supprime pas le compte chez
+        Unipile ; la ligne survit comme preuve de propriété → rebind déterministe à la
+        reconnexion). Par-org : le binding est un acte par org (modèle explicite) —
+        et l'affichage ne montrant QUE les bindings de l'org courante, ce qu'on voit
+        est ce qu'on déconnecte (plus de résurgence cross-org, ex-#221)."""
         sub, err = await authenticate(request, verifier)
         if err:
             return err
@@ -213,7 +243,7 @@ def make_routes(
 
     async def unipile_platform_seats(request: Request) -> JSONResponse:
         """[super_admin] Sièges de la **clé plateforme** unipile : tous les comptes
-        présents sur l'instance partagée (Otomata, api25), réconciliés avec leur
+        présents sur l'instance partagée (Otomata, api.unipile.com), réconciliés avec leur
         propriétaire oto via `unipile_accounts`. Un compte sur l'instance NON mappé =
         **orphelin** (créé puis user churné → coûte ~5 €/mois pour rien). Révèle
         l'ownership cross-user → super_admin only. Ne renvoie aucun secret."""
@@ -229,7 +259,7 @@ def make_routes(
                                            "instance_dsn": None, "orphan_count": 0})
         api_key = credentials_store.get_credential(credentials_store.PLATFORM, insts[0]["label"], "unipile")
         from oto.tools.unipile import UnipileClient
-        client = UnipileClient(api_key=api_key)  # dsn=None → env/api25 (instance plateforme)
+        client = UnipileClient(api_key=api_key)  # dsn=None → env/api.unipile.com (instance plateforme)
         try:
             instance = await asyncio.to_thread(client.list_accounts)
         except Exception as e:
@@ -377,6 +407,8 @@ def make_routes(
         Route("/api/admin/connectors/activation", options_handler, methods=["OPTIONS"]),
         Route("/api/me/unipile/connect", unipile_connect, methods=["POST"]),
         Route("/api/me/unipile/connect", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/unipile/reconcile", unipile_reconcile, methods=["POST"]),
+        Route("/api/me/unipile/reconcile", options_handler, methods=["OPTIONS"]),
         Route("/api/unipile/webhook", unipile_webhook, methods=["POST"]),
         Route("/api/me/unipile", unipile_status, methods=["GET"]),
         Route("/api/me/unipile", unipile_disconnect, methods=["DELETE"]),

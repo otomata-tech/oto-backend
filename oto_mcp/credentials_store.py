@@ -46,7 +46,7 @@ ORG = "org"
 MEMBER = "member"
 # Scope PLATEFORME (ADR 0044 §F) : la clé plateforme partagée EST une instance du coffre
 # (fin de la table legacy `platform_keys`). `entity_id` = le label de la clé (N par
-# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config (api_version, dsn).
+# connecteur, cf. l'ex-`UNIQUE(provider,label)`). `meta` porte sa config non-secrète (dsn…).
 PLATFORM = "platform"
 
 
@@ -385,6 +385,18 @@ def get_credential_with_meta(entity_type: str, entity_id: str, connector: str,
             "meta": meta, "set_at": row["set_at"]}
 
 
+def instance_suspended(entity_type: str, entity_id: str, connector: str, account: str = "") -> bool:
+    """`meta.suspended` d'une instance — lecture SANS déchiffrer (chemin cascade/status).
+    Une instance suspendue est SAUTÉE par la résolution (la cascade tombe au barreau
+    suivant) mais reste LISTÉE (KeyStack : « suspendue · Réactiver ») — ADR 0044, lot 2."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT meta->>'suspended' AS s FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (entity_type, entity_id, connector, account)).fetchone()
+    return bool(row) and row["s"] == "true"
+
+
 def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
                 patch: dict, conn=None) -> bool:
     """Merge `patch` dans `meta` (JSONB ||) SANS toucher secret/secret_enc — pour
@@ -572,6 +584,70 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
             (entity_type, entity_id),
         ).fetchall()
         return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
+
+
+def scan_vault_health() -> dict:
+    """Scan de santé du coffre (#72) : parcourt TOUTES les lignes chiffrées de
+    `connector_credentials` et teste leur déchiffrement — SANS jamais garder ni
+    renvoyer le plaintext. Une ligne indéchiffrable = chiffrée avec une master key
+    périmée (`InvalidTag`) ou enveloppe corrompue (cf. mémoire
+    `vault_stale_key_corruption`) → cible de re-pose. Agrège par connecteur et par
+    type d'entité, et liste les lignes KO par leur seule IDENTITÉ (entity_type/
+    entity_id/connector/account — pas de secret).
+
+    Prérequis : la master key doit être chargée. Sans elle, AUCUN déchiffrement
+    n'est possible et 100 % des lignes apparaîtraient faussement périmées → on lève
+    plutôt que rapporter un scan trompeur (le message « impossible » de
+    `crypto.decrypt` ≠ le message « indéchiffrable » d'un vrai InvalidTag)."""
+    if not crypto.encryption_enabled():
+        raise RuntimeError(
+            "OTO_MCP_MASTER_KEY absente — scan de santé impossible (aucun "
+            "déchiffrement possible ; toutes les lignes apparaîtraient périmées)"
+        )
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, connector, account, secret_enc, set_at "
+            "FROM connector_credentials WHERE secret_enc IS NOT NULL "
+            "ORDER BY entity_type, connector, entity_id"
+        ).fetchall()
+    return classify_vault_rows(rows)
+
+
+def classify_vault_rows(rows) -> dict:
+    """Cœur PUR (hors DB) du scan de santé : classe des lignes de credentials en
+    déchiffrant chacune — la valeur est JETÉE (test booléen, jamais de plaintext en
+    sortie). Extrait de `scan_vault_health` (qui garde le SELECT) pour être testable
+    sans PG. Suppose la master key présente : toute exception de `crypto.decrypt` =
+    InvalidTag/corruption (indéchiffrable), pas une master key absente. Chaque `row`
+    porte entity_type/entity_id/connector/account/secret_enc/set_at."""
+    by_connector: dict[str, dict[str, int]] = {}
+    by_entity_type: dict[str, dict[str, int]] = {}
+    undecryptable: list[dict] = []
+    for r in rows:
+        et, eid = r["entity_type"], r["entity_id"]
+        cn, acct = r["connector"], r["account"]
+        bc = by_connector.setdefault(cn, {"total": 0, "undecryptable": 0})
+        be = by_entity_type.setdefault(et, {"total": 0, "undecryptable": 0})
+        bc["total"] += 1
+        be["total"] += 1
+        try:
+            crypto.decrypt(r["secret_enc"], _aad(et, eid, cn, acct))  # jetée
+        except Exception:
+            bc["undecryptable"] += 1
+            be["undecryptable"] += 1
+            undecryptable.append({
+                "entity_type": et, "entity_id": eid, "connector": cn,
+                "account": acct or None, "set_at": r["set_at"],
+            })
+    total = len(rows)
+    return {
+        "total": total,
+        "ok": total - len(undecryptable),
+        "undecryptable": len(undecryptable),
+        "by_connector": by_connector,
+        "by_entity_type": by_entity_type,
+        "undecryptable_rows": undecryptable,
+    }
 
 
 # (list_remote_namespaces / org_remote_namespaces retirés — ADR 0034 B4 : le

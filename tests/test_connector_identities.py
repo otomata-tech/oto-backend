@@ -150,6 +150,44 @@ def test_unipile_hosted_reflects_live_status(monkeypatch):
     assert ids[0]["status"] == "credentials"
 
 
+def test_live_status_map_downgrades_dead_session(monkeypatch):
+    # #236 : sources[].status peut dire OK alors que la SESSION est morte (401
+    # users/me). La sonde account_alive rétrograde en 'disconnected' → fin du
+    # « connecté » menteur. Vivant = on garde le status de compte.
+    class _Cli:
+        def list_accounts(self):
+            return [{"id": "H1", "sources": [{"status": "OK"}]},
+                    {"id": "H2", "sources": [{"status": "OK"}]}]
+
+        def account_alive(self, aid):
+            return aid != "H1"          # H1 mort, H2 vivant
+
+    class _RC:
+        key, config = "K", {}
+    monkeypatch.setattr(access, "resolve_credential",
+                        lambda prov, want=None, sub=None, **k: _RC())
+    monkeypatch.setattr("oto.tools.unipile.make_unipile_client", lambda **k: _Cli())
+    m = connector_identities._unipile_live_status_map("u1")
+    assert m == {"H1": "disconnected", "H2": "OK"}
+
+
+def test_live_status_map_probe_failsoft(monkeypatch):
+    # La sonde account_alive qui LÈVE ne casse rien : on garde le status de compte.
+    class _Cli:
+        def list_accounts(self):
+            return [{"id": "H1", "sources": [{"status": "OK"}]}]
+
+        def account_alive(self, aid):
+            raise RuntimeError("boom")
+
+    class _RC:
+        key, config = "K", {}
+    monkeypatch.setattr(access, "resolve_credential",
+                        lambda prov, want=None, sub=None, **k: _RC())
+    monkeypatch.setattr("oto.tools.unipile.make_unipile_client", lambda **k: _Cli())
+    assert connector_identities._unipile_live_status_map("u1") == {"H1": "OK"}
+
+
 def test_unipile_hosted_status_failsoft_ok(monkeypatch):
     # Lecture live indisponible (panne / clé absente) → fallback « ok », jamais de
     # régression d'affichage (comportement d'avant préservé).

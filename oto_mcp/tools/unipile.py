@@ -1,9 +1,9 @@
 """Unipile — LinkedIn & WhatsApp hébergés (recherche / scrape / messagerie).
 
 Clé résolue par appel via `access.resolve_api_key("unipile")` (keyed, cascade
-user > org). Le dsn (`api<NN>.unipile.com:port`) et l'account_id LinkedIn sont
-résolus côté client (env `UNIPILE_DSN`, défaut api25 ; auto-résolution du 1er
-compte LINKEDIN connecté).
+user > org). Le dsn (API v2 : gateway `api.unipile.com`) et l'account_id LinkedIn
+sont résolus côté client (env `UNIPILE_DSN`, défaut api.unipile.com ;
+auto-résolution du 1er compte LINKEDIN connecté).
 
 Pourquoi à côté du connecteur browser `linkedin` : la session vit chez Unipile
 (vrai Chrome + proxy résidentiel), ce qui contourne l'empreinte TLS et
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -20,7 +21,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, connector_verify, db
+from .. import access, connector_verify, db, status_hints
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,19 @@ _FEED_NS = "linkedin-feed"          # namespace datastore per-user
 _FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
 _FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
 _FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
+
+
+def _canonical_li_identifier(identifier: str) -> str:
+    """Canonicalise un `public_identifier` LinkedIn (vanity slug) : LinkedIn le
+    génère TOUJOURS en ASCII (translittère les accents à la création, p. ex.
+    `nicolas-chéhanne` → `nicolas-chehanne`). Un slug accentué saisi par l'agent
+    fait renvoyer à l'API Unipile un 403 « Insufficient permissions » TROMPEUR
+    (#180) → on retire les diacritiques avant l'appel. No-op sur un slug déjà ASCII
+    ou un provider_id opaque (`ACoAA…`, sans accent) — idempotent."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", identifier)
+        if not unicodedata.combining(c)
+    )
 
 
 def _feed_ttl_seconds() -> int:
@@ -110,31 +124,56 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     de messagerie hébergée doit avoir été accordée à l'org par un admin (comp).
     `org`/`group` explicites = état d'un TIERS contre son propre contexte, sans le
     contexte view-as/session du requérant (anti-fuite, cf. access._UNSET).
-    Scope membre (ADR 0033 B4) : les canaux montrés = ceux rattachés à l'org de
-    contexte (les bindings des autres orgs n'existent pas ici)."""
+    Scope membre (ADR 0033 B4) : `channels` = les canaux liés à CETTE org (le binding
+    est un acte par org — modèle explicite, fin du fallback silencieux #221).
+    `elsewhere` = la PROPOSITION : canaux non liés ici dont le sub a un siège
+    plateforme vivant dans une autre org (même clé partagée ⟹ adoptable au connect)."""
     o = access.current_org(sub) if org is access._UNSET else org
-    accts = {a["provider"]: a for a in db.list_unipile_accounts(sub)
-             if a.get("org_id") == o}
     mode = access.credential_mode_for(sub, "unipile", org=org, group=group)
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # source unique (byo OU option)
-    # Version d'API de la clé RÉSOLUE (v1/v2 selon la BYO) pour l'affichage carte.
-    # Self seulement (pas de résolution cross-contexte pour un tiers) ; best-effort.
-    api_version = "v1"
-    if org is access._UNSET:
-        try:
-            api_version = access.resolve_credential(
-                "unipile", want="auto", sub=sub, emit_on_failure=False
-            ).config.get("api_version") or "v1"
-        except Exception:  # noqa: BLE001 — affichage, jamais bloquant
-            pass
+    all_accts = db.list_unipile_accounts(sub)
+    accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
+    # Adoption possible ? (mode platform = même clé partout ; l'option gate le connect)
+    elsewhere: dict = {}
+    if mode == "platform" and subscribed:
+        for a in sorted((x for x in all_accts
+                         if x.get("platform_seat") and x.get("org_id") != o),
+                        key=lambda x: str(x.get("connected_at") or ""), reverse=True):
+            if a["provider"] not in accts:
+                elsewhere.setdefault(a["provider"], {
+                    "account_id": a["account_id"],
+                    "account_name": a.get("account_name"),
+                    "org_id": a.get("org_id"),
+                })
+    front_by_provider = {prov: front for front, prov in UNIPILE_CHANNELS.items()}
     return {
         "subscribed": subscribed,   # option débloquée (BYO ou comp admin) — gate « connecter »
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origine de la clé)
         "byo": byo,
-        "api_version": api_version,  # v1|v2 de la clé résolue (info carte)
         "channels": _channels_from(accts),
+        # par canal front : compte du sub connecté AILLEURS, adoptable ici en un clic
+        # (le bouton Connect adopte côté backend — l'UI peut l'annoncer).
+        "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
+                      if p in front_by_provider},
     }
+
+
+def _status_pending_action(sub: str, org, group, entry: dict):
+    """Hook `status_hints` (seam générique, lot 2) : la clé résout et l'option est
+    ouverte, mais AUCUN canal n'est lié → l'étape manquante est « Connecte un
+    canal ». La spécificité hosted-account reste ICI, pas dans le modèle commun."""
+    if entry.get("mode") == "forbidden":
+        return None   # pas de clé → les verdicts « à connecter »/« option » suffisent
+    st = status_for(sub, org=org, group=group)
+    if not st["subscribed"]:
+        return None   # option fermée → le front rend déjà « option requise »
+    if any(ch["connected"] for ch in st["channels"].values()):
+        return None
+    return "Connecte un canal"
+
+
+status_hints.register("unipile", _status_pending_action)
 
 
 def admin_status_by_org(sub: str, orgs: list) -> list:
@@ -214,26 +253,17 @@ def unipile_client(provider: str = "LINKEDIN"):
             message=f"Connecte ton compte {provider.title()} sur "
                     "https://manage.oto.cx/console/connections "
                     "avant d'utiliser ces outils."))
-    # DSN apparié à la clé BYO gagnante (chaque clé Unipile est liée à son
-    # sous-domaine), tiré de la config du credential résolu. Clé plateforme →
-    # DSN env/défaut (instance Otomata).
+    # DSN tiré de la config du credential résolu (défaut api.unipile.com côté
+    # oto-core). Clé plateforme → DSN env/défaut (instance Otomata).
     dsn = None if rc.is_platform else rc.config.get("dsn")
-    # Version d'API : v1 par défaut (prod). Opt-in v2 par la config du credential
-    # (`api_version`) — la v2 Unipile impose un compte/clé dédiés, donc la bascule
-    # suit la clé — sinon repli sur l'env `OTO_UNIPILE_API_VERSION` (bascule globale).
-    api_version = (rc.config.get("api_version")
-                   or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1")
-    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn,
-                               api_version=api_version)
+    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn)
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
     """Sonde de connexion Unipile (#133) : `list_accounts()` sur la clé résolue.
 
     Teste l'auth ET le contenu d'un coup — un endpoint compte-agnostique donc pas
-    besoin d'account_id. ⚠️ `config` (dsn/api_version appariés à la clé) est REQUIS
-    pour une clé v2 : sans lui la sonde tape l'endpoint v1 par défaut → 401 sur une
-    clé v2 pourtant valide (#194). On distingue trois cas :
+    besoin d'account_id. On distingue trois cas :
     - clé absente → message actionnable (ne devrait pas arriver : `_fields_for`
       résout le credential en amont, mais on garde le garde-fou) ;
     - clé morte / refusée → `UnipileError` (401/4xx) laissée remonter telle quelle
@@ -250,12 +280,8 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     if not api_key:
         raise ValueError("clé API Unipile absente.")
     cfg = config or {}
-    # dsn + version APPARIÉS à la clé (une clé v2 vit sur un tenant distinct) : sans
-    # ça la sonde tapait toujours le défaut v1/api25 → 401 sur toute clé v2 (#194).
-    client = make_unipile_client(
-        api_key=api_key, dsn=cfg.get("dsn"),
-        api_version=(cfg.get("api_version")
-                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
+    # dsn apparié à la clé (défaut api.unipile.com côté oto-core).
+    client = make_unipile_client(api_key=api_key, dsn=cfg.get("dsn"))
     accounts = client.list_accounts()
     if not accounts:
         raise ValueError(
@@ -301,7 +327,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def unipile_connect_start(channel: str = "linkedin",
-                                    force: bool = False) -> dict:
+                                    force: bool = False,
+                                    premium: Optional[str] = None) -> dict:
         """Démarre la connexion d'un compte de messagerie hébergé (LinkedIn par
         défaut) et renvoie une **`url`** d'auth Unipile à transmettre à l'utilisateur.
 
@@ -316,18 +343,42 @@ def register(mcp: FastMCP) -> None:
         refuse par défaut pour éviter un doublon. Ne passe `force=True` que pour
         connecter un compte RÉELLEMENT différent.
 
+        ⚠️ **LinkedIn premium** : par défaut seul le produit `classic` est connecté.
+        Si la personne a un siège **Recruiter** ou **Sales Navigator** et veut s'en
+        servir (`unipile_search(api="recruiter"/"sales_navigator")`, `unipile_contracts`…),
+        il FAUT le demander ICI via `premium` — sinon ces APIs répondent 403 « out of
+        your scope ». Les deux sont **exclusifs**. Pour AJOUTER un produit à un compte
+        DÉJÀ connecté (classic seul aujourd'hui), relance avec `premium=` — et
+        `force=True` si le garde anti-doublon bloque : le siège existant est
+        **reconnecté** (produit rattaché, PAS de doublon). Si Recruiter répond quand
+        même 403 après ça, c'est côté abonnement Unipile plateforme (API Recruiter à
+        activer), pas la connexion.
+
         Args:
             channel: canal à connecter — linkedin (défaut), whatsapp, telegram,
                 instagram, messenger, twitter.
             force: connecter malgré un compte déjà lié à ce canal ailleurs (#172).
+            premium: produit LinkedIn premium à activer — "recruiter" ou
+                "sales_navigator" (exclusifs, un seul par compte). À ne demander que
+                si la personne a bien le siège LinkedIn correspondant. Ajoute aussi
+                la connexion par cookies au wizard (recommandé pour ces produits).
         """
         from .. import unipile_connect
 
         sub = access.current_user_sub_or_raise()
         try:
-            out = await unipile_connect.hosted_auth_url(sub, channel, force=force)
+            out = await unipile_connect.hosted_auth_url(sub, channel, force=force,
+                                                        premium=premium)
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
+        if out.get("adopted"):
+            # Binding-par-org : le compte déjà connecté ailleurs (même clé partagée)
+            # vient d'être lié à l'org courante — aucun lien à ouvrir.
+            out["instructions"] = (
+                f"Compte {out.get('channel', channel)} déjà connecté ailleurs : il vient "
+                "d'être activé pour cette org — rien d'autre à faire, les outils sont "
+                "utilisables immédiatement.")
+            return out
         out["instructions"] = (
             f"Transmets `url` à l'utilisateur : il ouvre le lien, connecte son compte "
             f"{out.get('channel', channel)}, et la liaison se finalise seule "
@@ -360,14 +411,23 @@ def register(mcp: FastMCP) -> None:
             company: Employeur(s) — noms ou ids de facette.
             location: Localisation(s) — noms ou ids de facette.
             industry: filtre secteur — dict `{include?: [...], exclude?: [...]}` (noms ou ids).
+                ⚠️ `exclude` n'est PAS supporté par `api="classic"` (lève une erreur) :
+                LinkedIn classic n'accepte qu'une liste de secteurs à INCLURE. Pour
+                exclure un secteur, utilise `api="sales_navigator"` ou `"recruiter"`.
             network_distance: degré de relation — `[1]`=1er degré (tes relations N1),
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
                 company?, school?}`.
-            url: URL de recherche LinkedIn/Sales Nav collée du navigateur (si fournie,
-                les autres filtres structurés sont ignorés).
+            url: URL de recherche LinkedIn collée du navigateur (classic / Sales
+                Navigator). Si fournie, les autres filtres structurés sont ignorés ;
+                passe `api=` du produit de l'URL. ⚠️ **Recruiter-from-URL est
+                actuellement peu fiable côté Unipile** (l'endpoint pend → timeout,
+                même avec un searchContextId neuf) : pour Recruiter, préfère la
+                recherche STRUCTURÉE ci-dessous (`api="recruiter"` + keywords/facettes),
+                pas l'URL.
             api: "classic" | "sales_navigator" | "recruiter" (filtres avancés selon
-                l'abonnement LinkedIn du compte connecté).
+                l'abonnement LinkedIn du compte connecté). Recruiter/Sales Nav exigent
+                le siège premium activé au connect (sinon 403 « out of scope »).
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
         return unipile_client().search(
@@ -392,7 +452,7 @@ def register(mcp: FastMCP) -> None:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
         """
-        return unipile_client().get_profile(identifier, sections=sections)
+        return unipile_client().get_profile(_canonical_li_identifier(identifier), sections=sections)
 
     @mcp.tool()
     def unipile_company(identifier: str) -> dict:
@@ -401,7 +461,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             identifier: slug ou id de la page société.
         """
-        return unipile_client().get_company(identifier)
+        return unipile_client().get_company(_canonical_li_identifier(identifier))
 
     @mcp.tool()
     def unipile_chats(limit: int = 20, cursor: Optional[str] = None,

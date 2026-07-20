@@ -2,9 +2,10 @@
 
 **Masqués par défaut** mais **self-activables** (`oto_enable_tool`) — simple
 découvrabilité, pas un contrôle d'accès : pour des surfaces verbeuses/spécifiques
-sans enjeu de sécurité. Deux grains : DEFAULT_HIDDEN_TOOLS (noms individuels) et
-DEFAULT_HIDDEN_NAMESPACES (namespaces entiers, DÉRIVÉ du registre — champ
-`default_hidden` des connecteurs, ex. attio).
+sans enjeu de sécurité. Un seul grain : DEFAULT_HIDDEN_TOOLS (noms individuels).
+Le grain CONNECTEUR (ex-`default_hidden` du registre) a été retiré (ADR 0050) —
+un connecteur hors du socle `default_active` est simplement non-installé
+(sélection 0019, régime strict) et se réinstalle depuis la library.
 
 Modèle de visibilité effective : un tool est visible sauf s'il est désactivé
 (toggle perso) ou masqué par défaut ; `enabled_override` prime pour rendre visible
@@ -13,8 +14,6 @@ ADR 0025, credential) est appliquée AILLEURS — la visibilité n'est PAS une b
 de sécurité (ADR 0031).
 """
 from __future__ import annotations
-
-from . import connectors
 
 # Masqués par défaut mais self-activables (découvrabilité, pas sécurité).
 # `email_send` : envoi d'email per-org. Autz DYNAMIQUE dans le handler (membre de
@@ -25,7 +24,6 @@ from . import connectors
 # utile en qualif sociale type Mūcho) — masquée pour ne pas charger la toolbox `fr`
 # par défaut ; activable à la demande (oto_enable_tool fr_egapro_declaration).
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset({"email_send", "fr_egapro_declaration"})
-DEFAULT_HIDDEN_NAMESPACES = connectors.DEFAULT_HIDDEN_NAMESPACES
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
 # plus se déverrouiller (lister/activer un tool) — plus l'identité `oto_whoami`
@@ -56,8 +54,20 @@ PROTECTED_TOOLS: frozenset[str] = frozenset(
      "feedback", "run_start", "run_finish",
      # Famille projet (ADR 0032) — même raison : le bloc C injecte « Projets
      # récents » et les instructions mandatent « travaille dans un projet »
-     # (oto_use_project).
-     "oto_project", "oto_use_project", "oto_clear_project"})
+     # (oto_use_project). `oto_doc`/`oto_doc_app` = pendant DOCUMENTS du projet
+     # (pages markdown, KB) : même rôle spine de gestion → jamais évinçable, sinon
+     # l'agent ne peut plus écrire les pages d'un projet en pleine tâche (signal #213).
+     "oto_project", "oto_use_project", "oto_clear_project",
+     "oto_doc", "oto_doc_app"})
+
+
+# Namespaces SPINE plateforme, TOUJOURS montés (hors gate connecteur) : datastore
+# (`data_*` — substrat PG natif, cf. providers.py « PAS un connecteur »), boucle
+# d'usage (`run_*`, `feedback`). Trop de noms `data_*` pour les lister → on protège
+# le namespace entier. Le namespace `oto` n'y est PAS (il porte les `oto_admin_*`
+# gatés par rôle) → ses tools spine sont listés par NOM dans PROTECTED_TOOLS.
+# Miroir de meta._NON_DISPATCHABLE / middleware._SPINE_SERVICES.
+PROTECTED_NAMESPACES: frozenset[str] = frozenset({"data", "run", "feedback"})
 
 
 # Testables depuis le dashboard (bouton « tester » de la fiche connecteur) :
@@ -85,7 +95,17 @@ def is_testable(name: str) -> bool:
 
 
 def is_default_hidden(name: str) -> bool:
-    return name in DEFAULT_HIDDEN_TOOLS or namespace_of(name) in DEFAULT_HIDDEN_NAMESPACES
+    return name in DEFAULT_HIDDEN_TOOLS
+
+
+def is_protected(name: str) -> bool:
+    """True si `name` est un tool SPINE anti-lockout : jamais masquable par AUCUN
+    mécanisme (toggle perso, default-hidden, gating connecteur/RBAC/sélection/admin).
+    Source UNIQUE consommée par `is_tool_visible` (couche toggle) ET le garde final
+    de `compute_hidden_tools` (couches de gating) — sans ce garde, un tool protégé
+    n'était sauvé des blocs de gating que parce que son namespace ne résolvait aucun
+    connecteur (effet de bord fragile, signal d’usage #213)."""
+    return name in PROTECTED_TOOLS or namespace_of(name) in PROTECTED_NAMESPACES
 
 
 def is_tool_visible(
@@ -97,7 +117,7 @@ def is_tool_visible(
 
     Override positif perso prime > désactivé perso > masqué-par-défaut > visible.
     Les méta-tools protégés ne sont jamais masqués (anti-lockout)."""
-    if name in PROTECTED_TOOLS:
+    if is_protected(name):
         return True  # anti-lockout : jamais masqué (ni toggle perso, ni default-hidden)
     if name in enabled_override:
         return True

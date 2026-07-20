@@ -1,21 +1,37 @@
-name: CI/CD
+name: Deploy prod
 
-# test → deploy : le deploy DÉPEND d'un CI vert (`needs: test`). Avant, Deploy et CI
-# tournaient en parallèle sur push main → un commit rouge déployait quand même.
-# Désormais un test rouge bloque le deploy. Le job `test` tourne aussi sur PR (= le
-# required check de branch protection). Cf. otomata-private#39 (revue CI/CD).
+# Modèle de release (ADR 0020, refonte 2026-07-20) : un TAG `v*` → PROD.
+# main = tronc/preprod (deploy-canari.yml) ; la prod est un acte explicite = poser un
+# tag `vX.Y.Z` sur le commit de main à promouvoir (`git tag vX.Y.Z && git push origin
+# vX.Y.Z`). Le tag est passé au script serveur root-restreint /opt/deploy/oto-backend.sh
+# (reset --hard <tag> + reinstall oto-core au tag pyproject + restart + healthcheck +
+# rollback). test → deploy (`needs: test`, ceinture+bretelles au tag). Cf. ADR 0020.
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
-  workflow_dispatch: {}
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à déployer en prod (ex: v1.2.3)"
+        required: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_REF: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
+      # Valide le format du tag AVANT tout usage (anti-injection : le ref/input
+      # atterrit ensuite dans un `ref:` de checkout et une commande shell).
+      - name: Validate tag format
+        run: |
+          case "$DEPLOY_REF" in
+            v[0-9]*) echo "tag ok: $DEPLOY_REF" ;;
+            *) echo "tag invalide (attendu vX.Y.Z): $DEPLOY_REF" >&2; exit 1 ;;
+          esac
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -28,17 +44,19 @@ jobs:
 
   deploy:
     needs: test
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, oto-platform]
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
+    env:
+      DEPLOY_REF: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - name: Deploy (build serveur via script root-restreint)
-        # Runner self-hosted sur la box dédiée (user non-root `gha-runner`, sudo
-        # NOPASSWD limité à /opt/deploy/oto-backend.sh) : plus de SSH entrant (le
-        # port 22 de la box est filtré par CrowdSec, qui droppe les IP des runners
-        # GitHub hosted). La logique de deploy (reset + reinstall oto-core au tag +
-        # restart + healthcheck + rollback) vit dans le script serveur — source de
-        # vérité unique. Cf. ADR 0020 + otomata-private#39.
-        run: sudo /opt/deploy/oto-backend.sh
+      - name: Deploy prod (build serveur via script root-restreint)
+        # Runner self-hosted sur la box dédiée (sudo NOPASSWD limité à
+        # /opt/deploy/oto-backend.sh). Le tag validé est passé en argument via env.
+        run: |
+          case "$DEPLOY_REF" in
+            v[0-9]*) : ;;
+            *) echo "tag invalide: $DEPLOY_REF" >&2; exit 1 ;;
+          esac
+          sudo /opt/deploy/oto-backend.sh "$DEPLOY_REF"

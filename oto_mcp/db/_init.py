@@ -16,14 +16,32 @@ from ._schema import _SCHEMA
 
 logger = logging.getLogger(__name__)
 
+# Clé d'advisory lock (arbitraire mais FIXE) sérialisant init_db entre instances
+# qui bootent en parallèle sur la MÊME base (partagée canari/prod). Cf. init_db().
+_INIT_DB_LOCK_ID = 0x0704_0D0B  # « oto init_db », 117_449_483
+
 def init_db() -> None:
     with _connect() as conn:
+        # Un SEUL migrateur à la fois. La DB est PARTAGÉE canari/prod : deux instances
+        # qui bootent en même temps exécutaient CETTE MÊME transaction de DDL (DROP/
+        # ALTER/CREATE INDEX sur les mêmes tables + leurs FK) et s'interbloquaient sur
+        # les locks catalogue (DeadlockDetected in init_db, Sentry). Un advisory lock
+        # de TRANSACTION — pris en PREMIER, relâché au commit du `with` — sérialise le
+        # boot : le 2e attend la fin du 1er, puis traverse la DDL idempotente (devenue
+        # no-op) SEUL, sans entrelacement de locks. Doit précéder tout DDL (y compris
+        # les _migrate_* ci-dessous). Le waiter est ACTIF (pas idle-in-tx) → non coupé
+        # par idle_in_transaction_session_timeout ; il attend le commit du 1er.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_INIT_DB_LOCK_ID,))
         # AVANT _SCHEMA : renomme l'ancienne tool_call_log vers le schéma canonique
         # (sinon CREATE IF NOT EXISTS poserait une tool_calls vide à côté).
         _migrate_tool_call_log(conn)
         # AVANT _SCHEMA : droppe l'org_subscriptions du modèle Stripe retiré
         # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
         _drop_legacy_org_subscriptions(conn)
+        # Recherche sémantique (lot 3) : pgvector requis par la table doc_embeddings
+        # (halfvec/hnsw) créée dans _SCHEMA → l'extension DOIT précéder. Idempotent ;
+        # no-op si déjà installée. pgvector 0.8.2 dispo sur otomata-main (spike 20/07).
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute(_SCHEMA)
         # ADR 0044 §F R5 : clés plateforme + grants migrés en instances du coffre unifié
         # (connector_credentials scope PLATFORM + share_down/meta.rate_limit) → DROP des 3
@@ -33,6 +51,9 @@ def init_db() -> None:
         conn.execute("DROP TABLE IF EXISTS platform_keys")
         # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
         # nouvelles colonnes sur les tables existantes.
+        # Soft-disconnect unipile : la ligne de binding survit (preuve de propriété
+        # durable du compte hébergé → rebind déterministe à la reconnexion).
+        conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMPTZ")
         # ADR 0032 §2 : le lien projet→entité porte un `role` (pourquoi cette entité est ici).
         conn.execute("ALTER TABLE project_links ADD COLUMN IF NOT EXISTS role TEXT")
         # ADR 0032 §4 (B2) : surcharge contextuelle préfaite du lien (connecteur → identité/instructions).
@@ -40,6 +61,63 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Recherche sémantique (lot 3) : outbox d'indexation — `embed_dirty` marque les
+        # pages à (ré)indexer ; le worker embed_worker draine hors event loop. Backfill :
+        # tout ce qui n'a pas encore d'embedding est marqué dirty (idempotent).
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_embed_dirty ON docs(id) WHERE embed_dirty")
+        conn.execute("UPDATE docs SET embed_dirty = TRUE "
+                     "WHERE embed_dirty = FALSE AND id NOT IN (SELECT doc_id FROM doc_embeddings)")
+        # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
+        # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
+        # lignes ont doc_id). Idempotent.
+        conn.execute("ALTER TABLE doc_change_requests ALTER COLUMN doc_id DROP NOT NULL")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS proposed_parent_id BIGINT REFERENCES docs(id) ON DELETE SET NULL")
+        conn.execute("ALTER TABLE doc_change_requests ADD COLUMN IF NOT EXISTS proposed_kind TEXT")
+        conn.execute("DO $$ BEGIN "
+                     "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='dcr_target') THEN "
+                     "ALTER TABLE doc_change_requests ADD CONSTRAINT dcr_target "
+                     "CHECK (doc_id IS NOT NULL OR project_id IS NOT NULL); END IF; END $$")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dcr_requester ON doc_change_requests(requested_by, resolved_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dcr_project ON doc_change_requests(project_id, status)")
+        # Lot 3 Ship 2 : chapô + ordre curé des pages. Backfill des positions par
+        # fratrie (entiers espacés ×16, ordre historique = title) — idempotent
+        # (ne touche que les NULL ; ensuite create_doc/move_doc posent toujours).
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS description TEXT")
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS position INTEGER")
+        conn.execute("""
+            UPDATE docs d SET position = s.rn * 16
+            FROM (SELECT id, ROW_NUMBER() OVER (
+                      PARTITION BY project_id, parent_id ORDER BY title, id) AS rn
+                  FROM docs WHERE position IS NULL) s
+            WHERE d.id = s.id AND d.position IS NULL
+        """)
+        # Lot 3 Ship 1 : index FTS de la recherche transverse (GIN d'expression —
+        # PAS de colonne STORED, qui réécrirait la table sous ACCESS EXCLUSIVE).
+        # Source unique des expressions : db/search.py (index ↔ requête identiques).
+        from . import search as _search
+        for ddl in _search.index_ddl():
+            conn.execute(ddl)
+        # Lot 3 chantier 0.4 : purge du type de lien `doc` (vestige Memento — pointeur
+        # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
+        # prod au comptage du 17/07. Idempotent (0 row ensuite).
+        conn.execute("DELETE FROM project_links WHERE target_type = 'doc'")
+        # Lot 3 chantier 0.3 : le projet KB est ancré PAR ID (fin de l'identification
+        # par nom — renommable, transférable, 2 appels concurrents = 2 KB). ON DELETE
+        # SET NULL : un hard-delete du projet vide l'ancre, kb.py recrée.
+        conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS kb_project_id BIGINT "
+                     "REFERENCES projects(id) ON DELETE SET NULL")
+        # Backfill one-shot par nom (l'ancien marqueur) : pour chaque org sans ancre,
+        # le PLUS ANCIEN projet org-owned vivant nommé « Base de connaissance ».
+        conn.execute("""
+            UPDATE orgs o SET kb_project_id = p.id
+            FROM (SELECT DISTINCT ON (owner_id) owner_id, id FROM projects
+                  WHERE owner_type = 'org' AND name = 'Base de connaissance'
+                    AND archived_at IS NULL
+                  ORDER BY owner_id, id) p
+            WHERE o.kb_project_id IS NULL AND p.owner_id = o.id::text
+        """)
         # ADR 0032 §7 (B5a) : un projet peut être publié comme MODÈLE (template) copiable.
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_template ON projects(is_template) WHERE is_template")
@@ -70,6 +148,17 @@ def init_db() -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS copied_from BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_copied_from "
                      "ON projects(owner_type, owner_id, copied_from) WHERE copied_from IS NOT NULL")
+        # Scope MEMBRE (ADR 0030 amendé 2026-07-17) : un projet naît possédé par
+        # (owner_type='user', owner_id=sub) — PRIVÉ au créateur — MAIS dans le CONTEXTE
+        # d'une org de travail. `context_org_id` porte cette org : elle sépare la PROPRIÉTÉ
+        # (qui = la personne) du CONTEXTE (où = l'org, pour la résolution des credentials
+        # et le scope de liste). L'identité de la plateforme est toujours `(moi, org)`.
+        # NULL = projet non-perso (contexte dérivé de l'owner org/group) OU perso legacy
+        # (résolution repli sur l'org perso, ancien comportement préservé).
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_org_id BIGINT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_member_context "
+                     "ON projects(owner_id, context_org_id) "
+                     "WHERE owner_type = 'user' AND archived_at IS NULL")
         # Retrait du partage public CHIFFRÉ zero-knowledge (`/p/p`), supplanté par le
         # partage NAVIGABLE live sur `<slug>.share.oto.cx` (share_ui). La table ne stockait
         # que du ciphertext irrécupérable (clé jamais côté serveur) → drop sûr, pas de legacy.
@@ -100,20 +189,11 @@ def init_db() -> None:
             "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
             "FROM user_agent_readme WHERE COALESCE(body_md, '') <> '' "
             "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortent de
-        # `*_instructions` (qui ne gardent que les PROCÉDURES + versioning) vers `guides`.
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'org', org_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
-        conn.execute(
-            "INSERT INTO guides (scope, owner_id, slug, delivery, body_md, created_at, updated_at) "
-            "SELECT 'group', group_id::text, 'readme', 'init', body_md, "
-            "       COALESCE(created_at, NOW()), COALESCE(updated_at, NOW()) "
-            "FROM org_group_instructions WHERE slug = 'claude_md' AND COALESCE(body_md, '') <> '' "
-            "ON CONFLICT (scope, owner_id, slug) DO NOTHING")
+        # Barreau 2 : readmes d'org + d'équipe (slug réservé claude_md) sortis de
+        # `*_instructions` vers `guides` — backfills one-shot RETIRÉS (cadrage 10/07,
+        # chantier procédures B1) : ils ont tourné en prod à chaque boot depuis le
+        # 06/07, et celui d'équipe lisait `org_group_instructions` (jumelle vouée au
+        # DROP — un boot post-drop aurait cassé).
         # ADR 0032 §6 / 0029 (B6) : mode typé optionnel d'un namespace de datastore.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS schema JSONB")
         # gap #4a : partage public d'un doc (token de lien public, lookup indexé).
@@ -144,6 +224,67 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE doctrine_library ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb")
+        # Chantier procédures (cadrage 10/07) B1 : la procédure devient une ressource
+        # possédée par un SCOPE — colonnes owner_type/owner_id sur la table ET ses
+        # revisions ('org' aujourd'hui ; les lignes GROUP arrivent en B2 par fusion
+        # d'org_group_instructions, ids tirés d'org_instructions_id_seq). Le nouvel
+        # ARBITRE d'unicité est (owner_type, owner_id, slug) : le code écrit dessus dès
+        # B1 ; la PK legacy (org_id, slug) ne tombe qu'en B2, une fois ce code PROMU en
+        # prod (DB partagée canari/prod — la prod actuelle fait ON CONFLICT (org_id, slug)).
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instructions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instructions_owner_slug "
+                     "ON org_instructions(owner_type, owner_id, slug)")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org'")
+        conn.execute("ALTER TABLE org_instruction_revisions ADD COLUMN IF NOT EXISTS owner_id TEXT")
+        conn.execute("UPDATE org_instruction_revisions SET owner_id = org_id::text WHERE owner_id IS NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_org_instruction_revisions_owner "
+                     "ON org_instruction_revisions(owner_type, owner_id, slug, version)")
+        # Chantier procédures B2 (le B1 est PROMU prod — la prod écrit sur l'arbitre
+        # owner) : la PK legacy (org_id, slug) tombe → les lignes GROUP peuvent
+        # coexister avec les lignes org de la même org parente. Puis FUSION de la
+        # jumelle : copie des procédures d'équipe (ids tirés d'org_instructions_id_seq
+        # — la MÊME séquence, zéro collision avec les refs project_links/grants), à
+        # CHAQUE boot tant que la jumelle existe (newer-wins : rattrape les écritures
+        # prod de la fenêtre) ; slots='[]' (colonne absente côté équipe). Le DROP de
+        # la jumelle = Lot C, une fois CE code promu (la prod Lot A la lit encore).
+        conn.execute("ALTER TABLE org_instructions ALTER COLUMN owner_id SET NOT NULL")
+        conn.execute("ALTER TABLE org_instruction_revisions ALTER COLUMN owner_id SET NOT NULL")
+        conn.execute("ALTER TABLE org_instructions DROP CONSTRAINT IF EXISTS org_instructions_pkey")
+        conn.execute("ALTER TABLE org_instruction_revisions DROP CONSTRAINT IF EXISTS org_instruction_revisions_pkey")
+        if conn.execute("SELECT to_regclass('org_group_instructions') AS t").fetchone()["t"]:
+            conn.execute("""
+                INSERT INTO org_instructions
+                    (id, org_id, owner_type, owner_id, slug, title, description,
+                     body_md, slots, version, set_by, created_at, updated_at)
+                SELECT nextval('org_instructions_id_seq'), og.org_id, 'group',
+                       g.group_id::text, g.slug, g.title, g.description, g.body_md,
+                       '[]'::jsonb, g.version, g.set_by, g.created_at, g.updated_at
+                  FROM org_group_instructions g JOIN org_groups og ON og.id = g.group_id
+                ON CONFLICT (owner_type, owner_id, slug) DO UPDATE SET
+                    title = EXCLUDED.title, description = EXCLUDED.description,
+                    body_md = EXCLUDED.body_md, version = EXCLUDED.version,
+                    set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at
+                 WHERE EXCLUDED.updated_at > org_instructions.updated_at
+            """)
+        if conn.execute("SELECT to_regclass('org_group_instruction_revisions') AS t").fetchone()["t"]:
+            conn.execute("""
+                INSERT INTO org_instruction_revisions
+                    (org_id, owner_type, owner_id, slug, version, title, description,
+                     body_md, slots, set_by, created_at)
+                SELECT og.org_id, 'group', r.group_id::text, r.slug, r.version, r.title,
+                       r.description, r.body_md, '[]'::jsonb, r.set_by, r.created_at
+                  FROM org_group_instruction_revisions r
+                  JOIN org_groups og ON og.id = r.group_id
+                ON CONFLICT (owner_type, owner_id, slug, version) DO NOTHING
+            """)
+        # Lot C (le Lot B est PROMU prod — plus aucun code ne lit/écrit les jumelles) :
+        # DROP, juste après la copie finale ci-dessus (même boot → la dernière écriture
+        # prod de la fenêtre est rattrapée). Les copies gardées to_regclass restent :
+        # no-op permanents, filet des environnements en retard.
+        conn.execute("DROP TABLE IF EXISTS org_group_instruction_revisions")
+        conn.execute("DROP TABLE IF EXISTS org_group_instructions")
         # ADR 0035 (B2) : un lien peut BINDER un slot par NOM — vocabulaire DU PROJET
         # (deux procédures liées partageant `sortie` partagent le binding). Unicité
         # (projet, slot) = zéro ambiguïté par nommage explicite, refusée au link (409).
@@ -255,30 +396,24 @@ def init_db() -> None:
         conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS group_role TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invitations_group "
                      "ON org_invitations(group_id) WHERE group_id IS NOT NULL")
-        # Datastore multi-compte (oto-backend#9) : compte Google propriétaire du sheet.
-        conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_email TEXT")
-        # Datastore = spine natif PG (ADR 0016) : `spreadsheet_id` devient une
-        # relique Sheets (nullable, plus écrite). DROP des colonnes Sheets différé
-        # post-backfill — ici on lève juste le NOT NULL pour que les créations PG
-        # natives passent. Idempotent.
-        conn.execute("ALTER TABLE user_datastores ALTER COLUMN spreadsheet_id DROP NOT NULL")
-        conn.execute("ALTER TABLE datastore_shares ALTER COLUMN spreadsheet_id DROP NOT NULL")
-        # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par
-        # la ressource. `owner_type` défaut 'user' (classeur perso, l'existant) ;
-        # `owner_id` = sub pour un user, org.id::text pour un classeur d'org.
-        # Backfill owner_id ← sub (idempotent : ne touche que les lignes non backfillées).
+        # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par la
+        # ressource (`owner_type` défaut 'user', `owner_id` = sub | org.id | group.id).
+        # Phase H (cadrage 10/07) — B1 (promu prod 10/07) a purgé toute référence aux
+        # reliques du cutover ; **B2** (ci-dessous) droppe les objets morts. Idempotent,
+        # sûr sur la DB partagée : plus aucun code (canari NI prod) ne les lit.
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'user'")
         conn.execute("ALTER TABLE user_datastores ADD COLUMN IF NOT EXISTS owner_id TEXT")
-        conn.execute("UPDATE user_datastores SET owner_id = sub WHERE owner_id IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_datastores_owner "
                      "ON user_datastores(owner_type, owner_id)")
-        # Swap de contrainte (ADR 0030) : la clé logique passe de (sub, namespace) à
-        # (owner_type, owner_id, namespace) — requis pour les classeurs org-owned.
-        # `sub` devient une relique nullable (DROP de la colonne différé à la Phase H).
-        conn.execute("ALTER TABLE user_datastores ALTER COLUMN sub DROP NOT NULL")
-        conn.execute("ALTER TABLE user_datastores DROP CONSTRAINT IF EXISTS user_datastores_sub_namespace_key")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_datastores_owner_ns "
                      "ON user_datastores(owner_type, owner_id, namespace)")
+        # Phase H B2 : DROP des reliques per-sub/Sheets (ADR 0016/0030, différé depuis
+        # le cutover). `datastore_shares` = remplacée par resource_grants (backfillée
+        # à chaque boot depuis 0030, données longtemps migrées).
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS sub")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS spreadsheet_id")
+        conn.execute("ALTER TABLE user_datastores DROP COLUMN IF EXISTS owner_email")
+        conn.execute("DROP TABLE IF EXISTS datastore_shares")
         # ADR 0048 — le grant possède un RÔLE (viewer/editor/manager). Ajout de la colonne
         # + backfill depuis `permission` (read→viewer, write→editor ; jamais manager en
         # backfill : la gouvernance grantable est un acte explicite). `permission` reste
@@ -288,18 +423,6 @@ def init_db() -> None:
         conn.execute("UPDATE resource_grants SET role = "
                      "CASE permission WHEN 'read' THEN 'viewer' ELSE 'editor' END "
                      "WHERE role NOT IN ('viewer', 'manager')")
-        # Backfill datastore_shares → resource_grants (ADR 0030). One-shot idempotent :
-        # ON CONFLICT DO NOTHING + clé stable resource_id = user_datastores.id::text.
-        # On joint sur (owner_sub, namespace) pour retrouver l'id du namespace.
-        conn.execute(
-            "INSERT INTO resource_grants "
-            "(resource_type, resource_id, principal_type, principal_id, permission, granted_at) "
-            "SELECT 'datastore_namespace', d.id::text, 'user', s.shared_with_sub, "
-            "       s.permission, s.created_at "
-            "FROM datastore_shares s "
-            "JOIN user_datastores d ON d.sub = s.owner_sub AND d.namespace = s.namespace "
-            "ON CONFLICT DO NOTHING"
-        )
         # Préférence de langue de l'UI dashboard (2026-07-07) : NULL = pas de
         # préférence explicite (le front retombe sur la langue du navigateur).
         # Validée à 'en'|'fr' en amont (capacité me.locale.set) ; colonne libre.
@@ -422,12 +545,45 @@ def init_db() -> None:
         from .. import connector_activation as _conn_act
         _conn_act.init_schema(conn)
         _conn_act.seed_initial(conn)
+        # Chantier ACL (cadrage 10/07, B1) : copie legacy → `connector_acl` unifiée,
+        # à CHAQUE boot tant que les tables legacy existent (fenêtre canari/prod :
+        # la prod écrit encore les legacy jusqu'à promotion). Gardée `to_regclass` :
+        # après le DROP (B2), no-op. Grants immutables → DO NOTHING suffit (une
+        # révocation prod pendant la fenêtre ressuscite jusqu'à promotion — assumé,
+        # fenêtre de quelques minutes).
+        if conn.execute("SELECT to_regclass('org_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'org', org_id::text, connector, principal_type, principal_id, "
+                "       granted_by, granted_at FROM org_connector_access "
+                "ON CONFLICT DO NOTHING")
+        if conn.execute("SELECT to_regclass('group_connector_access') AS t").fetchone()["t"]:
+            conn.execute(
+                "INSERT INTO connector_acl (scope_type, scope_id, connector, "
+                "                           principal_type, principal_id, granted_by, granted_at) "
+                "SELECT 'group', group_id::text, connector, 'user', principal_sub, "
+                "       granted_by, granted_at FROM group_connector_access "
+                "ON CONFLICT DO NOTHING")
+        # Chantier ACL B2 (le B1 est PROMU prod — plus AUCUN code ne lit les 4 tables
+        # legacy, les copies ci-dessus sont gardées to_regclass) : DROP. Dernière
+        # copie exécutée juste avant, même boot — rien ne se perd.
+        conn.execute("DROP TABLE IF EXISTS org_connector_access")
+        conn.execute("DROP TABLE IF EXISTS group_connector_access")
+        conn.execute("DROP TABLE IF EXISTS connector_activation")
+        conn.execute("DROP TABLE IF EXISTS group_connector_activation")
         # Sélection de connecteurs par membre (ADR 0019, B1) — table seule, aucun
         # lecteur encore (canari, no-behavior-change) ; le câblage lecture/mutation
         # (capacité connectors.me/select/pause) et le masquage pause au middleware
         # suivent en B3/B4/B5.
         from .. import connector_selection as _conn_sel
         _conn_sel.init_schema(conn)
+        # ADR 0050 : passage au régime nominal « non-sélectionné = masqué ».
+        # Backfill ONE-SHOT (sentinelle) des (sub, org) pré-existants avec ce
+        # qu'ils VOYAIENT (exposé − ex-default_hidden) — zéro changement de
+        # toolbox pour l'existant ; les pairs créés ensuite reçoivent le SOCLE
+        # curé au seed lazy (session_visibility).
+        _conn_sel.backfill_preexisting(conn)
     # Borne la volumétrie du journal de monitoring (hors transaction schéma).
     try:
         from .usage import prune_tool_calls

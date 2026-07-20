@@ -21,6 +21,23 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Palier organization (= périmètre / store serveur) — table RACINE, définie en
+-- tête car des tables plus bas la référencent (`unipile_accounts` etc.) : sur une
+-- base VIERGE, PostgreSQL crée les tables dans l'ordre du DDL et une FK vers une
+-- table non encore créée échoue (`relation "orgs" does not exist`, #151). Détail
+-- du palier (appartenance, credentials) au bloc org_members plus bas.
+CREATE TABLE IF NOT EXISTS orgs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    logo_url TEXT,
+    domain TEXT,
+    industry TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS usage (
     sub TEXT NOT NULL,
     tool TEXT NOT NULL,
@@ -177,53 +194,44 @@ CREATE TABLE IF NOT EXISTS legal_acceptances (
 );
 
 
--- RBAC connecteur INTERNE à l'org (ADR 0025) : l'org_admin réserve un connecteur à
--- un sous-ensemble de son org (départements et/ou membres). La PRÉSENCE de ≥1 ligne
--- pour (org_id, connector) ⟹ connecteur RESTREINT dans l'org (deny-by-default) ;
--- absence ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user.
--- DUR : enforced en visibilité (session_visibility) + au call-time (resolve_credential
--- via access.require_connector_access). Ouvert par défaut = zéro disruption.
-CREATE TABLE IF NOT EXISTS org_connector_access (
-    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+-- RBAC connecteur — table UNIQUE `connector_acl` (chantier ACL, cadrage 10/07 :
+-- fusion d'org_connector_access + group_connector_access ; le grain est une COLONNE
+-- de scope, pas une table par grain). Sémantique INCHANGÉE par scope :
+-- · scope 'org' (ADR 0025) : l'org_admin réserve un connecteur à un sous-ensemble de
+--   son org. ≥1 ligne pour (scope, connector) ⟹ RESTREINT (deny-by-default) ; absence
+--   ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user. DUR :
+--   enforced en visibilité + au call-time (access.require_connector_access) ;
+--   l'escalade org_admin transcende (0044 §G). Ouvert par défaut = zéro disruption.
+-- · scope 'group' (ADR 0012 B2, restrict-only) : narrowing pur de l'ACL d'org — le
+--   principal est toujours un MEMBRE ('user', sub) ; l'équipe restreint davantage,
+--   ne débloque jamais ce que l'org autorise.
+-- (Les tables legacy vivent encore en base jusqu'au B2 — copiées au boot par _init,
+--  DROP une fois ce code promu en prod : DB partagée canari/prod.)
+CREATE TABLE IF NOT EXISTS connector_acl (
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'group')),
+    scope_id TEXT NOT NULL,       -- org.id / group.id en texte
     connector TEXT NOT NULL,
     principal_type TEXT NOT NULL CHECK (principal_type IN ('group', 'user')),
     principal_id TEXT NOT NULL,   -- group_id (en texte) ou sub
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, connector, principal_type, principal_id)
-);
-
--- ACL connecteur au grain ÉQUIPE (ADR 0012 B2, restrict-only) : un chef d'équipe
--- réserve un connecteur à un sous-ensemble de membres de SON équipe. Intersection
--- avec l'ACL d'org (narrowing pur — l'équipe ne peut que RESTREINDRE davantage, jamais
--- débloquer ce que l'org autorise). ≥1 ligne ⟹ connecteur réservé dans l'équipe ;
--- absence ⟹ ouvert à toute l'équipe. Le principal est toujours un MEMBRE (sub).
-CREATE TABLE IF NOT EXISTS group_connector_access (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    connector TEXT NOT NULL,
-    principal_sub TEXT NOT NULL,
-    granted_by TEXT,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, connector, principal_sub)
+    PRIMARY KEY (scope_type, scope_id, connector, principal_type, principal_id)
 );
 
 -- Datastore = spine natif PG (ADR 0016). `user_datastores` = registre de
 -- namespaces ; les rows vivent dans `datastore_rows` (JSONB). Propriété portée par
--- `(owner_type, owner_id)` (ADR 0030 : user/org/group). `sub` est une relique de
--- l'ancien modèle per-sub (nullable, DROP différé Phase H) ; `spreadsheet_id`/
--- `owner_email` sont des reliques Sheets (nullable, DROP différé).
+-- `(owner_type, owner_id)` (ADR 0030 : user/org/group). Phase H (cadrage 10/07)
+-- TERMINÉE : les reliques per-sub/Sheets (`sub`, `spreadsheet_id`, `owner_email`,
+-- table `datastore_shares`) sont purgées du code (B1, promu prod) et DROPpées (B2).
 -- ⚠️ Les INDEX sur owner_type/owner_id NE sont PAS créés ici : sur une base
 -- existante, `CREATE TABLE IF NOT EXISTS` est un no-op et ces colonnes n'existent
 -- pas encore quand `_SCHEMA` s'exécute (ajoutées plus bas par ALTER). Index +
 -- contrainte d'unicité owner créés dans init_db APRÈS l'ALTER (couvre fresh ET existant).
 CREATE TABLE IF NOT EXISTS user_datastores (
     id BIGSERIAL PRIMARY KEY,
-    sub TEXT,
     owner_type TEXT NOT NULL DEFAULT 'user',
     owner_id TEXT,
     namespace TEXT NOT NULL,
-    spreadsheet_id TEXT,
-    owner_email TEXT,
     -- Mode TYPÉ optionnel (ADR 0032 §6 / 0029) : NULL = table libre (colonnes
     -- découvertes des rows) ; sinon un schéma déclaré
     -- {fields:[{key,label?,type?,role?}]} où role ∈ title|badge|metric|status|
@@ -249,17 +257,8 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     PRIMARY KEY (ns_id, row_id)
 );
 
-CREATE TABLE IF NOT EXISTS datastore_shares (
-    id BIGSERIAL PRIMARY KEY,
-    owner_sub TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    spreadsheet_id TEXT,
-    shared_with_sub TEXT NOT NULL,
-    permission TEXT NOT NULL DEFAULT 'write',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(owner_sub, namespace, shared_with_sub)
-);
-CREATE INDEX IF NOT EXISTS idx_datastore_shares_recipient ON datastore_shares(shared_with_sub, namespace);
+-- (`datastore_shares` — legacy remplacée par `resource_grants`, ADR 0030 — DROPpée
+--  en Phase H B2, 10/07.)
 
 -- Projet = couche d'organisation (modèle produit 2026-06-27). Conteneur de travail
 -- POSSÉDÉ (owner_type/owner_id, ADR 0030) : nom + brief (doc d'entrée inline pour
@@ -342,6 +341,10 @@ CREATE TABLE IF NOT EXISTS docs (
     title TEXT NOT NULL,
     body_md TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'doc',
+    -- Lot 3 Ship 2 : chapô (sous-titre curé, fallback dérivé à la lecture) + ordre
+    -- curé de la fratrie (entiers espacés ×16, réindexés atomiquement au move).
+    description TEXT,
+    position INTEGER,
     -- Partage public (gap #4a) : NULL = privé ; sinon un token aléatoire qui sert
     -- de lien public en lecture seule (/api/public/docs/{token}). Index unique créé
     -- dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).
@@ -373,7 +376,12 @@ CREATE INDEX IF NOT EXISTS idx_doc_revisions_doc ON doc_revisions(doc_id, create
 -- `status` ∈ pending|accepted|rejected. CASCADE sur la suppression du doc.
 CREATE TABLE IF NOT EXISTS doc_change_requests (
     id BIGSERIAL PRIMARY KEY,
-    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    -- Ship 3 : `doc_id` NULL = proposition de CRÉATION (la page n'existe pas encore) ;
+    -- `project_id` porte alors le projet cible + `proposed_parent_id`/`proposed_kind`.
+    doc_id BIGINT REFERENCES docs(id) ON DELETE CASCADE,
+    project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+    proposed_parent_id BIGINT REFERENCES docs(id) ON DELETE SET NULL,
+    proposed_kind TEXT,
     requested_by TEXT,
     proposed_title TEXT,
     proposed_body_md TEXT NOT NULL DEFAULT '',
@@ -381,8 +389,33 @@ CREATE TABLE IF NOT EXISTS doc_change_requests (
     status TEXT NOT NULL DEFAULT 'pending',
     resolved_by TEXT,
     resolved_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT dcr_target CHECK (doc_id IS NOT NULL OR project_id IS NOT NULL)
 );
+
+-- Backlinks [[…]] (lot 3 Ship 4) — graphe LÉGER de pages qui se citent. Table
+-- DÉRIVÉE (reconstructible par re-parse des bodies) : `from_doc` cite `to_doc`.
+-- Résolue contre le projet courant + la KB de l'org (précédence projet > KB) ;
+-- purgée en cascade au delete d'un des deux docs.
+CREATE TABLE IF NOT EXISTS doc_links (
+    from_doc BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    to_doc   BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    PRIMARY KEY (from_doc, to_doc)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_links_to ON doc_links(to_doc);
+
+-- Embeddings des pages (lot 3, recherche sémantique V2) — une ligne par doc,
+-- mistral-embed 1024 en halfvec. `content_sha` = idempotence (ré-embed seulement si
+-- le texte change). Table NEUVE → l'index HNSW ici est sûr (créée juste au-dessus).
+CREATE TABLE IF NOT EXISTS doc_embeddings (
+    doc_id BIGINT PRIMARY KEY REFERENCES docs(id) ON DELETE CASCADE,
+    content_sha TEXT NOT NULL,
+    embedding halfvec(1024) NOT NULL,
+    model TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_embeddings_hnsw
+    ON doc_embeddings USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté
@@ -487,6 +520,12 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     -- par org — revendeur/passthrough). FALSE en BYO (l'user paie son instance).
     platform_seat BOOLEAN NOT NULL DEFAULT FALSE,
     connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- SOFT disconnect : la ligne survit (disconnected_at posé) au lieu d'être
+    -- supprimée. C'est la PREUVE DE PROPRIÉTÉ durable du compte : une reconnexion
+    -- qui RÉUTILISE le même account_id chez Unipile (comportement observé) est
+    -- rebindée déterministiquement au même sub — sans elle, l'heuristique du
+    -- poll-and-bind (compte créé APRÈS le pending) rate toute réutilisation.
+    disconnected_at TIMESTAMPTZ,
     PRIMARY KEY (sub, org_id, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_unipile_accounts_org ON unipile_accounts(org_id);
@@ -539,24 +578,12 @@ CREATE TABLE IF NOT EXISTS unipile_operated_accounts (
     PRIMARY KEY (sub, provider)
 );
 
--- Palier organization (= périmètre / store serveur). Une org possède des
--- credentials propres (coffre `connector_credentials`, entity_type='org') et
--- des opérateurs (org_members). Source de vérité de l'appartenance = ces tables, résolues par
--- `sub` — JAMAIS un claim du token
--- Logto (le token MCP ne porte que sub). Cf. project_oto_mcp_org_tier.
--- NB barreau 1 : tables seules, aucun helper ne les lit encore (canari de
--- déploiement). Le câblage (resolve_api_key, visibilité, meta-tools) suit.
-CREATE TABLE IF NOT EXISTS orgs (
-    id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    logo_url TEXT,
-    domain TEXT,
-    industry TEXT NOT NULL DEFAULT '',
-    location TEXT NOT NULL DEFAULT '',
-    created_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Palier organization : la table `orgs` est définie en TÊTE du schéma (près de
+-- `users`, tables racines) — cf. la note là-bas (#151). Une org possède des
+-- credentials propres (coffre `connector_credentials`, entity_type='org') et des
+-- opérateurs (org_members) ; source de vérité de l'appartenance = ces tables,
+-- résolues par `sub` — JAMAIS un claim du token Logto (le token MCP ne porte que
+-- sub). Cf. project_oto_mcp_org_tier.
 
 -- org_role : 'org_admin' | 'org_member' (validé en code, pas par CHECK, comme
 -- users.role). is_active = org courante du sub (au plus une TRUE par sub,
@@ -641,15 +668,19 @@ CREATE TABLE IF NOT EXISTS guides (
     UNIQUE (scope, owner_id, slug)
 );
 
--- Instructions markdown d'une org : doctrine de base + bibliothèque de skills.
--- Modèle unifié — chaque instruction est identifiée par `slug` ; le slug réservé
--- 'claude_md' = la doctrine de base servie d'office par oto_procedure(op='get'), les
--- autres = des skills chargés à la demande (list/search/get). En CLAIR (prose,
--- pas un credential → hors coffre chiffré). Même principe d'accès que les
--- secrets d'org : résolu par l'org active du sub (get_active_org). `version` est
+-- Procédures (doctrines/skills) — table UNIQUE, possédée par un SCOPE (chantier
+-- procédures, cadrage 10/07) : `owner_type/owner_id` ('org' = procédure d'org,
+-- 'group' = procédure d'équipe à la fusion B2 d'org_group_instructions ; `org_id`
+-- reste l'org PARENTE dans les deux cas — dénormalisé, FK + prédicats). Chaque
+-- procédure est identifiée par `slug` dans son scope ; l'unicité vivante =
+-- (owner_type, owner_id, slug) (index unique posé par _init ; la PK legacy
+-- (org_id, slug) tombe en B2). En CLAIR (prose, hors coffre). `version` est
 -- incrémenté à chaque écriture, qui archive un snapshot dans la table sœur.
+-- (Le readme `claude_md` vit dans `guides`, ADR 0042 — plus une ligne d'ici.)
 CREATE TABLE IF NOT EXISTS org_instructions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL DEFAULT 'org',
+    owner_id TEXT NOT NULL,
     slug TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
@@ -662,13 +693,19 @@ CREATE TABLE IF NOT EXISTS org_instructions (
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, slug)
+    -- PK NOMMÉE : le DROP de la PK legacy (org_id, slug) dans _init cible
+    -- `org_instructions_pkey` — un nom distinct protège l'install fraîche.
+    CONSTRAINT org_instructions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);
 
 -- Historique : un snapshot par version posée (revert + audit). Append-only.
+-- Porte le même scope owner que la table vivante (unicité vivante :
+-- (owner_type, owner_id, slug, version), index unique posé par _init).
 CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL DEFAULT 'org',
+    owner_id TEXT NOT NULL,
     slug TEXT NOT NULL,
     version INTEGER NOT NULL,
     title TEXT NOT NULL DEFAULT '',
@@ -677,7 +714,7 @@ CREATE TABLE IF NOT EXISTS org_instruction_revisions (
     slots JSONB NOT NULL DEFAULT '[]'::jsonb,
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, slug, version)
+    CONSTRAINT org_instruction_revisions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug, version)
 );
 
 -- Bibliothèque PUBLIQUE de doctrines (marketplace de skills/templates). Chaque
@@ -750,35 +787,9 @@ CREATE INDEX IF NOT EXISTS idx_org_group_members_sub ON org_group_members(sub);
 CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
     ON org_group_members(sub) WHERE is_active;
 
--- Doctrine + skills d'un GROUPE (miroir d'org_instructions au grain groupe).
--- Servie en COMPLÉMENT de la doctrine d'org par oto_procedure(op='get') quand l'user a
--- un groupe actif. Même modèle versionné (slug réservé 'claude_md' = base ;
--- autres = skills). En clair (prose, hors coffre chiffré).
-CREATE TABLE IF NOT EXISTS org_group_instructions (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    slug TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    body_md TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-    set_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, slug)
-);
-CREATE INDEX IF NOT EXISTS idx_org_group_instructions_group ON org_group_instructions(group_id);
-
-CREATE TABLE IF NOT EXISTS org_group_instruction_revisions (
-    group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
-    slug TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    body_md TEXT NOT NULL,
-    set_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, slug, version)
-);
+-- (Les procédures d'ÉQUIPE vivent dans `org_instructions` avec owner_type='group'
+--  depuis la fusion du chantier procédures — cadrage 10/07, Lot B/C. Les tables
+--  jumelles org_group_instructions/+revisions sont DROPpées en Lot C.)
 
 -- Coffre unique des credentials per-entité (user OU org OU group) : clés API,
 -- sessions linkedin/crunchbase, OAuth Google multi-compte, platform keys.

@@ -205,6 +205,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         instructions.seed_platform_blocks()
     except Exception as e:
         logger.warning("seed_platform_blocks at _build_mcp failed: %s", e)
+    # Seed des guides plateforme on-demand depuis les fichiers `guides/*.md`
+    # (idempotent — la DB est la source de vérité éditable, ADR 0042 tout-DB).
+    try:
+        from . import guide_store
+        guide_store.seed_platform_guides()
+    except Exception as e:
+        logger.warning("seed_platform_guides at _build_mcp failed: %s", e)
 
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:
@@ -408,6 +415,11 @@ def main():
         if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
             from . import scheduler
             _bg_loops.append(scheduler.run_scheduler_loop)
+        # Indexation sémantique (lot 3) : draine l'outbox embed_dirty hors event loop.
+        # No-op sans MISTRAL_API_KEY (la recherche reste lexicale).
+        if os.environ.get("OTO_EMBED_WORKER_ENABLED", "1") != "0":
+            from . import embed_worker
+            _bg_loops.append(embed_worker.run_embed_loop)
         from . import billing as _billing
         if _billing.is_enabled() and os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
             # échéances d'abonnement + réconciliation (ADR 0043 B3) — gaté sur le

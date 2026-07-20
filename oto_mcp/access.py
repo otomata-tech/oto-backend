@@ -39,12 +39,12 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from . import connectors, credentials_store, db, group_store, org_store, session_org
+from . import connectors, credentials_store, db, group_store, org_store, session_org, status_hints
 from .auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
@@ -609,6 +609,124 @@ def _resolve_platform_grant(sub, provider, active_org) -> "dict | None":
     return {**g, "secret": secret}
 
 
+# ── Walker de cascade unique ───────────────────────────────────────────────────
+# La cascade `perso > cross-org > équipe active > org > plateforme` était écrite à
+# la main à 6 endroits (résolution, mode, status ×2, anonyme, sonde de publication)
+# — chaque barreau nouveau devait être reporté N fois, et chaque oubli faisait
+# MENTIR une surface (vécu 2026-07-16 : boucle fields de status_for restée
+# user-only ; 2026-07-07 : règle option recopiée 3×, divergée). Ici : UNE marche,
+# paramétrée par la SONDE — `presence` (pas de déchiffrement, batchable /api/me)
+# ou `fetch` (ne déchiffre que le gagnant). Toute évolution de cascade se fait ici
+# et nulle part ailleurs.
+
+@dataclass(frozen=True)
+class CascadeRung:
+    """Un barreau GAGNANT de la marche : niveau + entité + charge de la sonde
+    (`payload` = secret/grant en fetch, True/meta en présence). `via` distingue la
+    clé membre LOCALE (éditable ici) de l'instance personnelle cross-org (#172)."""
+    mode: str                       # user | group | org | platform
+    entity_type: Optional[str]      # credentials_store.MEMBER | 'group' | 'org' | PLATFORM
+    entity_id: Optional[str]
+    payload: object
+    account: str = ""
+    via: str = "local"              # local | cross_org
+
+
+@dataclass(frozen=True)
+class CascadeProbe:
+    """Sonde d'un barreau — même interface pour présence et fetch. `member` renvoie
+    `(payload, account)` ou None (le fetch de résolution y encapsule sa sélection
+    multi-compte, McpErrors comprises) ; `member_cross` est toujours mono-compte ;
+    `platform` renvoie le grant (meta ou résolu) ou None."""
+    member: Callable[[str, int, str], Optional[tuple]]
+    member_cross: Callable[[str, int, str], Optional[object]]
+    group: Callable[[int, str], Optional[object]]
+    org: Callable[[int, str], Optional[object]]
+    platform: Callable[[Optional[str], str, Optional[int]], Optional[dict]]
+
+
+# Une instance membre SUSPENDUE (lot 2 / ADR 0044 §KeyStack) est repliée dans les
+# sondes réelles : la clé existe au coffre mais la cascade la traite comme absente
+# → la résolution ET le statut sautent le barreau membre (le niveau du dessous prend
+# le relais). Elle reste listée par `oto_instance op=list` (KeyStack), réactivable.
+PRESENCE_PROBE = CascadeProbe(
+    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p)
+                            and not db.member_instance_suspended(s, o, p) else None),
+    member_cross=lambda s, o, p: (True if db.has_member_api_key(s, o, p) else None),
+    group=lambda g, p: (True if group_store.has_group_secret(g, p) else None),
+    org=lambda o, p: (True if org_store.has_org_secret(o, p) else None),
+    platform=lambda s, p, o: _platform_grant_meta(s, p, o),
+)
+
+FETCH_PROBE = CascadeProbe(
+    member=lambda s, o, p: ((lambda k: (k, "") if k
+                             and not db.member_instance_suspended(s, o, p) else None)(
+                                 db.get_member_api_key(s, o, p))),
+    member_cross=lambda s, o, p: db.get_member_api_key(s, o, p),
+    group=lambda g, p: group_store.get_group_secret(g, p),
+    org=lambda o, p: org_store.get_org_secret(o, p),
+    platform=lambda s, p, o: _resolve_platform_grant(s, p, o),
+)
+
+
+def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
+                 group: "Optional[int] | Callable[[], Optional[int]]",
+                 probe: CascadeProbe, want: str = "auto"):
+    """Générateur des barreaux gagnants, DANS L'ORDRE de la cascade. Consommer le
+    premier = résolution (`cascade_winner`) ; tout consommer = statut (les niveaux
+    configurés au-delà du gagnant restent affichables). Chaque gate (byo_user,
+    ORG_SHAREABLE, personal_cross_org, éligibilité plateforme, `want='byo'`)
+    vit ICI — plus jamais dans un call-site."""
+    if sub is not None and org is not None and connectors.is_byo_user(provider):
+        hit = probe.member(sub, org, provider)
+        if hit is not None:
+            payload, account = hit
+            yield CascadeRung("user", credentials_store.MEMBER,
+                              credentials_store.member_id(org, sub), payload, account)
+    # Instance personnelle cross-org (#172, amende ADR 0033) : connecteur par-personne
+    # (unipile) → ma clé posée dans une AUTRE org me suit (même sub, zéro usurpation).
+    # Mono-compte seulement. Prime sur les paliers partagés, comme la clé locale.
+    if (sub is not None and connectors.is_personal_cross_org(provider)
+            and not _is_multi_account(provider)):
+        pio = personal_instance_org(sub, provider, exclude_org=org)
+        if pio is not None:
+            payload = probe.member_cross(sub, pio, provider)
+            if payload is not None:
+                yield CascadeRung("user", credentials_store.MEMBER,
+                                  credentials_store.member_id(pio, sub), payload,
+                                  via="cross_org")
+    if provider in ORG_SHAREABLE_PROVIDERS:
+        # `group` accepte un callable zéro-arg (résolution PARESSEUSE de l'équipe
+        # active) : le générateur s'arrête au premier barreau gagnant, donc une
+        # clé membre trouvée ne coûte jamais le lookup DB de `current_group`
+        # (iso-comportement avec l'ancien chemin ; vécu test_call_axes_account).
+        g = group() if callable(group) else group
+        if g is not None:
+            payload = probe.group(g, provider)
+            if payload is not None:
+                yield CascadeRung("group", "group", str(g), payload)
+        if org is not None:
+            payload = probe.org(org, provider)
+            if payload is not None:
+                yield CascadeRung("org", "org", str(org), payload)
+    if want != "byo":
+        con = connectors.connector_for_provider(provider)
+        if con is not None and "platform" in con.auth_modes:
+            grant = probe.platform(sub, provider, org)
+            if grant:
+                yield CascadeRung("platform", credentials_store.PLATFORM,
+                                  grant.get("label"), grant)
+
+
+def cascade_winner(sub: Optional[str], provider: str, *, org: Optional[int],
+                   group: "Optional[int] | Callable[[], Optional[int]]",
+                   probe: CascadeProbe,
+                   want: str = "auto") -> Optional[CascadeRung]:
+    """Premier barreau gagnant, ou None si rien ne résout."""
+    return next(walk_cascade(sub, provider, org=org, group=group,
+                             probe=probe, want=want), None)
+
+
 def _resolve_credential_impl(provider: str, want: str, sub: str,
                              account: Optional[str] = None) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
@@ -650,127 +768,85 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # le seam `current_org` (session MCP ?? consultation ?? maison, ADR 0023) AVANT
     # le premier palier : plus aucun credential per-user org-agnostique.
     active_org = current_org(sub)
-    member_key = None
-    eff = ""  # compte effectif du palier membre (multi-compte)
-    # Palier membre SEULEMENT pour un provider byo_user : un byo-org-only (http,
-    # ex-mm…) n'a pas de credential membre par construction — et la LECTURE du
-    # coffre le valide (`require_credential` lève ValueError) : sans ce gate, toute
-    # résolution d'un provider org-only explosait AVANT les paliers groupe/org
-    # (trou exposé par le cas « un http par département », 2026-07-05).
-    if active_org is not None and connectors.is_byo_user(provider):
-        if _is_multi_account(provider):
-            # Multi-compte (coffre à N comptes, ex. « 2 Zoho ») : sélection du compte =
-            # account explicite (param) > axe d'appel `account=` (#108) > épinglage
-            # projet > compte unique auto > McpError (jamais de repli muet vers un autre
-            # compte/l'org/la plateforme — anti-usurpation). '' = mono-compte legacy.
-            eff = (account if account is not None
-                   else session_org.current_call_account() or project_pinned_identity(provider))
-            if eff is None:
-                accts = credentials_store.list_accounts(
-                    credentials_store.MEMBER, credentials_store.member_id(active_org, sub), provider)
-                if len(accts) == 1:
-                    eff = accts[0]["account"]
-                elif len(accts) == 0:
-                    eff = ""
-                else:
-                    raise McpError(ErrorData(
-                        code=INVALID_PARAMS,
-                        message=(
-                            f"Plusieurs comptes `{provider}` configurés dans cette org — "
-                            f"précise lequel (oto_identity(op='list') pour les lister)."
-                        )))
-            member_key = db.get_member_api_key(sub, active_org, provider, eff)
-            if eff and not member_key:
-                # Compte explicite/épinglé introuvable → on NE retombe PAS sur l'org/la
-                # plateforme (ce serait agir sous une autre identité que celle demandée).
+
+    def _member_fetch(msub: str, morg: int, mprov: str) -> Optional[tuple]:
+        """Sonde MEMBRE du fetch : sélection du compte en multi-compte (« 2 Zoho ») =
+        account explicite (param) > axe d'appel `account=` (#108) > épinglage projet
+        > compte unique auto > McpError — jamais de repli muet vers un autre compte/
+        l'org/la plateforme (anti-usurpation). '' = mono-compte legacy. Un compte
+        explicite/épinglé introuvable LÈVE (on n'agit pas sous une autre identité)."""
+        if not _is_multi_account(mprov):
+            key = db.get_member_api_key(msub, morg, mprov)
+            return (key, "") if key else None
+        eff = (account if account is not None
+               else session_org.current_call_account() or project_pinned_identity(mprov))
+        if eff is None:
+            accts = credentials_store.list_accounts(
+                credentials_store.MEMBER, credentials_store.member_id(morg, msub), mprov)
+            if len(accts) == 1:
+                eff = accts[0]["account"]
+            elif len(accts) == 0:
+                eff = ""
+            else:
                 raise McpError(ErrorData(
                     code=INVALID_PARAMS,
                     message=(
-                        f"Compte `{eff}` introuvable pour `{provider}` — vérifie avec "
-                        f"oto_identity(op='list'), ou pose-le sur {_ACCOUNT_URL}."
+                        f"Plusieurs comptes `{mprov}` configurés dans cette org — "
+                        f"précise lequel (oto_identity(op='list') pour les lister)."
                     )))
-        else:
-            # Mono-compte (chemin historique inchangé) : account='' implicite.
-            member_key = db.get_member_api_key(sub, active_org, provider)
-    if member_key:
-        return ResolvedCredential(provider, member_key, False, "user",
-                                  credentials_store.MEMBER,
-                                  credentials_store.member_id(active_org, sub), account=eff)
+        key = db.get_member_api_key(msub, morg, mprov, eff)
+        if eff and not key:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"Compte `{eff}` introuvable pour `{mprov}` — vérifie avec "
+                    f"oto_identity(op='list'), ou pose-le sur {_ACCOUNT_URL}."
+                )))
+        return (key, eff) if key else None
 
-    # Instance PERSONNELLE cross-org (issue #172, piste A ; amende ADR 0033). Pour un
-    # connecteur intrinsèquement PAR-PERSONNE (`personal_cross_org` — unipile hosted :
-    # le compte de messagerie EST l'humain, pas l'appartenance), ma clé membre posée
-    # dans une AUTRE org me suit ici : c'est MON identité propre (mode 'user', MÊME
-    # sub → zéro usurpation), donc elle prime sur les paliers PARTAGÉS (groupe/org) et
-    # plateforme — comme la clé membre locale. Ne mord QU'EN L'ABSENCE de clé membre
-    # locale (au-dessus) : aucun impact sur les users mono-org ni ceux déjà keyés dans
-    # l'org de contexte. Mono-compte seulement (une identité par-personne, pas de
-    # désambiguïsation de compte cross-org). Org gagnante déterministe (perso > récente).
-    if connectors.is_personal_cross_org(provider) and not _is_multi_account(provider):
-        pio = personal_instance_org(sub, provider, exclude_org=active_org)
-        if pio is not None:
-            personal_key = db.get_member_api_key(sub, pio, provider)
-            if personal_key:
-                return ResolvedCredential(provider, personal_key, False, "user",
-                                          credentials_store.MEMBER,
-                                          credentials_store.member_id(pio, sub))
+    # Marche unique de la cascade (walker) — la sonde fetch ne déchiffre que le
+    # gagnant ; le palier membre porte la sélection multi-compte ci-dessus.
+    # `group` passé en LAZY : l'équipe active (lookup DB) n'est résolue que si
+    # aucun barreau plus proche n'a gagné.
+    probe = CascadeProbe(member=_member_fetch, member_cross=FETCH_PROBE.member_cross,
+                         group=FETCH_PROBE.group, org=FETCH_PROBE.org,
+                         platform=FETCH_PROBE.platform)
+    win = cascade_winner(sub, provider, org=active_org,
+                         group=lambda: current_group(sub),
+                         probe=probe, want=want)
 
-    # Paliers partagés (ADR 0012) : secret du GROUPE actif (le plus spécifique),
-    # puis de l'ORG active. Sautés tant que l'user n'a ni groupe ni org actifs
-    # (-> None) → strictement identique à avant pour tout user flat.
-    # Cascade : clé membre > group_secret > org_secret > platform_grant.
-    if provider in ORG_SHAREABLE_PROVIDERS:
-        active_group = current_group(sub)
-        if active_group is not None:
-            grp_key = group_store.get_group_secret(active_group, provider)
-            # Une instance BYO est utilisable par tout le sous-arbre de son owner —
-            # restreindre = poser l'instance au bon niveau (équipe), pas une
-            # allowlist (le cran `share_down` BYO a été retiré, jamais exposé à
-            # l'écriture ; sur les instances PLATFORM il reste la liste des
-            # grantees, cf. `_platform_instance_usable`).
-            if grp_key:
-                return ResolvedCredential(provider, grp_key, False, "group",
-                                          "group", str(active_group))
-        if active_org is not None:
-            org_key = org_store.get_org_secret(active_org, provider)
-            if org_key:
-                return ResolvedCredential(provider, org_key, False, "org",
-                                          "org", str(active_org))
-
-    # byo-only : pas de palier plateforme (mounts basic_auth, clients multi-secrets).
-    if want == "byo":
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
-                f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
-            ),
-        ))
-
-    # Défense en profondeur : le chemin platform-grant n'est valide que si le
-    # registre AUTORISE `platform` pour ce provider. Un provider byo-only
-    # (attio, lemlist, pennylane, fullenrich, slack…) ne doit JAMAIS être résolu
-    # via une clé plateforme — même si une clé résiduelle existait en base
-    # (seed SOPS historique). Sans ce gate, un grant suffisait à utiliser un
-    # compte privé, l'inverse du modèle (audité 2026-06-11).
-    con = connectors.connector_for_provider(provider)
-    platform_eligible = con is not None and "platform" in con.auth_modes
-    # ADR 0044 §F R3 : le palier plateforme lit les instances scope PLATFORM du coffre unifié
-    # (share_mode/share_down = accès ; meta.rate_limit* = quota) au lieu des tables legacy
-    # platform_keys/user_grants/org_grants. Free-tier = instance 'open' (share_down vide,
-    # ouverte à tous) ; grant = instance 'closed' (sub ∈ share_down : user-grant OU org-grant
-    # sur l'org active). Le secret n'est déchiffré que pour l'instance gagnante.
-    grant = _resolve_platform_grant(sub, provider, active_org) if platform_eligible else None
-    if not grant:
+    if win is None:
+        # byo-only : pas de palier plateforme (mounts basic_auth, multi-secrets).
+        if want == "byo":
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
+                    f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+                    + _reachable_hint(sub, active_org, provider)
+                ),
+            ))
+        # Défense en profondeur : le palier plateforme n'existe que si le registre
+        # AUTORISE `platform` (gate DANS le walker) — un provider byo-only n'est
+        # JAMAIS résolu via une clé plateforme résiduelle (audité 2026-06-11).
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 f"Aucune clé `{provider}` configurée pour toi. Soit pose "
                 f"ta propre clé sur {_ACCOUNT_URL} (section {provider.capitalize()}), "
                 f"soit demande à un admin de te grant un accès à une clé plateforme."
+                + _reachable_hint(sub, active_org, provider)
             ),
         ))
 
+    if win.mode != "platform":
+        return ResolvedCredential(provider, win.payload, False, win.mode,
+                                  win.entity_type, win.entity_id, account=win.account)
+
+    # ADR 0044 §F R3 : le palier plateforme lit les instances scope PLATFORM du
+    # coffre unifié (share_mode/share_down = accès ; meta.rate_limit* = quota).
+    # Le secret n'est déchiffré que pour l'instance gagnante.
+    grant = win.payload
     used = db.get_usage_today(sub, provider)
     limit = grant.get("daily_quota") or quota_for(provider)
     # ADR 0043 : une org abonnée à un plan `unmetered` n'a PLUS de quota sur les
@@ -967,23 +1043,23 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) ->
             code=INVALID_PARAMS,
             message=(f"L'endpoint anonyme n'a pas d'org propriétaire pour résoudre "
                      f"`{provider}` (projet sans org).")))
-    if provider in ORG_SHAREABLE_PROVIDERS:
-        org_key = org_store.get_org_secret(org_id, provider)
-        if org_key:
-            return ResolvedCredential(provider, org_key, False, "org", "org", str(org_id))
-    if want == "byo":
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
-    platform_eligible = "platform" in con.auth_modes
-    # ADR 0044 §F R3 : anon (pas de sub) → instance 'open' (free-tier, ouverte à tous) OU
-    # 'closed' dont le share_down vise l'org du projet (`org:<org_id>`, gaté sur org_id ici).
-    grant = _resolve_platform_grant(None, provider, org_id) if platform_eligible else None
-    if not grant:
+    # Walker avec sub=None : les barreaux membre/groupe se sautent d'eux-mêmes →
+    # cascade réduite org > plateforme (ADR 0044 §F R3 : anon → instance 'open'
+    # free-tier, ou 'closed' dont le share_down vise `org:<org_id>`).
+    win = cascade_winner(None, provider, org=org_id, group=None,
+                         probe=FETCH_PROBE, want=want)
+    if win is None:
+        if want == "byo":
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"Aucun credential `{provider}` configuré pour l'org de ce projet."))
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"L'endpoint anonyme ne peut pas résoudre `{provider}` : configure "
                      f"une clé d'org, ou grant une clé plateforme à l'org du projet.")))
+    if win.mode == "org":
+        return ResolvedCredential(provider, win.payload, False, "org", "org", str(org_id))
+    grant = win.payload
     return ResolvedCredential(provider, grant["secret"], True, "platform",
                               credentials_store.PLATFORM, grant["label"])
 
@@ -1076,6 +1152,99 @@ def unipile_api_key_for(sub: str) -> Optional[str]:
     return None
 
 
+def reachable_instances(sub: str, org: Optional[int], provider: str) -> list[dict]:
+    """Instances `provider` utilisables dans un AUTRE contexte que l'ambiant :
+    équipes de `org` dont `sub` est MEMBRE (secret présent, équipe pas forcément
+    active) + ses AUTRES orgs (clé d'org partagée, ou sa clé membre là-bas). La
+    cascade ne les lit pas — mais un jeton d'appel (`group=`/`org=`/`instance=`)
+    les atteint légitimement (mêmes gardes d'appartenance). Nourrit l'erreur
+    « rien ne résout » : on REMONTE les choix pour que l'agent pinne explicitement,
+    jamais de choix silencieux entre identités. Best-effort : ne lève jamais,
+    renvoie ce qui a pu être énuméré (vécu Zoho/movinmotion 2026-07-16 : clé sur
+    l'équipe sales, 3 membres, 0 actif → « pas de clé » sec et session perdue)."""
+    out: list[dict] = []
+    shareable = provider in ORG_SHAREABLE_PROVIDERS
+    try:
+        if org is not None and shareable:
+            seen_gids: set = set()
+            for g in group_store.list_groups_for_user(sub, org):
+                if group_store.has_group_secret(g["group_id"], provider):
+                    out.append({"kind": "group", "id": g["group_id"],
+                                "name": g["name"]})
+                    seen_gids.add(g["group_id"])
+            # #218 : l'org_admin GOUVERNE ses équipes sans en être MEMBRE — sa clé de
+            # groupe lui est accessible par escalade (group=/instance= re-gardés par
+            # can_read_group). Le hint était aveugle là (list_groups_for_user = membre
+            # STRICT) → « pas de clé » sec alors que la clé existe sur une équipe qu'il
+            # gouverne. On complète par les équipes de l'org visibles par escalade.
+            from . import roles
+            try:  # escalade best-effort ISOLÉE : ne doit pas abîmer l'énumération
+                if roles.is_org_admin(sub, org):  # ci-dessous (orgs) si elle hoquette.
+                    for g in group_store.list_groups(org):
+                        gid = g["id"]
+                        if gid not in seen_gids and group_store.has_group_secret(gid, provider):
+                            out.append({"kind": "group", "id": gid, "name": g["name"]})
+                            seen_gids.add(gid)
+            except Exception:
+                pass
+        for o in org_store.list_orgs_for_user(sub):
+            oid = o["org_id"]
+            if oid == org:
+                continue
+            if ((shareable and org_store.has_org_secret(oid, provider))
+                    or db.has_member_api_key(sub, oid, provider)):
+                out.append({"kind": "org", "id": oid,
+                            "name": o.get("name") or f"org {oid}"})
+    except Exception:
+        return out
+    return out
+
+
+def reachable_team_key(sub: str, org: Optional[int], provider: str,
+                       groups: "Optional[list[dict]]" = None) -> Optional[dict]:
+    """Première équipe de `org` dont `sub` est membre et qui détient un secret
+    `provider` — le hint `team_key_group` de `status_for` (drawer). `groups` =
+    liste pré-chargée de `list_groups_for_user` (hissée par l'appelant batch,
+    /api/me boucle sur ~50 providers). Best-effort, ne lève jamais."""
+    if org is None or provider not in ORG_SHAREABLE_PROVIDERS:
+        return None
+    try:
+        if groups is None:
+            groups = group_store.list_groups_for_user(sub, org)
+        for g in groups:
+            if group_store.has_group_secret(g["group_id"], provider):
+                return {"id": g["group_id"], "name": g["name"]}
+    except Exception:
+        return None
+    return None
+
+
+def _reachable_hint(sub: str, org: Optional[int], provider: str) -> str:
+    """Suffixe actionnable des erreurs « rien ne résout » : remonte les instances
+    à portée avec le GESTE de pin pour chacune — jeton d'appel d'abord (`group=`/
+    `org=`, per-call, sans état), `instance=` pour le grain fin. Chaîne vide si
+    rien à portée."""
+    items = reachable_instances(sub, org, provider)
+    if not items:
+        return ""
+    lines = []
+    for it in items[:4]:
+        if it["kind"] == "group":
+            lines.append(
+                f"· équipe « {it['name']} » → passe group={it['id']} sur l'appel "
+                f"(ou instance=group:{it['id']}:{provider})")
+        else:
+            lines.append(
+                f"· org « {it['name']} » → passe org={it['id']} sur l'appel")
+    more = len(items) - 4
+    if more > 0:
+        lines.append(f"· … +{more} (oto_instance op=list pour tout voir)")
+    return (
+        f"\nNB — des clés `{provider}` existent à portée :\n" + "\n".join(lines)
+        + "\nDurable : lie l'instance à ton projet (oto_project op=link)."
+    )
+
+
 def credential_mode_for(sub: str, provider: str, *,
                         org: "int | None | object" = _UNSET,
                         group: "int | None | object" = _UNSET) -> str:
@@ -1088,28 +1257,15 @@ def credential_mode_for(sub: str, provider: str, *,
     contexte (fiche admin), sans current_org/current_group (anti-fuite du requérant)."""
     o = current_org(sub) if org is _UNSET else org
     g = current_group(sub) if group is _UNSET else group
-    # Scope membre (ADR 0033) : la clé propre se cherche dans l'org de contexte —
-    # pour un tiers (org explicite), dans SON org, jamais celle du requérant.
-    if db.has_member_api_key(sub, o, provider):
-        return "user"
-    # Instance personnelle cross-org (issue #172) : miroir EXACT de la cascade de
-    # résolution — sans ça l'UI/le connect verrait « platform » là où la résolution
-    # trouve MA clé perso d'une autre org (divergence = UI qui ment). Même sub.
-    if connectors.is_personal_cross_org(provider):
-        pio = personal_instance_org(sub, provider, exclude_org=o)
-        if pio is not None and db.has_member_api_key(sub, pio, provider):
-            return "user"
-    if provider in ORG_SHAREABLE_PROVIDERS:
-        if g is not None and group_store.has_group_secret(g, provider):
-            return "group"
-        if o is not None and org_store.has_org_secret(o, provider):
-            return "org"
-    con = connectors.connector_for_provider(provider)
-    if not (con and "platform" in con.auth_modes):
+    # Marche unique (walker) en sonde PRÉSENCE — plus de cascade recopiée ici :
+    # le miroir est structurel, il ne peut plus diverger de la résolution.
+    win = cascade_winner(sub, provider, org=o, group=g,
+                         probe=PRESENCE_PROBE, want="auto")
+    if win is None:
         return "forbidden"
-    grant = _platform_grant_meta(sub, provider, o)  # ADR 0044 §F R3 : instances PLATFORM
-    if not grant:
-        return "forbidden"
+    if win.mode != "platform":
+        return win.mode
+    grant = win.payload
     used = db.get_usage_today(sub, provider)
     limit = grant.get("daily_quota") or quota_for(provider)
     return "over_quota" if (limit and used >= limit) else "platform"
@@ -1127,13 +1283,10 @@ def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
         return False
     if con.secret_kind == "none":
         return True
-    if provider in ORG_SHAREABLE_PROVIDERS and org_store.has_org_secret(org_id, provider):
-        return True
-    # ADR 0044 §F R3 : clé plateforme utilisable par l'org (instance 'open' free-tier, ou
-    # 'closed' dont le share_down vise `org:<org_id>`). Anon = pas de sub → org_id seul.
-    if "platform" in con.auth_modes and _platform_grant_meta(None, provider, org_id):
-        return True
-    return False
+    # Walker en présence, sub=None → cascade réduite org > plateforme (ADR 0044
+    # §F R3 : instance 'open' free-tier, ou 'closed' visant `org:<org_id>`).
+    return cascade_winner(None, provider, org=org_id, group=None,
+                          probe=PRESENCE_PROBE) is not None
 
 
 BYO_MODES = ("user", "group", "org")
@@ -1213,38 +1366,34 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
     active_group = current_group(sub) if group is _UNSET else group
     out: dict = {"role": role, "active_org": active_org,
                  "active_group": active_group, "providers": {}}
+    # Équipes du sub dans l'org (une requête, partagée par tous les hints
+    # `team_key_group` ci-dessous). Best-effort.
+    try:
+        member_groups = (group_store.list_groups_for_user(sub, active_org)
+                         if active_org is not None else [])
+    except Exception:
+        member_groups = []
     for provider in db.KEY_PROVIDERS:
-        shareable = provider in ORG_SHAREABLE_PROVIDERS
-        # PRÉSENCE seulement (pas de déchiffrement sur le chemin /api/me).
-        # Scope membre (ADR 0033) : la clé propre est celle posée dans CETTE org.
-        user_has = db.has_member_api_key(sub, active_org, provider)
-        group_has = (
-            group_store.has_group_secret(active_group, provider)
-            if active_group is not None and shareable else False
-        )
-        org_has = (
-            org_store.has_org_secret(active_org, provider)
-            if active_org is not None and shareable else False
-        )
-        grant = _platform_grant_meta(sub, provider, active_org)  # ADR 0044 §F R3 : PLATFORM
+        # Marche COMPLÈTE du walker en sonde PRÉSENCE (pas de déchiffrement sur le
+        # chemin /api/me) : le gagnant donne le mode, les barreaux suivants restent
+        # affichables (flags par niveau). Miroir STRUCTUREL de resolve_api_key —
+        # toute divergence ferait mentir /api/me sur le mode réel.
+        hits = list(walk_cascade(sub, provider, org=active_org, group=active_group,
+                                 probe=PRESENCE_PROBE, want="auto"))
+        user_has = any(r.mode == "user" and r.via == "local" for r in hits)
+        group_has = any(r.mode == "group" for r in hits)
+        org_has = any(r.mode == "org" for r in hits)
+        grant = next((r.payload for r in hits if r.mode == "platform"), None)
         used = db.get_usage_today(sub, provider)
         limit = (grant.get("daily_quota") if grant else None) or quota_for(provider)
 
-        # Miroir EXACT de la cascade de resolve_api_key : user_key > group_secret
-        # > org_secret > grant plateforme. Toute divergence = /api/me ment sur le
-        # mode réel.
-        if user_has:
-            mode = "user"
-        elif group_has:
-            mode = "group"
-        elif org_has:
-            mode = "org"
-        elif not grant:
+        winner = hits[0] if hits else None
+        if winner is None:
             mode = "forbidden"
-        elif limit and used >= limit:
+        elif winner.mode == "platform" and limit and used >= limit:
             mode = "over_quota"
         else:
-            mode = "platform"
+            mode = winner.mode
 
         out["providers"][provider] = {
             "mode": mode,
@@ -1256,25 +1405,43 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             # limit 0 = illimité (convention default_quota) → None pour que l'UI
             # affiche « ∞ », pas « /0 » (qui se lit comme un quota épuisé).
             "quota_daily": (limit or None) if grant else None,
+            # Clé d'équipe « à portée » (membre d'une équipe qui a le secret, sans
+            # l'avoir active) : rien ne résout mais une clé existe → l'UI doit le
+            # dire au lieu d'un « pas de clé » sec.
+            "team_key_group": (reachable_team_key(sub, active_org, provider,
+                                                  groups=member_groups)
+                               if mode == "forbidden" else None),
         }
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
     # multi-champs, ADR 0011) : mounts basic_auth (planity) ET clients in-process
-    # multi-secrets (silae). Pas de quota ni de grant — le credential EST le grant
-    # (cf. resolve_mount_token / resolve_credential_fields). `user` si posé, sinon
-    # `forbidden`. Permet au dashboard d'afficher « configuré / remove » comme une clé.
+    # multi-secrets (silae, zoho). Pas de quota ni de grant — le credential EST le
+    # grant (cf. resolve_mount_token / resolve_credential_fields). Miroir de la
+    # cascade byo user > groupe actif > org (un provider `fields` org-shareable
+    # résout par le secret d'équipe/org — l'ex-check user-only affichait
+    # `forbidden` avec une clé d'org qui résolvait, l'UI mentait ; corrigé
+    # 2026-07-16). Permet au dashboard d'afficher « configuré / remove ».
     for c in connectors.REGISTRY.values():
         if (c.name in out["providers"] or not c.secret_fields
                 or "byo_user" not in c.auth_modes):
             continue
-        has = db.has_member_api_key(sub, active_org, c.name)
+        # Même walker, `want='byo'` (le credential EST le grant — pas de palier
+        # plateforme ni de quota, cf. resolve_credential_fields).
+        hits = list(walk_cascade(sub, c.name, org=active_org, group=active_group,
+                                 probe=PRESENCE_PROBE, want="byo"))
+        mode = hits[0].mode if hits else "forbidden"
         out["providers"][c.name] = {
-            "mode": "user" if has else "forbidden",
-            "user_key_configured": has,
-            "org_secret_configured": False,
+            "mode": mode,
+            "user_key_configured": any(r.mode == "user" and r.via == "local"
+                                       for r in hits),
+            "group_secret_configured": any(r.mode == "group" for r in hits),
+            "org_secret_configured": any(r.mode == "org" for r in hits),
             "platform_key_label": None,
             "quota_used_today": 0,
             "quota_daily": None,
+            "team_key_group": (reachable_team_key(sub, active_org, c.name,
+                                                  groups=member_groups)
+                               if mode == "forbidden" else None),
         }
 
     # Connecteurs à SESSION navigateur (`personal_session`, secret_kind="cookie" :
@@ -1327,4 +1494,13 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
             "quota_used_today": 0,
             "quota_daily": None,
         }
+
+    # Étape manquante par connecteur (seam générique `pending_action`, lot 2) :
+    # « la clé résout mais il reste une étape » (unipile : lier un canal…). La
+    # spécificité vit DANS le module connecteur (hook `status_hints.register`),
+    # jamais ici. Seuls les connecteurs à hook paient le coût ; fail-open.
+    for name, entry in out["providers"].items():
+        if status_hints.has_hook(name):
+            entry["pending_action"] = status_hints.pending_action(
+                name, sub, active_org, active_group, entry)
     return out

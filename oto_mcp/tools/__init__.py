@@ -32,7 +32,7 @@ def register_all(mcp: FastMCP) -> None:
     from . import whoami
     whoami.register(mcp)
 
-    # Guides — how-to plateforme d'usage d'oto (fichiers `guides/*.md`), chargés à la
+    # Guides — how-to d'usage d'oto (DB, seeds `guides/*.md`), chargés à la
     # demande via `oto_guide`. Spine, hors gate, toujours visible (PROTECTED_TOOLS) ;
     # sa description embarque l'index des guides. Pas de dépendance externe.
     from . import guide
@@ -54,16 +54,17 @@ def register_all(mcp: FastMCP) -> None:
     from . import datastore
     datastore.register(mcp)
 
+    # Docs app — variante MCP App rendue d'`oto_doc` (lecture/parcours des pages d'un
+    # projet + KB d'org). Spine, hors gate d'activation ; ne s'enregistre que si
+    # l'extra prefab_ui est présent (import gardé dans le module).
+    from . import docs_app
+    docs_app.register(mcp)
+
     # Runs / déroulés (ADR 0017) — verbes run_start/finish (spine). Le run_id posé
     # en état de session est stampé sur chaque tool_call par le sink calllog. Pas
     # de dépendance externe.
     from . import doctrine_run
     doctrine_run.register(mcp)
-
-    # Connecteurs remote (bridges, ADR 0003) — middleware générique, zéro code
-    # client : forward HTTP vers le bridge résolu depuis le credential d'org.
-    from . import remote
-    remote.register(mcp)
 
     # Connecteurs mount (fédération MCP, otomata#16) — monte un MCP distant via
     # proxy FastMCP, credential per-user injecté par requête. Inerte tant

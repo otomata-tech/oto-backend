@@ -18,6 +18,7 @@ from . import orgs_invites  # noqa: F401 — org.invite.{create,list,revoke,acce
 # Invitation PLATEFORME (feature cascade, sommet) — onboarding admin, org cible optionnelle.
 from . import platform_invites  # noqa: F401 — platform.invite.{create,list,revoke}
 from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
+from . import vault_health  # noqa: F401 — admin.vault_health (scan credentials indéchiffrables, #72)
 # Sous-palier groupe (ADR 0012) — départements/équipes + chef d'équipe.
 from . import groups  # noqa: F401 — group.create/list/list_mine/use/clear/get/update/delete
 from . import groups_members  # noqa: F401 — group.member.{add,set_role,remove}
@@ -83,6 +84,8 @@ from . import platform_instructions  # noqa: F401 — platform.instructions (oto
 from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
 from . import project_files  # noqa: F401 — me.project_files (oto_project_files, MCP-only, ADR 0032 §3)
 from . import kb  # noqa: F401 — me.kb (oto_kb : base de connaissance d'org = zone Documents, remplace Memento)
+from . import search  # noqa: F401 — me.search (oto_search, lot 3 Ship 1)
+from . import inbox  # noqa: F401 — me.inbox (lot 3 Ship 3)
 from . import docs  # noqa: F401 — me.doc (oto_doc, POST /api/me/docs) — pages d'un projet
 from . import uploads  # noqa: F401 — me.upload_url (oto_upload_url) — push out-of-bande de gros contenu (#105)
 

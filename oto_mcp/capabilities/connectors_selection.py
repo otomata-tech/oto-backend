@@ -11,9 +11,10 @@ proposition (`orgs.default_connectors`), sélection (`user_selected_connectors`)
   retire un connecteur. Garde : refuser un connecteur non-exposé pour l'org active
   (le plafond d'exposition `connector_activation` n'est jamais relâché).
 
-Handlers SYNC (les adaptateurs n'awaitent pas). NB : la mutation n'a **pas** encore
-d'effet de visibilité — le masquage de la pause est branché au middleware en B5
-(derrière flag `OTO_CONNECTOR_SELECTION_ENABLED`).
+Handlers SYNC (les adaptateurs n'awaitent pas). Régime NOMINAL (ADR 0050) :
+« non-sélectionné = masqué » — le seed d'un nouveau (sub, org) installe le socle
+curé `default_active` ; sélectionner/mettre en pause a un effet de visibilité à la
+session suivante (`session_visibility`).
 """
 from __future__ import annotations
 

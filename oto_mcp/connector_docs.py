@@ -162,12 +162,11 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "crée une clé api dans les réglages api/intégrations de ton compte [kaspr](https://app.kaspr.io).\n"
             "- colle-la dans tes connecteurs oto sur `/account` — kaspr est **byo** (pas de clé plateforme, chacun la sienne)\n"
             "- kaspr facture en crédits : 1 par email, +1 par téléphone\n"
-            "- vérifie ta clé et tes crédits restants avec `kaspr_verify_key`"
+            "- vérifie ta clé avec `oto_instance(op='verify', connector='kaspr')`"
         )),
         DocSection(kind="usage", title="enrichir un contact depuis linkedin", body_md=(
             "récupère emails et téléphones d'une personne à partir de son profil linkedin.\n"
-            "- `kaspr_enrich_linkedin` — passe le slug (`alexis-laporte`) ou l'url linkedin complète, options `with_phone` pour les numéros\n"
-            "- `kaspr_verify_key` — état du compte + crédits restants"
+            "- `kaspr_enrich_linkedin` — passe le slug (`alexis-laporte`) ou l'url linkedin complète, options `with_phone` pour les numéros"
         )),
     ),
     "fullenrich": (
@@ -424,7 +423,13 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `fr_search(query=…, naf=…, departement=…)` — recherche multicritère (secteur, zone, effectifs, CA)\n"
             "- `fr_get(siren)` — fiche complète agrégée : identité + 7 ratios du dernier bilan inpi + événements bodacc\n"
             "- `fr_bilans(siren)` puis `fr_bilan(siren, date_cloture)` — historique des dépôts et bilan détaillé (CA, EBE, endettement…)\n"
-            "- `fr_directors(siren)`, `fr_events(siren)`, `fr_tenders_search(query=…)` — dirigeants, événements bodacc, appels d'offres boamp"
+            "- `fr_directors(siren)`, `fr_events(siren)`, `fr_tenders_search(query=…)` — dirigeants, événements bodacc, appels d'offres boamp\n"
+            "- `fr_accords_search(siren=…)`, `fr_egapro_declaration(siren)`, `fr_avis_sirene(siret)` — accords d'entreprise, index égalité f-h, avis de situation insee (pdf)"
+        )),
+        DocSection(kind="usage", title="aides publiques (subventions, prêts, aap)", body_md=(
+            "la base de référence de l'état (data.aides-entreprises.fr, ~2 400 aides actives, màj quotidienne) filtrée pour une entreprise ou un projet.\n"
+            "- `fr_aides_search(insee=…, effectif=…, nature=…, echeance_avant=…)` — shortlist déterministe : territoire (commune → région → national/ue), tranche d'effectif, type d'aide (subvention, prêt, garantie…), échéance des aap\n"
+            "- `fr_aides_get(id)` — fiche complète : objet, conditions, montants, financeurs, contacts, source officielle"
         )),
         DocSection(kind="usage", title="sirene stock (enrichissement en masse)", body_md=(
             "le parquet sirene complet (insee, millésime mensuel) pour les lookups ponctuels et l'enrichissement **batch** de milliers de sirens.\n"

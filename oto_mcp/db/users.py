@@ -97,20 +97,30 @@ def get_user(sub: str) -> Optional[dict]:
 # UPDATE : le nouveau sub est frais → aucun conflit de PK, SAUF user_account_profile
 # (PK sub) et connector_credentials (coffre user), traités à part.
 _SUB_COLUMNS = [
+    # ⚠️ Chaque entrée DOIT exister en DB : la boucle fait des UPDATE nus dans UNE
+    # transaction — une table absente fait échouer TOUT le merge (vécu : `user_grants`,
+    # droppée par 0044 §F mais restée listée → migrate_sub cassé jusqu'au nettoyage
+    # Phase H B1 du 10/07, qui a aussi sorti les reliques datastore `user_datastores.sub`
+    # et `datastore_shares` : colonnes mortes, plus rien ne les lit, DROP en B2).
     # données de l'user
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
     ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"),
-    ("user_grants", "sub"), ("user_datastores", "sub"),
-    ("datastore_shares", "owner_sub"), ("datastore_shares", "shared_with_sub"),
     ("org_members", "sub"), ("org_group_members", "sub"),
     ("user_api_tokens", "sub"), ("unipile_accounts", "sub"), ("unipile_pending", "sub"),
+    # ressources possédées + grants (ère ownership 0030/0042/0048 — ajoutées Phase H B1 :
+    # l'inventaire n'avait jamais suivi, une bascule de tenant orphelinait les ressources
+    # user-owned et les grants nominatifs). `owner_id`/`principal_id` mélangent sub et
+    # ids numériques d'org/groupe : un sub Logto n'est jamais un entier → l'UPDATE nu
+    # `col=old_sub` ne peut toucher que les lignes user.
+    ("user_datastores", "owner_id"), ("projects", "owner_id"),
+    ("resource_grants", "principal_id"), ("resource_grants", "granted_by"),
+    ("guides", "owner_id"),
     # attribution (soft)
-    ("user_grants", "granted_by"),
+    ("projects", "created_by"),
     ("orgs", "created_by"),
     ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
     ("org_groups", "created_by"), ("org_instructions", "set_by"),
-    ("org_instruction_revisions", "set_by"), ("org_group_instructions", "set_by"),
-    ("org_group_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
+    ("org_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
 ]
 
 

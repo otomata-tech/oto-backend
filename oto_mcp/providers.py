@@ -8,8 +8,9 @@ listes en dur qui dérivaient (`db.KEY_PROVIDERS`, `access.ORG_SHAREABLE_PROVIDE
 Chaque connecteur porte les 3 axes du modèle plateforme :
 - **A. Disponibilité** : `availability` (self_serve | platform_granted). platform_granted
   = grant-only (la plateforme accorde explicitement, ex. `mm` réservé à un client).
-- **B. Visibilité** : `in_default_bundle` (accordé d'office à une nouvelle entité) /
-  `in_default_preset` (affiché+activé par le preset de base). Policy, tunable.
+- **B. Visibilité** : `default_active` (SOCLE curé, ADR 0050 — installé d'office
+  dans la sélection d'un nouveau (sub, org) ; le reste du catalogue = library
+  installable). Policy, tunable.
 - **C. Credential** : `auth_modes` ⊆ {byo_user, byo_org, platform} ; `keyed` (résolu via
   `resolve_api_key` avec une clé api) ; `secret_kind` ; `personal_session` (session
   physiologiquement per-user : linkedin/google/slack/whatsapp/crunchbase, jamais org).
@@ -60,11 +61,9 @@ class Connector:
                                        # (`byo_org` ⇒ session partageable, ex. pennylaneged)
     secret_kind: str                   # api_key|refresh_token|oauth|cookie|none
     default_quota: int                 # 0 = illimité
-    in_default_bundle: bool            # axe A : accordé d'office (bundle par défaut)
-    in_default_preset: bool            # axe B : affiché+activé par le preset de base
-    default_hidden: bool = False       # axe B : namespaces masqués par défaut mais
-                                       # self-activables (oto_enable_tool) — découvrabilité,
-                                       # pas sécurité (≠ platform_granted)
+    default_active: bool               # axe B : socle curé (ADR 0050) — installé
+                                       # d'office au seed d'un nouveau (sub, org) ;
+                                       # le reste reste installable depuis la library
     platform_key_open: bool = False    # free-tier : clé plateforme utilisable SANS grant
                                        # (quota gratuit = default_quota par user/jour, ADR 0031)
     label: str = ""
@@ -399,8 +398,8 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
 
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none",
-       default_quota=0, in_default_bundle=True, in_default_preset=False,
-       default_hidden=False, platform_key_open=False, label="", help="", href=None,
+       default_quota=0, default_active=False,
+       platform_key_open=False, label="", help="", href=None,
        publisher="", logo_url=None, kind="tools", mount_url=None,
        mount_strip_prefix=None,
        credential_fields=(), modules=(), hosted_auth=False,
@@ -409,8 +408,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
         secret_kind=secret_kind, default_quota=default_quota,
-        in_default_bundle=in_default_bundle, in_default_preset=in_default_preset,
-        default_hidden=default_hidden, platform_key_open=platform_key_open,
+        default_active=default_active, platform_key_open=platform_key_open,
         label=label or name.capitalize(), help=help, href=href,
         publisher=publisher, logo_url=logo_url, kind=kind,
         mount_url=mount_url, mount_strip_prefix=mount_strip_prefix,
@@ -427,10 +425,10 @@ _REGISTRY_LIST = [
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     _c("serper", ["serper"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=200, platform_key_open=True,
-       in_default_preset=True, label="Serper", help="recherche web", href="https://serper.dev"),
+       label="Serper", help="recherche web", href="https://serper.dev"),
     _c("hunter", ["hunter"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=5, platform_key_open=True,
-       in_default_preset=True, label="Hunter.io", help="emails", href="https://hunter.io"),
+       label="Hunter.io", help="emails", href="https://hunter.io"),
     # `fr` (APIs live SIRENE/Recherche Entreprises/INPI/BODACC/BOAMP) + `fr_stock`
     # (stock SIRENE parquet, ex-connecteur `sirene_stock`, fusionné 2026-06-22 :
     # même domaine entreprises FR, namespace fr_stock_* → namespace_of="fr").
@@ -441,22 +439,22 @@ _REGISTRY_LIST = [
     # la clé partagée, remonté tel quel (429) sans throttle oto.
     _c("sirene", ["fr"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=0, platform_key_open=True,
-       in_default_preset=True, label="INSEE SIRENE", help="données entreprise FR",
+       label="INSEE SIRENE", help="données entreprise FR",
        href="https://api.insee.fr", modules=("fr", "fr_stock")),
     # droit : jurisprudence (juris_*) + codes consolidés (loi_*) + conventions
     # collectives (ccn_*), servis par le service FOD (fod_juris/loi/ccn). Extrait
     # de `sirene`/`fr` (n'était pas de l'INSEE : DILA/Justice/Légifrance). Open
     # data, sans clé. 3 namespaces → 1 carte « Info légale FR ».
-    _c("droit", ["juris", "loi", "ccn"], secret_kind="none", in_default_preset=True,
+    _c("droit", ["juris", "loi", "ccn"], secret_kind="none",
        label="Info légale FR",
        help="jurisprudence, codes consolidés, conventions collectives (open data DILA/Légifrance)",
        href="https://www.legifrance.gouv.fr", modules=("droit",)),
-    # attio : masqué par défaut (2026-06-11) — le MCP Attio officiel est meilleur
-    # pour l'instant. Code conservé (tools/attio.py) pour d'éventuelles implems
-    # custom ; self-activable via oto_enable_tool.
+    # attio : hors socle (2026-06-11) — le MCP Attio officiel est meilleur pour
+    # l'instant. Code conservé (tools/attio.py) pour d'éventuelles implems
+    # custom ; installable depuis la library.
     _c("attio", ["attio"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key", default_quota=200,
-       default_hidden=True, label="Attio", help="CRM", href="https://app.attio.com"),
+       label="Attio", help="CRM", href="https://app.attio.com"),
     _c("lemlist", ["lemlist"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
        label="Lemlist", help="cold outreach", href="https://app.lemlist.com"),
@@ -495,40 +493,41 @@ _REGISTRY_LIST = [
     # contourne empreinte TLS + isolation de session du browser local (#5). Keyed
     # api_key (résolu via resolve_api_key, cascade user > org). byo_user (BYO) OU
     # byo_org (l'org pose l'abonnement Otomata, ses membres connectent leur LinkedIn
-    # par hosted-auth). Hors bundle par défaut : SaaS payant, opt-in. Le **dsn**
-    # (sous-domaine dédié `api<NN>.unipile.com:port`) est résolu côté client (env
-    # `UNIPILE_DSN`, défaut api25 = celui d'Otomata) — PAS un champ de credential
-    # tant qu'un BYO sur un autre sous-domaine n'existe pas (déféré ; single-field
-    # = compatible avec le stockage org-secret existant, mono-valeur). 2e provider
+    # par hosted-auth). Hors socle (comme tout le catalogue, 16/07) ; l'option payante
+    # (couche 3) gate l'usage plateforme, le BYO reste libre. Le **dsn** (API v2 :
+    # gateway `api.unipile.com`) est résolu côté client (env `UNIPILE_DSN`, défaut
+    # api.unipile.com = celui d'Otomata) — PAS un champ de credential tant qu'un BYO
+    # sur un autre endpoint n'existe pas (déféré ; single-field = compatible avec le
+    # stockage org-secret existant, mono-valeur). 2e provider
     # du domaine LinkedIn — convergence en capabilities provider-agnostiques (0010/0011) plus tard.
     _c("unipile", ["unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", hosted_auth=True, personal_cross_org=True,
-       in_default_bundle=False, label="Messagerie hébergée (Unipile)",
+       label="Messagerie hébergée (Unipile)",
        help="LinkedIn + WhatsApp + Telegram + Instagram + Messenger + X/Twitter hébergés (recherche/scrape/messagerie)",
        href="https://www.unipile.com",
        modules=("unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter")),
     # topograph : KYB — données + documents normalisés de 100+ registres publics
     # européens via une seule API REST. byo-only (pay-per-request, chacun connecte
     # son compte ; clé d'org partageable), keyed api_key (en-tête x-api-key résolu
-    # côté client). Pas de clé plateforme. Hors bundle par défaut : opt-in.
+    # côté client). Pas de clé plateforme. Hors socle : opt-in.
     _c("topograph", ["topograph"], auth_modes={"byo_user", "byo_org"}, keyed=True,
        secret_kind="api_key",
-       in_default_bundle=False, label="Topograph",
+       label="Topograph",
        help="KYB — données & documents entreprise (registres européens)",
        href="https://www.topograph.co"),
     # resend : credential-only (PAS de tools propres). La clé Resend de l'org est
     # consommée par `email_send` (transport=resend) via resolve_api_key, cascade
     # user > org. Domaine d'envoi vérifié côté Resend par l'org ; l'adresse `from`
-    # vit dans orgs.email_settings, pas dans le credential. default_hidden + hors
-    # bundle (pas un tool à exposer). tools/resend.py = register() no-op pour
+    # vit dans orgs.email_settings, pas dans le credential. Hors socle (pas un
+    # tool à exposer). tools/resend.py = register() no-op pour
     # satisfaire l'invariant « un fichier tools/ par provider kind=tools ».
     # resend : email transactionnel BYOK (clé Resend de l'ORG). byo_org uniquement
     # (l'email est org-level) ; self_serve = dispo à la demande pour toute org. La
     # propriété du domaine est garantie par Resend (la clé ne peut envoyer que depuis
     # les domaines vérifiés dans le compte Resend de l'org) → zéro logique domaine côté oto.
     _c("resend", ["resend"], auth_modes={"byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, default_hidden=True,
+       secret_kind="api_key",
        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
     # scaleway : email transactionnel via le compte Scaleway TEM DE L'ORG (BYO, comme resend).
@@ -538,8 +537,7 @@ _REGISTRY_LIST = [
     # Config (expéditeurs + fenêtre calme) dans le panneau email de la carte connecteur ORG ;
     # email_send (spine) route sender→connecteur→transport.
     _c("scaleway", ["scaleway"], auth_modes={"byo_org"}, secret_kind="fields",
-       in_default_bundle=False, default_hidden=True,
-       label="Scaleway TEM (email)",
+              label="Scaleway TEM (email)",
        help="envoi d'email transactionnel via ton compte Scaleway TEM (domaine vérifié chez Scaleway)",
        publisher="Scaleway", href="https://www.scaleway.com/en/transactional-email-tem/",
        credential_fields=(
@@ -552,10 +550,10 @@ _REGISTRY_LIST = [
     # silae : paie FR. Auth OAuth2 client-credentials (Azure AD B2C) = 3 secrets
     # → modèle générique multi-champs (ADR 0011). PAS keyed (résolu via
     # access.resolve_credential_fields, pas de clé plateforme ni quota : byo-only,
-    # le credential EST le grant). in_default_bundle=False → activable à la demande
+    # le credential EST le grant). Hors socle → installable à la demande
     # (cran d'activation par org). IBAN/BIC masqués avant l'agent (tools/silae.py).
     _c("silae", ["silae"], auth_modes={"byo_user"}, secret_kind="fields",
-       in_default_bundle=False, label="Silae", help="paie FR (lecture) — API Silae Paie v1",
+       label="Silae", help="paie FR (lecture) — API Silae Paie v1",
        href="https://www.silae.fr", credential_fields=(
            CredentialField("client_id", "Client ID", secret=True),
            CredentialField("client_secret", "Client Secret", secret=True),
@@ -566,10 +564,10 @@ _REGISTRY_LIST = [
     # keyed BYO (user OU org), résolu via resolve_api_key comme pennylane/attio.
     # self_serve : chacun connecte SON propre compte GoCardless (sandbox ou prod) —
     # PAS de clé plateforme partagée, donc rien de sensible à gater par grant. Reste
-    # hors bundle par défaut (in_default_bundle=False) → opt-in, pas imposé. L'org MM
+    # hors socle → opt-in, pas imposé. L'org MM
     # y pose le token de son compte de service pour le POC avoirs (doctrine d'une org client).
     _c("gocardless", ["gocardless"], availability="self_serve",
-       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key", in_default_bundle=False,
+       auth_modes={"byo_user", "byo_org"}, keyed=True, secret_kind="api_key",
        label="GoCardless", help="prélèvements SEPA (lecture)"),
     # (Ponts vers un service distant : voir l'entrée `bridge` universelle en fin
     # de registre — ADR 0034. L'ex-modèle remote data-driven per-namespace,
@@ -587,7 +585,7 @@ _REGISTRY_LIST = [
     # (memento_federation.py). byo_user (chacun connecte SON compte).
     _c("memento", ["memento"], kind="mount", mount_url="https://mcp.mento.cc/mcp",
        auth_modes={"byo_user"}, secret_kind="oauth",
-       in_default_bundle=False, label="Memento",
+       label="Memento",
        help="base de connaissance structurée (MCP fédéré)", href="https://mento.cc"),
     # atlassian : MCP fédéré (kind=mount, #40). Le Rovo Remote MCP d'Atlassian
     # (mcp.atlassian.com/v1/mcp, Jira+Confluence) a son propre AS OAuth 2.1 + DCR +
@@ -598,7 +596,7 @@ _REGISTRY_LIST = [
     _c("atlassian", ["atlassian"], kind="mount",
        mount_url="https://mcp.atlassian.com/v1/mcp",
        auth_modes={"byo_user"}, secret_kind="oauth",
-       in_default_bundle=False, label="Atlassian",
+       label="Atlassian",
        help="Jira / Confluence (MCP fédéré)", href="https://atlassian.com"),
     # folkmcp : MCP OFFICIEL de Folk (kind=mount, #85), COEXISTANT avec le
     # connecteur natif `folk` (clé API REST). Namespace distinct `folkmcp` ; le MCP
@@ -613,7 +611,7 @@ _REGISTRY_LIST = [
     _c("folkmcp", ["folkmcp"], kind="mount",
        mount_url="https://mcp.folk.app/mcp", mount_strip_prefix="folk_",
        auth_modes={"byo_user"}, secret_kind="oauth",
-       in_default_bundle=False, label="Folk (MCP)",
+       label="Folk (MCP)",
        help="CRM Folk via son MCP officiel (fédéré, OAuth per-user)",
        href="https://folk.app"),
     # planity : MCP fédéré (kind=mount). Serveur autonome stateless distant
@@ -622,7 +620,7 @@ _REGISTRY_LIST = [
     # dans le bearer (planity-mcp le décode et rejoue la chaîne d'auth Planity).
     _c("planity", ["planity"], kind="mount",
        mount_url="https://planity-mcp.oto.zone/mcp",
-       auth_modes={"byo_user"}, secret_kind="basic_auth", in_default_bundle=False,
+       auth_modes={"byo_user"}, secret_kind="basic_auth",
        label="Planity",
        help="agenda + caisse Planity (RDV, clients, CA, stats) — MCP fédéré",
        href="https://planity-mcp.oto.zone"),
@@ -637,7 +635,7 @@ _REGISTRY_LIST = [
     # `_db_activated_mounts`). Hors bundle par défaut.
     _c("justicelibre", ["justicelibre"], kind="mount",
        mount_url="https://justicelibre.org/mcp",
-       auth_modes=frozenset(), secret_kind="none", in_default_bundle=False,
+       auth_modes=frozenset(), secret_kind="none",
        label="JusticeLibre",
        help="droit français & européen — législation + jurisprudence "
             "(Légifrance/Judilibre/CE/CC/CEDH/CJUE), MCP fédéré, sources ouvertes",
@@ -652,7 +650,7 @@ _REGISTRY_LIST = [
     _c("aiark", ["aiark"],
        auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key",
-       in_default_bundle=False, label="AI Ark",
+       label="AI Ark",
        help="people & company search via LinkedIn",
        href="https://ai-ark.com"),
 
@@ -665,7 +663,7 @@ _REGISTRY_LIST = [
     # Live View (`crunchbase_connect_start`), sa session persiste dans un Context =
     # le credential per-user (coffre `crunchbase`). Plus de scraping DOM in-process.
     _c("crunchbase", ["crunchbase"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, label="Crunchbase",
+       secret_kind="cookie", label="Crunchbase",
        help="fiches société/personne (session Browserbase)", publisher="Crunchbase",
        href="https://www.crunchbase.com/"),
     # brevoauto : automations (workflows marketing) via l'API PRIVÉE de l'éditeur
@@ -677,9 +675,9 @@ _REGISTRY_LIST = [
     # Live View (`brevoauto_connect_start`), sa session persiste dans un Context = le
     # credential per-user (coffre). Pas de browser sur la box, pas d'export de cookie.
     # personal_session (session physiologiquement per-user). Expérimental (API non
-    # documentée) : hors bundle + masqué, self-activable.
+    # documentée) : hors socle, installable depuis la library.
     _c("brevoauto", ["brevoauto"], auth_modes={"byo_user"}, personal_session=True,
-       secret_kind="cookie", in_default_bundle=False, default_hidden=True,
+       secret_kind="cookie",
        label="Brevo (automation)", help="automations marketing (session Browserbase)",
        publisher="Brevo", href="https://app.brevo.com/automation/automations"),
     # pennylaneged : GED (bac documentaire) Pennylane via l'API PRIVÉE de la SPA
@@ -689,14 +687,14 @@ _REGISTRY_LIST = [
     # **Browserbase** : l'user se logue 1× via Live View (`pennylaneged_connect_start`),
     # sa session persiste dans un Context = le credential (coffre). Upload =
     # control plane ici (URL S3 présignée) + PUT des octets EN LOCAL (RGPD, issue #31).
-    # Expérimental (API interne RE) : hors bundle + masqué, self-activable.
+    # Expérimental (API interne RE) : hors socle, installable depuis la library.
     # **byo_org** : la session peut être configurée au niveau USER, ÉQUIPE ou ORG
     # (cas cabinet : une seule connexion Pennylane partagée par la team pour pousser
     # dans les GED clients — cascade user > groupe > org). `personal_session=True`
     # reste = catégorie « session navigateur » côté UI (orthogonal au partage).
     _c("pennylaneged", ["pennylaneged"], auth_modes={"byo_user", "byo_org"},
-       personal_session=True, secret_kind="cookie", in_default_bundle=False,
-       default_hidden=True, label="Pennylane GED",
+       personal_session=True, secret_kind="cookie",
+       label="Pennylane GED",
        help="bac documentaire Pennylane (session Browserbase)",
        publisher="Pennylane", href="https://app.pennylane.com"),
     # namespaces = préfixes RÉELS des tools (namespace_of = 1er token avant `_`) :
@@ -705,7 +703,7 @@ _REGISTRY_LIST = [
     # par l'activation (cf. middleware.py « tools plateforme … data … jamais gatés »).
     _c("google", ["gmail", "tasks", "calendar", "sheets", "drive", "chat"],
        auth_modes={"byo_user"},
-       personal_session=True, secret_kind="oauth", in_default_preset=True,
+       personal_session=True, secret_kind="oauth",
        label="Google", help="Gmail + Tasks + Calendar + Sheets + Drive + Chat (OAuth)",
        modules=("gmail", "tasks", "calendar", "sheets", "drive", "chat")),
 
@@ -715,46 +713,46 @@ _REGISTRY_LIST = [
     # l'autre). namespace = préfixe réel : culture_spectacle_* → `culture`
     # (namespace_of = 1er token), reddit_* → `reddit`. Déclarer "culture", PAS
     # "culture_spectacle" (jamais matché → fail-open du gate, #24).
-    _c("culture", ["culture"], secret_kind="none", in_default_preset=True,
+    _c("culture", ["culture"], secret_kind="none",
        label="Culture (open data)",
        help="entreprises du spectacle vivant — open data Ministère de la Culture"),
-    _c("reddit", ["reddit"], secret_kind="none", in_default_preset=True,
+    _c("reddit", ["reddit"], secret_kind="none",
        label="Reddit", help="recherche & lecture de posts/subreddits (API publique)"),
     # Grèce : lookup entité via registre GEMI (autocomplete) + VIES. Open data,
     # sans clé. Inerte tant que non activé en DB (deny-by-default), comme foncier/sante.
-    _c("gr", ["gr"], secret_kind="none", in_default_bundle=False,
+    _c("gr", ["gr"], secret_kind="none",
        label="Data GR", help="entreprises Grèce — registre GEMI + VIES (open data)"),
     # foncier / sante : connecteurs open-data déclarés (ADR 0010). Inertes tant
     # que non activés en DB (connector_activation) — register_all gate dessus,
     # donc absents du seed initial → OFF par défaut (deny-by-default).
-    _c("foncier", ["foncier"], secret_kind="none", in_default_bundle=False,
+    _c("foncier", ["foncier"], secret_kind="none",
        label="Foncier", help="géocodage, cadastre, bâti, risques/ICPE, solaire, immobilier (open data)"),
-    _c("urba", ["urba"], secret_kind="none", in_default_bundle=False,
+    _c("urba", ["urba"], secret_kind="none",
        label="Urbanisme", help="zonage PLU/GPU, risques, QPV, EPFIF, socio-démo commune (open data)"),
-    _c("sante", ["sante"], secret_kind="none", in_default_bundle=False,
+    _c("sante", ["sante"], secret_kind="none",
        label="Santé", help="établissements FINESS + évaluations ESSMS HAS (open data)"),
-    _c("osm", ["osm"], secret_kind="none", in_default_bundle=False,
+    _c("osm", ["osm"], secret_kind="none",
        label="OpenStreetMap", help="points d'intérêt OSM par tag sur une zone (parkings, équipements, commerces) — recensement exhaustif via Overpass (open data)"),
-    _c("frenchtech", ["frenchtech"], secret_kind="none", in_default_bundle=False,
+    _c("frenchtech", ["frenchtech"], secret_kind="none",
        label="French Tech", help="annuaire écosystème d'une capitale French Tech (startups/structures/prestataires) + événements, appels à projet, financements + French Tech Central (open data, défaut Aix-Marseille)"),
     # infosec : recon PASSIF d'un domaine (RDAP/DNS/CT/TLS/headers, OSINT, sans clé).
     # Complète fr_* (identité légale) par l'empreinte numérique. Pas de scan intrusif.
-    _c("infosec", ["infosec"], secret_kind="none", in_default_bundle=False,
+    _c("infosec", ["infosec"], secret_kind="none",
        label="Infosec", help="empreinte numérique d'un domaine : whois/RDAP, DNS, posture e-mail (SPF/DMARC), sous-domaines (CT), TLS, headers de sécurité (recon passif)"),
 
     # --- connecteurs API tiers (clients oto-core déjà écrits, câblés 2026-06-19) ---
-    # byo keyed api_key, hors bundle (opt-in, activables par org/admin), pas de
+    # byo keyed api_key, hors socle (opt-in, installables depuis la library), pas de
     # clé plateforme (chacun pose la sienne). Inertes tant que non activés en DB
     # (connector_activation, deny-by-default), comme foncier/sante.
     _c("hubspot", ["hubspot"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="HubSpot",
+       secret_kind="api_key", label="HubSpot",
        help="CRM (contacts, companies, deals, tickets, notes)",
        href="https://app.hubspot.com"),
     # brevo : API PUBLIQUE v3 (`api.brevo.com/v3`, header `api-key`). Une clé porte
     # tout le compte (pas de scope) → byo. Ne PAS confondre avec `brevoauto`
     # (automations, session navigateur) : surfaces disjointes, credentials distincts.
     _c("brevo", ["brevo"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Brevo",
+       secret_kind="api_key", label="Brevo",
        help="emailing & CRM (contacts, listes, transactionnel, campagnes, deals)",
        publisher="Brevo", href="https://app.brevo.com",
        # 2 modules, 1 namespace : le CRM natif est un sous-domaine distinct, sorti
@@ -762,30 +760,30 @@ _REGISTRY_LIST = [
        modules=("brevo", "brevo_crm")),
     _c("apollo", ["apollo"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=20, platform_key_open=True,
-       in_default_bundle=False, label="Apollo.io",
+       label="Apollo.io",
        help="prospection B2B (organizations, people, job postings)",
        href="https://app.apollo.io"),
     _c("zerobounce", ["zerobounce"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="ZeroBounce",
+       secret_kind="api_key", label="ZeroBounce",
        help="vérification de délivrabilité email", href="https://www.zerobounce.net"),
     _c("hithorizons", ["hithorizons"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="HitHorizons",
+       secret_kind="api_key", label="HitHorizons",
        help="données entreprise européennes (recherche + détails)",
        href="https://www.hithorizons.com"),
     _c("phantombuster", ["phantombuster"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Phantombuster",
+       secret_kind="api_key", label="Phantombuster",
        help="agents d'automatisation (launch + résultats)",
        href="https://phantombuster.com"),
     _c("notion", ["notion"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Notion",
+       secret_kind="api_key", label="Notion",
        help="pages, bases de données, blocs (lecture + écriture)",
        href="https://www.notion.so"),
     _c("figma", ["figma"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Figma",
+       secret_kind="api_key", label="Figma",
        help="fichiers, export d'images, commentaires, FigJam",
        href="https://www.figma.com"),
     _c("supabase", ["supabase"], auth_modes={"byo_user"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Supabase",
+       secret_kind="api_key", label="Supabase",
        help="Management API (projets, config auth, logs)",
        href="https://supabase.com"),
     # zoho / zohodesk : OAuth2 self-client → credential multi-champs (ADR 0011,
@@ -793,7 +791,7 @@ _REGISTRY_LIST = [
     # (zoho : clé d'org/groupe partageable — équipe sales partage un self-client).
     # `data_center` (non-secret) sélectionne la région Zoho (com/eu/in…).
     _c("zoho", ["zoho"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
-       in_default_bundle=False, label="Zoho CRM",
+       label="Zoho CRM",
        help="CRM Zoho (CRUD modules, notes)", href="https://crm.zoho.com",
        credential_fields=(
            CredentialField("client_id", "Client ID", secret=True,
@@ -806,7 +804,7 @@ _REGISTRY_LIST = [
                            secret=False, reveal=True, help="eu"),
        )),
     _c("zohodesk", ["zohodesk"], auth_modes={"byo_user"}, secret_kind="fields",
-       in_default_bundle=False, label="Zoho Desk",
+       label="Zoho Desk",
        help="support Zoho Desk (tickets, threads, contacts)",
        href="https://desk.zoho.com", credential_fields=(
            CredentialField("client_id", "Client ID", secret=True,
@@ -818,7 +816,7 @@ _REGISTRY_LIST = [
            CredentialField("org_id", "Org ID", secret=False, help="ex. 800123456"),
        )),
     _c("zohoanalytics", ["zohoanalytics"], auth_modes={"byo_user", "byo_org"},
-       secret_kind="fields", in_default_bundle=False, label="Zoho Analytics",
+       secret_kind="fields", label="Zoho Analytics",
        help="Zoho Analytics (workspaces, vues, export, requêtes SQL)",
        href="https://analytics.zoho.com", credential_fields=(
            CredentialField("client_id", "Client ID", secret=True),
@@ -836,23 +834,23 @@ _REGISTRY_LIST = [
     # comme hubspot/apollo). Recruitee = credential à 2 champs (token + company id)
     # → resolve_credential_fields, pas keyed.
     _c("greenhouse", ["greenhouse"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Greenhouse",
+       secret_kind="api_key", label="Greenhouse",
        help="ATS — candidats, jobs, candidatures, notes (Harvest API)",
        href="https://www.greenhouse.io"),
     _c("lever", ["lever"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Lever",
+       secret_kind="api_key", label="Lever",
        help="ATS — opportunities (candidats), postings, stages, notes",
        href="https://www.lever.co"),
     _c("ashby", ["ashby"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Ashby",
+       secret_kind="api_key", label="Ashby",
        help="ATS — candidates, jobs, applications, notes",
        href="https://www.ashbyhq.com"),
     _c("teamtailor", ["teamtailor"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Teamtailor",
+       secret_kind="api_key", label="Teamtailor",
        help="ATS — candidats, jobs, candidatures (JSON:API)",
        href="https://www.teamtailor.com"),
     _c("recruitee", ["recruitee"], auth_modes={"byo_user"}, secret_kind="fields",
-       in_default_bundle=False, label="Recruitee",
+       label="Recruitee",
        help="ATS — candidats, offers (postes), notes",
        href="https://www.recruitee.com", credential_fields=(
            CredentialField("api_token", "API token", secret=True),
@@ -863,7 +861,7 @@ _REGISTRY_LIST = [
     # eligible (clé plateforme + quota daily, comme serper).
     _c("serpapi", ["serpapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=200, platform_key_open=True,
-       in_default_bundle=False, label="SerpApi",
+       label="SerpApi",
        help="recherche multi-moteurs (Google verticals, Bing, YouTube, Walmart, Amazon, jobs…)",
        href="https://serpapi.com"),
     # searchapi : recherche multi-moteurs via SearchApi.io (verticaux Google +
@@ -872,7 +870,7 @@ _REGISTRY_LIST = [
     # auto-contenu (pas de dép oto-core).
     _c("searchapi", ["searchapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
        secret_kind="api_key", default_quota=200, platform_key_open=True,
-       in_default_bundle=False, label="SearchApi",
+       label="SearchApi",
        help="recherche multi-moteurs (Google verticals, YouTube, Bing, jobs, news, maps, scholar…)",
        href="https://www.searchapi.io"),
     # brightdata : scraping & SERP via réseau proxy Bright Data. COQUILLE VIDE —
@@ -880,27 +878,29 @@ _REGISTRY_LIST = [
     # pas encore implémentés (tools/brightdata.py n'expose aucun tool pour l'instant).
     _c("brightdata", ["brightdata"], auth_modes={"byo_user", "byo_org", "platform"},
        keyed=True, secret_kind="api_key",
-       default_quota=50, in_default_bundle=False, label="Bright Data",
+       default_quota=50, label="Bright Data",
        help="scraping & SERP via proxy (coquille vide — à implémenter)",
        href="https://brightdata.com"),
     # cloro : veille AI-search (ChatGPT/Gemini/Perplexity/Copilot/Grok/AI Mode) +
-    # SERP Google en JSON. keyed api_key, platform-eligible (clé + quota daily).
-    _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
-       secret_kind="api_key", default_quota=50,
-       in_default_bundle=False, label="Cloro",
+    # SERP Google en JSON. keyed api_key, **BYOK** (byo user/org) — PAS de mode
+    # plateforme (décision produit : chaque org pose SA clé cloro, pas de clé oto
+    # partagée ; signaux #210-212). Sans mode platform, plus de quota daily oto.
+    _c("cloro", ["cloro"], auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key",
+       label="Cloro",
        help="veille AI-search (ChatGPT, Gemini, Perplexity…) + SERP Google JSON",
        href="https://cloro.dev"),
 
     # --- automatisation de workflows (no-code) — câblés 2026-06-21 -----------
-    # Connecteurs vers les plateformes d'automatisation tierces. byo, hors bundle
-    # (opt-in, activables par org/admin), pas de clé plateforme (chacun pose la
-    # sienne). Inertes tant que non activés en DB (deny-by-default, comme hubspot).
+    # Connecteurs vers les plateformes d'automatisation tierces. byo, hors socle
+    # (opt-in, installables depuis la library), pas de clé plateforme (chacun
+    # pose la sienne). Inertes tant que non activés en DB (deny-by-default, comme hubspot).
     # n8n / make : credential à 2 champs (clé + base URL de l'instance/zone —
     # self-hosting & régionalisation imposent une URL propre) → secret_kind="fields",
     # résolu via resolve_credential_fields. zapier : clé simple (AI Actions API),
     # keyed → resolve_api_key.
     _c("n8n", ["n8n"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
-       in_default_bundle=False, label="n8n",
+       label="n8n",
        help="automatisation de workflows — workflows + exécutions (API publique)",
        href="https://n8n.io", credential_fields=(
            CredentialField("api_key", "API key", secret=True),
@@ -908,7 +908,7 @@ _REGISTRY_LIST = [
                            help="ex. https://acme.app.n8n.cloud"),
        )),
     _c("make", ["make"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
-       in_default_bundle=False, label="Make",
+       label="Make",
        help="automatisation de workflows — scénarios, exécution, logs (API v2)",
        href="https://www.make.com", credential_fields=(
            CredentialField("api_token", "API token", secret=True),
@@ -916,7 +916,7 @@ _REGISTRY_LIST = [
                            help="ex. https://eu1.make.com ou https://us1.make.com"),
        )),
     _c("zapier", ["zapier"], auth_modes={"byo_user", "byo_org"}, keyed=True,
-       secret_kind="api_key", in_default_bundle=False, label="Zapier",
+       secret_kind="api_key", label="Zapier",
        help="automatisation — actions exposées (AI Actions) + exécution",
        href="https://actions.zapier.com"),
 
@@ -929,7 +929,7 @@ _REGISTRY_LIST = [
     # À DISTINGUER du bridge (credential hors plateforme) : ici la clé est confiée
     # à oto — pas de custody côté client.
     _c("http", ["http"], auth_modes={"byo_org"}, secret_kind="fields",
-       in_default_bundle=False, default_hidden=True, label="HTTP",
+       label="HTTP",
        help="connecte n'importe quelle API HTTP à oto : renseigne l'URL de base, "
             "le mode d'auth (bearer / clé en header ou query / basic / oauth2) et "
             "le secret correspondant. oto stocke le secret (coffre chiffré) et tape "
@@ -962,24 +962,11 @@ _REGISTRY_LIST = [
        )),
 
     # --- bridge universel (ADR 0034, amende 0003/0011) ------------------------
-    # UN connecteur générique pour tout pont vers un middleware distant qui détient
-    # le credential métier (bridge ADR 0003). L'identité du service ponté vit dans
-    # la CONFIG d'org (base_url + label, privés) — jamais dans le namespace, donc
-    # montrable au catalogue sans nom client. oto ne stocke que l'endpoint + le
-    # token M2M. Tools bridge_describe/bridge_call (namespace fixe, barreau B2).
-    _c("bridge", ["bridge"], kind="remote", auth_modes={"byo_org"},
-       secret_kind="fields", in_default_bundle=False, default_hidden=True,
-       label="Bridge",
-       help="pont universel vers ton propre service distant (middleware) : le "
-            "service détient tes credentials métier, oto ne stocke que son URL "
-            "et un token d'accès",
-       credential_fields=(
-           CredentialField("base_url", "URL du bridge", secret=False, reveal=True,
-                           help="endpoint HTTPS de ton service (ex. https://bridge.acme.com)"),
-           CredentialField("token", "Token M2M", secret=True),
-           CredentialField("label", "Nom affiché", secret=False, reveal=True,
-                           help="ex. « Back-office Acme » — visible de ta seule org"),
-       )),
+    # (Connecteur `bridge` RETIRÉ le 2026-07-16, ADR 0037 / oto-backend#108 :
+    #  subsumé par le connecteur `http` générique — un bridge n'est qu'une API HTTP
+    #  que le back-office re-expose, jointe via http_get/http_post. Le pilote MM a
+    #  migré bridge→http. Le concept « remote data-driven » (base_url sur un provider
+    #  hors registre) subsiste dans org_secret_meta, sans entrée de catalogue.)
 ]
 
 REGISTRY: dict[str, Connector] = {c.name: c for c in _REGISTRY_LIST}
@@ -1006,16 +993,20 @@ CREDENTIAL_PROVIDERS: frozenset = frozenset(
 )
 ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.org_shareable)
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
-DEFAULT_BUNDLE: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_bundle)
-DEFAULT_PRESET: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.in_default_preset)
+# Socle curé (ADR 0050) : les connecteurs installés d'office (state='active') au
+# seed de la sélection d'un NOUVEAU (sub, org). Le reste de l'exposé = library.
+# ⚠️ Politique actuelle (décision 16/07) : socle VIDE — aucun connecteur n'est
+# pré-installé ; l'agent guide l'utilisateur depuis les tools spine (`oto_connector`
+# op=list/select, `oto_call`) et le catalogue injecté. Le mécanisme reste : poser
+# default_active=True sur un connecteur le remettrait au départ.
+DEFAULT_ACTIVE_CONNECTORS: frozenset = frozenset(
+    c.name for c in _REGISTRY_LIST if c.default_active
+)
 
 # Connecteurs d'envoi d'email → transport effectif. Un expéditeur appartient à un
 # connecteur (sa config vit dans orgs.email_settings keyé par connecteur) ; le
 # transport en DÉRIVE. `email_send` (spine) route sender→connecteur→transport.
 EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "scaleway", "resend": "resend"}
-DEFAULT_HIDDEN_NAMESPACES: frozenset = frozenset(
-    ns for c in _REGISTRY_LIST if c.default_hidden for ns in c.namespaces
-)
 REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote")
 MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 
@@ -1041,10 +1032,6 @@ def _availability_tag(c: "Connector") -> str:
     bits: list[str] = []
     if c.hosted_auth:
         bits.append("compte à connecter")
-    if c.default_hidden:
-        bits.append("masqué — oto_enable_tool")
-    elif not c.in_default_bundle and c.kind == "tools":
-        bits.append("à activer selon ton org")
     return f" ({'; '.join(bits)})" if bits else ""
 
 
@@ -1091,8 +1078,9 @@ def require_keyed(name: str) -> None:
 def require_credential(entity_type: str, name: str) -> None:
     """Lève si le connecteur ne peut PAS porter un credential à ce niveau d'entité.
     user → doit accepter `byo_user` (clé API keyed OU secret de session :
-    linkedin/crunchbase/google/slack…) ; org → doit être org-partageable (byo_org,
-    ex. mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
+    linkedin/crunchbase/google/slack…) ; group → org-partageable OU byo_user (une
+    équipe délègue l'org, ADR 0012) ; org → doit être org-partageable (byo_org,
+    ex. http/mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
@@ -1103,7 +1091,17 @@ def require_credential(entity_type: str, name: str) -> None:
         c = REGISTRY.get(name)
         if not (c and "platform" in c.auth_modes):
             raise ValueError(f"{name!r} n'accepte pas de credential plateforme (auth_modes 'platform' requis)")
-    else:
+    elif entity_type == "group":
+        # Un GROUPE est une délégation de l'org (ADR 0012) : ce qui est
+        # org-partageable est posable au niveau équipe (miroir EXACT du palier
+        # groupe de la résolution, gaté `ORG_SHAREABLE_PROVIDERS`, pas byo_user).
+        # Un byo_user pur (sessions linkedin/google) reste posable en équipe aussi.
+        # ⚠️ NE PAS exiger byo_user ici : un connecteur org-only (http « un par
+        # département », #183) DOIT pouvoir poser son secret d'équipe sans devenir
+        # byo_user (ce qui réactiverait à tort le palier membre — cf. access.py).
+        if not (is_org_shareable(name) or is_byo_user(name)):
+            raise ValueError(f"{name!r} n'accepte pas de credential de groupe")
+    else:  # user
         if not is_byo_user(name):
             raise ValueError(
                 f"{name!r} n'accepte pas de credential per-user (byo_user requis)")

@@ -22,8 +22,13 @@ ROW = {"id": 7, "owner_type": "org", "owner_id": "99", "name": "Proj", "brief_md
 def seams(monkeypatch):
     rec = {"create": [], "update": [], "archive": []}
     monkeypatch.setattr(P.db, "create_project",
-                        lambda ot, oid, name, brief, created_by=None: rec["create"].append((ot, oid, name, brief, created_by)) or 7)
+                        lambda ot, oid, name, brief, created_by=None, context_org_id=None: rec["create"].append((ot, oid, name, brief, created_by, context_org_id)) or 7)
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
+    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de l'org de contexte. Défaut =
+    # aucun ; les tests dédiés surchargent.
+    rec["member"] = []
+    monkeypatch.setattr(P.db, "list_member_projects",
+                        lambda sub, org, **k: rec["member"].append((sub, org)) or [])
     rec["list_owners"] = []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
                         lambda owners, templates_only=False: rec["list_owners"].append(owners) or (
@@ -48,6 +53,14 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    # ADR 0049 : défauts neutres — pas d'escalade admin, membre des équipes qu'il vise,
+    # aucun groupe dans l'org active. Les tests dédiés surchargent.
+    monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: False)
+    monkeypatch.setattr(P.roles, "is_platform_admin", lambda sub: False)
+    monkeypatch.setattr(P.roles, "can_read_group", lambda sub, gid: True)
+    monkeypatch.setattr(P.group_store, "get_group",
+                        lambda gid: {"id": gid, "org_id": 99, "name": "pôle"})
+    monkeypatch.setattr(P.group_store, "list_groups", lambda org_id: [])
     monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
     monkeypatch.setattr(P.db, "list_project_activity",
                         lambda pid, limit=50: [{"sub": "u1", "action": "project.create",
@@ -86,11 +99,13 @@ def test_mcp_url_domain_env_driven(monkeypatch):
     assert P._mcp_url("ft", "off") is None
 
 
-def test_create_defaults_to_active_org(seams):
-    # Suppression du perso : le défaut crée dans l'ORG ACTIVE (ctx.org_id), plus en user.
+def test_create_defaults_to_personal(seams):
+    # ADR 0030 AMENDÉ (2026-07-17) : le défaut crée un projet PERSO — owner=('user', sub),
+    # PRIVÉ, dans le CONTEXTE de l'org active (context_org=99). L'org/team = partage ou
+    # transfert explicites, plus le défaut. C'est l'identité « moi, org ».
     ctx = ResolvedCtx(sub="u1", org_id=99)
     out = P._project(ctx, P.ProjectInput(op="create", name="  Proj  ", brief_md="b"))
-    assert seams["create"] == [("org", "99", "Proj", "b", "u1")]     # owner=org active
+    assert seams["create"] == [("user", "u1", "Proj", "b", "u1", 99)]   # owner=perso, contexte=org
     assert out["id"] == 7 and out["name"] == "Proj"
 
 
@@ -112,6 +127,39 @@ def test_create_org_ok(seams):
     assert seams["create"][0][:2] == ("org", "5")
 
 
+def test_create_group_owned(seams):
+    # ADR 0049 : projet de PÔLE — owner=('group', id), créable par un lecteur du groupe.
+    P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert seams["create"][0][:2] == ("group", "5")
+
+
+def test_create_group_requires_membership(seams, monkeypatch):
+    monkeypatch.setattr(P.roles, "can_read_group", lambda sub, gid: False)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert e.value.code == "forbidden"
+
+
+def test_create_group_unknown_group(seams, monkeypatch):
+    monkeypatch.setattr(P.group_store, "get_group", lambda gid: None)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="group", owner_id="5"))
+    assert e.value.code == "unknown_group"
+
+
+def test_create_platform_requires_platform_admin(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="platform"))
+    assert e.value.code == "forbidden"
+
+
+def test_create_platform_owned(seams, monkeypatch):
+    # ADR 0049 : projet BIBLIOTHÈQUE — sentinelle owner=('platform', 'platform').
+    monkeypatch.setattr(P.roles, "is_platform_admin", lambda sub: True)
+    P._project(CTX, P.ProjectInput(op="create", name="X", owner_type="platform"))
+    assert seams["create"][0][:2] == ("platform", "platform")
+
+
 def test_create_missing_name(seams):
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="create", name="   "))
@@ -131,6 +179,22 @@ def test_list_without_active_org_rejected(seams):
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX_NOORG, P.ProjectInput(op="list"))   # pas d'org active
     assert e.value.code == "no_active_org"
+
+
+def test_list_includes_my_personal_projects(seams, monkeypatch):
+    # ADR 0030 amendé : mes projets PERSO de l'org de CONTEXTE apparaissent dans la liste,
+    # possédés (jamais `shared`), scopés à l'org active (`db.list_member_projects(sub, org)`).
+    mine = dict(ROW, id=71, name="Perso", owner_type="user", owner_id="u1",
+                context_org_id=99)
+    monkeypatch.setattr(P.db, "list_member_projects",
+                        lambda sub, org, **k: [mine] if (sub, org) == ("u1", 99) else [])
+    ctx = ResolvedCtx(sub="u1", org_id=99)
+    out = P._project(ctx, P.ProjectInput(op="list"))
+    ids = [p["id"] for p in out["projects"]]
+    assert ids == [7, 71]                                  # org-owned + mon perso
+    perso = next(p for p in out["projects"] if p["id"] == 71)
+    assert perso["shared"] is False and perso["owner_type"] == "user"
+    assert perso["context_org_id"] == "99"                 # « moi, org » exposé
 
 
 def test_list_includes_projects_delivered_to_org(seams, monkeypatch):
@@ -216,10 +280,30 @@ def test_update_publish_template_ok(seams):
     assert out["is_template"] is False   # vue reflète ROW (stub) — publication persistée côté db
 
 
+def test_list_includes_my_group_projects(seams, monkeypatch):
+    # ADR 0049 : les projets des pôles dont je suis membre (dans l'org active) sont
+    # listés à côté des projets d'org — le scope reste borné à l'org active.
+    monkeypatch.setattr(P.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [{"group_id": 5}])
+    P._project(CTX, P.ProjectInput(op="list"))
+    assert seams["list_owners"] == [[("org", "99"), ("group", "5")]]
+
+
+def test_list_org_admin_sees_all_org_groups(seams, monkeypatch):
+    # Gouvernance inaliénable : l'org_admin liste les projets de TOUS les pôles de son org.
+    monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: True)
+    monkeypatch.setattr(P.group_store, "list_groups",
+                        lambda org_id: [{"id": 5}, {"id": 6}])
+    P._project(CTX, P.ProjectInput(op="list"))
+    assert seams["list_owners"] == [[("org", "99"), ("group", "5"), ("group", "6")]]
+
+
 def test_list_templates(seams):
     out = P._project(CTX, P.ProjectInput(op="list_templates"))
     assert [p["id"] for p in out["projects"]] == [7]
     assert out["projects"][0]["is_template"] is True
+    # ADR 0049 : la bibliothèque PLATEFORME est toujours dans le scope des modèles.
+    assert ("platform", "platform") in seams["list_owners"][0]
 
 
 def test_copy(seams):
@@ -293,11 +377,19 @@ def test_link(seams):
     assert out["ok"] is True and out["links"]
 
 
+def test_link_type_doc_removed(seams):
+    # Lot 3 chantier 0.4 : le type de lien `doc` (vestige Memento) est RETIRÉ —
+    # relier des pages = les backlinks [[…]] (Ship 4), pas un pointeur de rail.
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36")
+
+
 def test_link_with_role(seams):
-    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc",
+    P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="procedure",
                                    target_ref="36", label="Ton of voice",
                                    role="charte éditoriale de référence"))
-    assert seams["link"] == [(7, "doc", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
+    assert seams["link"] == [(7, "procedure", "36", "Ton of voice", "charte éditoriale de référence", None, None)]
 
 
 def test_link_connector_with_config(seams):
@@ -389,7 +481,7 @@ def test_link_missing_target(seams):
 def test_link_forbidden_without_write(seams, monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": False)
     with pytest.raises(AuthzDenied) as e:
-        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="doc", target_ref="36"))
+        P._project(CTX, P.ProjectInput(op="link", project_id=7, target_type="tableau", target_ref="36"))
     assert e.value.code == "forbidden"
 
 

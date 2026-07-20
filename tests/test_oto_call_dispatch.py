@@ -251,3 +251,45 @@ def test_dispatch_org_refused_raises_before_run(oto_call_fn, monkeypatch):
         _call(oto_call_fn, [target], name="zoho_records", arguments={}, org=999)
     assert target.org_during_run is None                     # dispatch jamais atteint
     assert session_org.current_call_org() is None
+
+
+# --- 7. #228 : TOUS les axes-contexte (pas seulement org=) forwardés via oto_call --
+
+class _ArgsCapturingTool(_OrgCapturingTool):
+    """Capture AUSSI les arguments vus par la cible (pour prouver le strip des axes)."""
+    def __init__(self, name):
+        super().__init__(name)
+        self.args_seen = None
+
+    async def run(self, arguments):
+        self.args_seen = dict(arguments)
+        return await super().run(arguments)
+
+
+def test_dispatch_org_axis_in_arguments(oto_call_fn, monkeypatch):
+    """#228 : un axe passé DANS `arguments` (ici org=, sans le param top-level) est
+    routé au contexte d'appel via la boucle d'axes ET retiré des args de la cible."""
+    from oto_mcp import call_axes, session_org
+    monkeypatch.setattr(redaction, "_resolve_field_filter", lambda _s: FieldFilter())
+
+    async def _guard(org):
+        return 167
+    monkeypatch.setattr(call_axes, "resolve_org_guarded", _guard)
+
+    target = _ArgsCapturingTool("zoho_records")
+    _call(oto_call_fn, [target], name="zoho_records",
+          arguments={"module": "Contacts", "org": 167})
+
+    assert target.org_during_run == 167              # org routée (axe dans arguments)
+    assert target.args_seen == {"module": "Contacts"}  # axe org RETIRÉ des args cible
+    assert session_org.current_call_org() is None
+
+
+def test_dispatch_strips_nonapplicable_axis(oto_call_fn, monkeypatch):
+    """Un axe qui ne s'applique pas à la cible (ex. account= sur zoho, non multi-compte)
+    est ÉCARTÉ des args — pas posé, pas passé au tool (sinon sa validation casserait)."""
+    monkeypatch.setattr(redaction, "_resolve_field_filter", lambda _s: FieldFilter())
+    target = _ArgsCapturingTool("zoho_records")
+    _call(oto_call_fn, [target], name="zoho_records",
+          arguments={"module": "X", "account": "nope"})
+    assert target.args_seen == {"module": "X"}       # account= écarté, cible propre

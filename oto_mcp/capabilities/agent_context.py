@@ -95,3 +95,34 @@ CAPABILITIES += [
         rest=RestBinding("GET", "/api/me/agent-context"),
     ),
 ]
+
+
+# ── oto_context : rechargement PULL du contexte au changement de scope (call pt 1) ──
+# Les instructions injectées sont FIGÉES au handshake (MCP n'a pas de « instructions
+# changed »). Quand l'agent bascule d'org/équipe/projet en cours de session, la toolbox
+# (tools/list_changed) et les credentials (résolution par appel, ADR 0038) suivent, mais
+# le bloc C (readme org+équipe, guides, procédures) reste gelé. `oto_context` laisse
+# l'agent TIRER ce bloc C frais pour le scope EFFECTIF — `ctx.org_id` respecte les jetons
+# org=/project=/group= de l'appel. Focalisé (bloc C seul, pas la doctrine ni les tools) :
+# c'est ce qui change au switch (leçon D1 : ne pas gonfler la sortie).
+class ContextInput(BaseModel):
+    pass
+
+
+def _context(ctx: ResolvedCtx, inp: ContextInput) -> dict:
+    return {"org_id": ctx.org_id, "context": _instructions._block_c(ctx.sub, ctx.org_id)}
+
+
+CAPABILITIES += [
+    Capability(
+        key="me.context", handler=_context, Input=ContextInput, authz=SUB_ONLY,
+        description="Reload YOUR contextual instructions for the CURRENT effective scope "
+                    "(org + team agent-readme, guides index, procedures index, recent "
+                    "projects/runs). Your injected context is frozen at connection time; "
+                    "after you switch org/team/project — or pass org=/project=/group= on "
+                    "this call — the toolbox and credentials follow but this prose does "
+                    "NOT. Call it to act on the right org/team's knowledge, not the one "
+                    "you connected under.",
+        mcp="oto_context",
+    ),
+]

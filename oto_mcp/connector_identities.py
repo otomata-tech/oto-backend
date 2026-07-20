@@ -82,12 +82,13 @@ def _google_select(sub: str, identity_id: str) -> dict:
 # + comptes ACCORDÉS par leur propriétaire (#55, tout mode — y compris revente).
 
 def _own_unipile_account_id(sub: str, provider: str) -> str | None:
-    """Compte Unipile connecté PROPRE de `sub` sur ce canal — org de contexte
-    d'abord, puis (issue #172, piste A) l'org de mon instance PERSONNELLE cross-org.
-    Un compte de messagerie hébergé étant PAR-PERSONNE (`personal_cross_org`), mon
-    LinkedIn connecté dans une autre org me suit ici : le fallback vise la MÊME org
-    que la clé qui résout (`access.personal_instance_org`) → clé et compte restent
-    appariés (pas de clé d'ici + compte de là-bas). None si aucun."""
+    """Compte Unipile connecté PROPRE de `sub` sur ce canal — le binding VIVANT de
+    l'org de contexte (le binding est un ACTE par org, modèle explicite : un siège
+    plateforme connecté ailleurs se propose à l'ADOPTION au connect, jamais en
+    fallback silencieux ici — l'ex-#221 auto a été retiré, il rendait le disconnect
+    incohérent). Seul cross-org restant : **BYO** (#172) — la clé membre me suit dans
+    une autre org → compte pris dans la MÊME org que la clé (`personal_instance_org`),
+    clé et compte appariés. None si aucun."""
     from . import access, connectors, db
     org = access.current_org(sub)
     acc = db.get_unipile_account_id(sub, org, provider)
@@ -140,15 +141,10 @@ def _unipile_client(sub: str):
     if access.credential_mode_for(sub, "unipile") not in access.BYO_MODES:
         return None  # revente (clé plateforme) → hosted-auth, pas de sélecteur
     rc = access.resolve_credential("unipile", want="byo", sub=sub)
-    import os
     from oto.tools.unipile import make_unipile_client
-    # make_unipile_client (pas UnipileClient v1 en dur) : une clé v2 vit sur un
-    # tenant/endpoint distinct → dsn + api_version appariés à la clé, sinon
-    # list_accounts() interroge le mauvais tenant (vide/erroné) (#194).
-    return make_unipile_client(
-        api_key=rc.key, dsn=rc.config.get("dsn"),
-        api_version=(rc.config.get("api_version")
-                     or os.environ.get("OTO_UNIPILE_API_VERSION") or "v1"))
+    # dsn apparié à la clé (défaut api.unipile.com côté oto-core) — une clé qui vit
+    # sur un tenant distinct porte son dsn dans la config du credential.
+    return make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"))
 
 
 def _unipile_live_status_map(sub: str) -> dict:
@@ -159,16 +155,33 @@ def _unipile_live_status_map(sub: str) -> dict:
     Unipile → un compte réellement mort (checkpoint, credentials expirés, révoqué
     par l'utilisateur) affichait « ok » à tort (#201). Le vrai statut n'est lisible
     qu'en listant les comptes de l'abonnement (`list_accounts().sources[].status`).
+
+    ⚠️ Mais ce `sources[].status` de compte peut LUI AUSSI rester « OK » alors que
+    la SESSION est morte (checkpoint / cookie li_at tourné) → un vrai appel se prend
+    un 401 mais la carte disait « connecté » (#236). On confirme donc la liveness
+    par une sonde `account_alive` (GET users/me → 401 = mort) et on rétrograde en
+    'disconnected'. Chemin PICKER d'identités SEUL (hors boucle /api/me chaude —
+    budget assumé, un appel users/me par compte hébergé, au clic sur le sélecteur).
     Fail-soft : `{}` si indisponible (l'appelant retombe sur « ok », comportement
-    d'avant — jamais de régression d'affichage sur une panne de lecture)."""
+    d'avant) ; sonde best-effort PAR compte (un incident garde le status de compte)."""
     from . import access
     try:
         rc = access.resolve_credential("unipile", want="auto", sub=sub)
         from oto.tools.unipile import make_unipile_client
-        cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"),
-                                  api_version=rc.config.get("api_version", "v1"))
-        return {a.get("id"): (a.get("sources") or [{}])[0].get("status")
-                for a in cli.list_accounts() if a.get("id")}
+        cli = make_unipile_client(api_key=rc.key, dsn=rc.config.get("dsn"))
+        out: dict = {}
+        for a in cli.list_accounts():
+            aid = a.get("id")
+            if not aid:
+                continue
+            status = (a.get("sources") or [{}])[0].get("status")
+            try:  # sonde de vraie liveness (#236) : users/me 401 = session morte
+                if not cli.account_alive(aid):
+                    status = "disconnected"
+            except Exception:
+                pass  # best-effort : garde le status de compte sur incident sonde
+            out[aid] = status
+        return out
     except Exception:
         return {}
 

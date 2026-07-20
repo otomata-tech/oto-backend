@@ -19,21 +19,22 @@ def seams(monkeypatch):
     monkeypatch.setattr(D.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(D.db, "get_doc_by_id", lambda i: dict(DOC, id=i) if i in (3, 9) else None)
     monkeypatch.setattr(D.db, "create_doc",
-                        lambda pid, title, parent_id=None, body_md="", kind="doc", created_by=None:
+                        lambda pid, title, parent_id=None, body_md="", kind="doc", created_by=None, description=None:
                         rec["create"].append((pid, title, parent_id, kind, created_by)) or 3)
     monkeypatch.setattr(D.db, "list_docs_for_project", lambda pid: [DOC])
     monkeypatch.setattr(D.db, "update_doc",
-                        lambda did, title=None, body_md=None, kind=None, edited_by=None: rec["update"].append((did, title, body_md, kind, edited_by)))
+                        lambda did, title=None, body_md=None, kind=None, edited_by=None, description=None: rec["update"].append((did, title, body_md, kind, edited_by)))
     monkeypatch.setattr(D.db, "list_doc_revisions",
                         lambda did, limit=50: [{"id": 1, "title": "v0", "body_md": "old", "edited_by": "u1", "created_at": "2026-06-30"}])
     monkeypatch.setattr(D.db, "delete_doc", lambda did: rec["delete"].append(did))
-    monkeypatch.setattr(D.db, "move_doc", lambda did, p: rec["move"].append((did, p)))
+    monkeypatch.setattr(D.db, "move_doc", lambda did, p, position=None: rec["move"].append((did, p)))
     monkeypatch.setattr(D.db, "log_project_activity", lambda *a, **k: None)
     # gap #4b — demandes de modif
     rec["cr_add"], rec["cr_resolve"] = [], []
     monkeypatch.setattr(D.db, "add_doc_change_request",
-                        lambda did, by, proposed_title=None, proposed_body_md="", message=None:
-                        rec["cr_add"].append((did, by, proposed_title, proposed_body_md, message))
+                        lambda by, *, doc_id=None, project_id=None, proposed_parent_id=None,
+                        proposed_kind=None, proposed_title=None, proposed_body_md="", message=None:
+                        rec["cr_add"].append((doc_id, by, proposed_title, proposed_body_md, message))
                         or {"id": 5, "status": "pending"})
     monkeypatch.setattr(D.db, "list_doc_change_requests",
                         lambda did, only_pending=True: [{"id": 5, "proposed_body_md": "new", "status": "pending"}])

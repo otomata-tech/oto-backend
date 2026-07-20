@@ -155,6 +155,17 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
         except McpError:
             pass
     client = make_unipile_client(api_key=api_key, dsn=dsn)
+    # Activer un premium sur un compte DÉJÀ connecté = `type=reconnect` sur CE compte
+    # (rattache le produit sans DOUBLON), pas un `create` (qui a produit les comptes
+    # concurrents vécus). On ne reconnecte que le siège plateforme du sub (même clé
+    # partagée). `force` = compte réellement neuf → wizard `create`.
+    reconnect_account = None
+    if premium and platform_seat and not force:
+        existing = db.seat_binding_elsewhere(sub, provider, exclude_org=None) \
+            or ({"account_id": db.get_unipile_account_id(sub, org_id, provider)}
+                if db.get_unipile_account_id(sub, org_id, provider) else None)
+        if existing and existing.get("account_id"):
+            reconnect_account = existing["account_id"]
     public = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
     dash = os.environ.get("OTO_DASHBOARD_URL", "https://dashboard.oto.ninja").rstrip("/")
     nonce = secrets.token_urlsafe(24)
@@ -173,6 +184,8 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
                 # recommandé par Unipile pour ces produits)
                 premium=premium,
                 allow_cookies=bool(premium),
+                # rattacher le produit sur le compte existant (anti-doublon)
+                reconnect_account=reconnect_account,
             )
         )
     except Exception as e:
@@ -264,7 +277,15 @@ def reconcile_pending(sub: str) -> dict:
             continue
         from datetime import datetime, timezone
         cand.sort(key=lambda t: t[0] or datetime.min.replace(tzinfo=timezone.utc))
-        chosen = cand[-1][1]
+        # Sonde de SESSION (du plus récent au plus ancien) : ne binder qu'un compte
+        # VIVANT. Un wizard avorté produit un compte `status:'running'` mais mort
+        # (401 users/me) — le lier faisait taper l'agent sur une session morte pendant
+        # que l'ancien compte sain restait ignoré (incident 2026-07-17).
+        chosen = next((a for _, a in reversed(cand)
+                       if client.account_alive(a["id"])), None)
+        if chosen is None:
+            logger.info("reconcile unipile: candidats tous morts (session 401) sub=%s", sub)
+            continue
         db.set_unipile_account(sub, chosen["id"], account_name=chosen.get("name"),
                                org_id=pend["org_id"], provider=provider,
                                platform_seat=bool(pend.get("platform_seat")))

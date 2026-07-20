@@ -62,3 +62,19 @@ détruisant que ce que le code prod COURANT ne référence plus.
 - **Tree partagé** : une session parallèle peut committer TON `_init.py` en vol dans son
   propre commit (absorption). Avant de diagnostiquer un diff stagé « incomplet »,
   vérifier si HEAD contient déjà tes hunks (`git log -S <marqueur>`).
+
+
+## Piège : `CREATE INDEX` d'une NOUVELLE colonne dans `_schema.py` (vécu 20/07)
+
+`_init.init_db` fait `conn.execute(_SCHEMA)` PUIS les `ALTER TABLE … ADD COLUMN`. Sur
+une table EXISTANTE, `CREATE TABLE IF NOT EXISTS` est sauté — mais un `CREATE INDEX …(col)`
+posé **dans `_schema.py` juste après le CREATE TABLE** s'exécute quand même, contre
+l'**ancienne** table qui n'a pas encore la colonne → `column "col" does not exist`, init_db
+KO, service down, **rollback auto**. (Vécu : `doc_change_requests(project_id)`.)
+
+**Règle** : les index d'une colonne AJOUTÉE par migration vivent UNIQUEMENT dans `_init.py`
+**après l'ALTER** (idempotents `IF NOT EXISTS` — le fresh install les crée aussi). Le
+`CREATE INDEX` reste dans `_schema.py` SEULEMENT si la table (et la colonne) sont **neuves**
+au même endroit (ex. `doc_links`, `doc_embeddings` : table + index créés ensemble sur une
+table fraîche = sûr). Corollaire extension : `CREATE EXTENSION vector` doit précéder
+`_SCHEMA` si une table de `_SCHEMA` utilise `halfvec`/`vector`.

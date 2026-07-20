@@ -142,8 +142,22 @@ sur la saisie BRUTE) ∪ tableaux/fichiers/connecteurs (conteneurs, matchés en 
 `can_access`, cross-org) ; **tripwire par source = critère de merge**
 (`test_search_scope_tripwire.py`). Le catalogue connecteurs est INJECTÉ par la capacité
 (pas d'inversion de couche). `oto_doc(op=search)` = rerouté, déprécié. Fichiers matchés sur
-`filename+title+description` (jamais `summary`, colonne morte). V1 lexicale — embeddings/V2
-conditionnés au golden set (~30 requêtes JB, ≥80 % top-5).
+`filename+title+description` (jamais `summary`, colonne morte).
+
+**Sémantique + RRF (20/07, LIVE preprod)** : fusion LEXICAL + SÉMANTIQUE des pages.
+`embeddings.py` = client Mistral `mistral-embed` (1024, même modèle que Memento →
+import sans re-embed au sunset) — **sync `embed_texts`** (worker, batch DÉCOUPÉ sous le
+budget de tokens/requête : 400 « too many tokens overall » sinon ; cap ~16k ch/input)
++ **async `embed_query`** (chemin requête). Outbox `docs.embed_dirty` (marqué à
+create/update, coût nul) + `doc_embeddings(halfvec(1024))` + index HNSW cosine ; worker
+`embed_worker` (boucle de fond composée au lifespan, embed HORS event loop via
+`run_in_threadpool`, idempotent par `content_sha`) draine. Handler `oto_search` ASYNC :
+embed la requête hors boucle → `search.search(query_embedding=…)` ajoute la source
+`page`/`matched_by='semantic'`, la fusion RRF DÉDUPLIQUE (kind,ref) + SOMME les rangs
+(une page trouvée par les deux remonte ; passage lexical conservé). **Dégradation
+gracieuse** : sans `MISTRAL_API_KEY` ou sur échec → lexical seul, jamais un prérequis.
+pgvector 0.8.2 sur otomata-main (`CREATE EXTENSION vector` AVANT `_SCHEMA` car halfvec en
+dépend). Le **golden set JB** cale désormais la QUALITÉ (plus le *si*).
 
 **Se repérer** : `docs.description` (chapô ; fallback DÉRIVÉ À LA LECTURE `derive_description`,
 jamais stocké) + `docs.position` (ordre curé, entiers ×16 ; `move_doc(parent?, position=INDEX)`
@@ -152,7 +166,15 @@ depth?)` bornée (N+2, plafond 200, compteurs `more`) — la carte que l'agent l
 `oto_doc(op=get)`, jamais `op=list` de tout. **KB d'org ancrée PAR ID** (`orgs.kb_project_id`,
 claim optimiste anti-doublon, auto-réparation transfert/archive — le nom n'est plus un marqueur).
 Le lien `project_links.target_type='doc'` est RETIRÉ (vestige memento) ; relier des pages =
-les backlinks `[[…]]` (Ship 4, **en pause** — Ships 3-4 + V2 : voulus à terme, cf. #67).
+les **backlinks `[[…]]`** (Ship 4, LIVE) : résolus À L'ÉCRITURE (hook `db.create/update/
+delete_doc` — JAMAIS capacité, `resolve_change` appelle db en direct), précédence projet >
+KB (`db/backlinks.py`), table dérivée `doc_links` (CASCADE 2 côtés), `oto_doc op=backlinks`
+= « Cité par » filtré accès. **Propositions modif+création + inbox** (Ship 3, LIVE) : « les
+lecteurs proposent » — un viewer (lecture sans écriture) qui crée/modifie obtient une
+PROPOSITION (`doc_change_requests`, `doc_id` nullable + `project_id` + emplacement + CHECK) ;
+le dispatch `docs.py` route resolve/list/create-proposal sur request_id/project_id **AVANT
+le gate doc_id** (une création doc_id NULL était sinon inatteignable) ; `me.inbox`
+(`GET /api/me/inbox`, 2 voies À traiter/Récent, 200-vide sans org).
 
 **Seam `pending_action`** (`status_hints.py`, patron connector_verify) : un connecteur à
 connexion en deux temps enregistre un hook « quelle étape manque ? » → `ProviderStatus.

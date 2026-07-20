@@ -75,6 +75,37 @@ def test_reachable_instances_lists_teams_and_other_orgs(monkeypatch):
     assert not any(i["kind"] == "org" and i["id"] == 35 for i in items)
 
 
+def test_reachable_instances_includes_org_admin_governed_teams(monkeypatch):
+    # #218 : org_admin NON membre de l'équipe sales (list_groups_for_user vide pour lui)
+    # mais la clé zoho y vit → le hint DOIT quand même la lister (accès par escalade).
+    from oto_mcp import roles
+    monkeypatch.setattr(access.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [])            # pas membre
+    monkeypatch.setattr(access.group_store, "list_groups",
+                        lambda org_id: [{"id": 2, "name": "sales"},
+                                        {"id": 9, "name": "finance"}])
+    monkeypatch.setattr(access.group_store, "has_group_secret",
+                        lambda gid, prov: gid == 2)             # clé sur sales seule
+    monkeypatch.setattr(access.org_store, "list_orgs_for_user", lambda sub: [])
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: True)
+    items = access.reachable_instances("admin", 35, "zoho")
+    assert {"kind": "group", "id": 2, "name": "sales"} in items
+    assert not any(i["id"] == 9 for i in items)                 # finance sans clé, absent
+
+
+def test_reachable_instances_non_admin_stays_membership_only(monkeypatch):
+    # Non-admin, non membre : pas d'escalade → aucune équipe remontée (pas de fuite).
+    from oto_mcp import roles
+    monkeypatch.setattr(access.group_store, "list_groups_for_user",
+                        lambda sub, org_id=None: [])
+    monkeypatch.setattr(access.group_store, "list_groups",
+                        lambda org_id: [{"id": 2, "name": "sales"}])
+    monkeypatch.setattr(access.group_store, "has_group_secret", lambda gid, prov: gid == 2)
+    monkeypatch.setattr(access.org_store, "list_orgs_for_user", lambda sub: [])
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
+    assert access.reachable_instances("u1", 35, "zoho") == []
+
+
 def test_resolution_failure_mentions_reachable_team(monkeypatch):
     monkeypatch.setattr(access, "require_connector_access", lambda *a, **k: None)
     monkeypatch.setattr(access.session_org, "current_call_instance", lambda: None)

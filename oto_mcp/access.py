@@ -1166,10 +1166,27 @@ def reachable_instances(sub: str, org: Optional[int], provider: str) -> list[dic
     shareable = provider in ORG_SHAREABLE_PROVIDERS
     try:
         if org is not None and shareable:
+            seen_gids: set = set()
             for g in group_store.list_groups_for_user(sub, org):
                 if group_store.has_group_secret(g["group_id"], provider):
                     out.append({"kind": "group", "id": g["group_id"],
                                 "name": g["name"]})
+                    seen_gids.add(g["group_id"])
+            # #218 : l'org_admin GOUVERNE ses équipes sans en être MEMBRE — sa clé de
+            # groupe lui est accessible par escalade (group=/instance= re-gardés par
+            # can_read_group). Le hint était aveugle là (list_groups_for_user = membre
+            # STRICT) → « pas de clé » sec alors que la clé existe sur une équipe qu'il
+            # gouverne. On complète par les équipes de l'org visibles par escalade.
+            from . import roles
+            try:  # escalade best-effort ISOLÉE : ne doit pas abîmer l'énumération
+                if roles.is_org_admin(sub, org):  # ci-dessous (orgs) si elle hoquette.
+                    for g in group_store.list_groups(org):
+                        gid = g["id"]
+                        if gid not in seen_gids and group_store.has_group_secret(gid, provider):
+                            out.append({"kind": "group", "id": gid, "name": g["name"]})
+                            seen_gids.add(gid)
+            except Exception:
+                pass
         for o in org_store.list_orgs_for_user(sub):
             oid = o["org_id"]
             if oid == org:

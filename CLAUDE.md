@@ -557,11 +557,12 @@ fichier seed (sinon un environnement neuf naît avec l'ancien texte).
   (fichier + entrée registre) le garde vert SANS rien y toucher ; il casse seulement
   sur un **fichier orphelin** (connecteur posé mais pas déclaré → dort invisible) ou un
   **module fantôme** (faute dans `modules=`/nom). Seul un **module spine** chargé
-  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` de
-  `deploy.yml` tourne **sur les PR ET sur push main** (`on: pull_request` + `push`,
-  required check de branch protection) et installe oto-core **au tag épinglé** (runner
-  neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (`deploy` a
-  `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
+  explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` tourne
+  **sur les PR ET sur push main** (`deploy-canari.yml` « Deploy preprod », `on:
+  pull_request` + `push` sur main ; required check de branch protection sur main) et
+  au **tag** (`deploy.yml` « Deploy prod »), et installe oto-core **au tag épinglé**
+  (runner neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (les
+  deux jobs `deploy` ont `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
   vérifie STATIQUEMENT que chaque `_client().<m>()` d'un tool existe sur la classe
   oto-core épinglée (un tool en avance de phase sur son oto-core casse la PR au lieu
   d'atteindre la prod — leçon `folk_get_user`).
@@ -670,22 +671,26 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # `_connector_blocked`/seams) + les gardes de capacité par stub ; le chemin SQL est vérifié
 # au déploiement (le job `test` du CI tourne le vrai suite avec toutes les deps).
 
-# Deploy — push main déclenche `.github/workflows/deploy.yml` : workflow unique
-# CI/CD (job `test` pytest → job `deploy` `needs: test`). Deploy = SSH box dédiée :
-# git reset --hard origin/main + pip install -e . + **force-reinstall oto-core
-# depuis le tag pinné** (lu du pyproject ; pip saute sinon une dép VCS déjà
-# présente) + restart + **smoke HTTP** (GET 200 /.well-known/oauth-authorization-server)
-# + **rollback auto** vers le commit précédent si install/restart/smoke échoue. Le
-# restart relance start-encrypted (refetch master key). ⚠️ start-encrypted.sh
-# untracked → survit au git reset.
+# Deploy — modèle tronc unique (refonte 2026-07-20, ADR 0020) :
+#   push `main`  → PREPROD (« Deploy preprod », deploy-canari.yml, script serveur
+#                  oto-backend-canari.sh : git reset --hard origin/main → preprod)
+#   tag  `v*`    → PROD    (« Deploy prod », deploy.yml, script serveur
+#                  oto-backend.sh <tag> : git reset --hard <tag> → prod)
+# Le deploy (les deux) = SSH box dédiée via runner self-hosted : reset au ref +
+# pip install -e . + **force-reinstall oto-core depuis le tag pinné** (lu du
+# pyproject ; pip saute sinon une dép VCS déjà présente) + restart + **smoke HTTP**
+# (GET 200 /.well-known/oauth-authorization-server) + **rollback auto** si
+# install/restart/smoke échoue. Le restart relance start-encrypted (refetch master
+# key). ⚠️ start-encrypted.sh untracked → survit au git reset.
 #
-# ⚠️ CANARI (ADR 0040) : le travail se pousse sur `canari` (→ preprod). Un push
-# canari déclenche PLUSIEURS workflows — le VRAI deploy preprod est **« Deploy
-# canari »** (job `deploy-preprod`). Le workflow **« CI/CD »** a un job `deploy`
-# GATÉ sur `main` → il apparaît **`skipped`** sur un push canari : NE PAS le
-# confondre avec un deploy raté. Suivre `gh run watch` sur le run *Deploy
-# canari*, pas *CI/CD* (ni *guard-main*).
-git push origin main
+# Preprod = travailler sur `main`, commit, push : deploy preprod auto (gate
+# `needs: test`). Claude Code (web) ouvre ses PR sur main → merge = deploy preprod.
+git push origin main            # → PREPROD
+
+# Prod = acte explicite : taguer un commit de main + pousser le tag.
+git tag v1.2.3 && git push origin v1.2.3   # → PROD (tags v* immuables, ruleset)
+# ⚠️ `canari` est DÉPRÉCIÉE (ne déploie plus) : un checkout encore dessus doit
+# passer sur main (`git checkout main`). guard-main + sync-main-to-canari retirés.
 
 # Logs
 ssh -i ~/.ssh/alexis root@<box> "journalctl -u oto-mcp -f"

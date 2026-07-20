@@ -38,6 +38,10 @@ def init_db() -> None:
         # AVANT _SCHEMA : droppe l'org_subscriptions du modèle Stripe retiré
         # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
         _drop_legacy_org_subscriptions(conn)
+        # Recherche sémantique (lot 3) : pgvector requis par la table doc_embeddings
+        # (halfvec/hnsw) créée dans _SCHEMA → l'extension DOIT précéder. Idempotent ;
+        # no-op si déjà installée. pgvector 0.8.2 dispo sur otomata-main (spike 20/07).
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute(_SCHEMA)
         # ADR 0044 §F R5 : clés plateforme + grants migrés en instances du coffre unifié
         # (connector_credentials scope PLATFORM + share_down/meta.rate_limit) → DROP des 3
@@ -57,6 +61,13 @@ def init_db() -> None:
         # ADR 0032 §3 (B4b) : un « Autre document » peut être partagé publiquement.
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE")
         conn.execute("ALTER TABLE project_files ADD COLUMN IF NOT EXISTS public_url TEXT")
+        # Recherche sémantique (lot 3) : outbox d'indexation — `embed_dirty` marque les
+        # pages à (ré)indexer ; le worker embed_worker draine hors event loop. Backfill :
+        # tout ce qui n'a pas encore d'embedding est marqué dirty (idempotent).
+        conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_embed_dirty ON docs(id) WHERE embed_dirty")
+        conn.execute("UPDATE docs SET embed_dirty = TRUE "
+                     "WHERE embed_dirty = FALSE AND id NOT IN (SELECT doc_id FROM doc_embeddings)")
         # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
         # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
         # lignes ont doc_id). Idempotent.

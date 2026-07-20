@@ -1,6 +1,7 @@
 """Unités de la recherche transverse (lot 3 Ship 1) : fusion RRF, matchers en
 mémoire (tableaux/connecteurs, repli d'accents), garde du headline, erreurs de
 la capacité. Logique pure — sources db stubées."""
+import asyncio
 import pytest
 
 from oto_mcp import search as S
@@ -108,28 +109,28 @@ def test_match_connectors_accent_fold_and_rank():
 
 def test_cap_no_org():
     with pytest.raises(AuthzDenied) as e:
-        CAP._search(ResolvedCtx(sub="u1", org_id=None), CAP.SearchInput(q="xx"))
+        asyncio.run(CAP._search(ResolvedCtx(sub="u1", org_id=None), CAP.SearchInput(q="xx")))
     assert e.value.code == "no_active_org"
 
 
 def test_cap_query_too_short():
     with pytest.raises(AuthzDenied) as e:
-        CAP._search(ResolvedCtx(sub="u1", org_id=7), CAP.SearchInput(q="a"))
+        asyncio.run(CAP._search(ResolvedCtx(sub="u1", org_id=7), CAP.SearchInput(q="a")))
     assert e.value.code == "query_too_short"
 
 
 def test_cap_project_scope_requires_project():
     with pytest.raises(AuthzDenied) as e:
-        CAP._search(ResolvedCtx(sub="u1", org_id=7),
-                    CAP.SearchInput(q="xx", scope="project"))
+        asyncio.run(CAP._search(ResolvedCtx(sub="u1", org_id=7),
+                    CAP.SearchInput(q="xx", scope="project")))
     assert e.value.code == "project_required"
 
 
 def test_cap_foreign_project_neutral_refusal(monkeypatch):
     monkeypatch.setattr(CAP.ownership, "visible_in_org", lambda *a: False)
     with pytest.raises(AuthzDenied) as e:
-        CAP._search(ResolvedCtx(sub="u1", org_id=7),
-                    CAP.SearchInput(q="xx", scope="project", project=99))
+        asyncio.run(CAP._search(ResolvedCtx(sub="u1", org_id=7),
+                    CAP.SearchInput(q="xx", scope="project", project=99)))
     assert e.value.code == "unknown_project"
 
 

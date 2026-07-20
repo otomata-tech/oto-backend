@@ -60,9 +60,13 @@ def _snippet(text: str, cap: int = 160) -> str:
 def search(sub: str, org_id: int, q: str, *,
            scope: str = "org", project_id: Optional[int] = None,
            kinds: Optional[list[str]] = None, limit: int = 20,
-           connectors_catalog: Optional[list[dict]] = None) -> dict:
+           connectors_catalog: Optional[list[dict]] = None,
+           query_embedding: Optional[list[float]] = None) -> dict:
     """Le verbe « retrouver ». `scope='project'` restreint à UN projet (déjà validé
-    accessible par le caller) ; défaut = tous les projets accessibles de l'org."""
+    accessible par le caller) ; défaut = tous les projets accessibles de l'org.
+    `query_embedding` (fourni par le handler async, hors event loop) active la
+    fusion LEXICAL + SÉMANTIQUE des pages par RRF (sinon lexical seul, dégradation
+    gracieuse : le sémantique n'est jamais un prérequis)."""
     wanted = set(kinds) if kinds else set(KINDS)
     per_source = min(max(limit, 10), 50)
 
@@ -86,6 +90,14 @@ def search(sub: str, org_id: int, q: str, *,
             "project_id": r["project_id"],
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
+        # Sémantique (lot 3) : les pages proches du sens de la requête, fusionnées au
+        # lexical par RRF (une page trouvée par les DEUX cumule ses deux rangs → remonte).
+        if query_embedding is not None:
+            from .embeddings import to_pg
+            _add(db.search_docs_semantic(to_pg(query_embedding), pids, limit=per_source),
+                 lambda r: {"kind": "page", "ref": r["id"], "title": r["title"],
+                            "project_id": r["project_id"], "passage": None,
+                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
     if "brief" in wanted:
         _add(db.search_project_briefs(q, pids, limit=per_source), lambda r: {
             "kind": "brief", "ref": r["id"], "title": r["name"],
@@ -119,9 +131,22 @@ def search(sub: str, org_id: int, q: str, *,
     if "connecteur" in wanted and connectors_catalog:
         _add(_match_connectors(q, connectors_catalog), lambda r: r)
 
-    # ── fusion RRF + noms de projet (une requête) ───────────────────────────
-    ranked.sort(key=lambda t: t[0], reverse=True)
-    hits = [h for _, h in ranked[:limit]]
+    # ── fusion RRF : dédup par (kind, ref) en SOMMANT les rangs réciproques ──
+    # Une page trouvée par lexical ET sémantique cumule ses deux contributions →
+    # remonte (le vrai gain du RRF). On garde le passage lexical s'il existe.
+    fused: dict[tuple, tuple[float, dict]] = {}
+    for score, hit in ranked:
+        key = (hit["kind"], str(hit["ref"]))
+        if key in fused:
+            prev_s, prev_h = fused[key]
+            merged = prev_h if prev_h.get("passage") else hit
+            if not merged.get("passage") and hit.get("passage"):
+                merged = hit
+            fused[key] = (prev_s + score, merged)
+        else:
+            fused[key] = (score, hit)
+    ordered = sorted(fused.values(), key=lambda t: t[0], reverse=True)
+    hits = [h for _, h in ordered[:limit]]
     names = db.project_names(sorted({h["project_id"] for h in hits if h.get("project_id")}))
     for h in hits:
         if h.get("project_id") in names:

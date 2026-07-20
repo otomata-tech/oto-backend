@@ -114,6 +114,25 @@ def search_guides_fts(q: str, org_id: Optional[int], sub: str, *, limit: int = 2
         (str(org_id or ""), sub), q, limit)
 
 
+def search_docs_semantic(query_literal: str, project_ids: list[int], *,
+                         limit: int = 20) -> list[dict]:
+    """kNN sémantique (lot 3) : pages des projets accessibles les plus PROCHES du
+    vecteur de requête (distance cosine `<=>` sur l'index HNSW). Scopé accès comme le
+    lexical (mêmes `project_ids`). `query_literal` = littéral halfvec `[...]`."""
+    if not project_ids:
+        return []
+    sql = (
+        "SELECT d.id, d.project_id, d.title, d.updated_at, "
+        "e.embedding <=> %s::halfvec AS distance "
+        "FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
+        "WHERE d.project_id = ANY(%s) "
+        "ORDER BY e.embedding <=> %s::halfvec LIMIT %s"
+    )
+    with _connect() as conn:
+        rows = conn.execute(sql, (query_literal, project_ids, query_literal, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
 def project_names(ids: list[int]) -> dict[int, str]:
     """Noms d'un lot de projets (étiquette des hits) — une requête."""
     if not ids:

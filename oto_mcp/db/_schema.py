@@ -403,6 +403,19 @@ CREATE TABLE IF NOT EXISTS doc_links (
     PRIMARY KEY (from_doc, to_doc)
 );
 CREATE INDEX IF NOT EXISTS idx_doc_links_to ON doc_links(to_doc);
+
+-- Embeddings des pages (lot 3, recherche sémantique V2) — une ligne par doc,
+-- mistral-embed 1024 en halfvec. `content_sha` = idempotence (ré-embed seulement si
+-- le texte change). Table NEUVE → l'index HNSW ici est sûr (créée juste au-dessus).
+CREATE TABLE IF NOT EXISTS doc_embeddings (
+    doc_id BIGINT PRIMARY KEY REFERENCES docs(id) ON DELETE CASCADE,
+    content_sha TEXT NOT NULL,
+    embedding halfvec(1024) NOT NULL,
+    model TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_embeddings_hnsw
+    ON doc_embeddings USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté

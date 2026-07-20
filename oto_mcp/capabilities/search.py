@@ -48,7 +48,9 @@ class SearchInput(BaseModel):
         return max(1, min(int(v), 50))
 
 
-def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
+async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
+    # Handler ASYNC : l'embedding de la requête (chemin réseau) est awaité hors event
+    # loop (httpx async) ; la recherche DB elle-même reste synchrone (indexée, courte).
     if ctx.org_id is None:
         raise AuthzDenied(400, "no_active_org",
                           "Aucune org active — passe `org=<id>` ou `oto_use_org`.")
@@ -72,9 +74,15 @@ def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
+    # Vecteur de requête (fusion sémantique) — None si désactivé/échec → lexical seul.
+    want_pages = not inp.kinds or "page" in inp.kinds
+    from .. import embeddings
+    qvec = await embeddings.embed_query(q) if want_pages else None
+
     return search_mod.search(
         ctx.sub, ctx.org_id, q, scope=inp.scope, project_id=inp.project,
-        kinds=inp.kinds, limit=inp.limit, connectors_catalog=catalog)
+        kinds=inp.kinds, limit=inp.limit, connectors_catalog=catalog,
+        query_embedding=qvec)
 
 
 CAPABILITIES += [

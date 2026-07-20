@@ -569,6 +569,9 @@ def update_doc(doc_id: int, *, title: Optional[str] = None,
         params.append(kind)
     if not sets:
         return
+    # Sémantique (lot 3) : titre/corps change ⇒ ré-indexer (outbox).
+    if title is not None or body_md is not None:
+        sets.append("embed_dirty = TRUE")
     sets.append("updated_at = NOW()")
     params.append(doc_id)
     with _connect() as conn:
@@ -710,6 +713,45 @@ def doc_backlinks(doc_id: int) -> list[dict]:
     call-site (capacité)."""
     with _connect() as conn:
         return _backlinks.backlinks_of(conn, doc_id)
+
+
+# --- Recherche sémantique : outbox d'embeddings (lot 3) ----------------------
+
+def list_dirty_docs(limit: int = 32) -> list[dict]:
+    """Pages à (ré)indexer (`embed_dirty`) — le worker les draine. Le TEXTE embarqué
+    = titre + corps (la même matière que le FTS)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, coalesce(title,'') || E'\n' || coalesce(body_md,'') AS text "
+            "FROM docs WHERE embed_dirty ORDER BY id LIMIT %s", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def upsert_doc_embedding(doc_id: int, content_sha: str, embedding_literal: str,
+                         model: str) -> None:
+    """Pose/rafraîchit l'embedding d'une page ET lève son drapeau dirty — en UNE
+    transaction (le worker ne perd pas une écriture concurrente : si le doc a été
+    re-touché entretemps il reste dirty via le WHERE ci-dessous)."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO doc_embeddings (doc_id, content_sha, embedding, model) "
+            "VALUES (%s, %s, %s::halfvec, %s) "
+            "ON CONFLICT (doc_id) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
+            "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
+            (doc_id, content_sha, embedding_literal, model))
+        conn.execute("UPDATE docs SET embed_dirty = FALSE WHERE id = %s", (doc_id,))
+
+
+def get_doc_embedding_sha(doc_id: int) -> Optional[str]:
+    with _connect() as conn:
+        row = conn.execute("SELECT content_sha FROM doc_embeddings WHERE doc_id = %s",
+                           (doc_id,)).fetchone()
+        return row["content_sha"] if row else None
+
+
+def clear_embed_dirty(doc_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE docs SET embed_dirty = FALSE WHERE id = %s", (doc_id,))
 
 
 def move_doc(doc_id: int, new_parent_id: Optional[int],

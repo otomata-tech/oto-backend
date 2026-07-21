@@ -1503,4 +1503,22 @@ def status_for(sub: str, *, org: "int | None | object" = _UNSET,
         if status_hints.has_hook(name):
             entry["pending_action"] = status_hints.pending_action(
                 name, sub, active_org, active_group, entry)
+
+    # Santé du connecteur (flag persistant `meta.health_ko`, posé par la sonde verify =
+    # le « read facile » de chaque connecteur) : un « connecteur KO » (session expirée,
+    # token révoqué…) reste signalé jusqu'à ce qu'un test/reconnexion le rétablisse.
+    # Lu en UN batch sur les clés MEMBRE de l'acteur — générique (tout connecteur), fail-open.
+    if sub and active_org is not None:
+        try:
+            health = {r["connector"]: (r.get("meta") or {})
+                      for r in credentials_store.list_credentials(
+                          credentials_store.MEMBER, credentials_store.member_id(active_org, sub))
+                      if r.get("account") == ""}
+            for name, entry in out["providers"].items():
+                m = health.get(name) or {}
+                if m.get("health_ko"):
+                    entry["health_ko"] = True
+                    entry["health_reason"] = m.get("health_reason")
+        except Exception:  # noqa: BLE001 — la santé est un bonus, jamais bloquant
+            pass
     return out

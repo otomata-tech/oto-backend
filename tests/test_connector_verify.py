@@ -100,6 +100,30 @@ def test_verify_async_probe_awaited(monkeypatch):
     assert res["ok"] is True
 
 
+def test_verify_records_health_on_member_key(monkeypatch):
+    """La sonde alimente le flag santé (`meta.health_ko`) de la clé MEMBRE : échec → KO
+    + raison, succès → rétabli. Lu ensuite par status_for, rendu terra au verdict."""
+    written = {}
+    monkeypatch.setattr(cv.access, "resolve_credential",
+                        lambda *a, **k: types.SimpleNamespace(fields={"k": "v"}, config={}, mode="user"))
+    monkeypatch.setattr(cv.credentials_store, "member_id", lambda org, sub: f"{org}:{sub}")
+    monkeypatch.setattr(cv.credentials_store, "update_meta",
+                        lambda et, eid, conn, acct, patch: written.update(scope=(et, eid), patch=patch) or True)
+
+    def bad(fields, config=None):  # noqa: ARG001
+        raise ValueError("session expirée")
+    connector_verify.register("_ut_health_ko", bad)
+    asyncio.run(cv._verify(_ctx(), cv.VerifyInput(provider="_ut_health_ko")))
+    assert written["scope"] == ("member", "42:user-1")
+    assert written["patch"]["health_ko"] is True
+    assert "session" in (written["patch"]["health_reason"] or "")
+
+    written.clear()
+    connector_verify.register("_ut_health_ok", lambda f, config=None: None)  # noqa: ARG005
+    asyncio.run(cv._verify(_ctx(), cv.VerifyInput(provider="_ut_health_ok")))
+    assert written["patch"]["health_ko"] is False
+
+
 # --- sonde Zoho : refresh token, message actionnable --------------------------
 
 def _zoho_fields(**over):

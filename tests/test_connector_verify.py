@@ -124,6 +124,29 @@ def test_verify_records_health_on_member_key(monkeypatch):
     assert written["patch"]["health_ko"] is False
 
 
+# --- M4 : « Effet pour : [membre] » (org admin rejoue le verdict d'un membre) ---------
+
+def test_effect_for_member_replays_member_status(monkeypatch):
+    monkeypatch.setattr("oto_mcp.roles.is_org_member", lambda sub, org: sub == "m1" and org == 42)
+    seen = {}
+    monkeypatch.setattr(cv.access, "status_for",
+                        lambda sub, org=None: seen.update(sub=sub, org=org)
+                        or {"providers": {"zoho": {"mode": "user", "health_ko": True}}})
+    out = cv._effect_for_member(cv.ResolvedCtx(sub="admin", org_id=42),
+                                cv.EffectForMemberInput(provider="zoho", member="m1"))
+    # org passée EXPLICITEMENT (ADR 0023), statut du MEMBRE (pas de l'admin).
+    assert seen == {"sub": "m1", "org": 42}
+    assert out["member"] == "m1" and out["status"]["health_ko"] is True
+
+
+def test_effect_for_member_rejects_non_member(monkeypatch):
+    monkeypatch.setattr("oto_mcp.roles.is_org_member", lambda sub, org: False)
+    with pytest.raises(AuthzDenied) as ei:
+        cv._effect_for_member(cv.ResolvedCtx(sub="admin", org_id=42),
+                              cv.EffectForMemberInput(provider="zoho", member="x"))
+    assert ei.value.code == "not_a_member"
+
+
 # --- sonde Zoho : refresh token, message actionnable --------------------------
 
 def _zoho_fields(**over):

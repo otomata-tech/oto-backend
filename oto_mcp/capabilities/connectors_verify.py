@@ -16,7 +16,7 @@ from mcp.shared.exceptions import McpError
 from pydantic import BaseModel
 
 from .. import access, connector_verify, credentials_store
-from ._authz import ORG_MEMBER
+from ._authz import ORG_ADMIN, ORG_MEMBER
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 
 
@@ -99,6 +99,28 @@ CAP_DOC = (
     "'auto' tests the credential that resolves for you; 'org' tests the org shared key."
 )
 
+class EffectForMemberInput(BaseModel):
+    provider: str                              # path {provider}
+    member: str                                # query ?member=<sub> : le membre cible
+
+
+def _effect_for_member(ctx: ResolvedCtx, inp: EffectForMemberInput) -> dict:
+    """M4 (CDC connecteurs) : rejoue le verdict d'un connecteur POUR un membre de l'org
+    (org admin) → « Effet pour : [membre] ». L'org est passée EXPLICITEMENT à `status_for`
+    (ADR 0023 : jamais `current_org` d'un tiers). Anti-IDOR : la cible doit appartenir à
+    l'org active. Retourne l'entrée `ProviderStatus` du membre pour ce connecteur (le front
+    la passe à `connectorVerdict` pour afficher la même phrase que le membre verrait)."""
+    org = ctx.org_id
+    if org is None:
+        raise AuthzDenied(400, "no_active_org", "Aucune org active.")
+    from .. import roles
+    if not roles.is_org_member(inp.member, org):
+        raise AuthzDenied(404, "not_a_member", "Ce membre n'appartient pas à cette org.")
+    st = access.status_for(inp.member, org=org)
+    return {"provider": inp.provider, "member": inp.member,
+            "status": (st.get("providers") or {}).get(inp.provider)}
+
+
 from .registry import CAPABILITIES  # noqa: E402
 
 CAPABILITIES += [
@@ -106,5 +128,12 @@ CAPABILITIES += [
         key="connectors.verify", handler=_verify, Input=VerifyInput, authz=ORG_MEMBER,
         description=CAP_DOC,
         rest=RestBinding("POST", "/api/me/connectors/{provider}/verify"),
+    ),
+    Capability(
+        key="connectors.effect_for_member", handler=_effect_for_member,
+        Input=EffectForMemberInput, authz=ORG_ADMIN,
+        description="Org admin: replay a connector's verdict AS a given org member (M4). "
+                    "Returns that member's ProviderStatus entry for {provider}, org scoped.",
+        rest=RestBinding("GET", "/api/me/connectors/{provider}/effect"),
     ),
 ]

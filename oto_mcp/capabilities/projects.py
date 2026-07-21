@@ -224,10 +224,15 @@ def publish_project_mcp(sub: str, row: dict, *, access_mode: str,
     """Cœur de la publication MCP d'un projet (ADR 0032). AUCUN contrôle d'autz (le
     caller a déjà gaté `can_govern`) — partagé par la capacité `oto_project` et par le
     « Partager » unifié (`oto_resource` audience public/secret/org, ADR 0048 B3). Lève
-    `AuthzDenied` sur entrée invalide (tools vide, slug manquant, slug pris)."""
+    `AuthzDenied` sur entrée invalide (tools vide en public/org, slug manquant, slug pris)."""
     project_id = int(row["id"])
     tools = [t for t in (mcp_tools or []) if t and t.strip()]
-    _require(bool(tools), "missing_tools", "`mcp_tools` (liste non vide) requis.", 400)
+    # Un endpoint `anonymous`/`org` EST un preset d'outils figé → liste requise. Un lien
+    # `secret` (UI navigable lecture seule) peut tout exposer → liste vide autorisée (le
+    # front applique déjà la même règle avant l'appel).
+    _require(bool(tools) or access_mode == "secret", "missing_tools",
+             "`mcp_tools` (liste non vide) requis pour un endpoint public ou org — "
+             "seul un lien « secret » peut tout exposer en lecture seule.", 400)
     # Datastore exposé (LECTURE) : DÉFAUT au partage `secret` (#193), refermable ;
     # réservé à `secret`. L'ÉCRITURE est un opt-in additionnel séparé.
     expose_ds = ((access_mode == "secret") if expose_datastore is None

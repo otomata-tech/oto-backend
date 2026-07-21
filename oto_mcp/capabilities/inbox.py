@@ -42,6 +42,9 @@ def _inbox(ctx: ResolvedCtx, inp: InboxInput) -> dict:
                 "project_name": cr.get("project_name"),
                 "doc_id": cr.get("doc_id"), "doc_title": cr.get("doc_title"),
                 "proposed_title": cr.get("proposed_title"),
+                # Corps proposé → le diff avant/après de la revue (sinon after=before,
+                # « aucun changement détecté » sur toute modification).
+                "proposed_body_md": cr.get("proposed_body_md"),
                 "requested_by": cr.get("requested_by"),
                 "message": cr.get("message"), "created_at": cr.get("created_at")})
 

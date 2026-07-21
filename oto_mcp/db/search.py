@@ -73,7 +73,7 @@ def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[
         return []
     return _prose_query(
         "docs", DOCS_TEXT,
-        "id, project_id, title, updated_at",
+        "id, project_id, title, description, updated_at",
         "coalesce(body_md,'')",
         "project_id = ANY(%s)", (project_ids,), q, limit)
 
@@ -122,7 +122,7 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
     if not project_ids:
         return []
     sql = (
-        "SELECT d.id, d.project_id, d.title, d.updated_at, "
+        "SELECT d.id, d.project_id, d.title, d.description, d.updated_at, "
         "e.embedding <=> %s::halfvec AS distance "
         "FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
         "WHERE d.project_id = ANY(%s) "

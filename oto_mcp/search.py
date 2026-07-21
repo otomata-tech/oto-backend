@@ -87,7 +87,7 @@ def search(sub: str, org_id: int, q: str, *,
     if "page" in wanted:
         _add(db.search_docs_fts(q, pids, limit=per_source), lambda r: {
             "kind": "page", "ref": r["id"], "title": r["title"],
-            "project_id": r["project_id"],
+            "project_id": r["project_id"], "description": r.get("description") or None,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
         # Sémantique (lot 3) : les pages proches du sens de la requête, fusionnées au
@@ -96,7 +96,8 @@ def search(sub: str, org_id: int, q: str, *,
             from .embeddings import to_pg
             _add(db.search_docs_semantic(to_pg(query_embedding), pids, limit=per_source),
                  lambda r: {"kind": "page", "ref": r["id"], "title": r["title"],
-                            "project_id": r["project_id"], "passage": None,
+                            "project_id": r["project_id"], "description": r.get("description") or None,
+                            "passage": None,
                             "updated_at": r.get("updated_at"), "matched_by": "semantic"})
     if "brief" in wanted:
         _add(db.search_project_briefs(q, pids, limit=per_source), lambda r: {

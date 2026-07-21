@@ -278,7 +278,7 @@ _CATEGORY_BY_CONNECTOR = {
     "brevo": "Prospection", "salesforce": "Prospection",
     "figma": "Design", "supabase": "Dev",
     # recherche web / scraping
-    "aiark": "Prospection",
+    "aiark": "Prospection", "cognism": "Prospection",
     "serpapi": "Prospection", "searchapi": "Prospection", "brightdata": "Prospection", "cloro": "Prospection",
     # ATS / talent sourcing (RH)
     "greenhouse": "Recrutement", "lever": "Recrutement", "ashby": "Recrutement",
@@ -304,7 +304,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "zoho": "Zoho", "zohodesk": "Zoho", "zohoanalytics": "Zoho",
     "salesforce": "Salesforce",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
-    "aiark": "AI Ark",
+    "aiark": "AI Ark", "cognism": "Cognism",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
     "searchapi": "SearchApi", "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
@@ -391,7 +391,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com", "searchapi": "searchapi.io", "brightdata": "brightdata.com", "cloro": "cloro.dev",
-    "aiark": "ai-ark.com",
+    "aiark": "ai-ark.com", "cognism": "cognism.com",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
     "reddit": "reddit.com",
 }
@@ -654,6 +654,23 @@ _REGISTRY_LIST = [
        label="AI Ark",
        help="people & company search via LinkedIn",
        href="https://ai-ark.com"),
+    # cognism : connecteur classique (kind="tools") sur l'API Search de Cognism
+    # (developers.cognism.com). Client REST synchrone dans oto-core
+    # (`oto.tools.cognism`), tools curés dans `tools/cognism.py`. Cascade de clé
+    # standard (`resolve_api_key`) — BYO org couvre le besoin "une clé pour tout
+    # l'org" sans ouvrir de grant plateforme (pas d'accord commercial Otomata↔
+    # Cognism à ce jour, donc PAS de mode "platform" ici, contrairement à AI Ark/
+    # Kaspr). search_contacts/search_accounts = preview only (flags `has*`, pas
+    # d'email/téléphone réel) ; redeem_contacts/redeem_accounts = reveal complet
+    # (consomme des crédits) ; enrich_contact/enrich_account = lookup par
+    # identité (email/LinkedIn/nom+société). DSL de filtre (~150 champs)
+    # documentée dans le guide `cognism-filters`, pas dans les docstrings tool.
+    _c("cognism", ["cognism"],
+       auth_modes={"byo_user", "byo_org"}, keyed=True,
+       secret_kind="api_key",
+       label="Cognism",
+       help="B2B contact & company search, reveal, and identity enrichment",
+       href="https://cognism.com"),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur

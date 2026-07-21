@@ -51,14 +51,21 @@ def _import_of(tree: ast.Module, clsname: str) -> str | None:
 
 
 def _methods_called_on_client(tree: ast.Module) -> set[str]:
-    """Toutes les méthodes appelées via `_client().<m>` (Attribute dont la value est
-    un Call à Name('_client'))."""
+    """Toutes les méthodes appelées via `_client().<m>` (chaîné) OU `c.<m>` (nom
+    de variable conventionnel du client résolu par `_client()`, utilisé quand
+    la méthode est appelée depuis un dispatcher partagé plutôt qu'inline — ex.
+    Folk `_create_one(c, entity, ...)` plutôt que `_client().create_person(...)` ;
+    sans ce 2e motif, un connecteur qui factorise ses tools singulier/bulk
+    derrière des dispatchers perd toute couverture version-skew)."""
     methods: set[str] = set()
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Call)
+        if not isinstance(node, ast.Attribute):
+            continue
+        if (isinstance(node.value, ast.Call)
                 and isinstance(node.value.func, ast.Name)
                 and node.value.func.id == "_client"):
+            methods.add(node.attr)
+        elif isinstance(node.value, ast.Name) and node.value.id == "c":
             methods.add(node.attr)
     return methods
 

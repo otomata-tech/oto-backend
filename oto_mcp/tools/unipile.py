@@ -394,6 +394,7 @@ def register(mcp: FastMCP) -> None:
         industry: Optional[dict] = None,
         network_distance: Optional[list[int]] = None,
         advanced_keywords: Optional[dict] = None,
+        skills: Optional[list] = None,
         url: Optional[str] = None,
         api: str = "classic",
         cursor: Optional[str] = None,
@@ -418,6 +419,9 @@ def register(mcp: FastMCP) -> None:
                 `[2]`=2e, `[3]`=3e+. Combinable (`[1, 2]`) → cible « mes N1 sur [ville] ».
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
                 company?, school?}`.
+            skills: filtre compétences (Recruiter / Sales Nav) — liste, chaque item un
+                dict `{id, name}` obtenu via `unipile_search_facets(facet_type="SKILL", …)`
+                (TU choisis le bon candidat), ou un nom brut (résolu au 1er candidat).
             url: URL de recherche LinkedIn collée du navigateur (classic / Sales
                 Navigator). Si fournie, les autres filtres structurés sont ignorés ;
                 passe `api=` du produit de l'URL. ⚠️ **Recruiter-from-URL est
@@ -433,7 +437,8 @@ def register(mcp: FastMCP) -> None:
         return unipile_client().search(
             keywords=keywords, category=category, company=company, location=location,
             industry=industry, network_distance=network_distance,
-            advanced_keywords=advanced_keywords, url=url, api=api, cursor=cursor,
+            advanced_keywords=advanced_keywords, skills=skills, url=url, api=api,
+            cursor=cursor,
         )
 
     @mcp.tool()

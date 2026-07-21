@@ -401,6 +401,13 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Recherche LinkedIn via Unipile.
 
+        ⚠️ **Recherche Recruiter / Sales Navigator par facettes** (compétences,
+        secteur, localisation, employeur) : lis d'abord le guide
+        `oto_guide(op=read, slug="linkedin-search")`. Deux pièges qui FAUSSENT en
+        silence : (1) une facette exige un **ID résolu** — passe le terme par
+        `unipile_search_facets` et donne l'`id` choisi ; un terme brut NE filtre PAS ;
+        (2) le mode `url=` est **plafonné à 25 sans pagination** — préfère le structuré.
+
         `company`/`location`/`industry` acceptent des NOMS (résolus automatiquement
         en facettes LinkedIn) ou des ids de facette numériques. ⚠️ La page company
         LinkedIn n'est PAS un id de facette employeur valide pour la recherche

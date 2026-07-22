@@ -548,10 +548,31 @@ def search_docs_in_project(project_id: int, query: str, *, limit: int = 20) -> l
         return [dict(r) for r in rows]
 
 
+class DocConflict(Exception):
+    """L'édition optimiste a échoué : le doc a changé depuis la lecture du client
+    (rev attendue ≠ rev courante). Le caller doit relire et refuser silencieusement
+    l'écrasement (oto/#6)."""
+    def __init__(self, current_rev: str):
+        self.current_rev = current_rev
+        super().__init__("doc modifié depuis la lecture")
+
+
+def doc_rev(title: Optional[str], body_md: Optional[str]) -> str:
+    """Jeton de version dérivé du CONTENU (titre+corps) — un ETag. Robuste sans
+    colonne de version ni migration ; insensible à la troncature seconde d'`updated_at`
+    (le row factory perd les sous-secondes). Deux écritures au même contenu = même rev."""
+    h = hashlib.md5()
+    h.update((title or "").encode("utf-8"))
+    h.update(b"\x00")
+    h.update((body_md or "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 def update_doc(doc_id: int, *, title: Optional[str] = None,
                body_md: Optional[str] = None, kind: Optional[str] = None,
                edited_by: Optional[str] = None,
-               description: Optional[str] = None) -> None:
+               description: Optional[str] = None,
+               expected_rev: Optional[str] = None) -> None:
     sets: list[str] = []
     params: list = []
     if title is not None:
@@ -576,8 +597,14 @@ def update_doc(doc_id: int, *, title: Optional[str] = None,
     params.append(doc_id)
     with _connect() as conn:
         # Snapshot de l'état ANTÉRIEUR avant d'écrire (chaîne de versions, ADR 0032 §3 B4c).
-        prior = conn.execute("SELECT title, body_md FROM docs WHERE id = %s",
+        # FOR UPDATE verrouille la ligne → le check de rev + l'UPDATE sont un
+        # compare-and-set ATOMIQUE (deux éditions concurrentes ne s'écrasent plus, oto/#6).
+        prior = conn.execute("SELECT title, body_md FROM docs WHERE id = %s FOR UPDATE",
                              (doc_id,)).fetchone()
+        if prior is not None and expected_rev is not None:
+            cur = doc_rev(prior["title"], prior["body_md"])
+            if cur != expected_rev:
+                raise DocConflict(cur)
         if prior is not None:
             conn.execute(
                 "INSERT INTO doc_revisions (doc_id, title, body_md, edited_by) "

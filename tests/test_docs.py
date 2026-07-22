@@ -23,7 +23,7 @@ def seams(monkeypatch):
                         rec["create"].append((pid, title, parent_id, kind, created_by)) or 3)
     monkeypatch.setattr(D.db, "list_docs_for_project", lambda pid: [DOC])
     monkeypatch.setattr(D.db, "update_doc",
-                        lambda did, title=None, body_md=None, kind=None, edited_by=None, description=None: rec["update"].append((did, title, body_md, kind, edited_by)))
+                        lambda did, title=None, body_md=None, kind=None, edited_by=None, description=None, expected_rev=None: rec["update"].append((did, title, body_md, kind, edited_by, expected_rev)))
     monkeypatch.setattr(D.db, "list_doc_revisions",
                         lambda did, limit=50: [{"id": 1, "title": "v0", "body_md": "old", "edited_by": "u1", "created_at": "2026-06-30"}])
     monkeypatch.setattr(D.db, "delete_doc", lambda did: rec["delete"].append(did))
@@ -93,7 +93,22 @@ def test_get_unknown(seams):
 
 def test_update(seams):
     D._doc(CTX, D.DocInput(op="update", doc_id=3, body_md="new"))
-    assert seams["update"] == [(3, None, "new", None, "u1")]   # edited_by = ctx.sub
+    assert seams["update"] == [(3, None, "new", None, "u1", None)]   # edited_by = ctx.sub
+
+
+def test_update_passes_expected_rev(seams):
+    D._doc(CTX, D.DocInput(op="update", doc_id=3, body_md="new", expected_rev="abc123"))
+    assert seams["update"][0][5] == "abc123"   # le token de conflit optimiste est transmis
+
+
+def test_update_conflict_is_409(seams, monkeypatch):
+    # Le doc a changé depuis la lecture → DocConflict → erreur actionnable 409, pas d'écrasement.
+    def _boom(*a, **k):
+        raise D.db.DocConflict("newrev99")
+    monkeypatch.setattr(D.db, "update_doc", _boom)
+    with pytest.raises(D.AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="update", doc_id=3, body_md="x", expected_rev="stale"))
+    assert ei.value.status == 409 and ei.value.code == "conflict"
 
 
 def test_revisions(seams):
@@ -142,7 +157,7 @@ def test_list_changes_needs_write(seams, monkeypatch):
 def test_resolve_change_accept_applies(seams):
     out = D._doc(CTX, D.DocInput(op="resolve_change", doc_id=3, request_id=5, accept=True))
     assert out["accepted"] is True
-    assert seams["update"] == [(3, "T", "new", None, "u1")]      # contenu proposé appliqué
+    assert seams["update"] == [(3, "T", "new", None, "u1", None)]      # contenu proposé appliqué
     assert seams["cr_resolve"] == [(5, "accepted", "u1")]
 
 

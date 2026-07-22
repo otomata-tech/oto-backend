@@ -43,6 +43,7 @@ class DocInput(BaseModel):
     message: Optional[str] = None      # request_change : note libre du demandeur
     accept: Optional[bool] = None      # resolve_change : True = accepter (applique), False = refuser
     public: Optional[bool] = None      # set_public : True = partager publiquement, False = retirer
+    expected_rev: Optional[str] = None  # update : rev (ETag) lue par le client → conflit optimiste
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -58,6 +59,9 @@ def _view(row: dict) -> dict:
     out = {k: row.get(k) for k in
            ("id", "project_id", "parent_id", "title", "description", "position",
             "body_md", "kind", "created_at", "updated_at")}
+    # rev = ETag de contenu : à relire par le client et repasser en `expected_rev`
+    # sur op=update pour détecter un écrasement concurrent (oto/#6).
+    out["rev"] = db.doc_rev(row.get("title"), row.get("body_md"))
     tok = row.get("public_token")
     out["public"] = bool(tok)
     out["public_url"] = _public_doc_url(tok) if tok else None
@@ -223,9 +227,15 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
 
     if inp.op == "update":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
-        db.update_doc(int(inp.doc_id), title=(inp.title.strip() if inp.title else None),
-                      body_md=inp.body_md, kind=inp.kind, edited_by=sub,
-                      description=inp.description)
+        try:
+            db.update_doc(int(inp.doc_id), title=(inp.title.strip() if inp.title else None),
+                          body_md=inp.body_md, kind=inp.kind, edited_by=sub,
+                          description=inp.description, expected_rev=inp.expected_rev)
+        except db.DocConflict as e:
+            # Écrasement concurrent évité : le doc a changé depuis la lecture du client.
+            _require(False, "conflict",
+                     f"Le doc a été modifié entre-temps (rev actuelle {e.current_rev}). "
+                     f"Relis-le (op=get) et refais ton édition sur la version à jour.", 409)
         db.log_project_activity(pid, sub, "doc.update", row.get("title"))
         return _view(db.get_doc_by_id(int(inp.doc_id)))
 

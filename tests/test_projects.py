@@ -79,6 +79,9 @@ def seams(monkeypatch):
     rec["granted"] = []
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: rec["granted"].append(principals) or [])
+    # #5.1 : org maison = l'org active des tests (99) → le partage personnel s'affiche
+    # (comportement préservé) ; un test dédié utilise une AUTRE org pour vérifier le masquage.
+    monkeypatch.setattr(P.org_store, "get_active_org", lambda sub: 99)
     # Pastilles d'état de l'index (refonte UX) : nb de grants batché + audit par projet.
     monkeypatch.setattr(P.db, "project_grant_counts", lambda ids: {})
     monkeypatch.setattr("oto_mcp.project_audit.audit_project",
@@ -227,6 +230,22 @@ def test_list_includes_projects_shared_to_my_team(seams, monkeypatch):
     out = P._project(ctx, P.ProjectInput(op="list"))
     shared = next(p for p in out["projects"] if p["id"] == 61)
     assert shared["shared"] is True and shared["permission"] == "write"
+
+
+def test_personal_share_shown_only_in_home_org(seams, monkeypatch):
+    # #5.1 : un projet partagé PERSONNELLEMENT (principal ('user', sub)) n'apparaît que
+    # dans l'org de rattachement (maison=99), pas dupliqué dans les autres orgs.
+    perso_share = dict(ROW, id=67, name="Partagé perso", owner_type="org", owner_id="188",
+                       permission="read")
+    monkeypatch.setattr(P.db, "list_projects_granted_to",
+                        lambda principals: [perso_share] if ("user", "u1") in principals else [])
+    # Dans la MAISON (99) → visible.
+    out_home = P._project(ResolvedCtx(sub="u1", org_id=99), P.ProjectInput(op="list"))
+    assert 67 in [p["id"] for p in out_home["projects"]]
+    # Dans une AUTRE org (42) → le principal 'user' est retiré → invisible (plus de doublon).
+    monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    out_other = P._project(ResolvedCtx(sub="u1", org_id=42), P.ProjectInput(op="list"))
+    assert 67 not in [p["id"] for p in out_other["projects"]]
 
 
 def test_get_other_org_hidden_returns_404(seams, monkeypatch):

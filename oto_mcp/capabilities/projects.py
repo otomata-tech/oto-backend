@@ -373,6 +373,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         own = [_enrich(r, False) for r in own_rows]
         seen = {p["id"] for p in own}
         principals = ownership.active_org_principals(ctx.sub, ctx.org_id)
+        # #5.1 : un partage PERSONNEL (principal ('user', sub)) est org-agnostique → il
+        # remontait dans « Partagés » de CHAQUE org de l'utilisateur. On ne l'AFFICHE que
+        # dans l'org de RATTACHEMENT (la maison) → une seule fois, pas dupliqué partout.
+        # L'ACCÈS reste intact ailleurs (can_access/recherche : un partage personnel est
+        # cross-org par nature) — c'est le LISTING qui se dé-duplique.
+        from .. import org_store  # noqa: org_store est shadowé en local par d'autres branches de cette fonction
+        if ctx.org_id != org_store.get_active_org(ctx.sub):
+            principals = [p for p in principals if p[0] != "user"]
         shared = [{**_enrich(r, True), "permission": r.get("permission")}
                   for r in db.list_projects_granted_to(principals)
                   if r["id"] not in seen]

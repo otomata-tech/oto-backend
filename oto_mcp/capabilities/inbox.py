@@ -88,8 +88,14 @@ def _inbox(ctx: ResolvedCtx, inp: InboxInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="me.inbox", handler=_inbox, Input=InboxInput, authz=SUB_ONLY,
-        description="Home inbox: proposals awaiting your review + pending invitations "
-                    "(À traiter) and recent activity (Récent). REST-only.",
+        mcp="oto_inbox",
+        description=(
+            "YOUR inbox — two lists. `to_review`: change-request proposals awaiting "
+            "your decision on projects you can write (resolve with oto_doc op=resolve) "
+            "+ pending org invitations. `recent`: YOUR own proposals now accepted/"
+            "rejected + projects freshly shared with you. `count` = items needing a "
+            "decision. Check it to know what awaits you (the « readers propose / "
+            "authors validate » loop) — no argument needed."),
         rest=RestBinding("GET", "/api/me/inbox"),
     ),
 ]

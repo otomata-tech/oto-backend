@@ -177,8 +177,9 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
         )),
         DocSection(kind="usage", title="enrichissement waterfall (20+ sources)", body_md=(
             "trouve téléphones et emails d'un contact en cascade sur 20+ fournisseurs (~70% de taux sur le téléphone).\n"
-            "- `fullenrich_enrich_linkedin` — passe le slug linkedin + prénom/nom (et le nom d'entreprise pour mieux matcher)\n"
-            "- renvoie téléphones, emails pro et perso, titre et localisation ; appel asynchrone (~30s à quelques minutes)"
+            "- `fullenrich_enrich_linkedin` — soumet un job **bulk** (1 à 100 contacts : prénom/nom + slug linkedin + entreprise), retour immédiat avec un `enrichment_id`\n"
+            "- `fullenrich_result` — relève le résultat (repasser toutes les ~20-30s jusqu'à `done` ; un job prend ~30s à 4 min)\n"
+            "- renvoie téléphones, emails pro et perso, titre et localisation par contact"
         )),
     ),
     "apollo": (

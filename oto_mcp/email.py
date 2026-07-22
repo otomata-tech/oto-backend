@@ -22,6 +22,16 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _no_crlf(s: str | None) -> str | None:
+    """Neutralise une injection d'en-tête email : retire CR/LF (et NUL) d'une valeur
+    destinée à un champ d'en-tête (sujet, to, from, reply_to). Des données
+    user-controlled (nom de projet, titre de page) transitent par le sujet ; un
+    \\r\\n y injecterait un en-tête arbitraire côté service d'envoi."""
+    if s is None:
+        return None
+    return s.replace("\r", "").replace("\n", " ").replace("\x00", "")
+
+
 def _send(to: str, subject: str, html: str, reply_to: str | None = None,
           from_email: str | None = None) -> bool:
     """Envoi via mailer.oto.zone (Scaleway TEM). `from_email` = adresse expéditrice
@@ -32,9 +42,13 @@ def _send(to: str, subject: str, html: str, reply_to: str | None = None,
         return False
     try:
         import httpx
-        payload = {"from": from_email or _MAIL_FROM, "to": to, "subject": subject, "html": html}
+        # Anti-injection d'en-tête : neutralise CR/LF sur TOUS les champs d'en-tête
+        # (choke-point unique → couvre tous les templates). Le corps `html` n'est pas
+        # un en-tête (et déjà échappé par les templates via _esc).
+        payload = {"from": _no_crlf(from_email or _MAIL_FROM), "to": _no_crlf(to),
+                   "subject": _no_crlf(subject), "html": html}
         if reply_to:
-            payload["reply_to"] = reply_to
+            payload["reply_to"] = _no_crlf(reply_to)
         r = httpx.post(
             _MAILER_URL,
             headers={"Authorization": f"Bearer {bearer}"},

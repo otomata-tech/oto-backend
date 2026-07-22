@@ -27,7 +27,9 @@ PROJECTS_TEXT = "coalesce(name,'') || ' ' || coalesce(brief_md,'')"
 INSTR_TEXT = "coalesce(title,'') || ' ' || coalesce(description,'') || ' ' || coalesce(body_md,'')"
 GUIDES_TEXT = "coalesce(title,'') || ' ' || coalesce(description,'') || ' ' || coalesce(body_md,'')"
 
-_HL_OPTS = "MaxWords=30,MinWords=12,ShortWord=2,HighlightAll=false"
+# MaxFragments=2 : deux extraits courts plutôt qu'un long qui coupe en plein
+# tableau markdown (oto-backend#6). Le texte est pré-nettoyé de ses pipes `|`.
+_HL_OPTS = "MaxWords=22,MinWords=8,ShortWord=2,HighlightAll=false,MaxFragments=2"
 
 
 def _vec(text_expr: str) -> str:
@@ -51,20 +53,42 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
                  where_scope: str, scope_params: tuple, q: str, limit: int) -> list[dict]:
     """Requête générique d'une source de prose : match FTS foldé (l'index), rang
     `ts_rank_cd` length-normalized (|32 — une page géante ne domine ni ne disparaît),
-    headline sur la saisie brute contre le texte original."""
+    headline sur la saisie brute contre le texte original.
+
+    Trois robustesses (oto-backend#6) via un CTE qui calcule la tsquery UNE fois :
+    - **stopwords/symboles** (« € », « avoir ») : si la requête ne produit aucun
+      lexème (`numnode = 0`), repli ILIKE sur le texte foldé (comme les fichiers) ;
+    - **fragments** de headline pré-nettoyés des pipes markdown (`_HL_OPTS`) ;
+    - **fallback OR** (traité par le caller `_prose_query`) : si l'AND de tous les
+      termes ne matche rien, on re-tente en OR (au moins un terme)."""
     vec = _vec(text_expr)
-    fold_q = _fold("%s")
-    sql = (
-        f"SELECT {select_cols}, "
-        f"ts_rank_cd({vec}, websearch_to_tsquery('french', {fold_q}), 32) AS rank, "
-        f"ts_headline('french', {headline_col}, websearch_to_tsquery('french', %s), '{_HL_OPTS}') AS headline "
-        f"FROM {table} "
-        f"WHERE {vec} @@ websearch_to_tsquery('french', {fold_q}) AND ({where_scope}) "
-        "ORDER BY rank DESC LIMIT %s"
-    )
-    with _connect() as conn:
-        rows = conn.execute(sql, (q, q, q, *scope_params, limit)).fetchall()
-        return [dict(r) for r in rows]
+    fold_q = _fold("%s")            # translate(lower(%s), accents…)
+    folded_doc = _fold(text_expr)   # le texte du document, foldé (repli ILIKE)
+    hl_text = f"replace({headline_col}, '|', ' ')"  # pas de coupe en plein tableau
+
+    def _run(or_mode: bool) -> list[dict]:
+        ws = f"websearch_to_tsquery('french', {fold_q})"
+        # OR = passer les `&` de la tsquery en `|` (garde le stemming de websearch).
+        tsq = f"replace({ws}::text, '&', '|')::tsquery" if or_mode else ws
+        sql = (
+            f"WITH qq AS (SELECT {tsq} AS tsq, {fold_q} AS raw) "
+            f"SELECT {select_cols}, ts_rank_cd({vec}, qq.tsq, 32) AS rank, "
+            f"ts_headline('french', {hl_text}, qq.tsq, '{_HL_OPTS}') AS headline "
+            f"FROM {table}, qq "
+            f"WHERE ((numnode(qq.tsq) > 0 AND {vec} @@ qq.tsq) "
+            f"       OR (numnode(qq.tsq) = 0 AND {folded_doc} ILIKE '%%' || qq.raw || '%%')) "
+            f"  AND ({where_scope}) "
+            "ORDER BY rank DESC LIMIT %s"
+        )
+        # Params : tsq (1×q) + raw (1×q) dans le CTE, puis scope, puis limit.
+        with _connect() as conn:
+            rows = conn.execute(sql, (q, q, *scope_params, limit)).fetchall()
+            return [dict(r) for r in rows]
+
+    rows = _run(or_mode=False)
+    if not rows and len(q.split()) > 1:
+        rows = _run(or_mode=True)  # aucun résultat en AND multi-termes → OR
+    return rows
 
 
 def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[dict]:
@@ -115,21 +139,30 @@ def search_guides_fts(q: str, org_id: Optional[int], sub: str, *, limit: int = 2
 
 
 def search_docs_semantic(query_literal: str, project_ids: list[int], *,
-                         limit: int = 20) -> list[dict]:
+                         limit: int = 20, max_distance: float = 0.6) -> list[dict]:
     """kNN sémantique (lot 3) : pages des projets accessibles les plus PROCHES du
     vecteur de requête (distance cosine `<=>` sur l'index HNSW). Scopé accès comme le
-    lexical (mêmes `project_ids`). `query_literal` = littéral halfvec `[...]`."""
+    lexical (mêmes `project_ids`). `query_literal` = littéral halfvec `[...]`.
+
+    `max_distance` = cut-off de distance cosine (~0.6) : sans lui, le kNN renvoie
+    TOUJOURS `limit` pages, même sans rapport avec la requête → à 500 pages, un
+    repli sémantique noierait le lexical sous du bruit (oto-backend#6). `body_excerpt`
+    (début du corps) sert de passage de repli pour un hit sémantique pur (sans
+    surlignage lexical)."""
     if not project_ids:
         return []
     sql = (
         "SELECT d.id, d.project_id, d.title, d.description, d.updated_at, "
+        "left(d.body_md, 400) AS body_excerpt, "
         "e.embedding <=> %s::halfvec AS distance "
         "FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
-        "WHERE d.project_id = ANY(%s) "
+        "WHERE d.project_id = ANY(%s) AND (e.embedding <=> %s::halfvec) < %s "
         "ORDER BY e.embedding <=> %s::halfvec LIMIT %s"
     )
     with _connect() as conn:
-        rows = conn.execute(sql, (query_literal, project_ids, query_literal, limit)).fetchall()
+        rows = conn.execute(
+            sql, (query_literal, project_ids, query_literal, max_distance,
+                  query_literal, limit)).fetchall()
         return [dict(r) for r in rows]
 
 

@@ -97,7 +97,10 @@ def search(sub: str, org_id: int, q: str, *,
             _add(db.search_docs_semantic(to_pg(query_embedding), pids, limit=per_source),
                  lambda r: {"kind": "page", "ref": r["id"], "title": r["title"],
                             "project_id": r["project_id"], "description": r.get("description") or None,
-                            "passage": None,
+                            # Pas de surlignage lexical sur un hit sémantique pur → passage
+                            # de repli = début du corps (à défaut, le chapô), pour juger la
+                            # pertinence sans ouvrir la page (oto-backend#6).
+                            "passage": _snippet(r.get("body_excerpt") or r.get("description") or "") or None,
                             "updated_at": r.get("updated_at"), "matched_by": "semantic"})
     if "brief" in wanted:
         _add(db.search_project_briefs(q, pids, limit=per_source), lambda r: {
@@ -159,7 +162,14 @@ def search(sub: str, org_id: int, q: str, *,
                 hashlib.sha256(q.encode()).hexdigest()[:12], scope,
                 ",".join(sorted(wanted)) if kinds else "*", len(hits))
 
-    out: dict = {"hits": hits, "count": len(hits), "matched_by": "lexical"}
+    # `matched_by` racine DÉRIVÉ des hits (était codé « lexical » en dur → mentait
+    # quand tout venait du sémantique, oto-backend#6). semantic si tous les hits le
+    # sont, mixed si les deux familles cohabitent, lexical sinon.
+    tones = {h.get("matched_by") for h in hits}
+    root_matched = ("semantic" if tones == {"semantic"}
+                    else "mixed" if "semantic" in tones and len(tones) > 1
+                    else "lexical")
+    out: dict = {"hits": hits, "count": len(hits), "matched_by": root_matched}
     if not hits:
         out["hint"] = ("Aucun résultat — reformule (la V1 est lexicale : essaie les "
                        "mots exacts du contenu), ou navigue : `oto_project op=list` "

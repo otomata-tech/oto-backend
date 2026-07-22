@@ -35,6 +35,12 @@ ALLOWED = {
                                    "du requérant (feedback actor-scoped seam).",
     "capabilities/usage.py": "fallback de télémétrie (tag d'un signal si ctx.org_id "
                              "absent) — métadonnée best-effort, pas un accès.",
+    "capabilities/projects.py": "listing des projets (#5.1) : un partage PERSONNEL "
+                                "(grant ('user',sub), org-agnostique) ne s'AFFICHE que "
+                                "dans l'org de RATTACHEMENT (la maison) — comparaison "
+                                "current(ctx.org_id) vs maison pour dé-dupliquer "
+                                "l'affichage, JAMAIS une résolution d'accès (l'accès "
+                                "reste cross-org via can_access/recherche).",
 }
 
 

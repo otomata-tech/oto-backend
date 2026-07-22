@@ -29,16 +29,26 @@ from .tool_visibility import (
 
 logger = logging.getLogger(__name__)
 
+# Sentinelle « dérive l'org de current_org » (défaut) — distincte de org=None/0
+# (perso/global), qui est une valeur LÉGITIME.
+_DERIVE_ORG = object()
 
-async def compute_hidden_tools(ctx, sub: str) -> set[str]:
+
+async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     """Ensemble effectif des tools à masquer pour `(sub, org active)`.
 
     Profil de visibilité = (sub, org active) ; 0 = perso/global (ADR 0015). Lit
     l'org active à CHAQUE appel → après `set_active_org`, recalcule pour la
-    nouvelle org. `ctx` = `Context` fastmcp (pour `ctx.fastmcp.list_tools`)."""
+    nouvelle org. `ctx` = `Context` fastmcp (pour `ctx.fastmcp.list_tools`).
+
+    `org` = org de scope EXPLICITE (défaut = dérive de `current_org(sub)`, le
+    comportement handshake/bascule à chaud MCP). À passer quand la vue doit
+    refléter une org CONSULTÉE précise plutôt que re-dériver le contexte de
+    l'acteur — ex. la carte contexte du dashboard, qui affichait sinon la
+    sélection GLOBALE (org 0) au lieu de l'org consultée (oto/#5.3)."""
     try:
         # Les toggles perso sont scopés par org → on lit ceux de l'org active.
-        active_org = access.current_org(sub)
+        active_org = access.current_org(sub) if org is _DERIVE_ORG else org
         prof_org = active_org or 0
         disabled = set(db.list_user_disabled_tools(sub, prof_org))
         enabled_override = set(db.list_user_enabled_tools(sub, prof_org))

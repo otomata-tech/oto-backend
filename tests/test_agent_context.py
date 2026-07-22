@@ -32,11 +32,15 @@ def test_tools_view_groups_by_namespace(monkeypatch):
 
     monkeypatch.setattr(ac.tool_registry, "bound_instance", lambda: _Inst())
 
-    async def _hidden(ctx, sub):
+    seen = {}
+
+    async def _hidden(ctx, sub, *, org=None):
+        seen["org"] = org         # la vue DOIT scoper sur l'org consultée (oto/#5.3)
         return {"apollo_search"}   # apollo masqué (non activé pour l'org)
     monkeypatch.setattr(ac.session_visibility, "compute_hidden_tools", _hidden)
 
     view = asyncio.run(ac._tools_view(ResolvedCtx(sub="u1", org_id=7)))
+    assert seen["org"] == 7        # ctx.org_id passé explicitement, pas re-dérivé
     assert view["available"] is True
     assert view["total_visible"] == 4 and view["total_hidden"] == 1
     by = {n["namespace"]: n for n in view["namespaces"]}

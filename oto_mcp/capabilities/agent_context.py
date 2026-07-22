@@ -49,8 +49,11 @@ async def _tools_view(ctx: ResolvedCtx) -> dict:
         return {"available": False}   # hors serveur (tests) — pas d'instance liée
     try:
         all_tools = await inst.list_tools(run_middleware=False)
+        # Scope EXPLICITE sur l'org de la vue (ctx.org_id) — sinon compute_hidden_tools
+        # re-dérive current_org(sub), qui dans ce chemin REST retombe sur la sélection
+        # GLOBALE (org 0) et gonfle le compte à ~609 sur une org neuve vide (oto/#5.3).
         hidden = await session_visibility.compute_hidden_tools(
-            types.SimpleNamespace(fastmcp=inst), ctx.sub)
+            types.SimpleNamespace(fastmcp=inst), ctx.sub, org=ctx.org_id)
     except Exception as e:           # derive-only : on n'échoue pas la vue
         logger.warning("agent-context tools view failed for %s: %s", ctx.sub, e)
         return {"available": False}

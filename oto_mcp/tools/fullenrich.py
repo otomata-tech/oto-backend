@@ -41,8 +41,10 @@ def register(mcp: FastMCP) -> None:
             contacts: 1-100 contacts in ONE job (batch friends — one job for a whole
                 list beats parallel single calls). Each: {"first_name": str,
                 "last_name": str, "linkedin_slug": str (e.g. "alexis-laporte",
-                NOT a URL — optional but strongly improves matching),
-                "company_name": str (optional)}.
+                NOT a URL — best matching), "domain": str (company website
+                domain), "company_name": str (optional)}. Each contact MUST
+                carry linkedin_slug OR domain (FullEnrich rejects the job
+                otherwise).
             enrich_fields: subset of ["contact.work_emails", "contact.phones",
                 "contact.personal_emails"]. Default: work_emails + phones.
                 Only ask what you need — pricing is pay-per-result:

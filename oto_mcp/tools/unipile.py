@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
@@ -30,6 +31,54 @@ _FEED_NS = "linkedin-feed"          # namespace datastore per-user
 _FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
 _FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
 _FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
+
+# --- Discipline du quota amont LinkedIn (Unipile ~100 requêtes/12h PAR COMPTE sur
+# les fiches société & profils, vécu 2026-07-21 : 251 × 429 + 166 hangs de 121s
+# d'un seul user en bulk). Deux garde-fous PROCESS-LOCAL (backend mono-loop) :
+#   1. cooldown 429 : au 1er 429 on arme un délai (parsé du corps « Retry in N h »)
+#      et on REFUSE les scrapes suivants du même sub sans taper Unipile → l'agent
+#      STOPPE au lieu de marteler (et de creuser le rate-limit LinkedIn).
+#   2. cache fiches société : une même société relookée dans la fenêtre est servie
+#      du cache — 0 appel amont, 0 quota consommé (les fiches sont ~statiques).
+_RATE_LIMIT_UNTIL: dict[str, float] = {}   # sub -> epoch de fin de cooldown
+_COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, résultat)
+_COMPANY_TTL = 6 * 3600                      # fiches société ~statiques → 6h
+_COMPANY_CACHE_MAX = 3000                    # borne mémoire (purge grossière au-delà)
+
+
+def _rate_limit_guard(sub: str) -> None:
+    """Refuse un scrape LinkedIn pendant un cooldown 429 actif (sans appeler Unipile),
+    avec un délai actionnable → l'agent arrête d'empiler des appels perdus."""
+    until = _RATE_LIMIT_UNTIL.get(sub, 0.0)
+    now = time.time()
+    if until > now:
+        mins = int((until - now) // 60) + 1
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            f"⛔ Quota Unipile atteint pour ce compte LinkedIn — réessai dans ~{mins} min "
+            "(cap amont ~100 requêtes/12h sur fiches société & profils). N'appelle plus "
+            "unipile_search / unipile_company / unipile_profile d'ici là ; reprends plus tard.")))
+
+
+def _note_rate_limited(sub: str, err) -> None:
+    """Arme le cooldown à partir du délai renvoyé par Unipile (défaut 1h si illisible —
+    plutôt qu'un pari de 12h qui verrouillerait à tort)."""
+    secs = getattr(err, "retry_after", None) or 3600
+    _RATE_LIMIT_UNTIL[sub] = time.time() + secs
+
+
+def _scrape(sub: str, fn):
+    """Exécute un appel LinkedIn scrape sous discipline de quota : refus immédiat en
+    cooldown, armement du cooldown + erreur STOP sur un 429 amont."""
+    _rate_limit_guard(sub)
+    from oto.tools.unipile.client import UnipileRateLimited
+    try:
+        return fn()
+    except UnipileRateLimited as e:
+        _note_rate_limited(sub, e)
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            f"{e} ⛔ Quota Unipile atteint pour ce compte (~100 requêtes/12h sur les "
+            "fiches société & profils LinkedIn). ARRÊTE les appels unipile_* et reprends "
+            "après le délai indiqué — réutilise en attendant les fiches déjà récupérées.")))
 
 
 def _canonical_li_identifier(identifier: str) -> str:
@@ -442,12 +491,13 @@ def register(mcp: FastMCP) -> None:
                 le siège premium activé au connect (sinon 403 « out of scope »).
             cursor: Curseur de pagination renvoyé par un appel précédent.
         """
-        return unipile_client().search(
+        sub = access.current_user_sub_or_raise()
+        return _scrape(sub, lambda: unipile_client().search(
             keywords=keywords, category=category, company=company, location=location,
             industry=industry, network_distance=network_distance,
             advanced_keywords=advanced_keywords, skills=skills, url=url, api=api,
             cursor=cursor,
-        )
+        ))
 
     @mcp.tool()
     def unipile_search_facets(facet_type: str, keywords: str, limit: int = 25) -> dict:
@@ -491,16 +541,29 @@ def register(mcp: FastMCP) -> None:
             identifier: public identifier (slug) ou provider id LinkedIn.
             sections: Sections à inclure ("*" = tout).
         """
-        return unipile_client().get_profile(_canonical_li_identifier(identifier), sections=sections)
+        sub = access.current_user_sub_or_raise()
+        return _scrape(sub, lambda: unipile_client().get_profile(
+            _canonical_li_identifier(identifier), sections=sections))
 
     @mcp.tool()
     def unipile_company(identifier: str) -> dict:
         """Fiche société LinkedIn via Unipile.
 
-        Args:
-            identifier: slug ou id de la page société.
+        Résultat mis en cache 6h par compte (les fiches société sont ~statiques) :
+        une même société relookée est servie du cache, sans consommer le quota amont
+        (~100 fiches/12h par compte). Args: identifier = slug ou id de page société.
         """
-        return unipile_client().get_company(_canonical_li_identifier(identifier))
+        sub = access.current_user_sub_or_raise()
+        ident = _canonical_li_identifier(identifier)
+        key = (sub, ident.lower())
+        hit = _COMPANY_CACHE.get(key)
+        if hit and time.time() - hit[0] < _COMPANY_TTL:
+            return hit[1]
+        res = _scrape(sub, lambda: unipile_client().get_company(ident))
+        if len(_COMPANY_CACHE) >= _COMPANY_CACHE_MAX:
+            _COMPANY_CACHE.clear()
+        _COMPANY_CACHE[key] = (time.time(), res)
+        return res
 
     @mcp.tool()
     def unipile_chats(limit: int = 20, cursor: Optional[str] = None,

@@ -18,7 +18,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, memento_oauth, org_store, session_org
+from .. import access, db, org_store, session_org
 from ..auth_hooks import current_user_sub_from_token
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def register(mcp: FastMCP) -> None:
 
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
         id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
-        `knowledge` (base Memento connectée ?), `connectors` (résumé des connecteurs
+        `knowledge` (KB native oto_kb : ancre kb_project_id), `connectors` (résumé des connecteurs
         configurés), et un `summary` lisible. Lecture seule.
 
         Pour agir sous une autre org/équipe/projet : passe le jeton `org=` /
@@ -136,11 +136,15 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             logger.warning("whoami: status_for failed: %s", e)
 
-        memento_connected = False
+        # KB NATIVE (oto_kb) : la base de connaissance vit dans le projet ancré de
+        # l'org (orgs.kb_project_id) — plus l'ancien Memento fédéré (mort). On expose
+        # l'ancre native, pas un « memento_connected: false » qui contredit oto_kb.
+        kb_project_id = None
         try:
-            memento_connected = bool(memento_oauth.status_for(sub).get("connected"))
+            if active_org is not None:
+                kb_project_id = org_store.get_kb_project_id(active_org)
         except Exception as e:
-            logger.warning("whoami: memento status failed: %s", e)
+            logger.warning("whoami: kb lookup failed: %s", e)
 
         who = user.get("name") or user.get("email") or sub
         if org_block:
@@ -165,7 +169,7 @@ def register(mcp: FastMCP) -> None:
             "org": org_block,
             "group": group_block,
             "project": project_block,
-            "knowledge": {"memento_connected": memento_connected},
+            "knowledge": {"native_kb": True, "kb_project_id": kb_project_id},
             "connectors": {
                 "configured": configured,
                 "platform_available": platform_ready,

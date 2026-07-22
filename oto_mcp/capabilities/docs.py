@@ -7,16 +7,75 @@ source (import)}. CRUD + move, co-déclaré MCP+REST.
 """
 from __future__ import annotations
 
+import logging
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, ownership
+from .. import db, email, org_store, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
+logger = logging.getLogger(__name__)
+
 PROJECT_RTYPE = "project"
+
+
+def _dash_url() -> str:
+    return os.environ.get("OTO_DASHBOARD_BASE_URL", "https://dashboard.oto.ninja").rstrip("/")
+
+
+def _email_of(sub: Optional[str]) -> Optional[str]:
+    if not sub:
+        return None
+    return (db.get_user(sub) or {}).get("email")
+
+
+def _notify_cr_created(pid: int, proposer_sub: str, *, is_create: bool,
+                       doc_title: Optional[str]) -> None:
+    """Prévient les VALIDATEURS qu'une proposition attend (oto/#6, « les auteurs
+    valident »). Destinataires = org_admins de l'org du projet + le propriétaire si le
+    projet est user-owned, SAUF le proposeur. Best-effort — ne casse jamais la création."""
+    try:
+        project = db.get_project_by_id(int(pid)) or {}
+        pname = project.get("name")
+        org = project.get("context_org_id")
+        recips: set[str] = set()
+        if org is not None:
+            for m in org_store.list_org_members(int(org)):
+                if m.get("org_role") == "org_admin" and m.get("sub") != proposer_sub:
+                    if e := _email_of(m.get("sub")):
+                        recips.add(e)
+        if project.get("owner_type") == "user" and project.get("owner_id") != proposer_sub:
+            if e := _email_of(project.get("owner_id")):
+                recips.add(e)
+        if not recips:
+            return
+        proposer = (db.get_user(proposer_sub) or {}).get("name") or (db.get_user(proposer_sub) or {}).get("email")
+        url = f"{_dash_url()}/projects/{int(pid)}"
+        for to in recips:
+            email.send_change_request_email(
+                to, project_name=pname, doc_title=doc_title, proposer=proposer,
+                is_create=is_create, app_url=url)
+    except Exception as e:  # best-effort
+        logger.warning("notify CR created (project %s) failed: %s", pid, e)
+
+
+def _notify_cr_resolved(cr: dict, accepted: bool) -> None:
+    """Prévient le PROPOSEUR que sa proposition a été tranchée (oto/#6). Best-effort."""
+    try:
+        to = _email_of(cr.get("requested_by"))
+        if not to:
+            return
+        pname = cr.get("project_name")
+        pid = cr.get("project_id") or (cr.get("doc_id") and (db.get_doc_by_id(int(cr["doc_id"])) or {}).get("project_id"))
+        url = f"{_dash_url()}/projects/{int(pid)}" if pid else _dash_url()
+        email.send_change_request_resolved_email(
+            to, project_name=pname, doc_title=cr.get("doc_title"), accepted=accepted, app_url=url)
+    except Exception as e:  # best-effort
+        logger.warning("notify CR resolved (#%s) failed: %s", cr.get("id"), e)
 
 
 def _public_doc_url(token: str) -> str:
@@ -83,6 +142,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                 proposed_kind=(inp.kind or "doc"),
                 proposed_title=inp.title.strip(), proposed_body_md=inp.body_md or "",
                 message=inp.message)
+            _notify_cr_created(int(inp.project_id), sub, is_create=True, doc_title=None)
             return {"status": "proposal_created", "request": req}
         if inp.parent_id is not None:
             parent = db.get_doc_by_id(int(inp.parent_id))
@@ -111,6 +171,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                 # MODIF : la page cible existe-t-elle encore ? sinon on ferme (motif).
                 if db.get_doc_by_id(int(cr["doc_id"])) is None:
                     db.resolve_doc_change_request(int(inp.request_id), "rejected", sub)
+                    _notify_cr_resolved(cr, False)
                     return {"ok": True, "id": inp.request_id, "accepted": False,
                             "reason": "page supprimée"}
                 db.update_doc(int(cr["doc_id"]),
@@ -129,6 +190,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         else:
             db.resolve_doc_change_request(int(inp.request_id), "rejected", sub)
             db.log_project_activity(int(cr_pid), sub, "doc.change_rejected", cr.get("proposed_title"))
+        _notify_cr_resolved(cr, bool(inp.accept))
         return {"ok": True, "id": inp.request_id, "accepted": bool(inp.accept)}
 
     if inp.op == "list_changes" and inp.project_id is not None:
@@ -147,6 +209,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
             proposed_kind=(inp.kind or "doc"),
             proposed_title=inp.title.strip(), proposed_body_md=inp.body_md or "",
             message=inp.message)
+        _notify_cr_created(int(inp.project_id), sub, is_create=True, doc_title=None)
         return {"ok": True, "request": req}
 
     if inp.op == "list":
@@ -217,6 +280,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
             proposed_title=(inp.title.strip() if inp.title else None),
             proposed_body_md=body, message=inp.message)
         db.log_project_activity(pid, sub, "doc.change_request", row.get("title"))
+        _notify_cr_created(int(pid), sub, is_create=False, doc_title=row.get("title"))
         return {"ok": True, "request": req}
 
     if inp.op == "list_changes":

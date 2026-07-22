@@ -101,6 +101,42 @@ def test_update_passes_expected_rev(seams):
     assert seams["update"][0][5] == "abc123"   # le token de conflit optimiste est transmis
 
 
+def test_cr_created_notifies_admins_not_proposer(seams, monkeypatch):
+    # Proposition de modif (viewer) → notifie les org_admins de l'org du projet + le
+    # propriétaire user, JAMAIS le proposeur ni les simples membres (oto/#6).
+    monkeypatch.setattr(D.ownership, "can_access",
+                        lambda sub, t, rid, want="read": want == "read")  # lecture seule → propose
+    monkeypatch.setattr(D.db, "get_project_by_id",
+                        lambda pid: {"id": pid, "name": "P", "context_org_id": 7,
+                                     "owner_type": "org", "owner_id": "7"})
+    monkeypatch.setattr(D.org_store, "list_org_members", lambda org: [
+        {"sub": "admin1", "org_role": "org_admin"},
+        {"sub": "u1", "org_role": "org_admin"},      # le proposeur (CTX.sub) — exclu
+        {"sub": "member1", "org_role": "org_member"},  # simple membre — exclu
+    ])
+    emails = {"admin1": "a1@x.fr", "u1": "prop@x.fr", "member1": "m1@x.fr"}
+    monkeypatch.setattr(D.db, "get_user",
+                        lambda sub: {"email": emails.get(sub), "name": sub})
+    sent = []
+    monkeypatch.setattr(D.email, "send_change_request_email",
+                        lambda to, **k: sent.append(to) or True)
+    D._doc(CTX, D.DocInput(op="request_change", doc_id=3, body_md="new"))
+    assert sent == ["a1@x.fr"]   # admin1 seul ; ni le proposeur ni le membre
+
+
+def test_cr_resolved_notifies_proposer(seams, monkeypatch):
+    monkeypatch.setattr(D.db, "get_doc_change_request",
+                        lambda rid: {"id": rid, "doc_id": 3, "project_id": 7, "status": "pending",
+                                     "proposed_title": "T", "proposed_body_md": "new",
+                                     "requested_by": "bob", "project_name": "P", "doc_title": "Page"})
+    monkeypatch.setattr(D.db, "get_user", lambda sub: {"email": "bob@x.fr"} if sub == "bob" else {})
+    got = {}
+    monkeypatch.setattr(D.email, "send_change_request_resolved_email",
+                        lambda to, **k: got.update(to=to, accepted=k.get("accepted")) or True)
+    D._doc(CTX, D.DocInput(op="resolve_change", doc_id=3, request_id=5, accept=True))
+    assert got == {"to": "bob@x.fr", "accepted": True}   # le proposeur, verdict accepté
+
+
 def test_update_conflict_is_409(seams, monkeypatch):
     # Le doc a changé depuis la lecture → DocConflict → erreur actionnable 409, pas d'écrasement.
     def _boom(*a, **k):

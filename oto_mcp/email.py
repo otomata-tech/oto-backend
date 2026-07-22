@@ -185,6 +185,43 @@ def send_resource_transferred_email(to: str, *, type_label: str, name: str | Non
     return _send(to, subject, html)
 
 
+def send_change_request_email(to: str, *, project_name: str | None, doc_title: str | None,
+                              proposer: str | None, is_create: bool, app_url: str) -> bool:
+    """Email à un VALIDATEUR : une proposition de modification attend sa décision
+    (« les lecteurs proposent / les auteurs valident », oto/#6). Best-effort. Voix
+    funnel : FR, vouvoiement + minuscules."""
+    what = "une nouvelle page" if is_create else f"une modification de « {doc_title} »" if doc_title else "une modification"
+    where = f" dans « {project_name} »" if project_name else ""
+    who = f"{_esc(proposer)} propose" if proposer else "on propose"
+    subject = f"proposition à valider sur oto{f' — {project_name}' if project_name else ''}"
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>{who} {_esc(what)}{_esc(where)} sur oto — votre validation est attendue.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">revoir et décider</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
+def send_change_request_resolved_email(to: str, *, project_name: str | None, doc_title: str | None,
+                                       accepted: bool, app_url: str) -> bool:
+    """Email au PROPOSEUR : sa proposition a été acceptée ou refusée (oto/#6).
+    Best-effort. Voix funnel : FR, vouvoiement + minuscules."""
+    verdict = "acceptée" if accepted else "refusée"
+    what = f"votre proposition sur « {doc_title} »" if doc_title else "votre proposition"
+    where = f" dans « {project_name} »" if project_name else ""
+    subject = f"proposition {verdict} sur oto{f' — {project_name}' if project_name else ''}"
+    html = (
+        f'<div style="{_WRAP}">'
+        f'<p>{_esc(what)}{_esc(where)} a été <strong>{verdict}</strong> sur oto.</p>'
+        f'<p><a href="{_esc(app_url)}" style="{_BTN}">ouvrir dans oto</a></p>'
+        f'<p style="{_FAINT}">{_esc(app_url)}</p>'
+        f'</div>'
+    )
+    return _send(to, subject, html)
+
+
 def render_composed_email(
     body: str,
     *,

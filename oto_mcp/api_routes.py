@@ -1371,6 +1371,19 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except ValueError:
             return default
 
+    async def me_activity_summary(request: Request) -> JSONResponse:
+        """Activité de CE workspace pour l'utilisateur courant (MES appels dans l'org
+        active), fenêtre `?days=` (défaut 7). Scopé (org active, self) → l'overview
+        d'un workspace ne montre plus l'activité plateforme-wide ni celle des autres
+        membres/orgs (oto/#5.2). Pas de gate admin : chacun voit sa propre activité.
+        Un workspace neuf sans appel → agrégats vides (comportement attendu)."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        active_org = access.current_org(sub)
+        return _json(request, db.tool_call_stats(
+            since_days=_monitoring_days(request), org_id=active_org, sub=sub))
+
     async def admin_monitoring_rest(request: Request) -> JSONResponse:
         """Lentille REST (ADR 0017, kind='rest') : volume/erreurs/latence des appels
         `/api/*` par route, sur `?days=` (défaut 7). Admin only."""
@@ -1743,6 +1756,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/tokens/{token_id}", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/summary", admin_monitoring_summary, methods=["GET"]),
         Route("/api/admin/monitoring/summary", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/activity-summary", me_activity_summary, methods=["GET"]),
+        Route("/api/me/activity-summary", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/calls", admin_monitoring_calls, methods=["GET"]),
         Route("/api/admin/monitoring/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/rest", admin_monitoring_rest, methods=["GET"]),

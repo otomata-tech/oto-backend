@@ -425,61 +425,72 @@ def instruction_usage(
     }
 
 
-def tool_call_stats(since_days: int = 7) -> dict:
+def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
+                    sub: Optional[str] = None) -> dict:
     """Agrégats pour le dashboard de monitoring sur les `since_days` derniers jours :
-    total, échecs, ventilation par tool / par user / par jour."""
+    total, échecs, ventilation par tool / par user / par jour.
+
+    Défaut = PLATEFORME-wide (console `/platform/monitoring`). `org_id`/`sub`
+    RESTREIGNENT la fenêtre : `org_id` = l'activité d'UN workspace,
+    `sub` = celle d'UN membre — la vue « activité de CE workspace / de moi » de
+    l'overview ne fuite plus le trafic des autres orgs/users (oto/#5.2)."""
     since_days = max(1, min(int(since_days), 365))
+
+    def _where(prefix: str = "") -> tuple[str, list]:
+        clauses = [f"{prefix}kind = 'mcp'",
+                   f"{prefix}created_at >= NOW() - make_interval(days => %s)"]
+        params: list = [since_days]
+        if org_id is not None:
+            clauses.append(f"{prefix}org_id = %s"); params.append(org_id)
+        if sub is not None:
+            clauses.append(f"{prefix}sub = %s"); params.append(sub)
+        return " AND ".join(clauses), params
+
+    w, wp = _where()
+    wl, wlp = _where("l.")
     with _connect() as conn:
         totals = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    COUNT(DISTINCT sub) AS users
-            FROM tool_calls
-            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
+            FROM tool_calls WHERE {w}
             """,
-            (since_days,),
+            tuple(wp),
         ).fetchone() or {}
         by_tool = conn.execute(
-            """
+            f"""
             SELECT tool AS tool_name,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    ROUND(AVG(duration_ms))::int AS avg_ms,
                    ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
-            FROM tool_calls
-            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
-            GROUP BY tool
-            ORDER BY calls DESC
-            LIMIT 100
+            FROM tool_calls WHERE {w}
+            GROUP BY tool ORDER BY calls DESC LIMIT 100
             """,
-            (since_days,),
+            tuple(wp),
         ).fetchall()
         by_user = conn.execute(
-            """
+            f"""
             SELECT l.sub, u.email, u.name,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT l.ok) AS errors
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
-            WHERE l.kind = 'mcp' AND l.created_at >= NOW() - make_interval(days => %s)
-            GROUP BY l.sub, u.email, u.name
-            ORDER BY calls DESC
-            LIMIT 100
+            WHERE {wl}
+            GROUP BY l.sub, u.email, u.name ORDER BY calls DESC LIMIT 100
             """,
-            (since_days,),
+            tuple(wlp),
         ).fetchall()
         by_day = conn.execute(
-            """
+            f"""
             SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors
-            FROM tool_calls
-            WHERE kind = 'mcp' AND created_at >= NOW() - make_interval(days => %s)
-            GROUP BY created_at::date
-            ORDER BY created_at::date
+            FROM tool_calls WHERE {w}
+            GROUP BY created_at::date ORDER BY created_at::date
             """,
-            (since_days,),
+            tuple(wp),
         ).fetchall()
     return {
         "since_days": since_days,

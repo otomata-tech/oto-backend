@@ -38,6 +38,27 @@ def extract_titles(body_md: str) -> list[str]:
     return out
 
 
+def reresolve_referrers(conn, project_id: int, *titles: Optional[str]) -> None:
+    """Re-résout les liens SORTANTS des pages qui citent l'un des `titles` par `[[…]]`
+    (oto/#6 C). Appelé quand une page est CRÉÉE ou RENOMMÉE : un `[[Titre]]` écrit AVANT
+    que la page cible existe (ou sous son ancien nom) était un lien-souche non stocké —
+    en re-résolvant les référents, il se lie (création) ou se délie proprement (renommage).
+    Scope = projet + sa KB (là où `[[Titre]]` résoudrait). Petits arbres → scan + filtre
+    Python (pas d'ILIKE à échapper)."""
+    keys = {" ".join((t or "").split()).casefold() for t in titles if t and t.strip()}
+    if not keys:
+        return
+    kb = _kb_project_of(conn, project_id)
+    scope = [project_id] + ([kb] if kb and kb != project_id else [])
+    rows = conn.execute(
+        "SELECT id, project_id, body_md FROM docs WHERE project_id = ANY(%s)",
+        (scope,)).fetchall()
+    for r in rows:
+        cited = {t.casefold() for t in extract_titles(r["body_md"] or "")}
+        if cited & keys:
+            refresh_links(conn, r["id"], r["project_id"], r["body_md"] or "")
+
+
 def _kb_project_of(conn, project_id: int) -> Optional[int]:
     """La KB de l'org qui CONTEXTE ce projet (org owner, sinon `context_org_id`
     membre, sinon l'org d'un projet de groupe), ou None. Une requête."""

@@ -465,6 +465,9 @@ def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,
         ).fetchone()
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
         _backlinks.refresh_links(conn, int(row["id"]), project_id, body_md)
+        # #6 C : une page créée avec ce titre résout les `[[Titre]]`-souches écrits AVANT
+        # elle dans d'autres pages → on re-résout leurs liens.
+        _backlinks.reresolve_referrers(conn, project_id, title)
         return int(row["id"])
 
 
@@ -614,11 +617,20 @@ def update_doc(doc_id: int, *, title: Optional[str] = None,
             )
         conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = %s", tuple(params))
         # Backlinks (Ship 4) : re-extraire les liens sortants quand le corps change.
+        pr = None
         if body_md is not None:
             pr = conn.execute("SELECT project_id FROM docs WHERE id = %s",
                               (doc_id,)).fetchone()
             if pr is not None:
                 _backlinks.refresh_links(conn, doc_id, pr["project_id"], body_md)
+        # #6 C : RENOMMAGE — re-résout les référents de l'ANCIEN et du NOUVEAU titre (les
+        # `[[ancien]]` se délient proprement, les `[[nouveau]]`-souches se lient).
+        if title is not None and prior is not None and title != prior["title"]:
+            if pr is None:
+                pr = conn.execute("SELECT project_id FROM docs WHERE id = %s",
+                                  (doc_id,)).fetchone()
+            if pr is not None:
+                _backlinks.reresolve_referrers(conn, pr["project_id"], prior["title"], title)
 
 
 def list_doc_revisions(doc_id: int, limit: int = 50) -> list[dict]:

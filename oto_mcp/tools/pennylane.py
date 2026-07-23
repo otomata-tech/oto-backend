@@ -233,6 +233,7 @@ def register(mcp: FastMCP) -> None:
         lines: list,
         external_reference: Optional[str] = None,
         free_text: Optional[str] = None,
+        customer_invoice_template_id: Optional[int] = None,
     ) -> dict:
         """Crée une facture de vente client en **brouillon** dans Pennylane.
 
@@ -264,6 +265,7 @@ def register(mcp: FastMCP) -> None:
         return _client().create_customer_invoice(
             customer_id=customer_id, date=date, deadline=deadline, lines=lines,
             external_reference=external_reference, pdf_free_text=free_text,
+            customer_invoice_template_id=customer_invoice_template_id,
             draft=True)
 
     @mcp.tool()
@@ -274,6 +276,7 @@ def register(mcp: FastMCP) -> None:
         lines: list,
         external_reference: Optional[str] = None,
         free_text: Optional[str] = None,
+        customer_invoice_template_id: Optional[int] = None,
         credited_invoice_id: Optional[int] = None,
     ) -> dict:
         """Crée un avoir **standalone** en brouillon (convention v2 : montants négatifs).
@@ -309,6 +312,7 @@ def register(mcp: FastMCP) -> None:
         note = _client().create_credit_note(
             customer_id=customer_id, date=date, deadline=deadline, lines=lines,
             external_reference=external_reference, pdf_free_text=free_text,
+            customer_invoice_template_id=customer_invoice_template_id,
             draft=True)
         if credited_invoice_id:
             note_id = note.get("id") or (note.get("customer_invoice") or {}).get("id")
@@ -346,6 +350,38 @@ def register(mcp: FastMCP) -> None:
                 raise ValueError("op='get' requiert product_id")
             return _client().get_product(product_id)
         raise ValueError("op doit être 'list' ou 'get'")
+
+    @mcp.tool()
+    def pennylane_invoice_templates(max_pages: Optional[int] = None) -> list:
+        """Liste les modèles de facturation (customer invoice templates).
+
+        Le modèle pilote le RENDU PDF du document — notamment le modèle
+        « Avoir » (sans bloc paiement/IBAN), seul moyen API d'obtenir le rendu
+        avoir : le passer en `customer_invoice_template_id` à
+        `pennylane_create_credit_note` (ou via `pennylane_update_invoice` sur
+        un brouillon). Scope requis : customer_invoice_templates:readonly.
+
+        Args:
+            max_pages: limite de pagination.
+        """
+        return _client().list_invoice_templates(max_pages=max_pages)
+
+    @mcp.tool()
+    def pennylane_update_invoice(invoice_id: int, fields: dict) -> dict:
+        """Met à jour une facture/avoir en BROUILLON (date, deadline,
+        customer_invoice_template_id, pdf_invoice_free_text, external_reference…).
+
+        Sur un document FINALISÉ, l'API ne permet plus que label /
+        transaction_reference / external_reference — ne pas s'en servir pour
+        « corriger » un document émis. Usage type : basculer un brouillon
+        d'avoir sur le modèle « Avoir » (`{"customer_invoice_template_id": <id>}`)
+        avant finalisation.
+
+        Args:
+            invoice_id: ID du brouillon.
+            fields: champs à mettre à jour.
+        """
+        return _client().update_invoice(invoice_id, **fields)
 
     @mcp.tool()
     def pennylane_finalize_invoice(invoice_id: int) -> dict:

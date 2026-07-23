@@ -87,9 +87,9 @@ def _public_doc_url(token: str) -> str:
 
 
 class DocInput(BaseModel):
-    op: Literal["create", "list", "search", "get", "update", "patch", "delete", "move",
-                "revisions", "request_change", "list_changes", "resolve_change",
-                "set_public", "backlinks"]
+    op: Literal["create", "bulk_create", "list", "search", "get", "update", "patch",
+                "delete", "move", "revisions", "request_change", "list_changes",
+                "resolve_change", "set_public", "backlinks"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move / request_change / list_changes
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -107,6 +107,7 @@ class DocInput(BaseModel):
     section: Optional[str] = None       # patch : titre (heading markdown) de la section ciblée
     mode: Optional[Literal["replace", "append", "prepend"]] = None  # patch : défaut replace
     to_project: Optional[int] = None    # move : projet cible (déplacer la page + son sous-arbre)
+    pages: Optional[list[dict]] = None  # bulk_create : [{title, body_md?, kind?, description?, parent_index?}]
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -157,6 +158,28 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
                             description=inp.description)
         db.log_project_activity(int(inp.project_id), sub, "doc.create", inp.title.strip())
         return _view(db.get_doc_by_id(did))
+
+    if inp.op == "bulk_create":
+        # A4 (#6) : créer N pages en UN appel (33 pages ≠ 33 allers-retours). Arbre en un
+        # coup via `parent_index` (index d'une page PLUS TÔT dans le lot) ; sinon `parent_id`.
+        _require(inp.project_id is not None, "missing_project", "`project_id` requis.")
+        _require(_can(sub, inp.project_id, "write"), "forbidden", "Écriture refusée.", 403)
+        _require(bool(inp.pages), "missing_pages", "`pages` (liste non vide) requis.")
+        if inp.parent_id is not None:
+            par = db.get_doc_by_id(int(inp.parent_id))
+            _require(par and par["project_id"] == inp.project_id, "bad_parent",
+                     "`parent_id` invalide (autre projet ou inexistant).")
+        created: list[int] = []
+        for i, p in enumerate(inp.pages):
+            title = str(p.get("title") or "").strip()
+            _require(bool(title), "missing_title", f"page #{i} sans `title`.")
+            pi = p.get("parent_index")
+            parent = created[pi] if isinstance(pi, int) and 0 <= pi < len(created) else inp.parent_id
+            created.append(db.create_doc(
+                int(inp.project_id), title, parent_id=parent, body_md=p.get("body_md") or "",
+                kind=(p.get("kind") or "doc"), created_by=sub, description=p.get("description")))
+        db.log_project_activity(int(inp.project_id), sub, "doc.bulk_create", f"{len(created)} pages")
+        return {"created": created, "count": len(created)}
 
     # ── Propositions (Ship 3) — AVANT le gate doc_id : une proposition de CRÉATION a
     # doc_id=NULL, elle serait inatteignable sinon. On résout le projet par request_id
@@ -395,7 +418,9 @@ CAPABILITIES += [
             "then read/search/write reference pages here (the dashboard « Documents » zone). "
             "Prefer it over the web for org facts (processes, context, conventions), and "
             "CAPTURE durable, sourced facts here (kind=source/note) as you learn them. "
-            "op=create (project_id, title; optional parent_id/body_md/kind) / list "
+            "op=create (project_id, title; optional parent_id/body_md/kind) / bulk_create "
+            "(project_id + `pages`=[{title, body_md?, kind?, parent_index?}] → N pages in ONE "
+            "call, build a tree via parent_index = an earlier page in the batch) / list "
             "(project_id → all pages, build the tree via parent_id) / search (project_id + "
             "query → full-text hits {id,title,kind,snippet}: LOCATE a page, then get its "
             "content) / get (returns `rev`, an ETag) / update (title/body_md/kind, full body; "

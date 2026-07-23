@@ -176,6 +176,28 @@ def test_revisions(seams):
     assert out["doc_id"] == 3 and out["revisions"][0]["title"] == "v0"
 
 
+def test_bulk_create_builds_tree_via_parent_index(seams, monkeypatch):
+    # A4 (#6) : N pages en un appel ; parent_index référence une page plus tôt dans le lot.
+    made = []
+    def _create(pid, title, parent_id=None, body_md="", kind="doc", created_by=None, description=None):
+        made.append((title, parent_id))
+        return 100 + len(made)              # ids séquentiels 101, 102, 103…
+    monkeypatch.setattr(D.db, "create_doc", _create)
+    out = D._doc(CTX, D.DocInput(op="bulk_create", project_id=7, pages=[
+        {"title": "Racine"},
+        {"title": "Enfant", "parent_index": 0},     # sous « Racine » (id 101)
+        {"title": "Autre racine"},
+    ]))
+    assert out["count"] == 3 and out["created"] == [101, 102, 103]
+    assert made == [("Racine", None), ("Enfant", 101), ("Autre racine", None)]
+
+
+def test_bulk_create_requires_titles(seams):
+    with pytest.raises(D.AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="bulk_create", project_id=7, pages=[{"body_md": "x"}]))
+    assert ei.value.code == "missing_title"
+
+
 def test_move_to_another_project(seams, monkeypatch):
     # A4 (#6) : op=move avec to_project déplace la page + sous-arbre vers le projet cible
     # (écriture requise sur source ET cible ; cible doit exister).

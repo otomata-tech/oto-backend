@@ -96,6 +96,30 @@ def test_update(seams):
     assert seams["update"] == [(3, None, "new", None, "u1", None)]   # edited_by = ctx.sub
 
 
+def test_patch_replaces_only_target_section(seams, monkeypatch):
+    body = "# T\n\n## A\n\nvieux A.\n\n## B\n\ngarder B.\n"
+    monkeypatch.setattr(D.db, "get_doc_by_id", lambda i: dict(DOC, id=i, body_md=body))
+    D._doc(CTX, D.DocInput(op="patch", doc_id=3, section="A", body_md="NEUF A."))
+    # update_doc reçoit le corps COMPLET patché : A remplacé, B intact
+    new_body = seams["update"][0][2]
+    assert "NEUF A." in new_body and "vieux A." not in new_body and "garder B." in new_body
+
+
+def test_patch_unknown_section_is_404(seams, monkeypatch):
+    body = "# T\n\n## A\n\nx\n"
+    monkeypatch.setattr(D.db, "get_doc_by_id", lambda i: dict(DOC, id=i, body_md=body))
+    with pytest.raises(D.AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="patch", doc_id=3, section="Zzz", body_md="x"))
+    assert ei.value.status == 404 and ei.value.code == "unknown_section"
+
+
+def test_patch_passes_expected_rev_for_conflict(seams, monkeypatch):
+    body = "# T\n\n## A\n\nx\n"
+    monkeypatch.setattr(D.db, "get_doc_by_id", lambda i: dict(DOC, id=i, body_md=body))
+    D._doc(CTX, D.DocInput(op="patch", doc_id=3, section="A", body_md="y", expected_rev="r1"))
+    assert seams["update"][0][5] == "r1"   # le conflit optimiste s'applique aussi au patch
+
+
 def test_update_passes_expected_rev(seams):
     D._doc(CTX, D.DocInput(op="update", doc_id=3, body_md="new", expected_rev="abc123"))
     assert seams["update"][0][5] == "abc123"   # le token de conflit optimiste est transmis

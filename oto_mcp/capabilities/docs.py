@@ -13,7 +13,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import db, email, org_store, ownership
+from .. import db, doc_patch, email, org_store, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -87,8 +87,9 @@ def _public_doc_url(token: str) -> str:
 
 
 class DocInput(BaseModel):
-    op: Literal["create", "list", "search", "get", "update", "delete", "move", "revisions",
-                "request_change", "list_changes", "resolve_change", "set_public", "backlinks"]
+    op: Literal["create", "list", "search", "get", "update", "patch", "delete", "move",
+                "revisions", "request_change", "list_changes", "resolve_change",
+                "set_public", "backlinks"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move / request_change / list_changes
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -102,7 +103,9 @@ class DocInput(BaseModel):
     message: Optional[str] = None      # request_change : note libre du demandeur
     accept: Optional[bool] = None      # resolve_change : True = accepter (applique), False = refuser
     public: Optional[bool] = None      # set_public : True = partager publiquement, False = retirer
-    expected_rev: Optional[str] = None  # update : rev (ETag) lue par le client → conflit optimiste
+    expected_rev: Optional[str] = None  # update/patch : rev (ETag) lue par le client → conflit optimiste
+    section: Optional[str] = None       # patch : titre (heading markdown) de la section ciblée
+    mode: Optional[Literal["replace", "append", "prepend"]] = None  # patch : défaut replace
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -303,6 +306,32 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         db.log_project_activity(pid, sub, "doc.update", row.get("title"))
         return _view(db.get_doc_by_id(int(inp.doc_id)))
 
+    if inp.op == "patch":
+        # Édition PARTIELLE par section (top5 #3) : ne touche QUE la section `section`
+        # (titre markdown) → deux auteurs sur des sections différentes ne s'écrasent
+        # plus. On applique le patch puis on réécrit via update_doc (révisions +
+        # backlinks + conflit optimiste conservés).
+        _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
+        _require(inp.section and inp.section.strip(), "missing_section",
+                 "`section` (titre de la section à modifier) requis.")
+        _require(inp.body_md is not None, "missing_body", "`body_md` (nouveau contenu) requis.")
+        try:
+            new_body = doc_patch.patch_section(
+                row.get("body_md") or "", inp.section, inp.body_md, mode=(inp.mode or "replace"))
+        except doc_patch.SectionNotFound as e:
+            _require(False, "unknown_section",
+                     f"Section « {inp.section} » introuvable. Sections disponibles : "
+                     f"{', '.join(e.available) or '(aucune)'}.", 404)
+        try:
+            db.update_doc(int(inp.doc_id), body_md=new_body, edited_by=sub,
+                          expected_rev=inp.expected_rev)
+        except db.DocConflict as e:
+            _require(False, "conflict",
+                     f"Le doc a été modifié entre-temps (rev actuelle {e.current_rev}). "
+                     f"Relis-le (op=get) et refais ton patch sur la version à jour.", 409)
+        db.log_project_activity(pid, sub, "doc.patch", f"{row.get('title')} § {inp.section}")
+        return _view(db.get_doc_by_id(int(inp.doc_id)))
+
     if inp.op == "delete":
         _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
         db.delete_doc(int(inp.doc_id))   # CASCADE sur le sous-arbre
@@ -343,7 +372,11 @@ CAPABILITIES += [
             "op=create (project_id, title; optional parent_id/body_md/kind) / list "
             "(project_id → all pages, build the tree via parent_id) / search (project_id + "
             "query → full-text hits {id,title,kind,snippet}: LOCATE a page, then get its "
-            "content) / get / update (title/body_md/kind ; snapshots the prior version) / "
+            "content) / get (returns `rev`, an ETag) / update (title/body_md/kind, full body; "
+            "snapshots the prior version; pass `expected_rev` from op=get for optimistic "
+            "conflict detection → 409 if the page changed since) / patch (edit ONE section in "
+            "place: `section`=its markdown heading + `body_md` + `mode` replace|append|prepend "
+            "→ two authors on different sections don't clobber; also honours `expected_rev`) / "
             "revisions (doc_id → version history, newest first) / request_change (read-only "
             "users propose a new body_md/title + message) / list_changes (owner: pending "
             "requests) / resolve_change (request_id + accept: true applies it, false rejects) "

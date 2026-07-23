@@ -7,10 +7,15 @@ instance privée/on-prem, défaut = SaaS public) → modèle générique multi-c
 (ADR 0011), résolu par appel via `access.resolve_credential_fields("lighton")`.
 BYO only (le compte Paradigm appartient au client — le credential EST le grant).
 
-⚠️ Gotcha empirique (2026-07-23) : `GET /models` renvoie des templates de prompt
-de plusieurs Ko par modèle → `lighton_models` trimme les champs `*_template`
-(le reste passe brut). L'upload peut renvoyer 403 selon les droits du compte
-Paradigm (rôle/plan côté LightOn, pas un bug du connecteur).
+⚠️ Gotchas empiriques (2026-07-23) : `GET /models` renvoie des templates de
+prompt de plusieurs Ko par modèle → `lighton_models` trimme les champs
+`*_template` (le reste passe brut). Upload : `collection_type` vaut
+`private`/`company`/`shared` — la valeur `workspace` de la doc OpenAPI
+officielle est REJETÉE (« no longer valid » → `shared` + workspace_id) ; le
+chemin prouvé bout-en-bout = `shared` + workspace_id (private → 404 et
+company → 403 sur le compte de test, droits côté Paradigm).
+`/files/{id}/ask-question` renvoyait 500 systématique (dysfonction/config
+instance Paradigm) — repli : `lighton_query` + `lighton_chat`.
 """
 from __future__ import annotations
 
@@ -142,6 +147,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             file_id: document id (from `lighton_files` or an upload).
             question: the question, in natural language.
+
+        NOTE: if this errors 500 (Paradigm instance-side issue, seen 2026-07),
+        fall back to `lighton_query` (retrieve chunks) + `lighton_chat`
+        (compose the answer yourself).
         """
         return _run(lambda c: c.ask_document(file_id, question))
 
@@ -163,9 +172,12 @@ def register(mcp: FastMCP) -> None:
         Optional `account` (email) targets a specific Google account.
 
         Args:
-            collection_type: `private` (Paradigm default), `company`, or
-                `workspace`.
-            workspace_id: required when collection_type='workspace'.
+            collection_type: `private`, `company`, or `shared` (workspace).
+                To upload into a workspace, use `shared` + `workspace_id` —
+                the value `workspace` shown in LightOn's own API docs is
+                REJECTED by the API. `shared` is the proven path; `private`/
+                `company` may 404/403 depending on the Paradigm account.
+            workspace_id: required when collection_type='shared'.
             title: display title (default: filename).
 
         NOTE: a 403 means the Paradigm account behind the key lacks upload

@@ -435,7 +435,11 @@ CAPABILITIES += [
             "returns public_url) / delete (cascades its subtree) / move (reparent/reorder "
             "in-project via parent_id [null=top-level] + position; OR cross-project via "
             "`to_project`=target project id → moves the page AND its subtree there, "
-            "write required on both). kind ∈ doc|note|source."
+            "write required on both). kind ∈ doc|note|source. EMBED A LIVE DATASTORE in a "
+            "page body with a fenced block ```oto-data<newline><namespace-name-or-id><newline>``` "
+            "→ the viewer renders that datastore's table LIVE (always up to date). Prefer this "
+            "over a hand-typed summary table when the data lives in a datastore (single source "
+            "of truth, no drift)."
         ),
         mcp="oto_doc",
         rest=RestBinding("POST", "/api/me/docs"),

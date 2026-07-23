@@ -106,6 +106,7 @@ class DocInput(BaseModel):
     expected_rev: Optional[str] = None  # update/patch : rev (ETag) lue par le client → conflit optimiste
     section: Optional[str] = None       # patch : titre (heading markdown) de la section ciblée
     mode: Optional[Literal["replace", "append", "prepend"]] = None  # patch : défaut replace
+    to_project: Optional[int] = None    # move : projet cible (déplacer la page + son sous-arbre)
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -341,6 +342,31 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     # move — nouveau parent dans le MÊME projet (cycle profond non gardé en v1) ET/OU
     # réordonnancement (Ship 2 : `position` = index cible, la fratrie est réindexée).
     _require(_can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
+
+    # A4 (#6) : déplacement CROSS-PROJET — la page + son sous-arbre changent de projet.
+    # Écriture requise sur la SOURCE (ci-dessus) ET la CIBLE ; le parent proposé (si
+    # fourni) doit appartenir au projet cible.
+    if inp.to_project is not None and int(inp.to_project) != pid:
+        tgt = int(inp.to_project)
+        _require(db.get_project_by_id(tgt) is not None, "unknown_project",
+                 f"Projet cible #{tgt} inconnu.", 404)
+        _require(_can(sub, tgt, "write"), "forbidden",
+                 "Écriture refusée sur le projet cible.", 403)
+        if inp.parent_id is not None:
+            _require(int(inp.parent_id) != int(inp.doc_id), "bad_parent",
+                     "Un doc ne peut pas être son propre parent.")
+            parent = db.get_doc_by_id(int(inp.parent_id))
+            _require(parent and parent["project_id"] == tgt, "bad_parent",
+                     "Parent invalide (doit être une page du projet cible).")
+        n = db.move_doc_to_project(int(inp.doc_id), tgt,
+                                   inp.parent_id if "parent_id" in inp.model_fields_set else None,
+                                   position=inp.position)
+        db.log_project_activity(pid, sub, "doc.move_out", f"{row.get('title')} → projet {tgt}")
+        db.log_project_activity(tgt, sub, "doc.move_in", row.get("title"))
+        out = _view(db.get_doc_by_id(int(inp.doc_id)))
+        out["moved_count"] = n
+        return out
+
     if inp.parent_id is not None:
         _require(int(inp.parent_id) != int(inp.doc_id), "bad_parent",
                  "Un doc ne peut pas être son propre parent.")
@@ -381,8 +407,10 @@ CAPABILITIES += [
             "users propose a new body_md/title + message) / list_changes (owner: pending "
             "requests) / resolve_change (request_id + accept: true applies it, false rejects) "
             "/ set_public (public: true → shareable public read-only link, false → private ; "
-            "returns public_url) / delete (cascades its subtree) / move (parent_id, "
-            "null=top-level). kind ∈ doc|note|source."
+            "returns public_url) / delete (cascades its subtree) / move (reparent/reorder "
+            "in-project via parent_id [null=top-level] + position; OR cross-project via "
+            "`to_project`=target project id → moves the page AND its subtree there, "
+            "write required on both). kind ∈ doc|note|source."
         ),
         mcp="oto_doc",
         rest=RestBinding("POST", "/api/me/docs"),

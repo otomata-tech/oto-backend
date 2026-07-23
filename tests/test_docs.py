@@ -176,6 +176,27 @@ def test_revisions(seams):
     assert out["doc_id"] == 3 and out["revisions"][0]["title"] == "v0"
 
 
+def test_move_to_another_project(seams, monkeypatch):
+    # A4 (#6) : op=move avec to_project déplace la page + sous-arbre vers le projet cible
+    # (écriture requise sur source ET cible ; cible doit exister).
+    rec = {}
+    monkeypatch.setattr(D.db, "get_project_by_id", lambda i: {"id": i} if i in (3, 8) else None)
+    monkeypatch.setattr(D.db, "move_doc_to_project",
+                        lambda did, tgt, parent=None, position=None: rec.update(
+                            did=did, tgt=tgt, parent=parent) or 3)
+    out = D._doc(CTX, D.DocInput(op="move", doc_id=3, to_project=8))
+    assert rec == {"did": 3, "tgt": 8, "parent": None}
+    assert out["moved_count"] == 3
+    assert seams["move"] == []          # PAS le move intra-projet
+
+
+def test_move_to_unknown_project_404(seams, monkeypatch):
+    monkeypatch.setattr(D.db, "get_project_by_id", lambda i: dict(DOC, id=i) if i == 3 else None)
+    with pytest.raises(D.AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="move", doc_id=3, to_project=999))
+    assert ei.value.status == 404 and ei.value.code == "unknown_project"
+
+
 def test_delete(seams):
     out = D._doc(CTX, D.DocInput(op="delete", doc_id=3))
     assert seams["delete"] == [3] and out["deleted"] is True

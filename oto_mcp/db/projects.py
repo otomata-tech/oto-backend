@@ -804,6 +804,43 @@ def move_doc(doc_id: int, new_parent_id: Optional[int],
             conn.execute("UPDATE docs SET position = %s WHERE id = %s", ((i + 1) * 16, did))
 
 
+def move_doc_to_project(doc_id: int, target_project_id: int,
+                        new_parent_id: Optional[int] = None,
+                        *, position: Optional[int] = None) -> int:
+    """Déplace un doc ET SON SOUS-ARBRE vers `target_project_id` (oto/#6 A4). Le doc
+    racine devient enfant de `new_parent_id` (dans le projet cible ; None = racine) ;
+    les relations internes du sous-arbre sont préservées. Réindexe la fratrie cible et
+    RE-RÉSOUT les backlinks de chaque doc déplacé (précédence projet > KB change avec le
+    contexte). Retourne le nombre de docs déplacés. Transaction unique (atomique)."""
+    with _connect() as conn:
+        subtree = [r["id"] for r in conn.execute(
+            "WITH RECURSIVE sub AS ("
+            "  SELECT id, body_md FROM docs WHERE id = %s "
+            "  UNION ALL SELECT d.id, d.body_md FROM docs d JOIN sub ON d.parent_id = sub.id) "
+            "SELECT id FROM sub", (doc_id,)).fetchall()]
+        if not subtree:
+            return 0
+        conn.execute("UPDATE docs SET project_id = %s WHERE id = ANY(%s)",
+                     (target_project_id, subtree))
+        conn.execute("UPDATE docs SET parent_id = %s, updated_at = NOW() WHERE id = %s",
+                     (new_parent_id, doc_id))
+        # Réindexe la fratrie de destination (mêmes entiers ×16 que move_doc).
+        sibs = [r["id"] for r in conn.execute(
+            "SELECT id FROM docs WHERE project_id = %s "
+            "AND parent_id IS NOT DISTINCT FROM %s AND id <> %s "
+            "ORDER BY position NULLS LAST, title, id",
+            (target_project_id, new_parent_id, doc_id)).fetchall()]
+        idx = len(sibs) if position is None else max(0, min(int(position), len(sibs)))
+        sibs.insert(idx, doc_id)
+        for i, did in enumerate(sibs):
+            conn.execute("UPDATE docs SET position = %s WHERE id = %s", ((i + 1) * 16, did))
+        # Backlinks re-résolus dans le NOUVEAU projet (mêmes hook que create/update_doc).
+        for did in subtree:
+            r = conn.execute("SELECT body_md FROM docs WHERE id = %s", (did,)).fetchone()
+            _backlinks.refresh_links(conn, did, target_project_id, (r or {}).get("body_md") or "")
+        return len(subtree)
+
+
 def derive_description(body_md: str, cap: int = 140) -> str:
     """Chapô DÉRIVÉ du corps (fallback à la LECTURE — jamais stocké, on ne duplique
     pas la source) : première ligne de PROSE (headings/code/tables sautés), markdown

@@ -72,6 +72,15 @@ def register(mcp: FastMCP) -> None:
         except file_source.FileSourceError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
+    def _strip_images(payload: dict) -> dict:
+        """Retire les images de page base64 des résultats retrieval — l'API v3
+        les joint D'OFFICE sur /ask (~250 Ko PAR chunk, vécu 23/07 : 3 chunks
+        = 820 Ko de réponse), intenable dans un contexte LLM."""
+        for r in payload.get("results", []) or []:
+            if isinstance(r, dict):
+                r.pop("image", None)
+        return payload
+
     @mcp.tool()
     def lighton_search(
         query: str,
@@ -97,11 +106,11 @@ def register(mcp: FastMCP) -> None:
 
         Billed: 1 retrieval credit per call.
         """
-        return _run(lambda c, ws: c.search(
+        return _strip_images(_run(lambda c, ws: c.search(
             query,
             workspace_ids=workspace_ids or (None if file_ids else ([ws] if ws else None)),
             file_ids=file_ids, max_results=max_results,
-            mode=mode if mode != "text" else None))
+            mode=mode if mode != "text" else None)))
 
     @mcp.tool()
     def lighton_ask(
@@ -127,10 +136,10 @@ def register(mcp: FastMCP) -> None:
         Billed: 1 retrieval credit per call. For chunks without generation
         (cheaper composition by the agent), use `lighton_search`.
         """
-        return _run(lambda c, ws: c.ask(
+        return _strip_images(_run(lambda c, ws: c.ask(
             query,
             workspace_ids=workspace_ids or (None if file_ids else ([ws] if ws else None)),
-            file_ids=file_ids, max_results=max_results, model=model))
+            file_ids=file_ids, max_results=max_results, model=model)))
 
     @mcp.tool()
     def lighton_parse(source: dict) -> dict:

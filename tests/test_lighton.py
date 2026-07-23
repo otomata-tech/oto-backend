@@ -170,6 +170,22 @@ def test_search_explicit_workspace_overrides_default(monkeypatch):
     assert kwargs["json"]["workspace_id"] == [99]
 
 
+def test_ask_and_search_strip_page_images():
+    # L'API v3 joint D'OFFICE l'image de page base64 (~250 Ko PAR chunk) aux
+    # résultats d'/ask — 3 chunks = 820 Ko de réponse (vécu 23/07), intenable
+    # dans un contexte LLM. Le tool doit la retirer.
+    heavy = {"answer": "42", "results": [
+        {"chunk_id": "c1", "content": "x", "image": {"b64_content": "A" * 1000}},
+    ]}
+    for tool, kwargs in (("lighton_ask", {"query": "q"}),
+                         ("lighton_search", {"query": "q"})):
+        with patch("oto.tools.lighton.client.requests.request") as req:
+            req.return_value = _Resp(heavy)
+            out = _call(tool, **kwargs)
+        assert all("image" not in r for r in out["results"]), tool
+        assert out["results"][0]["content"] == "x"
+
+
 def test_ask_body():
     with patch("oto.tools.lighton.client.requests.request") as req:
         req.return_value = _Resp({"answer": "42", "results": []})

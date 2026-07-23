@@ -54,7 +54,7 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
             "VALUES (%s, %s, %s, %s, %s, %s, 'on-demand') "
             "ON CONFLICT (scope, owner_id, slug) DO UPDATE SET "
             "  title = EXCLUDED.title, description = EXCLUDED.description, "
-            "  body_md = EXCLUDED.body_md, updated_at = NOW() "
+            "  body_md = EXCLUDED.body_md, embed_dirty = TRUE, updated_at = NOW() "
             f"RETURNING {_COLS}",
             (scope, str(owner_id), slug, title, description, body_md),
         ).fetchone()

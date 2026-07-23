@@ -185,6 +185,7 @@ def update_project(project_id: int, *, name: Optional[str] = None,
     if brief_md is not None:
         sets.append("brief_md = %s")
         params.append(brief_md)
+        sets.append("embed_dirty = TRUE")   # brief changé → ré-indexation sémantique (#6 C)
     if is_template is not None:
         sets.append("is_template = %s")
         params.append(is_template)

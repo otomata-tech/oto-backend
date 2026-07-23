@@ -108,6 +108,14 @@ def search(sub: str, org_id: int, q: str, *,
             "project_id": r["id"],
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
+        # Sémantique sur les briefs (#6 C) — fusionnée au lexical par RRF, comme les pages.
+        if query_embedding is not None:
+            from .embeddings import to_pg
+            _add(db.search_briefs_semantic(to_pg(query_embedding), pids, limit=per_source),
+                 lambda r: {"kind": "brief", "ref": r["id"], "title": r["name"],
+                            "project_id": r["id"],
+                            "passage": _snippet(r.get("body_excerpt") or "") or None,
+                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
     if "procedure" in wanted:
         _add(db.search_procedures_fts(q, org_id, limit=per_source), lambda r: {
             "kind": "procedure", "ref": r["slug"], "title": r["title"] or r["slug"],
@@ -121,6 +129,15 @@ def search(sub: str, org_id: int, q: str, *,
             "description": r.get("description") or None,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
+        # Sémantique sur les guides on-demand (#6 C).
+        if query_embedding is not None:
+            from .embeddings import to_pg
+            _add(db.search_guides_semantic(to_pg(query_embedding), org_id, sub, limit=per_source),
+                 lambda r: {"kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
+                            "title": r["title"] or r["slug"],
+                            "description": r.get("description") or None,
+                            "passage": _snippet(r.get("body_excerpt") or "") or None,
+                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
 
     # ── conteneurs ──────────────────────────────────────────────────────────
     if "tableau" in wanted:

@@ -60,6 +60,39 @@ def _index_batch() -> int:
     return skipped + done
 
 
+def _index_aux_batch() -> int:
+    """Miroir de `_index_batch` pour les sources non-page (briefs + guides on-demand,
+    #6 C) : draine `list_dirty_aux`, ré-embed sur changement de sha, upsert dans
+    `aux_embeddings`. Best-effort par source."""
+    rows = db.list_dirty_aux(_BATCH)
+    if not rows:
+        return 0
+    to_embed = []
+    skipped = 0
+    for r in rows:
+        sha = _sha(r["text"])
+        if db.get_aux_embedding_sha(r["kind"], r["ref"]) == sha:
+            db.clear_aux_dirty(r["kind"], r["ref"])
+            skipped += 1
+        else:
+            to_embed.append((r["kind"], r["ref"], r["text"], sha))
+    if not to_embed:
+        return skipped
+    try:
+        vectors = embeddings.embed_texts([t for _, _, t, _ in to_embed])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("embed_worker: batch aux échoué (re-tenté) : %s", e)
+        return 0
+    done = 0
+    for (kind, ref, _text, sha), vec in zip(to_embed, vectors):
+        try:
+            db.upsert_aux_embedding(kind, ref, sha, embeddings.to_pg(vec), embeddings.MODEL)
+            done += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("embed_worker: upsert %s #%s échoué : %s", kind, ref, e)
+    return skipped + done
+
+
 async def run_embed_loop(interval: int = _POLL_S) -> None:
     if not embeddings.enabled():
         logger.info("embed_worker: MISTRAL_API_KEY absent → sémantique inerte, worker off.")
@@ -68,8 +101,9 @@ async def run_embed_loop(interval: int = _POLL_S) -> None:
     while True:
         try:
             n = await run_in_threadpool(_index_batch)
-            if n:
-                logger.info("embed_worker: %d page(s) indexée(s).", n)
+            na = await run_in_threadpool(_index_aux_batch)   # briefs + guides (#6 C)
+            if n or na:
+                logger.info("embed_worker: %d page(s) + %d brief/guide indexé(s).", n, na)
         except Exception as e:  # noqa: BLE001
             logger.warning("embed_worker: tour en échec : %s", e)
         await asyncio.sleep(interval)

@@ -68,6 +68,16 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_embed_dirty ON docs(id) WHERE embed_dirty")
         conn.execute("UPDATE docs SET embed_dirty = TRUE "
                      "WHERE embed_dirty = FALSE AND id NOT IN (SELECT doc_id FROM doc_embeddings)")
+        # Sémantique AUSSI sur briefs (projects) + guides on-demand (#6 C) : même outbox.
+        # Additif (ADD COLUMN IF NOT EXISTS) → sûr sur la base partagée. Backfill dirty.
+        conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_embed_dirty ON projects(id) WHERE embed_dirty")
+        conn.execute("ALTER TABLE guides ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_guides_embed_dirty ON guides(id) WHERE embed_dirty")
+        conn.execute("UPDATE projects SET embed_dirty = TRUE "
+                     "WHERE embed_dirty = FALSE AND id NOT IN (SELECT ref FROM aux_embeddings WHERE kind='brief')")
+        conn.execute("UPDATE guides SET embed_dirty = TRUE "
+                     "WHERE embed_dirty = FALSE AND id NOT IN (SELECT ref FROM aux_embeddings WHERE kind='guide')")
         # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
         # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
         # lignes ont doc_id). Idempotent.

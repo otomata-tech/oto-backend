@@ -421,6 +421,21 @@ CREATE TABLE IF NOT EXISTS doc_embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_doc_embeddings_hnsw
     ON doc_embeddings USING hnsw (embedding halfvec_cosine_ops);
+
+-- Embeddings des sources NON-page (oto/#6 C) : briefs de projet + guides on-demand.
+-- Table générique keyée (kind, ref) — ref = projects.id (brief) | guides.id (guide) ;
+-- même modèle 1024d que doc_embeddings. Le worker draine `embed_dirty` de projects/guides.
+CREATE TABLE IF NOT EXISTS aux_embeddings (
+    kind TEXT NOT NULL,                          -- 'brief' | 'guide'
+    ref BIGINT NOT NULL,                         -- projects.id | guides.id
+    content_sha TEXT NOT NULL,
+    embedding halfvec(1024) NOT NULL,
+    model TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (kind, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_aux_embeddings_hnsw
+    ON aux_embeddings USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté

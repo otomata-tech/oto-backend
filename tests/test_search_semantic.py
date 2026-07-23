@@ -13,7 +13,7 @@ def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
     monkeypatch.setattr(S.db, "search_docs_semantic",
                         lambda ql, pids, limit: [dict(r) for r in semantic])
     for n in ("search_project_briefs", "search_procedures_fts", "search_guides_fts",
-              "search_files_meta"):
+              "search_files_meta", "search_briefs_semantic", "search_guides_semantic"):
         monkeypatch.setattr(S.db, n, lambda *a, **k: [])
     monkeypatch.setattr(S.ownership, "active_org_principals", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastore_namespaces_for_owners", lambda o: [])

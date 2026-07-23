@@ -64,3 +64,26 @@ def test_resolved_proposals_surface_to_proposer(monkeypatch):
     _wire(monkeypatch, {"platform": "SAUCE"}, ctx)
     out = I.compose_session("u1", 42)
     assert "- Tes propositions traitées : « Plan Q3 » acceptée · « Idée » refusée" in out
+
+
+def test_session_layers_reconstruct_compose(monkeypatch):
+    # Invariant de la vue de transparence (/api/me/agent-context) : la concaténation
+    # "\n\n" des couches == l'artefact injecté, octet à octet.
+    ctx = dict(_CTX, profile={"role": "DAF"})
+    _wire(monkeypatch, {"platform": "SAUCE", "org": "ORG", "group": "GRP", "user": "USR"}, ctx)
+    layers = I.session_layers("u1", 42)
+    assert "\n\n".join(l["body"] for l in layers if l["body"]) == I.compose_session("u1", 42)
+    keys = [l["key"] for l in layers]
+    assert keys == ["platform", "catalog", "context", "profile", "org", "group", "user"]
+
+
+def test_session_layers_profile_between_context_and_readmes(monkeypatch):
+    # La fiche « situation avec oto » = sa PROPRE couche, entre contexte et readmes
+    # (même position qu'avant la décomposition — sortie inchangée).
+    ctx = dict(_CTX, profile={"role": "DAF"})
+    _wire(monkeypatch, {"platform": "SAUCE", "org": "ORG"}, ctx)
+    out = I.compose_session("u1", 42)
+    i_ctx = out.index("## Ton contexte oto")
+    i_prof = out.index("### Ce que tu sais de l'utilisateur")
+    i_org = out.index("## README de ton organisation")
+    assert i_ctx < i_prof < i_org

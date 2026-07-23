@@ -15,9 +15,13 @@ def test_assembles_layers(monkeypatch):
     monkeypatch.setattr(ac.tool_registry, "bound_instance", lambda: None)
     ctx = ResolvedCtx(sub="u1", org_id=None)
     out = asyncio.run(ac._agent_context(ctx, ac.AgentContextInput()))
-    assert set(out) == {"org_id", "instructions", "doctrine", "tools"}
+    assert set(out) == {"org_id", "instructions", "layers", "doctrine", "tools"}
     assert "TA boîte à outils" in out["instructions"]                 # bloc A prose
     assert "data_*" in out["instructions"] and "apollo_*" in out["instructions"]  # catalogue (bloc A)
+    # `layers` = le même artefact décomposé (pile de la vue /context), avec poids.
+    assert [l["key"] for l in out["layers"]] == ["platform", "catalog"]  # pas d'org → bloc A seul
+    assert "\n\n".join(l["body"] for l in out["layers"]) == out["instructions"]
+    assert all(l["chars"] == len(l["body"]) for l in out["layers"])
     assert out["doctrine"]["org_id"] is None
     assert out["tools"] == {"available": False}
 

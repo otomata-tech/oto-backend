@@ -80,9 +80,13 @@ async def _agent_context(ctx: ResolvedCtx, inp: AgentContextInput) -> dict:
                                    org_id=None, with_history=False))
     # Instructions RÉELLEMENT reçues = artefact composé A/C (#50), même chemin que
     # DynamicInstructionsMiddleware → la vue montre exactement ce que reçoit l'agent.
+    # `layers` = le même artefact DÉCOMPOSÉ (pile de couches avec poids) pour la vue
+    # anatomie de /context ; `instructions` (concaténé) reste pour compat.
+    layers = _instructions.session_layers(ctx.sub, ctx.org_id)
     return {
         "org_id": ctx.org_id,
-        "instructions": _instructions.compose_session(ctx.sub, ctx.org_id),
+        "instructions": "\n\n".join(l["body"] for l in layers if l["body"]),
+        "layers": [{**l, "chars": len(l["body"])} for l in layers if l["body"]],
         "doctrine": doctrine,
         "tools": await _tools_view(ctx),
     }

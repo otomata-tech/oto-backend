@@ -32,53 +32,64 @@ _FEED_SYNC_CAP_PAGES = 5            # garde-fou anti-martelage LinkedIn par sync
 _FEED_PAGE_COUNT = 40              # items par page Voyager pendant le sync
 _FEED_SORT_ORDER = "MEMBER_SETTING"  # honore le tri choisi sur la home LinkedIn
 
-# --- Discipline du quota amont LinkedIn (Unipile ~100 requêtes/12h PAR COMPTE sur
-# les fiches société & profils, vécu 2026-07-21 : 251 × 429 + 166 hangs de 121s
-# d'un seul user en bulk). Deux garde-fous PROCESS-LOCAL (backend mono-loop) :
-#   1. cooldown 429 : au 1er 429 on arme un délai (parsé du corps « Retry in N h »)
-#      et on REFUSE les scrapes suivants du même sub sans taper Unipile → l'agent
-#      STOPPE au lieu de marteler (et de creuser le rate-limit LinkedIn).
-#   2. cache fiches société : une même société relookée dans la fenêtre est servie
-#      du cache — 0 appel amont, 0 quota consommé (les fiches sont ~statiques).
+# --- Discipline du rate-limit amont LinkedIn (Unipile). EMPIRIQUE 2026-07-21 : le 429
+# Unipile est un rate-limit EN COUCHES (« We only allow 1 / 10 / 100 requests ») avec un
+# `Retry in N` le plus souvent en SECONDES (rafale : 3-38s), rarement en heures. Ce n'est
+# PAS un cap dur 100/12h (455 appels/h observés dont 187 OK, 429 récupéré en ~40s). On
+# SUIT le signal d'Unipile : sur un 429 on arme un cooldown = SON PROPRE `retry_after`
+# (parsé oto-core, secondes incluses), plafonné, et on refuse les scrapes du sub d'ici là
+# — micro-backoff qui auto-pace la rafale sans marteler (le martèlement dégrade en timeouts
+# puis fait checkpoint/déconnecte le compte). + cache fiches société (route la plus
+# contrainte, ~100/fenêtre) = 0 appel amont, 0 quota. Garde-fous PROCESS-LOCAL (mono-loop).
 _RATE_LIMIT_UNTIL: dict[str, float] = {}   # sub -> epoch de fin de cooldown
 _COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, résultat)
 _COMPANY_TTL = 6 * 3600                      # fiches société ~statiques → 6h
 _COMPANY_CACHE_MAX = 3000                    # borne mémoire (purge grossière au-delà)
+_RL_DEFAULT_SECS = 30    # 429 sans délai lisible → backoff court (les rafales = quelques s)
+_RL_MAX_SECS = 3600      # plafond : un « Retry in 12 hours » (rare/trompeur) ne verrouille
+                         #  pas la journée — au pire on re-sonde après 1h (auto-correcteur)
+
+
+def _fmt_wait(secs: float) -> str:
+    s = max(1, int(secs) + 1)
+    return f"~{s}s" if s < 90 else f"~{s // 60 + 1} min"
 
 
 def _rate_limit_guard(sub: str) -> None:
-    """Refuse un scrape LinkedIn pendant un cooldown 429 actif (sans appeler Unipile),
-    avec un délai actionnable → l'agent arrête d'empiler des appels perdus."""
+    """Refuse un scrape pendant le cooldown 429 en cours (sans taper Unipile) — la durée
+    est CELLE qu'Unipile a demandée. Évite de marteler pendant le backoff."""
     until = _RATE_LIMIT_UNTIL.get(sub, 0.0)
     now = time.time()
     if until > now:
-        mins = int((until - now) // 60) + 1
         raise McpError(ErrorData(code=INVALID_PARAMS, message=(
-            f"⛔ Quota Unipile atteint pour ce compte LinkedIn — réessai dans ~{mins} min "
-            "(cap amont ~100 requêtes/12h sur fiches société & profils). N'appelle plus "
-            "unipile_search / unipile_company / unipile_profile d'ici là ; reprends plus tard.")))
+            f"⏳ Unipile rate-limite ce compte LinkedIn — réessaie dans {_fmt_wait(until - now)} "
+            "(délai demandé par Unipile ; c'est en général quelques secondes). RALENTIS la "
+            "cadence des appels unipile_* plutôt que de les enchaîner en rafale.")))
 
 
 def _note_rate_limited(sub: str, err) -> None:
-    """Arme le cooldown à partir du délai renvoyé par Unipile (défaut 1h si illisible —
-    plutôt qu'un pari de 12h qui verrouillerait à tort)."""
-    secs = getattr(err, "retry_after", None) or 3600
+    """Arme le cooldown = le `retry_after` renvoyé par Unipile (souvent quelques secondes),
+    plafonné à `_RL_MAX_SECS` (un « 12 hours » rare/trompeur ne bloque pas la journée) ;
+    défaut court si le corps n'a pas de délai lisible."""
+    secs = min(getattr(err, "retry_after", None) or _RL_DEFAULT_SECS, _RL_MAX_SECS)
     _RATE_LIMIT_UNTIL[sub] = time.time() + secs
 
 
 def _scrape(sub: str, fn):
-    """Exécute un appel LinkedIn scrape sous discipline de quota : refus immédiat en
-    cooldown, armement du cooldown + erreur STOP sur un 429 amont."""
+    """Scrape LinkedIn sous discipline de rate-limit : refus pendant un cooldown en cours,
+    et sur un 429 amont on arme le cooldown (= délai Unipile) + erreur actionnable « ralentis »."""
     _rate_limit_guard(sub)
     from oto.tools.unipile.client import UnipileRateLimited
     try:
         return fn()
     except UnipileRateLimited as e:
         _note_rate_limited(sub, e)
+        wait = _fmt_wait(_RATE_LIMIT_UNTIL[sub] - time.time())
         raise McpError(ErrorData(code=INVALID_PARAMS, message=(
-            f"{e} ⛔ Quota Unipile atteint pour ce compte (~100 requêtes/12h sur les "
-            "fiches société & profils LinkedIn). ARRÊTE les appels unipile_* et reprends "
-            "après le délai indiqué — réutilise en attendant les fiches déjà récupérées.")))
+            f"⏳ Unipile rate-limite ce compte LinkedIn ({e}). Réessaie dans {wait} et "
+            "RALENTIS : n'enchaîne pas des dizaines d'appels unipile_* en rafale (c'est ce qui "
+            "déclenche le throttle, puis dégrade et déconnecte le compte). Les fiches société "
+            "déjà vues sont servies du cache — inutile de les relire.")))
 
 
 def _canonical_li_identifier(identifier: str) -> str:
@@ -456,6 +467,12 @@ def register(mcp: FastMCP) -> None:
         silence : (1) une facette exige un **ID résolu** — passe le terme par
         `unipile_search_facets` et donne l'`id` choisi ; un terme brut NE filtre PAS ;
         (2) le mode `url=` est **plafonné à 25 sans pagination** — préfère le structuré.
+
+        ⚠️ **Cadence** : LinkedIn rate-limite par compte. Enchaîner des dizaines
+        d'appels en rafale déclenche un `429` (backoff de quelques secondes), puis
+        DÉGRADE et finit par DÉCONNECTER le compte. Espace tes appels ; sur un `429`,
+        respecte le délai renvoyé (souvent quelques s) et RALENTIS — n'insiste pas.
+        Pour du volume, délègue la pagination à un sous-agent (guide `bulk-load`).
 
         `company`/`location`/`industry` acceptent des NOMS (résolus automatiquement
         en facettes LinkedIn) ou des ids de facette numériques. ⚠️ La page company

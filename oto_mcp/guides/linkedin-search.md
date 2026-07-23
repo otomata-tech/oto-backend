@@ -53,6 +53,30 @@ en cas d'ambiguïté, résous d'abord via `unipile_search_facets` et passe l'id 
 - **Pagination** : repasse le `cursor` renvoyé (`unipile_search(cursor=…)`) — il ré-encode
   toute la requête, ne reconstruis rien. Boucle jusqu'à cursor vide.
 
+## Cadence & rate-limit (ne pas cramer le compte)
+
+LinkedIn rate-limite **par compte**, en couches (Unipile renvoie `429 We only allow
+1 / 10 / 100 requests. Retry in N`). Le `Retry in N` est **le plus souvent quelques
+secondes** (throttle de rafale), rarement des heures. Ce n'est **pas** un cap dur : le
+danger n'est pas « 100 et bloqué », c'est **le martèlement** — enchaîner des dizaines
+d'appels en rafale fait passer le compte de `429` → **timeouts** → **checkpoint /
+déconnexion** (vécu : un compte cassé ainsi en une soirée).
+
+Règles :
+
+- **Espace tes appels** — pas des dizaines de `unipile_company` / `unipile_search` en
+  rafale. Traite les leads en série tranquille, pas en tir groupé.
+- **Sur un `429`** : le serveur arme un court backoff (= le délai qu'Unipile a demandé)
+  et refuse les scrapes d'ici là avec « réessaie dans ~Xs ». **Respecte-le, RALENTIS** ;
+  n'insiste pas en boucle (ça aggrave le throttle).
+- **`unipile_company` est mis en cache 6h** par compte : relire une société déjà vue ne
+  coûte rien — mais ne relis pas inutilement.
+- **Search-first** : une page de résultats porte déjà nom/poste/entreprise/headline. Ne
+  fais un `unipile_company` / `unipile_profile` que si tu as VRAIMENT besoin du détail —
+  c'est la route la plus contrainte (~100/fenêtre).
+- **Gros volume** = plusieurs comptes (chaque siège a sa propre limite) + délégation à un
+  sous-agent, pas un seul compte poussé à fond.
+
 ## Gros volumes
 
 Un réseau/export complet dépasse le plafond de tokens d'un résultat d'outil et pollue le

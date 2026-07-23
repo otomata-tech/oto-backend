@@ -24,14 +24,35 @@ def test_note_then_guard_blocks():
         U._rate_limit_guard("s1")
 
 
-def test_note_default_1h_when_no_hint():
+def test_note_default_short_when_no_hint():
     U._RATE_LIMIT_UNTIL.clear()
 
     class _E:
         retry_after = None
 
     U._note_rate_limited("s2", _E())
-    assert U._RATE_LIMIT_UNTIL["s2"] > time.time() + 3000  # ~1h, pas 12h
+    # défaut COURT (les 429 de rafale = quelques s), pas une heure
+    assert time.time() < U._RATE_LIMIT_UNTIL["s2"] <= time.time() + U._RL_DEFAULT_SECS + 1
+
+
+def test_note_honors_seconds_delay():
+    U._RATE_LIMIT_UNTIL.clear()
+
+    class _E:
+        retry_after = 6  # « Retry in 6 seconds » → backoff de 6s, pas 12h
+
+    U._note_rate_limited("s2b", _E())
+    assert time.time() + 4 < U._RATE_LIMIT_UNTIL["s2b"] <= time.time() + 7
+
+
+def test_note_caps_long_delay():
+    U._RATE_LIMIT_UNTIL.clear()
+
+    class _E:
+        retry_after = 43200  # « Retry in 12 hours » → plafonné, pas de lockout journée
+
+    U._note_rate_limited("s2c", _E())
+    assert U._RATE_LIMIT_UNTIL["s2c"] <= time.time() + U._RL_MAX_SECS + 1
 
 
 def test_scrape_maps_rate_limit_and_arms_cooldown():

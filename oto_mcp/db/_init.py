@@ -324,6 +324,9 @@ def init_db() -> None:
         # Org de l'appel (#67, scope d'audit exact) — extension OTO-LOCALE.
         conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS org_id BIGINT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_org ON tool_calls(org_id, created_at DESC) WHERE org_id IS NOT NULL")
+        # Application OAuth cliente porteuse du grant (`azp` du JWT — claude.ai,
+        # Claude Code, ChatGPT…) : axe de télémétrie par surface, extension OTO-LOCALE.
+        conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS client_id TEXT")
         # Résolution des signaux d'usage (ADR 0017) : marquer un feedback/gap traité.
         # NULL = ouvert. resolution = note libre de l'opérateur (ce qui a été fait).
         conn.execute("ALTER TABLE usage_signals ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")

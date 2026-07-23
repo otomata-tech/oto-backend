@@ -37,6 +37,21 @@ def sub_override(sub: Optional[str]) -> Iterator[None]:
         _sub_override.reset(token)
 
 
+def current_client_id_from_token() -> Optional[str]:
+    """`azp`/`client_id` du bearer JWT — l'application OAuth CLIENTE qui porte le
+    grant (claude.ai, Claude Code, ChatGPT…), PAS l'utilisateur (`sub`). Axe de
+    télémétrie/UX seulement : la façade DCR laisse un client choisir son nom →
+    identification fiable, jamais une frontière d'autz. NULL en REST/dev local."""
+    try:
+        from fastmcp.server.dependencies import get_access_token  # type: ignore
+        token = get_access_token()
+        if token and getattr(token, "claims", None):
+            return token.claims.get("azp") or token.claims.get("client_id")
+    except Exception:
+        pass
+    return None
+
+
 def current_user_sub_from_token() -> Optional[str]:
     """Sub de l'utilisateur courant depuis le bearer JWT MCP (ou l'override REST)."""
     override = _sub_override.get()

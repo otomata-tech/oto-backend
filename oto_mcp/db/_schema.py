@@ -75,7 +75,11 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     run_id TEXT,
     -- Org sous laquelle l'appel a été émis (seam current_org au moment du call,
     -- extension OTO-LOCALE) — scope EXACT du journal d'audit org (#67). NULL hors org.
-    org_id BIGINT
+    org_id BIGINT,
+    -- Application OAuth cliente porteuse du grant (`azp`/`client_id` du JWT :
+    -- claude.ai, Claude Code, ChatGPT… — extension OTO-LOCALE). Télémétrie par
+    -- surface, jamais une frontière d'autz. NULL en REST/dev local.
+    client_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);

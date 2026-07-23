@@ -32,7 +32,7 @@ import os
 import sentry_sdk
 from fastmcp.server.middleware import Middleware
 
-from .auth_hooks import current_user_sub_from_token
+from .auth_hooks import current_client_id_from_token, current_user_sub_from_token
 # Classifieurs partagés (D2, #124) : source unique de la taxonomie d'exceptions,
 # consommée aussi par `ErrorEnvelopeMiddleware`. Ré-exportés ici (les tests et le
 # reste du module les référencent via `sentry_setup`).
@@ -100,6 +100,11 @@ class SentryToolErrorMiddleware(Middleware):
                             sub = None
                         if sub:
                             scope.set_user({"id": sub})
+                        # Surface cliente (`azp` : claude.ai, Claude Code…) — où
+                        # l'erreur se produit, pas qui l'a causée.
+                        client = current_client_id_from_token()
+                        if client:
+                            scope.set_tag("mcp.client", client)
                         sentry_sdk.capture_exception(e)
                 except Exception:
                     # La capture ne doit jamais masquer l'erreur d'origine.

@@ -46,8 +46,8 @@ def insert_tool_call(row: dict) -> None:
         conn.execute(
             """
             INSERT INTO tool_calls
-                (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id, run_id, org_id)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id, run_id, org_id, client_id)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -55,6 +55,7 @@ def insert_tool_call(row: dict) -> None:
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
                 bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
                 row.get("session_id"), row.get("run_id"), row.get("org_id"),
+                row.get("client_id"),
             ),
         )
 

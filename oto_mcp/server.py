@@ -278,6 +278,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
             # session → scope exact du journal d'audit org. NULL hors org.
             from . import access
             row["org_id"] = access.current_org(row.get("sub"))
+            # Application cliente porteuse du grant (`azp` — claude.ai, Claude Code,
+            # ChatGPT…) : axe télémétrie par surface. Contexte copié par create_task
+            # → le token est lisible ici comme dans le handler.
+            from .auth_hooks import current_client_id_from_token
+            row["client_id"] = current_client_id_from_token()
         except Exception:
             pass
         # to_thread : l'INSERT PG (pool psycopg sync) ne doit pas bloquer

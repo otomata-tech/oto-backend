@@ -266,31 +266,75 @@ def register(mcp: FastMCP) -> None:
     def pennylane_create_credit_note(
         customer_id: int,
         date: str,
+        deadline: str,
         lines: list,
-        credited_invoice_id: int,
         external_reference: Optional[str] = None,
+        credited_invoice_id: Optional[int] = None,
     ) -> dict:
-        """Crée un avoir (facture d'avoir) en **brouillon**, crédité sur une facture.
+        """Crée un avoir **standalone** en brouillon (convention v2 : montants négatifs).
 
-        L'avoir est lié à la facture d'origine via `credited_invoice_id`. Toujours
-        créé en brouillon : finaliser ensuite avec `pennylane_finalize_invoice`
-        après validation humaine. Vérifier l'anti-doublon avec
-        `pennylane_find_invoice_by_reference` au préalable.
+        Fournis les lignes en **POSITIF** (le geste métier : 195 crédits à 1,45) —
+        la négativation qui fait de la facture un AVOIR est appliquée côté client,
+        jamais par toi. **Pas de facture liée par défaut** (la pratique réelle :
+        la référence AUT-… vit en texte libre) ; si `credited_invoice_id` est
+        fourni, le lien est posé APRÈS création via l'endpoint dédié
+        `link_credit_note` (le champ create-time est cassé côté Pennylane).
+        Toujours créé en brouillon : finaliser avec `pennylane_finalize_invoice`
+        après validation humaine. Anti-doublon au préalable :
+        `pennylane_find_invoice_by_reference` sur la référence externe.
 
         Args:
-            customer_id: ID du client Pennylane (complété au préalable si besoin).
+            customer_id: ID du client Pennylane (créé au préalable si besoin).
             date: date de l'avoir (YYYY-MM-DD).
-            lines: lignes au schéma strict de `pennylane_create_invoice` (2 formes :
-                produit `{product_id, quantity}` ou libre `{label, quantity, unit,
-                raw_currency_unit_price, vat_rate}` tous requis ; vat_rate = code
-                "FR_200"/"FR_100"/…, prix HT en string, quantity en number).
-            credited_invoice_id: ID de la facture d'origine créditée.
+            deadline: date d'échéance (YYYY-MM-DD — pratique MM : aujourd'hui).
+            lines: lignes au schéma strict de `pennylane_create_invoice`, en
+                POSITIF (2 formes : produit `{product_id, quantity}` — résoudre le
+                product_id via `pennylane_products` — ou libre `{label, quantity,
+                unit, raw_currency_unit_price, vat_rate}` tous requis ; vat_rate =
+                code "FR_200"/"FR_100"/…, prix HT en string, quantity en number).
             external_reference: trace de la source (ex. id paiement GoCardless `PM…`) — anti-doublon.
+            credited_invoice_id: optionnel — ID d'une facture à créditer ; le lien
+                est posé après création (2ᵉ appel), jamais au create.
         """
-        return _client().create_credit_note(
-            customer_id=customer_id, date=date, lines=lines,
-            credited_invoice_id=credited_invoice_id,
+        note = _client().create_credit_note(
+            customer_id=customer_id, date=date, deadline=deadline, lines=lines,
             external_reference=external_reference, draft=True)
+        if credited_invoice_id:
+            note_id = note.get("id") or (note.get("customer_invoice") or {}).get("id")
+            if not note_id:
+                return {"credit_note": note,
+                        "link": "NON posé : id de l'avoir introuvable dans la réponse"}
+            link = _client().link_credit_note(credited_invoice_id, note_id)
+            return {"credit_note": note, "link": link}
+        return note
+
+    @mcp.tool()
+    def pennylane_products(
+        op: str = "list",
+        product_id: Optional[int] = None,
+        max_pages: Optional[int] = None,
+    ) -> dict | list:
+        """Catalogue produits Pennylane. op="list" → tous les produits (id, label,
+        prix, unité, vat_rate…) ; op="get" (`product_id`) → la fiche d'un produit.
+
+        Sert à résoudre le `product_id` d'une ligne de facture ou d'avoir
+        (`pennylane_create_invoice` / `pennylane_create_credit_note`) — ne jamais
+        deviner un product_id : le lire ici. Attention aux libellés quasi
+        homonymes (ex. deux produits « crédit … ») : choisir sur la fiche
+        complète (prix, unité), pas sur le début du nom.
+
+        Args:
+            op: "list" (défaut) ou "get".
+            product_id: requis pour op="get".
+            max_pages: op="list" — limite de pagination.
+        """
+        if op == "list":
+            return _client().list_products(max_pages=max_pages)
+        if op == "get":
+            if not product_id:
+                raise ValueError("op='get' requiert product_id")
+            return _client().get_product(product_id)
+        raise ValueError("op doit être 'list' ou 'get'")
 
     @mcp.tool()
     def pennylane_finalize_invoice(invoice_id: int) -> dict:

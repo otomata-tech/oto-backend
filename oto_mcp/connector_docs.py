@@ -650,7 +650,7 @@ DOC_SECTIONS: dict[str, tuple[DocSection, ...]] = {
             "- `pennylane_trial_balance` la balance comptable sur une période, `pennylane_ledger_accounts` le plan comptable\n"
             "- `pennylane_customer_invoices` / `pennylane_supplier_invoices` les factures, `pennylane_transactions` les mouvements bancaires\n"
             "- `pennylane_match` lettre une transaction avec sa facture (réversible) pour ne pas laisser une facture payée en `late`\n"
-            "- flux avoir supervisé : `pennylane_find_invoice_by_reference` (anti-doublon) → `pennylane_create_credit_note` (brouillon) → `pennylane_finalize_invoice` puis `pennylane_send_invoice` **après validation humaine**"
+            "- flux avoir supervisé : `pennylane_products` (résoudre le `product_id`, jamais le deviner) → `pennylane_find_invoice_by_reference` (anti-doublon) → `pennylane_create_credit_note` (brouillon **standalone**, lignes en positif — la négativation « avoir » est appliquée côté serveur) → `pennylane_finalize_invoice` puis `pennylane_send_invoice` **après validation humaine**"
         )),
     ),
     "gocardless": (

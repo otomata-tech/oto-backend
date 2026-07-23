@@ -31,7 +31,10 @@ jobs:
 
   deploy-preprod:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # push main OU relance manuelle (workflow_dispatch depuis main) — un dispatch
+    # qui ne faisait que les tests laissait croire à un déploiement (vécu 23/07 :
+    # canari resté en arrière après un push failed, dispatch « success » sans effet).
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, oto-platform]
     concurrency:
       group: deploy-preprod

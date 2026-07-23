@@ -271,6 +271,7 @@ _CATEGORY_BY_CONNECTOR = {
     "pennylane": "Finance", "pennylaneged": "Finance", "gocardless": "Finance", "silae": "Finance",
     "slack": "Comms", "google": "Comms", "zohodesk": "Comms",
     "memento": "Knowledge", "notion": "Knowledge", "zohoanalytics": "Knowledge",
+    "lighton": "Knowledge",
     "planity": "Métier",
     "atlassian": "Métier",
     "hubspot": "Prospection", "apollo": "Prospection", "zerobounce": "Prospection",
@@ -304,7 +305,7 @@ _PUBLISHER_BY_CONNECTOR = {
     "zoho": "Zoho", "zohodesk": "Zoho", "zohoanalytics": "Zoho",
     "salesforce": "Salesforce",
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
-    "aiark": "AI Ark", "cognism": "Cognism",
+    "aiark": "AI Ark", "cognism": "Cognism", "lighton": "LightOn",
     "recruitee": "Recruitee", "teamtailor": "Teamtailor", "serpapi": "SerpApi",
     "searchapi": "SearchApi", "brightdata": "Bright Data", "cloro": "Cloro",
     "n8n": "n8n", "make": "Make", "zapier": "Zapier",
@@ -391,7 +392,7 @@ _LOGO_DOMAIN_BY_CONNECTOR = {
     "greenhouse": "greenhouse.io", "lever": "lever.co", "ashby": "ashbyhq.com",
     "recruitee": "recruitee.com", "teamtailor": "teamtailor.com",
     "serpapi": "serpapi.com", "searchapi": "searchapi.io", "brightdata": "brightdata.com", "cloro": "cloro.dev",
-    "aiark": "ai-ark.com", "cognism": "cognism.com",
+    "aiark": "ai-ark.com", "cognism": "cognism.com", "lighton": "lighton.ai",
     "n8n": "n8n.io", "make": "make.com", "zapier": "zapier.com",
     "reddit": "reddit.com",
 }
@@ -671,6 +672,23 @@ _REGISTRY_LIST = [
        label="Cognism",
        help="B2B contact & company search, reveal, and identity enrichment",
        href="https://cognism.com"),
+
+    # lighton : plateforme GenAI souveraine Paradigm (LightOn) — chat sur les
+    # modèles hébergés en Europe + base documentaire RAG d'entreprise (upload,
+    # extraction de chunks, Q&A sur document). Credential à 2 champs (clé API +
+    # base URL optionnelle — Paradigm existe en instance privée/on-prem) →
+    # secret_kind="fields", résolu via resolve_credential_fields. BYO only :
+    # le compte Paradigm appartient au client, pas d'accord plateforme.
+    _c("lighton", ["lighton"], auth_modes={"byo_user", "byo_org"},
+       secret_kind="fields",
+       label="LightOn Paradigm",
+       help="GenAI souveraine — chat (modèles hébergés UE) + base documentaire RAG",
+       href="https://lighton.ai", credential_fields=(
+           CredentialField("api_key", "API key", secret=True),
+           CredentialField("base_url", "Instance URL", secret=False, required=False,
+                           help="instance privée uniquement (défaut : SaaS "
+                                "https://paradigm.lighton.ai)"),
+       )),
 
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     # LinkedIn n'est plus un connecteur browser ici : remplacé par le connecteur

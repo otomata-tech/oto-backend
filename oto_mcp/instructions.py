@@ -66,7 +66,8 @@ _README_USER_HEADER = "## README de ton utilisateur"
 _CONTEXT_HEADER = "## Ton contexte oto"
 
 # Tokens de variable substitués dans les agent README (bloc C). Auto-contexte v1.
-_VAR_TOKENS = ("{{org}}", "{{user}}", "{{équipe}}", "{{equipe}}", "{{connecteurs_actifs}}")
+_VAR_TOKENS = ("{{org}}", "{{user}}", "{{équipe}}", "{{equipe}}", "{{connecteurs_actifs}}",
+               "{{rôle}}", "{{role}}", "{{date}}", "{{projets_récents}}", "{{projets_recents}}")
 
 
 # --- Lecture des blocs plateforme (DB override → seed) ----------------------
@@ -184,12 +185,18 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
 def _apply_vars(body: str, ctx: dict) -> str:
     """Substitue les variables d'auto-contexte dans la doctrine d'org. Les tokens
     inconnus sont laissés tels quels (intention de l'auteur)."""
+    from datetime import date
+    projets = " · ".join(ctx.get("projects") or []) or "—"
+    role = ctx.get("role") or "—"
     repl = {
         "{{org}}": ctx["org_name"],
         "{{user}}": ctx["user_name"] or "—",
         "{{équipe}}": ctx["group_name"] or "—",
         "{{equipe}}": ctx["group_name"] or "—",
         "{{connecteurs_actifs}}": ", ".join(ctx["connectors"]) or "—",
+        "{{rôle}}": role, "{{role}}": role,          # rôle de l'user dans l'org (#6 C)
+        "{{date}}": date.today().isoformat(),         # date du jour (session)
+        "{{projets_récents}}": projets, "{{projets_recents}}": projets,
     }
     for token, value in repl.items():
         if token in body:

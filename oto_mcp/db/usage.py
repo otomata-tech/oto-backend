@@ -173,23 +173,25 @@ def list_usage_signals(
     """Signaux récents (récent d'abord), filtrables par type / cible / statut —
     base des projections (qualité d'outil, manques) du barreau 4.
 
-    status: 'open' (resolved_at IS NULL) | 'resolved' (NOT NULL) | None (tous)."""
+    status: 'open' (resolved_at IS NULL) | 'resolved' (NOT NULL) | None (tous).
+    Joint l'email/nom du rapporteur (LEFT JOIN users) pour l'UI admin."""
     limit = max(1, min(int(limit), 1000))
-    sql = ("SELECT id, created_at, sub, org_id, signal, kind, target, body, "
-           "session_id, source, resolved_at, resolved_by, resolution "
-           "FROM usage_signals")
+    sql = ("SELECT s.id, s.created_at, s.sub, u.email, u.name, s.org_id, s.signal, "
+           "s.kind, s.target, s.body, s.session_id, s.source, s.resolved_at, "
+           "s.resolved_by, s.resolution "
+           "FROM usage_signals s LEFT JOIN users u ON u.sub = s.sub")
     clauses, params = [], []
     if signal:
-        clauses.append("signal = %s"); params.append(signal)
+        clauses.append("s.signal = %s"); params.append(signal)
     if target:
-        clauses.append("target = %s"); params.append(target)
+        clauses.append("s.target = %s"); params.append(target)
     if status == "open":
-        clauses.append("resolved_at IS NULL")
+        clauses.append("s.resolved_at IS NULL")
     elif status == "resolved":
-        clauses.append("resolved_at IS NOT NULL")
+        clauses.append("s.resolved_at IS NOT NULL")
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY created_at DESC LIMIT %s"
+    sql += " ORDER BY s.created_at DESC LIMIT %s"
     params.append(limit)
     with _connect() as conn:
         return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
@@ -272,28 +274,35 @@ def get_run(run_id: str) -> list[dict]:
 
 
 def aggregate_gaps(days: int = 30) -> list[dict]:
-    """Manques agrégés (cas d'usage non couverts) — backlog produit dérivé."""
+    """Manques agrégés (cas d'usage non couverts) — backlog produit dérivé.
+
+    `users` = emails distincts des rapporteurs (repli sub si compte inconnu) —
+    l'UI admin montre QUI a signalé, pas seulement combien."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             """
-            SELECT kind, target AS intent, count(*) AS n, max(created_at) AS last_at
-            FROM usage_signals
-            WHERE signal = 'gap' AND created_at > NOW() - make_interval(days => %s)
-            GROUP BY kind, target ORDER BY n DESC, last_at DESC
+            SELECT s.kind, s.target AS intent, count(*) AS n, max(s.created_at) AS last_at,
+                   array_remove(array_agg(DISTINCT coalesce(u.email, s.sub)), NULL) AS users
+            FROM usage_signals s
+            LEFT JOIN users u ON u.sub = s.sub
+            WHERE s.signal = 'gap' AND s.created_at > NOW() - make_interval(days => %s)
+            GROUP BY s.kind, s.target ORDER BY n DESC, last_at DESC
             """,
             (int(days),),
         ).fetchall()]
 
 
 def aggregate_tool_feedback(days: int = 30) -> list[dict]:
-    """Qualité d'outil agrégée : feedback par (outil, kind)."""
+    """Qualité d'outil agrégée : feedback par (outil, kind). `users` : cf. aggregate_gaps."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             """
-            SELECT target AS tool, kind, count(*) AS n, max(created_at) AS last_at
-            FROM usage_signals
-            WHERE signal = 'tool_feedback' AND created_at > NOW() - make_interval(days => %s)
-            GROUP BY target, kind ORDER BY n DESC, last_at DESC
+            SELECT s.target AS tool, s.kind, count(*) AS n, max(s.created_at) AS last_at,
+                   array_remove(array_agg(DISTINCT coalesce(u.email, s.sub)), NULL) AS users
+            FROM usage_signals s
+            LEFT JOIN users u ON u.sub = s.sub
+            WHERE s.signal = 'tool_feedback' AND s.created_at > NOW() - make_interval(days => %s)
+            GROUP BY s.target, s.kind ORDER BY n DESC, last_at DESC
             """,
             (int(days),),
         ).fetchall()]

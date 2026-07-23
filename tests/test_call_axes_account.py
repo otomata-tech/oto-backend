@@ -22,9 +22,16 @@ def _params(name):
     return {a.param for a in call_axes.axes_for(name)}
 
 
+def test_account_axis_applies_to_identity_bearing_tools():
+    # ADR 0051 : unipile (1 clé partagée → N identités opérées) porte l'axe
+    # account=/identity= pour épingler le compte LinkedIn/messagerie à opérer.
+    assert "account" in _params("unipile_search")
+    assert "account" in _params("whatsapp_send_message")
+
+
 def test_account_axis_excludes_single_and_spine():
     for name in ("folk_search", "serper_web_search", "pennylane_company",
-                 "unipile_search", "oto_create_org", "oto_whoami", "data_write"):
+                 "oto_create_org", "oto_whoami", "data_write"):
         assert "account" not in _params(name), name
 
 

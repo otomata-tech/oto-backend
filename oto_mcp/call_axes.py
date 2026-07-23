@@ -120,13 +120,14 @@ async def resolve_org_guarded(org: object) -> int:
 
 # ── Axe account= (connecteurs multi-compte) ──────────────────────────────────
 
-def _is_multi_account_tool(name: str) -> bool:
-    """Le tool appartient-il à un connecteur MULTI-COMPTE (coffre à N comptes,
-    `Connector.auth_multi_account`) ? Dérivé du registre via le namespace → seuls
-    zoho/google exposent `account=` aujourd'hui (« 2 Zoho », gmail/tasks/calendar).
-    Les caps spine (`oto_*`) et les connecteurs mono-compte renvoient None → exclus."""
+def _has_account_axis(name: str) -> bool:
+    """Le tool porte-t-il un CHOIX de compte/identité ? Deux familles (ADR 0024/0051) :
+    - **multi-credential** (`auth_multi_account`) : N clés pour une entité (google, « 2 Zoho ») ;
+    - **porteur d'identités** (`personal_cross_org`) : 1 clé → N identités opérées
+      (unipile : le compte LinkedIn/WhatsApp à opérer — le tien, ou un compte accordé #55).
+    Dérivé du registre via le namespace. Les caps spine (`oto_*`) → None → exclus."""
     con = providers.connector_for_namespace(namespace_of(name))
-    return con is not None and con.auth_multi_account
+    return con is not None and (con.auth_multi_account or con.personal_cross_org)
 
 
 async def _pin_account(value: object) -> list[UndoEntry]:
@@ -145,12 +146,15 @@ ACCOUNT = CallAxis(
         "type": "string",
         "title": "Account",
         "description": (
-            "Compte du connecteur à utiliser quand plusieurs sont configurés dans "
-            "l'org (ex. « 2 Zoho »). Le label listé par oto_identity(op='list'). "
-            "Omets si un seul compte est configuré."
+            "Compte/identité à utiliser POUR CET APPEL quand plusieurs sont possibles : "
+            "soit un credential parmi plusieurs (ex. « 2 Zoho »), soit — pour LinkedIn/"
+            "messagerie — le compte à OPÉRER sous la clé partagée (le tien par défaut, ou "
+            "un compte qui t'est accordé). Passe l'`account_id`/label listé par "
+            "oto_identity(op='list'). Épinglage ÉPHÉMÈRE (cet appel seulement), il ne "
+            "change pas ton compte par défaut. Omets pour ton compte par défaut."
         ),
     },
-    applies=_is_multi_account_tool,
+    applies=_has_account_axis,
     pin=_pin_account,
 )
 

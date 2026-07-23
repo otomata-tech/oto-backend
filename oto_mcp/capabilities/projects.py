@@ -34,8 +34,9 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur")
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
                 "copy", "handoff", "link", "unlink", "activity", "runs", "inventory",
-                "publish_mcp", "unpublish_mcp"]
+                "lint", "publish_mcp", "unpublish_mcp"]
     project_id: Optional[int] = None
+    stale_days: Optional[int] = None   # lint : seuil « pas retouché depuis » (défaut 90)
     name: Optional[str] = None
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
@@ -429,6 +430,18 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 depth=(inp.depth if inp.depth is not None else 2))
         return out
 
+    if inp.op == "lint":
+        # B1 (#6) : santé des pages du projet (stale / vides / titres en double) — un
+        # seul list_docs_for_project, checks en mémoire (pas de N+1). Accès = gate org
+        # ci-dessus (comme op=get). L'agent/l'user curent ensuite.
+        from datetime import datetime, timedelta
+        from .. import doc_lint
+        days = inp.stale_days if inp.stale_days is not None else 90
+        cutoff = (datetime.now() - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d %H:%M:%S")
+        docs = db.list_docs_for_project(int(inp.project_id))
+        return {"project_id": int(inp.project_id), "stale_days": days,
+                **doc_lint.lint_docs(docs, stale_before=cutoff)}
+
     if inp.op == "activity":
         # Chaque événement porte l'IDENTITÉ de son auteur (`actor`, résolue du sub loggé)
         # → l'Historique dashboard affiche « par X » réel (refonte UX, ADR 0032).
@@ -771,6 +784,8 @@ CAPABILITIES += [
             "from links & declared slots) — never retype a tool list: derive, then curate. "
             "runs (optional target_ref = a linked procedure's stable id) = the project's "
             "recent runs (label/doctrine/outcome), filtered to that procedure when given. "
+            "lint (optional stale_days, default 90) = KB health of this project's pages: "
+            "stale (untouched since), empty (trivial body), duplicate_titles (likely merges). "
             "publish_mcp (mcp_slug + mcp_access anonymous|secret|org + mcp_tools = the fixed "
             "tool allowlist) publishes the project as a dedicated MCP endpoint "
             "`<mcp_slug>.mcp.oto.cx/mcp`, the toolset served under the OWNER ORG's credentials — "

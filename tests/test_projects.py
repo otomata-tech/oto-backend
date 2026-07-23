@@ -232,6 +232,21 @@ def test_list_includes_projects_shared_to_my_team(seams, monkeypatch):
     assert shared["shared"] is True and shared["permission"] == "write"
 
 
+def test_lint_reports_stale_empty_duplicates(seams, monkeypatch):
+    # B1 (#6) : op=lint remonte pages stale / vides / titres en double d'un projet.
+    docs = [
+        {"id": 1, "title": "A", "body_md": "contenu suffisant.", "updated_at": "2026-07-22 10:00:00"},
+        {"id": 2, "title": "A", "body_md": "autre contenu.", "updated_at": "2026-07-22 10:00:00"},  # doublon
+        {"id": 3, "title": "Vide", "body_md": " ", "updated_at": "2026-07-22 10:00:00"},            # vide
+        {"id": 4, "title": "Vieux", "body_md": "du contenu ancien.", "updated_at": "2020-01-01 10:00:00"},  # stale
+    ]
+    monkeypatch.setattr(P.db, "list_docs_for_project", lambda pid: docs)
+    out = P._project(ResolvedCtx(sub="u1", org_id=99), P.ProjectInput(op="lint", project_id=7, stale_days=90))
+    assert [d["id"] for d in out["stale"]] == [4]
+    assert [d["id"] for d in out["empty"]] == [3]
+    assert len(out["duplicate_titles"]) == 1 and set(out["duplicate_titles"][0]["ids"]) == {1, 2}
+
+
 def test_personal_share_shown_only_in_home_org(seams, monkeypatch):
     # #5.1 : un projet partagé PERSONNELLEMENT (principal ('user', sub)) n'apparaît que
     # dans l'org de rattachement (maison=99), pas dupliqué dans les autres orgs.

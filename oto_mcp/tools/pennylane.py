@@ -232,6 +232,7 @@ def register(mcp: FastMCP) -> None:
         deadline: str,
         lines: list,
         external_reference: Optional[str] = None,
+        free_text: Optional[str] = None,
     ) -> dict:
         """Crée une facture de vente client en **brouillon** dans Pennylane.
 
@@ -257,10 +258,13 @@ def register(mcp: FastMCP) -> None:
             deadline: date d'échéance (YYYY-MM-DD).
             lines: lignes au schéma strict ci-dessus.
             external_reference: référence externe (anti-doublon / trace de la source).
+            free_text: texte libre imprimé sur le PDF (commentaire visible client,
+                champ API `pdf_invoice_free_text`).
         """
         return _client().create_customer_invoice(
             customer_id=customer_id, date=date, deadline=deadline, lines=lines,
-            external_reference=external_reference, draft=True)
+            external_reference=external_reference, pdf_free_text=free_text,
+            draft=True)
 
     @mcp.tool()
     def pennylane_create_credit_note(
@@ -269,6 +273,7 @@ def register(mcp: FastMCP) -> None:
         deadline: str,
         lines: list,
         external_reference: Optional[str] = None,
+        free_text: Optional[str] = None,
         credited_invoice_id: Optional[int] = None,
     ) -> dict:
         """Crée un avoir **standalone** en brouillon (convention v2 : montants négatifs).
@@ -293,12 +298,18 @@ def register(mcp: FastMCP) -> None:
                 unit, raw_currency_unit_price, vat_rate}` tous requis ; vat_rate =
                 code "FR_200"/"FR_100"/…, prix HT en string, quantity en number).
             external_reference: trace de la source (ex. id paiement GoCardless `PM…`) — anti-doublon.
+            free_text: texte libre imprimé sur le PDF (commentaire visible client,
+                champ API `pdf_invoice_free_text`) — c'est LÀ que vit le
+                rapprochement lisible avec la facture d'origine (pratique MM :
+                « Avoir sur facture AUT-XXXXX suite prélèvement échoué sur
+                GoCardless »), l'avoir n'étant pas lié structurellement.
             credited_invoice_id: optionnel — ID d'une facture à créditer ; le lien
                 est posé après création (2ᵉ appel), jamais au create.
         """
         note = _client().create_credit_note(
             customer_id=customer_id, date=date, deadline=deadline, lines=lines,
-            external_reference=external_reference, draft=True)
+            external_reference=external_reference, pdf_free_text=free_text,
+            draft=True)
         if credited_invoice_id:
             note_id = note.get("id") or (note.get("customer_invoice") or {}).get("id")
             if not note_id:

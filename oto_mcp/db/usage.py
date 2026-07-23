@@ -239,12 +239,13 @@ def list_runs(limit: int = 100) -> list[dict]:
                    COALESCE(s.args->>'doctrine', s.args->>'label') AS slug,
                    s.args->>'label'    AS label,
                    s.args->>'doctrine' AS doctrine,
-                   s.sub,
+                   s.sub, u.email, u.name,
                    s.created_at      AS started_at,
                    f.created_at      AS finished_at,
                    f.args->>'outcome' AS outcome,
                    COALESCE(c.n_calls, 0) AS n_calls
             FROM tool_calls s
+            LEFT JOIN users u ON u.sub = s.sub
             LEFT JOIN LATERAL (
                 SELECT created_at, args FROM tool_calls
                 WHERE tool = 'run_finish' AND args->>'run_id' = s.run_id

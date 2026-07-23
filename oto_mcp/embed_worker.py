@@ -45,15 +45,28 @@ def _index_batch() -> int:
             to_embed.append((r["id"], r["text"], sha))
     if not to_embed:
         return skipped
+    # Chunking (#6 C) : une page longue → PLUSIEURS vecteurs (chunk 0 dans doc_embeddings,
+    # débordement dans doc_chunk_embeddings) → sa fin reste recherchable. On aplatit tous
+    # les chunks de toutes les pages en UN appel d'embedding, puis on ré-associe.
+    per_doc = [(doc_id, sha, embeddings.chunks(text)) for doc_id, text, sha in to_embed]
+    flat = [c for _, _, chs in per_doc for c in chs]
+    if not flat:
+        return skipped
     try:
-        vectors = embeddings.embed_texts([t for _, t, _ in to_embed])
+        vectors = embeddings.embed_texts(flat)
     except Exception as e:  # noqa: BLE001 — réseau/API : on laisse dirty, re-tour suivant
         logger.warning("embed_worker: batch échoué (re-tenté) : %s", e)
         return 0
+    it = iter(vectors)
     done = 0
-    for (doc_id, _text, sha), vec in zip(to_embed, vectors):
+    for doc_id, sha, chs in per_doc:
+        vecs = [next(it) for _ in chs]
+        if not vecs:
+            continue
         try:
-            db.upsert_doc_embedding(doc_id, sha, embeddings.to_pg(vec), embeddings.MODEL)
+            db.upsert_doc_embedding(doc_id, sha, embeddings.to_pg(vecs[0]), embeddings.MODEL)
+            overflow = [(i, embeddings.to_pg(v)) for i, v in enumerate(vecs[1:], start=1)]
+            db.replace_doc_chunk_embeddings(doc_id, sha, overflow, embeddings.MODEL)
             done += 1
         except Exception as e:  # noqa: BLE001
             logger.warning("embed_worker: upsert doc #%s échoué : %s", doc_id, e)

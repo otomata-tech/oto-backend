@@ -67,6 +67,8 @@ def test_worker_skips_unchanged_sha(monkeypatch):
     monkeypatch.setattr(W.db, "clear_embed_dirty", lambda did: cleared.append(did))
     monkeypatch.setattr(W.db, "upsert_doc_embedding",
                         lambda did, sha, lit, model: upserts.append(did))
+    monkeypatch.setattr(W.db, "replace_doc_chunk_embeddings",
+                        lambda did, sha, chunks, model: None)   # #6 C : chunking (débordement)
     monkeypatch.setattr(W.embeddings, "embed_texts",
                         lambda texts: embedded.append(texts) or [[0.0] * 3])
     n = W._index_batch()

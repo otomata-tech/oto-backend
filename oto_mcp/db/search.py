@@ -151,18 +151,32 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
     surlignage lexical)."""
     if not project_ids:
         return []
+    # Une page matche si son embedding PRINCIPAL (doc_embeddings) OU un chunk de
+    # DÉBORDEMENT (doc_chunk_embeddings, #6 C — pages longues) est proche. Deux kNN
+    # INDEXÉS (chacun ORDER BY <=> LIMIT → HNSW), unis, dédupliqués par doc (distance min).
+    k = max(limit * 3, limit)   # sur-échantillonne : la dédup par doc réduit le lot
     sql = (
+        "WITH cand AS ("
+        "  (SELECT e.doc_id, e.embedding <=> %s::halfvec AS distance "
+        "     FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
+        "     WHERE d.project_id = ANY(%s) ORDER BY e.embedding <=> %s::halfvec LIMIT %s) "
+        "  UNION ALL "
+        "  (SELECT c.doc_id, c.embedding <=> %s::halfvec AS distance "
+        "     FROM doc_chunk_embeddings c JOIN docs d ON d.id = c.doc_id "
+        "     WHERE d.project_id = ANY(%s) ORDER BY c.embedding <=> %s::halfvec LIMIT %s)"
+        "), best AS ("
+        "  SELECT doc_id, min(distance) AS distance FROM cand WHERE distance < %s GROUP BY doc_id"
+        ") "
         "SELECT d.id, d.project_id, d.title, d.description, d.updated_at, "
-        "left(d.body_md, 400) AS body_excerpt, "
-        "e.embedding <=> %s::halfvec AS distance "
-        "FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
-        "WHERE d.project_id = ANY(%s) AND (e.embedding <=> %s::halfvec) < %s "
-        "ORDER BY e.embedding <=> %s::halfvec LIMIT %s"
+        "left(d.body_md, 400) AS body_excerpt, b.distance "
+        "FROM best b JOIN docs d ON d.id = b.doc_id "
+        "ORDER BY b.distance LIMIT %s"
     )
     with _connect() as conn:
         rows = conn.execute(
-            sql, (query_literal, project_ids, query_literal, max_distance,
-                  query_literal, limit)).fetchall()
+            sql, (query_literal, project_ids, query_literal, k,
+                  query_literal, project_ids, query_literal, k,
+                  max_distance, limit)).fetchall()
         return [dict(r) for r in rows]
 
 

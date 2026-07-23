@@ -36,6 +36,28 @@ def _cap(text: str) -> str:
     return t[:_MAX_CHARS] if t else " "
 
 
+def chunks(text: str, size: int = _MAX_CHARS) -> list[str]:
+    """Découpe un texte en morceaux de ≤ `size` caractères (indexer une page longue en
+    PLUSIEURS vecteurs → sa fin n'est plus invisible à la recherche, oto/#6 C). Coupe sur
+    une frontière de mot proche quand possible. Texte vide → []."""
+    t = (text or "").strip()
+    if not t:
+        return []
+    if len(t) <= size:
+        return [t]
+    out: list[str] = []
+    i = 0
+    while i < len(t):
+        end = min(i + size, len(t))
+        if end < len(t):
+            sp = t.rfind(" ", i + size - 200, end)   # recule vers un espace (fenêtre 200)
+            if sp > i:
+                end = sp
+        out.append(t[i:end].strip())
+        i = end
+    return [c for c in out if c]
+
+
 def enabled() -> bool:
     return bool(os.environ.get("MISTRAL_API_KEY"))
 

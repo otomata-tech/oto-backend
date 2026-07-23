@@ -436,6 +436,21 @@ CREATE TABLE IF NOT EXISTS aux_embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_aux_embeddings_hnsw
     ON aux_embeddings USING hnsw (embedding halfvec_cosine_ops);
+
+-- Chunks de DÉBORDEMENT d'une page longue (oto/#6 C) : au-delà du 1er morceau (16k,
+-- dans doc_embeddings), les chunks 1..N vivent ici → toute la page est recherchable.
+-- Additif : doc_embeddings inchangé (rétro-compat). CASCADE sur la page.
+CREATE TABLE IF NOT EXISTS doc_chunk_embeddings (
+    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    chunk_index INT NOT NULL,
+    content_sha TEXT NOT NULL,
+    embedding halfvec(1024) NOT NULL,
+    model TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (doc_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_chunk_embeddings_hnsw
+    ON doc_chunk_embeddings USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_doc_change_requests_doc ON doc_change_requests(doc_id, status, created_at DESC);
 
 -- Journal d'activité d'un projet (incrément 5) : qui a fait quoi, quand. Alimenté

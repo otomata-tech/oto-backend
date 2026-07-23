@@ -780,6 +780,20 @@ def upsert_doc_embedding(doc_id: int, content_sha: str, embedding_literal: str,
         conn.execute("UPDATE docs SET embed_dirty = FALSE WHERE id = %s", (doc_id,))
 
 
+def replace_doc_chunk_embeddings(doc_id: int, content_sha: str,
+                                 chunks: list, model: str) -> None:
+    """Remplace TOUS les chunks de débordement (index ≥ 1) d'une page longue (#6 C).
+    `chunks` = list[(chunk_index:int, embedding_literal:str)]. Liste vide = la page est
+    (re)devenue courte → on efface ses chunks. Transaction unique."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM doc_chunk_embeddings WHERE doc_id = %s", (doc_id,))
+        for idx, lit in chunks:
+            conn.execute(
+                "INSERT INTO doc_chunk_embeddings (doc_id, chunk_index, content_sha, embedding, model) "
+                "VALUES (%s, %s, %s, %s::halfvec, %s)",
+                (doc_id, idx, content_sha, lit, model))
+
+
 def get_doc_embedding_sha(doc_id: int) -> Optional[str]:
     with _connect() as conn:
         row = conn.execute("SELECT content_sha FROM doc_embeddings WHERE doc_id = %s",

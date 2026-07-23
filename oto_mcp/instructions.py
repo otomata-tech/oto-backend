@@ -43,7 +43,7 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 
 **Travaille dans un projet.** Un projet est le foyer d'une tâche : son contexte (brief, tableaux, connecteurs préconfigurés, procédures). Quand tu agis POUR un projet, passe le jeton `project=<id>` sur CHAQUE appel de travail (liste/charge via `oto_project` op=list/get — aucun état de session, ADR 0038) : tes connecteurs prennent alors l'identité préconfigurée du projet, l'org du projet s'applique, tes runs lui sont rattachés, et tes tableaux de sortie doivent y être liés (`oto_project(op=link, target_type=tableau)`). Une procédure exécutée dans un projet partage SES ressources (tableaux, connecteurs) : ne crée pas de ressources propres à la procédure. Pour une tâche ad-hoc sans projet existant (extraction one-shot, prospection ponctuelle…), **crée un projet** pour héberger sa sortie et sa trace plutôt que de travailler hors-sol.
 
-**Porte ton contexte DANS l'appel, jamais dans un état de session.** Il n'y a AUCUN état de session serveur (ADR 0038) : quand une action dépend d'un contexte précis, passe-le EN PARAMÈTRE de l'appel — `project=<id>` (le jeton PRIMAIRE : org du projet, slots `slot:<nom>`, identités connecteur préfaites), `org=<id>` / `group=<id>` (agir dans une org/équipe donnée), `account=<label>` (connecteur multi-compte, ex. « 2 Zoho » — `oto_identity(op='list')` liste les labels), `instance=<ref>` (une instance de connecteur PRÉCISE, refs via `oto_instance(op='list')`), `run_id=<id>` (rattacher l'appel à un `run_start`). Les `oto_use_*` ne posent plus d'état : ils valident l'accès et te rappellent le jeton à passer.
+**Porte ton contexte DANS l'appel, jamais dans un état de session.** Il n'y a AUCUN état de session serveur (ADR 0038) : quand une action dépend d'un contexte précis, passe-le EN PARAMÈTRE de l'appel — `project=<id>` (le jeton PRIMAIRE : org du projet, slots `slot:<nom>`, identités connecteur préfaites), `org=<id>` / `group=<id>` (agir dans une org/équipe donnée), `account=<id>` (le compte/identité à OPÉRER quand plusieurs sont possibles : un credential parmi plusieurs « 2 Zoho », OU le compte LinkedIn/messagerie sous la clé partagée — **y compris un compte qu'un pair t'a accordé** ; `oto_identity(op='list')` les liste, pin ÉPHÉMÈRE cet appel), `instance=<ref>` (une instance de connecteur PRÉCISE, refs via `oto_instance(op='list')`), `run_id=<id>` (rattacher l'appel à un `run_start`). Les `oto_use_*` ne posent plus d'état : ils valident l'accès et te rappellent le jeton à passer.
 
 **Un outil non listé ? Appelle-le quand même via `oto_call`.** `oto_call(name, arguments)` est le pont universel : il exécute par son nom N'IMPORTE quel outil du catalogue — un outil masqué, un outil de FOD, ou un connecteur que tu VIENS d'activer. ⚠️ Activer un connecteur en cours de conversation ne monte PAS ses outils dans la session (le registre est figé à l'ouverture, et claude.ai n'applique pas le rechargement à chaud) : n'en conclus JAMAIS « la capacité n'existe pas ». Appelle-le tout de suite via `oto_call(name="<connecteur>_…", arguments={…})`, ou invite l'utilisateur à ouvrir une NOUVELLE conversation pour les voir montés. (Un sous-agent que tu lances hérite du même registre figé → lui aussi passe par `oto_call`.)
 
@@ -224,9 +224,6 @@ def _format_context(ctx: dict) -> str:
             verdict = "acceptée" if cr.get("status") == "accepted" else "refusée"
             bits.append(f"« {title} » {verdict}")
         lines.append(f"- Tes propositions traitées : {' · '.join(bits)}")
-    profile_md = _format_profile(ctx.get("profile") or {})
-    if profile_md:
-        lines += ["", profile_md]
     return "\n".join(lines)
 
 
@@ -253,32 +250,46 @@ def _format_profile(profile: dict) -> str:
     return "### Ce que tu sais de l'utilisateur\n" + "\n".join(rows)
 
 
-def _block_c(sub: str | None, org_id: int | None) -> str:
-    """Le bloc contexte dynamique : section de contexte résolu + agent README cumulés
-    (org → équipe → user, variables substituées). '' si pas d'org. Fail-open : README
-    d'org seul sans contexte si la résolution échoue."""
+def _c_layers(sub: str | None, org_id: int | None) -> list[dict]:
+    """Les couches du bloc C, ORDONNÉES — `[{key, label, body}]`, couches vides omises.
+    `[]` si pas d'org. Fail-open : README d'org seul sans contexte si la résolution
+    échoue. Source unique : `_block_c` (artefact injecté) et la vue de transparence
+    `/api/me/agent-context` (pile de couches) en dérivent — derive don't duplicate."""
     if org_id is None:
-        return ""
+        return []
     try:
         ctx = _resolve_context(sub, org_id)
     except Exception:
         logger.warning("résolution du contexte org=%s échouée (fail-open readme)",
                        org_id, exc_info=True)
-        return _org_readme_only(org_id)
+        body = _org_readme_only(org_id)
+        return [{"key": "org", "label": "readme de ton org", "body": body}] if body else []
 
     # Readmes « init » cumulés du général au spécifique (org → équipe → user) : le
     # MÊME primitif de guide, rendu uniformément par scope (ADR 0042). Chaque scope =
     # (owner, en-tête) ; corps lu via `guide_store.init_guide_body`, variables
     # substituées. Ordre = cumul de doctrine ; un scope vide est omis.
-    sections = [_format_context(ctx)]
-    for part in (
-        _render_init_readme("org", org_id, f"{_README_ORG_HEADER} ({ctx['org_name']})", ctx),
-        _render_init_readme("group", ctx.get("group_id"), _group_readme_header(ctx), ctx),
-        _render_init_readme("user", sub, _README_USER_HEADER, ctx),
+    layers = [{"key": "context", "label": "ton contexte oto", "body": _format_context(ctx)}]
+    profile_md = _format_profile(ctx.get("profile") or {})
+    if profile_md:
+        layers.append({"key": "profile", "label": "ta fiche", "body": profile_md})
+    for key, label, part in (
+        ("org", "readme de ton org",
+         _render_init_readme("org", org_id, f"{_README_ORG_HEADER} ({ctx['org_name']})", ctx)),
+        ("group", "readme de ton équipe",
+         _render_init_readme("group", ctx.get("group_id"), _group_readme_header(ctx), ctx)),
+        ("user", "ta note",
+         _render_init_readme("user", sub, _README_USER_HEADER, ctx)),
     ):
         if part:
-            sections.append(part)
-    return "\n\n".join(sections)
+            layers.append({"key": key, "label": label, "body": part})
+    return layers
+
+
+def _block_c(sub: str | None, org_id: int | None) -> str:
+    """Le bloc contexte dynamique : section de contexte résolu + fiche profil + agent
+    README cumulés (org → équipe → user, variables substituées). '' si pas d'org."""
+    return "\n\n".join(l["body"] for l in _c_layers(sub, org_id))
 
 
 def _group_readme_header(ctx: dict) -> str:
@@ -324,15 +335,23 @@ def render() -> str:
     return f"{_SECRET_SAUCE.strip()}\n\n{_catalog()}"
 
 
+def session_layers(sub: str | None, org_id: int | None) -> list[dict]:
+    """L'artefact injecté DÉCOMPOSÉ en couches ordonnées `[{key, label, body}]` :
+    bloc A (socle plateforme + catalogue dérivé) puis couches du bloc C. Invariant :
+    `"\\n\\n".join(bodies) == compose_session(sub, org_id)` — sert la vue de
+    transparence (`/api/me/agent-context`) sans dupliquer la composition."""
+    return [
+        {"key": "platform", "label": "socle oto",
+         "body": _platform_block(KEY_SECRET_SAUCE, _SECRET_SAUCE)},
+        {"key": "catalog", "label": "catalogue des capacités", "body": _catalog()},
+    ] + _c_layers(sub, org_id)
+
+
 def compose_session(sub: str | None, org_id: int | None) -> str:
     """L'artefact injecté pour UNE session : bloc A (toujours) + bloc C (contexte +
     doctrine, si org). Runtime. Fail-open géré dans chaque bloc (un bloc qui échoue
     retombe sur son seed / est omis)."""
-    parts = [_block_a()]
-    block_c = _block_c(sub, org_id)
-    if block_c:
-        parts.append(block_c)
-    return "\n\n".join(parts)
+    return "\n\n".join(l["body"] for l in session_layers(sub, org_id) if l["body"])
 
 
 def default_block(key: str) -> str:

@@ -288,10 +288,13 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         description=(
             "Connected identities/accounts your credential can act as for a connector (e.g. "
-            "the LinkedIn accounts under your Unipile key, or your Google accounts). op=list "
-            "(with the current default; empty when the connector has no identity choice) / "
-            "set (`identity_id` from op=list — picks the account to act as; rejects an id "
-            "not reachable by your credential)."),
+            "the LinkedIn accounts under your shared Unipile key, or your Google accounts). "
+            "op=list → each operable account with `is_default`, plus `granted:true`+`owner` "
+            "when a peer shared THEIRS with you (#55). **To act as one for a SINGLE call, pass "
+            "`account=<id>` on that tool** (e.g. unipile_search(account=<id>, …)) — an "
+            "EPHEMERAL pin: it's how you use a granted account without changing your default, "
+            "and needs NO reconnection or key setup. op=set (`identity_id` from op=list) sets "
+            "your PERSISTENT default identity instead (rejects an id your credential can't reach)."),
         mcp="oto_identity",
     ),
     Capability(

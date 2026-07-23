@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                   Response, StreamingResponse)
 
-from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, group_store, memento_oauth, org_store, tool_registry
+from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, doc_export, group_store, memento_oauth, org_store, ownership, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from . import auth_hooks
@@ -1371,6 +1371,27 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         except ValueError:
             return default
 
+    async def me_project_export(request: Request) -> Response:
+        """Export d'un projet (KB) en ZIP d'arborescence markdown (oto/#6 B2 —
+        réversibilité). Accès LECTURE requis. Les pages deviennent des .md ; une page
+        à enfants → dossier + `_index.md`."""
+        sub, err = await _authenticate(request, verifier)
+        if err:
+            return err
+        try:
+            pid = int(request.path_params["id"])
+        except (KeyError, ValueError):
+            return _json_error(request, 400, "bad_project")
+        if not ownership.can_access(sub, "project", str(pid), "read"):
+            return _json_error(request, 403, "forbidden")
+        proj = db.get_project_by_id(pid) or {}
+        docs = db.list_docs_for_project(pid)
+        blob = await run_in_threadpool(doc_export.build_export, docs,
+                                       doc_export._slug(proj.get("name") or "kb", pid))
+        fname = f"{doc_export._slug(proj.get('name') or 'export', pid)}.zip"
+        return Response(blob, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
     async def me_activity_summary(request: Request) -> JSONResponse:
         """Activité de CE workspace pour l'utilisateur courant (MES appels dans l'org
         active), fenêtre `?days=` (défaut 7). Scopé (org active, self) → l'overview
@@ -1758,6 +1779,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/monitoring/summary", options_handler, methods=["OPTIONS"]),
         Route("/api/me/activity-summary", me_activity_summary, methods=["GET"]),
         Route("/api/me/activity-summary", options_handler, methods=["OPTIONS"]),
+        Route("/api/me/projects/{id}/export", me_project_export, methods=["GET"]),
+        Route("/api/me/projects/{id}/export", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/calls", admin_monitoring_calls, methods=["GET"]),
         Route("/api/admin/monitoring/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/monitoring/rest", admin_monitoring_rest, methods=["GET"]),

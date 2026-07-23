@@ -1,9 +1,9 @@
-"""Connecteur LightOn Paradigm — verrouille : l'entrée registre (credential
-multi-champs clé + base_url optionnelle, BYO user/org SEULEMENT — le compte
-Paradigm appartient au client, pas de mode plateforme), la surface MCP curée
-(7 tools), la jointure tool↔client oto-core (garde version-skew), le trim des
-templates verbeux de `lighton_models`, et la traduction des erreurs Paradigm
-en McpError actionnables (401 clé / 403 droits du compte / 5xx retry).
+"""Connecteur LightOn (API v3) — verrouille : l'entrée registre (credential
+multi-champs clé + base_url + workspace_id par défaut, BYO user/org SEULEMENT
+— le compte LightOn appartient au client, pas de mode plateforme), la surface
+MCP curée (8 tools), la jointure tool↔client oto-core (garde version-skew),
+le scoping workspace par défaut de l'instance (l'argument explicite prime),
+et la traduction des erreurs LightOn en McpError actionnables.
 """
 import asyncio
 from unittest.mock import patch
@@ -15,13 +15,14 @@ from oto_mcp import providers
 from oto_mcp.tool_visibility import namespace_of
 
 EXPECTED_TOOLS = {
-    "lighton_models",
-    "lighton_chat",
-    "lighton_query",
+    "lighton_search",
+    "lighton_ask",
+    "lighton_parse",
+    "lighton_extract",
     "lighton_files",
-    "lighton_ask_document",
     "lighton_upload_document",
     "lighton_delete_document",
+    "lighton_workspaces",
 }
 
 
@@ -43,12 +44,14 @@ def test_lighton_is_fields_connector():
     assert c.kind == "tools"
     assert c.secret_kind == "fields"
     field_names = [f.name for f in c.secret_fields]
-    assert field_names == ["api_key", "base_url"]
+    assert field_names == ["api_key", "base_url", "workspace_id"]
     by_name = {f.name: f for f in c.secret_fields}
     assert by_name["api_key"].secret is True
-    # base_url = config non-secrète OPTIONNELLE (instance privée seulement)
-    assert by_name["base_url"].secret is False
-    assert by_name["base_url"].required is False
+    # base_url + workspace_id = config non-secrète OPTIONNELLE (instance
+    # privée / workspace par défaut de l'instance)
+    for opt in ("base_url", "workspace_id"):
+        assert by_name[opt].secret is False
+        assert by_name[opt].required is False
 
 
 def test_lighton_is_byo_only_no_platform_mode():
@@ -69,6 +72,14 @@ def test_lighton_tools_register_under_namespace(all_tools):
                for t in all_tools if t.startswith("lighton_"))
 
 
+def test_lighton_v2_tools_are_gone(all_tools):
+    # L'API v2 Paradigm (chat alfred, query, ask-question par doc) est
+    # dépréciée — ses tools ne doivent plus exister.
+    for legacy in ("lighton_chat", "lighton_models", "lighton_query",
+                   "lighton_ask_document"):
+        assert legacy not in all_tools
+
+
 def test_lighton_tools_all_have_descriptions(all_tools):
     for name in EXPECTED_TOOLS:
         assert all_tools[name].description, f"{name} has no description"
@@ -78,19 +89,23 @@ def test_lighton_tools_all_have_descriptions(all_tools):
 
 def test_client_exposes_methods_called_by_tools():
     from oto.tools.lighton import LightOnClient
-    for meth in ("list_models", "chat", "query", "list_files", "get_file",
-                 "upload_file_bytes", "ask_document", "delete_file"):
+    for meth in ("search", "ask", "parse_bytes", "extract_bytes",
+                 "list_files", "get_file", "upload_file_bytes", "delete_file",
+                 "list_workspaces"):
         assert callable(getattr(LightOnClient, meth, None)), \
             f"LightOnClient.{meth} manquant"
 
 
 # --- contrat via le tool layer (mocké) ----------------------------------------
 
+_CREDS = {"api_key": "k", "base_url": "", "workspace_id": ""}
+
+
 @pytest.fixture(autouse=True)
 def _fake_creds(monkeypatch):
     monkeypatch.setattr(
         "oto_mcp.access.resolve_credential_fields",
-        lambda provider, account=None: {"api_key": "k", "base_url": ""},
+        lambda provider, account=None: dict(_CREDS),
     )
 
 
@@ -117,51 +132,64 @@ def _call(tool_name, **kwargs):
     return fn(**kwargs)
 
 
-def test_models_trims_verbose_templates():
-    raw = {"object": "list", "data": [{
-        "name": "alfred-ft5", "model_type": "Vision Language Model",
-        "enabled": True,
-        "start_messages_template": "x" * 5000,
-        "prompt_template": "y" * 5000,
-    }]}
+def test_search_sends_bearer_and_body():
     with patch("oto.tools.lighton.client.requests.request") as req:
-        req.return_value = _Resp(raw)
-        out = _call("lighton_models")
-    assert out["data"] == [{"name": "alfred-ft5",
-                            "model_type": "Vision Language Model",
-                            "enabled": True}]
-
-
-def test_chat_sends_bearer_and_model():
-    with patch("oto.tools.lighton.client.requests.request") as req:
-        req.return_value = _Resp({"choices": [], "usage": {}})
-        _call("lighton_chat",
-              messages=[{"role": "user", "content": "hi"}],
-              model="alfred-ft5", max_tokens=10)
+        req.return_value = _Resp({"results": []})
+        _call("lighton_search", query="code secret", workspace_ids=[7046],
+              max_results=3)
     args, kwargs = req.call_args
     assert args[0] == "POST"
-    assert args[1] == "https://paradigm.lighton.ai/api/v2/chat/completions"
+    assert args[1] == "https://api.lighton.ai/api/v3/search"
     assert kwargs["headers"]["Authorization"] == "Bearer k"
-    assert kwargs["json"]["model"] == "alfred-ft5"
-    assert kwargs["json"]["max_tokens"] == 10
+    assert kwargs["json"] == {"query": "code secret", "workspace_id": [7046],
+                              "max_results": 3}
 
 
-def test_query_body():
+def test_search_uses_instance_default_workspace(monkeypatch):
+    # workspace_id configuré sur le credential → scope par défaut du search.
+    monkeypatch.setattr(
+        "oto_mcp.access.resolve_credential_fields",
+        lambda provider, account=None: {**_CREDS, "workspace_id": "7046"},
+    )
     with patch("oto.tools.lighton.client.requests.request") as req:
-        req.return_value = _Resp({"chunks": []})
-        _call("lighton_query", query="code secret", n=3)
-    args, kwargs = req.call_args
-    assert args[1] == "https://paradigm.lighton.ai/api/v2/query"
-    assert kwargs["json"] == {"query": "code secret", "n": 3}
+        req.return_value = _Resp({"results": []})
+        _call("lighton_search", query="x")
+    _, kwargs = req.call_args
+    assert kwargs["json"]["workspace_id"] == [7046]
 
 
-def test_ask_document_path():
+def test_search_explicit_workspace_overrides_default(monkeypatch):
+    monkeypatch.setattr(
+        "oto_mcp.access.resolve_credential_fields",
+        lambda provider, account=None: {**_CREDS, "workspace_id": "7046"},
+    )
     with patch("oto.tools.lighton.client.requests.request") as req:
-        req.return_value = _Resp({"answer": "42"})
-        _call("lighton_ask_document", file_id=7, question="le code ?")
+        req.return_value = _Resp({"results": []})
+        _call("lighton_search", query="x", workspace_ids=[99])
+    _, kwargs = req.call_args
+    assert kwargs["json"]["workspace_id"] == [99]
+
+
+def test_ask_body():
+    with patch("oto.tools.lighton.client.requests.request") as req:
+        req.return_value = _Resp({"answer": "42", "results": []})
+        _call("lighton_ask", query="le code ?", file_ids=[7],
+              model="mistral-large-latest")
     args, kwargs = req.call_args
-    assert args[1] == "https://paradigm.lighton.ai/api/v2/files/7/ask-question"
-    assert kwargs["json"] == {"question": "le code ?"}
+    assert args[1] == "https://api.lighton.ai/api/v3/ask"
+    assert kwargs["json"] == {"query": "le code ?", "stream": False,
+                              "file_id": [7], "max_results": 5,
+                              "model": "mistral-large-latest"}
+
+
+def test_upload_without_workspace_errors_actionably():
+    # Pas de workspace_id explicite NI configuré sur l'instance → erreur
+    # actionnable AVANT tout appel réseau LightOn.
+    with patch("oto.tools.lighton.client.requests.request") as req:
+        with pytest.raises(McpError) as exc:
+            _call("lighton_upload_document",
+                  source={"kind": "url", "url": "https://x/f.pdf"})
+    assert "workspace_id" in str(exc.value)
 
 
 def test_delete_document_returns_ack():
@@ -177,30 +205,20 @@ def test_401_maps_to_actionable_message():
     with patch("oto.tools.lighton.client.requests.request") as req:
         req.return_value = _Resp({"error": "unauthorized", "code": 401}, 401)
         with pytest.raises(McpError) as exc:
-            _call("lighton_models")
+            _call("lighton_workspaces")
     assert "invalide" in str(exc.value)
-
-
-def test_403_maps_to_paradigm_rights_message():
-    # Vécu 2026-07-23 : l'upload renvoie 403 selon le rôle/plan du compte
-    # Paradigm — le message doit pointer LightOn, pas le connecteur.
-    with patch("oto.tools.lighton.client.requests.request") as req:
-        req.return_value = _Resp({"error": "Permission denied", "code": 403}, 403)
-        with pytest.raises(McpError) as exc:
-            _call("lighton_files")
-    assert "Paradigm" in str(exc.value)
 
 
 def test_5xx_maps_to_retry_message():
     with patch("oto.tools.lighton.client.requests.request") as req:
         req.return_value = _Resp({"error": "oops"}, 503)
         with pytest.raises(McpError) as exc:
-            _call("lighton_models")
+            _call("lighton_workspaces")
     assert "indisponible" in str(exc.value)
 
 
-def test_upload_bad_source_never_hits_network():
+def test_parse_bad_source_never_hits_network():
     with patch("oto.tools.lighton.client.requests.request") as req:
         with pytest.raises(McpError):
-            _call("lighton_upload_document", source={"kind": "nope"})
+            _call("lighton_parse", source={"kind": "nope"})
     req.assert_not_called()

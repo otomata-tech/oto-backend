@@ -1,21 +1,20 @@
-"""LightOn Paradigm — GenAI souveraine : chat (modèles hébergés UE) + base
-documentaire RAG d'entreprise.
+"""LightOn — indexation documentaire souveraine (API v3, api.lighton.ai) :
+retrieval hybride (search), RAG groundé (ask), parse → Markdown, extraction
+structurée, ingestion par workspace.
 
-Wrappe `oto.tools.lighton.LightOnClient` (API Paradigm v2, docs.lighton.ai).
-Credential à 2 champs (clé API + base URL optionnelle — Paradigm existe en
-instance privée/on-prem, défaut = SaaS public) → modèle générique multi-champs
-(ADR 0011), résolu par appel via `access.resolve_credential_fields("lighton")`.
-BYO only (le compte Paradigm appartient au client — le credential EST le grant).
+Wrappe `oto.tools.lighton.LightOnClient` (v3 — l'API v2 de l'applicatif
+Paradigm est dépréciée et n'est plus couverte). Credential à 3 champs
+(clé API + base URL optionnelle instance privée + `workspace_id` par défaut
+optionnel) → modèle générique multi-champs (ADR 0011), résolu par appel via
+`access.resolve_credential_fields("lighton")`. BYO only (le compte LightOn
+appartient au client — le credential EST le grant).
 
-⚠️ Gotchas empiriques (2026-07-23) : `GET /models` renvoie des templates de
-prompt de plusieurs Ko par modèle → `lighton_models` trimme les champs
-`*_template` (le reste passe brut). Upload : `collection_type` vaut
-`private`/`company`/`shared` — la valeur `workspace` de la doc OpenAPI
-officielle est REJETÉE (« no longer valid » → `shared` + workspace_id) ; le
-chemin prouvé bout-en-bout = `shared` + workspace_id (private → 404 et
-company → 403 sur le compte de test, droits côté Paradigm).
-`/files/{id}/ask-question` renvoyait 500 systématique (dysfonction/config
-instance Paradigm) — repli : `lighton_query` + `lighton_chat`.
+Le `workspace_id` du credential fait de l'instance (ADR 0038) « une clé × un
+workspace » : une instance liée à un projet scope par défaut search/ask/upload
+sur son workspace ; l'argument explicite du tool prime toujours.
+
+Facturation LightOn (lighton.ai/pricing) : ingestion à la page, retrieval à
+la requête (search ET ask), stockage vectoriel au Go.
 """
 from __future__ import annotations
 
@@ -31,18 +30,24 @@ from .. import access, file_source
 def register(mcp: FastMCP) -> None:
     from oto.tools.lighton import LightOnClient
 
-    def _client() -> LightOnClient:
-        creds = access.resolve_credential_fields("lighton")
+    def _creds() -> dict:
+        return access.resolve_credential_fields("lighton")
+
+    def _client(creds: dict) -> LightOnClient:
         return LightOnClient(api_key=creds.get("api_key"),
                              base_url=creds.get("base_url") or None)
 
+    def _default_workspace(creds: dict) -> Optional[int]:
+        raw = (creds.get("workspace_id") or "").strip()
+        return int(raw) if raw.isdigit() else None
+
     def _run(fn):
-        """Exécute un appel Paradigm : traduit une erreur en McpError
-        actionnable (401 = clé invalide ; 403 = droits du compte Paradigm
-        insuffisants ; 5xx = réessayer)."""
-        client = _client()
+        """Exécute un appel LightOn : traduit une erreur en McpError
+        actionnable (401 clé / 403 droits du compte / 5xx retry)."""
+        creds = _creds()
+        client = _client(creds)
         try:
-            return fn(client)
+            return fn(client, _default_workspace(creds))
         except McpError:
             raise
         except RuntimeError as e:
@@ -50,10 +55,10 @@ def register(mcp: FastMCP) -> None:
             if msg.startswith("LightOn 401"):
                 msg = "Clé LightOn invalide ou révoquée (401). Vérifie la clé posée."
             elif msg.startswith("LightOn 403"):
-                msg = ("Le compte Paradigm de cette clé n'a pas le droit de faire "
-                       f"cette opération (403 — rôle/plan côté LightOn). {msg}")
+                msg = ("Le compte LightOn de cette clé n'a pas accès à cette "
+                       f"ressource/opération (403). {msg}")
             elif msg.startswith("LightOn 5"):
-                msg = (f"Paradigm est momentanément indisponible ({msg}). "
+                msg = (f"LightOn est momentanément indisponible ({msg}). "
                        "Réessaie dans un moment.")
             raise McpError(ErrorData(code=INVALID_PARAMS, message=msg))
         except Exception as e:
@@ -61,143 +66,181 @@ def register(mcp: FastMCP) -> None:
                 code=INVALID_PARAMS,
                 message=f"LightOn n'a pas pu traiter la requête ({e})."))
 
-    @mcp.tool()
-    def lighton_models() -> dict:
-        """List the AI models configured on the LightOn Paradigm instance
-        (sovereign GenAI, EU-hosted).
-
-        Returns `data[]` with name, model_type, deployment_type, enabled —
-        verbose prompt-template fields are stripped. Use a returned `name` as
-        the `model` argument of `lighton_chat`.
-        """
-        raw = _run(lambda c: c.list_models())
-        data = [
-            {k: v for k, v in m.items() if not k.endswith("_template")}
-            for m in raw.get("data", [])
-        ]
-        return {"object": raw.get("object", "list"), "data": data}
+    def _resolve_source(source: dict):
+        try:
+            return file_source.resolve(source)
+        except file_source.FileSourceError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
-    def lighton_chat(
-        messages: list[dict],
-        model: str,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-    ) -> dict:
-        """Chat completion on a sovereign LightOn model (Paradigm, EU-hosted —
-        OpenAI-compatible response).
-
-        Args:
-            messages: `[{"role": "system"|"user"|"assistant", "content": "…"}]`.
-            model: model name from `lighton_models` (e.g. "alfred-ft5").
-            max_tokens / temperature: standard sampling params (optional).
-
-        Returns the raw completion: `choices[0].message.content` + `usage`.
-        """
-        return _run(lambda c: c.chat(
-            messages, model, max_tokens=max_tokens, temperature=temperature))
-
-    @mcp.tool()
-    def lighton_query(
+    def lighton_search(
         query: str,
-        collection: Optional[str] = None,
-        n: int = 5,
+        workspace_ids: Optional[list[int]] = None,
+        file_ids: Optional[list[int]] = None,
+        max_results: int = 5,
+        mode: str = "text",
     ) -> dict:
-        """Semantic search over the Paradigm document base (RAG): retrieve the
-        most relevant chunks for a natural-language query (LightOn).
+        """Semantic retrieval over the LightOn document index (sovereign,
+        EU-hosted): hybrid dense + keyword search with multivector reranking.
+        Returns ranked chunks with provenance (file, pages, scores) — NO LLM
+        generation (compose the answer yourself, or use `lighton_ask`).
 
         Args:
-            query: the search query.
-            collection: collection to search (Paradigm default:
-                `base_collection`).
-            n: number of chunks to return (default 5).
+            query: natural-language query (max 1500 chars).
+            workspace_ids: restrict to these workspaces. Default: the
+                connector's configured workspace if set, else the whole
+                corpus the key can access. Cannot combine with file_ids.
+            file_ids: restrict to specific documents.
+            max_results: chunks returned after reranking (1-50).
+            mode: "text" (default) or "vision" (searches VLM-embedded page
+                images — scanned docs, diagrams).
 
-        Returns the raw chunks with their source document refs. Errors with
-        `empty_collection_error` if no document has been uploaded yet
-        (`lighton_upload_document`).
+        Billed: 1 retrieval credit per call.
         """
-        return _run(lambda c: c.query(query, collection=collection, n=n))
+        return _run(lambda c, ws: c.search(
+            query,
+            workspace_ids=workspace_ids or (None if file_ids else ([ws] if ws else None)),
+            file_ids=file_ids, max_results=max_results,
+            mode=mode if mode != "text" else None))
 
     @mcp.tool()
-    def lighton_files(
-        private_scope: Optional[bool] = None,
-        company_scope: Optional[bool] = None,
-        workspace_scope: Optional[int] = None,
-        page: Optional[int] = None,
+    def lighton_ask(
+        query: str,
+        workspace_ids: Optional[list[int]] = None,
+        file_ids: Optional[list[int]] = None,
+        max_results: int = 5,
+        model: Optional[str] = None,
     ) -> dict:
-        """List documents in the Paradigm document base (LightOn), paginated.
+        """Full RAG over the LightOn document index: retrieves the most
+        relevant chunks then generates an LLM answer grounded in them, with
+        source citations. Returns `{answer, results[]}`.
 
         Args:
-            private_scope: include the user's private collection.
-            company_scope: include the company collection.
-            workspace_scope: include documents of this workspace id.
-            page: page number.
+            query: natural-language question (max 1500 chars).
+            workspace_ids / file_ids: scoping — same rules as
+                `lighton_search` (connector's configured workspace by
+                default).
+            max_results: context chunks (1-50).
+            model: generation LLM (e.g. "mistral-large-latest"); platform
+                default if omitted.
 
-        Returns `{count, next, previous, data[]}` (id, filename, status…).
+        Billed: 1 retrieval credit per call. For chunks without generation
+        (cheaper composition by the agent), use `lighton_search`.
         """
-        return _run(lambda c: c.list_files(
-            private_scope=private_scope, company_scope=company_scope,
-            workspace_scope=workspace_scope, page=page))
+        return _run(lambda c, ws: c.ask(
+            query,
+            workspace_ids=workspace_ids or (None if file_ids else ([ws] if ws else None)),
+            file_ids=file_ids, max_results=max_results, model=model))
 
     @mcp.tool()
-    def lighton_ask_document(file_id: int, question: str) -> dict:
-        """Ask a question about ONE document of the Paradigm base — the answer
-        is generated from that document's content only (LightOn).
-
-        Args:
-            file_id: document id (from `lighton_files` or an upload).
-            question: the question, in natural language.
-
-        NOTE: if this errors 500 (Paradigm instance-side issue, seen 2026-07),
-        fall back to `lighton_query` (retrieve chunks) + `lighton_chat`
-        (compose the answer yourself).
-        """
-        return _run(lambda c: c.ask_document(file_id, question))
-
-    @mcp.tool()
-    def lighton_upload_document(
-        source: dict,
-        collection_type: Optional[str] = None,
-        workspace_id: Optional[int] = None,
-        title: Optional[str] = None,
-    ) -> dict:
-        """Upload a document into the Paradigm document base (LightOn) — it
-        becomes searchable via `lighton_query` / `lighton_ask_document` once
-        ingested.
+    def lighton_parse(source: dict) -> dict:
+        """Parse a document into clean structured Markdown (LightOn OCR
+        pipeline — PDF, Office, images, HTML). One-shot processing: the
+        document is NOT added to the search index (use
+        `lighton_upload_document` for that).
 
         `source` (object, `kind` selects the origin):
         - Drive: `{"kind":"drive","file_id":"<id>"}`
         - Gmail attachment: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
         - URL: `{"kind":"url","url":"https://…"}`
-        Optional `account` (email) targets a specific Google account.
+
+        Sync limits: ~20 MB / 15 pages. Returns `{status, result, usage}` —
+        the Markdown is in `result`.
+        """
+        rf = _resolve_source(source)
+        return _run(lambda c, ws: c.parse_bytes(rf.data, rf.filename))
+
+    @mcp.tool()
+    def lighton_extract(source: dict, schema: dict) -> dict:
+        """Extract structured fields from a document into a typed JSON Schema
+        (LightOn). One-shot processing, document NOT indexed.
 
         Args:
-            collection_type: `private`, `company`, or `shared` (workspace).
-                To upload into a workspace, use `shared` + `workspace_id` —
-                the value `workspace` shown in LightOn's own API docs is
-                REJECTED by the API. `shared` is the proven path; `private`/
-                `company` may 404/403 depending on the Paradigm account.
-            workspace_id: required when collection_type='shared'.
+            source: same shape as `lighton_parse` (drive/gmail/url).
+            schema: JSON Schema object describing the fields to extract,
+                e.g. `{"type":"object","properties":{"invoice_number":
+                {"type":"string"}}}`.
+
+        Sync limits: ~20 MB / 15 pages. Returns `{status, result, usage}`.
+        """
+        rf = _resolve_source(source)
+        return _run(lambda c, ws: c.extract_bytes(rf.data, rf.filename, schema))
+
+    @mcp.tool()
+    def lighton_files(
+        workspace_ids: Optional[list[int]] = None,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        filename: Optional[str] = None,
+        page: Optional[int] = None,
+    ) -> dict:
+        """List documents in the LightOn index (paginated). `search` orders
+        results by semantic relevance (quick "find my doc").
+
+        Args:
+            workspace_ids: filter by workspaces (default: the connector's
+                configured workspace if set, else all accessible).
+            search: semantic relevance query.
+            status: ingestion status filter (e.g. "pending,embedded").
+            filename: case-insensitive partial filename match.
+
+        Returns `{count, next, previous, results[]}` (id, filename, title,
+        workspace, status, total_pages…).
+        """
+        return _run(lambda c, ws: c.list_files(
+            workspace_ids=workspace_ids or ([ws] if ws else None),
+            search=search, status=status, filename=filename, page=page))
+
+    @mcp.tool()
+    def lighton_upload_document(
+        source: dict,
+        workspace_id: Optional[int] = None,
+        title: Optional[str] = None,
+    ) -> dict:
+        """Upload + index a document into a LightOn workspace — it becomes
+        searchable via `lighton_search`/`lighton_ask` once its status reaches
+        `embedded` (check with `lighton_files`).
+
+        Args:
+            source: same shape as `lighton_parse` (drive/gmail/url).
+            workspace_id: destination workspace. REQUIRED unless the
+                connector instance has a configured default workspace.
+                List available ones with `lighton_workspaces`.
             title: display title (default: filename).
 
-        NOTE: a 403 means the Paradigm account behind the key lacks upload
-        rights (LightOn-side role/plan) — not a connector failure.
+        Billed per ingested page.
         """
-        try:
-            rf = file_source.resolve(source)
-        except file_source.FileSourceError as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-        return _run(lambda c: c.upload_file_bytes(
-            rf.data, rf.filename, collection_type=collection_type,
-            workspace_id=workspace_id, title=title))
+        # gate workspace AVANT de résoudre la source (pas de download inutile)
+        wid = workspace_id or _default_workspace(_creds())
+        if not wid:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="workspace_id requis (aucun workspace par défaut "
+                        "configuré sur le connecteur) — liste-les via "
+                        "lighton_workspaces."))
+        rf = _resolve_source(source)
+        return _run(lambda c, ws: c.upload_file_bytes(
+            rf.data, rf.filename, wid, title=title))
 
     @mcp.tool()
     def lighton_delete_document(file_id: int) -> dict:
-        """Delete a document from the Paradigm document base (LightOn).
+        """Permanently delete a document and its index from LightOn.
         Irreversible.
 
         Args:
             file_id: document id (from `lighton_files`).
         """
-        _run(lambda c: c.delete_file(file_id))
+        _run(lambda c, ws: c.delete_file(file_id))
         return {"deleted": file_id}
+
+    @mcp.tool()
+    def lighton_workspaces(name: Optional[str] = None) -> dict:
+        """List LightOn workspaces accessible to the configured key —
+        isolated document collections (manually fed, or synced from
+        SharePoint / Google Drive). Use a returned `id` as `workspace_id`
+        in upload/search/ask.
+
+        Args:
+            name: filter by name.
+        """
+        return _run(lambda c, ws: c.list_workspaces(name=name))

@@ -307,9 +307,11 @@ RUN = CallAxis(
         "type": "string",
         "title": "Run Id",
         "description": (
-            "run_id d'un déroulé ouvert par `run_start`, à repasser sur les appels de "
-            "CE run pour les corréler (la corrélation ne survit pas sinon au modèle sans "
-            "état de session). Omets hors de tout run."
+            "run_id d'un déroulé ouvert par `run_start`. Le serveur rattache DÉJÀ tout "
+            "appel au run ACTIF (sommet de ta pile run_start/run_finish) quand tu l'omets "
+            "— pas besoin de le répéter systématiquement. Passe-le explicitement pour "
+            "OVERRIDE (cibler un run précis parmi plusieurs imbriqués) ou par robustesse si "
+            "la corrélation semble se perdre. Omets hors de tout run."
         ),
     },
     applies=_is_run_correlatable_tool,

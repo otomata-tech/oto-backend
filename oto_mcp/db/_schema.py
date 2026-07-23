@@ -47,8 +47,9 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 
 -- Journal des appels MCP (monitoring admin). Une ligne par appel de tool,
--- posée par otomata_calllog.ToolCallLogger (succès comme échec). Schéma
--- CANONIQUE otomata-calllog (contrat inter-projets ogic/ytmusic/memento).
+-- posée par calllog.ToolCallLogger (succès comme échec). Schéma CANONIQUE
+-- calllog (contrat inter-projets, domicile = socle otomata-mcp/logging.py ;
+-- l'ex-lib otomata-calllog est décommissionnée, otomata-calllog#1).
 -- Volumétrie bornée par un prune au boot (cf. prune_tool_calls + init_db).
 -- `sub` nullable : les appels stdio local non authentifiés n'ont pas d'identité.
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -69,7 +70,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     error TEXT,
     duration_ms INTEGER,
     -- Corrélation (ADR 0017, extension OTO-LOCALE — PAS dans le contrat canonique
-    -- otomata-calllog) : session_id = session mcp transport (grossier) ; run_id =
+    -- calllog/otomata-mcp) : session_id = session mcp transport (grossier) ; run_id =
     -- déroulé/run (fin, posé par run_start, stampé ici). NULL hors run.
     session_id TEXT,
     run_id TEXT,

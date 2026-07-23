@@ -302,7 +302,7 @@ revalidés à chaque appel, jamais de repli silencieux).
 
 ## Monitoring des appels MCP
 
-`ToolCallLogger` (lib otomata-calllog) journalise chaque appel dans `tool_calls`
+`ToolCallLogger` (middleware inliné `oto_mcp/calllog.py`, ex-lib otomata-calllog décommissionnée — contrat canonique dans le socle otomata-mcp) journalise chaque appel dans `tool_calls`
 (`db.insert_tool_call`, best-effort, identité = `sub` du JWT via
 `current_user_sub_from_token`) ; surface admin `/api/admin/monitoring/{summary,calls}`.
 **Détail : `docs/monitoring.md`**. ⚠️ **Ne trace QUE les invocations d'outils MCP** —

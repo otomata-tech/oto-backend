@@ -22,7 +22,7 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
 `otomata-tech/oto`). Surfaces livrées (B1–B6) :
 
 - **Corrélation** : `tool_calls` gagne 2 colonnes **OTO-LOCALES** (hors contrat canonique
-  otomata-calllog) `session_id` (session mcp transport) + `run_id` (déroulé). Stampées
+  calllog/otomata-mcp) `session_id` (session mcp transport) + `run_id` (déroulé). Stampées
   par `server._calllog_sink` qui lit `get_context().session_id` + le run actif. ⚠️ piège
   rattrapé : l'index sur `run_id` va dans le bloc **ALTER** d'`init_db` (après l'ADD COLUMN),
   **jamais** dans `_SCHEMA` (no-op sur table existante → `UndefinedColumn` au boot).

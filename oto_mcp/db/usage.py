@@ -37,7 +37,7 @@ def increment_usage(sub: str, tool: str) -> int:
 
 
 def insert_tool_call(row: dict) -> None:
-    """Sink otomata-calllog : insère un row canonique (server, sub, email, tool,
+    """Sink calllog (middleware inliné oto_mcp/calllog.py) : insère un row canonique (server, sub, email, tool,
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
     ADR 0017, absents du contrat canonique → enrichis par le sink). `kind` discrimine
     l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux »).

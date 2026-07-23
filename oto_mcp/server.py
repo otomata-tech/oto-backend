@@ -249,12 +249,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # Injection de la doctrine de base de l'org dans les instructions du `initialize`
     # (canal fiable, par-(sub,org) — otomata-private#49, amende ADR 0014).
     instance.add_middleware(DynamicInstructionsMiddleware())
-    # Journalisation des appels MCP (lib commune otomata-calllog, table tool_calls,
+    # Journalisation des appels MCP (middleware inliné `calllog.py`, table tool_calls,
     # lue par /api/admin/monitoring/*). Identité via auth_hooks (auth Logto custom —
     # le get_access_token fastmcp par défaut ne la voit pas).
     import asyncio
 
-    from otomata_calllog import ToolCallLogger
+    from .calllog import ToolCallLogger
 
     from .auth_hooks import current_user_sub_from_token
 

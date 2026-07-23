@@ -361,7 +361,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
         def _enrich(r: dict, shared: bool) -> dict:
             links = db.list_project_links(r["id"])
-            aud = project_audit.audit_project(r["id"], links)
+            # LISTE : audit LÉGER (checks en mémoire seuls) — l'audit complet par projet
+            # (résolution procédures + résolvabilité connecteur + run_stats) produisait un
+            # N+1 → timeout 180 s (oto/#6 A7). Le badge « à vérifier » reste sur les liens
+            # morts détectables sans requête ; le détail complet est servi par op=get.
+            aud = project_audit.audit_project(r["id"], links, light=True)
             has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
                              or aud.get("inert_procedures"))
             return {**_view(r), "entity_count": len(links), "has_audit": has_audit,

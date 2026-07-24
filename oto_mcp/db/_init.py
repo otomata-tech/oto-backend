@@ -145,9 +145,18 @@ def init_db() -> None:
         # Opt-in ADDITIONNEL, séparé de la lecture (#193) : l'ÉCRITURE du datastore
         # (data_write/data_set_schema) sur l'endpoint partagé. Défaut FALSE (lecture seule).
         conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS mcp_expose_datastore_write BOOLEAN NOT NULL DEFAULT FALSE")
-        # ADR 0043 phase 2 (SEPA) : id du mandat Stancer (mndt_xxx) sur l'abonnement —
-        # la table existait déjà (B1) quand la colonne est arrivée.
+        # ADR 0043 : id du mandat (mdt_xxx Mollie) sur l'abonnement — la table
+        # existait déjà (B1) quand la colonne est arrivée.
         conn.execute("ALTER TABLE org_subscriptions ADD COLUMN IF NOT EXISTS mandate_id TEXT")
+        # ADR 0043 bascule Stancer→Mollie (2026-07-24) : réaligne l'index partiel
+        # de la file de réconciliation sur les statuts terminaux MOLLIE (le
+        # prédicat doit matcher billing_payments.TERMINAL_PAYMENT_STATUSES pour
+        # que l'index serve). Tables billing dormantes → drop/recreate sans coût.
+        conn.execute("DROP INDEX IF EXISTS idx_billing_payments_open")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_payments_open "
+            "ON billing_payments(created_at) "
+            "WHERE status NOT IN ('paid', 'failed', 'canceled', 'expired')")
         # ADR 0046 D (datastore v2) : bail de claim de la file de travail sur les rows
         # (data_claim_next / data_release ; NULL = libre, bail expiré = recyclable).
         conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_by TEXT")

@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                   Response, StreamingResponse)
 
-from . import access, api_routes_atlassian, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, doc_export, group_store, memento_oauth, org_store, ownership, tool_registry
+from . import access, api_routes_atlassian, api_routes_billing, api_routes_connectors, api_routes_contact, api_routes_datastore, api_routes_folk, api_routes_memento, api_routes_sirene, billing, connector_activation, connectors, credentials_store, db, doc_export, group_store, memento_oauth, org_store, ownership, tool_registry
 from .capabilities import _rest_adapter as _cap_rest_adapter
 from .capabilities import registry as _cap_registry
 from . import auth_hooks
@@ -1699,6 +1699,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         _json, _json_error, options_handler,
     )
 
+    # Webhook Mollie (ADR 0043) — non authentifié, réconciliation événementielle.
+    billing_webhook_routes = api_routes_billing.make_routes(options_handler)
+
     return [
         Route("/favicon.svg", favicon, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
@@ -1797,4 +1800,5 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *capability_routes,
         *connectors_routes,
         *contact_routes,
+        *billing_webhook_routes,
     ]

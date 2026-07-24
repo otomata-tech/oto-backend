@@ -1,8 +1,9 @@
-"""Billing B2 (ADR 0043) — machine à états subscribe → confirm → cancel.
+"""Billing (ADR 0043) — machine à états subscribe → confirm → cancel, PSP Mollie.
 
-Stancer et le store sont monkeypatchés : on teste la LOGIQUE du cycle (le
-chemin sandbox réel a été exercé au smoke B2 du 2026-07-06 : ping, customer,
-intent+url, tokenisation, MIT, idempotence 409)."""
+Mollie et le store sont monkeypatchés : on teste la LOGIQUE du cycle (le chemin
+sandbox réel a été exercé le 2026-07-24 : customer, first payment + checkout,
+mandat, recurring + Idempotency-Key). Mollie unifie carte et SEPA derrière un
+customer + un mandat né du premier paiement → UN seul chemin subscribe/confirm."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -35,100 +36,114 @@ def _wire_subscribe(monkeypatch, existing=None):
     monkeypatch.setattr(db_billing, "get_org_subscription", lambda org: existing)
     monkeypatch.setattr(db_billing, "insert_billing_payment",
                         lambda *a, **k: calls.setdefault("insert", (a, k)) or 1)
+
     def fake_customer(**k):
         calls["customer"] = k
-        return {"id": "cust_1"}
+        return {"id": "cst_1"}
 
-    def fake_intent(amount, **k):
-        calls["intent"] = (amount, k)
-        return {"id": "pi_1", "status": "require_payment_method",
-                "url": "https://payment.stancer.com/test_pi_1"}
+    def fake_first_payment(amount, **k):
+        calls["payment"] = (amount, k)
+        return {"id": "tr_1", "status": "open",
+                "_links": {"checkout": {"href": "https://www.mollie.com/checkout/tr_1"}}}
 
-    monkeypatch.setattr(billing.stancer_client, "create_customer", fake_customer)
-    monkeypatch.setattr(billing.stancer_client, "create_payment_intent", fake_intent)
+    monkeypatch.setattr(billing.mollie_client, "create_customer", fake_customer)
+    monkeypatch.setattr(billing.mollie_client, "create_first_payment", fake_first_payment)
     return calls
 
 
 def test_subscribe_happy_path(monkeypatch):
     calls = _wire_subscribe(monkeypatch)
-    out = billing.subscribe(42, "solo", "https://oto.cx/billing")
-    assert out["checkout_url"].startswith("https://payment.stancer.com/")
-    assert calls["customer"]["external_id"] == "org-42"
-    amount, kw = calls["intent"]
+    out = billing.subscribe(42, "solo", "https://otomata.tech/billing")
+    assert out["checkout_url"].startswith("https://www.mollie.com/checkout/")
+    assert calls["customer"]["metadata"] == {"org_id": "42"}
+    amount, kw = calls["payment"]
     assert amount == billing.PLANS["solo"]["amount"]
-    assert kw["order_id"].startswith("org42:solo:")   # le plan voyage dans l'intent
+    assert kw["method"] == "creditcard"                  # 'card' → page carte
+    assert kw["metadata"] == {"org_id": "42", "plan": "solo"}   # le plan voyage
     assert calls["insert"][0][:2] == (42, "initial")
 
 
-def test_subscribe_rejects_unknown_plan_and_double(monkeypatch):
+def test_subscribe_sepa_maps_to_directdebit(monkeypatch):
+    # UN seul flux : method='sepa' restreint juste la page Mollie (mandat SEPA
+    # collecté sur le checkout, plus de flux IBAN/OTP/ICS séparé).
+    calls = _wire_subscribe(monkeypatch)
+    out = billing.subscribe(42, "solo", "https://otomata.tech/billing", method="sepa")
+    assert out["method"] == "sepa"
+    assert calls["payment"][1]["method"] == "directdebit"
+
+
+def test_subscribe_rejects_unknown_plan_method_and_double(monkeypatch):
     _wire_subscribe(monkeypatch)
     with pytest.raises(ValueError, match="unknown_plan"):
-        billing.subscribe(42, "gold", "https://oto.cx/billing")
+        billing.subscribe(42, "gold", "https://otomata.tech/billing")
+    with pytest.raises(ValueError, match="unknown_method"):
+        billing.subscribe(42, "solo", "https://otomata.tech/billing", method="wire")
     _wire_subscribe(monkeypatch, existing={"status": "active", "canceled_at": None,
-                                           "customer_id": "cust_1", "plan": "solo"})
+                                           "customer_id": "cst_1", "plan": "solo"})
     with pytest.raises(ValueError, match="already_subscribed"):
-        billing.subscribe(42, "solo", "https://oto.cx/billing")
+        billing.subscribe(42, "solo", "https://otomata.tech/billing")
 
 
 def test_subscribe_reuses_customer(monkeypatch):
     calls = _wire_subscribe(monkeypatch, existing={
-        "status": "canceled", "canceled_at": "2026-07-01", "customer_id": "cust_old",
+        "status": "canceled", "canceled_at": "2026-07-01", "customer_id": "cst_old",
         "plan": "solo"})
-    billing.subscribe(42, "solo", "https://oto.cx/billing")
-    assert "customer" not in calls                      # pas de re-création
-    assert calls["intent"][1]["customer"] == "cust_old"
+    billing.subscribe(42, "solo", "https://otomata.tech/billing")
+    assert "customer" not in calls                       # pas de re-création
+    assert calls["payment"][1]["customer_id"] == "cst_old"
 
 
 # ── confirm ──────────────────────────────────────────────────────────────────
 
-def _wire_confirm(monkeypatch, *, intent, payments=None, sub=None):
+def _wire_confirm(monkeypatch, *, payment, mandate=None, sub=None):
     state = {}
-    row = {"id": 7, "kind": "initial", "status": "processing",
-           "payment_intent_id": "pi_1"}
+    row = {"id": 7, "kind": "initial", "status": "open",
+           "payment_intent_id": "tr_1"}
     monkeypatch.setattr(db_billing, "get_org_subscription", lambda org: sub)
     monkeypatch.setattr(db_billing, "list_billing_payments", lambda org, limit=20: [row])
     monkeypatch.setattr(db_billing, "update_billing_payment",
                         lambda rid, **k: state.setdefault("update", (rid, k)) or True)
     monkeypatch.setattr(db_billing, "upsert_org_subscription",
                         lambda org, **k: state.setdefault("upsert", (org, k)))
-    monkeypatch.setattr(billing.stancer_client, "get_payment_intent", lambda i: intent)
-    monkeypatch.setattr(billing.stancer_client, "payment_intent_payments",
-                        lambda i: {"payments": payments or []})
+    monkeypatch.setattr(billing.mollie_client, "get_payment", lambda i: payment)
+    monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: mandate)
     monkeypatch.setattr(billing, "apply_plan_entitlements", lambda org, plan: None)
     return state
 
 
-def test_confirm_pending_while_on_3ds(monkeypatch):
-    _wire_confirm(monkeypatch, intent={"status": "require_authentication"})
+def test_confirm_pending_while_on_checkout(monkeypatch):
+    _wire_confirm(monkeypatch, payment={"status": "open"})
     assert billing.confirm(42)["status"] == "pending"
 
 
 def test_confirm_failure_closes_payment(monkeypatch):
-    state = _wire_confirm(monkeypatch, intent={"status": "unpaid"})
+    state = _wire_confirm(monkeypatch, payment={"status": "failed"})
     assert billing.confirm(42)["status"] == "failed"
-    assert state["update"][1]["status"] == "unpaid"
-    assert "upsert" not in state                        # jamais de miroir sur échec
+    assert state["update"][1]["status"] == "failed"
+    assert "upsert" not in state                         # jamais de miroir sur échec
 
 
 def test_confirm_success_opens_subscription(monkeypatch):
     state = _wire_confirm(
         monkeypatch,
-        intent={"status": "captured", "customer": "cust_1",
-                "order_id": "org42:solo:abcd1234"},
-        payments=[{"id": "paym_1", "card": {"id": "card_1"}}])
+        payment={"status": "paid", "customerId": "cst_1", "method": "creditcard",
+                 "id": "tr_1", "metadata": {"org_id": "42", "plan": "solo"}},
+        mandate={"id": "mdt_1", "mandateReference": "RUM123"})
     out = billing.confirm(42)
-    assert out["status"] == "active" and out["plan"] == "solo"
+    assert out["status"] == "active" and out["plan"] == "solo" and out["method"] == "card"
     org, kw = state["upsert"]
-    assert (org, kw["plan"], kw["card_id"], kw["status"]) == (42, "solo", "card_1", "active")
+    assert (org, kw["plan"], kw["mandate_id"], kw["status"]) == (42, "solo", "mdt_1", "active")
+    assert kw["provider"] == "mollie"
     assert kw["next_billing_at"] == kw["current_period_end"]
 
 
-def test_confirm_without_card_token_refuses(monkeypatch):
-    # fonds encaissés mais pas de token → PAS d'abonnement irrenouvelable posé.
+def test_confirm_paid_without_mandate_refuses(monkeypatch):
+    # encaissé mais aucun mandat valide → PAS d'abonnement irrenouvelable posé.
     _wire_confirm(monkeypatch,
-                  intent={"status": "captured", "order_id": "org42:solo:x"},
-                  payments=[{"id": "paym_1"}])
-    with pytest.raises(RuntimeError, match="no_card_token"):
+                  payment={"status": "paid", "customerId": "cst_1",
+                           "metadata": {"org_id": "42", "plan": "solo"}},
+                  mandate=None)
+    with pytest.raises(RuntimeError, match="no_mandate"):
         billing.confirm(42)
 
 

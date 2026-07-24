@@ -1,28 +1,33 @@
-"""Billing par org (ADR 0043, B2) — abonnement unique, PSP Stancer.
+"""Billing par org (ADR 0043) — abonnement unique, PSP Mollie.
 
-Le cycle est piloté ICI (Stancer n'a ni webhooks ni subscription API) :
-- `subscribe` ouvre le paiement initial sur la page hébergée Stancer
-  (tokenisation + 3DS gérés par eux) et journalise l'intent ;
-- `confirm` POLLE l'intent au retour du payeur (et en réconciliation), extrait
-  le token carte du paiement encaissé et pose le miroir `org_subscriptions`
-  à `active` — c'est LUI qui ouvre l'entitlement, jamais le redirect brut ;
+Le cycle est piloté ICI (miroir local `org_subscriptions` = source de vérité,
+PSP-agnostique par conception ADR 0043) :
+- `subscribe` ouvre le PREMIER paiement sur la page de checkout hébergée Mollie
+  (`sequenceType=first` — 3DS carte ou collecte IBAN + mandat SEPA gérés par eux,
+  UN seul flux) et journalise le paiement ;
+- `confirm` LIT le paiement au retour du payeur (et en réconciliation) : encaissé
+  (`paid`) → récupère le mandat réutilisable né du checkout et pose le miroir
+  `active` — c'est LUI qui ouvre l'entitlement, jamais le redirect brut ;
 - `cancel` marque la résiliation à fin de période (l'entitlement court jusqu'à
-  `current_period_end` ; le billing_runner (B3) fera la bascule).
+  `current_period_end` ; le billing_runner fera la bascule).
+
+Bascule Stancer→Mollie (ADR 0043, amende 2026-07-24) : Mollie **unifie carte et
+SEPA** derrière un customer + un mandat créé au premier paiement → plus de chemin
+SEPA séparé (IBAN tokenisé + signature OTP + ICS créancier). Le rejeu MIT tire sur
+`customerId`+`mandateId`. Webhooks natifs (barreau ultérieur) ; polling = socle.
 
 Le plan (prix, options débloquées) vit dans `PLANS` — mapping en CODE (pas de
 table) : la vérité produit est versionnée et relue par l'entitlement (has_option,
-2e source). ⚠️ Valeurs actuelles = PLACEHOLDER sandbox — la décision produit
-(prix réels, contenu, niveau gratuit) est un préalable au barreau B4 (ADR 0043).
+2e source). ⚠️ Valeurs actuelles = prix actés Alexis 2026-07-06.
 """
 from __future__ import annotations
 
 import logging
 import os
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
-from . import stancer_client
+from . import mollie_client
 from . import db
 from .db import billing as db_billing
 
@@ -33,7 +38,7 @@ def is_enabled() -> bool:
     """Feature flag global (ADR 0043, dark launch) : la surface billing (capacités
     REST/MCP + nav dashboard + runner) n'est exposée QUE si `OTO_BILLING_ENABLED=1`.
     Absent/0 = dormant. Piloté par-déploiement (prod off tant que le PSP n'est pas
-    live/KYB, canari on) sans divergence de branche ni revert."""
+    live, canari on) sans divergence de branche ni revert."""
     return os.environ.get("OTO_BILLING_ENABLED", "0") == "1"
 
 # plan → prix (centimes), intervalle, options de connecteur débloquées (couche 3,
@@ -43,7 +48,7 @@ def is_enabled() -> bool:
 # `amount=None` = palier sur devis (pas de checkout self-serve ; posé par un
 # admin en abonnement `comp`). `unipile_accounts` alimente orgs.unipile_account_
 # limit ; `unmetered=True` = clés plateforme sans quota (fin des credits d'appel).
-# ⚠️ contenu des paliers à confirmer (question posée) — prix, eux, actés.
+# Plafonds de comptes messagerie actés (Alexis 2026-07-09) : 1 / 10 / 50.
 PLANS: dict[str, dict] = {
     "solo": {
         "label": "Solo", "amount": 4900, "currency": "eur", "interval": "month",
@@ -51,11 +56,11 @@ PLANS: dict[str, dict] = {
     },
     "team": {
         "label": "Team", "amount": 25000, "currency": "eur", "interval": "month",
-        "options": ("unipile",), "unipile_accounts": 5, "unmetered": True,
+        "options": ("unipile",), "unipile_accounts": 10, "unmetered": True,
     },
     "business": {
         "label": "Business", "amount": 50000, "currency": "eur", "interval": "month",
-        "options": ("unipile",), "unipile_accounts": 20, "unmetered": True,
+        "options": ("unipile",), "unipile_accounts": 50, "unmetered": True,
     },
     "enterprise": {
         "label": "Entreprise (sur devis)", "amount": None, "currency": "eur",
@@ -63,11 +68,6 @@ PLANS: dict[str, dict] = {
         "unmetered": True, "custom": True,
     },
 }
-
-# Statuts d'intent qui signifient « fonds obtenus ou en cours de capture »
-# (capture=true par défaut : authorized → captured suit en batch Stancer).
-_INTENT_SUCCESS = frozenset({"authorized", "captured"})
-_INTENT_FAILED = frozenset({"canceled", "unpaid"})
 
 
 def plans() -> list[dict]:
@@ -119,29 +119,24 @@ def _safe_replace(dt: datetime, *, year: int, month: int) -> datetime:
     raise AssertionError("unreachable")
 
 
-def _ref_id(value: Any) -> Optional[str]:
-    """Les refs Stancer arrivent en id nu OU en objet embarqué selon l'endpoint."""
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        return value.get("id")
-    return str(value)
+def webhook_url() -> str:
+    """URL publique que Mollie rappelle à chaque changement d'état d'un paiement
+    (base = `OTO_MCP_PUBLIC_URL`, cf. Logto/Google OAuth). Portée par chaque
+    paiement créé → réconciliation événementielle en complément du polling."""
+    base = os.environ.get("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja").rstrip("/")
+    return f"{base}/api/billing/webhook"
 
 
 # ── souscription ─────────────────────────────────────────────────────────────
 
 def subscribe(org_id: int, plan: str, return_url: str, *,
-              method: str = "card", iban: Optional[str] = None,
-              holder_name: Optional[str] = None,
-              mobile: Optional[str] = None) -> dict:
-    """Ouvre la souscription. Deux voies symétriques (l'URL renvoyée = la page
-    hébergée Stancer où le payeur finit le geste) :
-    - `card` : payment intent → page de paiement (tokenisation + 3DS) ;
-    - `sepa` : IBAN tokenisé + mandat → page de SIGNATURE (`sign_url`, OTP SMS
-      — `mobile` du signataire OBLIGATOIRE, exigence Stancer vérifiée sandbox).
-      Le miroir naît `incomplete` (jamais entitled) ; le 1er prélèvement part à
-      `confirm` une fois le mandat signé.
-    Le miroir carte n'est PAS posé ici — il naît à `confirm` (paiement constaté)."""
+              method: str = "card") -> dict:
+    """Ouvre la souscription. UN seul flux (Mollie unifie carte et SEPA) : premier
+    paiement `sequenceType=first` → l'URL renvoyée = la page de checkout hébergée
+    Mollie où le payeur finit le geste (3DS carte, ou saisie IBAN + acceptation du
+    mandat SEPA). `method` ∈ {card, sepa} restreint la page ; le mandat réutilisable
+    naît à l'encaissement. Le miroir n'est PAS posé ici — il naît à `confirm`
+    (paiement constaté), qui relit le plan de la `metadata` du paiement."""
     meta = PLANS.get(plan)
     if meta is None:
         raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
@@ -154,54 +149,32 @@ def subscribe(org_id: int, plan: str, return_url: str, *,
     if existing and existing["status"] == "active" and not existing.get("canceled_at"):
         raise ValueError("already_subscribed: l'org a déjà un abonnement actif")
 
-    if method == "sepa":
-        if not iban or not holder_name or not mobile:
-            raise ValueError(
-                "sepa_fields_required: iban + holder_name + mobile requis "
-                "(le mobile reçoit l'OTP de signature du mandat)")
-        cust = stancer_client._req("POST", "/v2/customers/", json={
-            "name": holder_name, "mobile": mobile,
-            "external_id": f"org-{org_id}-sepa-{uuid.uuid4().hex[:6]}"})
-        sepa = stancer_client.create_sepa(iban=iban, name=holder_name,
-                                          customer=cust["id"])
-        mandate = stancer_client.create_mandate(sepa["id"])
-        # miroir `incomplete` : porte sepa/mandat pour que confirm les retrouve
-        # (pas d'order_id ici — il n'y a pas d'intent côté SEPA).
-        db_billing.upsert_org_subscription(
-            org_id, plan=plan, method="sepa", customer_id=cust["id"],
-            sepa_id=sepa["id"], mandate_id=mandate["id"], status="incomplete")
-        return {"checkout_url": mandate.get("sign_url"),
-                "mandate_id": mandate["id"], "plan": plan, "method": "sepa"}
-
     customer_id = existing["customer_id"] if existing and existing.get("customer_id") else None
     if not customer_id:
-        cust = stancer_client.create_customer(
-            name=f"Otomata org {org_id}", external_id=f"org-{org_id}")
+        cust = mollie_client.create_customer(
+            name=f"Otomata org {org_id}", metadata={"org_id": str(org_id)})
         customer_id = cust["id"]
 
-    # le plan voyage dans l'order_id de l'intent (pas d'état serveur pendant le
-    # checkout : confirm le relit de l'intent — survit à un restart).
-    order_id = f"org{org_id}:{plan}:{uuid.uuid4().hex[:8]}"
-    intent = stancer_client.create_payment_intent(
-        meta["amount"], currency=meta["currency"], customer=customer_id,
-        return_url=return_url, description=f"Abonnement {meta['label']}",
-        order_id=order_id)
+    payment = mollie_client.create_first_payment(
+        meta["amount"], customer_id=customer_id, currency=meta["currency"],
+        redirect_url=return_url, description=f"Abonnement {meta['label']}",
+        method=mollie_client.mollie_method(method), webhook_url=webhook_url(),
+        # le plan voyage dans la metadata du paiement (pas d'état serveur pendant
+        # le checkout : confirm le relit → survit à un restart).
+        metadata={"org_id": str(org_id), "plan": plan})
     db_billing.insert_billing_payment(
         org_id, "initial", meta["amount"], currency=meta["currency"],
-        payment_intent_id=intent["id"], status=intent.get("status", "processing"))
-    return {"checkout_url": intent.get("url"), "payment_intent_id": intent["id"],
-            "plan": plan, "method": "card"}
+        payment_intent_id=payment["id"], status=payment.get("status", "open"))
+    return {"checkout_url": mollie_client.checkout_url(payment),
+            "payment_intent_id": payment["id"], "plan": plan, "method": method}
 
 
 def confirm(org_id: int) -> dict:
-    """Fait avancer la souscription en cours (POLLING, pas de webhooks) :
-    - voie carte : lit l'intent ; encaissé → extrait le token, miroir `active` ;
-    - voie SEPA (`incomplete`) : lit le mandat ; signé → 1er prélèvement SDD
-      + activation (RUM définitive du mandat).
-    Idempotent : re-confirmer un abonnement déjà actif est un no-op informatif."""
+    """Fait avancer la souscription en cours (POLLING) : lit le premier paiement ;
+    encaissé (`paid`) → récupère le mandat réutilisable né du checkout, pose le
+    miroir `active` (carte comme SEPA — même chemin). Idempotent : re-confirmer un
+    abonnement déjà actif est un no-op informatif."""
     sub_row = db_billing.get_org_subscription(org_id)
-    if sub_row and sub_row["status"] == "incomplete" and sub_row.get("mandate_id"):
-        return _confirm_sepa(org_id, sub_row)
     open_initial = [
         p for p in db_billing.list_billing_payments(org_id)
         if p["kind"] == "initial"
@@ -214,84 +187,46 @@ def confirm(org_id: int) -> dict:
         raise ValueError("no_pending_subscription: aucun paiement initial en cours")
 
     row = open_initial[0]  # le plus récent (list_billing_payments trie DESC)
-    intent = stancer_client.get_payment_intent(row["payment_intent_id"])
-    istatus = str(intent.get("status") or "")
+    payment = mollie_client.get_payment(row["payment_intent_id"])
+    pstatus = str(payment.get("status") or "")
 
-    if istatus in _INTENT_FAILED:
-        db_billing.update_billing_payment(row["id"], status=istatus)
-        return {"status": "failed", "intent_status": istatus}
-    if istatus not in _INTENT_SUCCESS:
-        # pas terminal : le payeur est peut-être encore sur la page 3DS.
-        return {"status": "pending", "intent_status": istatus}
+    if pstatus in ("failed", "canceled", "expired"):
+        db_billing.update_billing_payment(row["id"], status=pstatus)
+        return {"status": "failed", "payment_status": pstatus}
+    if pstatus != "paid":
+        # pas encaissé : le payeur est peut-être encore sur la page de checkout.
+        return {"status": "pending", "payment_status": pstatus}
 
-    # encaissé → extraire le paiement + le token carte, poser le miroir.
-    payments = stancer_client.payment_intent_payments(row["payment_intent_id"])
-    plist = payments.get("payments") if isinstance(payments, dict) else payments
-    first = (plist or [{}])[0]
-    card_id = _ref_id(first.get("card")) or _ref_id(intent.get("card"))
-    payment_id = first.get("id")
-    if not card_id:
-        # fonds obtenus mais pas de token → pas de récurrence possible : on ne
-        # pose PAS un abonnement qu'on ne saura pas renouveler (ADR : jamais de
-        # fallback silencieux). Cas à investiguer (tokenize sur la page hébergée).
+    # encaissé → le mandat réutilisable existe désormais sur le customer.
+    customer_id = payment.get("customerId")
+    mandate = mollie_client.valid_mandate(customer_id) if customer_id else None
+    if not mandate:
+        # payé mais pas de mandat valide → pas de récurrence possible : on ne pose
+        # PAS un abonnement qu'on ne saura pas renouveler (ADR : jamais de fallback
+        # silencieux). Cas à investiguer (méthode non récurrente sur la page).
         raise RuntimeError(
-            "no_card_token: intent encaissé sans token carte réutilisable — "
-            "récurrence impossible, vérifier la tokenisation de la page hébergée")
+            "no_mandate: premier paiement encaissé sans mandat valide — récurrence "
+            "impossible, vérifier le moyen de paiement de la page de checkout")
 
-    order = str(intent.get("order_id") or "")
-    plan = order.split(":")[1] if order.count(":") >= 2 else None
+    plan = (payment.get("metadata") or {}).get("plan")
     if plan not in PLANS:
-        raise RuntimeError(f"bad_order_id: plan illisible sur l'intent ({order!r})")
+        raise RuntimeError(f"bad_metadata: plan illisible sur le paiement ({plan!r})")
     meta = PLANS[plan]
+    method = mollie_client.method_from_mollie(payment.get("method"))
 
     now = datetime.now(timezone.utc)
     period_end = _add_period(now, meta["interval"])
-    db_billing.update_billing_payment(row["id"], status="captured" if istatus == "captured" else "to_capture",
-                                      payment_id=payment_id)
+    db_billing.update_billing_payment(row["id"], status="paid",
+                                      payment_id=payment["id"])
     db_billing.upsert_org_subscription(
-        org_id, plan=plan, method="card",
-        customer_id=_ref_id(intent.get("customer")), card_id=card_id,
+        org_id, plan=plan, method=method, provider="mollie",
+        customer_id=customer_id, mandate_id=mandate["id"],
+        mandate_rum=mandate.get("mandateReference"),
         status="active", current_period_end=period_end, next_billing_at=period_end)
     apply_plan_entitlements(org_id, plan)
-    logger.info("billing: org %s abonnée (plan %s, échéance %s)", org_id, plan,
-                period_end.date())
-    return {"status": "active", "plan": plan,
-            "current_period_end": period_end.isoformat()}
-
-
-def _confirm_sepa(org_id: int, sub_row: dict) -> dict:
-    """Voie SEPA de confirm : mandat signé ? → 1er prélèvement + activation."""
-    mandate = stancer_client.get_mandate(sub_row["mandate_id"])
-    if not stancer_client.mandate_is_signed(mandate):
-        return {"status": "pending", "mandate_status": "awaiting_signature",
-                "sign_url": mandate.get("sign_url")}
-
-    plan = sub_row["plan"]
-    meta = PLANS.get(plan)
-    if meta is None:
-        raise RuntimeError(f"bad_plan: plan inconnu sur le miroir ({plan!r})")
-    now = datetime.now(timezone.utc)
-    row_id = db_billing.insert_billing_payment(
-        org_id, "initial", meta["amount"], currency=meta["currency"],
-        status="processing")
-    payment = stancer_client.create_payment(
-        meta["amount"], currency=meta["currency"], sepa=sub_row["sepa_id"],
-        customer=sub_row.get("customer_id"),
-        # déterministe PAR MANDAT : un double confirm concurrent prend un 409,
-        # une re-souscription (nouveau mandat) reste unique.
-        unique_id=f"org{org_id}-init-{sub_row['mandate_id'][-8:]}",
-        description=f"Abonnement {meta['label']} — 1ʳᵉ échéance")
-    db_billing.update_billing_payment(
-        row_id, status=str(payment.get("status") or "processing"),
-        payment_id=payment.get("id"))
-    period_end = _add_period(now, meta["interval"])
-    db_billing.activate_subscription(
-        org_id, current_period_end=period_end, next_billing_at=period_end,
-        mandate_rum=mandate.get("rum"))
-    apply_plan_entitlements(org_id, plan)
-    logger.info("billing: org %s abonnée par prélèvement (plan %s, échéance %s)",
-                org_id, plan, period_end.date())
-    return {"status": "active", "plan": plan, "method": "sepa",
+    logger.info("billing: org %s abonnée (plan %s, méthode %s, échéance %s)",
+                org_id, plan, method, period_end.date())
+    return {"status": "active", "plan": plan, "method": method,
             "current_period_end": period_end.isoformat()}
 
 
@@ -356,3 +291,28 @@ def admin_clear_plan(org_id: int) -> dict:
     db.set_org_unipile_limit(org_id, None)   # retire le plafond posé par le plan
     logger.info("billing: plan comp retiré de l'org %s", org_id)
     return {"subscribed": False, "org_id": org_id}
+
+
+# ── webhook Mollie (réconciliation événementielle) ───────────────────────────
+
+def process_webhook(payment_id: str) -> str:
+    """Traite un rappel webhook Mollie (le corps ne porte QUE l'id du paiement —
+    on re-fetch l'objet avec NOTRE clé, jamais de confiance dans le POST). Retourne
+    l'issue (log) : 'ignored' | 'confirmed' | 'updated' | 'unchanged'.
+
+    Sécurité : un id inconnu de notre journal est ignoré (un POST forgé ne
+    déclenche rien) ; un premier paiement `paid` rejoue `confirm` (idempotent) ;
+    sinon on aligne le statut journalisé. Complément du polling (billing_runner),
+    pas un remplacement."""
+    row = db_billing.get_billing_payment_by_ref(payment_id)
+    if not row:
+        return "ignored"
+    payment = mollie_client.get_payment(payment_id)
+    status = str(payment.get("status") or "")
+    if row["kind"] == "initial" and status == "paid":
+        confirm(row["org_id"])   # pose le miroir si pas déjà fait (idempotent)
+        return "confirmed"
+    if status and status != row["status"]:
+        db_billing.update_billing_payment(row["id"], status=status)
+        return "updated"
+    return "unchanged"

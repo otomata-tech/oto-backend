@@ -1,4 +1,4 @@
-"""Billing par org (ADR 0043, B1) — schéma + client Stancer, canari inerte.
+"""Billing par org (ADR 0043) — schéma + client Mollie, canari inerte.
 
 Logique pure + contrat du client (transport mocké). Le chemin SQL réel est
 vérifié au boot (CREATE TABLE IF NOT EXISTS appliqué par _init), convention
@@ -6,12 +6,12 @@ du repo.
 """
 from __future__ import annotations
 
-import base64
+import json
 
 import httpx
 import pytest
 
-from oto_mcp import stancer_client
+from oto_mcp import mollie_client
 from oto_mcp.db import _schema
 from oto_mcp.db import billing as billing_db
 
@@ -53,91 +53,133 @@ def test_set_subscription_status_rejects_unknown():
         billing_db.set_subscription_status(1, "on_hold")
 
 
-# ── client Stancer ───────────────────────────────────────────────────────────
+# ── client Mollie ─────────────────────────────────────────────────────────────
 
 def test_client_requires_key(monkeypatch):
-    monkeypatch.delenv("STANCER_API_KEY", raising=False)
-    monkeypatch.setattr(stancer_client, "_client", None)
-    with pytest.raises(RuntimeError, match="STANCER_API_KEY"):
-        stancer_client.ping()
+    monkeypatch.delenv("MOLLIE_API_KEY", raising=False)
+    monkeypatch.setattr(mollie_client, "_client", None)
+    with pytest.raises(RuntimeError, match="MOLLIE_API_KEY"):
+        mollie_client.ping()
 
 
 def _mock_client(handler) -> httpx.Client:
-    return httpx.Client(base_url="https://api.stancer.com",
+    return httpx.Client(base_url="https://api.mollie.com",
                         transport=httpx.MockTransport(handler))
 
 
-def test_client_builds_basic_auth(monkeypatch):
-    # la clé part en HTTP Basic username (password vide) — contrat Stancer.
-    monkeypatch.setenv("STANCER_API_KEY", "stest_abc")
-    monkeypatch.setattr(stancer_client, "_client", None)
+def test_client_builds_bearer_auth(monkeypatch):
+    # la clé part en Bearer — contrat Mollie.
+    monkeypatch.setenv("MOLLIE_API_KEY", "test_abc")
+    monkeypatch.setattr(mollie_client, "_client", None)
     captured = {}
 
     class FakeClient:
         def __init__(self, **kw):
             captured.update(kw)
 
-    monkeypatch.setattr(stancer_client.httpx, "Client", FakeClient)
-    stancer_client._c()
-    assert captured["auth"] == ("stest_abc", "")
-    assert captured["base_url"] == "https://api.stancer.com"
+    monkeypatch.setattr(mollie_client.httpx, "Client", FakeClient)
+    mollie_client._c()
+    assert captured["headers"]["Authorization"] == "Bearer test_abc"
+    assert captured["base_url"] == "https://api.mollie.com"
 
 
-def test_ping_path(monkeypatch):
+def test_ping_path_and_bearer(monkeypatch):
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["auth"] = request.headers.get("Authorization")
         seen["path"] = request.url.path
-        return httpx.Response(200, json={"pong": True})
+        return httpx.Response(200, json={"_embedded": {"methods": []}})
 
-    monkeypatch.setattr(stancer_client, "_c", lambda: httpx.Client(
-        base_url="https://api.stancer.com", auth=("stest_abc", ""),
+    monkeypatch.setattr(mollie_client, "_c", lambda: httpx.Client(
+        base_url="https://api.mollie.com",
+        headers={"Authorization": "Bearer test_abc"},
         transport=httpx.MockTransport(handler)))
-    assert stancer_client.ping() is True
-    assert seen["path"] == "/v2/ping"
-    # format wire du Basic : base64("clé:")
-    assert seen["auth"] == "Basic " + base64.b64encode(b"stest_abc:").decode()
+    assert mollie_client.ping() is True
+    assert seen["path"] == "/v2/methods"
+    assert seen["auth"] == "Bearer test_abc"
 
 
-def test_create_payment_intent_body(monkeypatch):
+def test_amount_field_decimal_and_uppercase():
+    # centimes internes → montant Mollie (string 2 décimales + devise MAJUSCULE).
+    assert mollie_client.amount_field(4900, "eur") == {"currency": "EUR", "value": "49.00"}
+    assert mollie_client.amount_field(25000, "eur")["value"] == "250.00"
+
+
+def test_create_first_payment_body(monkeypatch):
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
         seen["body"] = json.loads(request.content)
         seen["path"] = request.url.path
-        return httpx.Response(200, json={"id": "pi_1", "status": "require_payment_method",
-                                         "url": "https://payment.stancer.com/…"})
+        return httpx.Response(201, json={
+            "id": "tr_1", "status": "open",
+            "_links": {"checkout": {"href": "https://www.mollie.com/checkout/x"}}})
 
-    monkeypatch.setattr(stancer_client, "_c", lambda: _mock_client(handler))
-    out = stancer_client.create_payment_intent(
-        4900, customer="cust_1", return_url="https://oto.cx/r", order_id="org-42")
-    assert out["id"] == "pi_1"
-    assert seen["path"] == "/v2/payment_intents/"
+    monkeypatch.setattr(mollie_client, "_c", lambda: _mock_client(handler))
+    out = mollie_client.create_first_payment(
+        4900, customer_id="cst_1", redirect_url="https://otomata.tech/r",
+        method="creditcard", metadata={"org_id": "42", "plan": "solo"})
+    assert out["id"] == "tr_1"
+    assert mollie_client.checkout_url(out) == "https://www.mollie.com/checkout/x"
+    assert seen["path"] == "/v2/payments"
     assert seen["body"] == {
-        "amount": 4900, "currency": "eur", "methods_allowed": ["card"],
-        "customer": "cust_1", "return_url": "https://oto.cx/r", "order_id": "org-42",
+        "amount": {"currency": "EUR", "value": "49.00"},
+        "customerId": "cst_1", "sequenceType": "first",
+        "redirectUrl": "https://otomata.tech/r", "method": "creditcard",
+        "metadata": {"org_id": "42", "plan": "solo"},
     }
 
 
-def test_create_payment_requires_token():
-    with pytest.raises(ValueError, match="card.*sepa|sepa.*card"):
-        stancer_client.create_payment(4900)
+def test_recurring_payment_passes_idempotency_header(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["idem"] = request.headers.get("Idempotency-Key")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "tr_r1", "status": "pending"})
+
+    monkeypatch.setattr(mollie_client, "_c", lambda: _mock_client(handler))
+    out = mollie_client.create_recurring_payment(
+        4900, customer_id="cst_1", mandate_id="mdt_1",
+        idempotency_key="org42-2026-08-06-a1")
+    assert out["status"] == "pending"
+    assert seen["idem"] == "org42-2026-08-06-a1"
+    assert seen["body"]["sequenceType"] == "recurring"
+    assert seen["body"]["mandateId"] == "mdt_1"
 
 
 def test_api_error_surfaces_detail(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(402, json={"detail": "card declined"})
+        return httpx.Response(422, json={"detail": "The mandate is invalid"})
 
-    monkeypatch.setattr(stancer_client, "_c", lambda: _mock_client(handler))
-    with pytest.raises(stancer_client.StancerError, match="402.*card declined"):
-        stancer_client.create_payment(100, card="card_1", unique_id="u1")
+    monkeypatch.setattr(mollie_client, "_c", lambda: _mock_client(handler))
+    with pytest.raises(mollie_client.MollieError, match="422.*mandate is invalid"):
+        mollie_client.create_recurring_payment(100, customer_id="cst_1")
 
 
-def test_intent_terminal_statuses():
-    # `authorized` n'est PAS terminal (capture attendue) ; polling continue.
-    assert stancer_client.intent_is_terminal("captured")
-    assert stancer_client.intent_is_terminal("unpaid")
-    assert not stancer_client.intent_is_terminal("authorized")
-    assert not stancer_client.intent_is_terminal("processing")
+def test_valid_mandate_picks_first_valid(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"_embedded": {"mandates": [
+            {"id": "mdt_pending", "status": "pending"},
+            {"id": "mdt_ok", "status": "valid"},
+        ]}})
+
+    monkeypatch.setattr(mollie_client, "_c", lambda: _mock_client(handler))
+    m = mollie_client.valid_mandate("cst_1")
+    assert m["id"] == "mdt_ok"
+
+
+def test_payment_terminal_statuses():
+    # `pending`/`open` NE SONT PAS terminaux (checkout / SEPA en dénouement).
+    assert mollie_client.payment_is_terminal("paid")
+    assert mollie_client.payment_is_terminal("expired")
+    assert not mollie_client.payment_is_terminal("pending")
+    assert not mollie_client.payment_is_terminal("open")
+
+
+def test_method_vocabulary_mapping():
+    assert mollie_client.mollie_method("card") == "creditcard"
+    assert mollie_client.mollie_method("sepa") == "directdebit"
+    assert mollie_client.method_from_mollie("directdebit") == "sepa"
+    assert mollie_client.method_from_mollie(None) == "card"      # défaut

@@ -26,7 +26,7 @@ def test_self_serve_refuses_custom_plan(monkeypatch):
 
 def test_plan_carries_messaging_cap_and_unmetered():
     assert billing.plan_is_unmetered("business") is True
-    assert billing.PLANS["team"]["unipile_accounts"] == 5
+    assert billing.PLANS["team"]["unipile_accounts"] == 10
     assert billing.PLANS["enterprise"]["unipile_accounts"] is None   # devis = illimité
 
 
@@ -46,8 +46,8 @@ def test_admin_set_plan_forces_comp_and_configures_org(monkeypatch):
     state = _wire_admin(monkeypatch)
     billing.admin_set_plan(7, "business", granted_by="admin-sub")
     assert state["comp"] == (7, "business", "admin-sub")
-    # le plan CONFIGURE l'org : plafond messagerie posé d'un coup (20 pour business)
-    assert state["limit"] == (7, 20)
+    # le plan CONFIGURE l'org : plafond messagerie posé d'un coup (50 pour business)
+    assert state["limit"] == (7, 50)
 
 
 def test_admin_set_plan_rejects_unknown(monkeypatch):
@@ -58,7 +58,7 @@ def test_admin_set_plan_rejects_unknown(monkeypatch):
 
 def test_admin_clear_refuses_paid(monkeypatch):
     monkeypatch.setattr(db_billing, "get_org_subscription",
-                        lambda org: {"provider": "stancer", "status": "active"})
+                        lambda org: {"provider": "mollie", "status": "active"})
     with pytest.raises(ValueError, match="paid_subscription"):
         billing.admin_clear_plan(7)
 
@@ -78,7 +78,7 @@ def test_admin_clear_removes_comp(monkeypatch):
 
 def test_runner_never_charges_comp(monkeypatch):
     charged = {}
-    monkeypatch.setattr(billing_runner.stancer_client, "create_payment",
+    monkeypatch.setattr(billing_runner.mollie_client, "create_recurring_payment",
                         lambda *a, **k: charged.setdefault("hit", True))
     sub = {"org_id": 7, "provider": "comp", "plan": "business", "method": "comp",
            "status": "active", "current_period_end": None}

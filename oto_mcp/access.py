@@ -178,7 +178,7 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = _UNSET) ->
         return True
     plan = db.subscription_plan_for_org(int(org))
     if plan is not None:
-        from . import billing  # import tardif (billing tire stancer/httpx)
+        from . import billing  # import tardif (billing tire mollie/httpx)
 
         return option in billing.plan_options(plan)
     return False
@@ -422,7 +422,7 @@ def _org_unmetered(org: int) -> bool:
     plan = db.subscription_plan_for_org(int(org))
     if plan is None:
         return False
-    from . import billing  # import tardif (billing tire stancer/httpx)
+    from . import billing  # import tardif (billing tire mollie/httpx)
 
     return billing.plan_is_unmetered(plan)
 

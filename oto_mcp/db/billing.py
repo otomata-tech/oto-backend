@@ -1,11 +1,11 @@
 """Store de l'abonnement par org (ADR 0043) — miroir + machine à états.
 
-Deux tables : `org_subscriptions` (≤1 ligne par org, la vérité du cycle — Stancer
-n'a ni webhooks ni subscription API, c'est NOTRE runner qui pilote) et
-`billing_payments` (journal des échéances : audit, UI, file de réconciliation).
+Deux tables : `org_subscriptions` (≤1 ligne par org, la vérité du cycle — le
+miroir local fait foi, PSP-agnostique par conception) et `billing_payments`
+(journal des échéances : audit, UI, file de réconciliation).
 
-Les statuts de `billing_payments` sont les statuts Stancer OBSERVÉS (payment
-intent puis payment) ; les statuts TERMINAUX sont figés ici (`TERMINAL_PAYMENT_
+Les statuts de `billing_payments` sont les statuts Mollie OBSERVÉS (enum
+PaymentStatus) ; les statuts TERMINAUX sont figés ici (`TERMINAL_PAYMENT_
 STATUSES`) — la file de réconciliation (`open_billing_payments`) = tout le reste.
 """
 from __future__ import annotations
@@ -14,15 +14,15 @@ from typing import Any, Optional
 
 from ._conn import _connect
 
-# Statuts Stancer au-delà desquels un paiement ne bouge plus (union des enums
-# PaymentIntentStatus/StatusCode du spec OpenAPI v2 — doit rester aligné avec
-# l'index partiel idx_billing_payments_open de _schema.py).
+# Statuts Mollie au-delà desquels un paiement ne bouge plus (enum PaymentStatus —
+# doit rester aligné avec l'index partiel idx_billing_payments_open de _schema.py).
 TERMINAL_PAYMENT_STATUSES = frozenset(
-    {"captured", "canceled", "refused", "failed", "expired", "unpaid"}
+    {"paid", "failed", "canceled", "expired"}
 )
 
-# `incomplete` = souscription SEPA ouverte, mandat pas encore signé (jamais
-# entitled — les lectures d'entitlement ne regardent que active/past_due).
+# `incomplete` = souscription ouverte non encore activée (jamais entitled — les
+# lectures d'entitlement ne regardent que active/past_due). Conservé pour
+# compat de schéma ; le flux Mollie unifié pose le miroir directement `active`.
 SUBSCRIPTION_STATUSES = ("incomplete", "active", "past_due", "canceled")
 
 
@@ -40,7 +40,7 @@ def upsert_org_subscription(
     *,
     plan: str,
     method: str = "card",
-    provider: str = "stancer",
+    provider: str = "mollie",
     customer_id: Optional[str] = None,
     card_id: Optional[str] = None,
     sepa_id: Optional[str] = None,
@@ -101,33 +101,6 @@ def set_subscription_status(
             "canceled_at = CASE WHEN %s THEN NOW() ELSE canceled_at END, "
             "updated_at = NOW() WHERE org_id = %s",
             (status, grace_until, canceled, org_id),
-        ).rowcount
-    return n > 0
-
-
-def activate_subscription(
-    org_id: int, *, current_period_end, next_billing_at,
-    mandate_rum: Optional[str] = None,
-) -> bool:
-    """Passe `active` une souscription `incomplete` (mandat SEPA signé + 1er
-    prélèvement parti) — pose la RUM définitive lue du mandat signé."""
-    with _connect() as conn:
-        n = conn.execute(
-            "UPDATE org_subscriptions SET status = 'active', "
-            "mandate_rum = COALESCE(%s, mandate_rum), current_period_end = %s, "
-            "next_billing_at = %s, updated_at = NOW() WHERE org_id = %s",
-            (mandate_rum, current_period_end, next_billing_at, org_id),
-        ).rowcount
-    return n > 0
-
-
-def set_subscription_card(org_id: int, card_id: str) -> bool:
-    """Rotation du moyen de paiement (nouvelle carte tokenisée)."""
-    with _connect() as conn:
-        n = conn.execute(
-            "UPDATE org_subscriptions SET card_id = %s, method = 'card', "
-            "updated_at = NOW() WHERE org_id = %s",
-            (card_id, org_id),
         ).rowcount
     return n > 0
 
@@ -332,10 +305,23 @@ def list_billing_payments(org_id: int, limit: int = 20) -> list[dict]:
         ))
 
 
+def get_billing_payment_by_ref(ref: str) -> Optional[dict]:
+    """Retrouve une ligne de paiement par son id Mollie (`tr_…`) — que ce soit le
+    premier paiement (`payment_intent_id`) ou un rejeu (`payment_id`). Sert le
+    webhook Mollie : il ne porte que l'id, on remonte à l'org + la ligne."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM billing_payments "
+            "WHERE payment_intent_id = %s OR payment_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ref, ref),
+        ).fetchone()
+
+
 def open_billing_payments(limit: int = 100) -> list[dict]:
-    """File de réconciliation : paiements non terminaux à re-poller (Stancer
-    sans webhooks — c'est CE crochet qui rattrape les fermetures de navigateur
-    post-3DS et les statuts en vol)."""
+    """File de réconciliation : paiements non terminaux à re-poller (rattrape les
+    fermetures de checkout post-paiement, les prélèvements SEPA qui se dénouent en
+    plusieurs jours et les statuts en vol)."""
     placeholders = ",".join(["%s"] * len(TERMINAL_PAYMENT_STATUSES))
     with _connect() as conn:
         return list(conn.execute(

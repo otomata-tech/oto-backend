@@ -1,21 +1,23 @@
-"""Runner d'échéances d'abonnement (ADR 0043, B3) — la « récurrence » maison.
+"""Runner d'échéances d'abonnement (ADR 0043) — la « récurrence » maison.
 
-Stancer n'a ni webhooks ni subscription API : cette boucle de fond (lifespan,
-même famille que scheduler.py) fait tout le cycle à intervalle horaire :
+Le miroir local fait foi : cette boucle de fond (lifespan, même famille que
+scheduler.py) fait tout le cycle à intervalle horaire :
 
-1. **Échéances dues** (`due_subscriptions`) : rejoue un paiement MIT sur le
-   token carte. `unique_id` DÉTERMINISTE `org<id>-<période>-a<tentative>` →
-   un tick concurrent/rejoué prend un 409 Stancer, jamais un double débit.
+1. **Échéances dues** (`due_subscriptions`) : rejoue un paiement MIT
+   (`sequenceType=recurring`) sur `customerId`+`mandateId`. `Idempotency-Key`
+   DÉTERMINISTE `org<id>-<période>-a<tentative>` → un tick concurrent/rejoué
+   renvoie le MÊME paiement Mollie (HTTP 200), jamais un double débit.
 2. **Politique d'impayé** (dunning borné) : échec → retry à J+3 (tentatives
    trackées par le JOURNAL, pas un compteur mutable) ; 3 échecs → `past_due`
-   + grace 14 j. La notification org_admin = B6.
+   + grace 14 j. La notification org_admin = barreau ultérieur.
 3. **Sweeps** : résiliations à période échue + graces consommées → `canceled`
    (c'est la fermeture d'entitlement ; les données ne bougent jamais).
 4. **Réconciliation** (`open_billing_payments`) : re-polle les paiements non
-   terminaux (capture batch Stancer, navigateur fermé post-3DS…) ; un intent
-   initial jamais payé est clos `expired` après 48 h.
+   terminaux (checkout fermé post-paiement, prélèvement SEPA qui se dénoue en
+   plusieurs jours…) ; un premier paiement jamais encaissé finit `expired`
+   (Mollie expire les paiements ouverts ; garde-fou TTL 48 h en secours).
 
-Sans STANCER_API_KEY le tick est un no-op silencieux (le serveur vit sans
+Sans MOLLIE_API_KEY le tick est un no-op silencieux (le serveur vit sans
 billing). Un tick raté ne tue jamais la boucle.
 """
 from __future__ import annotations
@@ -24,7 +26,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from . import billing, stancer_client
+from . import billing, mollie_client
 from .db import billing as db_billing
 
 log = logging.getLogger("oto_mcp.billing_runner")
@@ -35,9 +37,11 @@ _MAX_ATTEMPTS = 3
 _GRACE = timedelta(days=14)
 _INITIAL_INTENT_TTL = timedelta(hours=48)
 
-# statuts Stancer d'un paiement MIT qui valent encaissement (la capture est un
-# batch asynchrone côté Stancer — la réconciliation finalisera à `captured`).
-_PAYMENT_OK = frozenset({"authorized", "to_capture", "capture_sent", "captured"})
+# statuts Mollie d'un paiement MIT qui valent encaissement (ou en cours de
+# dénouement — `pending` = prélèvement SEPA soumis ; la réconciliation/webhook
+# rattrape un éventuel rejet ultérieur).
+_PAYMENT_OK = frozenset({"paid", "pending", "authorized"})
+_PAYMENT_FAILED = frozenset({"failed", "canceled", "expired"})
 
 
 def _charge_one(sub_row: dict, now: datetime) -> str:
@@ -53,41 +57,32 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
         log.error("billing_runner: org %s a un plan inconnu %r — échéance sautée",
                   org_id, sub_row["plan"])
         return "skipped"
-    method = sub_row.get("method")
-    token_field = {"card": "card_id", "sepa": "sepa_id"}.get(method)
-    if not token_field or not sub_row.get(token_field):
-        log.error("billing_runner: org %s sans moyen de paiement rejouable "
-                  "(method=%s) — sautée", org_id, method)
+    if not sub_row.get("customer_id") or not sub_row.get("mandate_id"):
+        log.error("billing_runner: org %s sans customer/mandat rejouable "
+                  "(method=%s) — sautée", org_id, sub_row.get("method"))
         return "skipped"
 
     period_ref = str(sub_row.get("current_period_end") or "epoch")[:10]
     attempt = db_billing.count_renewal_attempts(
         org_id, sub_row.get("current_period_end") or now) + 1
-    unique_id = f"org{org_id}-{period_ref}-a{attempt}"
+    idempotency_key = f"org{org_id}-{period_ref}-a{attempt}"
 
     row_id = db_billing.insert_billing_payment(
         org_id, "renewal", plan["amount"], currency=plan["currency"],
         status="processing", attempt=attempt)
     try:
-        payment = stancer_client.create_payment(
-            plan["amount"], currency=plan["currency"],
-            card=sub_row.get("card_id") if method == "card" else None,
-            sepa=sub_row.get("sepa_id") if method == "sepa" else None,
-            customer=sub_row.get("customer_id"),
-            unique_id=unique_id,
+        payment = mollie_client.create_recurring_payment(
+            plan["amount"], customer_id=sub_row["customer_id"],
+            mandate_id=sub_row["mandate_id"], currency=plan["currency"],
+            idempotency_key=idempotency_key, webhook_url=billing.webhook_url(),
             description=f"Abonnement {plan['label']} — échéance {period_ref}")
         pstatus = str(payment.get("status") or "")
         db_billing.update_billing_payment(row_id, status=pstatus or "processing",
                                           payment_id=payment.get("id"))
-    except stancer_client.StancerError as e:
-        if e.status_code == 409:
-            # unique_id déjà joué (tick concurrent / crash après POST) : le
-            # paiement existe côté Stancer — la réconciliation le rattrape.
-            db_billing.update_billing_payment(row_id, status="processing")
-            log.warning("billing_runner: org %s échéance déjà en vol (%s)",
-                        org_id, unique_id)
-            return "skipped"
+    except mollie_client.MollieError as e:
         db_billing.update_billing_payment(row_id, status="failed")
+        log.warning("billing_runner: org %s échéance refusée (Mollie %s)",
+                    org_id, e.status_code)
         pstatus = "failed"
 
     if pstatus in _PAYMENT_OK:
@@ -119,27 +114,27 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
 
 
 def _reconcile_one(row: dict, now: datetime) -> None:
-    """Re-polle UN paiement non terminal du journal."""
-    if row.get("payment_id"):
-        status = str(stancer_client.get_payment(row["payment_id"]).get("status") or "")
-        if status and status != row["status"]:
-            db_billing.update_billing_payment(row["id"], status=status)
+    """Re-polle UN paiement non terminal du journal (initial ou renewal — tous
+    des objets `payment` Mollie `tr_`)."""
+    ref = row.get("payment_id") or row.get("payment_intent_id")
+    if not ref:
         return
-    if row.get("payment_intent_id"):
-        intent = stancer_client.get_payment_intent(row["payment_intent_id"])
-        istatus = str(intent.get("status") or "")
-        if istatus in ("captured", "authorized"):
-            # payé sur la page hébergée sans que confirm ait tourné (onglet
-            # fermé) : on termine la pose du miroir nous-mêmes.
-            try:
-                billing.confirm(row["org_id"])
-            except Exception as e:
-                log.warning("billing_runner: confirm de rattrapage org %s : %s",
-                            row["org_id"], e)
-            return
-        if istatus in ("canceled", "unpaid"):
-            db_billing.update_billing_payment(row["id"], status=istatus)
-            return
+    status = str(mollie_client.get_payment(ref).get("status") or "")
+    if row.get("kind") == "initial" and status == "paid":
+        # encaissé sur la page hébergée sans que confirm ait tourné (onglet
+        # fermé) : on termine la pose du miroir nous-mêmes.
+        try:
+            billing.confirm(row["org_id"])
+        except Exception as e:
+            log.warning("billing_runner: confirm de rattrapage org %s : %s",
+                        row["org_id"], e)
+        return
+    if status and status != row["status"]:
+        db_billing.update_billing_payment(row["id"], status=status)
+        return
+    # premier paiement resté ouvert trop longtemps → expiré (garde-fou ; Mollie
+    # expire de lui-même, ce TTL couvre un statut en vol).
+    if row.get("kind") == "initial" and status not in mollie_client.TERMINAL_PAYMENT_STATUSES:
         created = row.get("created_at")
         created_dt = created if isinstance(created, datetime) else None
         if created_dt and now - created_dt > _INITIAL_INTENT_TTL:
@@ -148,7 +143,7 @@ def _reconcile_one(row: dict, now: datetime) -> None:
 
 def tick() -> dict:
     """Un passage complet (sync, appelé en thread). Retourne les compteurs."""
-    if not stancer_client.is_configured():
+    if not mollie_client.is_configured():
         return {}
     now = datetime.now(timezone.utc)
     counts: dict[str, int] = {}
@@ -168,7 +163,7 @@ def tick() -> dict:
         try:
             _reconcile_one(row, now)
             counts["reconciled"] = counts.get("reconciled", 0) + 1
-        except stancer_client.StancerError as e:
+        except mollie_client.MollieError as e:
             log.warning("billing_runner: réconciliation paiement %s : %s",
                         row.get("id"), e)
     return counts

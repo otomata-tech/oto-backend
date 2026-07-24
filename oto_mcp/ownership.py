@@ -257,15 +257,11 @@ def _best_grant(sub: str, resource_type: str, resource_id: str) -> Optional[str]
 
 # --- Plan GOUVERNANCE : can_transfer (structure) / can_govern (grantable) ------
 
-def can_transfer(sub: str, resource_type: str, resource_id: str) -> bool:
-    """Gouvernance STRUCTURELLE : transfert de propriété — owner ∪ escalade `roles.py`
-    (platform_admin / org_admin / group_admin), **jamais** un simple `gérant` (ADR 0048
-    §3 : le gérant gouverne mais ne peut ni retirer l'owner ni se l'approprier). C'est
-    l'ancienne sémantique de `can_govern`, conservée pour le seul transfert."""
-    owner = owner_of(resource_type, resource_id)
-    if owner is None:
-        return False
-    owner_type, owner_id = owner
+def _can_transfer_owner(sub: str, owner_type: str, owner_id: str) -> bool:
+    """L'acteur peut-il transférer une ressource dont l'owner serait `(owner_type,
+    owner_id)` ? — owner ∪ escalade `roles.py`, **jamais** un simple gérant. Prend
+    l'owner en PARAMÈTRE (pas résolu en DB) pour servir aussi la PRÉDICTION du garde-fou
+    anti-lockout (`would_retain_control`), sans muter la ressource."""
     if owner_type == "user":
         return sub == owner_id or roles.is_platform_admin(sub)
     if owner_type == "org":
@@ -275,6 +271,26 @@ def can_transfer(sub: str, resource_type: str, resource_id: str) -> bool:
     if owner_type == "platform":
         return roles.is_platform_admin(sub)   # ADR 0049 : bibliothèque = gouvernance plateforme
     return False
+
+
+def can_transfer(sub: str, resource_type: str, resource_id: str) -> bool:
+    """Gouvernance STRUCTURELLE : transfert de propriété — owner ∪ escalade `roles.py`
+    (platform_admin / org_admin / group_admin), **jamais** un simple `gérant` (ADR 0048
+    §3 : le gérant gouverne mais ne peut ni retirer l'owner ni se l'approprier). C'est
+    l'ancienne sémantique de `can_govern`, conservée pour le seul transfert."""
+    owner = owner_of(resource_type, resource_id)
+    if owner is None:
+        return False
+    return _can_transfer_owner(sub, owner[0], owner[1])
+
+
+def would_retain_control(sub: str, new_owner_type: str, new_owner_id: str) -> bool:
+    """Garde-fou anti-lockout : après un transfert vers `(new_owner_type, new_owner_id)`,
+    l'acteur pourrait-il encore RÉCUPÉRER la ressource (la re-transférer) ? Faux ⇒ il perd
+    tout contrôle (cession à un tiers, ou à une org/équipe qu'il n'administre pas) → l'UI/
+    le MCP exige alors une confirmation explicite. Le platform_admin retient toujours (il
+    rattrape n'importe quelle ressource)."""
+    return _can_transfer_owner(sub, new_owner_type, new_owner_id)
 
 
 def _has_manager_grant(sub: str, resource_type: str, resource_id: str) -> bool:

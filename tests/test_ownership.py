@@ -159,6 +159,34 @@ def test_manager_grant_via_team(monkeypatch):
     assert not ownership.can_transfer("m", RT, RID)   # gérant ≠ org_admin
 
 
+# --- Garde-fou anti-lockout : would_retain_control (prédiction, pas de mutation) -----
+
+def test_retain_control_self_and_admin_orgs(monkeypatch):
+    """L'acteur RETIENT le contrôle en cédant à lui-même, ou à une org/équipe qu'il
+    administre → pas de confirmation exigée."""
+    _wire(monkeypatch, owner=("org", "42"), org_admin_of=(42,), group_admin_of=(5,))
+    assert ownership.would_retain_control("alice", "user", "alice")   # à moi
+    assert ownership.would_retain_control("alice", "org", "42")       # org que j'admin
+    assert ownership.would_retain_control("alice", "group", "5")      # équipe que je pilote
+
+
+def test_lose_control_stranger_or_unadmined_scope(monkeypatch):
+    """L'acteur PERD le contrôle en cédant à un autre user, ou à une org/équipe qu'il
+    n'administre pas → confirmation exigée (would_retain_control = False)."""
+    _wire(monkeypatch, owner=("org", "42"), org_admin_of=(42,), org_member_of=(99,))
+    assert not ownership.would_retain_control("alice", "user", "bob")   # cession à un tiers
+    assert not ownership.would_retain_control("alice", "org", "99")     # simple membre, pas admin
+    assert not ownership.would_retain_control("alice", "group", "7")    # équipe non pilotée
+
+
+def test_platform_admin_always_retains_control(monkeypatch):
+    """Le platform_admin rattrape n'importe quelle ressource → il retient toujours le
+    contrôle, quelle que soit la cible : jamais bloqué par la confirmation."""
+    _wire(monkeypatch, owner=("user", "alice"), super_admin=True)
+    assert ownership.would_retain_control("ops", "user", "someone-else")
+    assert ownership.would_retain_control("ops", "platform", "platform")
+
+
 def test_transfer_reparents_and_keeps_previous_owner_write(monkeypatch):
     calls = {}
     _wire(monkeypatch, owner=("user", "alice"))

@@ -16,6 +16,7 @@ def _wire(monkeypatch):
     monkeypatch.setattr(R.access, "is_platform_operator", lambda sub: False)
     monkeypatch.setattr(R.ownership, "accessor_scope", lambda sub: ownership.AccessorScope(sub, [], []))
     monkeypatch.setattr(R.roles, "is_org_admin", lambda sub, oid: False)
+    monkeypatch.setattr(R.roles, "is_platform_admin", lambda sub: False)   # garde-fou anti-lockout
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u1@x.co"})
     # transfert = re-gardé sur can_transfer dans le handler (ADR 0048) — l'acteur possède PROW.
     monkeypatch.setattr(R.ownership, "can_transfer", lambda sub, rt, rid: True)
@@ -48,14 +49,18 @@ def test_transfer_routes_generically(monkeypatch):
     seen = {}
     monkeypatch.setattr(R.ownership, "transfer",
                         lambda rt, rid, ot, oid: seen.update(rt=rt, rid=rid, ot=ot, oid=oid))
+    # Cession à un TIERS (u2) = perte de contrôle → le garde-fou exige confirm_transfer.
     out = R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
-                                            resource_id="7", new_owner_email="u2@x.co"))
+                                            resource_id="7", new_owner_email="u2@x.co",
+                                            confirm_transfer=True))
     assert seen == {"rt": "project", "rid": "7", "ot": "user", "oid": "u2"} and out["ok"]
 
 
 def test_transfer_to_own_org(monkeypatch):
     _wire(monkeypatch)
+    # Transfert vers une org que j'ADMINISTRE → je garde le contrôle, aucune confirmation.
     monkeypatch.setattr(R.roles, "is_org_member", lambda sub, oid: oid == 35)
+    monkeypatch.setattr(R.roles, "is_org_admin", lambda sub, oid: oid == 35)
     monkeypatch.setattr(R.org_store, "get_org", lambda oid: {"name": "movinmotion"})
     seen = {}
     monkeypatch.setattr(R.ownership, "transfer",
@@ -64,6 +69,33 @@ def test_transfer_to_own_org(monkeypatch):
                                             resource_id="7", new_owner_org=35))
     assert seen == {"rt": "project", "rid": "7", "ot": "org", "oid": "35"}
     assert out["ok"] and out["new_owner"] == "movinmotion"
+
+
+def test_transfer_loss_of_control_requires_confirmation(monkeypatch):
+    """Cession à un tiers sans confirm_transfer → 409 confirm_loss_of_control, aucun
+    transfert effectué (le garde-fou coupe AVANT ownership.transfer)."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    called = {"n": 0}
+    monkeypatch.setattr(R.ownership, "transfer", lambda *a: called.update(n=called["n"] + 1))
+    with pytest.raises(AuthzDenied) as e:
+        R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
+                                          resource_id="7", new_owner_email="u2@x.co"))
+    assert e.value.code == "confirm_loss_of_control" and e.value.status == 409
+    assert called["n"] == 0
+
+
+def test_transfer_to_unadmined_org_requires_confirmation(monkeypatch):
+    """Transfert vers une org dont on est simple membre (pas admin) → perte de contrôle
+    (on ne pourra plus re-transférer) → confirmation exigée."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.roles, "is_org_member", lambda sub, oid: oid == 35)  # membre, pas admin
+    monkeypatch.setattr(R.org_store, "get_org", lambda oid: {"name": "movinmotion"})
+    monkeypatch.setattr(R.ownership, "transfer", lambda *a: None)
+    with pytest.raises(AuthzDenied) as e:
+        R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
+                                          resource_id="7", new_owner_org=35))
+    assert e.value.code == "confirm_loss_of_control"
 
 
 def test_transfer_to_org_requires_membership(monkeypatch):

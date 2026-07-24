@@ -584,44 +584,11 @@ def make_routes(
             return json_error(request, 409, str(e))
         return json_response(request, {"ok": True, "namespace": new})
 
-    async def ds_transfer(request: Request) -> JSONResponse:
-        sub, err = await authenticate(request, verifier)
-        if err:
-            return err
-        namespace = request.path_params["namespace"]
-        try:
-            body = await request.json()
-        except Exception:
-            return json_error(request, 400, "invalid_json")
-        # Cible : une de SES orgs (`new_owner_org`, owner_type='org', ADR 0030) OU un
-        # utilisateur (`email`). Transférer VERS une org exige d'en être membre.
-        new_owner_org = (body or {}).get("new_owner_org")
-        if new_owner_org is not None:
-            try:
-                org_id = int(new_owner_org)
-            except (TypeError, ValueError):
-                return json_error(request, 400, "invalid_org")
-            if not roles.is_org_member(sub, org_id):
-                return json_error(request, 403, "not_org_member")
-            new_owner_type, new_owner_id = "org", str(org_id)
-            from . import org_store
-            new_owner_label = (org_store.get_org(org_id) or {}).get("name") or f"#{org_id}"
-        else:
-            email = ((body or {}).get("email") or "").strip()
-            if not email:
-                return json_error(request, 400, "email_required")
-            recipient = db.get_user_by_email(email)
-            if not recipient:
-                return json_error(request, 404, f"no oto user with email {email}")
-            new_owner_type, new_owner_id, new_owner_label = "user", recipient["sub"], email
-        ns_id, gerr = _govern_ns(sub, namespace)
-        if gerr:
-            return json_error(request, gerr[0], gerr[1])
-        try:
-            ownership.transfer("datastore_namespace", str(ns_id), new_owner_type, new_owner_id)
-        except ValueError as e:
-            return json_error(request, 409, str(e))
-        return json_response(request, {"ok": True, "namespace": namespace, "new_owner": new_owner_label})
+    # Le TRANSFERT de propriété d'un datastore passe par la capacité UNIQUE `oto_resource`
+    # (op=transfer, resource_type='datastore_namespace' — même seam `ownership` + garde-fou
+    # anti-lockout + cibles user/org/GROUPE). L'ancien endpoint bespoke `ds_transfer` a été
+    # retiré (2026-07-24) : il dupliquait la résolution de cible et court-circuitait la
+    # confirmation de perte de contrôle. Le front vise `/api/resources` par l'id du namespace.
 
     return [
         # Google OAuth
@@ -670,6 +637,4 @@ def make_routes(
         Route("/api/datastore/namespaces/{namespace}/share", ds_share, methods=["POST"]),
         Route("/api/datastore/namespaces/{namespace}/share", ds_unshare, methods=["DELETE"]),
         Route("/api/datastore/namespaces/{namespace}/share", options_handler, methods=["OPTIONS"]),
-        Route("/api/datastore/namespaces/{namespace}/transfer", ds_transfer, methods=["POST"]),
-        Route("/api/datastore/namespaces/{namespace}/transfer", options_handler, methods=["OPTIONS"]),
     ]

@@ -39,6 +39,9 @@ def _wire(monkeypatch, *, governed=("11", "77")):
                         lambda sub, rt, rid: rid in governed)
     # transfert re-gardé (ADR 0048) : le projet #7 est transférable par l'acteur.
     monkeypatch.setattr(R.ownership, "can_transfer", lambda sub, rt, rid: True)
+    # Garde-fou anti-lockout hors scope de ces tests cascade (testé dans test_resources_project) :
+    # l'acteur retient toujours le contrôle → pas de confirmation exigée.
+    monkeypatch.setattr(R.ownership, "would_retain_control", lambda sub, ot, oid: True)
     # ADR 0048 : grant est désormais keyé par RÔLE (viewer/editor/manager) ; on
     # enregistre la permission dérivée pour garder les assertions read/write lisibles.
     def _grant(rt, rid, pt, pid, perm=None, granted_by=None, role=None):

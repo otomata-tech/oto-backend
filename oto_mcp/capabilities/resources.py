@@ -55,6 +55,7 @@ class ResourceInput(BaseModel):
     mcp_slug: Optional[str] = None          # préfixe de sous-domaine (facultatif en secret)
     mcp_tools: Optional[list[str]] = None   # allowlist figée (vide = réutilise la liste publiée)
     cascade: bool = False                   # share/transfer d'un PROJET : embarquer ses entités liées (#52)
+    confirm_transfer: bool = False          # transfer : lever la confirmation anti-lockout (perte de contrôle assumée)
 
 
 def _check_type(resource_type: str) -> None:
@@ -411,6 +412,17 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
             recipient = _resolve_recipient(inp.new_owner_email)
             new_owner_type, new_owner_id = "user", recipient["sub"]
             new_owner_label = recipient.get("email")
+        # Garde-fou anti-lockout (confirmation explicite, choix produit 24/07) : si ce
+        # transfert retirerait à l'acteur tout moyen de RÉCUPÉRER la ressource (cession à
+        # un tiers, ou à une org/équipe qu'il n'administre pas), on refuse tant qu'il n'a
+        # pas confirmé consciemment. Le platform_admin n'est jamais gêné (il rattrape tout).
+        if (not inp.confirm_transfer
+                and not ownership.would_retain_control(ctx.sub, new_owner_type, new_owner_id)):
+            raise AuthzDenied(
+                409, "confirm_loss_of_control",
+                f"Ce transfert vers « {new_owner_label} » te retirera tout contrôle : tu ne "
+                f"pourras plus récupérer cette ressource toi-même (seul un admin Otomata le "
+                f"pourra). Renvoie avec confirm_transfer=true pour confirmer.")
         try:
             ownership.transfer(inp.resource_type, rid, new_owner_type, new_owner_id)
         except ValueError as e:
@@ -480,9 +492,15 @@ CAPABILITIES += [
             "Govern an OWNED resource (ADR 0030) without reading its content. "
             "op=list: resources you govern (platform admins see all); op=get: owner + "
             "shares + metadata (each grant carries a `role`); op=transfer: hand ownership to a "
-            "user (`new_owner_email`) OR to one of YOUR orgs (`new_owner_org`, you must be a "
-            "member); the previous owner keeps editor access (transfer is owner/admin only, "
-            "never a grantee). op=share/unshare — ONE unified « Share », two axes (ADR 0048): "
+            "user (`new_owner_email`), to one of YOUR orgs (`new_owner_org`, you must be a "
+            "member) OR to one of YOUR teams (`new_owner_group`, ADR 0049 — scoping a resource "
+            "to a pôle IS the way to restrict it); a user-owned previous owner keeps editor "
+            "access (transfer is owner/admin only, never a grantee). ANTI-LOCKOUT: if the "
+            "transfer would leave YOU unable to ever get the resource back (handing to a third "
+            "party, or to an org/team you don't administer), it is refused with code "
+            "`confirm_loss_of_control` — resend with `confirm_transfer=true` to proceed "
+            "consciously (a platform admin is never blocked and can always recover it). "
+            "op=share/unshare — ONE unified « Share », two axes (ADR 0048): "
             "AUDIENCE (`audience`) = where it goes: `person` (`email`) / `team` (`group_id`, a "
             "group of an org you belong to) / `org` (`org_id`, a whole org, client delivery) → a "
             "grant; `public`/`secret` → PUBLISH the project (public = listed, secret = "

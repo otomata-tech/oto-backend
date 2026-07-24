@@ -851,7 +851,7 @@ _REGISTRY_LIST = [
        )),
     _c("zohodesk", ["zohodesk"], auth_modes={"byo_user"}, secret_kind="fields",
        label="Zoho Desk",
-       help="support Zoho Desk (tickets, threads, contacts)",
+       help="support Zoho Desk (tickets, threads, contacts, articles KB)",
        href="https://desk.zoho.com", credential_fields=(
            CredentialField("client_id", "Client ID", secret=True,
                            help="1000.XXXXXXXX… (self-client)"),
@@ -860,6 +860,8 @@ _REGISTRY_LIST = [
            CredentialField("refresh_token", "Refresh Token", secret=True,
                            help="1000.xxxxx.yyyyy"),
            CredentialField("org_id", "Org ID", secret=False, help="ex. 800123456"),
+           CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
+                           secret=False, reveal=True, help="eu"),
        )),
     _c("zohoanalytics", ["zohoanalytics"], auth_modes={"byo_user", "byo_org"},
        secret_kind="fields", label="Zoho Analytics",

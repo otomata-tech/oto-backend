@@ -149,6 +149,22 @@ def register(mcp: FastMCP) -> None:
         return _client().list_suppliers(max_pages=max_pages)
 
     @mcp.tool()
+    def pennylane_find_customer_by_reference(external_reference: str) -> dict:
+        """Retrouve un client par son `external_reference`, ou {"found": false}.
+
+        Anti-doublon client : un client déjà créé (ex. companyId back-office en
+        external_reference) fait échouer `pennylane_create_customer` en 422
+        « External reference has already been taken ». À appeler AVANT de créer :
+        s'il existe, réutiliser son `id` ; sinon créer. Filtre serveur natif
+        (un seul appel).
+
+        Args:
+            external_reference: la référence externe recherchée (ex. companyId).
+        """
+        c = _client().find_customer_by_external_reference(external_reference)
+        return c if c else {"found": False}
+
+    @mcp.tool()
     def pennylane_create_supplier(name: str, fields: Optional[dict] = None) -> dict:
         """Crée un fournisseur — à faire avant de saisir la facture d'achat d'un
         NOUVEAU fournisseur (pennylane_import_supplier_invoice exige un supplier_id

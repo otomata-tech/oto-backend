@@ -124,3 +124,46 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > (200 uniquement pour un slug **publié** → borne l'émission de certs). `publish_mcp` est la **seule** action
 > par projet — **zéro DNS** à chaque publication. **Surface web** : annuaire public **oto.ninja/apps**
 > (`web/AppsView.vue`) via `GET /api/public/mcp-projects` (CORS `*`, liste les projets `anonymous` publiés).
+
+> **Agent SERVER-SIDE d'un projet (`agent_runtime`) — la 3ᵉ face.** Un projet publié
+> avait deux faces : l'**UI navigable** (`share_ui`, lecture seule) et l'**endpoint MCP**
+> (`subdomain_project`) que le visiteur devait brancher dans SON client. Manquait la
+> troisième : **oto fait tourner la boucle de tool calling** pour qui n'a pas de client
+> MCP — au premier chef sur un **projet partagé public**, où la boucle EST le produit.
+> Modules : `agent_llm.py` (seam LLM, SDK Anthropic, import **guardé** — sans lib ni
+> `ANTHROPIC_API_KEY` la surface agent est simplement absente et le serveur boote
+> identique) + `agent_runtime.py` (boucle bornée, exécution d'outil, prompt système).
+>
+> **Aucune règle d'accès neuve** — trois invariants hérités de l'endpoint MCP :
+> 1. **Allowlist FIGÉE = `mcp_tools`** (le preset du projet), fail-closed : un outil
+>    demandé hors preset n'est jamais exécuté, il revient au modèle en `tool_result`
+>    d'erreur nommant les outils permis (le modèle se corrige au lieu de casser le tour).
+>    Sur la face authentifiée, le param `tools` ne peut que **rétrécir** (intersection).
+> 2. **Gates d'appel intactes** : exécution par `Tool.run` — MÊME chemin qu'`oto_call`
+>    (ADR 0036), hors middleware → credential/RBAC/activation inchangés, et **rédaction
+>    de champs ré-appliquée** dans `execute_tool` (sinon un connecteur à PII fuirait).
+> 3. **Résolution de credential inchangée** : sur le sous-domaine, `HostDispatch` a déjà
+>    posé l'`AnonContext` → les outils tapent l'org **propriétaire** (`_resolve_credential_anon`),
+>    exactement comme un appel MCP anonyme.
+>
+> **Deux surfaces, un moteur** : (a) `POST /agent` du sous-domaine (sans login, gaté
+> `agent_enabled`, bucket de rate-limit **séparé et plus serré** que le MCP —
+> `OTO_AGENT_RATE_PER_MIN`, déf. 10/min/IP/projet) + la carte « Demander à l'agent »
+> rendue par `share_ui` ; (b) capacité **`me.agent`** — MCP `oto_agent`, REST
+> `POST /api/me/agent` — ops `run` / `configure` (`can_govern`) / `status`, la boucle
+> tournant alors sous l'identité de l'APPELANT.
+>
+> **Zéro état serveur** : le fil (`messages`, format Anthropic) revient au client à
+> chaque tour et lui est rejoué au suivant — pas de session à expirer, un rechargement
+> de page repart proprement. **Bornes de coût** : `agent_max_steps` (tours d'outils,
+> borné [1,12] à l'écriture ET à la lecture), sortie d'outil tronquée
+> (`MAX_TOOL_OUTPUT_CHARS`), historique borné, rate-limit, `output_config.effort`
+> (`OTO_AGENT_EFFORT`, déf. `medium`). Colonnes `projects.agent_{enabled,prompt_md,max_steps}`
+> — **opt-in STRICT** (défaut FALSE) : un endpoint public qui répond dépense le LLM et
+> les clés de l'org propriétaire.
+>
+> **Frontière d'injection de prompt** : le brief + `agent_prompt_md` (écrits par le
+> PROPRIÉTAIRE) vont au niveau système ; le message du VISITEUR reste strictement dans
+> le tour user, et le cadre système dit explicitement qu'une consigne du visiteur n'est
+> pas une consigne d'administration. Le `stop_reason: refusal` est lu **avant** le
+> contenu (jamais un `content[0]` nu) et rendu comme tour terminal.

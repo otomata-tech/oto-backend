@@ -226,6 +226,25 @@ tableau riche (recherche/tri/filtres), et CTA **« Ajouter à mon Oto »** → c
 dans l'org active (structure only, jamais de credentials ; idempotent via `projects.copied_from`).
 **Détail : `docs/projects.md`**.
 
+> **Agent SERVER-SIDE par projet (`agent_runtime` + `agent_llm`) — la 3ᵉ face.** Aux deux
+> faces d'un projet publié (UI navigable `share_ui` · endpoint MCP à brancher dans SON
+> client) s'ajoute **oto qui fait tourner la boucle de tool calling** — pour le visiteur
+> SANS client MCP, sur un projet partagé public d'abord. `agent_llm.py` = seam LLM (SDK
+> Anthropic, Messages API, import **guardé** : sans lib/`ANTHROPIC_API_KEY` la surface est
+> absente, le serveur boote identique) ; `agent_runtime.py` = boucle bornée. **Zéro règle
+> d'accès neuve** : allowlist figée = `mcp_tools` (fail-closed ; le param `tools` de la face
+> authentifiée ne peut que RÉTRÉCIR), exécution par `Tool.run` (même chemin qu'`oto_call`,
+> gates call-time intactes + **rédaction ré-appliquée**), credentials résolus par
+> l'`AnonContext` déjà posé (org propriétaire) sur le sous-domaine. Surfaces : `POST /agent`
+> du sous-domaine (sans login, gaté `agent_enabled`, **bucket de rate-limit séparé**
+> `OTO_AGENT_RATE_PER_MIN`) + carte « Demander à l'agent » de `share_ui` ; capacité
+> **`me.agent`** (`oto_agent` / `POST /api/me/agent`, ops run/configure/status — `configure`
+> = `can_govern`). **Aucun état serveur** : le fil revient au client et lui est rejoué.
+> Bornes : `agent_max_steps` [1,12], sortie d'outil tronquée, historique borné,
+> `output_config.effort`. Colonnes `projects.agent_{enabled,prompt_md,max_steps}`, **opt-in
+> strict** (un endpoint public qui répond dépense le LLM + les clés de l'org). Détail :
+> `docs/projects.md`.
+
 ## Messagerie & LinkedIn (Unipile)
 
 Tools `whatsapp_*`/`telegram_*`/`instagram_*` + `unipile_*` = **Unipile hébergé**

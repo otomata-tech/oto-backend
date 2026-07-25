@@ -24,6 +24,12 @@ dependencies = [
     # LOCAL) : on a donc retiré l'extra `browser` d'oto-core, qui ne servait qu'à tirer
     # patchright transitivement (via o-browser). Le CLI local, lui, garde oto-core[browser].
     "patchright>=0.1.0",
+    # SDK Anthropic = substrat du mode AGENT server-side (`agent_llm`/`agent_runtime`,
+    # Messages API + tool calling). Déclaré en dépendance NORMALE pour que le deploy
+    # l'installe, mais **importé de façon guardée** : sans ANTHROPIC_API_KEY la surface
+    # agent est simplement absente (`agent_runtime.available()` → False), le serveur
+    # boote et sert MCP/REST à l'identique. Plancher aligné sur `output_config`/`effort`.
+    "anthropic>=0.116.0",
     # Détection des callbacks qui bloquent l'event loop (gel du serveur mono-loop,
     # vécu 2026-07-02) — la détection native asyncio-debug sans son overhead ;
     # consommé par oto_mcp/loop_watch.py (warn journal ≥1s, event Sentry ≥10s).

@@ -269,9 +269,107 @@ def _connectors_card(connectors: list[dict]) -> str:
 
 
 # ── Rendus de page ────────────────────────────────────────────────────────────
+# ── Agent server-side : la boucle tourne CHEZ NOUS ───────────────────────────
+# Le hero ci-dessus dit « branche ce projet dans TON client ». Cette carte-ci
+# répond à l'autre moitié du public : celui qui n'a pas de client MCP. Le fil est
+# porté par le CLIENT (`messages` rejoué à chaque tour) — zéro état serveur, donc
+# aucune session à expirer, et un rechargement de page repart proprement.
+_AGENT_CSS = """
+  .agent{background:var(--surface);border:1px solid var(--hair);border-radius:14px;
+    padding:22px 26px;margin:20px 0;box-shadow:var(--shadow-card)}
+  .agent h2{font-family:'Bricolage Grotesque',sans-serif;font-size:15px;margin:0 0 4px;font-weight:700}
+  .agent .sub{color:var(--mute);font-size:13.5px;margin:0 0 14px}
+  .agent .log{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+  .agent .log:empty{display:none}
+  .agent .msg{border-radius:10px;padding:10px 13px;font-size:14.5px;white-space:pre-wrap;
+    word-wrap:break-word;max-width:100%}
+  .agent .msg.me{background:var(--primary-soft);color:var(--primary-ink);align-self:flex-end}
+  .agent .msg.bot{background:var(--paper3);border:1px solid var(--hair)}
+  .agent .msg.err{background:#fdeeea;border:1px solid #f0c4b8;color:#7a2e19}
+  .agent .tools{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);
+    margin-top:6px}
+  .agent form{display:flex;gap:8px}
+  .agent input{flex:1;font:inherit;font-size:14.5px;padding:10px 13px;border-radius:10px;
+    border:1px solid var(--hair);background:var(--paper3);color:var(--ink)}
+  .agent input:focus{outline:2px solid var(--primary);outline-offset:-1px}
+  .agent button[disabled]{opacity:.5;cursor:default}
+"""
+
+_AGENT_JS = """
+<script>
+(function(){
+  var f=document.getElementById('agf'); if(!f) return;
+  var input=document.getElementById('agq'), log=document.getElementById('aglog'),
+      btn=document.getElementById('agb'), thread=null, busy=false;
+  function add(cls,text){
+    var d=document.createElement('div'); d.className='msg '+cls; d.textContent=text;
+    log.appendChild(d); d.scrollIntoView({block:'nearest'}); return d;
+  }
+  f.addEventListener('submit',function(e){
+    e.preventDefault();
+    var q=input.value.trim(); if(!q||busy) return;
+    add('me',q); input.value=''; busy=true; btn.disabled=true;
+    var pending=add('bot','…');
+    fetch('/agent',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({message:q,messages:thread})})
+     .then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});})
+     .then(function(res){
+       var j=res.body||{};
+       if(!res.ok||j.error){
+         pending.className='msg err';
+         pending.textContent=j.message||"L'agent n'a pas pu répondre ("+(j.error||'erreur')+").";
+         return;
+       }
+       thread=j.messages||null;
+       pending.textContent=j.reply||(j.stopped==='refusal'
+         ? "Je ne peux pas répondre à cette demande."
+         : "Je n'ai pas de réponse à donner sur ce point.");
+       var used=(j.steps||[]).map(function(s){return s.tool+(s.ok?'':' ✗');});
+       if(used.length){
+         var t=document.createElement('div'); t.className='tools';
+         t.textContent='outils : '+used.join(', '); pending.appendChild(t);
+       }
+     })
+     .catch(function(){ pending.className='msg err';
+       pending.textContent='Connexion interrompue. Réessaie.'; })
+     .then(function(){ busy=false; btn.disabled=false; input.focus(); });
+  });
+})();
+</script>
+"""
+
+
+def _agent_available() -> bool:
+    """Le substrat LLM est-il configuré sur ce déploiement ? (import local : `share_ui`
+    est rendu en threadpool, on ne charge pas le runtime au boot pour rien)"""
+    try:
+        from . import agent_runtime
+        return agent_runtime.available()
+    except Exception:  # noqa: BLE001 — pas d'agent = page identique à avant
+        return False
+
+
+def _agent_card(enabled: bool) -> str:
+    """Carte « demande à l'agent » — rendue seulement si le projet l'a activée."""
+    if not enabled:
+        return ""
+    return (
+        '<div class=agent>'
+        '<h2>Demander à l\'agent</h2>'
+        '<p class=sub>Pose ta question : l\'agent de ce projet utilise ses outils pour '
+        'te répondre, directement ici — aucun compte requis.</p>'
+        '<div class=log id=aglog></div>'
+        '<form id=agf autocomplete=off>'
+        '<input id=agq type=text placeholder="Ta question…" maxlength=2000 '
+        'aria-label="Question à l\'agent">'
+        '<button class=btn id=agb type=submit>Envoyer</button>'
+        '</form></div>')
+
+
 def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: list[dict],
                  docs: list[dict], connect_url: str, connectors: Optional[list[dict]] = None,
-                 add_url: Optional[str] = None, loose_tools: Optional[list[str]] = None) -> str:
+                 add_url: Optional[str] = None, loose_tools: Optional[list[str]] = None,
+                 agent_enabled: bool = False) -> str:
     brief_html = (f'<div class=card><article>{_MD.render(brief_md)}</article></div>'
                   if (brief_md or "").strip()
                   else '<p class="empty">Projet partagé, en lecture seule.</p>')
@@ -298,10 +396,13 @@ def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: li
     inner = (f'  <div class=eyebrow>Projet partagé · Oto</div>\n'
              f'  <h1>{html.escape(name or "Projet")}</h1>\n'
              f'  {brief_html}\n'
+             f'  {_agent_card(agent_enabled)}\n'
              f'  {_hero_connect(connect_url, add_url)}\n'
              f'  {conns}\n'
              f'  {sections}\n  {loose}')
-    return _shell(title=name, inner=inner)
+    return _shell(title=name, inner=inner,
+                  extra_head=(f"<style>{_AGENT_CSS}</style>" if agent_enabled else ""),
+                  extra_body=(_AGENT_JS if agent_enabled else ""))
 
 
 def render_prose(*, name: str, title: str, body_md: str, kind_label: str) -> str:
@@ -611,7 +712,10 @@ def build_page(project: dict, path: str, *, offset: int = 0,
         return render_index(
             name=project.get("name") or "", brief_md=project.get("brief_md") or "",
             procedures=procedures, tables=tables, docs=docs, connect_url=connect_url,
-            connectors=connectors, add_url=add_url, loose_tools=loose), 200
+            connectors=connectors, add_url=add_url, loose_tools=loose,
+            # L'agent server-side n'a de surface publique que si l'auteur l'a activé
+            # ET que le déploiement porte le substrat LLM (sinon la carte mentirait).
+            agent_enabled=bool(project.get("agent_enabled")) and _agent_available()), 200
 
     parts = p.strip("/").split("/")
     if len(parts) == 2 and parts[1].isdigit():

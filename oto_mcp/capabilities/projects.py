@@ -117,6 +117,11 @@ def _view(row: dict) -> dict:
         "mcp_tools": list(row.get("mcp_tools") or []),
         "mcp_expose_datastore": bool(row.get("mcp_expose_datastore")),
         "mcp_expose_datastore_write": bool(row.get("mcp_expose_datastore_write")),
+        # Agent SERVER-SIDE (`agent_runtime`) : oto exécute la boucle de tool calling.
+        # Réglé par `oto_agent op=configure` ; ici en LECTURE seule (la fiche projet
+        # montre l'état sans que le dashboard ait à sonder une 2e route).
+        "agent_enabled": bool(row.get("agent_enabled")),
+        "agent_max_steps": row.get("agent_max_steps"),
         "mcp_url": _mcp_url(row.get("mcp_slug"), row.get("mcp_access") or "off"),
         # Base de PARTAGE navigable (lecture seule, humain) — mode `secret` uniquement.
         "share_url": (f"https://{row['mcp_slug']}.share.{config.project_domain()}"

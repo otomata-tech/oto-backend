@@ -184,6 +184,109 @@ def _offset_from_query(scope) -> int:
         return 0
 
 
+# Bucket SÉPARÉ (plus serré) pour l'agent server-side : un tour d'agent coûte des
+# appels LLM + N appels d'outils, sans commune mesure avec une requête MCP. Même
+# mécanique de token-bucket, autre cadence.
+def _agent_rate_per_min() -> float:
+    try:
+        return float(os.environ.get("OTO_AGENT_RATE_PER_MIN", "10"))
+    except ValueError:
+        return 10.0
+
+
+_AGENT_BUCKETS: dict[tuple[str, int], tuple[float, float]] = {}
+
+
+def _check_agent_bucket(key: tuple[str, int], now: float) -> bool:
+    per_sec = _agent_rate_per_min() / 60.0
+    burst = max(1.0, _agent_rate_per_min() / 2.0)
+    tokens, last = _AGENT_BUCKETS.get(key, (burst, now))
+    tokens = min(burst, tokens + (now - last) * per_sec)
+    if tokens < 1.0:
+        _AGENT_BUCKETS[key] = (tokens, now)
+        return False
+    _AGENT_BUCKETS[key] = (tokens - 1.0, now)
+    while len(_AGENT_BUCKETS) > _BUCKETS_CAP:
+        del _AGENT_BUCKETS[next(iter(_AGENT_BUCKETS))]
+    return True
+
+
+async def _send_json(send, payload: dict, status: int = 200) -> None:
+    body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", b"application/json; charset=utf-8"),
+                            (b"cache-control", b"no-store")]})
+    await send({"type": "http.response.body", "body": body})
+
+
+# Plafond du corps d'une requête d'agent (message + fil rejoué par le client).
+_AGENT_BODY_CAP = 256 * 1024
+
+
+async def _read_body(receive) -> Optional[bytes]:
+    """Corps de la requête, ou None s'il dépasse le plafond (refus explicite)."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            break
+        chunk = message.get("body") or b""
+        total += len(chunk)
+        if total > _AGENT_BODY_CAP:
+            return None
+        chunks.append(chunk)
+        if not message.get("more_body"):
+            break
+    return b"".join(chunks)
+
+
+async def _handle_agent(scope, receive, send, proj: dict, allow: frozenset) -> None:
+    """`POST /agent` d'un projet publié — fait tourner l'agent SERVER-SIDE.
+
+    Le contexte anonyme (`AnonContext`) est déjà posé par l'appelant : les outils
+    résolvent donc les credentials de l'org PROPRIÉTAIRE, exactement comme un appel
+    MCP anonyme sur le même endpoint. L'allowlist passée est celle du preset —
+    aucune surface neuve. **Sans état serveur** : le client rejoue le fil (`messages`)
+    qu'on lui a rendu au tour précédent.
+    """
+    from . import agent_runtime
+
+    if not bool(proj.get("agent_enabled")):
+        return await _send_json(send, {"error": "agent_disabled",
+                                       "message": "L'agent n'est pas activé sur ce projet."}, 404)
+    if not agent_runtime.available():
+        return await _send_json(send, {"error": "agent_unavailable",
+                                       "message": "L'agent n'est pas configuré sur ce déploiement."}, 503)
+    raw = await _read_body(receive)
+    if raw is None:
+        return await _send_json(send, {"error": "payload_too_large"}, 413)
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return await _send_json(send, {"error": "bad_json"}, 400)
+    if not isinstance(payload, dict):
+        return await _send_json(send, {"error": "bad_json"}, 400)
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return await _send_json(send, {"error": "empty_message"}, 400)
+    history = payload.get("messages")
+    if history is not None and not isinstance(history, list):
+        return await _send_json(send, {"error": "bad_history"}, 400)
+
+    spec = agent_runtime.project_spec(proj, allow)
+    try:
+        result = await agent_runtime.run(spec, message[:8000], history=history)
+    except agent_runtime.agent_llm.LlmUnavailable:
+        return await _send_json(send, {"error": "agent_unavailable"}, 503)
+    except Exception as e:  # noqa: BLE001 — jamais un 500 opaque sur une page publique
+        logger.exception("agent run failed for project %s", proj.get("id"))
+        return await _send_json(send, {"error": "agent_failed", "message": str(e)[:300]}, 502)
+    out = result.as_dict()
+    out["messages"] = result.messages
+    return await _send_json(send, out)
+
+
 async def _send_429(send) -> None:
     body = json.dumps({"error": "rate_limited",
                        "message": "Trop de requêtes sur cet endpoint anonyme. Réessaie plus tard."}).encode()
@@ -364,6 +467,12 @@ class HostDispatch:
             # Garde-fou anti-abus : token-bucket par (IP, projet) avant tout travail.
             if not _check_bucket((_client_ip(scope, headers), int(proj["id"])), time.monotonic()):
                 return await _send_429(send)
+            # L'AGENT server-side a son propre cran (un tour = N appels LLM + outils).
+            is_agent = (scope.get("method") == "POST"
+                        and (scope.get("path") or "") in ("/agent", "/api/agent"))
+            if is_agent and not _check_agent_bucket(
+                    (_client_ip(scope, headers), int(proj["id"])), time.monotonic()):
+                return await _send_429(send)
             ctx = AnonContext(int(proj["id"]), org_id,
                               frozenset(proj.get("mcp_tools") or []),
                               # opt-in datastore : honoré uniquement en `secret` (jamais
@@ -374,6 +483,13 @@ class HostDispatch:
             if sid:
                 _store_ctx(sid, ctx)
             try:
+                # Agent SERVER-SIDE : servi DANS le contexte anonyme qu'on vient de
+                # poser → ses outils résolvent les credentials de l'org propriétaire,
+                # exactement comme un appel MCP anonyme. Même allowlist (`current_allowlist`,
+                # datastore opt-in inclus) — aucune surface neuve.
+                if is_agent:
+                    return await _handle_agent(scope, receive, send, proj,
+                                               current_allowlist() or frozenset())
                 # Sur un sous-domaine DÉDIÉ, le MCP est servi à la RACINE : claude.ai/
                 # Mistral POSTent l'initialize sur l'URL nue (`…mcp.oto.cx`, sans `/mcp`)
                 # → on réécrit `/`→`/mcp`. Les routes OAuth/well-known (chemins propres)

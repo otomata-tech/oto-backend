@@ -82,6 +82,7 @@ from . import profile  # noqa: F401 — me.profile.{get,set} (GET/PUT /api/me/pr
 from . import platform_instructions  # noqa: F401 — platform.instructions (oto_admin_platform_instructions)
 # Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).
 from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
+from . import agent  # noqa: F401 — me.agent (oto_agent) : boucle de tool calling SERVER-SIDE d'un projet
 from . import project_files  # noqa: F401 — me.project_files (oto_project_files, MCP-only, ADR 0032 §3)
 from . import kb  # noqa: F401 — me.kb (oto_kb : base de connaissance d'org = zone Documents, remplace Memento)
 from . import search  # noqa: F401 — me.search (oto_search, lot 3 Ship 1)

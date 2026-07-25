@@ -294,6 +294,15 @@ CREATE TABLE IF NOT EXISTS projects (
     -- Opt-in ADDITIONNEL, séparé de la lecture (#193) : autoriser l'ÉCRITURE du datastore
     -- (data_write/data_set_schema) sur l'endpoint partagé. Défaut FALSE (lecture seule).
     mcp_expose_datastore_write BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Agent SERVER-SIDE (`agent_runtime`) : oto fait tourner la boucle de tool calling
+    -- au lieu de laisser le visiteur brancher l'endpoint MCP dans SON client. Opt-in
+    -- STRICT (défaut FALSE) : un endpoint public qui répond consomme le LLM et les clés
+    -- de l'org propriétaire. L'allowlist d'outils reste `mcp_tools` (aucun périmètre
+    -- neuf) ; `agent_prompt_md` = consignes de l'auteur, `agent_max_steps` = plafond
+    -- de tours d'outils par requête.
+    agent_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    agent_prompt_md TEXT NOT NULL DEFAULT '',
+    agent_max_steps INTEGER NOT NULL DEFAULT 6,
     -- Projet forké depuis un partage public (« Ajouter à mon Oto ») : pointeur vers la
     -- source, pour un import IDEMPOTENT par org (idx_projects_copied_from, créé dans `_init`
     -- après l'ADD COLUMN — même gotcha que is_template sur une table préexistante).

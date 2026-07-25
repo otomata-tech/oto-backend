@@ -32,7 +32,8 @@ from .users import upsert_user
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
 _PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
-                 "mcp_expose_datastore_write, archived_at, created_at, updated_at")
+                 "mcp_expose_datastore_write, agent_enabled, agent_prompt_md, "
+                 "agent_max_steps, archived_at, created_at, updated_at")
 
 # Publication MCP (ADR 0032, amende #44) : label de sous-domaine `<slug>.mcp.oto.cx`.
 _MCP_SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,}[a-z0-9])$")  # >=3 chars, pas de - en bord
@@ -281,6 +282,31 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
             (slug, access, list(tools or []), expose_datastore,
              expose_datastore_write, project_id),
         )
+
+
+def set_project_agent(project_id: int, *, enabled: bool,
+                      prompt_md: Optional[str] = None,
+                      max_steps: Optional[int] = None) -> None:
+    """Règle l'agent SERVER-SIDE d'un projet (`agent_runtime`). L'autz (`can_govern`)
+    est appliquée en amont par la capacité — ici on ne fait que borner les valeurs.
+
+    `prompt_md`/`max_steps` à None = inchangés (permet de basculer l'interrupteur
+    sans réécrire les consignes). `max_steps` borné [1, 12] : le plafond de tours
+    d'outils est un cran de COÛT sur un endpoint potentiellement public, pas un
+    réglage libre."""
+    sets = ["agent_enabled = %s"]
+    params: list = [bool(enabled)]
+    if prompt_md is not None:
+        sets.append("agent_prompt_md = %s")
+        params.append(str(prompt_md))
+    if max_steps is not None:
+        sets.append("agent_max_steps = %s")
+        params.append(max(1, min(int(max_steps), 12)))
+    params.append(project_id)
+    with _connect() as conn:
+        conn.execute(
+            f"UPDATE projects SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
+            tuple(params))
 
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,

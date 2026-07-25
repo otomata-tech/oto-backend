@@ -255,9 +255,13 @@ async def _handle_agent(scope, receive, send, proj: dict, allow: frozenset) -> N
     if not bool(proj.get("agent_enabled")):
         return await _send_json(send, {"error": "agent_disabled",
                                        "message": "L'agent n'est pas activé sur ce projet."}, 404)
-    if not agent_runtime.available():
+    # L'org PROPRIÉTAIRE paie les tours → c'est SA clé Anthropic qu'on exige ici.
+    owner_org = (int(proj["owner_id"]) if proj.get("owner_type") == "org"
+                 and str(proj.get("owner_id") or "").isdigit() else None)
+    if not agent_runtime.available(owner_org):
         return await _send_json(send, {"error": "agent_unavailable",
-                                       "message": "L'agent n'est pas configuré sur ce déploiement."}, 503)
+                                       "message": "Aucune clé Anthropic n'est branchée pour "
+                                                  "l'organisation de ce projet."}, 503)
     raw = await _read_body(receive)
     if raw is None:
         return await _send_json(send, {"error": "payload_too_large"}, 413)

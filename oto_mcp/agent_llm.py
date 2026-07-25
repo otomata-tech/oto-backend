@@ -96,24 +96,90 @@ def _sdk():
         return None
 
 
-def enabled() -> bool:
-    """Le mode agent est-il servable sur ce déploiement ? (lib + clé présentes)"""
-    return bool(os.environ.get("ANTHROPIC_API_KEY")) and _sdk() is not None
+def sdk_available() -> bool:
+    """La lib est-elle installée ? (indépendant de toute clé)"""
+    return _sdk() is not None
 
 
-_CLIENT = None
+# ── Custody de la clé : c'est l'ORG qui paie ses tours d'agent ───────────────
+# La clé Anthropic est un credential comme un autre : connecteur `anthropic` au
+# registre (`providers.py`), coffre chiffré, cascade standard
+# `membre > groupe > org > grant plateforme`. Conséquences voulues :
+# - une org branche SA clé et paie SES tours (BYO) ;
+# - sur un endpoint PUBLIC il n'y a pas de `sub` → la cascade se réduit à
+#   `org > grant plateforme` contre l'org PROPRIÉTAIRE du projet (celle qui a
+#   publié paie — jamais un visiteur, jamais une autre org) ;
+# - le mode plateforme reste possible (oto opère pour le compte de l'org) mais
+#   passe par un grant + quota, comme tout connecteur keyed — pas par une variable
+#   d'env qui servirait tout le monde en silence.
+# `ANTHROPIC_API_KEY` (env) demeure le **dernier recours de déploiement** : une
+# instance on-premise mono-tenant (positionnement produit : config 100 % par env)
+# n'a pas d'org à qui facturer. En SaaS multi-org, elle n'est pas posée.
+PROVIDER = "anthropic"
+
+_ENV_KEY = "ANTHROPIC_API_KEY"
 
 
-def _client():
-    global _CLIENT
-    if _CLIENT is None:
-        anthropic = _sdk()
-        if anthropic is None:
-            raise LlmUnavailable("le paquet `anthropic` n'est pas installé")
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise LlmUnavailable("ANTHROPIC_API_KEY absente")
-        _CLIENT = anthropic.Anthropic()
-    return _CLIENT
+def resolve_key(sub: Optional[str] = None) -> tuple[str, str]:
+    """Clé effective + sa provenance (`org` | `platform` | `env`).
+
+    `sub` explicite pour la face REST (le contextvar de token MCP n'y est pas
+    posé) ; None = contexte ambiant (session MCP, ou endpoint anonyme dont
+    `AnonContext` fait résoudre l'org propriétaire). Lève `LlmUnavailable` avec un
+    message ACTIONNABLE si rien ne résout — jamais un repli muet."""
+    try:
+        from . import access
+        rc = access.resolve_credential(PROVIDER, want="auto", sub=sub,
+                                       # Sonde de substrat : ne pas polluer le signal
+                                       # « connecteur qui ne résout pas » de la boucle
+                                       # d'usage quand on retombe sur la clé d'env.
+                                       emit_on_failure=False)
+        if rc.key:
+            return rc.key, ("platform" if rc.is_platform else "org")
+    except Exception:  # noqa: BLE001 — pas de clé d'org = on tente le recours déploiement
+        pass
+    env = os.environ.get(_ENV_KEY)
+    if env:
+        return env, "env"
+    raise LlmUnavailable(
+        "Aucune clé Anthropic résoluble : branche la clé de ton organisation sur le "
+        "connecteur « anthropic » (dashboard → connecteurs), ou demande un accès à la "
+        "clé plateforme.")
+
+
+def key_ready(org_id: Optional[int] = None) -> bool:
+    """Une clé est-elle DISPONIBLE, sans la déchiffrer ? Sonde légère pour décider
+    d'AFFICHER une surface d'agent (page publique, statut) — jamais pour autoriser
+    un appel (là c'est `resolve_key`, qui porte les gates).
+
+    `org_id` = l'org qui paiera (propriétaire d'un projet publié) ; None = on ne
+    sait pas encore, seule la clé d'env peut trancher sans contexte."""
+    if os.environ.get(_ENV_KEY):
+        return True
+    if org_id is None:
+        return False
+    try:
+        from . import access
+        return bool(access.connector_resolvable_for_org(PROVIDER, int(org_id)))
+    except Exception:  # noqa: BLE001 — sonde d'affichage : jamais bloquante
+        return False
+
+
+def enabled(org_id: Optional[int] = None) -> bool:
+    """Le mode agent est-il servable ici ? (lib installée ET clé disponible)"""
+    return sdk_available() and key_ready(org_id)
+
+
+def client_for(api_key: Optional[str] = None):
+    """Client SDK pour CETTE clé. **Pas de singleton** : la clé change d'une org à
+    l'autre (et d'un endpoint public à l'autre) — mémoriser un client, ce serait
+    dépenser la clé d'une org pour une autre. `api_key=None` = résolution ambiante
+    (repli pour un appelant qui n'a pas déjà résolu)."""
+    anthropic = _sdk()
+    if anthropic is None:
+        raise LlmUnavailable("le paquet `anthropic` n'est pas installé")
+    key = api_key or resolve_key()[0]
+    return anthropic.Anthropic(api_key=key)
 
 
 def _block_type(block: Any) -> str:
@@ -143,17 +209,21 @@ def _block_to_dict(block: Any) -> dict:
             "text": str(getattr(block, "text", "") or "")}
 
 
-def complete(*, system: str, messages: list, tools: list[dict]) -> Turn:
+def complete(*, system: str, messages: list, tools: list[dict],
+             api_key: Optional[str] = None) -> Turn:
     """UN tour de modèle. **SYNCHRONE** — le serveur est mono-loop : l'appeler
     depuis un threadpool (`run_in_threadpool`), jamais dans la boucle (cf. CLAUDE.md
     §PERF, même règle que `embeddings.embed_texts`).
 
     `messages` = le fil au format Anthropic (tours user/assistant, blocs
     `tool_result` côté user) ; `tools` = `[{name, description, input_schema}]`.
-    Lève `LlmUnavailable` si le substrat n'est pas configuré ; toute autre erreur
-    (réseau, quota, 4xx) remonte telle quelle à l'appelant, qui décide.
+    `api_key` = la clé RÉSOLUE par l'appelant (`resolve_key`) : elle est passée
+    explicitement pour que la boucle la résolve UNE fois par requête, sous le bon
+    contexte d'org, plutôt qu'ici à chaque tour. Lève `LlmUnavailable` si le
+    substrat n'est pas configuré ; toute autre erreur (réseau, quota, 4xx) remonte
+    telle quelle à l'appelant, qui décide.
     """
-    client = _client()
+    client = client_for(api_key)
     kwargs: dict = {
         "model": model(),
         "max_tokens": max_tokens(),

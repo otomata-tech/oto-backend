@@ -162,6 +162,25 @@ docs.py`, op create/list/get/update/delete/move, `POST /api/me/docs`). Partage/t
 > — **opt-in STRICT** (défaut FALSE) : un endpoint public qui répond dépense le LLM et
 > les clés de l'org propriétaire.
 >
+> **Custody de la clé — c'est l'ORG qui paie (oto-private#65 → `otomata-tech/oto#1`).**
+> La clé Anthropic n'est pas une variable d'env : c'est un **credential comme un autre**,
+> connecteur **`anthropic`** au registre (`providers.py`, `byo_org` + `platform`, keyed,
+> credential-only — `tools/anthropic.py` = `register()` no-op), coffre chiffré, cascade
+> standard `membre > groupe > org > grant plateforme` via `access.resolve_credential`.
+> Conséquences voulues : (a) une org branche SA clé et paie SES tours ; (b) sur la face
+> PUBLIQUE il n'y a pas de `sub` → la cascade se réduit à `org > grant plateforme` contre
+> l'**org propriétaire du projet** — celle qui a publié paie, jamais un visiteur ni une
+> autre org ; (c) le mode plateforme reste possible (oto opère pour le compte de l'org)
+> mais passe par grant + quota comme tout connecteur keyed, pas par une env qui servirait
+> tout le monde en silence. `ANTHROPIC_API_KEY` (env) reste le **dernier recours de
+> déploiement** (on-premise mono-tenant, qui n'a personne à facturer) — jamais prioritaire
+> sur une clé d'org. La clé est résolue **une fois par requête** (déchiffrement = I/O →
+> threadpool), sa provenance remonte dans `usage.key_source` (`org`/`platform`/`env`).
+> `available` (sonde `connector_resolvable_for_org`, sans déchiffrement) gate l'AFFICHAGE
+> de la carte publique : pas de clé ⇒ pas de bouton, plutôt qu'un bouton qui échoue.
+> C'est aussi le socle de custody des **routines** planifiées (`oto#1`) : mêmes clé,
+> même cascade, même org qui paie.
+>
 > **Frontière d'injection de prompt** : le brief + `agent_prompt_md` (écrits par le
 > PROPRIÉTAIRE) vont au niveau système ; le message du VISITEUR reste strictement dans
 > le tour user, et le cadre système dit explicitement qu'une consigne du visiteur n'est

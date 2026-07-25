@@ -93,9 +93,11 @@ class AgentResult:
                 "stopped": self.stopped, "usage": self.usage}
 
 
-def available() -> bool:
-    """Le mode agent est-il servable ici ? (substrat LLM configuré)"""
-    return agent_llm.enabled()
+def available(org_id: Optional[int] = None) -> bool:
+    """Le mode agent est-il servable ici ? Lib installée ET clé Anthropic disponible
+    pour l'org qui paiera (`org_id` = propriétaire du projet publié ; None = seule
+    une clé de déploiement en env peut trancher sans contexte)."""
+    return agent_llm.enabled(org_id)
 
 
 # ── Catalogue d'outils exposé au modèle ──────────────────────────────────────
@@ -211,13 +213,21 @@ def _trim(messages: list) -> list:
     return list(messages[-MAX_HISTORY_MESSAGES:])
 
 
-async def run(spec: AgentSpec, prompt: str, history: Optional[list] = None) -> AgentResult:
+async def run(spec: AgentSpec, prompt: str, history: Optional[list] = None,
+              sub: Optional[str] = None) -> AgentResult:
     """Fait tourner l'agent jusqu'à une réponse, `max_steps` tours d'outils, ou un
     refus. Le fil complet revient dans `AgentResult.messages` (relance sans état
     serveur). L'appel modèle est SYNC → poussé au threadpool (serveur mono-loop).
+
+    `sub` = identité sous laquelle la **clé Anthropic** est résolue (explicite pour
+    la face REST, où le contextvar de token MCP n'est pas posé). Sur un endpoint
+    public, `sub=None` + `AnonContext` → la clé de l'org PROPRIÉTAIRE. La clé est
+    résolue UNE fois par requête (déchiffrement = I/O bloquant → threadpool), pas
+    à chaque tour.
     """
     from starlette.concurrency import run_in_threadpool
 
+    api_key, key_source = await run_in_threadpool(agent_llm.resolve_key, sub)
     messages = _trim(history or [])
     messages.append({"role": "user", "content": prompt})
     schemas = await tool_schemas(spec.tools)
@@ -228,7 +238,8 @@ async def run(spec: AgentSpec, prompt: str, history: Optional[list] = None) -> A
 
     for _ in range(max(1, spec.max_steps) + 1):
         turn = await run_in_threadpool(
-            agent_llm.complete, system=spec.system, messages=messages, tools=schemas)
+            agent_llm.complete, system=spec.system, messages=messages,
+            tools=schemas, api_key=api_key)
         for k in ("input_tokens", "output_tokens"):
             usage[k] = usage.get(k, 0) + int(turn.usage.get(k) or 0)
 
@@ -266,6 +277,7 @@ async def run(spec: AgentSpec, prompt: str, history: Optional[list] = None) -> A
 
     if not reply and stopped == "end_turn":
         stopped = "no_reply"
+    usage["key_source"] = key_source
     return AgentResult(reply=reply, steps=steps, stopped=stopped, usage=usage,
                        messages=messages)
 

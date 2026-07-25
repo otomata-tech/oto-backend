@@ -532,6 +532,20 @@ _REGISTRY_LIST = [
        secret_kind="api_key",
        label="Resend", help="envoi d'email transactionnel (clé de l'org)",
        publisher="Resend", href="https://resend.com"),
+    # anthropic : credential-only (PAS de tools propres — comme resend). La clé
+    # alimente le SUBSTRAT d'agent (`agent_llm`/`agent_runtime`) : boucle de tool
+    # calling server-side d'un projet, et les routines planifiées à venir. C'est
+    # l'ORG qui paie ses tours d'agent → `byo_org` d'abord ; `platform` reste possible
+    # (oto opère pour le compte de l'org, via grant + quota, comme tout keyed).
+    # Résolu par la cascade standard `resolve_api_key` : sur un endpoint PUBLIC
+    # (sans sub) elle se réduit à org > grant plateforme et tape donc l'org
+    # PROPRIÉTAIRE du projet — celle qui a publié paie, jamais un tiers.
+    # tools/anthropic.py = register() no-op (invariant « un module par provider »).
+    _c("anthropic", ["anthropic"], auth_modes={"byo_org", "platform"}, keyed=True,
+       secret_kind="api_key",
+       label="Anthropic (agent)",
+       help="clé Anthropic de l'org — fait tourner les agents et les routines d'oto",
+       publisher="Anthropic", href="https://console.anthropic.com/settings/keys"),
     # scaleway : email transactionnel via le compte Scaleway TEM DE L'ORG (BYO, comme resend).
     # L'org amène sa clé (secret_key + project_id) ; l'API TEM n'envoie que depuis les domaines
     # VÉRIFIÉS dans le compte Scaleway de l'org → propriété du domaine garantie par Scaleway,

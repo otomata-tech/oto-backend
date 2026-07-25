@@ -126,6 +126,7 @@ async def test_run_executes_a_tool_then_answers(monkeypatch):
         _turn(calls=[agent_llm.ToolCall(id="t1", name="fr_search", arguments={"q": "x"})]),
         _turn(text="Voici la réponse."),
     ]
+    monkeypatch.setattr(agent_llm, "resolve_key", lambda sub=None: ("sk-test", "org"))
     monkeypatch.setattr(agent_llm, "complete", lambda **kw: scripted.pop(0))
     monkeypatch.setattr(agent_runtime, "tool_schemas",
                         lambda names: _async([{"name": "fr_search", "description": "",
@@ -153,6 +154,7 @@ async def test_run_executes_a_tool_then_answers(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_stops_at_max_steps(monkeypatch):
     call = agent_llm.ToolCall(id="t", name="fr_search", arguments={})
+    monkeypatch.setattr(agent_llm, "resolve_key", lambda sub=None: ("sk-test", "org"))
     monkeypatch.setattr(agent_llm, "complete", lambda **kw: _turn(calls=[call]))
     monkeypatch.setattr(agent_runtime, "tool_schemas", lambda names: _async([]))
 
@@ -170,6 +172,7 @@ async def test_run_stops_at_max_steps(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_surfaces_refusal_without_reading_content(monkeypatch):
+    monkeypatch.setattr(agent_llm, "resolve_key", lambda sub=None: ("sk-test", "org"))
     monkeypatch.setattr(agent_llm, "complete", lambda **kw: _turn(stop="refusal"))
     monkeypatch.setattr(agent_runtime, "tool_schemas", lambda names: _async([]))
     spec = agent_runtime.AgentSpec(system="s", tools=frozenset())
@@ -182,3 +185,59 @@ def _async(value):
     async def _coro():
         return value
     return _coro()
+
+
+# ── Custody de la clé : c'est l'ORG qui paie (oto-private#65 / oto#1) ────────
+def test_key_ready_falls_back_to_deployment_env_key(monkeypatch):
+    """Une instance on-premise mono-tenant n'a pas d'org à facturer : la clé d'env
+    reste un recours de DÉPLOIEMENT."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    assert agent_llm.key_ready() is True
+    assert agent_llm.key_ready(org_id=42) is True
+
+
+def test_key_ready_without_org_and_without_env_is_false(monkeypatch):
+    """Sans clé d'env ET sans org connue, rien ne peut trancher → pas de surface."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert agent_llm.key_ready() is False
+
+
+def test_resolve_key_prefers_the_org_credential_over_the_env_key(monkeypatch):
+    """La clé de l'ORG l'emporte : une clé d'env ne doit jamais faire payer oto à la
+    place d'une org qui a branché la sienne."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+
+    class _RC:
+        key, is_platform = "sk-org", False
+    import oto_mcp.access as access
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **kw: _RC())
+    assert agent_llm.resolve_key() == ("sk-org", "org")
+
+
+def test_resolve_key_raises_actionable_when_nothing_resolves(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import oto_mcp.access as access
+
+    def _boom(*a, **kw):
+        raise RuntimeError("pas de clé")
+    monkeypatch.setattr(access, "resolve_credential", _boom)
+    with pytest.raises(agent_llm.LlmUnavailable) as e:
+        agent_llm.resolve_key()
+    # Le message doit dire QUOI faire, pas seulement que ça a raté.
+    assert "anthropic" in str(e.value).lower()
+
+
+def test_anthropic_is_a_byo_org_connector_in_the_registry():
+    """La clé vit dans le coffre comme tout credential : org d'abord, plateforme
+    possible — jamais un secret hors registre."""
+    from oto_mcp import connectors
+    con = connectors.connector_for_provider("anthropic")
+    assert con is not None
+    assert con.keyed is True
+    assert "byo_org" in con.auth_modes
+    assert "byo_user" not in con.auth_modes  # un agent d'org n'est pas payé par un membre
+
+
+def test_owner_org_drives_who_pays_on_the_public_face():
+    assert agent_cap._owner_org({"owner_type": "org", "owner_id": "7"}) == 7
+    assert agent_cap._owner_org({"owner_type": "user", "owner_id": "sub-x"}) is None

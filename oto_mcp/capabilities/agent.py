@@ -53,6 +53,33 @@ def _require(cond, code: str, msg: str, status: int = 400) -> None:
         raise AuthzDenied(status, code, msg)
 
 
+def _owner_org(row: dict):
+    """Org PROPRIÉTAIRE du projet — celle dont la clé Anthropic paiera les tours
+    servis sur la face publique. None pour un projet possédé hors org."""
+    if row.get("owner_type") == "org" and str(row.get("owner_id") or "").isdigit():
+        return int(row["owner_id"])
+    return None
+
+
+def _available_for(row: dict, ctx: ResolvedCtx) -> bool:
+    """Une clé est-elle résoluble pour ce projet ? On sonde l'org PROPRIÉTAIRE (elle
+    porte la face publique) et, à défaut, l'org active de l'appelant (un projet perso
+    tourne sous la clé de l'org où il travaille)."""
+    return (agent_runtime.available(_owner_org(row))
+            or agent_runtime.available(ctx.org_id))
+
+
+def _key_source(sub: str):
+    """Provenance de la clé qui serait utilisée (`org`/`platform`/`env`), sans la
+    déchiffrer inutilement — informatif pour le dashboard, jamais un gate."""
+    try:
+        from .. import access
+        mode = access.credential_mode_for(sub, agent_llm.PROVIDER)
+        return mode if mode not in ("forbidden", "over_quota") else None
+    except Exception:  # noqa: BLE001 — un statut ne casse jamais
+        return None
+
+
 def _project(ctx: ResolvedCtx, inp: AgentInput) -> dict:
     row = db.get_project_by_id(int(inp.project_id))
     _require(row is not None, "not_found", "Projet introuvable.", 404)
@@ -79,10 +106,12 @@ async def _agent(ctx: ResolvedCtx, inp: AgentInput) -> dict:
         return {
             "project_id": row["id"],
             "enabled": bool(row.get("agent_enabled")),
-            # « Disponible » = le déploiement porte le substrat LLM. Distinct de
-            # `enabled` (choix de l'auteur) → le front rend les deux, sans deviner.
-            "available": agent_runtime.available(),
-            "model": agent_llm.model() if agent_runtime.available() else None,
+            # « Disponible » = lib installée ET clé Anthropic résoluble pour l'org
+            # qui paiera. Distinct d'`enabled` (choix de l'auteur) → le front rend
+            # les deux, sans deviner ; `key_source` dit QUI paie.
+            "available": _available_for(row, ctx),
+            "key_source": _key_source(ctx.sub),
+            "model": agent_llm.model(),
             "max_steps": row.get("agent_max_steps"),
             "prompt_md": row.get("agent_prompt_md") or "",
             "tools": list(row.get("mcp_tools") or []),
@@ -104,10 +133,11 @@ async def _agent(ctx: ResolvedCtx, inp: AgentInput) -> dict:
         out = {"project_id": fresh["id"], "enabled": bool(fresh.get("agent_enabled")),
                "max_steps": fresh.get("agent_max_steps"),
                "prompt_md": fresh.get("agent_prompt_md") or "",
-               "available": agent_runtime.available()}
+               "available": _available_for(fresh, ctx)}
         if enabled and not out["available"]:
-            out["warning"] = ("Agent activé mais le substrat LLM n'est pas configuré "
-                              "sur ce déploiement — la surface reste inerte.")
+            out["warning"] = ("Agent activé mais aucune clé Anthropic n'est résoluble "
+                              "pour l'organisation propriétaire — branche-la sur le "
+                              "connecteur « anthropic » ; la surface reste inerte d'ici là.")
         if enabled and not (fresh.get("mcp_tools") or []):
             out["warning_tools"] = ("Aucun outil dans le preset du projet : l'agent "
                                     "répondra sans pouvoir agir. Publie un toolset "
@@ -117,8 +147,8 @@ async def _agent(ctx: ResolvedCtx, inp: AgentInput) -> dict:
     # op == "run"
     _require(ownership.can_access(ctx.sub, RTYPE, pid, want="read"),
              "forbidden", "Accès refusé à ce projet.", 403)
-    _require(agent_runtime.available(), "agent_unavailable",
-             "Le substrat LLM n'est pas configuré sur ce déploiement.", 503)
+    _require(agent_llm.sdk_available(), "agent_unavailable",
+             "Le substrat d'agent n'est pas installé sur ce déploiement.", 503)
     message = (inp.message or "").strip()
     _require(bool(message), "empty_message", "`message` requis.", 400)
     tools = _allowlist(row, inp.tools)
@@ -127,7 +157,13 @@ async def _agent(ctx: ResolvedCtx, inp: AgentInput) -> dict:
              "(oto_project op=publish_mcp mcp_tools=[…]) avant de faire tourner l'agent.",
              400)
     spec = agent_runtime.project_spec(row, tools)
-    result = await agent_runtime.run(spec, message[:8000], history=inp.messages)
+    # `sub` explicite : la face REST n'a pas le contextvar de token MCP, et c'est
+    # l'appelant qui paie ce run (cascade membre > groupe > org > grant plateforme).
+    try:
+        result = await agent_runtime.run(spec, message[:8000],
+                                         history=inp.messages, sub=ctx.sub)
+    except agent_llm.LlmUnavailable as e:
+        raise AuthzDenied(503, "no_anthropic_key", str(e))
     out = result.as_dict()
     out["messages"] = result.messages
     out["project_id"] = row["id"]
@@ -152,7 +188,13 @@ CAPABILITIES += [
             "and `max_steps` (tool rounds per request, 1-12) — once ON, a PUBLISHED "
             "project also answers visitors on its public page with no login, spending "
             "the OWNER ORG's credentials, so enable it deliberately. op=status reports "
-            "enabled/available/model/tools without running anything."),
+            "enabled/available/model/tools without running anything. "
+            "WHO PAYS: the loop runs on the ANTHROPIC key resolved through the normal "
+            "connector cascade (member > team > org > platform grant) — an org plugs its "
+            "own key on the `anthropic` connector. On the PUBLIC face there is no user, "
+            "so it resolves against the project's OWNER ORG: publishing means spending "
+            "your own org's key. `available: false` means no key resolves — plug one "
+            "before enabling."),
         rest=RestBinding("POST", "/api/me/agent"),
     ),
 ]

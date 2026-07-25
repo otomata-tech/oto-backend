@@ -339,12 +339,16 @@ _AGENT_JS = """
 """
 
 
-def _agent_available() -> bool:
-    """Le substrat LLM est-il configuré sur ce déploiement ? (import local : `share_ui`
-    est rendu en threadpool, on ne charge pas le runtime au boot pour rien)"""
+def _agent_available(project: dict) -> bool:
+    """L'agent est-il servable pour CE projet ? Lib installée + **clé Anthropic de
+    l'org PROPRIÉTAIRE** disponible (c'est elle qui paiera les tours). Sans clé, on
+    n'affiche pas la carte : mieux vaut pas de bouton qu'un bouton qui échoue.
+    (Import local : `share_ui` est rendu en threadpool, rien au boot.)"""
     try:
         from . import agent_runtime
-        return agent_runtime.available()
+        org_id = (int(project["owner_id"]) if project.get("owner_type") == "org"
+                  and str(project.get("owner_id") or "").isdigit() else None)
+        return agent_runtime.available(org_id)
     except Exception:  # noqa: BLE001 — pas d'agent = page identique à avant
         return False
 
@@ -715,7 +719,8 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             connectors=connectors, add_url=add_url, loose_tools=loose,
             # L'agent server-side n'a de surface publique que si l'auteur l'a activé
             # ET que le déploiement porte le substrat LLM (sinon la carte mentirait).
-            agent_enabled=bool(project.get("agent_enabled")) and _agent_available()), 200
+            agent_enabled=bool(project.get("agent_enabled"))
+            and _agent_available(project)), 200
 
     parts = p.strip("/").split("/")
     if len(parts) == 2 and parts[1].isdigit():

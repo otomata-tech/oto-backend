@@ -244,6 +244,19 @@ dans l'org active (structure only, jamais de credentials ; idempotent via `proje
 > `output_config.effort`. Colonnes `projects.agent_{enabled,prompt_md,max_steps}`, **opt-in
 > strict** (un endpoint public qui répond dépense le LLM + les clés de l'org). Détail :
 > `docs/projects.md`.
+>
+> **Custody de la clé Anthropic = l'ORG paie (oto-private#65 → `otomata-tech/oto#1`).**
+> La clé n'est PAS une variable d'env : connecteur **`anthropic`** au registre
+> (`byo_org` + `platform`, keyed, credential-only — `tools/anthropic.py` = no-op),
+> coffre chiffré, cascade standard `access.resolve_credential`
+> (membre > groupe > org > grant plateforme). Sur la face **publique** (pas de `sub`) la
+> cascade se réduit à `org > grant` contre l'**org PROPRIÉTAIRE du projet** : qui publie
+> paie. `ANTHROPIC_API_KEY` (env) = **dernier recours de déploiement** (on-premise
+> mono-tenant), jamais prioritaire sur une clé d'org. Résolue **une fois par requête**
+> (déchiffrement = I/O → threadpool) ; provenance dans `usage.key_source`. La sonde
+> d'affichage (`agent_llm.key_ready` → `connector_resolvable_for_org`, sans déchiffrement)
+> gate la carte publique : pas de clé ⇒ pas de bouton. Même socle de custody pour les
+> **routines** planifiées à venir.
 
 ## Messagerie & LinkedIn (Unipile)
 

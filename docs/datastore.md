@@ -53,6 +53,23 @@ Surfaces :
   `tools/foncier.py` (`foncier_*_app`).
 - REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard.
 
+**Requêtage serveur de `data_rows` (feedback #279).** Le chemin MCP expose désormais le
+MÊME filtrage que la vue tableau du dashboard — un agent ne doit jamais dumper un
+namespace pour répondre à une question sur quelques lignes (vécu : 749 lignes de
+`linkedin-feed` rapatriées en 2 pages de ~500 Ko puis retaillées en jq, pour « quel post
+a une autrice prénommée Sylvie ? ») :
+- `q` = plein texte sur toute la ligne (`data::text ILIKE`) ;
+- `filter` à **trois formes** par colonne, traduites par `datastore._mcp_filter_clauses` :
+  scalaire = `eq`, liste = `in`, dict = opérateur explicite
+  (`{"author_name": {"contains": "sylvie"}}`, `{"posted_at": {"gte": "2026-06-01"}}`) —
+  ops = `db._DS_FILTER_OPS`, un op inconnu **lève** (jamais un filtre muet) ;
+- `order_by`/`order_dir` = tri SQL. **Deux régimes de pagination**, le curseur opaque
+  porte lequel : sans `order_by` = keyset `row_id` (immune aux écritures concurrentes) ;
+  avec = offset (`off:<n>`). Rejouer un curseur de l'autre régime lève `InvalidCursor`
+  plutôt que de rendre une page fausse.
+`count_only` et `data_aggregate` partagent la même traduction (total cohérent avec la
+page). Zéro SQL neuf : `_ds_where` portait déjà tout ça pour le dashboard.
+
 **Batch write + clé métier (2026-07-03).** `data_write` accepte un LOT `rows` (list[dict])
 écrit en un appel — importer un dataset sans faire transiter chaque ligne par le contexte
 du LLM. Un namespace peut déclarer une **clé métier** au schéma (`schema.key`, ex.

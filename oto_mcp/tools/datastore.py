@@ -420,10 +420,11 @@ def register(mcp: FastMCP) -> None:
         namespace: str, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
         cursor: str | None = None, fields: Optional[list[str]] = None,
-        count_only: bool = False,
+        count_only: bool = False, q: str | None = None,
+        order_by: str | None = None, order_dir: str = "desc",
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
-        of rows (optional exact-match `filter`, `limit`) with a stable cursor.
+        of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
 
         List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
         there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/
@@ -440,27 +441,47 @@ def register(mcp: FastMCP) -> None:
         row), drastically shrinking the payload. Bump `limit` when projecting — narrow
         rows let you pull far more per page.
 
+        NEVER dump a whole table to answer a question about SOME of its rows: narrow
+        SERVER-SIDE with `q` (free-text over the whole row), a `filter` OPERATOR, and
+        `order_by`. `filter` takes three forms per column, mixable in one call:
+          - exact:     `{"statut": "qualified"}`
+          - any of:    `{"statut": ["qualified", "won"]}`
+          - operator:  `{"author_name": {"contains": "sylvie"}}`,
+                       `{"posted_at": {"gte": "2026-06-01"}}`
+        Operators: contains (case-insensitive substring), eq, ne, in, gt, gte, lt, lte,
+        empty, not_empty. Comparisons are numeric when the value is a number, textual
+        otherwise (so ISO dates `YYYY-MM-DD` compare correctly).
+
         Args:
             namespace: target namespace, or `slot:<name>` = the table bound under
                 that slot name by the ACTIVE project (actionable error if unbound).
             id: `_id` of one row ; omit = list rows.
-            filter: dict `{column: value}` exact match (list mode only),
-                e.g. `{"project": "roundtable"}`.
+            filter: per-column narrowing (list mode only) — exact value, list of
+                values, or `{op: value}` (see above). Combined with AND.
             limit: page size (default 100, list mode only).
             cursor: opaque `next_cursor` from a previous call = fetch the NEXT page.
             fields: list of column names to keep (projection) — the returned rows
                 carry only these plus `_id`. Omit = full rows.
             count_only: return only `{total}` (filtered row count), no rows.
+            q: free-text search over the whole row (all columns, case-insensitive
+                substring) — for « which row mentions X » without knowing the column.
+            order_by: column to sort on, or `_created_at`/`_updated_at`/`_id`. Omit =
+                creation order (and a keyset cursor, immune to concurrent writes) ;
+                set = the requested sort with offset paging. Don't reuse a cursor
+                across a change of `order_by` (it is rejected, never silently wrong).
+            order_dir: `desc` (default) or `asc`, applies to `order_by`.
         """
         store = _acting_store()
         namespace = _ns(namespace)
         try:
             if count_only:
-                return {"total": store.count_rows(namespace, filter=filter)}
+                return {"total": store.count_rows(namespace, filter=filter, q=q)}
             if id is not None:
                 row = store.get_row(namespace, id)
                 return _project_row(row, fields) if fields else row
-            page = store.cursor_rows(namespace, filter=filter, limit=limit, cursor=cursor)
+            page = store.cursor_rows(namespace, filter=filter, limit=limit,
+                                     cursor=cursor, q=q, order_by=order_by,
+                                     order_dir=order_dir)
             rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
             out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"]}
@@ -485,7 +506,12 @@ def register(mcp: FastMCP) -> None:
                         "(0 résultat peut venir de là)")
             return out
         except InvalidCursor:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="`cursor` invalide (repartir sans cursor)"))
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                "`cursor` invalide — repartir sans cursor. (Un curseur ne se rejoue "
+                "pas après un changement d'`order_by` : les deux régimes de pagination "
+                "n'ont pas la même clé.)")))
+        except ValueError as e:  # filtre malformé (op inconnu) — jamais un filtre muet
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         except NamespaceNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` inconnu"))
         except RowNotFound:

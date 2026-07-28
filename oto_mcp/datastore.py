@@ -59,6 +59,56 @@ def _decode_cursor(cursor: str) -> str:
         raise InvalidCursor(cursor) from e
 
 
+_OFFSET_CURSOR_PREFIX = "off:"
+
+
+def _encode_offset_cursor(offset: int) -> str:
+    """Curseur du chemin TRIÉ (`order_by`) : l'ordre n'étant plus celui du keyset
+    `row_id`, la page suivante se repère par offset. Même forme opaque que le
+    curseur keyset, préfixée pour ne jamais confondre les deux régimes."""
+    return _encode_cursor(f"{_OFFSET_CURSOR_PREFIX}{offset}")
+
+
+def _decode_offset_cursor(cursor: str) -> int:
+    raw = _decode_cursor(cursor)
+    if not raw.startswith(_OFFSET_CURSOR_PREFIX):
+        raise InvalidCursor(cursor)  # curseur keyset repassé sur un appel trié
+    try:
+        return max(0, int(raw[len(_OFFSET_CURSOR_PREFIX):]))
+    except ValueError as e:
+        raise InvalidCursor(cursor) from e
+
+
+def _mcp_filter_clauses(filter: Optional[dict]) -> list[dict]:
+    """Traduit le `filter` du chemin MCP en clauses SQL `{field, op, value}`
+    (`db._DS_FILTER_OPS`, mêmes que la vue tableau du dashboard).
+
+    Trois formes par colonne, la simple restant la simple (feedback #279 — un
+    filtre exact-match seul obligeait à dumper tout un namespace pour répondre à
+    « quel post a une autrice prénommée Sylvie ? ») :
+      - scalaire  → égalité :        `{"statut": "qualified"}`
+      - liste     → appartenance :   `{"statut": ["qualified", "won"]}`
+      - dict      → opérateur :      `{"author_name": {"contains": "sylvie"}}`,
+                                     `{"posted_at": {"gte": "2026-06-01"}}`
+
+    Lève `ValueError` sur un opérateur inconnu — jamais de repli silencieux qui
+    filtrerait autre chose que ce qui a été demandé."""
+    clauses: list[dict] = []
+    for field, spec in (filter or {}).items():
+        if isinstance(spec, dict):
+            for op, value in spec.items():
+                if op not in db._DS_FILTER_OPS:
+                    raise ValueError(
+                        f"opérateur de filtre inconnu `{op}` (colonne `{field}`) — "
+                        f"attendus : {', '.join(sorted(db._DS_FILTER_OPS))}")
+                clauses.append({"field": field, "op": op, "value": value})
+        elif isinstance(spec, list):
+            clauses.append({"field": field, "op": "in", "value": spec})
+        else:
+            clauses.append({"field": field, "op": "eq", "value": spec})
+    return clauses
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -585,39 +635,61 @@ class DatastorePg:
         filter: Optional[dict] = None,
         limit: int = 100,
         cursor: Optional[str] = None,
+        q: Optional[str] = None,
+        order_by: Optional[str] = None,
+        order_dir: str = "desc",
     ) -> dict:
-        """Page **keyset** pour l'agent (chemin MCP `data_rows`) : tri stable par
-        `row_id`, filtre exact `{col: val}` poussé en SQL. Renvoie
-        `{rows, next_cursor}` — `next_cursor` non nul ⇒ il reste des lignes (repasse-le
-        pour la suite). Robuste aux écritures concurrentes (pas d'OFFSET qui dérive)."""
+        """Page pour l'agent (chemin MCP `data_rows`), filtrage/recherche/tri poussés
+        en SQL — `filter` (exact, liste ou opérateur, cf. `_mcp_filter_clauses`) et `q`
+        (plein texte sur toute la ligne). Renvoie `{rows, next_cursor}` — `next_cursor`
+        non nul ⇒ il reste des lignes (repasse-le pour la suite).
+
+        Deux régimes de pagination, le curseur porte lequel :
+          - **sans `order_by`** (défaut) → keyset sur `row_id` = ordre de création,
+            robuste aux écritures concurrentes (pas d'OFFSET qui dérive) ;
+          - **avec `order_by`** → tri SQL demandé + pagination par offset (un tri
+            arbitraire n'a pas de clé keyset stable). Repasser un curseur de l'autre
+            régime lève `InvalidCursor` plutôt que de rendre une page fausse."""
         ns_id = self._resolve(namespace)
-        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        filters = _mcp_filter_clauses(filter)
+        if order_by:
+            offset = _decode_offset_cursor(cursor) if cursor else 0
+            rows = db.datastore_list_rows(
+                ns_id, offset=offset, limit=limit, order_by=order_by,
+                order_dir=order_dir, q=q, filters=filters)
+            next_cursor = (_encode_offset_cursor(offset + len(rows))
+                           if len(rows) == limit else None)
+            return {"rows": [self._row_to_dict(r) for r in rows],
+                    "next_cursor": next_cursor}
         after = _decode_cursor(cursor) if cursor else None
+        if after and after.startswith(_OFFSET_CURSOR_PREFIX):
+            raise InvalidCursor(cursor)  # curseur trié repassé sans `order_by`
         rows = db.datastore_list_rows_after(
-            ns_id, after_row_id=after, limit=limit, filters=filters)
+            ns_id, after_row_id=after, limit=limit, q=q, filters=filters)
         out = [self._row_to_dict(r) for r in rows]
         next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
         return {"rows": out, "next_cursor": next_cursor}
 
-    def count_rows(self, namespace: str, *, filter: Optional[dict] = None) -> int:
-        """Nombre de lignes (filtré exact `{col: val}`), poussé en SQL (`COUNT(*)`)
-        — sans rapatrier les lignes (feedback #191 : stats d'un gros vivier sans
-        charger 300+ lignes en contexte)."""
+    def count_rows(self, namespace: str, *, filter: Optional[dict] = None,
+                   q: Optional[str] = None) -> int:
+        """Nombre de lignes (même filtrage que `cursor_rows` : `filter` exact/liste/
+        opérateur + `q` plein texte), poussé en SQL (`COUNT(*)`) — sans rapatrier les
+        lignes (feedback #191 : stats d'un gros vivier sans charger 300+ lignes en
+        contexte)."""
         ns_id = self._resolve(namespace)
-        filters = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
-        return db.datastore_count_rows(ns_id, filters=filters)
+        return db.datastore_count_rows(ns_id, q=q, filters=_mcp_filter_clauses(filter))
 
     def aggregate(self, namespace: str, *, group_by: Optional[str] = None,
                   metrics: Optional[list] = None, filter: Optional[dict] = None,
                   q: Optional[str] = None, filters: Optional[list] = None) -> list[dict]:
         """Agrégat serveur (feedback #191) : COUNT/SUM/AVG/MIN/MAX sur des champs JSONB,
         `group_by` optionnel — stats d'un vivier sans rapatrier les lignes. Délègue à
-        `db.datastore_aggregate`. Deux formes de filtre cumulables : `filter` exact
-        `{col: val}` (chemin MCP) et `q`/`filters` riches ({field, op, value}, mêmes
-        clauses que `page_rows`) — le dashboard agrège ainsi le MÊME jeu que sa vue
-        filtrée (tuiles metric)."""
+        `db.datastore_aggregate`. Deux formes de filtre cumulables : `filter` du chemin
+        MCP (exact/liste/opérateur, cf. `_mcp_filter_clauses`) et `q`/`filters` riches
+        ({field, op, value}, mêmes clauses que `page_rows`) — le dashboard agrège ainsi
+        le MÊME jeu que sa vue filtrée (tuiles metric)."""
         ns_id = self._resolve(namespace)
-        clauses = [{"field": k, "op": "eq", "value": v} for k, v in (filter or {}).items()]
+        clauses = _mcp_filter_clauses(filter)
         clauses.extend(filters or [])
         return db.datastore_aggregate(
             ns_id, group_by=group_by, metrics=metrics, q=q, filters=clauses)

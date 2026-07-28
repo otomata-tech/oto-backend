@@ -92,6 +92,33 @@ de paiement).
 > du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
 > BYO perso ≠ celle du grantee → 404 Unipile surfacé).
 
+## Feed LinkedIn : miroir datastore + contexte de remontée
+
+`unipile_feed` persiste la home LinkedIn dans le datastore per-user (namespace
+`linkedin-feed`, dédup par `urn`, refresh au TTL — cf. `tools/unipile._sync_feed`), ce
+qui rend le feed **requêtable** (`data_rows('linkedin-feed', q=…, filter={col:{contains:…}},
+order_by=…)`) là où Voyager ne filtre rien.
+
+**Pourquoi un post remonte (feedback #280).** Le mapping ne gardait qu'auteur / texte /
+urn / date / compteurs, donc perdait le **rebond** — or un post d'inconnu arrive presque
+toujours parce qu'une relation l'a commenté ou a réagi ; c'est la matière du social
+selling par rebond (« qui de mon réseau interagit avec qui »), et sans elle le cas
+d'usage est introuvable. Le parser oto-core (`parse_feed`) rend désormais aussi :
+`feed_reason` (libellé LinkedIn verbatim, « X a commenté ceci »), `surfaced_by` (la
+relation à l'origine) et `comment_authors` (auteurs des commentaires que LinkedIn joint
+à l'update).
+
+Extraction **best-effort** et indépendante de la langue de l'interface : le libellé vient
+de `header` puis `socialContext` ; le nom est la tranche couverte par la **1re annotation**
+du texte annoté Voyager (`_annotated_entity`, pas de regex sur la prose) ; les auteurs de
+commentaires viennent du `socialDetail` puis des objets `comment` d'`included` rattachés à
+l'activité par son urn. Absent côté LinkedIn ⇒ `null`/`[]`, jamais d'invention. ⚠️ Les
+posts DÉJÀ dans le miroir ne gagnent ces champs qu'en repassant dans une fenêtre de
+refresh (`_sync_feed` s'arrête dès qu'une page n'apporte rien de neuf).
+
+> ⚠️ **Déploiement** : `parse_feed` vit dans oto-core (pin `pyproject`) → les 3 champs
+> n'apparaissent qu'après tag oto-core + bump du pin. Sans bump, comportement inchangé.
+
 ## API v1 / v2 (client sélectionnable, v1 par défaut)
 
 Le client Unipile existe en **deux versions** dans oto-core

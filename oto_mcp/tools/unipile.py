@@ -92,6 +92,68 @@ def _scrape(sub: str, fn):
             "déjà vues sont servies du cache — inutile de les relire.")))
 
 
+def _project_items(out, fields: Optional[list] = None, *,
+                   text_max_chars: Optional[int] = None,
+                   text_keys: tuple = ("text",)):
+    """Allège une réponse `{items: [...]}` CÔTÉ SERVEUR : projection de colonnes
+    (`fields`) + troncature des champs de texte long (`text_max_chars`).
+
+    Pourquoi (feedback #281) : une page de posts LinkedIn brute pèse 50-75 Ko
+    (URLs d'images en triple, urns, tokens de partage) alors que le geste réel —
+    « balayer les derniers posts de X et voir si l'un m'intéresse » — demande
+    l'auteur, la date et 300-500 caractères de texte. Sans ces deux leviers,
+    l'appel dépasse la limite de tokens et bascule en fichier à chaque fois.
+
+    No-op si les deux leviers sont absents ou si la forme n'est pas `{items: [...]}`."""
+    if not fields and not text_max_chars:
+        return out
+    if not isinstance(out, dict) or not isinstance(out.get("items"), list):
+        return out
+    keep = set(fields) if fields else None
+    items = []
+    for it in out["items"]:
+        if not isinstance(it, dict):
+            continue
+        if text_max_chars:
+            it = {k: (_truncate_text(v, text_max_chars) if k in text_keys else v)
+                  for k, v in it.items()}
+        items.append({k: v for k, v in it.items() if k in keep} if keep else it)
+    out["items"] = items
+    return out
+
+
+def _truncate_text(value, max_chars: int):
+    """Coupe une chaîne à `max_chars` et marque la coupe par « … » (l'appelant sait
+    ainsi que le texte est tronqué et peut relire le post entier via unipile_get_post).
+    Laisse passer tel quel ce qui n'est pas une chaîne trop longue."""
+    if isinstance(value, str) and len(value) > max_chars:
+        return value[:max_chars].rstrip() + "…"
+    return value
+
+
+def _member_identifier_or_raise(identifier: str) -> str:
+    """Valide l'`identifier` d'un membre LinkedIn AVANT l'appel amont.
+
+    LinkedIn n'accepte que le slug public (`public_identifier`) ou le provider id
+    opaque (`ACoAA…`) : un id NUMÉRIQUE fait répondre « Unipile 400: Invalid User ID »,
+    erreur qui ne dit pas quoi passer à la place (feedback #281). On refuse donc tôt,
+    avec le nom du champ à utiliser."""
+    ident = str(identifier or "").strip()
+    if not ident:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            "`identifier` est vide — passe le slug public d'un membre "
+            "(`public_identifier`, ex. « marie-durand ») ou son provider id "
+            "(`provider_id`, ex. « ACoAA… »).")))
+    if ident.isdigit():
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            f"`identifier` = « {ident} » : LinkedIn REFUSE un id numérique (il répond "
+            "« Invalid User ID »). Passe le slug public (`public_identifier`, ex. "
+            "« marie-durand ») ou le provider id opaque (`provider_id`, ex. « ACoAA… ») "
+            "— les deux sont rendus par unipile_search et unipile_profile ; le "
+            "`member_id` numérique, non.")))
+    return ident
+
+
 def _canonical_li_identifier(identifier: str) -> str:
     """Canonicalise un `public_identifier` LinkedIn (vanity slug) : LinkedIn le
     génère TOUJOURS en ASCII (translittère les accents à la création, p. ex.
@@ -642,11 +704,7 @@ def register(mcp: FastMCP) -> None:
         (au-delà : 502 en cascade), prouver le tarissement par 2 passes décalées.
         Doctrine dédiée : `bulk-load-reseau`."""
         out = unipile_client().list_relations(cursor=cursor, limit=limit)
-        if fields and isinstance(out, dict) and isinstance(out.get("items"), list):
-            keep = set(fields)
-            out["items"] = [{k: v for k, v in it.items() if k in keep}
-                            for it in out["items"] if isinstance(it, dict)]
-        return out
+        return _project_items(out, fields)
 
     @mcp.tool()
     def unipile_invitations(direction: str = "received", limit: int = 50,
@@ -671,10 +729,32 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def unipile_member_posts(identifier: str, cursor: Optional[str] = None,
-                                   limit: Optional[int] = None) -> dict:
-        """Posts publiés par un membre LinkedIn — `identifier` = provider id ou slug.
-        Pour repérer un post à commenter/liker (social-selling)."""
-        return unipile_client().list_member_posts(identifier, cursor=cursor, limit=limit)
+                                   limit: Optional[int] = None,
+                                   fields: Optional[list] = None,
+                                   text_max_chars: Optional[int] = None) -> dict:
+        """Posts publiés par un membre LinkedIn. Pour repérer un post à commenter/liker
+        (social-selling).
+
+        Args:
+            identifier: slug public (`public_identifier`, ex. « marie-durand ») ou
+                provider id opaque (`provider_id`, ex. « ACoAA… »). ⚠️ le `member_id`
+                NUMÉRIQUE n'est PAS accepté par LinkedIn (refusé ici avec le nom du
+                bon champ, plutôt qu'un « Invalid User ID » amont).
+            cursor: `cursor` d'une page précédente = page suivante.
+            limit: nombre de posts par page.
+            fields: PROJECTION — ne garde que ces champs sur chaque post (ex.
+                `["text", "date", "social_id", "reaction_counter", "comment_counter"]`).
+            text_max_chars: tronque le corps des posts à N caractères (« … » en fin de
+                coupe). 300-500 suffit à TRIER ; relire un post entier ensuite =
+                unipile_get_post sur son `social_id`.
+
+        ⚠️ Payload : une page brute pèse 50-75 Ko même à `limit=10` (images, urns,
+        tokens) → au-delà de la limite de tokens. Pour « balayer les posts de X et voir
+        si l'un m'intéresse », TOUJOURS combiner `fields` + `text_max_chars` : un seul
+        appel léger au lieu d'un appel lourd à retailler."""
+        out = unipile_client().list_member_posts(
+            _member_identifier_or_raise(identifier), cursor=cursor, limit=limit)
+        return _project_items(out, fields, text_max_chars=text_max_chars)
 
     @mcp.tool()
     def unipile_get_post(post_id: str) -> dict:
@@ -721,8 +801,11 @@ def register(mcp: FastMCP) -> None:
         pour un miroir chronologique) ; quoi qu'il arrive le miroir est re-trié par
         date de publication.
 
-        Le miroir complet reste requêtable via `data_rows('linkedin-feed')` (filtrage
-        par date côté nous, impossible sur le feed Voyager brut).
+        Le miroir complet reste requêtable via `data_rows('linkedin-feed')` — filtrage
+        impossible sur le feed Voyager brut : recherche plein texte (`q="agent IA"`),
+        opérateurs (`filter={"author_name": {"contains": "sylvie"}}`,
+        `{"posted_at": {"gte": "2026-06-01"}}`) et tri (`order_by="posted_at"`). C'est
+        LA voie pour « retrouver le post de/commenté par X », jamais un dump complet.
 
         Args:
             limit: nombre de posts à renvoyer pour cette page (défaut 20).
@@ -730,9 +813,18 @@ def register(mcp: FastMCP) -> None:
             refresh: force un rafraîchissement live même si le cache est encore frais.
 
         Retourne `{items, total, page, limit, synced}` — `items` = posts (récent en
-        tête, mêmes champs qu'avant : urn, author_name, author_headline, text,
-        posted_at, reactions_count, comments_count, post_url), `total` = taille du
-        miroir, `synced` = True si un refresh live a eu lieu.
+        tête : urn, author_name, author_headline, text, posted_at, reactions_count,
+        comments_count, post_url), `total` = taille du miroir, `synced` = True si un
+        refresh live a eu lieu.
+
+        Chaque post porte aussi POURQUOI il remonte chez toi — un post d'inconnu
+        arrive presque toujours par rebond d'une relation : `feed_reason` (le libellé
+        LinkedIn verbatim, « X a commenté ceci »), `surfaced_by` (la relation à
+        l'origine) et `comment_authors` (qui a commenté, quand LinkedIn les joint).
+        C'est la matière du social selling par rebond : qui de mon réseau interagit
+        avec qui. Best-effort (null quand LinkedIn ne le fournit pas) ; les posts
+        déjà dans le miroir ne les gagnent qu'en repassant dans une fenêtre de
+        refresh.
         """
         from ..datastore import make_store, NamespaceNotFound
 
@@ -803,17 +895,32 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def unipile_member_comments(identifier: str, cursor: Optional[str] = None,
-                                      limit: Optional[int] = None) -> dict:
-        """Commentaires laissés par un membre LinkedIn (`identifier` = provider id).
-        Pour repérer ce qu'un prospect engage → accroche social-selling."""
-        return unipile_client().list_member_comments(identifier, cursor=cursor, limit=limit)
+                                      limit: Optional[int] = None,
+                                      fields: Optional[list] = None,
+                                      text_max_chars: Optional[int] = None) -> dict:
+        """Commentaires laissés par un membre LinkedIn. Pour repérer ce qu'un prospect
+        engage → accroche social-selling.
+
+        `identifier` = slug public ou provider id `ACoAA…` (pas le `member_id`
+        numérique). `fields`/`text_max_chars` = projection + troncature du texte,
+        mêmes leviers que unipile_member_posts (payload brut très lourd)."""
+        out = unipile_client().list_member_comments(
+            _member_identifier_or_raise(identifier), cursor=cursor, limit=limit)
+        return _project_items(out, fields, text_max_chars=text_max_chars)
 
     @mcp.tool()
     def unipile_member_reactions(identifier: str, cursor: Optional[str] = None,
-                                       limit: Optional[int] = None) -> dict:
-        """Réactions d'un membre LinkedIn (`identifier` = provider id) — posts qu'il
-        a likés/aimés."""
-        return unipile_client().list_member_reactions(identifier, cursor=cursor, limit=limit)
+                                       limit: Optional[int] = None,
+                                       fields: Optional[list] = None,
+                                       text_max_chars: Optional[int] = None) -> dict:
+        """Réactions d'un membre LinkedIn — posts qu'il a likés/aimés.
+
+        `identifier` = slug public ou provider id `ACoAA…` (pas le `member_id`
+        numérique). `fields`/`text_max_chars` = projection + troncature du texte,
+        mêmes leviers que unipile_member_posts (payload brut très lourd)."""
+        out = unipile_client().list_member_reactions(
+            _member_identifier_or_raise(identifier), cursor=cursor, limit=limit)
+        return _project_items(out, fields, text_max_chars=text_max_chars)
 
     # ---- messagerie : participants / contacts / état du fil -------------
 

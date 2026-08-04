@@ -28,8 +28,12 @@ from __future__ import annotations
 # connecteur GÉNÉRIQUE `browser` il devient pointable n'importe où → le geste courant
 # (`browser_fetch`) est exposé, l'échappatoire demande une activation explicite. C'est
 # de la découvrabilité graduée, pas une barrière (le connecteur reste le vrai gate).
+# `lemlist_launch_lead` : pousse un lead dans une séquence d'envoi RÉELLE (sort son
+# état "en attente de review"). `lemlist_create_lead`/`lemlist_add_lead_variables`
+# restent visibles (créer/annoter un lead n'envoie rien tant qu'il n'est pas lancé) —
+# seul le geste qui déclenche l'envoi est masqué, même logique graduée que ci-dessus.
 DEFAULT_HIDDEN_TOOLS: frozenset[str] = frozenset(
-    {"email_send", "fr_egapro_declaration", "browser_eval"})
+    {"email_send", "fr_egapro_declaration", "browser_eval", "lemlist_launch_lead"})
 
 # Méta-tools TOUJOURS visibles (anti-lockout) : sans eux l'utilisateur ne peut
 # plus se déverrouiller (lister/activer un tool) — plus l'identité `oto_whoami`

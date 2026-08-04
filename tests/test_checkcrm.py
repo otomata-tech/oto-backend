@@ -100,15 +100,27 @@ def test_send_contacts_includes_account_linkedin_url_when_given():
     assert kwargs["json"]["accountLinkedinUrl"] == "https://www.linkedin.com/company/acme-corp"
 
 
-def test_list_subsidiaries_sends_get_with_query_param():
+def test_list_subsidiaries_sends_get_with_slug_filter():
+    """L'endpoint filtre par `slug`/`name` (oto-core#31) — plus par le
+    `companyLinkedinUrl` du parent."""
     from oto.tools.checkcrm.client import CheckCrmClient
     with patch("oto.tools.checkcrm.client.requests.request") as req:
-        req.return_value = _resp(200, {"companyLinkedinUrl": "...", "subsidiaries": []})
-        CheckCrmClient(api_key="k").list_subsidiaries("https://www.linkedin.com/company/acme-corp")
+        req.return_value = _resp(200, {"companies": []})
+        CheckCrmClient(api_key="k").list_subsidiaries(slug="acme-corp")
     args, kwargs = req.call_args
     assert args[0] == "GET"
     assert args[1] == "https://enrichment-two.vercel.app/v1/companies/subsidiaries"
-    assert kwargs["params"] == {"companyLinkedinUrl": "https://www.linkedin.com/company/acme-corp"}
+    assert kwargs["params"] == {"slug": "acme-corp"}
+
+
+def test_list_subsidiaries_without_filter_sends_no_param():
+    """Sans filtre = tous les parents du réseau, pas une erreur d'argument manquant."""
+    from oto.tools.checkcrm.client import CheckCrmClient
+    with patch("oto.tools.checkcrm.client.requests.request") as req:
+        req.return_value = _resp(200, {"companies": []})
+        CheckCrmClient(api_key="k").list_subsidiaries()
+    _, kwargs = req.call_args
+    assert kwargs["params"] == {}
 
 
 def test_client_4xx_raises_upstream_error_with_body_preserved():

@@ -162,13 +162,23 @@ def register(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    def checkcrm_list_subsidiaries(company_linkedin_url: str) -> dict:
-        """List the subsidiary brands registered under a parent company.
+    def checkcrm_list_subsidiaries(
+        slug: str = None,
+        name: str = None,
+    ) -> dict:
+        """List parent companies with their subsidiary brands, optionally filtered.
 
-        Does NOT auto-create the parent — if this network has no company row for
-        `company_linkedin_url` yet, this raises (enrichment returns 404). Note a
-        subsidiary added moments ago via a numeric LinkedIn ID may still show that
-        numeric form here, or may already have merged into an existing entry — see
-        `checkcrm_add_subsidiary`'s docstring on the async-resolution behavior.
+        Sans argument : tous les parents de ce réseau qui ont au moins une filiale,
+        chacun avec sa liste imbriquée. `slug` = un slug LinkedIn nu (`"acme-corp"`,
+        une URL de société complète marche aussi) ou un id LinkedIn numérique ;
+        `name` = sous-chaîne insensible à la casse. Les deux ensemble sont OR-és, pas
+        cumulés. Le slug/nom d'une FILIALE remonte son parent avec toute sa fratrie —
+        jamais une filiale seule. Aucun résultat = `{"companies": []}`, pas une erreur
+        (≠ l'ancienne forme, qui exigeait le parent et rendait un 404).
+
+        Une filiale ajoutée à l'instant via un id LinkedIn numérique peut encore
+        apparaître sous cette forme numérique, ou avoir déjà fusionné avec une entrée
+        existante — cf. la docstring de `checkcrm_add_subsidiary` sur la résolution
+        asynchrone.
         """
-        return _client().list_subsidiaries(company_linkedin_url)
+        return _client().list_subsidiaries(slug=slug, name=name)

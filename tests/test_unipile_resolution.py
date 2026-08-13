@@ -11,8 +11,9 @@ from oto_mcp.tools import unipile as unipile_tool
 
 
 class _FakeClient:
-    def __init__(self, api_key=None, account_id=None, dsn=None):
+    def __init__(self, api_key=None, account_id=None, dsn=None, provider=None):
         self.api_key, self.account_id, self.dsn = api_key, account_id, dsn
+        self.provider = provider
 
 
 def _no_grants(monkeypatch):
@@ -150,3 +151,17 @@ def test_project_pin_inert_after_revoke(monkeypatch):
     monkeypatch.setattr(unipile_tool.db, "list_unipile_accounts",
                         lambda sub: [{"account_id": "DEFAULT", "provider": "LINKEDIN"}])
     assert unipile_tool.unipile_client("LINKEDIN").account_id == "DEFAULT"
+
+
+def test_channel_reaches_the_client(monkeypatch):
+    """Le CANAL demandé arrive au client, pas seulement au choix du compte.
+
+    La messagerie Unipile v2 a deux formes d'endpoint (par inbox pour LinkedIn, à
+    plat pour les cinq autres canaux) et l'amont répond 501 à la mauvaise : oto-core
+    dérive la route de `provider`. Tant que ce seam ne le transmettait pas, tout
+    compte était routé comme du LinkedIn — WhatsApp rendait un 501 sur `op="list"`
+    alors que son compte était connecté."""
+    _wire_basic(monkeypatch)
+    for chan in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER",
+                 "TWITTER"):
+        assert unipile_tool.unipile_client(chan).provider == chan

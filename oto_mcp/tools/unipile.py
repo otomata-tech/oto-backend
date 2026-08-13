@@ -542,7 +542,7 @@ def unipile_client(provider: str = "LINKEDIN"):
     if anon is not None:
         return make_unipile_client(
             api_key=rc.key, dsn=(None if rc.is_platform else rc.config.get("dsn")),
-            account_id=_project_operated_account(anon, provider))
+            account_id=_project_operated_account(anon, provider), provider=provider)
     sub = access.current_user_sub_or_raise()
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
@@ -570,7 +570,12 @@ def unipile_client(provider: str = "LINKEDIN"):
     # DSN tiré de la config du credential résolu (défaut api.unipile.com côté
     # oto-core). Clé plateforme → DSN env/défaut (instance Otomata).
     dsn = None if rc.is_platform else rc.config.get("dsn")
-    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn)
+    # `provider` = le CANAL du compte opéré. Il ne sert pas qu'à documenter : la
+    # messagerie Unipile v2 a deux formes d'endpoint (par inbox pour LinkedIn, à plat
+    # pour les cinq autres canaux) et l'amont répond 501 à la mauvaise. Sans lui,
+    # oto-core suppose LinkedIn et paie un aller-retour 501 avant de se rattraper.
+    return make_unipile_client(api_key=rc.key, account_id=account_id, dsn=dsn,
+                               provider=provider)
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:

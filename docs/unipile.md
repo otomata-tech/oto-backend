@@ -150,6 +150,37 @@ croisées #144-149/#153, retryable) ; erreurs réseau mappées proprement (#177)
 > bascule v2 = tagger oto-core + bumper le pin ; tant que le pin n'est pas bumpé,
 > seul le chemin v1 (défaut) tourne — donc merge sans risque prod.
 
+## Deux formes d'endpoint de messagerie — inbox vs plate (13/08)
+
+⚠️ **La même opération a DEUX routes chez Unipile, et l'amont répond 501 à la
+mauvaise, dans les deux sens.** Le guide de migration messaging v2 le dit tel quel :
+« Use `GET /v2/:account_id/chats` **or** `GET /v2/:account_id/inboxes/:inbox_id/chats`
+**if the provider uses inboxes** » (idem pour ouvrir un fil : `chats/send` vs
+`inboxes/{inbox}/chats/send`). LinkedIn range par **inbox** (`CLASSIC_PRIMARY`…) ; les
+cinq autres canaux (`whatsapp`, `telegram`, `instagram`, `messenger`, `twitter`) non.
+
+**Le mode de panne vécu** : quand LinkedIn est passé aux inbox (delta live 2026-07-06,
+puis `chats/send` le 08), le client oto-core ne servait QUE LinkedIn — la bascule a
+donc été faite en dur. Or ce client est channel-agnostic et partagé par
+`register_messaging_tools` : les cinq canaux sans inbox se sont mis à taper la route
+inbox, d'où un **501 sur `{canal}_chat(op="list")`** et sur l'ouverture d'un nouveau
+fil, avec un compte pourtant connecté. Signalé par un utilisateur sur WhatsApp.
+Répondre dans un fil existant et lire ses messages n'ont, eux, qu'une route (pas
+d'inbox dans le path) : ils n'ont jamais été touchés — le symptôme est bien la LISTE.
+
+**Ce qui tient maintenant** (oto-core ≥ v1.81.0) : la route est **dérivée du provider
+du compte opéré** (`_INBOX_PROVIDERS`, provider non déclaré = LinkedIn), et un 501 fait
+basculer sur l'autre route **en le journalisant** — un 501 d'Unipile n'est pas une
+panne, c'est l'amont qui NOMME la forme attendue. Donc un reclassement futur (dans un
+sens comme dans l'autre) se lit dans les logs au lieu de couper un canal en silence.
+Côté backend, `unipile_client(provider)` doit **passer le canal** à
+`make_unipile_client` (test d'ancrage `test_channel_reaches_the_client`) : il le
+connaissait déjà pour résoudre le compte, mais s'arrêtait là.
+
+**La leçon transposable** : un correctif de route relevé sur UN canal ne se code pas en
+dur dans un client partagé par six. Ce qui vaut pour LinkedIn seul est une propriété du
+**provider**, pas du client.
+
 ## Détail accumulé (migré de la carte)
 
 **Instance PERSONNELLE cross-org (#172, amende ADR 0033).** Un compte de messagerie

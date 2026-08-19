@@ -67,7 +67,7 @@ def _upstream_message(e) -> str:
                 "choisissent à la CRÉATION de la clé : il faut en créer une nouvelle "
                 "avec le scope manquant, on ne peut pas l'ajouter après coup.")
     if status == 404:
-        return f"Lightfield : ressource introuvable (404) — vérifie l'identifiant."
+        return "Lightfield : ressource introuvable (404) — vérifie l'identifiant."
     if status == 409:
         return ("Lightfield : conflit (409) — l'enregistrement a changé entre-temps. "
                 "Relis-le avec op='get' puis réessaie sur l'état frais.")
@@ -171,6 +171,20 @@ def _check_fields(payload: dict, definitions: Any, obj: str) -> None:
             "Les champs sont propres à chaque workspace Lightfield.")
 
 
+# `filters` est SPLATÉ à côté de `limit`/`offset` : une clé de filtre portant l'un de
+# ces deux noms lèverait un TypeError (« multiple values for keyword argument ») que
+# `_run` ne traduit pas — l'agent recevrait une erreur interne opaque au lieu d'un refus
+# qui nomme le paramètre dédié.
+_RESERVED_FILTERS = ("limit", "offset")
+
+
+def _check_filters(filters: Any) -> None:
+    clash = sorted(k for k in (filters or {}) if k in _RESERVED_FILTERS)
+    if clash:
+        raise _bad(f"`filters` ne peut pas porter {clash} : la pagination passe par les "
+                   "paramètres dédiés `limit` et `offset` de l'outil.")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.lightfield.client import LightfieldClient
@@ -199,6 +213,7 @@ def register(mcp: FastMCP) -> None:
             if op == "definitions":
                 return _run(defs_fn)
             if op == "search":
+                _check_filters(filters)
                 return _project(
                     _run(lambda: list_fn(limit=limit, offset=offset, **(filters or {}))),
                     full)
@@ -402,10 +417,19 @@ def register(mcp: FastMCP) -> None:
         if op == "members":
             if not list_id:
                 raise _bad("op='members' : `list_id` requis.")
-            fn = {"accounts": _client().list_accounts_of_list,
-                  "contacts": _client().list_contacts_of_list,
-                  "opportunities": _client().list_opportunities_of_list}[of]
-            return _project(_run(lambda: fn(list_id, limit=limit, offset=offset)), full)
+            # Lambdas et non méthodes liées : la forme liée construisait les TROIS
+            # clients (donc trois `resolve_api_key` — lecture du coffre + déchiffrement)
+            # pour n'en garder qu'un. L'appel reste écrit EN CLAIR, seule forme que la
+            # sonde version-skew sait lire.
+            fn = {
+                "accounts": lambda: _client().list_accounts_of_list(
+                    list_id, limit=limit, offset=offset),
+                "contacts": lambda: _client().list_contacts_of_list(
+                    list_id, limit=limit, offset=offset),
+                "opportunities": lambda: _client().list_opportunities_of_list(
+                    list_id, limit=limit, offset=offset),
+            }[of]
+            return _project(_run(fn), full)
         if op == "upsert":
             if not isinstance(fields, dict) or not fields:
                 raise _bad("op='upsert' : `fields` requis.")
@@ -521,6 +545,7 @@ def register(mcp: FastMCP) -> None:
         if op == "definitions":
             return _run(lambda: _client().meeting_definitions())
         if op == "search":
+            _check_filters(filters)
             return _project(_run(lambda: _client().list_meetings(
                 limit=limit, offset=offset, **(filters or {}))), full)
         if op == "get":
@@ -582,6 +607,7 @@ def register(mcp: FastMCP) -> None:
             full: raw records instead of projected ones.
         """
         if op == "search":
+            _check_filters(filters)
             return _project(_run(lambda: _client().list_emails(
                 limit=limit, offset=offset, **(filters or {}))), full)
         if op == "get":

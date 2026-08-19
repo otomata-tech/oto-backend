@@ -316,3 +316,30 @@ def test_a_client_side_refusal_becomes_an_actionable_tool_error():
     fake.list_accounts = _boom
     with _with_client(fake), pytest.raises(McpError, match="25"):
         _tool("lightfield_accounts").fn(op="search", limit=500)
+
+
+def test_a_filter_named_like_the_pagination_is_refused_with_its_reason():
+    """`filters` est splaté à côté de `limit`/`offset` : une clé de filtre homonyme
+    lèverait un TypeError que `_run` ne traduit pas — l'agent recevrait une erreur
+    interne opaque. On refuse en nommant le paramètre dédié, avant tout appel."""
+    fake = _FakeClient()
+    for tool, kwargs in (("lightfield_accounts", {}),
+                         ("lightfield_meetings", {}),
+                         ("lightfield_emails", {})):
+        with _with_client(fake), pytest.raises(McpError, match="limit"):
+            _tool(tool).fn(op="search", filters={"limit": 10}, **kwargs)
+    assert fake.calls == []
+
+
+def test_reading_the_members_of_a_list_resolves_the_api_key_ONCE(monkeypatch):
+    """Les trois voies membre étaient des méthodes LIÉES dans un dict : construire le
+    dict construisait les trois clients — trois lectures du coffre + déchiffrements
+    pour un seul appel servi."""
+    calls = []
+    monkeypatch.setattr("oto_mcp.access.resolve_api_key",
+                        lambda provider, account=None: (calls.append(provider), ("k", False))[1])
+    fake = _FakeClient()
+    with _with_client(fake):
+        _tool("lightfield_lists").fn(op="members", list_id="l1", of="accounts")
+    assert calls == ["lightfield"]
+    assert fake.calls[0][0] == "list_accounts_of_list"

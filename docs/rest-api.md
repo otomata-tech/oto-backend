@@ -26,13 +26,12 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 
 | famille | où | régime |
 | --- | --- | --- |
-| ~200 chemins générés (**le compte** `/api/me`, **la toolbox** `/api/me/tools*`, projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
+| ~200 chemins générés (**le compte** `/api/me`, **la toolbox** `/api/me/tools*`, **la session navigateur**, projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
 | primitives (`_authenticate`, CORS, `_json`/`_json_error`, `OPTIONS`, `bind`) | `api_routes_base.py` | partagées par tous les modules ; **ré-exportées** par `api_routes` |
 | favicon, `/api/mcp/catalog`, `openapi.json`, `/api/connectors`, bibliothèques doctrines & guides, aperçu d'invitation, docs partagés (`/api/public/docs/{token}`, `/p/d/{token}`) | `api_routes_public.py` | **sans auth** — l'adaptateur capacité authentifie toujours |
 | `/api/me/avatar`, `/api/orgs/{id}/logo` | `api_routes_media.py` | multipart → hors couche capacité |
 | fichiers bruts d'un projet, `/api/me/projects/{id}/export` | `api_routes_projects.py` | multipart / binaire |
 | `/api/upload/{token}` (PUT/POST/GET) | `api_routes_uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
-| `/api/settings/api-keys/{provider}`, `/api/me/connectors/{name}/session/*` | `api_routes_credentials.py` | pose d'un secret : dashboard-only par design |
 | `/api/admin/platform-keys*`, `/api/admin/users/{sub}/tokens*` | `api_routes_admin.py` | `allow_api_token=False` : un jeton ne fabrique pas de jeton |
 | SIRENE, accords, datastore, contact, connecteurs, webhook Mollie, OAuth zoho/atlassian/folk/salesforce | `api_routes_<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres |
 
@@ -57,6 +56,28 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 - `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo **uploadé** d'org (org_admin, multipart `file`). Le logo AFFICHÉ (`logo_url` des lectures + `active_org_logo_url` de `/api/me`) est l'**effectif** : upload sinon dérivé du CDN logo.dev via le `domain` déclaré (`org_store.effective_logo_url`, token `LOGODEV_TOKEN`) ; `logo_custom` (fiche org) dit si un upload existe.
 - `PATCH /api/orgs/{id}` (+ miroir `/api/admin/orgs/{id}`) — profil d'org (org_admin) : `name`, `description`, **`domain`** (domaine de marque, normalisé `org_store.normalize_domain` — `""` efface, saisie URL tolérée, invalide → 400 `invalid_domain`), `industry`, `location`. Capacité `org.update` (MCP `oto_org(op='update')`, console ADR 0047).
 - `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
+- `POST /api/me/connectors/{name}/session/start` + `POST …/session/finalize` — **la
+  connexion par SESSION NAVIGATEUR** (Live View Browserbase, ADR 0026), capacités
+  `me.browser_session.{start,finalize}` depuis le 2026-08-27
+  (`capabilities/browser_sessions.py` ; `api_routes_credentials.py` supprimé).
+  `start` ouvre une vraie fenêtre de navigateur hébergé où **l'utilisateur se connecte à
+  la main** et rend `{live_view_url, context_id, session_id}` ; `finalize` vérifie le
+  login puis persiste la session au coffre — c'est un credential comme un autre.
+  ⚠️ **`connected: false` est une 200** : « pas encore logué », pas un échec — la session
+  vit, rien n'a été écrit, on réessaie. **Pas de face MCP** : un `context_id` EST le
+  credential, et le geste exige un humain ; le pendant agent est
+  `POST /api/me/connectors/{name}/connect` (capacité `me.connector_connect`).
+  `scope` ∈ `member` (défaut) | `org` | `group` — les deux partagés exigent d'être admin
+  du palier ET un connecteur partageable, et **l'ordre des refus est un contrat** :
+  `400 no_org_context` → `400 not_org_shareable` → `403 forbidden` (d'où une escalade au
+  handler plutôt qu'une règle d'autz, qui trancherait trop tôt). `account` = le compte du
+  coffre visé (connecteur générique : le host — une ligne PAR SITE) ; `force` persiste
+  sans le verify générique, réservé aux connecteurs account-aware. Autres refus :
+  `404 not_a_session_connector`, `400 missing_params`, `400 invalid_scope`,
+  `503 browserbase_unavailable`, `502 session_verify_failed` (les deux derniers portent
+  un détail actionnable). ⚠️ Un corps JSON **malformé** rend désormais `400 missing_params`
+  et non `400 invalid_json` (même statut), et un corps **non-objet** rend `400` là où il
+  levait une **500**.
 - `GET|POST|DELETE /api/settings/api-keys/{provider}` — **ton credential** pour un
   connecteur, dans l'org de contexte (capacités `me.credential.{get,set,clear}` depuis
   le 2026-08-27 ; **pas de face MCP** — un secret brut ne passe pas en argument d'outil).

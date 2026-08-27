@@ -50,6 +50,9 @@ from . import connectors_verify  # noqa: F401 — connectors.verify (sonde de cr
 # Credential PERSONNEL (pose/état/retrait) — REST-only, un secret ne passe pas
 # en argument d'outil. Ex-routes écrites à la main d'`api_routes.py` (#121).
 from . import me_credentials  # noqa: F401 — me.credential.{get,set,clear}
+# Connexion par SESSION NAVIGATEUR (ADR 0026) — l'autre voie de pose d'un credential,
+# par un login humain dans un navigateur hébergé. Ex-routes écrites à la main (#121).
+from . import browser_sessions  # noqa: F401 — me.browser_session.{start,finalize}
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.

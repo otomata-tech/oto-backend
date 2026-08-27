@@ -174,12 +174,13 @@ _KNOWN: dict[str, str] = {
     # DETTE dans `test_platform_tools_are_capabilities.py`) n'est PAS remboursé ici : les
     # deux faces n'ont pas la même forme, les unifier casserait l'une des deux. Décision
     # de contrat, suivie en oto-backend#429.
-    # Pose/lecture de credential et connexion par session navigateur. La pose d'un
-    # secret est dashboard-only par DESIGN (jamais un argument MCP, il transiterait
-    # dans le contexte LLM) — mais une capacité peut être REST-only (binding `mcp`
-    # retiré, cf. `set_platform_key`) : c'est bien de la dette, pas une nature.
-    "/api/me/connectors/{name}/session/start": DEBT,
-    "/api/me/connectors/{name}/session/finalize": DEBT,
+    # ⚠️ La CONNEXION PAR SESSION NAVIGATEUR a quitté cette liste le 2026-08-27 :
+    # `…/session/{start,finalize}` sont des capacités (`capabilities/browser_sessions.py`),
+    # et `api_routes_credentials.py` a été SUPPRIMÉ. La pose d'un secret reste
+    # dashboard-only par DESIGN (jamais un argument MCP, il transiterait dans le contexte
+    # LLM) — mais une capacité peut être REST-only (`mcp=None`), c'était donc bien de la
+    # dette et pas une nature. Le pendant AGENT du même geste existe et c'est
+    # `me.connector_connect` (`POST /api/me/connectors/{name}/connect`).
     # Palier admin. ⚠️ Les deux routes `tokens` portent `allow_api_token=False` (un
     # jeton ne fabrique pas de jeton) — un cran que `_rest_adapter` ne sait pas
     # encore exprimer : c'est un travail de migration, pas une nature. Leurs miroirs
@@ -236,7 +237,7 @@ def test_rest_debt_only_shrinks():
     pas une dette, elle la RÉVÈLE. Toute autre hausse est un relâchement.
     """
     debt = sorted(p for p, kind in _KNOWN.items() if kind == DEBT)
-    assert len(debt) <= 29, (
+    assert len(debt) <= 27, (
         f"la dette REST a grossi ({len(debt)} routes) : {debt}. Elle doit "
         "DÉCROÎTRE — migre en capacité plutôt que d'élargir le plafond.")
 

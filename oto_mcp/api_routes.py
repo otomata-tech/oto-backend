@@ -17,7 +17,6 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api_routes_media.py`      | avatar user, logo d'org (multipart)                   |
 | `api_routes_projects.py`   | fichiers bruts d'un projet, export ZIP                |
 | `api_routes_uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
-| `api_routes_credentials.py`| pose de credential membre, session navigateur         |
 | `api_routes_admin.py`      | clés plateforme, jetons émis pour un tiers            |
 
 Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
@@ -71,7 +70,6 @@ from . import api_routes_public as public
 from . import api_routes_media as media
 from . import api_routes_projects as projects
 from . import api_routes_uploads as uploads
-from . import api_routes_credentials as credentials
 from . import api_routes_admin as admin
 
 logger = logging.getLogger(__name__)
@@ -464,11 +462,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
         # /api/me/instructions* — migré en capacités (ADR 0009, capabilities/orgs_instructions.py),
         # monté par capability_routes plus bas.
-        # Connexion par session navigateur (brevo/crunchbase) — Live View depuis le dashboard.
-        Route("/api/me/connectors/{name}/session/start", bind(credentials.session_start, verifier=verifier), methods=["POST"]),
-        Route("/api/me/connectors/{name}/session/start", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/connectors/{name}/session/finalize", bind(credentials.session_finalize, verifier=verifier), methods=["POST"]),
-        Route("/api/me/connectors/{name}/session/finalize", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/platform-keys", bind(admin.admin_platform_keys_list, verifier=verifier), methods=["GET"]),
         Route("/api/admin/platform-keys", bind(admin.admin_platform_key_create, verifier=verifier), methods=["POST"]),
         Route("/api/admin/platform-keys", options_handler, methods=["OPTIONS"]),

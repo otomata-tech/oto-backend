@@ -39,10 +39,6 @@ GET,HEAD /p/d/{token} -> public_doc_view
 POST /api/orgs/{id}/logo -> org_logo_save
 DELETE /api/orgs/{id}/logo -> org_logo_clear
 OPTIONS /api/orgs/{id}/logo -> options_handler
-POST /api/me/connectors/{name}/session/start -> session_start
-OPTIONS /api/me/connectors/{name}/session/start -> options_handler
-POST /api/me/connectors/{name}/session/finalize -> session_finalize
-OPTIONS /api/me/connectors/{name}/session/finalize -> options_handler
 GET,HEAD /api/admin/platform-keys -> admin_platform_keys_list
 POST /api/admin/platform-keys -> admin_platform_key_create
 OPTIONS /api/admin/platform-keys -> options_handler
@@ -363,6 +359,10 @@ POST /api/settings/api-keys/{provider} -> _handler
 OPTIONS /api/settings/api-keys/{provider} -> options_handler
 DELETE /api/settings/api-keys/{provider} -> _handler
 OPTIONS /api/settings/api-keys/{provider} -> options_handler
+POST /api/me/connectors/{name}/session/start -> _handler
+OPTIONS /api/me/connectors/{name}/session/start -> options_handler
+POST /api/me/connectors/{name}/session/finalize -> _handler
+OPTIONS /api/me/connectors/{name}/session/finalize -> options_handler
 GET,HEAD /api/groups/{id}/connectors/activation -> _handler
 OPTIONS /api/groups/{id}/connectors/activation -> options_handler
 PUT /api/groups/{id}/connectors/{name}/activation -> _handler

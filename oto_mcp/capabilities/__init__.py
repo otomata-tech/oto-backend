@@ -54,6 +54,10 @@ from . import me_credentials  # noqa: F401 — me.credential.{get,set,clear}
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
+# Toolbox du MEMBRE (#121) — ex-routes écrites à la main : liste, registre, bascule
+# de visibilité, fiche, test. ⚠️ Six d'un bloc : `…/tools/registry` doit précéder
+# `…/tools/{name}`, et l'ordre des bindings est l'ordre de déclaration du module.
+from . import tools_me  # noqa: F401 — me.tools.{list,registry,disable,enable,detail,call}
 # Denylist de TOOLS par org/équipe — remplace l'ancienne baseline allowlist (retirée 3951a57).
 from . import tools_visibility  # noqa: F401 — tools.{org,group}_{list,hide,unhide}
 # Partage d'instance (ADR 0044) — le propriétaire PRÊTE sa clé à un pair (share_side — MCP via oto_instance op=lend).

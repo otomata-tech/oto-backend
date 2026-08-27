@@ -41,8 +41,13 @@ _KNOWN: dict[str, bool] = {
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,
     "run_finish": True,
-    # DETTE — ceux-ci ont DÉJÀ une face REST écrite à la main (`/api/me/tools…`),
-    # donc deux implémentations de la même règle de visibilité.
+    # DETTE — miroir de `/api/me/tools…`, donc deux implémentations de la même règle
+    # de visibilité. ⚠️ Depuis le 2026-08-27 la face REST n'est plus écrite à la main :
+    # ce sont des capacités (`capabilities/tools_me.py`). La dette restante est celle-ci,
+    # et elle seule — mais elle ne se rembourse PAS par un refactor : les deux faces n'ont
+    # pas la même forme (l'outil MCP prend un `query` et rend une projection de recherche ;
+    # le REST rend la liste complète pour peindre une grille de gouvernance). Les unifier
+    # casse l'une des deux : décision de contrat, suivie en oto-backend#429.
     "oto_list_my_tools": False,
     "oto_enable_tool": False,
     "oto_disable_tool": False,

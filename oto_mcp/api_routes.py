@@ -18,7 +18,6 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api_routes_projects.py`   | fichiers bruts d'un projet, export ZIP                |
 | `api_routes_uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
 | `api_routes_credentials.py`| pose de credential membre, session navigateur         |
-| `api_routes_tools.py`      | toolbox du membre (liste, fiche, test)                |
 | `api_routes_admin.py`      | clés plateforme, jetons émis pour un tiers            |
 
 Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
@@ -73,7 +72,6 @@ from . import api_routes_media as media
 from . import api_routes_projects as projects
 from . import api_routes_uploads as uploads
 from . import api_routes_credentials as credentials
-from . import api_routes_tools as tools
 from . import api_routes_admin as admin
 
 logger = logging.getLogger(__name__)
@@ -464,19 +462,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/orgs/{id}/logo", bind(media.org_logo_save, verifier=verifier), methods=["POST"]),
         Route("/api/orgs/{id}/logo", bind(media.org_logo_clear, verifier=verifier), methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/tools", bind(tools.my_tools_list, verifier=verifier, mcp_instance=mcp_instance), methods=["GET"]),
-        Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
-        # `registry` AVANT `{name}` sinon Starlette le capture comme nom de tool.
-        Route("/api/me/tools/registry", bind(tools.my_tools_registry, verifier=verifier, mcp_instance=mcp_instance), methods=["GET"]),
-        Route("/api/me/tools/registry", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/tools/{name}", bind(tools.my_tools_disable, verifier=verifier), methods=["POST"]),
-        Route("/api/me/tools/{name}", bind(tools.my_tools_enable, verifier=verifier), methods=["DELETE"]),
-        Route("/api/me/tools/{name}", options_handler, methods=["OPTIONS"]),
-        # Fiche + test d'un outil (dashboard) — suffixes distincts de `{name}` nu.
-        Route("/api/me/tools/{name}/detail", bind(tools.my_tool_detail, verifier=verifier, mcp_instance=mcp_instance), methods=["GET"]),
-        Route("/api/me/tools/{name}/detail", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/tools/{name}/call", bind(tools.my_tool_call, verifier=verifier, mcp_instance=mcp_instance), methods=["POST"]),
-        Route("/api/me/tools/{name}/call", options_handler, methods=["OPTIONS"]),
         # /api/me/instructions* — migré en capacités (ADR 0009, capabilities/orgs_instructions.py),
         # monté par capability_routes plus bas.
         # Connexion par session navigateur (brevo/crunchbase) — Live View depuis le dashboard.

@@ -26,10 +26,9 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 
 | famille | où | régime |
 | --- | --- | --- |
-| ~200 chemins générés (projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
+| ~200 chemins générés (**le compte** `/api/me`, projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
 | primitives (`_authenticate`, CORS, `_json`/`_json_error`, `OPTIONS`, `bind`) | `api_routes_base.py` | partagées par tous les modules ; **ré-exportées** par `api_routes` |
 | favicon, `/api/mcp/catalog`, `openapi.json`, `/api/connectors`, bibliothèques doctrines & guides, aperçu d'invitation, docs partagés (`/api/public/docs/{token}`, `/p/d/{token}`) | `api_routes_public.py` | **sans auth** — l'adaptateur capacité authentifie toujours |
-| `/api/me`, `/api/me/calls`, `/api/me/activity-summary` | `api_routes_account.py` | scopé (sub, org active) |
 | `/api/me/avatar`, `/api/orgs/{id}/logo` | `api_routes_media.py` | multipart → hors couche capacité |
 | fichiers bruts d'un projet, `/api/me/projects/{id}/export` | `api_routes_projects.py` | multipart / binaire |
 | `/api/upload/{token}` (PUT/POST/GET) | `api_routes_uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
@@ -38,7 +37,23 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 | `/api/admin/platform-keys*`, `/api/admin/users/{sub}/tokens*` | `api_routes_admin.py` | `allow_api_token=False` : un jeton ne fabrique pas de jeton |
 | SIRENE, accords, datastore, contact, connecteurs, webhook Mollie, OAuth zoho/atlassian/folk/salesforce | `api_routes_<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres |
 
-- `GET /api/me` — profil + role + statut LinkedIn + statut providers (mode/key/quota) + `active_org`/`active_org_name`/`org_role` + `avatar_url`/`active_org_logo_url`
+- `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
+  capacités `me.{get,calls,activity_summary}` depuis le 2026-08-27
+  (`capabilities/me_account.py` ; `api_routes_account.py` supprimé). **Pas de face MCP** —
+  l'identité d'une session MCP est `oto_whoami`, l'activité se lit par les lentilles de
+  monitoring. `GET /api/me` rend profil + rôle plateforme + `providers` (accès effectif
+  par connecteur : mode/clé/quota) + `features.billing` + le couple **`active_*` / `home_*`** :
+  `active_org`/`active_group` sont les valeurs EFFECTIVES de la requête (seam `current_org`,
+  ADR 0023 — la consultation `X-Oto-Org` l'emporte), `home_*` le défaut persistant. Un front
+  qui scope ses vues sur `home_org` affiche les données d'une autre org que celle qu'il
+  annonce. `active_org_readonly` = opérateur plateforme en consultation (bandeau + écran en
+  lecture). Les deux lentilles d'activité sont scopées **(sub, org active)** : jamais un
+  autre membre, jamais une autre org — filtres `?limit=` (défaut 200, plafond dur 1000),
+  `?tool=` (nom EXACT), `?errors=1|true` (littéral : `?errors=yes` ne filtre pas), `?days=`.
+  ⚠️ **Le repli de saisie est conservé** : `?days=abc` rend 200 avec la fenêtre par défaut,
+  jamais un 400 — c'est le comportement servi depuis toujours. En revanche un **paramètre
+  inconnu** est désormais refusé (400 `unknown_fields`, champ nommé) là où il était ignoré
+  en silence : c'est la garde de l'adaptateur, et c'est le seul écart visible de la migration.
 - `POST|DELETE /api/me/avatar` — upload (multipart `file`, png/jpeg/webp ≤ 2 Mo) / efface l'avatar user → Scaleway Object Storage, URL publique en DB
 - `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo **uploadé** d'org (org_admin, multipart `file`). Le logo AFFICHÉ (`logo_url` des lectures + `active_org_logo_url` de `/api/me`) est l'**effectif** : upload sinon dérivé du CDN logo.dev via le `domain` déclaré (`org_store.effective_logo_url`, token `LOGODEV_TOKEN`) ; `logo_custom` (fiche org) dit si un upload existe.
 - `PATCH /api/orgs/{id}` (+ miroir `/api/admin/orgs/{id}`) — profil d'org (org_admin) : `name`, `description`, **`domain`** (domaine de marque, normalisé `org_store.normalize_domain` — `""` efface, saisie URL tolérée, invalide → 400 `invalid_domain`), `industry`, `location`. Capacité `org.update` (MCP `oto_org(op='update')`, console ADR 0047).

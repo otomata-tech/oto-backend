@@ -14,7 +14,6 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | -------------------------- | ---------------------------------------------------- |
 | `api_routes_base.py`       | primitives partagées (auth, CORS, JSON, OPTIONS, `bind`) |
 | `api_routes_public.py`     | surfaces sans auth : favicon, catalogues, bibliothèques, invitations, docs partagés |
-| `api_routes_account.py`    | `/api/me`, journal d'appels, activité                 |
 | `api_routes_media.py`      | avatar user, logo d'org (multipart)                   |
 | `api_routes_projects.py`   | fichiers bruts d'un projet, export ZIP                |
 | `api_routes_uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
@@ -70,7 +69,6 @@ from .api_routes_base import (  # noqa: F401 — ré-export de compatibilité
 # Handlers par DOMAINE (découpe du 2026-08-27) : chaque module porte des fonctions
 # de module, testables seules ; la table de routes ci-dessous reste ici.
 from . import api_routes_public as public
-from . import api_routes_account as account
 from . import api_routes_media as media
 from . import api_routes_projects as projects
 from . import api_routes_uploads as uploads
@@ -443,8 +441,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/invitations/code/{code}", options_handler, methods=["OPTIONS"]),
         Route("/api/invitations/{token}", public.invite_preview, methods=["GET"]),
         Route("/api/invitations/{token}", options_handler, methods=["OPTIONS"]),
-        Route("/api/me", bind(account.me, verifier=verifier), methods=["GET"]),
-        Route("/api/me", options_handler, methods=["OPTIONS"]),
         Route("/api/me/avatar", bind(media.avatar_save, verifier=verifier), methods=["POST"]),
         Route("/api/me/avatar", bind(media.avatar_clear, verifier=verifier), methods=["DELETE"]),
         Route("/api/me/avatar", options_handler, methods=["OPTIONS"]),
@@ -468,8 +464,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/orgs/{id}/logo", bind(media.org_logo_save, verifier=verifier), methods=["POST"]),
         Route("/api/orgs/{id}/logo", bind(media.org_logo_clear, verifier=verifier), methods=["DELETE"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/calls", bind(account.my_calls, verifier=verifier), methods=["GET"]),
-        Route("/api/me/calls", options_handler, methods=["OPTIONS"]),
         Route("/api/me/tools", bind(tools.my_tools_list, verifier=verifier, mcp_instance=mcp_instance), methods=["GET"]),
         Route("/api/me/tools", options_handler, methods=["OPTIONS"]),
         # `registry` AVANT `{name}` sinon Starlette le capture comme nom de tool.
@@ -500,8 +494,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/admin/users/{sub}/tokens", options_handler, methods=["OPTIONS"]),
         Route("/api/admin/users/{sub}/tokens/{token_id}", bind(admin.admin_tokens_delete, verifier=verifier), methods=["DELETE"]),
         Route("/api/admin/users/{sub}/tokens/{token_id}", options_handler, methods=["OPTIONS"]),
-        Route("/api/me/activity-summary", bind(account.me_activity_summary, verifier=verifier), methods=["GET"]),
-        Route("/api/me/activity-summary", options_handler, methods=["OPTIONS"]),
         Route("/api/me/projects/{id}/export", bind(projects.me_project_export, verifier=verifier), methods=["GET"]),
         Route("/api/me/projects/{id}/export", options_handler, methods=["OPTIONS"]),
         *datastore_routes,

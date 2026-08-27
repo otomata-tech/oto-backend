@@ -23,10 +23,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent / "oto_mcp"
 ALLOWED = {
     "access.py": "le seam current_org lui-même : la maison est son REPLI terminal.",
     "org_store.py": "le store qui la définit (set-path, invariants internes).",
-    # `api_routes.py` jusqu'au 2026-08-27 : le handler `/api/me` a suivi la
-    # découpe par domaine. Même call-site, même raison, autre fichier.
-    "api_routes_account.py": "exposition `home_org` de /api/me (« ton défaut », distinct "
-                             "d'active_org — affichage, pas résolution).",
+    # `api_routes.py` → `api_routes_account.py` (découpe du 2026-08-27) →
+    # `capabilities/me_account.py` (migration en capacité, le même jour). Même
+    # call-site, même raison, troisième fichier : c'est un AFFICHAGE, pas une résolution.
+    "capabilities/me_account.py": "exposition `home_org` de /api/me (« ton défaut », "
+                                  "distinct d'active_org — affichage, pas résolution).",
     "api_routes_connectors.py": "filet webhook unipile : pending émis pré-B4 sans "
                                 "org_id → maison du sub (binding legacy, documenté).",
     "credentials_store.py": "backfill_member_scope (migration ADR 0033) : la "

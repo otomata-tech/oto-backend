@@ -20,8 +20,6 @@ GET,HEAD /api/invitations/code/{code} -> invite_preview_by_code
 OPTIONS /api/invitations/code/{code} -> options_handler
 GET,HEAD /api/invitations/{token} -> invite_preview
 OPTIONS /api/invitations/{token} -> options_handler
-GET,HEAD /api/me -> me
-OPTIONS /api/me -> options_handler
 POST /api/me/avatar -> avatar_save
 DELETE /api/me/avatar -> avatar_clear
 OPTIONS /api/me/avatar -> options_handler
@@ -41,8 +39,6 @@ GET,HEAD /p/d/{token} -> public_doc_view
 POST /api/orgs/{id}/logo -> org_logo_save
 DELETE /api/orgs/{id}/logo -> org_logo_clear
 OPTIONS /api/orgs/{id}/logo -> options_handler
-GET,HEAD /api/me/calls -> my_calls
-OPTIONS /api/me/calls -> options_handler
 GET,HEAD /api/me/tools -> my_tools_list
 OPTIONS /api/me/tools -> options_handler
 GET,HEAD /api/me/tools/registry -> my_tools_registry
@@ -68,8 +64,6 @@ POST /api/admin/users/{sub}/tokens -> admin_tokens_create
 OPTIONS /api/admin/users/{sub}/tokens -> options_handler
 DELETE /api/admin/users/{sub}/tokens/{token_id} -> admin_tokens_delete
 OPTIONS /api/admin/users/{sub}/tokens/{token_id} -> options_handler
-GET,HEAD /api/me/activity-summary -> me_activity_summary
-OPTIONS /api/me/activity-summary -> options_handler
 GET,HEAD /api/me/projects/{id}/export -> me_project_export
 OPTIONS /api/me/projects/{id}/export -> options_handler
 GET,HEAD /api/google/oauth/start -> google_oauth_start
@@ -472,6 +466,12 @@ PUT /api/groups/{id}/guides/{scope}/{slug} -> _handler
 OPTIONS /api/groups/{id}/guides/{scope}/{slug} -> options_handler
 DELETE /api/me/guides/{scope}/{slug} -> _handler
 OPTIONS /api/me/guides/{scope}/{slug} -> options_handler
+GET,HEAD /api/me -> _handler
+OPTIONS /api/me -> options_handler
+GET,HEAD /api/me/calls -> _handler
+OPTIONS /api/me/calls -> options_handler
+GET,HEAD /api/me/activity-summary -> _handler
+OPTIONS /api/me/activity-summary -> options_handler
 PUT /api/me/locale -> _handler
 OPTIONS /api/me/locale -> options_handler
 GET,HEAD /api/me/profile -> _handler

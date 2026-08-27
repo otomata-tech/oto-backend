@@ -89,6 +89,9 @@ from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /ap
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # Guides ON-DEMAND (ADR 0042) — surface REST des how-to (miroir de l'outil MCP oto_guide).
 from . import guides  # noqa: F401 — me.guide (MCP oto_guide) + me.guides.{list,get,set,delete} (REST)
+# Le COMPTE (#121) — ex-routes écrites à la main d'`api_routes.py` : `GET /api/me`
+# est la première requête de tout front qui se branche, et l'OpenAPI n'en décrivait rien.
+from . import me_account  # noqa: F401 — me.{get,calls,activity_summary}
 # Préférence de langue de l'UI dashboard (niveau USER, REST-only).
 from . import user_locale  # noqa: F401 — me.locale.set (PUT /api/me/locale)
 # Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).

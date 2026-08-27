@@ -148,11 +148,14 @@ _KNOWN: dict[str, str] = {
     "/favicon.ico": NATURE,
     #
     # --- DETTE — verbes de dashboard authentifiés, à migrer en capacités.
-    # Compte, profil, activité : le cœur de ce que lit le dashboard.
-    "/api/me": DEBT,
+    # ⚠️ Le COMPTE a quitté cette liste le 2026-08-27 : `GET /api/me`,
+    # `/api/me/calls` et `/api/me/activity-summary` sont des capacités
+    # (`capabilities/me_account.py` — `me.{get,calls,activity_summary}`), et
+    # `api_routes_account.py` a été SUPPRIMÉ, vidé de ses trois handlers. Mêmes
+    # chemins, mêmes codes, même corps sur le fil ; entrée ET sortie déclarées, donc
+    # `GET /api/me` — la première requête de tout front qui se branche — est enfin
+    # décrite dans `/api/openapi.json`.
     "/api/me/avatar": DEBT,
-    "/api/me/activity-summary": DEBT,
-    "/api/me/calls": DEBT,
     # Fichiers bruts d'un projet + export — le reste du domaine projet est déjà en
     # capacités (`/api/me/projects` sert tout le métier en `op=`), ces quatre-là non.
     "/api/me/projects/{project_id:int}/files": DEBT,
@@ -230,7 +233,7 @@ def test_rest_debt_only_shrinks():
     pas une dette, elle la RÉVÈLE. Toute autre hausse est un relâchement.
     """
     debt = sorted(p for p, kind in _KNOWN.items() if kind == DEBT)
-    assert len(debt) <= 38, (
+    assert len(debt) <= 34, (
         f"la dette REST a grossi ({len(debt)} routes) : {debt}. Elle doit "
         "DÉCROÎTRE — migre en capacité plutôt que d'élargir le plafond.")
 

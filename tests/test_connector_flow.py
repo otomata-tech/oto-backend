@@ -99,17 +99,47 @@ def test_tout_connecteur_a_deux_temps_declare_son_flux():
         "aucun flux : le front ne pourra pas proposer le geste.")
 
 
+# Chemin de connexion NOMMÉ d'après un connecteur, toléré parce qu'il est ANTÉRIEUR à
+# la règle et qu'il est déjà supersédé. Cette liste ne doit que se vider.
+_NOMMES_TOLERES = {
+    # ⚠️ Découvert par CE garde-fou le 2026-08-27, en migrant la messagerie hébergée en
+    # capacité : le chemin existait depuis toujours, mais il était écrit à la main —
+    # or ce test ne parcourt QUE le registre de capacités. Même angle mort que le glob
+    # de `test_rest_modules_are_capabilities` avant #286 : un garde-fou ne voit que là
+    # où il regarde, et rendre un objet visible est ce qui fait apparaître sa dette.
+    #
+    # Il est déjà SUPERSÉDÉ par `me.connector_connect`
+    # (`POST /api/me/connectors/{name}/connect`, le chemin fixe qui ne nomme personne) —
+    # les deux appellent le MÊME `unipile_connect.hosted_auth_url`, donc ils ne peuvent
+    # pas diverger. Ce qui manque est la bascule du FRONT ; le jour où elle a lieu, on
+    # retire la capacité et cette ligne avec.
+    "me.unipile.connect",
+}
+
+
 def test_aucune_face_rest_de_connexion_nommee_dapres_un_connecteur():
     """Les chemins `/api/<nom>/oauth/start` ont été RETIRÉS une fois le dashboard de prod
     passé au chemin fixe (v1.19.0). Il ne reste qu'une face REST pour démarrer un flux,
-    et son chemin ne nomme personne."""
+    et son chemin ne nomme personne — hors `_NOMMES_TOLERES`, qui est daté et se vide."""
     from oto_mcp.capabilities import registry
     for cap in registry.CAPABILITIES:
-        if cap.rest is None or "connect" not in cap.key:
+        if cap.rest is None or "connect" not in cap.key or cap.key in _NOMMES_TOLERES:
             continue
         for n in providers.REGISTRY:
             assert f"/{n}/" not in cap.rest.path, (
                 f"{cap.key} expose une face REST nommée : {cap.rest.path}")
+
+
+def test_la_tolerance_de_chemin_nomme_ne_ment_pas():
+    """Une clé disparue doit quitter la liste : une tolérance qui ne correspond plus au
+    réel masque la prochaine vraie."""
+    from oto_mcp.capabilities import registry
+    connues = {c.key for c in registry.CAPABILITIES}
+    fantomes = sorted(_NOMMES_TOLERES - connues)
+    assert not fantomes, (
+        f"Ces capacités n'existent plus : {fantomes}. Retire-les de `_NOMMES_TOLERES` — "
+        "si `me.unipile.connect` est partie, c'est que le front a basculé sur le chemin "
+        "fixe, et la tolérance n'a plus lieu d'être.")
 
 
 def test_le_demarrage_generique_partage_le_handler_des_capacites_nommees():

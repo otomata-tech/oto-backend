@@ -68,10 +68,11 @@ _KNOWN: dict[str, str] = {
     "/api/fr/accords/{id_or_numero}": NATURE,
 
     # --- DETTE : verbes de dashboard écrits à la main, à migrer en capacités.
-    # Connexion hébergée + gouvernance connecteur.
-    "/api/me/unipile": DEBT,
-    "/api/me/unipile/connect": DEBT,
-    "/api/me/unipile/reconcile": DEBT,
+    # ⚠️ La MESSAGERIE HÉBERGÉE côté membre a quitté cette liste le 2026-08-27 :
+    # `/api/me/unipile{,/connect,/reconcile}` sont des capacités
+    # (`capabilities/unipile_me.py`). `api_routes_connectors.py` ne porte plus QUE le
+    # webhook ci-dessus — le premier module de ce chantier dont il ne reste qu'une
+    # route, et une route de NATURE.
     # (`/api/admin/unipile/seats` a quitté cette liste le 15/08 : inventaire ET
     #  libération sont des capacités — `capabilities/unipile_seats.py`.)
     # ⚠️ Le palier PLATEFORME des connecteurs a quitté cette liste le 2026-08-27 :
@@ -241,7 +242,7 @@ def test_rest_debt_only_shrinks():
     pas une dette, elle la RÉVÈLE. Toute autre hausse est un relâchement.
     """
     debt = sorted(p for p, kind in _KNOWN.items() if kind == DEBT)
-    assert len(debt) <= 25, (
+    assert len(debt) <= 22, (
         f"la dette REST a grossi ({len(debt)} routes) : {debt}. Elle doit "
         "DÉCROÎTRE — migre en capacité plutôt que d'élargir le plafond.")
 

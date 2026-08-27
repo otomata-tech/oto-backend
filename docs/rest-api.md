@@ -26,14 +26,14 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 
 | famille | où | régime |
 | --- | --- | --- |
-| ~200 chemins générés (**le compte** `/api/me`, **la toolbox** `/api/me/tools*`, **la session navigateur**, projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
+| ~200 chemins générés (**le compte** `/api/me`, **la toolbox** `/api/me/tools*`, **la session navigateur**, **la messagerie hébergée**, projets, pages, procédures, ressources, orgs, doctrine, monitoring, datastore, billing…) | `capabilities/` + `_rest_adapter` | **capacité** : un descripteur, deux faces (ADR 0009/0042) |
 | primitives (`_authenticate`, CORS, `_json`/`_json_error`, `OPTIONS`, `bind`) | `api_routes_base.py` | partagées par tous les modules ; **ré-exportées** par `api_routes` |
 | favicon, `/api/mcp/catalog`, `openapi.json`, `/api/connectors`, bibliothèques doctrines & guides, aperçu d'invitation, docs partagés (`/api/public/docs/{token}`, `/p/d/{token}`) | `api_routes_public.py` | **sans auth** — l'adaptateur capacité authentifie toujours |
 | `/api/me/avatar`, `/api/orgs/{id}/logo` | `api_routes_media.py` | multipart → hors couche capacité |
 | fichiers bruts d'un projet, `/api/me/projects/{id}/export` | `api_routes_projects.py` | multipart / binaire |
 | `/api/upload/{token}` (PUT/POST/GET) | `api_routes_uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
 | `/api/admin/platform-keys*`, `/api/admin/users/{sub}/tokens*` | `api_routes_admin.py` | `allow_api_token=False` : un jeton ne fabrique pas de jeton |
-| SIRENE, accords, datastore, contact, connecteurs, webhook Mollie, OAuth zoho/atlassian/folk/salesforce | `api_routes_<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres |
+| SIRENE, accords, datastore, contact, **webhook Unipile**, webhook Mollie, OAuth zoho/atlassian/folk/salesforce | `api_routes_<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
   capacités `me.{get,calls,activity_summary}` depuis le 2026-08-27
@@ -119,6 +119,30 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 - `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).
 - `GET /api/public/projects/{token}` — **sans auth** : renvoie `{ciphertext, updated_at}` du snapshot chiffré. Déchiffrement côté navigateur (route `/p/p/{token}#<clé>`). Pendant public de `GET /api/public/docs/{token}` (#4a).
 - `PUT|POST|GET /api/upload/{token}` — **réception d'un upload signé out-of-bande** (issue #105), **pas de JWT** : le `{token}` est un jeton HMAC scellant `(sub, org, cible)` + TTL court + usage unique (émis par `oto_upload_url`, module `upload_tokens.py`). **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary @fichier`) ; **POST** multipart `file` = le formulaire humain ; **GET** = page HTML d'upload autoportée (fallback quand l'agent n'a pas de shell, ex. claude.ai : il transmet le lien à l'humain — le jeton n'est PAS consommé au GET). Le backend matérialise dans la cible en **réappliquant** son autz, consomme le jeton (anti-rejeu), renvoie un **accusé léger** (id + compteurs), jamais le body. Cibles : page Documents (`doc`), fichier brut de projet (`project_file`, autz `ownership.can_access(project, write)`), lot de lignes datastore (`datastore` — NDJSON/CSV batch-upsert sur clé, autz `ownership.can_access(datastore_namespace, write)`, ns_id scellé au mint). Évite de faire transiter du gros contenu par le contexte du LLM.
+- `POST /api/me/unipile/connect` + `POST …/reconcile` + `GET|DELETE /api/me/unipile` —
+  **la messagerie hébergée côté membre**, capacités
+  `me.unipile.{connect,reconcile,status,disconnect}` depuis le 2026-08-27
+  (`capabilities/unipile_me.py`). Le **webhook** `POST /api/unipile/webhook` reste écrit
+  à la main dans `api_routes_connectors.py` : Unipile l'appelle server-to-server sans
+  en-tête d'auth, il est gardé par un **nonce**, et il répond toujours 200 (un échec ne
+  doit pas le faire rejouer en boucle).
+  ⚠️ **`connect` a DEUX formes de succès** : `{url}` d'ordinaire, et
+  `{adopted, channel, account_name}` **sans `url`** quand le compte était déjà connecté
+  sous la même identité dans une autre org — il vient d'être rattaché ici, il n'y a rien
+  à consentir, le front doit rafraîchir. ⚠️ **Les refus `409` et `502` servent leur
+  MESSAGE dans `error`**, pas leur code machine (forme historique conservée : le front
+  affiche `error` tel quel, et pour ces deux-là le message est ce qui est actionnable) ;
+  les autres statuts exposent bien leur jeton.
+  `GET /api/me/unipile` **réconcilie avant de répondre** (self-heal : le webhook
+  hosted-auth v2 n'est pas livré) — best-effort, jamais fatal pour le statut, no-op sans
+  pending. ⚠️ Son champ `channels` ne montre QUE les comptes liés à l'org **courante** :
+  un canal vu déconnecté peut l'être ailleurs, et `elsewhere` dit alors ce qui est
+  adoptable ici en un clic. `DELETE` est une **soft**-déconnexion, par org et par canal
+  (`?channel=`, défaut `linkedin`) : le compte survit chez le fournisseur et la ligne
+  survit comme preuve de propriété, ce qui rend la reconnexion déterministe.
+  **Pas de face MCP** : la face agent de ce geste est `me.connector_connect`
+  (`POST /api/me/connectors/{name}/connect`), qui **supersède** `…/unipile/connect` —
+  celui-ci vit jusqu'à la bascule du front.
 - `GET|POST|DELETE /api/admin/connectors/activation` + `GET|POST /api/admin/connectors/{provider}/platform-access`
   — **le palier PLATEFORME des connecteurs**, capacités
   `platform.connector.{activation_list,activation_set,activation_clear,access_list,access_set}`

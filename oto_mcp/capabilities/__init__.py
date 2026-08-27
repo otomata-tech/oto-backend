@@ -59,6 +59,10 @@ from . import connectors_activation  # noqa: F401 — connectors.activation.{org
 # plateforme (ADR 0010 B4, ADR 0044 §H). Ex-routes écrites à la main : les paliers org
 # et équipe étaient déjà des capacités, c'est l'étage qui manquait.
 from . import platform_connectors  # noqa: F401 — platform.connector.{activation_*,access_*}
+# Messagerie hébergée Unipile côté MEMBRE (#121) — connecter / réconcilier / lire /
+# délier. Ex-routes écrites à la main ; le WEBHOOK reste écrit à la main (non
+# authentifié par nature, gardé par un nonce).
+from . import unipile_me  # noqa: F401 — me.unipile.{connect,reconcile,status,disconnect}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
 # Toolbox du MEMBRE (#121) — ex-routes écrites à la main : liste, registre, bascule

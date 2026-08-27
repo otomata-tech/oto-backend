@@ -27,7 +27,8 @@ Deux découpages ne sont PAS des oublis et méritent d'être nommés ici :
 - `instance_refs.parse_ref` fait un `split(":")` sur un ref qui CONTIENT un sub —
   mais le sub y est percent-encodé (`quote(sub, safe="")`), donc son `:` devient
   `%3A`. C'est vérifié empiriquement plus bas, pas par une exemption.
-- `access._sub_matches_scopes` et `api_routes_connectors` partitionnent des scopes
+- `access._sub_matches_scopes` et `capabilities/platform_connectors` (ex-
+  `api_routes_connectors`, migré le 2026-08-27) partitionnent des scopes
   `user:<sub>` au premier `:` et recomparent le reste EN ENTIER — même forme que
   `entity_id`, même sûreté. Testé empiriquement plus bas.
 """

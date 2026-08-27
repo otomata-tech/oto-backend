@@ -74,8 +74,12 @@ _KNOWN: dict[str, str] = {
     "/api/me/unipile/reconcile": DEBT,
     # (`/api/admin/unipile/seats` a quitté cette liste le 15/08 : inventaire ET
     #  libération sont des capacités — `capabilities/unipile_seats.py`.)
-    "/api/admin/connectors/activation": DEBT,
-    "/api/admin/connectors/{provider}/platform-access": DEBT,
+    # ⚠️ Le palier PLATEFORME des connecteurs a quitté cette liste le 2026-08-27 :
+    # le cran d'activation et l'accès plateforme sont des capacités
+    # (`capabilities/platform_connectors.py`). C'était l'étage qui manquait — les
+    # paliers ORG et ÉQUIPE de la même famille étaient déjà des capacités
+    # (`capabilities/connectors_activation.py`), ce qui rendait la dette d'autant plus
+    # visible : un même métier décrit de deux façons selon l'étage.
     # ⚠️ Le 2026-08-12 (#302), le datastore a quitté cette liste EN ENTIER — onze
     # chemins, zéro reste : le tableau (`namespaces`, `namespaces/{ns}`, `…/url`),
     # les lignes (`…/rows`, `…/rows/{row_id}`, `…/rows/{row_id}/release`, `…/queue`,
@@ -237,7 +241,7 @@ def test_rest_debt_only_shrinks():
     pas une dette, elle la RÉVÈLE. Toute autre hausse est un relâchement.
     """
     debt = sorted(p for p, kind in _KNOWN.items() if kind == DEBT)
-    assert len(debt) <= 27, (
+    assert len(debt) <= 25, (
         f"la dette REST a grossi ({len(debt)} routes) : {debt}. Elle doit "
         "DÉCROÎTRE — migre en capacité plutôt que d'élargir le plafond.")
 

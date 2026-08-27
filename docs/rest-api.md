@@ -119,6 +119,30 @@ rouge, et régénérer `tests/api_routes_table.txt` EST la déclaration de l'ajo
 - `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).
 - `GET /api/public/projects/{token}` — **sans auth** : renvoie `{ciphertext, updated_at}` du snapshot chiffré. Déchiffrement côté navigateur (route `/p/p/{token}#<clé>`). Pendant public de `GET /api/public/docs/{token}` (#4a).
 - `PUT|POST|GET /api/upload/{token}` — **réception d'un upload signé out-of-bande** (issue #105), **pas de JWT** : le `{token}` est un jeton HMAC scellant `(sub, org, cible)` + TTL court + usage unique (émis par `oto_upload_url`, module `upload_tokens.py`). **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary @fichier`) ; **POST** multipart `file` = le formulaire humain ; **GET** = page HTML d'upload autoportée (fallback quand l'agent n'a pas de shell, ex. claude.ai : il transmet le lien à l'humain — le jeton n'est PAS consommé au GET). Le backend matérialise dans la cible en **réappliquant** son autz, consomme le jeton (anti-rejeu), renvoie un **accusé léger** (id + compteurs), jamais le body. Cibles : page Documents (`doc`), fichier brut de projet (`project_file`, autz `ownership.can_access(project, write)`), lot de lignes datastore (`datastore` — NDJSON/CSV batch-upsert sur clé, autz `ownership.can_access(datastore_namespace, write)`, ns_id scellé au mint). Évite de faire transiter du gros contenu par le contexte du LLM.
+- `GET|POST|DELETE /api/admin/connectors/activation` + `GET|POST /api/admin/connectors/{provider}/platform-access`
+  — **le palier PLATEFORME des connecteurs**, capacités
+  `platform.connector.{activation_list,activation_set,activation_clear,access_list,access_set}`
+  depuis le 2026-08-27 (`capabilities/platform_connectors.py`). C'était l'étage qui
+  manquait : les paliers **org** et **équipe** de la même famille étaient déjà des
+  capacités (`connectors.activation.{set_org,set_group}`).
+  **Activation** (ADR 0010 B4) : le code DÉCLARE les connecteurs, la DB décide lesquels
+  sont EXPOSÉS. ⚠️ `enabled: null` = **OFF** (jamais posé, deny-by-default), pas
+  « indéterminé ». ⚠️ **Le master GLOBAL ne prend effet qu'au prochain redémarrage** (le
+  chargement des tools est résolu au boot) — `restart_required` le dit ; un **override
+  d'org** prend effet tout de suite. Refus : `400 unknown_connector`,
+  `400 enabled_must_be_bool`, et sur le `DELETE` (query `?connector=&org_id=`)
+  `400 connector_and_org_id_required` / `400 org_id_must_be_int`.
+  **Accès plateforme** (ADR 0044 §H) : vue connecteur-centrique unique qui remplace les
+  leviers dispersés `/platform/orgs` et `/platform/users`. Le `POST` est un **acte
+  unique** — il pose ENSEMBLE l'option offerte (couche 3) et le grant de clé plateforme
+  (couche 2), ce que le backend couplait déjà. Aucun secret n'en sort. ⚠️ Si
+  `open_tier` est vrai, une instance en partage `open` sert le connecteur à **tous sans
+  grant** : `beneficiaries` ne dit alors plus la population servie. Lecture =
+  `PLATFORM_ADMIN`, écriture = `SUPER_ADMIN`. Refus : `404 unknown_connector`,
+  `400 invalid_body`, `404 unknown_org`/`unknown_user`, `400 no_platform_access`.
+  **Pas de face MCP** : basculer le master global est un acte de déploiement, ouvrir un
+  accès est un acte commercial — les paliers qu'un utilisateur pilote (org, équipe) sont
+  déjà servis par `oto_connector_activation`.
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/admin/users/{sub}/tokens` + `DELETE /api/admin/users/{sub}/tokens/{token_id}` — issue/list/revoke tokens API on behalf of a user (admin only)

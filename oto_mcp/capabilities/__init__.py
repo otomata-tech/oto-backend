@@ -55,6 +55,10 @@ from . import me_credentials  # noqa: F401 — me.credential.{get,set,clear}
 from . import browser_sessions  # noqa: F401 — me.browser_session.{start,finalize}
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 from . import connectors_activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
+# Palier PLATEFORME de la même famille (#121) — cran d'activation global + accès
+# plateforme (ADR 0010 B4, ADR 0044 §H). Ex-routes écrites à la main : les paliers org
+# et équipe étaient déjà des capacités, c'est l'étage qui manquait.
+from . import platform_connectors  # noqa: F401 — platform.connector.{activation_*,access_*}
 # RBAC connecteur interne à l'org (ADR 0025) — restreindre un connecteur à des départements/membres.
 from . import connectors_acl  # noqa: F401 — connectors.acl.{list,grant,revoke}
 # Toolbox du MEMBRE (#121) — ex-routes écrites à la main : liste, registre, bascule

@@ -102,6 +102,123 @@ def seed_initial(conn) -> None:
         )
 
 
+# Marque du one-shot de purge. Elle vit dans `connector_selection_seeded` —
+# précédent établi par `selection._BACKFILL_MARK` : une table de MARQUES de boot,
+# sans sémantique d'accès. Les deux autres emplacements possibles sont des pièges :
+# une ligne sentinelle dans `connector_acl` VAUT « connecteur restreint » (l'ACL est
+# deny-by-default à la présence), et une ligne 'platform' dans
+# `connector_availability` serait lue comme l'interrupteur maître (`is_exposed` ne
+# filtre pas sur `scope_id`). Une marque ne doit jamais ressembler à une décision.
+_PURGE_MARK = "#purge-connecteur-depose:"
+
+
+def _purge_faite(conn, connector: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM connector_selection_seeded WHERE sub = %s AND org_id = 0",
+        (_PURGE_MARK + connector,),
+    ).fetchone() is not None
+
+
+def purge_connecteur_depose(conn, connector: str) -> int:
+    """Efface la GOUVERNANCE laissée par un connecteur DÉPOSÉ — **une seule fois**.
+
+    Déposer un connecteur retire son entrée du registre ; ses lignes d'exposition
+    (`connector_availability`) et d'ACL (`connector_acl`), elles, survivent — rien ne
+    les nettoie, les `DELETE` existants sont des gestes d'admin explicites. Elles
+    dorment sans effet tant que le nom reste mort.
+
+    Elles se réveillent le jour où on **reprend le nom** pour autre chose, et en
+    silence : le fan-out qui installe le nouveau connecteur pose ses lignes en
+    `ON CONFLICT DO NOTHING` — à dessein, un réglage d'admin déjà pris doit gagner —
+    donc la ligne FOSSILE gagne. Une org qui avait coupé l'ancien `linkedin` (données
+    achetées AI Ark) verrait le nouveau (session hébergée) coupé lui aussi ; une org
+    qui l'avait réservé à une équipe le verrait réservé. Un verdict porté sur un AUTRE
+    produit, hérité sans que personne ne l'ait décidé, et sans rien qui échoue : la
+    carte est simplement absente ou grise.
+
+    **ONE-SHOT, et c'est structurel, pas une optimisation.** Rejouée à chaque boot,
+    la purge effacerait les décisions prises DEPUIS sur le nouveau connecteur — un
+    admin coupe LinkedIn pour son org le lundi, le boot du mardi le rallume. Le geste
+    ne s'adresse qu'aux fossiles, et un fossile n'existe qu'une fois.
+
+    Renvoie le nombre de lignes effacées : 0 au rejeu, et 0 aussi s'il n'y avait rien
+    à purger (un nom neuf n'a pas de passé) — les deux sont des succès."""
+    if _purge_faite(conn, connector):
+        return 0
+    n = 0
+    for table in ("connector_availability", "connector_acl"):
+        cur = conn.execute(f"DELETE FROM {table} WHERE connector = %s", (connector,))
+        n += cur.rowcount or 0
+    conn.execute(
+        "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, 0) "
+        "ON CONFLICT DO NOTHING",
+        (_PURGE_MARK + connector,),
+    )
+    return n
+
+
+def fanout_availability(conn, source: str, targets: tuple[str, ...]) -> int:
+    """Étend à `targets` l'exposition de `source` — aux TROIS scopes.
+
+    Le seed initial (`seed_initial`) ne joue qu'une fois, sur une table vide : un
+    connecteur ajouté après lui n'a AUCUNE ligne platform, donc reste OFF
+    (deny-by-default). C'est la bonne règle pour un connecteur neuf — et le pire cas
+    possible pour un connecteur SCINDÉ : le jour du split unipile (2026-08-28), les
+    six canaux naissent OFF et toute la messagerie hébergée s'éteint pour tout le
+    monde, alors que rien n'a été désactivé.
+
+    On recopie donc les trois scopes, pas seulement le master :
+    · `platform` — l'interrupteur global suit le connecteur d'origine ;
+    · `org`      — un override d'org (ON comme OFF) est une DÉCISION de cette org :
+                   une org qui avait coupé unipile ne doit pas voir six canaux
+                   s'allumer, et une org qui l'avait forcé ON les garde ;
+    · `group`    — une coupure d'équipe est monotone (elle ne fait que retrancher) :
+                   la perdre RELÂCHERAIT une restriction, jamais l'inverse.
+
+    `ON CONFLICT DO NOTHING` : un réglage déjà posé sur une cible gagne (rejeu de
+    boot, ou un admin qui a déjà tranché depuis). Idempotent."""
+    n = 0
+    for cible in targets:
+        cur = conn.execute(
+            "INSERT INTO connector_availability "
+            "       (scope_type, scope_id, connector, enabled, set_by) "
+            "SELECT scope_type, scope_id, %s, enabled, %s "
+            "  FROM connector_availability WHERE connector = %s "
+            "ON CONFLICT DO NOTHING",
+            (cible, f"split:{source}", source),
+        )
+        n += cur.rowcount or 0
+    return n
+
+
+def fanout_acl(conn, source: str, targets: tuple[str, ...]) -> int:
+    """Étend à `targets` l'ACL (`connector_acl`) de `source`.
+
+    L'ACL est deny-by-default À LA PRÉSENCE (ADR 0025) : ≥1 ligne pour
+    (scope, connector) ⟹ RESTREINT, aucune ⟹ ouvert. Un connecteur scindé dont
+    l'ACL ne suit pas devient donc OUVERT À TOUS — la restriction ne « reste pas
+    en place par défaut », elle s'ÉVAPORE. C'est le sens du fail-open qui rend ce
+    geste obligatoire, et pas seulement souhaitable : une org qui avait réservé la
+    messagerie à son équipe commerciale l'ouvrirait à tout le monde le jour du split,
+    sans rien faire et sans rien voir.
+
+    `granted_by` est conservé (l'audit dit QUI a posé la restriction d'origine) ;
+    `granted_at` repart à NOW() par défaut de colonne — la ligne est neuve, la
+    dater du geste original ferait croire à une décision qui n'a pas eu lieu."""
+    n = 0
+    for cible in targets:
+        cur = conn.execute(
+            "INSERT INTO connector_acl "
+            "       (scope_type, scope_id, connector, principal_type, principal_id, granted_by) "
+            "SELECT scope_type, scope_id, %s, principal_type, principal_id, granted_by "
+            "  FROM connector_acl WHERE connector = %s "
+            "ON CONFLICT DO NOTHING",
+            (cible, source),
+        )
+        n += cur.rowcount or 0
+    return n
+
+
 # --- résolution (pure) ------------------------------------------------------
 
 def _resolve(global_map: dict[str, bool], override_map: dict[str, bool]) -> set[str]:

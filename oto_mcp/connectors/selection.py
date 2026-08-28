@@ -206,6 +206,40 @@ def rename_selection(conn, old: str, new: str) -> int:
     return cur.rowcount or 0
 
 
+def fanout_selection(conn, source: str, targets: tuple[str, ...]) -> int:
+    """Étend à `targets` la sélection de `source` — un connecteur qui se SCINDE.
+
+    Pendant de `rename_selection` pour le cas 1→N. Le split unipile du 2026-08-28 en
+    est le premier porteur : la carte « messagerie hébergée » est devenue sept cartes
+    (le compte + ses six canaux), et un membre qui avait installé `unipile` doit
+    retrouver ses outils WhatsApp et LinkedIn là où ils sont MAINTENANT. Sans ce
+    geste, sous le régime strict « non-sélectionné = masqué » (ADR 0050), la surface
+    de messagerie disparaît de la toolbox de tous ceux qui l'avaient — silencieusement,
+    exactement le mode de panne de #295.
+
+    `source` est CONSERVÉ : il ne disparaît pas du registre (il devient le compte
+    fournisseur, qui porte la clé). C'est ce qui distingue un split d'un renommage.
+
+    `ON CONFLICT DO NOTHING` sur la PK `(sub, org_id, connector)` : une paire qui
+    porte déjà l'un des `targets` garde SON état — un membre qui avait déjà pausé un
+    canal ne se le voit pas réinstaller par la migration. Idempotent, donc rejouable
+    à chaque boot (base partagée preprod/prod, docs/live-migrations.md).
+
+    Le `state` est HÉRITÉ de la source : une sélection en pause reste en pause. Un
+    split n'est pas une occasion d'installer quelque chose."""
+    n = 0
+    for cible in targets:
+        cur = conn.execute(
+            "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
+            "SELECT sub, org_id, %s, state FROM user_selected_connectors "
+            " WHERE connector = %s "
+            "ON CONFLICT DO NOTHING",
+            (cible, source),
+        )
+        n += cur.rowcount or 0
+    return n
+
+
 # --- migration ADR 0050 : backfill one-shot des pairs pré-existants -----------
 
 # Connecteurs `default_hidden` AU MOMENT du retrait du flag (ADR 0050 B3) — fait

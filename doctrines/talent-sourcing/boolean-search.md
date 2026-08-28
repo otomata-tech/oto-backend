@@ -40,10 +40,10 @@ Cible un site qui indexe les profils :
 `serper_search` rend les SERP structurées — itère sur les requêtes, déduplique
 les profils, garde l'URL canonique comme clé.
 
-## Sur LinkedIn (via `linkedin_unipile_search`)
+## Sur LinkedIn (via `linkedin_search`)
 
 Passe la requête booléenne dans le mot-clé, puis affine par filtres (intitulé,
-localisation, entreprise). `linkedin_unipile_profile` (op="person") pour dérouler un profil, op="company"
+localisation, entreprise). `linkedin_profile` (op="person") pour dérouler un profil, op="company"
 pour qualifier l'employeur actuel (taille, secteur — signal de move probable).
 
 ## Garde-fous

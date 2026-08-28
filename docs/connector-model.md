@@ -32,7 +32,23 @@ Pour qu'un connecteur **marche** pour un utilisateur, les **trois** doivent êtr
 | 3 | **Option** *(options gatées only)* | l'option est-elle débloquée ? | `option_open(sub, connector)` = **BYO** ∪ `has_option` (comp admin user\|org **OU abonnement d'org**) |
 
 La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à option gatée**
-(unipile, linkedin hébergé) ont la couche **3**.
+(le compte unipile et ses six canaux) ont la couche **3**.
+
+> **⚠️ Un connecteur peut ne PAS porter sa propre clé** (`Connector.credential_of`,
+> split unipile du 2026-08-28). Les six canaux hébergés — `linkedin`,
+> `whatsapp`, `telegram`, `instagram`, `messenger`, `twitter` — ont leur **couche 1**
+> en propre (activation, ACL, sélection : c'est tout l'intérêt du split) mais
+> empruntent les **couches 2 et 3** au compte `unipile`. Deux questions cohabitent
+> donc, et tout site doit choisir laquelle il pose :
+>
+> | la question | ce qu'elle gouverne | le nom à employer |
+> |---|---|---|
+> | qui a le DROIT d'appeler ? | couche 1 + `require_connector_access` + pin `_instance=` | le nom **NU** |
+> | avec quelle CLÉ ? | couche 2, couche 3, quota, clé plateforme | `providers.credential_provider(nom)` |
+>
+> La normalisation vit dans **`walk_cascade`** — le seam que traversent la résolution,
+> le miroir de mode et le statut. La refaire ailleurs, c'est rouvrir la divergence du
+> 2026-07-07. Détail : `docs/unipile.md` §Le split.
 
 ---
 

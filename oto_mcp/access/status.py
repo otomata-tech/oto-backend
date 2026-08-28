@@ -86,11 +86,26 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
         Le repli n'est pas décoratif : si le préchargement a échoué, rendre 0 partout
         ferait afficher « quota intact » à quelqu'un qui l'a épuisé. Mieux vaut payer
         les 48 requêtes que mentir sur un quota."""
+        # Le compteur est celui de la CLÉ (délégation) : un canal unipile lit
+        # celui de son compte porteur, sinon il afficherait « quota intact » à
+        # côté du plafond d'une clé déjà épuisée.
+        porteur = providers.credential_provider(provider)
         if quotas_du_jour is not None:
-            return quotas_du_jour.get(provider, 0)
-        return db.get_usage_today(sub, provider)
+            return quotas_du_jour.get(porteur, 0)
+        return db.get_usage_today(sub, porteur)
 
+    # Connecteurs qui DÉLÈGUENT leur credential (`Connector.credential_of`, split
+    # unipile) : leur marche donnerait, par construction, EXACTEMENT celle de leur
+    # porteur — `walk_cascade` normalise avant le premier barreau. La faire six fois
+    # de plus n'ajoute pas une information, ça ajoute six marches sur LE chemin chaud
+    # (`/api/me`, à chaque chargement du dashboard) — celui-là même pour lequel ce
+    # bloc précharge l'inventaire du coffre et la carte des quotas. On les met donc
+    # de côté ici et on RECOPIE l'entrée du porteur après la boucle.
+    delegants = {p: providers.credential_provider(p) for p in db.KEY_PROVIDERS
+                 if providers.credential_provider(p) != p}
     for provider in db.KEY_PROVIDERS:
+        if provider in delegants:
+            continue
         # Marche COMPLÈTE du walker en sonde PRÉSENCE (pas de déchiffrement sur le
         # chemin /api/me) : le gagnant donne le mode, les barreaux suivants restent
         # affichables (flags par niveau). Miroir STRUCTUREL de resolve_api_key —
@@ -129,6 +144,16 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
                                                   groups=member_groups)
                                if mode == "forbidden" else None),
         }
+
+    # Recopie des délégants (cf. ci-dessus) : même clé ⟹ même verdict, mot pour mot.
+    # ⚠️ Copie, pas partage de référence : deux cartes qui pointeraient le même dict
+    # se répondraient l'une l'autre au premier `.update()` d'un appelant.
+    # Porteur absent (non keyed, ou registre incohérent) ⟹ on n'invente rien : la
+    # carte n'a pas d'entrée, comme n'importe quel connecteur sans credential.
+    for delegant, porteur in delegants.items():
+        entree = out["providers"].get(porteur)
+        if entree is not None:
+            out["providers"][delegant] = dict(entree)
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
     # multi-champs, ADR 0011) : mounts basic_auth (planity) ET clients in-process

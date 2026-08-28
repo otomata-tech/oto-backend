@@ -102,17 +102,25 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     # Couche 2 — la clé. `credential_mode_for` est le MIROIR de la cascade réelle
     # (`resolve_credential`) : le verdict de la carte ne peut donc pas diverger de ce
     # que l'appel ferait. `forbidden` = rien ne résout ; ce n'est PAS un refus RBAC.
+    # ⚠️ La clé peut appartenir à un AUTRE connecteur (`Connector.credential_of` —
+    # les canaux de messagerie hébergée empruntent celle du compte fournisseur). Le
+    # message doit alors nommer la carte où elle se POSE, pas celle qu'on diagnostique :
+    # envoyer quelqu'un « section Whatsapp » de sa page compte est un cul-de-sac, il
+    # n'y a pas de champ. La couche 1 (au-dessus) reste, elle, sur le connecteur
+    # DEMANDÉ — c'est bien son activation et son ACL à lui qui le gouvernent.
+    from .. import providers
+    porteur = providers.credential_provider(connector)
     mode = access.credential_mode_for(sub, connector, org=org, group=group)
     if mode == "forbidden":
         return Diagnosis(NO_CREDENTIAL, (
-            f"Aucune clé `{connector}` ne résout pour toi dans cette org : pose la "
-            f"tienne sur {_account_url(sub)} (section {connector.capitalize()}), ou "
+            f"Aucune clé `{porteur}` ne résout pour toi dans cette org : pose la "
+            f"tienne sur {_account_url(sub)} (section {porteur.capitalize()}), ou "
             f"demande à un admin de te prêter la clé plateforme."))
     if mode == OVER_QUOTA:
         # Distinct de `no_credential` À DESSEIN : la clé va très bien, c'est la
         # journée qui est finie. Les confondre envoie reconfigurer un credential sain.
         return Diagnosis(OVER_QUOTA, (
-            f"Quota de la clé plateforme `{connector}` épuisé pour aujourd'hui — la "
+            f"Quota de la clé plateforme `{porteur}` épuisé pour aujourd'hui — la "
             f"clé résout, elle est à bout de course. Pose ta propre clé sur "
             f"{_account_url(sub)} pour continuer sans limite, ou reprends demain."))
 

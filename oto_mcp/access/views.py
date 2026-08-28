@@ -176,7 +176,7 @@ def credential_mode_for(sub: str, provider: str, *,
     if win.mode != "platform":
         return win.mode
     grant = win.payload
-    used = db.get_usage_today(sub, provider)
+    used = quotas.usage_today(sub, provider)
     limit = grant.get("daily_quota") or quotas.quota_for(provider)
     return "over_quota" if (limit and used >= limit) else "platform"
 

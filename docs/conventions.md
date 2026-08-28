@@ -199,7 +199,7 @@ rien ne rendait navigable et que rien ne tenait.
   savoir que cette règle repose sur la mémoire, pas sur un garde-fou.
 - **Ce qu'un outil RENVOIE a un budget, et il se mesure — pas une consigne (14/08).** Sept
   signaux d'usage en six jours, tous le même défaut : un payload qu'un agent ne peut pas
-  lire (`linkedin_aiark_search` 3 M caractères, `oto_doc op=list` 201 K, `linkedin_unipile_post
+  lire (`linkedin_aiark_search` 3 M caractères, `oto_doc op=list` 201 K, `linkedin_post
   op=feed` 67 K, `oto_project op=list` 73 K). Chaque fois, le client déverse en fichier puis
   reparse au `jq` — et **un agent sans shell (client MCP nu, n8n) cale tout court** : pour lui
   un tool trop verbeux n'est pas cher, il est inutilisable. Quatre règles en sortent :

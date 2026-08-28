@@ -25,8 +25,8 @@ Garde court (≤ 6 phrases). Une seule question. Pas de jargon RH.
 
 ## Canaux & outils
 
-- **LinkedIn** (`linkedin_unipile_network(op="invite")` + note,
-  `linkedin_unipile_chat(op="send")` une fois
+- **LinkedIn** (`linkedin_network(op="invite")` + note,
+  `linkedin_chat(op="send")` une fois
   en relation). Le canal premier pour le passif.
 - **Email** (`gmail_compose` pour du 1:1, **`lemlist`** pour une séquence cadencée :
   `lemlist_list_campaigns`, ajout de lead). N'envoie qu'à un email **vérifié**

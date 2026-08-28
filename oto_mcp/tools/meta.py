@@ -238,7 +238,7 @@ def register(mcp: FastMCP) -> None:
         `oto_enable_tool`.
 
         Args:
-            name: Exact tool name (e.g. `attio_create_deal`, `linkedin_unipile_search`).
+            name: Exact tool name (e.g. `attio_create_deal`, `linkedin_search`).
         """
         sub = _require_sub()
         # Le nom peut arriver sous la forme du tenant (`tulina_doc`) : la denylist,
@@ -359,7 +359,7 @@ def register(mcp: FastMCP) -> None:
 
         The prefix keeps them out of the tools' own argument space: an unprefixed
         `account`/`org`/`project` in `arguments` is a BUSINESS argument of the target
-        (e.g. `aiark_company_search(account=…)` is AI Ark's company filter) and is
+        (e.g. `aiark_search(op="companies", account=…)` is AI Ark's company filter) and is
         passed through untouched.
         """
         # Identité ambiante : le sub du JWT porte déjà l'appel (le handler cible

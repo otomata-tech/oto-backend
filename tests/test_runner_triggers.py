@@ -72,7 +72,7 @@ def test_create_valide_puis_pose_avec_le_fuseau_par_defaut(monkeypatch):
     monkeypatch.setattr(RT.db, "create_trigger",
                         lambda org, sub, **kw: vu.update(kw, org=org) or {"id": 1, **kw})
     out = _appel(_ctx(), op="create", procedure="veille-linkedin",
-                 cron="5 6 * * *", tools=["linkedin_unipile_post", "data_write"])
+                 cron="5 6 * * *", tools=["linkedin_post", "data_write"])
     assert vu["tz"] == "Europe/Paris", "le défaut est ÉCRIT, pas supposé"
     assert vu["next_due"] is not None and out["trigger"]["id"] == 1
 

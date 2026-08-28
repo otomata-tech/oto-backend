@@ -28,7 +28,7 @@ sourcer large mais qualifié, enrichir les coordonnées, qualifier, puis approch
    Vérifie le poste ouvert côté ATS (`*_jobs` / `*_postings` / `*_offers`).
 
 2. **Sourcer (multi-canal).** Voir le skill `boolean-search`.
-   - LinkedIn via Unipile (`linkedin_unipile_search`, `linkedin_unipile_profile`
+   - LinkedIn via Unipile (`linkedin_search`, `linkedin_profile`
      op="person"/"company").
    - Recherche web / X-ray (`serper_search`, kind="scholar" pour les
      profils techniques/académiques). ⚠️ `serper_*` ne couvre PAS les offres

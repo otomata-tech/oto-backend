@@ -32,8 +32,16 @@ _PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
 
 
 def paid_option_for(connector: str) -> Optional[str]:
-    """Option payante requise par un connecteur (ou None)."""
-    return _PAID_OPTION_BY_CONNECTOR.get(connector)
+    """Option payante requise par un connecteur (ou None).
+
+    Suit la **délégation de credential** : les six canaux unipile n'ont pas d'option
+    à eux, ils partagent celle du compte. Une option par canal serait un contresens
+    métier (l'option paie des SIÈGES sur la clé plateforme, et un siège est un compte
+    chez le fournisseur, pas un canal) et une régression : le comp `unipile` d'un
+    client abonné cesserait d'ouvrir WhatsApp le jour du split."""
+    return _PAID_OPTION_BY_CONNECTOR.get(
+        connector) or _PAID_OPTION_BY_CONNECTOR.get(
+        providers.credential_provider(connector))
 
 
 def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNSET) -> bool:
@@ -62,6 +70,12 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
 
 
 def quota_for(provider: str) -> int:
+    """Quota journalier de la clé PLATEFORME d'un connecteur.
+
+    Normalisé vers le PORTEUR du credential : un quota est une propriété de la clé,
+    et six canaux qui empruntent la même clé partagent forcément son compteur. Six
+    compteurs indépendants laisseraient consommer 6× le quota sur une seule clé."""
+    provider = providers.credential_provider(provider)
     raw = os.environ.get(f"OTO_MCP_QUOTA_{provider.upper()}_DAILY")
     if raw is not None:
         try:
@@ -69,6 +83,15 @@ def quota_for(provider: str) -> int:
         except ValueError:
             pass
     return _QUOTA_DEFAULTS.get(provider, 0)
+
+
+def usage_today(sub: str, provider: str) -> int:
+    """Consommation du jour SUR LA CLÉ de `provider` — normalisée vers son porteur.
+
+    Pendant de `quota_for` : compteur et plafond doivent nommer la même clé, sinon
+    un canal lirait 0 face au plafond d'une clé déjà épuisée (« quota intact » chez
+    quelqu'un qui n'a plus rien). Tout lecteur de quota passe par ici."""
+    return db.get_usage_today(sub, providers.credential_provider(provider))
 
 
 def _org_unmetered(org: int) -> bool:
@@ -97,6 +120,10 @@ def record_platform_usage(provider: str, calls: int = 1) -> None:
     sub = current_user_sub_from_token()
     if not sub:
         return
+    # Métré sur la clé RÉELLEMENT consommée (délégation) : un appel WhatsApp brûle
+    # le quota du compte unipile, pas celui d'un compteur « whatsapp » que personne
+    # ne lit. Écriture et lecture (`usage_today`) normalisent pareil.
+    provider = providers.credential_provider(provider)
     for _ in range(max(1, calls)):
         db.increment_usage(sub, provider)
     if grants_chain.is_chained(provider):

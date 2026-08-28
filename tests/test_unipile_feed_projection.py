@@ -1,6 +1,6 @@
 """Le feed LinkedIn tient dans un résultat d'outil — signal d'usage #384.
 
-`linkedin_unipile_post(op="feed", limit=40)` rendait **67 383 caractères**, au-delà du
+`linkedin_post(op="feed", limit=40)` rendait **67 383 caractères**, au-delà du
 plafond d'un résultat MCP : observé en conditions réelles sur la procédure
 `veille-linkedin`, le harnais a déversé la sortie dans un fichier et l'agent a dû
 repasser au `jq` pour la ramener à 42 Ko — deux tours et un détour par le shell avant
@@ -70,7 +70,7 @@ def _tool():
 
     m = FastMCP("t")
     U.register(m)
-    return asyncio.run(m.get_tool("linkedin_unipile_post")).fn
+    return asyncio.run(m.get_tool("linkedin_post")).fn
 
 
 @pytest.fixture
@@ -245,7 +245,7 @@ def test_les_posts_dun_membre_ont_le_meme_defaut(monkeypatch):
 
     m = FastMCP("t")
     U.register(m)
-    profile = asyncio.run(m.get_tool("linkedin_unipile_profile")).fn
+    profile = asyncio.run(m.get_tool("linkedin_profile")).fn
 
     it = profile(op="posts", identifier="marie-dupont")["items"][0]
     assert len(it["text"]) == 601 and it["text_truncated"] is True

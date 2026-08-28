@@ -1,9 +1,17 @@
 """Unipile — LinkedIn & WhatsApp hébergés (recherche / scrape / messagerie).
 
-Clé résolue par appel via `access.resolve_api_key("unipile")` (keyed, cascade
-user > org). Le dsn (API v2 : gateway `api.unipile.com`) et l'account_id LinkedIn
-sont résolus côté client (env `UNIPILE_DSN`, défaut api.unipile.com ;
-auto-résolution du 1er compte LINKEDIN connecté).
+⚠️ **Un module, SEPT connecteurs** depuis le split du 2026-08-28 : `unipile` (le
+compte, qui porte la clé) et ses six canaux, dont `linkedin` sert ici. Les
+cinq autres ont leur propre `tools/<canal>.py`, qui appelle la factory de messagerie
+commune d'ici. Cf. `docs/unipile.md` §Le split.
+
+La clé est résolue par appel **sous le connecteur du CANAL**
+(`unipile_client` → `access.resolve_credential(<canal>)`), pas sous `unipile` : c'est
+ce qui fait mordre l'ACL et l'activation DE CE CANAL, le gate lisant le nom qu'on lui
+passe. La clé, elle, reste celle du compte — la délégation
+(`Connector.credential_of`) normalise dans la cascade. Le dsn (API v2 : gateway
+`api.unipile.com`) et l'account_id sont résolus côté client (env `UNIPILE_DSN`,
+défaut api.unipile.com).
 
 Pourquoi à côté du connecteur browser `linkedin` : la session vit chez Unipile
 (vrai Chrome + proxy résidentiel), ce qui contourne l'empreinte TLS et
@@ -22,7 +30,7 @@ from fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, session_org, status_hints
+from .. import access, db, providers, session_org, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import verify as connector_verify
 
@@ -65,7 +73,7 @@ _FEED_ADDRESSING = ("urn",)         # jamais projeté hors du résultat : sans l
 
 # Longueur d'extrait par DÉFAUT de tout texte long rendu en LISTE par ce connecteur —
 # feed (#384) comme posts/commentaires d'un membre (#281). Un seul chiffre pour toute la
-# famille `linkedin_unipile_*` : l'agent l'apprend une fois. L'entête d'un post suffit à
+# famille `linkedin_*` : l'agent l'apprend une fois. L'entête d'un post suffit à
 # le trier (c'est ce que l'agent de #384 avait retenu à la main au jq) ; la coupe est
 # MARQUÉE (`text_truncated`) et `text_max_chars=None` rend le texte entier.
 _TEXT_EXCERPT_CHARS = 600
@@ -112,7 +120,7 @@ def _rate_limit_guard(sub: str) -> None:
             f"⏳ Unipile rate-limite ce compte LinkedIn — réessaie dans {_fmt_wait(until - now)} "
             "(délai demandé par Unipile : de quelques secondes après une rafale légère à "
             "~1h quand la cadence récente a été soutenue — c'est le délai affiché qui fait "
-            "foi, pas une moyenne). RALENTIS la cadence des appels linkedin_unipile_* plutôt que de "
+            "foi, pas une moyenne). RALENTIS la cadence des appels linkedin_* plutôt que de "
             "les enchaîner en rafale ; si l'attente est longue, passe à autre chose et "
             "reviens, plutôt que de sonder en boucle.")))
 
@@ -153,7 +161,7 @@ def _scrape(sub: str, fn):
         wait = _fmt_wait(_RATE_LIMIT_UNTIL[sub] - time.time())
         raise McpError(ErrorData(code=INVALID_PARAMS, message=(
             f"⏳ Unipile rate-limite ce compte LinkedIn ({e}). Réessaie dans {wait} et "
-            "RALENTIS : n'enchaîne pas des dizaines d'appels linkedin_unipile_* en rafale (c'est ce qui "
+            "RALENTIS : n'enchaîne pas des dizaines d'appels linkedin_* en rafale (c'est ce qui "
             "déclenche le throttle, puis dégrade et déconnecte le compte). Les fiches société "
             "déjà vues sont servies du cache — inutile de les relire.")))
 
@@ -163,7 +171,7 @@ def _slim_search(res):
     - dé-duplique `data`/`items` et `next_cursor`/`cursor` — oto-core `_norm` renvoie les
       DEUX (même liste) pour la stabilité de l'aval ; l'agent n'a besoin QUE de `items`/`cursor` ;
     - retire de chaque résultat les URLs d'image (`*picture_url*` : photo + large + fond) =
-      poids mort en recherche (l'agent ne rend pas d'images ; un profil précis → linkedin_unipile_profile).
+      poids mort en recherche (l'agent ne rend pas d'images ; un profil précis → linkedin_profile).
     Ne touche à RIEN d'autre (tous les champs métier restent)."""
     if not isinstance(res, dict):
         return res
@@ -408,7 +416,7 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
 def account_status(provider: str = "LINKEDIN") -> dict:
     """« Mon compte {provider} est-il connecté, et sa session est-elle vivante ? »
 
-    Né du signal **#452** (org 2, 14/08/2026). Le NOM `linkedin_unipile_account`
+    Né du signal **#452** (org 2, 14/08/2026). Le NOM `linkedin_account`
     promet l'état du compte ; l'outil ne servait que l'ardoise premium (contrats
     Recruiter / Sales Navigator). Un agent venu vérifier « mon LinkedIn est-il
     connecté ? » a inventé `op='status'`, s'est pris un `invalid_arguments` (appel
@@ -472,11 +480,17 @@ def account_status(provider: str = "LINKEDIN") -> dict:
         # Le geste manquant vient du seam PARTAGÉ (option fermée ? aucune clé ? juste
         # un canal à lier ?) — la même réponse que la carte connecteur, pas une
         # seconde version qui divergerait.
+        # Diagnostiquer le CANAL, pas le compte : depuis le split, l'activation, l'ACL
+        # et la sélection qui peuvent bloquer CE canal sont les SIENNES. La couche
+        # « clé », elle, remonte au compte porteur — `readiness.diagnose` le fait
+        # lui-même (`credential_provider`), le message nomme donc la bonne carte.
+        canal_con = providers.connector_for_hosted_channel(provider)
+        nom = canal_con.name if canal_con else "unipile"
         diag = connector_readiness.diagnose(
-            sub, "unipile", org=org, group=access.current_group(sub))
+            sub, nom, org=org, group=access.current_group(sub))
         out["next_step"] = pointer_error or (
             diag.next_step if diag is not None
-            else connector_readiness.no_identity_step(sub, "unipile", "compte"))
+            else connector_readiness.no_identity_step(sub, nom, "compte"))
     elif alive is False:
         out["next_step"] = (
             f"Le compte {front} est bien lié, mais sa session est MORTE côté "
@@ -485,21 +499,41 @@ def account_status(provider: str = "LINKEDIN") -> dict:
     return out
 
 
-def _status_pending_action(sub: str, org, group, entry: dict):
-    """Hook `status_hints` (seam générique, lot 2) : la clé résout et l'option est
-    ouverte, mais AUCUN canal n'est lié → l'étape manquante est « Connecte un
-    canal ». La spécificité hosted-account reste ICI, pas dans le modèle commun."""
-    if entry.get("mode") == "forbidden":
-        return None   # pas de clé → les verdicts « à connecter »/« option » suffisent
-    st = status_for(sub, org=org, group=group)
-    if not st["subscribed"]:
-        return None   # option fermée → le front rend déjà « option requise »
-    if any(ch["connected"] for ch in st["channels"].values()):
-        return None
-    return "Connecte un canal"
+def _channel_pending_action(canal: str, libelle: str):
+    """Hook `status_hints` d'UNE carte de canal (split du 2026-08-28).
+
+    La clé du compte résout et l'option est ouverte, mais CE canal n'est pas lié →
+    l'étape manquante est « connecte ton compte X ». Avant le split, le hook était
+    posé sur `unipile` et disait « Connecte un canal » tant qu'AUCUN des six ne
+    l'était : il se taisait dès le premier connecté, donc quelqu'un qui avait
+    LinkedIn ne s'entendait jamais dire qu'il lui restait WhatsApp à brancher. Une
+    carte par canal rend la question posable canal par canal — et la réponse utile.
+
+    (Fermé sur `canal` par une fabrique plutôt que par une closure de boucle : six
+    hooks qui fermeraient sur la variable d'itération diraient tous le dernier.)"""
+
+    def hook(sub: str, org, group, entry: dict):
+        if entry.get("mode") == "forbidden":
+            return None   # pas de clé → « à connecter »/« option » suffisent déjà
+        st = status_for(sub, org=org, group=group)
+        if not st["subscribed"]:
+            return None   # option fermée → le front rend déjà « option requise »
+        if st["channels"].get(canal, {}).get("connected"):
+            return None
+        return f"Connecte ton compte {libelle}"
+
+    return hook
 
 
-status_hints.register("unipile", _status_pending_action)
+# Un hook par carte de canal. `unipile` n'en a plus : sa carte pose une CLÉ, elle
+# n'a aucun bouton pour connecter quoi que ce soit — un « Connecte un canal » y
+# serait une consigne sans geste.
+for _con in providers.REGISTRY.values():
+    if _con.hosted_channel:
+        status_hints.register(_con.name,
+                              _channel_pending_action(_con.hosted_channel.lower(),
+                                                      _con.label))
+del _con
 
 
 def admin_status_by_org(sub: str, orgs: list) -> list:
@@ -563,16 +597,32 @@ def _project_operated_account(anon, provider: str) -> str:
     Jamais de repli : ni sur un autre compte de l'org, ni sur le premier de l'abonnement.
     Un message parti sous la mauvaise identité est irréversible, et le destinataire du
     partage n'a aucun moyen de s'en apercevoir."""
-    declared = access.project_declared_identities("unipile", anon.project_id)
+    # ⚠️ DEUX noms de lien à lire depuis le split du 2026-08-28. Un lien écrit
+    # AVANT nomme le connecteur `unipile` (il n'y en avait qu'un, et le filtre par
+    # canal ci-dessous suffisait à lever l'ambiguïté) ; un lien écrit DEPUIS, depuis
+    # la carte du canal, nomme le canal. Ne lire que l'un des deux casse la moitié
+    # des projets — les anciens ou les nouveaux selon le nom retenu — et le casse en
+    # silence, puisque l'absence de lien se rend comme « ce projet ne déclare aucun
+    # compte ». Les liens ne sont volontairement PAS migrés : ils portent une
+    # identité choisie par une personne, et les deux noms restent vrais.
+    canal_con = providers.connector_for_hosted_channel(provider)
+    noms_de_lien = ["unipile"] + ([canal_con.name] if canal_con else [])
+    declared = [a for nom in noms_de_lien
+                for a in access.project_declared_identities(nom, anon.project_id)]
     if not declared:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Ce projet partagé ne déclare aucun compte {provider.title()}. Son "
                      "propriétaire doit lier le connecteur AVEC une identité "
-                     "(`oto_project op=link target_type=connecteur target_ref=unipile "
-                     "identity_ref=<account_id>`) pour que l'endpoint puisse agir.")))
-    usable = [a for a in declared
-              if a in db.org_unipile_account_ids(anon.org_id, provider)]
+                     f"(`oto_project op=link target_type=connecteur "
+                     f"target_ref={noms_de_lien[-1]} identity_ref=<account_id>`) pour "
+                     "que l'endpoint puisse agir.")))
+    # Dédupliqué (ordre stable) : un projet qui déclare la MÊME identité sous les
+    # deux noms de lien déclare UN compte, pas deux — sans ça le garde-fou
+    # « plusieurs comptes ⟹ je ne devine pas » se déclencherait sur un projet
+    # parfaitement univoque, simplement parce qu'il a été relié après le split.
+    joignables = db.org_unipile_account_ids(anon.org_id, provider)
+    usable = list(dict.fromkeys(a for a in declared if a in joignables))
     if not usable:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -620,7 +670,17 @@ def unipile_client(provider: str = "LINKEDIN"):
     from oto.tools.unipile import make_unipile_client
     from .. import subdomain_project
     from ..connectors import identities as connector_identities
-    rc = access.resolve_credential("unipile", want="auto")
+    # Résolution sous le connecteur du CANAL (split du 2026-08-28), pas sous
+    # `unipile` : c'est ce qui fait passer l'appel par les gates DE CE CANAL —
+    # `require_connector_access` (ACL d'org, backstop dur) est appliqué sur le nom
+    # que la résolution reçoit. Résoudre sous `unipile` gaterait les six canaux
+    # ensemble et une org qui a réservé WhatsApp à un département verrait le gate
+    # muet. La CLÉ, elle, reste celle du compte : la délégation
+    # (`Connector.credential_of`) la ramène sur `unipile` dans la cascade.
+    # Canal hors registre ⟹ on retombe sur le porteur (comportement d'avant).
+    canal_con = providers.connector_for_hosted_channel(provider)
+    rc = access.resolve_credential(canal_con.name if canal_con else "unipile",
+                                   want="auto")
     anon = subdomain_project.current_anon_context()
     if anon is not None:
         return make_unipile_client(
@@ -636,7 +696,12 @@ def unipile_client(provider: str = "LINKEDIN"):
     # (anti-usurpation + scope membre ADR 0033) OU lui est accordé par son propriétaire
     # (#55, grant vivant re-checké à cet appel), ET au canal demandé. Sinon défaut (fail-soft).
     org = access.current_org(sub)
-    pinned = access.project_pinned_identity("unipile")
+    # Même dualité de nom qu'au chemin anonyme (cf. `_project_operated_account`) :
+    # le canal d'abord — un lien posé depuis SA carte est le plus spécifique —, le
+    # compte ensuite pour les liens d'avant le split.
+    canal_con = providers.connector_for_hosted_channel(provider)
+    pinned = ((access.project_pinned_identity(canal_con.name) if canal_con else None)
+              or access.project_pinned_identity("unipile"))
     if pinned and (
         any(a.get("account_id") == pinned and a.get("provider") == provider
             and a.get("org_id") == org
@@ -698,7 +763,7 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     tools/{whatsapp,telegram,instagram,messenger,twitter}.py.
 
     Le canal reste dans le NOM (c'est ce qui le rend trouvable par l'agent) ; le
-    verbe passe en `op` — même forme que `linkedin_unipile_chat`, qui est la même
+    verbe passe en `op` — même forme que `linkedin_chat`, qui est la même
     capacité sur le même connecteur (ADR 0047 §Amendement). 3 tools × 5 canaux
     (15) → 5."""
     cl = channel.lower()
@@ -770,8 +835,8 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ **LinkedIn premium** : par défaut seul le produit `classic` est connecté.
         Si la personne a un siège **Recruiter** ou **Sales Navigator** et veut s'en
-        servir (`linkedin_unipile_search(api="recruiter"/"sales_navigator")`,
-        `linkedin_unipile_account(op="contracts")`…),
+        servir (`linkedin_search(api="recruiter"/"sales_navigator")`,
+        `linkedin_account(op="contracts")`…),
         il FAUT le demander ICI via `premium` — sinon ces APIs répondent 403 « out of
         your scope ». Les deux sont **exclusifs**. Pour AJOUTER un produit à un compte
         DÉJÀ connecté (classic seul aujourd'hui), relance avec `premium=` — et
@@ -825,7 +890,7 @@ def register(mcp: FastMCP) -> None:
     # ---- recherche -------------------------------------------------------
 
     @mcp.tool()
-    def linkedin_unipile_search(
+    def linkedin_search(
         keywords: Optional[str] = None,
         category: str = "people",
         company: Optional[list[str]] = None,
@@ -844,7 +909,7 @@ def register(mcp: FastMCP) -> None:
         secteur, localisation, employeur) : lis d'abord le guide
         `oto_guide(op=read, slug="linkedin-search")`. Deux pièges qui FAUSSENT en
         silence : (1) une facette exige un **ID résolu** — passe le terme par
-        `linkedin_unipile_facets` et donne l'`id` choisi ; un terme brut NE filtre PAS ;
+        `linkedin_facets` et donne l'`id` choisi ; un terme brut NE filtre PAS ;
         (2) le mode `url=` est **plafonné à 25 sans pagination** — préfère le structuré.
 
         ⚠️ **Cadence** : LinkedIn rate-limite par compte. Enchaîner des dizaines
@@ -874,7 +939,7 @@ def register(mcp: FastMCP) -> None:
             advanced_keywords: ciblage people — dict `{first_name?, last_name?, title?,
                 company?, school?}`.
             skills: filtre compétences (Recruiter / Sales Nav) — liste de noms OU
-                d'ids de facette (résous d'abord via `linkedin_unipile_facets(
+                d'ids de facette (résous d'abord via `linkedin_facets(
                 facet_type="SKILL", …)` et passe l'`id` choisi). Accepte aussi un dict
                 `{include?, exclude?}` (exclusion = `priority DOESNT_HAVE`).
             url: URL de recherche LinkedIn collée du navigateur (classic / Sales
@@ -898,16 +963,16 @@ def register(mcp: FastMCP) -> None:
         )))
 
     @mcp.tool()
-    def linkedin_unipile_facets(facet_type: str, keywords: str, limit: int = 25) -> dict:
+    def linkedin_facets(facet_type: str, keywords: str, limit: int = 25) -> dict:
         """Résout un NOM de filtre LinkedIn en candidats `{id, name}` à passer à
-        `linkedin_unipile_search`. À utiliser AVANT une recherche structurée dès qu'un
+        `linkedin_search`. À utiliser AVANT une recherche structurée dès qu'un
         critère n'est pas un simple mot-clé (compétence, secteur, localisation,
         employeur…).
 
         Le choix du bon candidat est TON travail : une même saisie renvoie souvent
         plusieurs facettes (« Microsoft Excel » → Excel, Microsoft Office, …) —
         lis les `name` et retiens l'`id` pertinent. Puis passe-le à
-        `linkedin_unipile_search` (`location`/`company`/`industry` acceptent déjà les
+        `linkedin_search` (`location`/`company`/`industry` acceptent déjà les
         ids ; les autres facettes arrivent — cf. guide `linkedin-search`).
 
         Args:
@@ -927,7 +992,7 @@ def register(mcp: FastMCP) -> None:
     # ---- membres & sociétés : lire un profil, son activité, agir dessus ---
 
     @mcp.tool()
-    def linkedin_unipile_profile(
+    def linkedin_profile(
         op: Literal["person", "company", "me", "posts", "comments", "reactions",
                     "followers", "following", "endorse", "action"] = "person",
         identifier: Optional[str] = None,
@@ -946,7 +1011,7 @@ def register(mcp: FastMCP) -> None:
         """Un membre ou une société LinkedIn : lire son profil, son activité, agir dessus.
 
         `identifier` = **slug public** (`marie-dupont`) ou **URN** (`ACoAA…`). PAS le
-        `member_id` numérique de `linkedin_unipile_search` : l'API v2 le rejette
+        `member_id` numérique de `linkedin_search` : l'API v2 le rejette
         (`400 Invalid User ID`) — passe par le slug, que ces ops résolvent pour toi.
 
         `op` :
@@ -968,7 +1033,7 @@ def register(mcp: FastMCP) -> None:
           Le texte de chaque item est servi en EXTRAIT (600 caractères, coupe marquée
           `text_truncated: true`) : le brut fait 55-75 Ko pour 10 posts, et on trie sur
           l'entête. `text_max_chars=None` rend le texte entier, `op="get"` de
-          `linkedin_unipile_post` un post précis. Pour alléger encore, `fields`
+          `linkedin_post` un post précis. Pour alléger encore, `fields`
           (ex. `["text","posted_at","social_id"]`) ne garde que ces champs — `id`/
           `social_id` restent toujours là pour enchaîner.
         - **"reactions"** : posts qu'un membre a likés/aimés.
@@ -1059,7 +1124,7 @@ def register(mcp: FastMCP) -> None:
     # ---- messagerie ------------------------------------------------------
 
     @mcp.tool()
-    def linkedin_unipile_chat(
+    def linkedin_chat(
         op: Literal["list", "read", "send", "attendees", "contacts", "update",
                     "react"] = "list",
         chat_id: Optional[str] = None,
@@ -1148,7 +1213,7 @@ def register(mcp: FastMCP) -> None:
     # ---- publications ----------------------------------------------------
 
     @mcp.tool()
-    def linkedin_unipile_post(
+    def linkedin_post(
         op: Literal["feed", "get", "engagement", "create", "comment",
                     "react"] = "feed",
         post_id: Optional[str] = None,
@@ -1186,7 +1251,7 @@ def register(mcp: FastMCP) -> None:
           `text_max_chars=None` le texte intégral, et un post entier se lit par
           `op="get"` ou `data_rows('linkedin-feed', id=<urn>)`.
         - **"get"** : un post — `post_id` = social_id (`urn:li:…`) d'un résultat
-          `linkedin_unipile_profile(op="posts")`.
+          `linkedin_profile(op="posts")`.
         - **"engagement"** : qui a réagi/commenté — `kind`='comments' ou 'reactions'.
         - **"create"** : publie un post depuis le compte connecté.
         - **"comment"** : commente un post (social-selling).
@@ -1259,7 +1324,7 @@ def register(mcp: FastMCP) -> None:
     # ---- réseau : relations & invitations ---------------------------------
 
     @mcp.tool()
-    def linkedin_unipile_network(
+    def linkedin_network(
         op: Literal["relations", "invitations", "invite", "handle",
                     "cancel"] = "relations",
         direction: Literal["received", "sent"] = "received",
@@ -1289,8 +1354,8 @@ def register(mcp: FastMCP) -> None:
           (reçues, à accepter) ou 'sent' (envoyées, en attente). Paginé — `limit`
           (défaut 50 : sans borne le backlog entier dépasse la limite de tokens).
         - **"invite"** : envoie une demande de connexion (outreach 2e/3e degré).
-          `provider_id` = champ `provider_id` d'un résultat `linkedin_unipile_search`
-          / `linkedin_unipile_profile` ; `message` = note ≤300 caractères.
+          `provider_id` = champ `provider_id` d'un résultat `linkedin_search`
+          / `linkedin_profile` ; `message` = note ≤300 caractères.
         - **"handle"** : accepte ou refuse une invitation REÇUE. `invitation_id` ET
           `shared_secret` proviennent du MÊME item d'op="invitations"
           (direction='received') ; `action` = 'accept' ou 'decline'.
@@ -1342,7 +1407,7 @@ def register(mcp: FastMCP) -> None:
     # ---- compte : ardoise premium (Recruiter / Sales Navigator) -----------
 
     @mcp.tool()
-    def linkedin_unipile_account(
+    def linkedin_account(
         op: Literal["status", "contracts", "select", "inmail_balance"] = "contracts",
         contract_id: Optional[str] = None,
     ) -> dict:
@@ -1389,7 +1454,7 @@ def register(mcp: FastMCP) -> None:
     # ---- Recruiter : offres d'emploi & candidats (lectures) ---------------
 
     @mcp.tool()
-    def linkedin_unipile_job(
+    def linkedin_job(
         op: Literal["postings", "posting", "applicants", "applicant",
                     "projects"] = "postings",
         job_id: Optional[str] = None,
@@ -1405,7 +1470,7 @@ def register(mcp: FastMCP) -> None:
         - **"applicants"** : candidats d'une offre. Paginé.
         - **"applicant"** : détail d'un candidat (`applicant_id` d'op="applicants").
         - **"projects"** : projets de recrutement (hiring projects). Le
-          `hiring_project_id` alimente `linkedin_unipile_profile(op="action")`
+          `hiring_project_id` alimente `linkedin_profile(op="action")`
           (pipeline). Paginé.
 
         Args:
@@ -1443,16 +1508,30 @@ def register(mcp: FastMCP) -> None:
 # Troisième fois cette semaine qu'un banc de test diverge du montage réel ; ici la
 # règle qui en sort est simple : **une déclaration vit dans un module que le boot
 # charge**, et `tools/unipile.py` en est un (le connecteur est au registre).
-connector_flow.declare(
-    "unipile",
-    start=lambda ctx, values: _start_hosted_flow(ctx, values),
-    label="Connecter un compte de messagerie",
-    params=(connector_flow.FlowParam(
-        name="channel", label="Canal à connecter", default="linkedin",
-        options=(("linkedin", "LinkedIn"), ("whatsapp", "WhatsApp"),
-                 ("telegram", "Telegram"), ("instagram", "Instagram"),
-                 ("messenger", "Messenger"), ("twitter", "X (Twitter)"))),),
-)
+# ⚠️ **Un flux par CANAL, sans paramètre de canal** (split du 2026-08-28). Avant, un
+# seul flux `unipile` portait un `channel` à choisir dans une liste : la carte
+# demandait « lequel ? » parce qu'elle représentait les six. Maintenant chaque canal
+# a sa carte, donc son flux, et le canal est DÉRIVÉ du connecteur
+# (`Connector.hosted_channel`) au lieu d'être saisi. Le geste ne perd rien et gagne
+# une garde : on ne peut plus démarrer une connexion WhatsApp depuis la carte
+# Telegram. Le front n'a rien à changer — il rend `connect.params`, qui est
+# simplement vide ici.
+#
+# `unipile` lui-même n'a PLUS de flux : c'est le compte fournisseur, sa carte pose
+# une clé. Le tool `unipile_connect_start(channel=…)` reste, lui, multi-canal (il
+# n'appartient à aucune capacité — cf. le namespace `unipile`).
+for _con in providers.REGISTRY.values():
+    if not _con.hosted_channel:
+        continue
+    connector_flow.declare(
+        _con.name,
+        # `_ch` capturé par valeur (défaut d'argument) : une closure sur `_con`
+        # rendrait les six flux identiques, tous sur le dernier canal de la boucle.
+        start=(lambda ctx, values, _ch=_con.hosted_channel.lower():
+               _start_hosted_flow(ctx, {**values, "channel": _ch})),
+        label=f"Connecter mon compte {_con.label}",
+    )
+del _con
 
 
 async def _start_hosted_flow(ctx, values: dict):

@@ -35,41 +35,61 @@ def test_broken_hook_fails_open():
     assert status_hints.pending_action("fake", "u1", 1, None, {}) is None
 
 
-# ── hook unipile : « Connecte un canal » ─────────────────────────────────────
+# ── hook d'une carte de CANAL : « Connecte ton compte X » ────────────────────
+#
+# Le hook vivait sur `unipile` et disait « Connecte un canal » tant qu'AUCUN des six
+# n'était lié. Le split du 2026-08-28 lui donne un grain utile : une carte par canal,
+# donc une question par canal. Le cas que l'ancien hook ne pouvait PAS voir —
+# quelqu'un qui a LinkedIn mais pas WhatsApp — est celui du 3ᵉ test ci-dessous.
 
-def _st(subscribed=True, connected=False):
-    ch = {"connected": connected, "account_id": None,
-          "account_name": None, "connected_at": None}
+def _st(subscribed=True, linkedin=False, whatsapp=False):
+    def ch(connected):
+        return {"connected": connected, "account_id": None,
+                "account_name": None, "connected_at": None}
     return {"subscribed": subscribed, "mode": "platform", "byo": False,
-            "channels": {"linkedin": dict(ch), "whatsapp": dict(ch)}}
+            "channels": {"linkedin": ch(linkedin), "whatsapp": ch(whatsapp)}}
 
 
-def test_unipile_hook_registered():
-    assert status_hints.has_hook("unipile")
+def test_chaque_canal_a_son_hook_le_compte_nen_a_plus():
+    """Le compte pose une CLÉ : sa carte n'a aucun bouton pour connecter quoi que
+    ce soit, donc rien à y dire d'une étape manquante."""
+    for canal in ("linkedin", "whatsapp", "telegram",
+                  "instagram", "messenger", "twitter"):
+        assert status_hints.has_hook(canal), canal
+    assert not status_hints.has_hook("unipile")
 
 
-def test_unipile_no_channel_linked(monkeypatch):
+def test_canal_non_lie(monkeypatch):
     monkeypatch.setattr(unipile, "status_for", lambda sub, *, org, group: _st())
-    assert unipile._status_pending_action(
-        "u1", 1, None, {"mode": "platform"}) == "Connecte un canal"
+    hook = unipile._channel_pending_action("whatsapp", "WhatsApp")
+    assert hook("u1", 1, None, {"mode": "platform"}) == "Connecte ton compte WhatsApp"
 
 
-def test_unipile_channel_linked(monkeypatch):
+def test_un_canal_lie_ne_fait_pas_taire_les_autres(monkeypatch):
+    """LE cas que l'ancien hook global ratait : il se taisait dès le PREMIER canal
+    connecté, donc quelqu'un qui avait LinkedIn ne s'entendait jamais dire qu'il lui
+    restait WhatsApp à brancher."""
     monkeypatch.setattr(unipile, "status_for",
-                        lambda sub, *, org, group: _st(connected=True))
-    assert unipile._status_pending_action("u1", 1, None, {"mode": "platform"}) is None
+                        lambda sub, *, org, group: _st(linkedin=True))
+    entry = {"mode": "platform"}
+    assert unipile._channel_pending_action("linkedin", "LinkedIn (Unipile)")(
+        "u1", 1, None, entry) is None
+    assert unipile._channel_pending_action("whatsapp", "WhatsApp")(
+        "u1", 1, None, entry) == "Connecte ton compte WhatsApp"
 
 
-def test_unipile_option_closed(monkeypatch):
+def test_option_fermee(monkeypatch):
     # option fermée → le verdict « option requise » (front) suffit, pas de doublon
     monkeypatch.setattr(unipile, "status_for",
                         lambda sub, *, org, group: _st(subscribed=False))
-    assert unipile._status_pending_action("u1", 1, None, {"mode": "platform"}) is None
+    hook = unipile._channel_pending_action("whatsapp", "WhatsApp")
+    assert hook("u1", 1, None, {"mode": "platform"}) is None
 
 
-def test_unipile_forbidden_short_circuits(monkeypatch):
+def test_sans_cle_court_circuit(monkeypatch):
     # pas de clé → pas d'appel status_for (les verdicts existants couvrent)
     def boom(sub, *, org, group):
         raise AssertionError("ne doit pas être appelé")
     monkeypatch.setattr(unipile, "status_for", boom)
-    assert unipile._status_pending_action("u1", 1, None, {"mode": "forbidden"}) is None
+    hook = unipile._channel_pending_action("whatsapp", "WhatsApp")
+    assert hook("u1", 1, None, {"mode": "forbidden"}) is None

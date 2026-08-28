@@ -45,7 +45,11 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
     """
     assert set(connector_flow.entries()) == {
         "zoho", "zohodesk", "zohoanalytics", "salesforce",
-        "atlassian", "folkmcp", "google", "unipile"}
+        "atlassian", "folkmcp", "google",
+        # Split du 2026-08-28 : `unipile` a perdu SON flux (sa carte pose une clé)
+        # et chacun de ses six canaux a le sien, sans paramètre — le canal est
+        # dérivé du connecteur au lieu d'être choisi dans une liste.
+        "linkedin", "whatsapp", "telegram", "instagram", "messenger", "twitter"}
 
 
 def test_le_descripteur_ne_porte_ni_url_ni_nom_de_capacite():
@@ -81,8 +85,14 @@ def test_le_catalogue_expose_la_forme_et_rien_pour_les_autres():
     assert cat["salesforce"]["connect"]["label"]
     assert cat["serper"]["connect"] is None       # 56 connecteurs sur 70
     # Le flux hébergé était l'exception (« pas encore déclaré ici ») : il ne l'est
-    # plus — son geste est déclaré comme les autres, avec son choix de canal.
-    assert cat["unipile"]["connect"]["params"][0]["name"] == "channel"
+    # plus — son geste est déclaré comme les autres. Et depuis le split du
+    # 2026-08-28 il n'a même plus de paramètre : le canal est DÉRIVÉ du connecteur
+    # (une carte = un canal), au lieu d'être choisi dans une liste sur une carte
+    # qui en représentait six.
+    assert cat["whatsapp"]["connect"]["label"]
+    assert cat["whatsapp"]["connect"]["params"] == []
+    # Le COMPTE, lui, n'a plus de flux du tout : sa carte pose une clé.
+    assert cat["unipile"]["connect"] is None
 
 
 # --- ce que le front n'a plus le droit de faire --------------------------------

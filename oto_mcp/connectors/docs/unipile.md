@@ -1,13 +1,15 @@
-## prerequisite — connexion hébergée unipile
+## prerequisite — le compte Unipile de ton org
 
-connecte tes comptes (LinkedIn, WhatsApp, Telegram, Instagram, Messenger, X) en **auth hébergée [Unipile](https://www.unipile.com)** depuis le dashboard oto — pas de cookie à coller ni d'extension. la session tourne chez Unipile (vrai Chrome + proxy résidentiel), ce qui évite les blocages d'empreinte.
-- option **messagerie hébergée** activée par l'admin de ton org (ou ta propre clé Unipile en BYO)
+cette carte-ci n'est pas une messagerie : c'est le **compte chez [Unipile](https://www.unipile.com)** qui porte tes connexions. une seule clé d'abonnement ouvre les six canaux — LinkedIn, WhatsApp, Telegram, Instagram, Messenger, X — que tu connectes ensuite **un par un, sur leur propre carte**.
+- soit ta propre clé Unipile (BYO), collée ici ;
+- soit la clé de la plateforme, avec l'option **messagerie hébergée** accordée par un admin (ou incluse à l'abonnement de ton org).
 
-## usage — prospection linkedin + messagerie multi-canal
+## usage — vérifier ce que porte le compte
 
-recherche, scrape et messagerie LinkedIn (et messagerie WhatsApp/Telegram/Instagram/Messenger/X), tu agis comme toi-même.
-- « recherche LinkedIn des DAF en région lyonnaise dans mon réseau N1 »
-- « ouvre le profil LinkedIn de ce slug et résume sa carrière »
-- « envoie une invitation à ce prospect avec une note » puis « réponds dans le fil quand il accepte »
-- « lis mes dernières conversations WhatsApp et réponds à la dernière »
-- « montre ma home LinkedIn récente » ou « commente ce post »
+la clé posée, il n'y a plus rien à faire ici : va sur la carte du canal que tu veux brancher.
+- « quels canaux de messagerie ai-je connectés ? »
+- « connecte mon LinkedIn » (t'emmène sur la carte LinkedIn (Unipile))
+
+## note — une clé, des comptes par personne
+
+la clé est partagée (org ou plateforme), mais **chacun connecte SON compte** : tu agis toujours comme toi-même, jamais sous l'identité d'un collègue. un compte hébergé est par-personne — il te suit dans toutes tes orgs, et le reconnecter ailleurs créerait un doublon qui se dispute la session (oto refuse, sauf `force`).

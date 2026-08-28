@@ -23,7 +23,7 @@ from __future__ import annotations
 # suppression des ré-identifiants directs (photo, URL/ids publics), drop de la date de
 # naissance. La localisation/headline sont **gardés** (utiles au scoring).
 #
-# ⚠️ Calé sur la FORME RÉELLE observée (`linkedin_unipile_profile` : `contact_info.emails`/
+# ⚠️ Calé sur la FORME RÉELLE observée (`linkedin_profile` : `contact_info.emails`/
 # `phones`, `profile_picture_url` + `_large`, `provider_id`, `birthdate`…). On NE
 # pseudonymise PAS la clé générique `name` : le moteur matche par clé feuille à toute
 # profondeur, et `name` désigne aussi `skills[].name`/`languages[].name` → ça les

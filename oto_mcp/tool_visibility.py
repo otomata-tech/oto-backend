@@ -96,15 +96,26 @@ def namespace_of(name: str) -> str:
 
     Pourquoi pas « le 1er token » tout court (règle d'avant le 2026-08-10) : le
     namespace résout LE CONNECTEUR qui gouverne le tool (`connector_for_namespace` →
-    gates d'appel, visibilité de session, sélection, projets, slots). Avec un schéma de
-    nommage `capacité_fournisseur` (ADR 0010 §Amendement — `linkedin_unipile_*` vs
-    `linkedin_aiark_*`), le 1er token est la CAPACITÉ : deux connecteurs distincts
-    tomberaient sur le même namespace, et le gate en désignerait un au hasard.
+    gates d'appel, visibilité de session, sélection, projets, slots). Sous un schéma
+    de nommage `capacité_fournisseur` (ADR 0010 §Amendement), le 1er token est la
+    CAPACITÉ : deux connecteurs distincts tomberaient sur le même namespace, et le
+    gate en désignerait un au hasard — mauvais credential, mauvaise activation,
+    mauvaise sélection.
 
-    **Strictement additif** : tant qu'aucun namespace multi-token n'est déclaré, la
-    boucle retombe sur le 1er token — comportement identique à l'implémentation
-    précédente. Un tool dont aucun préfixe n'est déclaré garde son 1er token (le gate
-    reste fail-open sur un namespace inconnu, inchangé).
+    **Le porteur vivant, aujourd'hui : `linkedin_aiark`.** Deux surfaces commencent
+    par `linkedin_` et n'ont rien à voir — `linkedin_*` est la SESSION qu'on opère
+    (hébergée), `linkedin_aiark_*` est de la DONNÉE ACHETÉE au crédit chez AI Ark
+    (email vérifié, mobile, reverse-lookup ; LinkedIn n'y est qu'une des sources).
+    Sans la résolution au plus long préfixe, `linkedin_aiark_person` tomberait sous
+    le connecteur `linkedin` : mauvaise clé (celle du compte hébergé, pas celle
+    d'AI Ark), mauvaise activation, mauvaise sélection. C'est exactement le cas pour
+    lequel la règle existe, et il est verrouillé par `tests/test_linkedin.py`.
+
+    **Strictement additif** : un tool dont aucun préfixe multi-token n'est déclaré
+    garde son 1er token — comportement identique à l'implémentation d'avant.
+
+    Un tool dont aucun préfixe n'est déclaré garde son 1er token (le gate reste
+    fail-open sur un namespace inconnu, inchangé).
     """
     if "_" not in name:
         return name

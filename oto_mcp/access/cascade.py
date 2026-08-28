@@ -89,7 +89,14 @@ def personal_instance_org(sub: str, provider: str,
     PERSO d'abord (une seule par sub, ADR 0030) si elle porte une clé membre, sinon
     la plus RÉCEMMENT posée. `exclude_org` écarte l'org de contexte (déjà testée en
     amont par le palier membre local). Sûr par construction : même `sub` ⟹ zéro
-    usurpation — on ne fait que retrouver SA propre clé posée ailleurs."""
+    usurpation — on ne fait que retrouver SA propre clé posée ailleurs.
+
+    `provider` est normalisé vers le porteur du credential (délégation) : la clé
+    perso d'un canal unipile est celle du COMPTE, et l'org à retenir est celle où
+    cette clé vit. Le compte hébergé sera cherché dans la MÊME org
+    (`connectors/identities._own_unipile_account_id`) — clé et compte appariés,
+    jamais la clé d'ici avec le compte de là-bas."""
+    provider = providers.credential_provider(provider)
     orgs = [o for o in credentials_store.list_member_orgs_for(sub, provider)
             if o != exclude_org]
     if not orgs:
@@ -330,7 +337,19 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
     premier = résolution (`cascade_winner`) ; tout consommer = statut (les niveaux
     configurés au-delà du gagnant restent affichables). Chaque gate (byo_user,
     ORG_SHAREABLE, personal_cross_org, éligibilité plateforme, `want='byo'`)
-    vit ICI — plus jamais dans un call-site."""
+    vit ICI — plus jamais dans un call-site.
+
+    **Délégation de credential** (`Connector.credential_of`) : `provider` est d'abord
+    normalisé vers le connecteur qui PORTE la clé (les six canaux unipile → `unipile`).
+    Le faire ICI et nulle part ailleurs est la raison d'être de ce walker : la
+    résolution (`_resolve_credential_impl`), le miroir de mode (`credential_mode_for`)
+    et le statut (`status_for`) le traversent tous les trois — ils ne peuvent donc pas
+    répondre trois choses différentes à « quelle clé ? ». Normaliser dans chacun d'eux
+    rouvrirait exactement la divergence du 2026-07-07 (carte « clé d'org » verte à côté
+    d'un « Bloqué » rouge). Ce que le walker ne décide PAS, en revanche, c'est le DROIT
+    d'appeler : activation, ACL et sélection restent gatées sur le nom NU, chez
+    l'appelant."""
+    provider = providers.credential_provider(provider)
     if sub is not None and org is not None and providers.is_byo_user(provider):
         hit = probe.member(sub, org, provider)
         if hit is not None:

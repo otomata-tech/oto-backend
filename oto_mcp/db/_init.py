@@ -921,15 +921,77 @@ def _init_db_once() -> None:
         # toolbox pour l'existant ; les pairs créés ensuite reçoivent le SOCLE
         # curé au seed lazy (session_visibility).
         _conn_sel.backfill_preexisting(conn)
-        # #295 — les sélections d'un connecteur DÉPOSÉ suivent son renommage. #279
-        # (lot 3) a déposé `linkedin` au profit d'`aiark` (même fournisseur, même
-        # client, même pool de crédits : la distinction n'était qu'un mode d'auth),
-        # mais 119 lignes de sélection sont restées sur l'ancien nom — qui ne résout
-        # plus rien, donc ne monte aucun outil : depuis le tag v1.69.0, ces membres
-        # avaient perdu la toolbox LinkedIn sans un mot. Ici et pas en one-shot
-        # manuel : la base est partagée preprod/prod, un boot doit pouvoir rejouer.
-        # Sûr depuis v1.69.0 — plus aucun code servi ne lit `'linkedin'`.
-        _conn_sel.rename_selection(conn, "linkedin", "aiark")
+        # ⚠️ **`rename_selection(conn, "linkedin", "aiark")` A ÉTÉ RETIRÉ ICI le
+        # 2026-08-28, et le retirer était OBLIGATOIRE — pas un nettoyage.**
+        #
+        # Ce geste datait du 2026-08-10 : `linkedin` (AI Ark en app-credits) était
+        # déposé au profit d'`aiark`, et #295 avait appris qu'une sélection restée
+        # sur un nom mort fait disparaître la toolbox en silence. Il a fait son
+        # travail — en prod, plus une ligne ne porte `linkedin` de ce côté-là.
+        #
+        # Mais `linkedin` n'est plus un nom mort : depuis aujourd'hui, c'est la
+        # SESSION hébergée, et le fan-out plus bas CRÉE des lignes `linkedin` à
+        # chaque boot. Laisser le renommage, c'était donc programmer une bombe à
+        # retardement d'un boot de décalage : le boot N crée les sélections
+        # LinkedIn, le boot N+1 les déplace toutes vers `aiark` avant que le
+        # fan-out ne les recrée… et ainsi de suite, chaque redémarrage rejouant le
+        # déménagement. Une migration de boot n'est sûre QUE tant que son nom source
+        # reste mort ; reprendre un nom déposé oblige à relire toutes celles qui le
+        # nomment. Tripwire : `tests/connectors/test_connector_selection_rename.py`.
+        #
+        # `aiark` n'a besoin d'AUCUN renommage : le connecteur existe toujours, il a
+        # seulement perdu son préfixe `linkedin_` de tools (rebranding annulé). Le
+        # NOM de connecteur, lui, n'a jamais changé — les sélections sont donc déjà
+        # au bon endroit.
+        # --- SPLIT `unipile` → le compte + ses six CONNEXIONS (2026-08-28) -------
+        # Le connecteur `unipile` portait sept namespaces : le sien et les six
+        # canaux hébergés. Chacun est désormais un connecteur à part entière, ce qui
+        # lui donne activation, ACL, sélection et visibilité PROPRES — mais le rend
+        # aussi INCONNU de toutes les tables de gouvernance, où seul `unipile`
+        # existe. Trois fan-out, dans cet ordre, et chacun corrige un fail-* qui
+        # penche du mauvais côté :
+        #   · availability — un connecteur sans ligne platform est OFF
+        #     (deny-by-default) : sans ce geste, la messagerie hébergée s'éteint
+        #     pour TOUT LE MONDE au premier boot du split ;
+        #   · ACL          — une ACL vide est OUVERTE (ADR 0025) : sans ce geste,
+        #     une org qui avait réservé la messagerie à une équipe l'ouvre à tous ;
+        #   · sélection    — non-sélectionné = masqué (ADR 0050) : sans ce geste,
+        #     les membres qui avaient installé unipile perdent la surface.
+        # Les trois sont idempotents (ON CONFLICT DO NOTHING) et ne TOUCHENT PAS
+        # `unipile`, qui survit comme compte fournisseur — c'est ce qui distingue un
+        # split d'un renommage, et pourquoi `rename_selection` ne convenait pas.
+        #
+        # Les tables de COMPTES (`unipile_accounts`, `connector_account_grants`,
+        # `unipile_operated_accounts`, `unipile_pending`) ne bougent PAS : leur
+        # colonne `provider` a toujours porté le CANAL (LINKEDIN/WHATSAPP/…), jamais
+        # le connecteur. Le split les rejoint, il ne les migre pas.
+        from ..connectors import activation as _conn_act_split
+        _CANAUX_UNIPILE = ("linkedin", "whatsapp", "telegram",
+                           "instagram", "messenger", "twitter")
+        # ⚠️ AVANT le fan-out : purger la gouvernance FOSSILE de l'ancien `linkedin`.
+        # Le connecteur `linkedin` déposé le 10/08 (données achetées AI Ark) a laissé
+        # ses lignes d'exposition et d'ACL en base — rien ne nettoie un connecteur
+        # déposé. Elles dormaient tant que le nom restait mort ; le nom revient
+        # aujourd'hui à la session hébergée, et le fan-out pose ses lignes en
+        # ON CONFLICT DO NOTHING (à dessein : un réglage d'admin déjà pris gagne).
+        # La ligne fossile GAGNERAIT donc : une org qui avait coupé l'AI Ark-LinkedIn
+        # verrait la session LinkedIn coupée, sans que personne ne l'ait décidé et
+        # sans que rien n'échoue. One-shot (marque en base) — rejouée, la purge
+        # effacerait les décisions prises DEPUIS sur le nouveau connecteur.
+        _conn_act_split.purge_connecteur_depose(conn, "linkedin")
+        _conn_act_split.fanout_availability(conn, "unipile", _CANAUX_UNIPILE)
+        _conn_act_split.fanout_acl(conn, "unipile", _CANAUX_UNIPILE)
+        _conn_sel.fanout_selection(conn, "unipile", _CANAUX_UNIPILE)
+        # Proposition d'org (`orgs.default_connectors`, consultatif) : une org qui
+        # RECOMMANDAIT unipile recommande ses canaux. `array_cat` + déduplication,
+        # gardé sur la présence de `unipile` → rejeu sans effet.
+        conn.execute(
+            "UPDATE orgs SET default_connectors = ("
+            "  SELECT ARRAY(SELECT DISTINCT unnest(default_connectors || %s::text[]))"
+            ") WHERE default_connectors @> ARRAY['unipile']::text[] "
+            "   AND NOT default_connectors @> %s::text[]",
+            (list(_CANAUX_UNIPILE), list(_CANAUX_UNIPILE)),
+        )
         # === Lot M2 (blueprint ADR 0054/0063, #287) : projets et pages → NŒUDS ===
         # PLACÉ EN FIN DE TRANSACTION, et c'est la même règle qu'au lot M1 : la
         # conversion doit suivre TOUTE écriture de sa table source dans CE boot.

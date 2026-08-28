@@ -26,7 +26,7 @@ from typing import Optional
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import credentials_store, db, group_store, org_store
+from .. import credentials_store, db, group_store, org_store, providers
 from ..auth.hooks import current_user_sub_from_token
 from . import cascade, scope
 
@@ -219,7 +219,14 @@ def reachable_instances(sub: str, org: Optional[int], provider: str) -> list[dic
     « rien ne résout » : on REMONTE les choix pour que l'agent pinne explicitement,
     jamais de choix silencieux entre identités. Best-effort : ne lève jamais,
     renvoie ce qui a pu être énuméré (vécu Zoho/movinmotion 2026-07-16 : clé sur
-    l'équipe sales, 3 membres, 0 actif → « pas de clé » sec et session perdue)."""
+    l'équipe sales, 3 membres, 0 actif → « pas de clé » sec et session perdue).
+
+    `provider` est normalisé vers le PORTEUR du credential (délégation) : les
+    instances d'un canal unipile SONT celles du compte, il n'en existe pas d'autres.
+    Sans ça, la carte d'un canal perdait le signal « une équipe a la clé » — et pour
+    un connecteur par-personne, c'est le signal qui évite de reconnecter un compte
+    déjà lié ailleurs (le doublon d'`account_id` de #172)."""
+    provider = providers.credential_provider(provider)
     out: list[dict] = []
     shareable = provider in cascade.ORG_SHAREABLE_PROVIDERS
     try:
@@ -336,6 +343,14 @@ def reachable_instances_map(sub: str, org: Optional[int]) -> dict[str, list[dict
     # noqa: SILENT — fail-open de visibilité, backstop dur au call-time
     except Exception:
         return out
+    # Délégation : la carte d'un canal doit montrer les instances de SON compte —
+    # ce sont les seules qui existent, et c'est la même liste, pas une approximation.
+    # Le catalogue annote par NOM de connecteur (`connectors_selection`), donc sans
+    # cet alias la ligne `whatsapp` reste muette pendant que `unipile` affiche la clé
+    # d'équipe qui la ferait marcher.
+    for c in providers._REGISTRY_LIST:
+        if c.credential_of and c.credential_of in out:
+            out[c.name] = list(out[c.credential_of])
     return out
 
 

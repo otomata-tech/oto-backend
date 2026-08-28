@@ -78,7 +78,10 @@ def test_le_perimetre_nest_pas_vide():
     passer à vide (le mode de panne de tout test de totalité)."""
     besoin = _needs_a_flow()
     assert len(besoin) >= 10, f"périmètre suspect : {sorted(besoin)}"
-    assert {"salesforce", "zoho", "google", "unipile"} <= besoin
+    # `unipile` n'y est plus depuis le split du 2026-08-28 : sa clé se colle au
+    # formulaire. Ce qui se connecte hors formulaire, ce sont ses canaux.
+    assert {"salesforce", "zoho", "google", "whatsapp",
+            "linkedin"} <= besoin
 
 
 def test_un_etat_declare_implique_une_etape_declaree():

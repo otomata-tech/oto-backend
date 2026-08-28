@@ -316,14 +316,29 @@ qui forke un projet publié dans l'org active — **structure only, jamais de cr
 
 ## Messagerie & LinkedIn (Unipile)
 
-Tools `{whatsapp,telegram,instagram,messenger,twitter}_chat` + **`linkedin_unipile_*`** =
+**Sept connecteurs depuis le 2026-08-28** : `unipile` = le **compte** chez le
+fournisseur (la clé, le quota, la clé plateforme, l'option couche-3) ; `linkedin`,
+`whatsapp`, `telegram`, `instagram`, `messenger`, `twitter` = les **connexions**, une
+carte et un flux hébergé chacune. ⚠️ **Deux questions, deux noms** : ce qui GATE
+(activation, ACL, sélection, visibilité) prend le nom NU ; ce qui touche à la CLÉ prend
+`providers.credential_provider(nom)` → `unipile` (`Connector.credential_of`, normalisé
+**dans `walk_cascade` seulement**). Les confondre rejoue la divergence du 2026-07-07.
+
+Tools `{whatsapp,telegram,instagram,messenger,twitter}_chat` + **`linkedin_*`** =
 **Unipile hébergé** (factory channel-agnostic, `account_id` per-membre `(sub, org_id,
 provider)` ADR 0033, **no-fallback anti-usurpation**). Mode plateforme (clé partagée + grant +
 option comp), DSN par credential, sélecteur d'identité, comptes partagés autorisés (#55 —
 grants revalidés à chaque appel, **jamais de repli silencieux**).
-⚠️ **`namespace_of` résout au plus long préfixe DÉCLARÉ au registre**, plus au 1er token —
-sans quoi `linkedin_unipile_*` tomberait sous le connecteur `linkedin` (mauvais
-credential/activation/sélection). Tripwire `tests/test_linkedin.py`.
+⚠️ **`aiark` n'est PAS touché** : mêmes tools `linkedin_aiark_*`, même clé, même grant
+plateforme, tels qu'en prod. Ce qui change, c'est que le nom NU `linkedin_*` va désormais à
+la session hébergée — il avait été libéré le 10/08 par le dépôt de l'ex-connecteur `linkedin`
+(#231), il n'est pris à personne. Les deux cohabitent par `namespace_of` (**plus long préfixe
+DÉCLARÉ au registre**, pas le 1er token) : `linkedin_aiark_person` → `aiark`, `linkedin_post`
+→ `linkedin`. Sans cette règle, les tools d'AI Ark tomberaient sous la session — mauvaise clé,
+mauvaise activation, mauvaise sélection. **C'est LE cas d'usage de la règle, et il est vivant.**
+Et ce sont deux CHOSES différentes, pas deux fournisseurs interchangeables : AI Ark VEND de la
+donnée (email vérifié, mobile, reverse-lookup) dont LinkedIn n'est qu'une source — sa famille
+est dropcontact/fullenrich ; la session, elle, EST LinkedIn. Tripwire `tests/test_linkedin.py`.
 **Détail : `docs/unipile.md`.**
 
 ## Monitoring des appels MCP
@@ -535,7 +550,7 @@ Déployé sur une **box Scaleway dédiée** (ADR 0002, depuis 2026-06-11) : oto-
 | `search-and-kb.md` | `oto_search` : RRF lexical+sémantique, grains matchés, invariant « cherchable ⇔ lisible », épine, backlinks, propositions. |
 | `doctrines.md` | doctrine & skills d'org (`oto_procedure`, versionnée), forme d'une procédure (digest + schéma), agent readme, **renommer un outil = migrer les procédures** (refs `<tool:slug>` en DB, angle mort du CI). |
 | `onboarding-et-profil.md` | onboarding = un projet « Découverte », fiche « situation avec oto » (`me.profile`), `oto_whoami`. |
-| `unipile.md` | messagerie hébergée : mode plateforme, DSN, sélecteur d'identité, comptes partagés (#55), renommage `linkedin_unipile_*`. |
+| `unipile.md` | **le split compte/canaux (28/08)**, mode plateforme, DSN, sélecteur d'identité, comptes partagés (#55), historique des renommages LinkedIn. |
 | `browser-automation.md` | substrat Browserbase (Context/Live View/run_fetch), connecteurs brevo/crunchbase/pennylaneged, connecteur générique `browser`, LinkedIn isolation de session. |
 | `email.md` | envoi per-org par connecteur (scaleway BYO TEM + resend), différé/quiet hours, front qui héberge l'org. |
 | `federation.md` | fédération MCP : mount (per-user) vs remote/bridge (org). |

@@ -48,9 +48,18 @@ def test_fields_only_for_secret_or_hosted_method():
                 f"{c.name}: fields hors method secret/hosted"
 
 
-def test_hosted_is_unipile_only():
+def test_hosted_ce_sont_les_canaux_unipile_pas_le_compte():
+    """`hosted` = « on connecte un COMPTE TIERS par un flux hébergé ».
+
+    Depuis le split du 2026-08-28, ce sont les six CANAUX unipile — un flux hébergé
+    par canal — et surtout PAS `unipile` lui-même : sa carte pose une clé
+    d'abonnement, donc `secret`. L'inversion est le piège : `unipile` reste le
+    connecteur qui porte la clé, il serait naturel de le croire encore hébergé, et
+    le front rendrait alors un widget de connexion sur une carte qui attend un
+    champ."""
     hosted = {c.name for c in _REGISTRY_LIST if c.auth_method == "hosted"}
-    assert hosted == {"unipile"}, hosted
+    assert hosted == {"linkedin", "whatsapp", "telegram", "instagram", "messenger", "twitter"}, hosted
+    assert REGISTRY["unipile"].auth_method == "secret"
 
 
 def test_multi_account_providers():

@@ -32,7 +32,16 @@ def pg_dsn():
     if dsn:
         yield dsn
         return
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+    try:
+        joignable = subprocess.run(["docker", "info"],
+                                   capture_output=True).returncode == 0
+    except (FileNotFoundError, OSError):
+        # `docker` PAS INSTALLÉ : `subprocess.run` lève au lieu de rendre un code.
+        # Sans ce cas, la fixture explose et les tests PG remontent en ERROR au lieu
+        # de SKIP — indiscernables d'une vraie casse dans un diff de suite, ce qui
+        # est précisément ce qu'un test « qui se saute proprement » promettait.
+        joignable = False
+    if not joignable:
         pytest.skip("aucun PostgreSQL joignable (ni OTO_TEST_PG_DSN, ni docker)")
     name = f"oto-test-pg-{uuid.uuid4().hex[:8]}"
     subprocess.run(

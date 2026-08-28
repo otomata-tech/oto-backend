@@ -1,4 +1,4 @@
-"""`linkedin_unipile_account` : le nom promettait l'état du compte, l'outil servait
+"""`linkedin_account` : le nom promettait l'état du compte, l'outil servait
 l'ardoise premium (signal #452, org 2, 14/08/2026).
 
 Vécu en prod : un agent qui veut vérifier « mon LinkedIn est-il connecté ? » tombe
@@ -80,7 +80,7 @@ def wired(monkeypatch):
 
 def test_op_status_existe_et_dit_le_compte_lie(wired):
     """L'op que l'agent inventait existe, et rend ce que le NOM promet."""
-    out = _tool("linkedin_unipile_account")(op="status")
+    out = _tool("linkedin_account")(op="status")
     assert out["connected"] is True
     assert out["account_id"] == "acc_1"
     assert out["account_name"] == "Julien Frèche"
@@ -91,7 +91,7 @@ def test_op_status_sans_compte_repond_faux_au_lieu_de_lever(wired):
     """Le mode de panne de #452, retourné : sans compte lié, `op='status'` doit
     RÉPONDRE. Lever renverrait l'agent à la même conclusion fausse qu'avant."""
     wired["accounts"] = []
-    out = _tool("linkedin_unipile_account")(op="status")
+    out = _tool("linkedin_account")(op="status")
     assert out["connected"] is False
     assert out["account_id"] is None
     assert out["next_step"]                  # le geste, nommé
@@ -102,7 +102,7 @@ def test_op_status_rapporte_une_session_morte(wired):
     #236). « Lié » n'est pas « vivant » : la carte doit distinguer les deux, sinon
     elle rassure exactement comme l'état qu'on répare."""
     wired["alive"] = False
-    out = _tool("linkedin_unipile_account")(op="status")
+    out = _tool("linkedin_account")(op="status")
     assert out["connected"] is True and out["alive"] is False
     assert out["next_step"]
 
@@ -120,11 +120,11 @@ def test_sonde_indisponible_nest_pas_une_session_morte(wired, monkeypatch):
             raise RuntimeError("amont indisponible")
 
     monkeypatch.setattr(core, "make_unipile_client", lambda **kw: _Boom())
-    out = _tool("linkedin_unipile_account")(op="status")
+    out = _tool("linkedin_account")(op="status")
     assert out["connected"] is True and out["alive"] is None
     assert "next_step" not in out
 
 
 def test_op_inconnue_leve_toujours(wired):
     with pytest.raises(McpError):
-        _tool("linkedin_unipile_account")(op="wat")
+        _tool("linkedin_account")(op="wat")

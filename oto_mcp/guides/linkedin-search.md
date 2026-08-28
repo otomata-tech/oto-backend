@@ -1,6 +1,6 @@
 ---
 title: Recherche LinkedIn (Recruiter / Sales Navigator / Classic) — facettes & pagination
-description: ce qui commande la pagination, c'est le PRODUIT (classic ne pagine pas, premium oui), pas le mode d'entrée ; résoudre chaque filtre en id via linkedin_unipile_facets (candidats sous `candidates`) ; keywords+company peut rendre 0 à tort ; l'URL reste une boîte noire plafonnée ; respecter le rate-limit (429 = backoff variable, de quelques secondes à ~1h selon la cadence récente — ne pas marteler)
+description: ce qui commande la pagination, c'est le PRODUIT (classic ne pagine pas, premium oui), pas le mode d'entrée ; résoudre chaque filtre en id via linkedin_facets (candidats sous `candidates`) ; keywords+company peut rendre 0 à tort ; l'URL reste une boîte noire plafonnée ; respecter le rate-limit (429 = backoff variable, de quelques secondes à ~1h selon la cadence récente — ne pas marteler)
 ---
 
 # Rechercher sur LinkedIn via Unipile
@@ -35,7 +35,7 @@ Recruiter, activé **À LA CONNEXION** (`unipile_connect_start(premium=…)`), s
 
 ## Structuré plutôt qu'URL — pour les filtres, pas pour le volume
 
-`linkedin_unipile_search` a deux entrées, `url=` et les paramètres structurés. **Privilégie le
+`linkedin_search` a deux entrées, `url=` et les paramètres structurés. **Privilégie le
 structuré**, mais pour la bonne raison : il te rend les filtres maîtrisables, pas le
 gisement complet (voir ci-dessus).
 
@@ -56,19 +56,19 @@ n'a que du `searchContextId` (100 % facettes, aucun paramètre lisible), ses fil
 Un filtre « compétence = Microsoft Excel » ou « secteur = Construction » ne s'écrit pas
 en clair : LinkedIn l'identifie par un **id de facette**. Résous-le d'abord :
 
-1. `linkedin_unipile_facets(facet_type, keywords)` → `{facet_type, candidates: [{id, name}]}`.
+1. `linkedin_facets(facet_type, keywords)` → `{facet_type, candidates: [{id, name}]}`.
    Les candidats sont sous **`candidates`**, pas à la racine.
 2. **Choisis le bon candidat** — une saisie renvoie souvent plusieurs facettes
    (« Microsoft Excel » → Excel, Microsoft Office, VBA…). Lis les `name`, garde l'`id`
    pertinent. **Ce choix est ton jugement**, il n'est pas automatisable.
-3. Passe l'`id` à `linkedin_unipile_search`.
+3. Passe l'`id` à `linkedin_search`.
 
 Types de facette confirmés : **`SKILL`, `LOCATION`, `INDUSTRY`, `COMPANY`**. D'autres
 existent (essaie `TITLE`, `SCHOOL`, `FUNCTION`, `SENIORITY`, `LANGUAGE`…) — un type
 invalide lève `Expected kind 'StringEnum'`. La résolution marche même hors Recruiter/SN.
 
-`location` / `company` / `industry` de `linkedin_unipile_search` acceptent déjà **noms OU ids** —
-en cas d'ambiguïté, résous d'abord via `linkedin_unipile_facets` et passe l'id exact.
+`location` / `company` / `industry` de `linkedin_search` acceptent déjà **noms OU ids** —
+en cas d'ambiguïté, résous d'abord via `linkedin_facets` et passe l'id exact.
 
 ⚠️ **`keywords=` combiné à `company=[…]` peut rendre `total_count: 0`** là où des profils
 correspondants existent bel et bien (observé le 10/08/2026 avec un id de facette `COMPANY`
@@ -79,7 +79,7 @@ résultats : la facette seule est fiable.
 
 ## Paginer, quand c'est possible
 
-Sur un produit premium : repasse le `cursor` renvoyé (`linkedin_unipile_search(cursor=…)`) — il
+Sur un produit premium : repasse le `cursor` renvoyé (`linkedin_search(cursor=…)`) — il
 ré-encode toute la requête, ne reconstruis rien. Boucle jusqu'à cursor vide.
 
 Sur `classic` : il n'y a pas de suite à aller chercher. Si le besoin porte sur un gisement
@@ -102,16 +102,16 @@ déjà trop haute.
 
 Règles :
 
-- **Espace tes appels** — pas des dizaines de `linkedin_unipile_profile(op="company")`
-  / `linkedin_unipile_search` en rafale. Traite les leads en série tranquille, pas en tir groupé.
+- **Espace tes appels** — pas des dizaines de `linkedin_profile(op="company")`
+  / `linkedin_search` en rafale. Traite les leads en série tranquille, pas en tir groupé.
 - **Sur un `429`** : le serveur arme un backoff (= le délai qu'Unipile a demandé, plafonné
   à 1h) et refuse les scrapes d'ici là en annonçant l'attente restante. **Respecte-la,
   RALENTIS** ; n'insiste pas en boucle (ça aggrave le throttle). Si l'attente se compte en
   dizaines de minutes, passe à autre chose et reviens — ne sonde pas.
-- **`linkedin_unipile_profile(op="company")` est mis en cache 6h** par compte : relire
+- **`linkedin_profile(op="company")` est mis en cache 6h** par compte : relire
   une société déjà vue ne coûte rien — mais ne relis pas inutilement.
 - **Search-first** : une page de résultats porte déjà nom/poste/entreprise/headline. Ne
-  fais un `linkedin_unipile_profile` (op="company"/"person") que si tu as VRAIMENT
+  fais un `linkedin_profile` (op="company"/"person") que si tu as VRAIMENT
   besoin du détail — c'est la route la plus contrainte (~100/fenêtre).
 - **Gros volume** = plusieurs comptes (chaque siège a sa propre limite) + délégation à un
   sous-agent, pas un seul compte poussé à fond.

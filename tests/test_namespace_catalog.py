@@ -43,9 +43,9 @@ def test_availability_annotations():
     assert "hors socle" not in cat
     assert "à activer" not in cat
     # seule annotation restante : le compte à connecter (hosted auth). La ligne du
-    # connecteur unipile s'ouvre sur `linkedin_unipile_*` depuis l'ADR 0010
+    # connecteur unipile s'ouvre sur `linkedin_*` depuis l'ADR 0010
     # §Amendement (le namespace porte la capacité + le fournisseur).
-    unipile = next(l for l in cat.splitlines() if l.startswith("• linkedin_unipile_*"))
+    unipile = next(l for l in cat.splitlines() if l.startswith("• linkedin_*"))
     assert "compte à connecter" in unipile
 
 

@@ -6,10 +6,10 @@ description: déléguer à un sous-agent, garder les gros payloads hors contexte
 # Charger un gros volume sans saturer le contexte
 
 À lire **avant** toute tâche qui va tirer beaucoup de données via oto : copier un
-réseau LinkedIn complet (`linkedin_unipile_network(op="relations")`), exporter des milliers de lignes,
+réseau LinkedIn complet (`linkedin_network(op="relations")`), exporter des milliers de lignes,
 enrichir une longue liste, boucler sur de la pagination profonde. Ces opérations
 renvoient des payloads qui **dépassent le plafond de tokens** d'un résultat d'outil
-(ex. `linkedin_unipile_network(op="relations")` ≈ 70 Ko/page) et, traitées dans le contexte principal,
+(ex. `linkedin_network(op="relations")` ≈ 70 Ko/page) et, traitées dans le contexte principal,
 le polluent et coûtent cher.
 
 ## Le principe : délègue à un sous-agent, ne remonte qu'un reçu
@@ -41,7 +41,7 @@ tout tirer d'un coup : passe `limit`, lis `next_cursor` dans la réponse, et rap
 `data_rows(cursor=<next_cursor>)` jusqu'à ce que `next_cursor` soit nul. Le curseur est
 **stable** (les lignes écrites entre-temps ne décalent pas la pagination).
 
-Côté source (ex. `linkedin_unipile_network(op="relations")`), pagine de même page par page ; n'accumule jamais
+Côté source (ex. `linkedin_network(op="relations")`), pagine de même page par page ; n'accumule jamais
 toutes les pages dans un seul message.
 
 ## Écrire en masse

@@ -69,7 +69,10 @@ from ._model import (  # noqa: F401  — surface publique historique du module
 #   tools/mount.py (auth_modes VIDE) reste, générique et sans consommateur
 #   vivant — cf. docs/federation.md.
 # - `linkedin` déposé le 2026-08-10 (#231) : absorbé par `aiark` — même vendeur,
-#   même client, la distinction n'était qu'un mode d'auth, donc une INSTANCE.
+#   même client, la distinction n'était qu'un mode d'auth, donc une INSTANCE. Le
+#   nom NU ainsi libéré est REPRIS le 2026-08-28 par la session hébergée. `aiark`
+#   garde son namespace `linkedin_aiark` : les deux cohabitent par la résolution au
+#   plus long préfixe DÉCLARÉ (`tool_visibility.namespace_of`), qui existe pour ça.
 _DECLARATIONS: tuple[str, ...] = (
     # --- keyed (résolus via resolve_api_key, clé api per-user) ---------------
     "serper",
@@ -86,7 +89,20 @@ _DECLARATIONS: tuple[str, ...] = (
     "dropcontact",
     "folk",
     "checkcrm",
+    "aiark",
     "unipile",
+    # Les six CONNEXIONS du compte unipile ci-dessus (split 2026-08-28) : chacune
+    # est un connecteur à part entière (activation, ACL, sélection, visibilité,
+    # connexion hébergée en propre) qui DÉLÈGUE son credential à `unipile`. Elles
+    # se déclarent juste après lui : l'ordre gouverne l'affichage, et une carte de
+    # canal qui flotterait loin de son compte se lirait comme un connecteur sans
+    # rapport.
+    "linkedin",
+    "whatsapp",
+    "telegram",
+    "instagram",
+    "messenger",
+    "twitter",
     "topograph",
     "resend",
     "routine",
@@ -100,7 +116,6 @@ _DECLARATIONS: tuple[str, ...] = (
     "atlassian",
     "folkmcp",
     "planity",
-    "aiark",
     "cognism",
     "lighton",
     "promptwatch",
@@ -234,9 +249,15 @@ KEY_PROVIDERS: tuple = tuple(c.name for c in _REGISTRY_LIST if c.keyed)
 # navigateur** (secret_kind="cookie" : brevo/crunchbase/pennylaneged, qui persistent le
 # Context Browserbase) et les connecteurs **byo multi-champs**. Sans ça, la persistance
 # d'une session (ADR 0026/0033, `_persist`→`set_member_api_key`) levait « Unknown provider ».
+# ⚠️ Un connecteur qui DÉLÈGUE son credential (`credential_of`, ex. les six canaux
+# unipile) en est EXCLU : sa clé n'existe que sous le porteur. Sans cette exclusion,
+# une clé posée sous `whatsapp` serait acceptée au coffre puis jamais relue (la
+# cascade normalise vers `unipile`) — un credential fantôme, et deux clés qui se
+# contredisent. Cf. `credential_provider`.
 CREDENTIAL_PROVIDERS: frozenset = frozenset(
     c.name for c in _REGISTRY_LIST
-    if c.keyed or c.credential_fields or c.secret_kind != "none"
+    if c.credential_of is None
+    and (c.keyed or c.credential_fields or c.secret_kind != "none")
 )
 ORG_SHAREABLE_PROVIDERS: frozenset = frozenset(c.name for c in _REGISTRY_LIST if c.org_shareable)
 QUOTA_DEFAULTS: dict = {c.name: c.default_quota for c in _REGISTRY_LIST if c.default_quota}
@@ -328,6 +349,15 @@ def require_credential(entity_type: str, name: str) -> None:
     linkedin/crunchbase/google/slack…) ; group → org-partageable OU byo_user (une
     équipe délègue l'org, ADR 0012) ; org → doit être org-partageable (byo_org,
     ex. http/mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
+    # Délégation (`credential_of`) : le connecteur n'a pas de credential à lui, à
+    # AUCUN niveau d'entité. Refus nommant le porteur — « whatsapp n'accepte pas de
+    # clé » sans dire où la poser laisserait l'appelant chercher une carte qui
+    # n'existe pas.
+    porteur = credential_provider(name)
+    if porteur != name:
+        raise ValueError(
+            f"{name!r} ne porte pas de credential : sa clé se pose sur {porteur!r} "
+            f"(un seul compte fournisseur pour toutes ses connexions).")
     if entity_type == "org":
         if not is_org_shareable(name):
             raise ValueError(f"{name!r} n'est pas un credential org-partageable")
@@ -376,6 +406,44 @@ PERSONAL_CROSS_ORG_PROVIDERS: frozenset = frozenset(
     c.name for c in _REGISTRY_LIST if c.personal_cross_org)
 
 
+def credential_provider(name: str) -> str:
+    """Le connecteur qui PORTE le credential de `name` (lui-même par défaut).
+
+    **LE seam de la délégation** (`Connector.credential_of`) : tout ce qui touche au
+    coffre, à la cascade, au quota, à la clé plateforme ou à l'option couche-3 pose
+    sa question à travers lui ; tout ce qui GATE (activation, ACL, sélection,
+    visibilité, pin `_instance=`) garde le nom NU. Les deux questions se ressemblent
+    et ne sont pas la même — c'est exactement la confusion qui a produit, le
+    2026-07-07, une carte « clé d'org » verte à côté d'un « Bloqué » rouge.
+
+    Un seul niveau, volontairement : un porteur ne délègue pas à son tour (une chaîne
+    rendrait le coffre adressable par un chemin qu'aucune surface ne montre). Nom
+    inconnu ⟹ rendu tel quel (le fail-open des gates est inchangé)."""
+    c = REGISTRY.get(name)
+    return (c.credential_of or name) if c else name
+
+
+def delegates_credential(name: str) -> bool:
+    """`name` emprunte-t-il le credential d'un autre connecteur ?"""
+    c = REGISTRY.get(name)
+    return bool(c and c.credential_of)
+
+
+def connector_for_hosted_channel(channel: str) -> Connector | None:
+    """Le connecteur qui REPRÉSENTE un canal hébergé (`LINKEDIN`, `WHATSAPP`…).
+
+    Réciproque de `Connector.hosted_channel`. C'est par là que le code qui ne
+    connaît que le canal — la résolution du compte opéré, les tools de messagerie,
+    le picker d'identités — retrouve le connecteur à GATER, au lieu de retomber sur
+    le porteur de la clé et de gater tout le monde pareil."""
+    if not channel:
+        return None
+    return _CHANNEL_INDEX.get(channel.upper())
+
+
+_CHANNEL_INDEX: dict = {c.hosted_channel: c for c in _REGISTRY_LIST if c.hosted_channel}
+
+
 def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, str | None]:
     """Valide l'écriture d'un secret partagé d'org et calcule son `meta` satellite.
 
@@ -397,6 +465,8 @@ def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, s
         if not base_url:
             return None, "base_url_required"
         return {"base_url": base_url.rstrip("/")}, None
+    # NB : un connecteur qui DÉLÈGUE son credential en est exclu par construction
+    # (`Connector.org_shareable`) — sa clé se pose sur le porteur, pas sur lui.
     if provider not in ORG_SHAREABLE_PROVIDERS:
         return None, "provider_not_shareable"
     if base_url:

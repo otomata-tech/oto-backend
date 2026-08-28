@@ -31,7 +31,7 @@ from oto_mcp.capabilities._types import ResolvedCtx
 
 _ROW = {"name": "unipile", "label": "Unipile", "help": "messagerie hébergée",
         "family": "api", "category": "Comms", "availability": "self_serve",
-        "logo_url": None, "namespaces": ["linkedin_unipile"]}
+        "logo_url": None, "namespaces": ["linkedin"]}
 
 
 def _wire(monkeypatch, *, catalog=(_ROW,), selection=None, option_ok=True,

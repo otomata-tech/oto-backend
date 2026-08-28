@@ -107,7 +107,7 @@ def test_replay_is_a_noop(conn):
 def test_other_connectors_are_never_touched(conn):
     _seed(conn, [("s1", 2, "linkedin", "active"), ("s1", 2, "unipile", "paused"),
                  ("s2", 2, "folk", "active")])
-    sel.rename_selection(conn, "linkedin", "aiark")
+    sel.rename_selection(conn, "aiark", "linkedin")
     assert ("s1", 2, "unipile", "paused") in _selection(conn)
     assert ("s2", 2, "folk", "active") in _selection(conn)
 
@@ -130,9 +130,27 @@ def test_the_three_statements_stay_in_this_order():
     assert promote < dedupe < rename
 
 
-def test_the_boot_runs_the_linkedin_rename():
-    """La consigne « à faire au tag » est devenue un geste de BOOT — c'est la leçon
-    de #295, et elle ne tient que si l'appel est là."""
+def test_le_boot_ne_renomme_plus_linkedin_vers_aiark():
+    """Le renommage `linkedin` → `aiark` (posé le 2026-08-10, leçon de #295) a été
+    RETIRÉ du boot le 2026-08-28, et son retrait était OBLIGATOIRE.
+
+    Une migration de boot n'est sûre QUE tant que son nom SOURCE reste mort. Celle-ci
+    l'était : `linkedin` avait été déposé, plus rien ne le créait. Depuis le split,
+    `linkedin` est la session hébergée et le fan-out en CRÉE des lignes à chaque
+    boot — le renommage devenait donc une bombe à retardement d'un boot de décalage
+    (boot N crée les sélections LinkedIn, boot N+1 les déménage vers `aiark`, et
+    ainsi à chaque redémarrage).
+
+    Le tripwire vise le geste, pas le symptôme : reprendre un nom déposé oblige à
+    relire TOUTES les migrations qui le nomment, et c'est cette relecture-là qu'on
+    ne pense pas à faire."""
     init_src = (pathlib.Path(__file__).resolve().parents[2]
                 / "oto_mcp" / "db" / "_init.py").read_text(encoding="utf-8")
-    assert 'rename_selection(conn, "linkedin", "aiark")' in init_src
+    # Sur les lignes de CODE seulement : le commentaire qui explique le retrait cite
+    # forcément le geste retiré, et une sonde textuelle naïve se déclencherait dessus
+    # — un test qui interdit d'expliquer sa propre raison d'être.
+    code = [l for l in init_src.splitlines() if not l.lstrip().startswith("#")]
+    assert not [l for l in code if 'rename_selection(conn, "linkedin"' in l], (
+        "`linkedin` n'est plus un nom mort : le fan-out du split en crée des lignes "
+        "à chaque boot, un renommage depuis ce nom les déménagerait en boucle.")
+    assert [l for l in code if 'fanout_selection(conn, "unipile"' in l]

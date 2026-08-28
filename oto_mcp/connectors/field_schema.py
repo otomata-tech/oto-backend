@@ -78,7 +78,13 @@ CONNECTOR_FIELD_SCHEMA: dict[str, list[dict]] = {
         {"name": "postal_code", "label": "code postal", "type": "string", "sensitive": False},
     ],
     # Recrutement — profils/candidats (anonymisation par défaut, cf. field_filter_defaults).
-    "unipile": _CANDIDATE_FIELDS,
+    # ⚠️ Keyé `linkedin`, PAS `unipile` — c'est le NAMESPACE que le
+    # middleware de rédaction résout (`namespace_of(tool)`), et depuis le split du
+    # 2026-08-28 c'est aussi un connecteur. Sous `unipile`, une politique d'org ne
+    # gouvernait que `unipile_connect_start`, qui ne rend aucun profil : le
+    # catalogue proposait à l'admin de masquer des champs sur des outils qui n'en
+    # servent pas, et les profils LinkedIn sortaient en clair.
+    "linkedin": _CANDIDATE_FIELDS,
     "ashby": _CANDIDATE_FIELDS,
     "greenhouse": _CANDIDATE_FIELDS,
     "lever": _CANDIDATE_FIELDS,

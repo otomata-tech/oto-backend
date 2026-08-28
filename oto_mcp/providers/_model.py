@@ -149,10 +149,46 @@ class Connector:
     # sert, et une validation à l'écriture qui refuse un mode incohérent au lieu de
     # l'accepter et d'échouer au premier appel réel (oto-backend#449).
     field_discriminator: str = ""
+    # DÉLÉGATION DE CREDENTIAL (split unipile, oto-backend — 2026-08-28). Ce
+    # connecteur n'a PAS de credential propre : sa clé, son quota, sa clé plateforme
+    # et son option (couche 3) vivent sous le connecteur NOMMÉ ici. Le cas d'usage
+    # est un fournisseur dont UNE clé ouvre N *connexions* qu'on veut gouverner
+    # séparément — unipile : une clé d'abonnement, six canaux, chacun sa carte, son
+    # activation, son ACL et sa sélection.
+    #
+    # ⚠️ Deux questions cohabitent alors, et CHAQUE site doit choisir laquelle il pose :
+    #   · « quel connecteur est APPELÉ ? »  → les gates : activation, ACL
+    #     (`require_connector_access`), sélection, visibilité de session, pin
+    #     `_instance=`. C'est le nom NU.
+    #   · « quel connecteur PORTE la clé ? » → le coffre, la cascade, le quota, la
+    #     clé plateforme, l'option. C'est `providers.credential_provider(nom)`.
+    # Confondre les deux redonne exactement la divergence de 2026-07-07 (carte « clé
+    # d'org » verte + « Bloqué » rouge) : le statut et la résolution répondaient à
+    # deux questions différentes en croyant répondre à la même.
+    #
+    # Un connecteur délégant ne DÉTIENT jamais de credential : il est hors
+    # `CREDENTIAL_PROVIDERS`, donc la pose d'une clé sous son nom est refusée et
+    # renvoie sur le porteur (sinon deux clés diraient le contraire l'une de l'autre).
+    credential_of: str | None = None
+    # Canal Unipile connecté par ce connecteur (`LINKEDIN`/`WHATSAPP`/…) quand la
+    # carte représente UNE connexion hébergée. None = pas un connecteur de canal.
+    # Rend le canal DÉRIVABLE du connecteur : le flux hébergé se déclare alors sans
+    # paramètre (`connectors/flow.py`), et le front n'a plus de sélecteur de canal à
+    # rendre — la carte EST le canal.
+    hosted_channel: str | None = None
 
     @property
     def org_shareable(self) -> bool:
-        return "byo_org" in self.auth_modes
+        """Un secret de ce connecteur peut-il être posé au niveau ORG (ou équipe) ?
+
+        Faux pour un connecteur qui DÉLÈGUE son credential, même s'il hérite
+        `byo_org` de son porteur : ce qui se partage, c'est la clé du COMPTE, sur la
+        carte du compte. Sans ce faux, les lecteurs qui interrogent le nom NU —
+        `org_secret_meta`, les hints « une équipe a la clé » (`access/rbac.py`), le
+        levier de partage de la carte — proposeraient de poser ou d'atteindre un
+        secret d'org sous `whatsapp`, que la cascade (normalisée vers `unipile`)
+        n'irait jamais lire."""
+        return "byo_org" in self.auth_modes and not self.credential_of
 
     @property
     def family(self) -> str:
@@ -340,7 +376,15 @@ class Connector:
         `status_for` et le packing. Déclaré explicitement (`credential_fields`),
         sinon dérivé des formes simples. Vide = pas de saisie générique : `cookie`
         (linkedin/crunchbase), `oauth` (google/atlassian) et `none` (open-data) ont
-        des flux dédiés, pas un formulaire de champs."""
+        des flux dédiés, pas un formulaire de champs.
+
+        Vide aussi pour un connecteur qui DÉLÈGUE son credential (`credential_of`) :
+        il n'a pas de champ à lui. Rendre le formulaire de son porteur sur sa carte
+        inviterait à poser une deuxième clé — que le coffre refuse (hors
+        `CREDENTIAL_PROVIDERS`) et que la cascade n'irait jamais lire. La carte du
+        porteur est le seul endroit où la clé se pose."""
+        if self.credential_of:
+            return ()
         if self.credential_fields:
             return self.credential_fields
         if self.secret_kind == "api_key":
@@ -398,7 +442,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        mount_strip_prefix=None,
        credential_fields=(), modules=(), hosted_auth=False,
        personal_cross_org=False, single_account=False, account_noun="",
-       field_discriminator="") -> Connector:
+       field_discriminator="", credential_of=None, hosted_channel=None) -> Connector:
     """Factory d'une entrée de registre — appelée par `providers/<nom>.py`.
 
     Ajouter un CHAMP par connecteur = l'ajouter à `Connector` ET ici, puis le
@@ -416,4 +460,5 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         modules=tuple(modules), hosted_auth=hosted_auth,
         personal_cross_org=personal_cross_org, single_account=single_account,
         account_noun=account_noun, field_discriminator=field_discriminator,
+        credential_of=credential_of, hosted_channel=hosted_channel,
     )

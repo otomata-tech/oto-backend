@@ -1,16 +1,125 @@
-# Unipile — messagerie hébergée (WhatsApp/Telegram/Instagram/LinkedIn)
+# Unipile — le compte, et ses six connexions
 
 > Extrait du CLAUDE.md (refactor 2026-07-02) — domicile du détail ; le CLAUDE.md garde le résumé + pointeur.
 
+## Le split du 2026-08-28 — sept connecteurs là où il y en avait un
+
+**`unipile` n'est plus la messagerie : c'est le COMPTE chez le fournisseur.** Il porte
+la clé d'abonnement, le quota, la clé plateforme, l'option couche-3 et les sièges. Les
+six **connexions** sont des connecteurs à part entière :
+
+| connecteur | namespace | canal | module `tools/` |
+|---|---|---|---|
+| `unipile` | `unipile` | — (le compte) | `unipile` |
+| `linkedin` | `linkedin` | `LINKEDIN` | `unipile` |
+| `whatsapp` | `whatsapp` | `WHATSAPP` | `whatsapp` |
+| `telegram` | `telegram` | `TELEGRAM` | `telegram` |
+| `instagram` | `instagram` | `INSTAGRAM` | `instagram` |
+| `messenger` | `messenger` | `MESSENGER` | `messenger` |
+| `twitter` | `twitter` | `TWITTER` | `twitter` |
+
+**Pourquoi.** Un connecteur est l'unité de gouvernance : activation, ACL d'org,
+sélection de membre, visibilité des tools, carte. Avec sept namespaces sous un seul
+nom, ces cinq choses étaient indivisibles — réserver WhatsApp à un département sans
+ouvrir LinkedIn était impossible, et installer WhatsApp montait 40 outils LinkedIn.
+
+**La ligne de partage, et c'est la seule chose à retenir :**
+
+| la question | la réponse | le nom à employer |
+|---|---|---|
+| qui a le DROIT d'appeler ? | activation, ACL, sélection, visibilité, pin `_instance=` | le nom **NU** (`whatsapp`) |
+| avec quelle CLÉ ? | coffre, cascade, quota, clé plateforme, option | `providers.credential_provider(nom)` → `unipile` |
+
+Le seam est `Connector.credential_of` ; la normalisation vit **dans `walk_cascade` et
+nulle part ailleurs** — résolution, miroir de mode et statut le traversent tous les
+trois, donc ils ne peuvent pas répondre trois choses différentes. Normaliser dans
+chacun rouvrirait la divergence du 2026-07-07 (carte « clé d'org » verte + « Bloqué »
+rouge). Conséquences : un canal n'est pas dans `CREDENTIAL_PROVIDERS` (pose refusée,
+le refus NOMME le porteur), n'est pas `org_shareable`, n'a pas de `secret_fields`, et
+ne recopie **pas** `platform_key_open` (propriété de la clé — le recopier serait la
+configuration morte qui a produit la panne all-users de #245).
+
+**Ce qui n'a PAS bougé** : les tables de comptes (`unipile_accounts`,
+`connector_account_grants`, `unipile_operated_accounts`, `unipile_pending`) étaient
+déjà keyées par CANAL (`provider` = `LINKEDIN`/`WHATSAPP`/…), jamais par connecteur.
+Le split les rejoint, il ne les migre pas.
+
+**Ce qui a dû migrer** (boot, idempotent, `db/_init.py` — trois fail-* qui penchent
+dans deux directions opposées et n'auraient rien levé) :
+`connector_availability` (pas de ligne ⟹ **OFF** : la messagerie s'éteindrait pour
+tous), `connector_acl` (pas de ligne ⟹ **OUVERT** : une restriction d'org
+s'évaporerait), `user_selected_connectors` (non-sélectionné ⟹ **MASQUÉ** : les
+membres perdraient la surface), plus `orgs.default_connectors`. Tests contre un vrai
+PostgreSQL : `tests/connectors/test_unipile_split_fanout.py`.
+
+**Le nom nu `linkedin_*` va à la session — et `aiark` n'est PAS touché.** Les 8
+tools passent de `linkedin_unipile_*` à `linkedin_*`. Le nom n'est pris à personne :
+il avait été LIBÉRÉ le 10/08 par le dépôt de l'ex-connecteur `linkedin` (AI Ark en
+app-credits, #231). AI Ark garde son namespace `linkedin_aiark`, sa clé, son grant
+plateforme et ses 3 tools, **tels qu'en production**.
+
+Les deux cohabitent par `namespace_of` — résolution au **plus long préfixe DÉCLARÉ**
+au registre, pas au 1er token : `linkedin_aiark_person` → `aiark`, `linkedin_post` →
+`linkedin`. Sans cette règle, les tools d'AI Ark tomberaient sous la session :
+mauvaise clé (celle du compte hébergé au lieu de celle d'AI Ark), mauvaise
+activation, mauvaise sélection. **C'est LE cas d'usage de la règle (ADR 0010
+§Amendement), et il est vivant** — ce lot le confirme au lieu de le retirer.
+
+Et ce sont bien deux CHOSES différentes, pas deux fournisseurs interchangeables :
+
+- **AI Ark VEND de la donnée** — email vérifié, mobile, reverse-lookup depuis un
+  contact — dont LinkedIn n'est qu'une des sources. Sa famille, c'est dropcontact et
+  fullenrich.
+- **La session EST LinkedIn** : elle rend ce que TON compte voit, sous ton identité,
+  au rythme que LinkedIn t'impose.
+
+`linkedin_chat` n'a aucun équivalent AI Ark ; `linkedin_aiark_person(op="mobile")`
+aucun équivalent dans la session. Verrouillé par `tests/test_linkedin.py`.
+
+### ⚠️ Ordre de promotion — deux lots, et le second dépend du premier
+
+Base **partagée preprod/prod**, prod tourne l'ANCIEN code pendant la fenêtre
+(`docs/live-migrations.md`). Deux pièges de nom, tous deux dus au fait que ce lot
+**reprend `linkedin`**, un nom déposé le 10/08 :
+
+1. **Lot A — `fix/retirer-rename-linkedin-aiark`, à promouvoir EN PREMIER.** La prod
+   exécute au boot `rename_selection(conn, "linkedin", "aiark")`, hérité de #295.
+   Ce geste n'est sûr que tant que RIEN ne crée de lignes `linkedin` — or le fan-out
+   ci-dessous en crée à CHAQUE boot. Livrés ensemble : boot preprod N crée les
+   sélections LinkedIn, boot prod N+1 les déménage toutes vers `aiark`, et ainsi de
+   suite ; l'utilisateur voit sa sélection LinkedIn devenir AI Ark sans avoir rien
+   fait. **Ce lot-ci ne peut être promu qu'une fois le Lot A EN PROD.**
+2. **La gouvernance fossile**, traitée dans ce lot-ci (`purge_connecteur_depose`,
+   one-shot). L'ancien `linkedin` a laissé ses lignes d'exposition et d'ACL : rien
+   ne nettoie un connecteur déposé. Le fan-out posant ses lignes en
+   `ON CONFLICT DO NOTHING` (à dessein), la ligne fossile GAGNERAIT — une org qui
+   avait coupé l'AI Ark-LinkedIn verrait la session LinkedIn coupée, sans décision
+   ni erreur. La purge précède donc le fan-out, et ne s'exécute **qu'une fois** :
+   rejouée, elle effacerait les décisions prises depuis sur le nouveau connecteur.
+
+**La leçon transposable, qui vaut au-delà d'unipile** : *reprendre un nom déposé
+oblige à relire tout ce qui le nomme encore* — migrations de boot ET lignes de
+gouvernance orphelines. Un nom mort paraît libre précisément parce qu'il est mort :
+rien ne le référence de façon VISIBLE, et les deux mécanismes qui le référencent
+quand même échouent en silence, l'un en déménageant des données, l'autre en
+héritant d'un verdict.
+
+**Connexion** : un flux par canal, **sans paramètre** — le canal est dérivé de
+`Connector.hosted_channel` au lieu d'être choisi dans une liste. `unipile` n'a plus de
+flux (sa carte pose une clé, `auth_method="secret"`). Le tool `unipile_connect_start(channel=…)`
+reste multi-canal.
+
+---
 
 Tools `whatsapp_chat` / `telegram_chat` / `instagram_chat` / `messenger_chat` /
-`twitter_chat` (`op=list|read|send`) = messagerie **hébergée Unipile**, sous le connecteur `unipile`
-(`modules`/namespaces = `unipile, whatsapp, telegram, instagram`). Générés par la
-factory `tools/unipile.register_messaging_tools(mcp, channel)` — l'API `/chats`
-d'Unipile est channel-agnostic ; chaque tool résout l'`account_id` du canal pour le
-user (no-fallback, `tools/unipile.unipile_client(provider)`).
+`twitter_chat` (`op=list|read|send`) = messagerie **hébergée Unipile**, chacun sous
+**son** connecteur (cf. le tableau ci-dessus). Générés par la factory
+`tools/unipile.register_messaging_tools(mcp, channel)` — l'API `/chats` d'Unipile est
+channel-agnostic ; chaque tool résout l'`account_id` du canal pour le user
+(no-fallback, `tools/unipile.unipile_client(provider)`, qui résout le credential
+**sous le connecteur du canal** pour que l'ACL de ce canal morde).
 
-> **⚠️ La surface LinkedIn s'appelle `linkedin_unipile_*` depuis le 2026-08-10**
+> **⚠️ La surface LinkedIn s'appelle `linkedin_*` depuis le 2026-08-10**
 > (ADR 0010 §Amendement + ADR 0047 §Amendement, oto-backend#279) : **38 tools
 > `unipile_*` → 8 tools à `op=`** — `search`, `facets`, `profile`, `chat`, `post`,
 > `network`, `account`, `job`. Deux raisons cumulées : le namespace portait le
@@ -22,10 +131,10 @@ user (no-fallback, `tools/unipile.unipile_client(provider)`).
 >
 > Conséquence technique : `namespace_of` résout désormais au **plus long préfixe déclaré
 > au registre** (`tool_visibility.py`) et non plus au 1er token — sans quoi
-> `linkedin_unipile_*` tomberait sous le connecteur `linkedin` (AI Ark) : mauvais
+> `linkedin_*` tomberait sous le connecteur `linkedin` (AI Ark) : mauvais
 > credential, mauvaise activation, mauvaise sélection. Le changement est additif (aucun
 > autre namespace n'est multi-token) et verrouillé par
-> `tests/test_linkedin.py::test_linkedin_unipile_namespace_resolves_to_unipile`.
+> `tests/test_linkedin.py::test_linkedin_namespace_resolves_to_unipile`.
 >
 > **`unipile_connect_start` garde son nom** : il est multi-canal
 > (`channel=linkedin|whatsapp|…`), donc il n'appartient à aucune capacité. Sa place
@@ -279,7 +388,7 @@ durable car il lit un flag cohérent. **Ne jamais recoder une règle d'accès c�
 un flag backend. Le gate DUR (qui peut utiliser) reste `require_connector_access` (ADR 0025, couvre
 le BYO — « pas de clé perso qui contourne ») ; il gate aussi la **pose** (`api_key_save` → 403).
 
-**Le feed est servi en VUE DE TRI (#384, 2026-08-11).** `linkedin_unipile_post(op="feed",
+**Le feed est servi en VUE DE TRI (#384, 2026-08-11).** `linkedin_post(op="feed",
 limit=40)` rendait **65-67 Ko**, au-delà du plafond d'un résultat MCP : sur la procédure
 `veille-linkedin`, le harnais a déversé la sortie dans un fichier et l'agent a repassé au
 `jq` pour la ramener à 42 Ko — deux tours et un détour par le shell avant le vrai travail ;
@@ -296,7 +405,7 @@ comptabilité de miroir. Le défaut coupe donc le texte à **600 caractères** (
 - `fields` a **exactement la sémantique de `data_rows`** (projection + `_id`/`urn`
   toujours gardés pour adresser la ligne, colonne inconnue signalée sans bloquer) — une
   seule chose à apprendre. `fields=[]` est refusé (l'avaler rendrait plus que le défaut).
-- Même extrait par défaut sur `linkedin_unipile_profile(op="posts"/"comments")`, **même
+- Même extrait par défaut sur `linkedin_profile(op="posts"/"comments")`, **même
   seam** (`_slim`) : #281 y avait ajouté `fields`/`text_max_chars` sans corriger le
   DÉFAUT, et le même incident s'est rejoué sur le feed. ADR 0047 §Amendement du 11/08 :
   *le défaut est un acte de conception, le chemin paresseux doit être le chemin juste* —
@@ -305,6 +414,14 @@ comptabilité de miroir. Le défaut coupe donc le texte à **600 caractères** (
   c'est la conjonction extrait + projection qui fait tomber le coût par post.
 
 ## Lots 2-3 (10/08, #279) — les 5 autres canaux, et `linkedin` déposé au profit d'`aiark`
+
+> ⚠️ **Section HISTORIQUE — les noms de tools qu'elle donne sont périmés depuis le
+> 2026-08-28.** Elle décrit la période où l'on croyait que DEUX fournisseurs se
+> disputaient la capacité « LinkedIn », d'où les suffixes `linkedin_unipile_*` /
+> `linkedin_aiark_*`. La prémisse était fausse : AI Ark vend de la donnée, la
+> session EST LinkedIn. Les tools sont aujourd'hui `aiark_*` et `linkedin_*` (cf.
+> §Le split plus haut). Ce qui suit reste utile pour comprendre POURQUOI les
+> suffixes ont existé — pas pour savoir comment les tools s'appellent.
 
 > **Lots 2-3 (10/08, même issue)** : les 5 autres canaux passent à `{whatsapp,telegram,
 > instagram,messenger,twitter}_chat(op=list|read|send)` — 15 → 5, factory commune, le canal

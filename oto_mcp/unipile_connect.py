@@ -106,6 +106,22 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
                 400, "invalid_premium",
                 f"premium inconnu : {premium} (attendu : {', '.join(LINKEDIN_PREMIUM)}). "
                 "Un compte ne peut activer qu'UN produit premium.")
+    # Gate d'ACCÈS du CANAL (split du 2026-08-28). Depuis que chaque canal est un
+    # connecteur, « qui peut connecter WhatsApp » se règle par canal — activation
+    # d'org et ACL comprises. Le gate vit ICI, dans le corps partagé, et pas
+    # seulement dans la capacité REST générique : le tool `unipile_connect_start` et
+    # l'ancienne route `POST /api/unipile/connect` passent par là sans elle, et un
+    # gate qu'un seul des trois chemins applique n'en est pas un.
+    # Canal inconnu au registre (impossible après la garde ci-dessus, mais on ne
+    # présume pas) ⟹ pas de gate supplémentaire : le fail-open est celui d'un
+    # namespace inconnu, inchangé.
+    from . import providers as _providers
+    canal_con = _providers.connector_for_hosted_channel(provider)
+    if canal_con is not None:
+        try:
+            access.require_connector_access(canal_con.name, sub)
+        except McpError as e:
+            raise ConnectRefused(403, "connector_restricted", e.error.message)
     api_key = access.unipile_api_key_for(sub)
     if not api_key:
         raise ConnectRefused(404, "unipile_not_configured",

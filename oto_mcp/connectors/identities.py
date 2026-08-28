@@ -226,7 +226,11 @@ def _unipile_live_status_map(sub: str) -> dict:
         return {}
 
 
-def _unipile_list(sub: str) -> list[dict]:
+def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
+    """Identités hébergées joignables par `sub`. `canal` (LINKEDIN/WHATSAPP/…) =
+    ne rendre que celles de CE canal — ce que voit la carte d'un connecteur de canal
+    depuis le split du 2026-08-28. None = tous les canaux (chemin d'appel qui ne
+    connaît pas de canal)."""
     from .. import db
     granted = [g for g in db.list_account_grants_to(sub) if g.get("active")]
     out = []
@@ -299,17 +303,43 @@ def _unipile_list(sub: str) -> list[dict]:
             "granted": True,
             "owner": owner,
         })
+    if canal:
+        # Filtre APRÈS l'annotation des comptes accordés : un compte accordé du bon
+        # canal doit rester listé (c'est la seule identité que certains grantees
+        # ont). Un compte dont le canal est INCONNU (`channel=None` — vu en BYO quand
+        # Unipile ne renvoie pas `type`) ne se rattache à aucune carte de canal : le
+        # taire ici vaut mieux que de le faire apparaître sous les six.
+        _c = canal.upper()
+        out = [i for i in out if (i.get("channel") or "").upper() == _c]
     return out
 
 
-def _unipile_select(sub: str, identity_id: str) -> dict:
+def _unipile_select(sub: str, identity_id: str, canal: str | None = None) -> dict:
+    """Choisit l'identité opérée. `canal` (carte d'un connecteur de canal) = garde :
+    on ne bascule pas son identité Telegram depuis la carte WhatsApp. Le canal RÉEL
+    est celui du COMPTE, jamais celui qu'on suppose — d'où une garde sur le résultat
+    plutôt qu'un filtre sur l'entrée : les trois chemins de sélection (compte accordé,
+    retour à soi, bascule BYO) le découvrent chacun à leur façon, et un seul endroit
+    doit trancher."""
     from .. import db
+
+    def _exige_canal(trouve: str | None) -> None:
+        """Refuse AVANT d'écrire si le compte n'est pas du canal de la carte.
+
+        Après l'écriture il serait trop tard : poser le pointeur puis lever
+        laisserait l'identité opérée changée par un appel qui a rendu une erreur."""
+        if canal and (trouve or "").upper() != canal.upper():
+            raise ValueError(
+                f"Ce compte est un compte {(trouve or 'inconnu').title()} : il ne se "
+                f"choisit pas depuis la carte {canal.title()}. Passe par la carte de "
+                "son canal.")
     # 1) Compte ACCORDÉ (#55) : pose le POINTEUR « identité opérée » — ne touche
     #    JAMAIS la ligne de connexion `unipile_accounts` du grantee. La validation
     #    = le grant vivant (deny-by-default), pas la clé.
     g = next((r for r in db.list_account_grants_to(sub)
               if r.get("active") and r["account_id"] == identity_id), None)
     if g:
+        _exige_canal(g["provider"])
         db.set_operated_account(sub, g["provider"], identity_id, g["owner_sub"])
         return {"id": identity_id, "channel": g["provider"], "is_default": True,
                 "granted": True}
@@ -317,6 +347,7 @@ def _unipile_select(sub: str, identity_id: str) -> dict:
     own = next((a for a in db.list_unipile_accounts(sub)
                 if a["account_id"] == identity_id), None)
     if own:
+        _exige_canal(own["provider"])
         db.clear_operated_account(sub, own["provider"])
         return {"id": identity_id, "channel": own["provider"], "is_default": True}
     # 3) Chemin BYO existant : choisir un compte de SA clé (bascule la connexion).
@@ -328,6 +359,7 @@ def _unipile_select(sub: str, identity_id: str) -> dict:
     if match is None:  # anti-binding : l'id DOIT exister sur la clé (ou être accordé)
         raise ValueError(f"Compte Unipile inconnu sur cette clé : {identity_id}")
     ch = (match.get("type") or "LINKEDIN").upper()
+    _exige_canal(ch)
     # Scope membre (ADR 0033 B4) : le binding vaut dans l'org de contexte. BYO →
     # pas un siège plateforme (platform_seat=False), cohérent avec unipile_connect.
     # Bascule de connexion = retour-à-soi sur ce canal → efface le pointeur opéré (#55).
@@ -419,4 +451,29 @@ def _register_keyed_multi_account() -> None:
         _SELECTORS[name] = lambda sub, iid, scope="member", c=name: _keyed_select(sub, c, iid, scope)
 
 
+def _register_hosted_channels() -> None:
+    """Un backend d'identités par CANAL hébergé (split du 2026-08-28).
+
+    `oto_identity(connector='whatsapp')` doit rendre les comptes WhatsApp, pas les
+    six canaux : depuis que chaque canal a sa carte, une liste non filtrée y ferait
+    apparaître un LinkedIn qu'aucun bouton de cette carte ne peut opérer. Même corps
+    (`_unipile_list`/`_unipile_select`) avec un canal en plus — la résolution, les
+    grants et le statut live restent UN seul chemin.
+
+    (Ces connecteurs ne passent pas par le backend keyed générique : `hosted` ⟹
+    `auth_multi_account` faux — leurs comptes ne sont pas des lignes du coffre.)"""
+    from .. import providers
+    for con in providers._REGISTRY_LIST:
+        if not con.hosted_channel:
+            continue
+        # `_ch` capturé par valeur : sans le défaut d'argument, les six backends
+        # fermeraient sur la même variable de boucle (donc sur le dernier canal).
+        _LISTERS[con.name] = (
+            lambda sub, scope="member", _ch=con.hosted_channel: _unipile_list(sub, _ch))
+        _SELECTORS[con.name] = (
+            lambda sub, iid, scope="member", _ch=con.hosted_channel:
+            _unipile_select(sub, iid, _ch))
+
+
 _register_keyed_multi_account()
+_register_hosted_channels()

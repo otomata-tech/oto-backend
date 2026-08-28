@@ -17,7 +17,7 @@ from ._model import _c
 # ⚠️ Namespace des tools = `linkedin_aiark` (ADR 0010 §Amendement 2026-08-10) :
 # le nom porte la CAPACITÉ (LinkedIn) suffixée du FOURNISSEUR, parce que deux
 # fournisseurs NON SUBSTITUABLES la rendent — AI Ark = donnée ACHETÉE au crédit
-# (aucun compte connecté), Unipile = la session OPÉRÉE (`linkedin_unipile_*`).
+# (aucun compte connecté), Unipile = la session OPÉRÉE (`linkedin_*`, nom nu).
 # `namespace_of` résout au plus long préfixe déclaré : les deux gardent un gate
 # distinct. Le connecteur, lui, garde le nom du fournisseur — c'est l'unité
 # d'activation et de credential.

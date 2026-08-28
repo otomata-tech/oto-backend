@@ -196,7 +196,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Search LinkedIn-sourced B2B data through AI Ark (bought data, per-credit).
 
-        Not interchangeable with `linkedin_unipile_search`: that one drives YOUR
+        Not interchangeable with `linkedin_search`: that one drives YOUR
         connected LinkedIn session (and is rate-limited by LinkedIn); this one
         queries AI Ark's index and BILLS CREDITS per returned record.
 

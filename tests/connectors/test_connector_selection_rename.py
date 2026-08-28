@@ -130,9 +130,27 @@ def test_the_three_statements_stay_in_this_order():
     assert promote < dedupe < rename
 
 
-def test_the_boot_runs_the_linkedin_rename():
-    """La consigne « à faire au tag » est devenue un geste de BOOT — c'est la leçon
-    de #295, et elle ne tient que si l'appel est là."""
+def test_le_boot_ne_renomme_plus_linkedin_vers_aiark():
+    """Le renommage `linkedin` → `aiark` a été RETIRÉ du boot, et il doit le rester.
+
+    Il était juste tant que `linkedin` était un nom MORT : rien n'en créait, la
+    migration ne pouvait donc que rattraper des lignes orphelines (leçon #295). Le
+    lot suivant rend ce nom à une surface VIVANTE, dont le fan-out créera des lignes
+    à chaque boot — la migration cesserait alors de migrer pour déménager en boucle,
+    un boot sur deux.
+
+    **La règle générale, qui est ce que ce test garde vraiment** : une migration de
+    boot A → B n'est sûre que tant que RIEN ne crée de A. Reprendre un nom déposé
+    oblige donc à relire toutes les migrations qui le nomment — et c'est cette
+    relecture-là qu'on ne pense pas à faire, parce que le nom qu'on reprend paraît
+    libre justement parce qu'il est mort.
+
+    Le tripwire ne lit que les lignes de CODE : le commentaire qui explique le
+    retrait cite forcément le geste retiré, et une sonde textuelle naïve interdirait
+    d'expliquer sa propre raison d'être."""
     init_src = (pathlib.Path(__file__).resolve().parents[2]
                 / "oto_mcp" / "db" / "_init.py").read_text(encoding="utf-8")
-    assert 'rename_selection(conn, "linkedin", "aiark")' in init_src
+    code = [l for l in init_src.splitlines() if not l.lstrip().startswith("#")]
+    assert not [l for l in code if 'rename_selection(conn, "linkedin"' in l], (
+        "le renommage depuis `linkedin` est de retour : s'il existe une surface qui "
+        "CRÉE des lignes `linkedin`, cette migration les déménagera en boucle.")

@@ -921,15 +921,32 @@ def _init_db_once() -> None:
         # toolbox pour l'existant ; les pairs créés ensuite reçoivent le SOCLE
         # curé au seed lazy (session_visibility).
         _conn_sel.backfill_preexisting(conn)
-        # #295 — les sélections d'un connecteur DÉPOSÉ suivent son renommage. #279
-        # (lot 3) a déposé `linkedin` au profit d'`aiark` (même fournisseur, même
-        # client, même pool de crédits : la distinction n'était qu'un mode d'auth),
-        # mais 119 lignes de sélection sont restées sur l'ancien nom — qui ne résout
-        # plus rien, donc ne monte aucun outil : depuis le tag v1.69.0, ces membres
-        # avaient perdu la toolbox LinkedIn sans un mot. Ici et pas en one-shot
-        # manuel : la base est partagée preprod/prod, un boot doit pouvoir rejouer.
-        # Sûr depuis v1.69.0 — plus aucun code servi ne lit `'linkedin'`.
-        _conn_sel.rename_selection(conn, "linkedin", "aiark")
+        # ⚠️ `rename_selection(conn, "linkedin", "aiark")` A ÉTÉ RETIRÉ ICI.
+        #
+        # Il datait de #295/#279 : `linkedin` avait été déposé au profit d'`aiark`
+        # (même fournisseur, même client, même pool de crédits — la distinction
+        # n'était qu'un mode d'auth), et 119 lignes de sélection étaient restées sur
+        # l'ancien nom, qui ne résolvait plus rien. Sous le régime strict
+        # « non-sélectionné = masqué », ces membres avaient perdu la toolbox LinkedIn
+        # sans un mot, sept tags durant. Le geste a fait son travail : plus une ligne
+        # ne porte ce nom-là.
+        #
+        # **Il devient dangereux dès que `linkedin` cesse d'être un nom mort**, et
+        # c'est la seule raison de ce retrait. Une migration de boot qui renomme
+        # A → B n'est sûre que tant que RIEN ne crée de A ; sinon elle ne migre plus,
+        # elle déménage en boucle. Le lot qui suit (split du connecteur de messagerie
+        # hébergée) rend précisément `linkedin` à une surface VIVANTE, dont le fan-out
+        # créera des lignes à CHAQUE boot.
+        #
+        # Ce retrait est donc son propre lot, promu AVANT, et c'est le playbook de
+        # `docs/live-migrations.md` appliqué à la lettre : preprod et prod partagent
+        # une base, prod tourne l'ANCIEN code pendant la fenêtre. Livrer les deux
+        # ensemble ferait boucler la prod sur les lignes que la preprod vient de
+        # créer — boot N les crée, boot N+1 les déplace vers `aiark`, et ainsi de
+        # suite. Le lot suivant ne peut être promu qu'une fois CELUI-CI en prod.
+        #
+        # Aucune migration de remplacement : `aiark` garde son nom de connecteur, ses
+        # lignes de sélection sont déjà au bon endroit.
         # === Lot M2 (blueprint ADR 0054/0063, #287) : projets et pages → NŒUDS ===
         # PLACÉ EN FIN DE TRANSACTION, et c'est la même règle qu'au lot M1 : la
         # conversion doit suivre TOUTE écriture de sa table source dans CE boot.

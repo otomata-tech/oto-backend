@@ -5,7 +5,17 @@ description = "MCP server exposing selected oto-cli connectors as tools (Streama
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
-    "fastmcp[apps]>=3.4.2",  # plancher = dernier (3.4.2) — schéma plat des tools validé dessus (ADR 0009). Extra `apps` = prefab_ui (MCP Apps SEP-1865, UI rendue en iframe) consommé par les tools *_app (cf. tools/foncier.py)
+    # ⚠️ PLAFOND `<4` TEMPORAIRE (posé le 2026-08-31, oto-backend#697) — NE PAS le
+    # retirer « pour être à jour » sans avoir fait la migration. fastmcp 4.0.0 (publié
+    # le 2026-08-31 à 18:20:31 UTC) tire fastmcp-slim 4.0.0, qui exige `mcp>=2.0` ; or
+    # `mcp` 2.0 RENOMME `McpError` en `MCPError`, et 223 fichiers de ce dépôt font
+    # `from mcp.shared.exceptions import McpError`. Sans plafond, la CI installait la
+    # 4.0.0 à chaque run : 341 modules morts à la collecte, TOUTES les PR rouges à la
+    # même minute, sans un seul commit de notre part. Le plafond restaure la CI et ne
+    # règle RIEN : le fond (porter le renommage sur 223 fichiers, ou rester en 3.x avec
+    # une date de revue) se tranche dans oto-backend#697. Le plafond sur fastmcp suffit
+    # parce qu'il replafonne `mcp` transitivement (fastmcp-slim 3.x exige `mcp<2.0`).
+    "fastmcp[apps]>=3.4.2,<4",  # plancher = dernier (3.4.2) — schéma plat des tools validé dessus (ADR 0009). Extra `apps` = prefab_ui (MCP Apps SEP-1865, UI rendue en iframe) consommé par les tools *_app (cf. tools/foncier.py)
     # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
     # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →

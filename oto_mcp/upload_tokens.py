@@ -137,9 +137,65 @@ def target_label(target: dict) -> str:
     return k or "?"
 
 
-def _parse_rows(data: bytes, fmt: str) -> list:
+def traduire_entetes(entetes: list, declarees: frozenset = frozenset()) -> dict:
+    """Un en-tête de tableur qui porte un point devient un nom de colonne (#684).
+
+    ⚠️ **Pourquoi c'est légitime ICI et illégitime à l'écriture — la distinction tient
+    tout ce fichier, et sans elle quelqu'un étendra ceci à l'appel programmatique en
+    croyant bien faire.**
+
+    Un en-tête CSV est une **étiquette** : une chaîne humaine, écrite par un tiers dans
+    son tableur, qu'il faut *traduire* en nom de colonne. L'import traduit déjà les
+    types, les vides, l'encodage — traduire un point est de la même famille. Une clé
+    d'appel, elle, est une **adresse** : `data_write({"champ.comment": …})` DÉSIGNE une
+    couche, et se tromper d'adresse est un bug qui doit lever. *Le refus protège le
+    magasin, la traduction protège l'ingestion : ce ne sont pas les mêmes portes.*
+
+    Sans cette traduction, notre convention d'adressage interne — un point désigne une
+    couche — **fuirait jusque dans le fichier du client**, à qui on demanderait de
+    renommer ses colonnes pour se conformer à notre modèle de stockage.
+
+    Trois conditions, et aucune n'est décorative :
+
+    - **dite, jamais silencieuse** — le renommage est rendu à l'appelant, sans quoi il
+      reçoit une colonne qu'il ne peut plus retrouver par le nom qu'il lui a donné ;
+    - **sûre en collision** — si la cible existe déjà (dans le fichier ou au schéma),
+      on REFUSE en nommant les deux plutôt que de fusionner deux colonnes distinctes ;
+    - **déterministe** — le même en-tête donne toujours la même colonne, sinon un
+      second import du même fichier vise d'autres colonnes et duplique.
+
+    Rend `{en-tête d'origine: nom de colonne}`, limité aux en-têtes effectivement
+    traduits. Lève `UploadError` sur collision.
+    """
+    presents = {e for e in entetes if e}
+    traduits, cibles = {}, {}
+    for entete in entetes:
+        if not entete or "." not in entete:
+            continue
+        cible = entete.replace(".", "_")
+        occupee = (cible in presents) or (cible in declarees) or (cible in cibles)
+        if occupee:
+            autre = cibles.get(cible)
+            raise UploadError(
+                400, "entete_en_collision",
+                f"L'en-tête `{entete}` ne peut pas devenir la colonne `{cible}` : "
+                f"ce nom est déjà pris "
+                f"({'par un autre en-tête du fichier, `' + autre + '`' if autre else 'dans le fichier ou au schéma du tableau'}). "
+                "Deux colonnes distinctes seraient fusionnées et l'une écraserait "
+                f"l'autre. Renomme `{entete}` dans le fichier source, puis recharge.")
+        traduits[entete] = cible
+        cibles[cible] = entete
+    return traduits
+
+
+def _parse_rows(data: bytes, fmt: str,
+                declarees: frozenset = frozenset()) -> tuple[list, dict]:
     """Décode le corps d'un upload datastore en lignes (list[dict]). NDJSON (défaut,
-    une ligne = un objet JSON) ou CSV (1re ligne = en-tête). Lève `UploadError`."""
+    une ligne = un objet JSON) ou CSV (1re ligne = en-tête). Lève `UploadError`.
+
+    Rend `(lignes, en-têtes traduits)` — le second est vide hors CSV : le NDJSON
+    porte des CLÉS, pas des étiquettes, et une clé pointée y est une adresse fautive
+    que le store refusera, à raison."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -147,10 +203,12 @@ def _parse_rows(data: bytes, fmt: str) -> list:
     if fmt == "csv":
         import csv
         import io
-        rows = [dict(r) for r in csv.DictReader(io.StringIO(text))]
+        lecteur = csv.DictReader(io.StringIO(text))
+        traduits = traduire_entetes(list(lecteur.fieldnames or []), declarees)
+        rows = [{traduits.get(k, k): v for k, v in r.items()} for r in lecteur]
         if not rows:
             raise UploadError(400, "empty_dataset", "Aucune ligne CSV (en-tête requis).")
-        return rows
+        return rows, traduits
     rows = []
     for i, line in enumerate(text.splitlines(), 1):
         line = line.strip()
@@ -165,7 +223,7 @@ def _parse_rows(data: bytes, fmt: str) -> list:
         rows.append(obj)
     if not rows:
         raise UploadError(400, "empty_dataset", "Aucune ligne NDJSON.")
-    return rows
+    return rows, {}
 
 
 def check_target_access(sub: str, target: dict) -> None:
@@ -252,8 +310,18 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
 
     if kind == "datastore":
         from .datastore import core as ds  # lazy : évite tout cycle d'import au boot
-        rows = _parse_rows(data, target.get("format") or "ndjson")
         store = ds.make_store(sub)
+        # Les colonnes DÉCLARÉES entrent dans la traduction : une cible déjà prise au
+        # schéma est une collision au même titre qu'une cible prise dans le fichier —
+        # l'import écrirait dans une colonne du tableau que le client n'a pas visée.
+        try:
+            _sch = store._schema_of(int(target["ns_id"])) or {}
+        except Exception:
+            _sch = {}
+        _declarees = frozenset(
+            f.get("key") for f in (_sch.get("fields") or []) if isinstance(f, dict))
+        rows, entetes_traduits = _parse_rows(
+            data, target.get("format") or "ndjson", _declarees)
         try:
             out = store._write_rows_to_ns(
                 int(target["ns_id"]), rows, key=target.get("key"))
@@ -261,10 +329,21 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
             raise UploadError(400, "bad_row", str(e))
         # Le chemin de bulk load est celui où le silence coûte le plus cher (#294) :
         # un format renommé + un lot de 500 lignes, et tout atterrit hors schéma.
-        return {"ok": True, "kind": "datastore", "namespace": target.get("namespace"),
+        out_ = {"ok": True, "kind": "datastore", "namespace": target.get("namespace"),
                 "inserted": out["inserted"], "updated": out["updated"],
                 "count": out["count"], "bytes": len(data),
                 **store.off_schema_report()}
+        if entetes_traduits:
+            # Dite, jamais silencieuse : sans cette ligne, le client reçoit une colonne
+            # qu'il ne peut plus retrouver par le nom qu'il lui a donné — exactement le
+            # défaut qu'on ferme côté écriture, rouvert côté import.
+            out_["entetes_traduits"] = entetes_traduits
+            out_["entetes_traduits_hint"] = (
+                "Un point ne peut pas figurer dans un nom de colonne (il y désigne une "
+                "couche). Ces en-têtes ont été traduits : "
+                + ", ".join(f"`{a}` → `{b}`" for a, b in sorted(entetes_traduits.items()))
+                + ". Pour choisir toi-même le nom, renomme la colonne dans le fichier.")
+        return out_
 
     if kind == "image":
         # Le type déclaré (curl, formulaire) n'est jamais cru : `upload_image` le

@@ -131,10 +131,16 @@ def test_materialize_project_file_ignores_curl_default_ct(monkeypatch):
 
 
 def test_parse_rows_ndjson_and_csv():
-    rows = ut._parse_rows(b'{"a":1}\n\n{"a":2}\n', "ndjson")
+    # Depuis #684, `_parse_rows` rend AUSSI les en-têtes traduits : un en-tête de
+    # tableur qui porte un point devient un nom de colonne, et le renommage doit
+    # remonter jusqu'à l'appelant — une traduction silencieuse rendrait au client
+    # une colonne qu'il ne peut plus retrouver par le nom qu'il lui a donné.
+    rows, traduits = ut._parse_rows(b'{"a":1}\n\n{"a":2}\n', "ndjson")
     assert rows == [{"a": 1}, {"a": 2}]
-    rows = ut._parse_rows(b"email,n\na@x,A\nb@y,B\n", "csv")
+    assert traduits == {}
+    rows, traduits = ut._parse_rows(b"email,n\na@x,A\nb@y,B\n", "csv")
     assert rows == [{"email": "a@x", "n": "A"}, {"email": "b@y", "n": "B"}]
+    assert traduits == {}, "aucun en-tête pointé ici, donc rien à signaler"
 
 
 def test_parse_rows_rejects_bad_ndjson():

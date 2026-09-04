@@ -15,7 +15,6 @@ n'a pas d'OAuth.
 """
 from __future__ import annotations
 
-import os
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -24,7 +23,6 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from ..auth import folk as folk_oauth
-from .. import config
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -37,9 +35,6 @@ def make_routes(
     options_handler: Callable[[Request], Awaitable[Response]],
 ) -> list[Route]:
 
-    def _app_url() -> str:
-        return config.dashboard_url()
-
     def _retour(statut: str, sub: "str | None" = None) -> str:
         """Où renvoyer le navigateur après le consentement Folk.
 
@@ -49,13 +44,21 @@ def make_routes(
         callback tient déjà, relu du state signé — donc aucune modification du
         front n'est nécessaire ici.
 
-        Pas de patron chez le tenant ⟹ `None` ⟹ destination historique À L'OCTET
-        PRÈS (`/?folk=<statut>`). On ne bascule PAS sur `redirect_for`, dont le
-        repli générique (`/connectors?connector=…`) changerait l'atterrissage de
-        l'appelant historique."""
+        Convention unique de retour OAuth (oto-backend#670) : `connect=<statut>`
+        rejoint le `connector=folk` déjà servi, via `oauth_flow.avec_connect` —
+        pur ajout, `connector=` ne bouge pas d'un octet.
+
+        Pas de patron chez le tenant ⟹ `None` ⟹ repli sur le fabricant partagé
+        (`connector_return_url`, défaut oto-dashboard `/connectors`). Avant ce lot,
+        ce repli était une f-string À ACCOLADES DOUBLÉES (`f"{{_app_url()}}/?…"`) —
+        une chaîne LITTÉRALE, jamais une URL : un statut qui n'a jamais eu de
+        lecteur n'a rien à préserver, donc rien à doubler ici non plus."""
         from .. import links
+        from ..auth import flow as oauth_flow
         cible = links.link_for("connector_return", sub=sub, connector="folk") if sub else None
-        return cible or f"{{_app_url()}}/?folk={{statut}}"
+        if cible:
+            return oauth_flow.avec_connect(cible, statut)
+        return oauth_flow.connector_return_url(None, "folk", statut)
 
 
 

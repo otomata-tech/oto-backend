@@ -120,3 +120,70 @@ def test_build_sum_requires_field():
     import pytest
     with pytest.raises(ValueError):
         DB._build_aggregate(7, None, [{"op": "sum"}], None, None, 1000)
+
+
+# ── oto#50 : un `group_by` composé se refuse, il ne s'agrège pas sur NULL ──────
+
+def test_un_group_by_compose_est_REFUSE_pas_agrege_sur_null(monkeypatch):
+    """Le fait mesuré : une mission cliente appelle `group_by="lot_test,statut"` et
+    reçoit **200, un unique groupe de clé `null`** contenant toutes ses lignes.
+
+    La chaîne partait telle quelle jusqu'au SQL, où `data->>'lot_test,statut'` vaut
+    NULL sur chaque ligne — donc un seul groupe. C'est la forme la plus coûteuse de la
+    classe oto#42 : l'agent lit « un groupe, clé nulle » et conclut que la donnée est
+    vide ou mal remplie. Il part corriger un tableau qui n'a rien, et rien dans la
+    réponse ne peut le détromper.
+
+    ⚠️ On vérifie que la base n'est même pas INTERROGÉE : un refus qui laisserait
+    partir la requête coûterait le scan, et surtout laisserait croire qu'il existe un
+    chemin où cette forme fonctionne."""
+    appels = []
+    monkeypatch.setattr(D.db, "datastore_aggregate",
+                        lambda *a, **k: appels.append(k) or [])
+    s = D.DatastorePg("u1")
+    monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
+
+    import pytest
+    with pytest.raises(ValueError) as e:
+        s.aggregate("t", group_by="lot_test,statut")
+    msg = str(e.value)
+    assert appels == [], "la requête ne doit pas partir : le refus est AVANT le SQL"
+
+    # Le refus nomme les DEUX gestes possibles — sans quoi il ne fait qu'arrêter.
+    assert "`lot_test`, `statut`" in msg, "les champs demandés sont rendus, un par un"
+    assert "LISTE" in msg, "la forme liste existe et fait autre chose : elle est nommée"
+    assert "fusionne, elle ne croise pas" in msg, (
+        "sans cette phrase, on essaie la liste en croyant obtenir un croisement — "
+        "c'est l'erreur naturelle de qui vient d'écrire une virgule")
+    # Et ce qu'il faudra trancher le jour où quelqu'un le demande vraiment : le refus
+    # ouvre la porte au lieu de la murer.
+    assert "clé jointe, tuple, ou objet" in msg.replace("—", "").replace("  ", " ") \
+        or "clé " in msg and "tuple" in msg
+
+
+def test_un_group_by_SIMPLE_passe_toujours(monkeypatch):
+    """Pas d'écart, pas de refus : le cas nominal ne doit rien coûter. Une garde qui
+    refuserait une virgule dans un nom de champ légitime casserait un usage réel."""
+    seen = {}
+    monkeypatch.setattr(D.db, "datastore_aggregate",
+                        lambda ns_id, **k: seen.update(k) or [{"statut": "ok"}])
+    s = D.DatastorePg("u1")
+    monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
+    s.aggregate("t", group_by="statut")
+    assert seen["group_by"] == "statut"
+
+
+def test_la_forme_LISTE_reste_acceptee(monkeypatch):
+    """⚠️ Le garde-fou du garde-fou. La liste EXISTE et met les valeurs en commun ;
+    le refus ne vise que la chaîne à virgules. Les confondre retirerait une forme
+    servie en croyant fermer un défaut."""
+    seen = {}
+    monkeypatch.setattr(D.db, "datastore_aggregate",
+                        lambda ns_id, **k: seen.update(k) or [])
+    s = D.DatastorePg("u1")
+    monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
+    s.aggregate("t", group_by=["lot_test", "statut"])
+    assert seen["group_by"] == ["lot_test", "statut"]

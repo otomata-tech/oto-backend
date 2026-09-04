@@ -1035,10 +1035,17 @@ def register(mcp: FastMCP) -> None:
         RATE without crossing two calls whose scopes can silently differ. Give such a
         metric a `label`, and it comes back under that name.
 
-        `group_by` also accepts a LIST of columns: their values are pooled, one row
+        `group_by` also accepts a LIST of columns: their values are POOLED, one row
         contributing one occurrence per filled column ("all ranks together"). Under a
         pooled group, `count` counts OCCURRENCES and `count_rows` counts ROWS — two
         different questions, so ask for the one you mean.
+
+        ⚠️ Pooling is NOT a two-dimensional group-by, and `group_by: "a,b"` is not one
+        either — it is REFUSED (oto#50). A comma-separated string used to be read as a
+        single column name containing a comma: no row carries it, so you got 200 with
+        ONE group of key `null` holding every row, and no way to tell that from empty
+        data. Group on one column per call, or pass the list if you meant to pool.
+        Crossing two dimensions is not served yet.
 
         Returns `{results: [...]}` — each entry carries the `group_by` value (when set)
         plus one key per metric (`count`, `sum_<field>`, `avg_<field>`, or `label`).

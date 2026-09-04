@@ -97,7 +97,49 @@ def _resolve_metrics(schema: Optional[dict], metrics):
     return out
 
 
+def _refuse_group_by_compose(group_by) -> None:
+    """`group_by="a,b"` est REFUSÉ, nommé (oto#50).
+
+    Le fait mesuré : une mission cliente appelle `data_aggregate` avec
+    `group_by: "lot_test,statut"` et reçoit **200, un unique groupe de clé `null`
+    contenant toutes les lignes**. La chaîne part telle quelle jusqu'au SQL, où
+    `data->>'lot_test,statut'` vaut NULL sur chaque ligne — donc un seul groupe, et une
+    réponse fausse rendue comme un résultat.
+
+    ⚠️ C'est la forme la plus coûteuse de cette classe : l'agent lit « un groupe, clé
+    nulle » et conclut que la donnée est vide ou mal remplie. Il part corriger un
+    tableau qui n'a rien. Rien dans la réponse ne peut le détromper — un refus, si.
+
+    **Pourquoi refuser plutôt que supporter.** Un vrai groupement à deux dimensions
+    demande de trancher ce qu'est un groupe COMPOSITE dans la réponse servie : une clé
+    jointe (`"a|b"`), un tuple, un objet imbriqué ? Chacune fige une forme qu'aucun
+    consommateur ne pourra plus changer, et personne ne l'a demandée — c'est un lot de
+    conception, pas un correctif. Le refus dit donc aussi ce qu'il faudra trancher le
+    jour où quelqu'un le demandera vraiment : il ouvre la porte au lieu de la murer.
+
+    ⚠️ Ne pas confondre avec la forme LISTE, qui existe et fait autre chose : elle met
+    en commun les valeurs de plusieurs champs sous une même clé, ce n'est pas un
+    groupement à deux dimensions. Le message le dit, parce que c'est l'erreur naturelle
+    de qui vient d'écrire une virgule."""
+    if not isinstance(group_by, str) or "," not in group_by:
+        return
+    champs = [c.strip() for c in group_by.split(",") if c.strip()]
+    cite = ", ".join(f"`{c}`" for c in champs)
+    raise ValueError(
+        f"`group_by=\"{group_by}\"` n'est pas un groupement à deux dimensions — cette "
+        "forme n'existe pas, et sans ce refus elle serait lue comme UN nom de champ "
+        f"contenant une virgule : aucune ligne ne le porte, tu recevrais un unique "
+        "groupe de clé `null` avec toutes tes lignes dedans, en 200. "
+        f"Groupe sur UN champ à la fois ({cite} — un appel chacun), ou passe la LISTE "
+        f"`{champs}` si tu voulais mettre leurs valeurs EN COMMUN sous une même clé "
+        "(ce n'est pas la même chose : la liste fusionne, elle ne croise pas). "
+        "Le groupement croisé n'est pas encore servi : le jour où il le sera, il "
+        "faudra d'abord décider sous quelle forme un groupe composite est rendu — clé "
+        "jointe, tuple, ou objet — parce que ce choix-là ne se défait plus.")
+
+
 def _resolve_group_by(schema: Optional[dict], group_by):
+    _refuse_group_by_compose(group_by)
     if isinstance(group_by, (list, tuple)):
         return [_to_path(schema, k) for k in group_by]
     return _to_path(schema, group_by)

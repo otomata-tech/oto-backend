@@ -411,6 +411,23 @@ donc pas et n'a pas à le faire) ; `_avec_cle` rend une copie ; Sentry a
 `include_local_variables=False` (#564) ; le runner n'a pas de Sentry et ne
 journalise que `job["id"]`.
 
+⚠️ **La clé n'est remise qu'à un compte MARQUÉ worker** (option de compte
+`runner_worker`, posée par un admin plateforme). Sans cette garde — c'est le
+défaut trouvé par dev 1 le 04/09, avant tout dépôt réel — n'importe quel membre
+de l'org faisait `enqueue` puis `claim provider=…` et recevait la clé EN CLAIR :
+la capacité est `ORG_MEMBER`, et **rien dans le protocole ne distingue un worker
+d'un membre**, ils portent le même genre de jeton sur la même route. Un membre
+reçoit désormais son travail SANS clé, sans refus explicite (le refus
+apprendrait qu'il y a une clé à obtenir) mais avec une ligne de journal : un
+membre qui nomme un dépôt cherche quelque chose.
+
+⚠️ **La marque se lit par `access.user_has_option`, jamais `has_option`.** Ce
+dernier répond vrai dès que l'ORG ACTIVE porte le don ou que son plan inclut
+l'option : l'employer ici aurait servi la clé à **tous les membres** de cette
+org — la fuite même que la garde ferme. `user_has_option` est le miroir de
+`org_has_option` : la moitié COMPTE du seam, pour les questions qui portent sur
+l'acteur et sur lui seul.
+
 **Ce qui n'est pas ici** : la grille d'offre — qui a droit à la clé de la
 plateforme, qui doit déposer la sienne. Elle appartient au chantier « qui a le
 droit de quoi et pourquoi », au blueprint. Aujourd'hui, une org sans dépôt

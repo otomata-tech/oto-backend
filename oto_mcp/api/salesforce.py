@@ -29,6 +29,7 @@ import logging
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -100,17 +101,27 @@ def make_routes(
             logger.warning("salesforce callback refusé : %s n'est plus admin du scope "
                            "%s (org=%s group=%s)", sub, scope, org_id, group_id)
             return RedirectResponse(_retour("forbidden", return_app, org_id), status_code=302)
-        try:
+        def _lire_et_echanger() -> dict:
             fields = salesforce_oauth.read_saved_fields(sub, org_id, scope, group_id)
             if not fields:
                 raise RuntimeError("Credential introuvable au retour de Salesforce.")
-            tokens = salesforce_oauth.exchange_code(
+            return salesforce_oauth.exchange_code(
                 code,
                 client_id=fields["client_id"],
                 client_secret=fields["client_secret"],
                 login_url=fields["login_url"],
                 verifier=verifier_pkce,
             )
+
+        try:
+            # DB + HTTP synchrones hors de la boucle : ce handler est
+            # `async def`, et l'échange de code parle à un serveur
+            # distant (15 à 30 s d'attente). Appelé nûment il fige tout
+            # le processus le temps que l'amont réponde
+            # (oto-backend#867). Même forme que le callback Zoho, qui
+            # était déjà protégé — la discipline existait, elle n'avait
+            # simplement pas été appliquée ici.
+            tokens = await run_in_threadpool(_lire_et_echanger)
             result = await salesforce_oauth.persist_token(sub, org_id, scope, tokens, group_id)
         except Exception:
             # Le client ne voit qu'un `?salesforce=error` : sans trace ici, un échec de

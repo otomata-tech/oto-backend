@@ -23,6 +23,7 @@ de bord de la documentation. Le chemin est FIXE et connu du client
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -146,13 +147,22 @@ async def start(connector: str, ctx, values: dict) -> FlowStart:
     ne vivait qu'en commentaire que deux flux ont pu diverger sans que rien ne
     proteste. Un flux qui rend autre chose casse au premier appel, pas au premier
     front qui s'y fie."""
-    out = _FLOWS[connector].start(ctx, values or {})
-    if inspect.isawaitable(out):
+    fabrique = _FLOWS[connector].start
+    if inspect.iscoroutinefunction(fabrique):
         # Un flux peut être ASYNCHRONE — celui d'une messagerie hébergée interroge le
         # fournisseur avant de rendre son lien. Le serveur est mono-loop : ce chemin
-        # réseau doit être attendu, jamais exécuté en bloquant. Les flux synchrones
-        # (les cinq autres) ne passent pas ici et restent inchangés.
-        out = await out
+        # réseau doit être attendu, jamais exécuté en bloquant.
+        out = await fabrique(ctx, values or {})
+    else:
+        # Un flux SYNCHRONE n'est pas inoffensif pour autant : deux d'entre eux
+        # enregistrent dynamiquement un client OAuth chez le fournisseur, en HTTP
+        # bloquant (chemin froid, la première fois seulement). Appelés nûment depuis
+        # cet `async def`, ils figeaient tout le processus le temps de la réponse
+        # (oto-backend#867). Les traiter ICI vaut pour les cinq flux d'un coup —
+        # aucun n'a besoin de le savoir, et le prochain non plus.
+        out = await asyncio.to_thread(fabrique, ctx, values or {})
+        if inspect.isawaitable(out):
+            out = await out
     if not isinstance(out, FlowStart):
         raise TypeError(
             f"le flux « {connector} » doit rendre un FlowStart (reçu {type(out).__name__}) : "

@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -74,9 +75,19 @@ def make_routes(
         if not code or not parsed:
             return RedirectResponse(_retour("error"), status_code=302)
         sub, verifier_pkce = parsed
-        try:
+        def _finir() -> None:
             tokens = folk_oauth.exchange_code(code, verifier_pkce)
             folk_oauth.persist_token(sub, tokens)
+
+        try:
+            # DB + HTTP synchrones hors de la boucle : ce handler est
+            # `async def`, et l'échange de code parle à un serveur
+            # distant (15 à 30 s d'attente). Appelé nûment il fige tout
+            # le processus le temps que l'amont réponde
+            # (oto-backend#867). Même forme que le callback Zoho, qui
+            # était déjà protégé — la discipline existait, elle n'avait
+            # simplement pas été appliquée ici.
+            await run_in_threadpool(_finir)
         # noqa: SILENT — un callback renvoie la personne CHEZ ELLE, sans détailler l'échec
         except Exception:
             # `sub` est connu ici (relu du state) : même un échec renvoie la personne

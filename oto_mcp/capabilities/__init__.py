@@ -75,6 +75,11 @@ from . import unipile_me  # noqa: F401 — me.unipile.{connect,reconcile,status,
 # deux fédérations MCP (atlassian, folkmcp) et Google (multi-compte). Ex-routes écrites
 # à la main ; les CALLBACKS restent écrits à la main (302 sans auth, hors du moule).
 from . import federated_oauth  # noqa: F401 — me.federation.{atlassian,folkmcp,google}.*
+# Statut/déconnexion OAuth GÉNÉRIQUES (oto-dashboard#125) — chemin fixe qui ne nomme pas
+# le connecteur, symétrique de `me.connector_connect` pour les items 2/3 de #125.
+# `me.federation.*` ci-dessus RESTE en place (retrait dans un lot séparé, après bascule
+# du dashboard) : import APRÈS, `oauth_status` réutilise `FederationDisconnected`.
+import oto_mcp.capabilities.connectors.oauth_status  # noqa: F401 — me.connector_{status,disconnect}
 # JETONS API `oto_` + CLÉS PLATEFORME (#121) — ex-routes écrites à la main. Les six
 # routes de jetons portent `RestBinding.allow_api_token=False` : un jeton ne fabrique
 # pas de jeton. C'est ce cran, absent de l'adaptateur jusqu'ici, qui les y retenait.

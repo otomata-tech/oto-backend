@@ -237,6 +237,28 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   construire son URL à partir du nom du connecteur — **dette de front**, pas de backend.
   **Pas de face MCP** : ouvrir une page de consentement demande un navigateur, et le
   pendant agent générique existe (`me.connector_connect`).
+- `GET /api/me/connectors/{name}/oauth-status` + `DELETE /api/me/connectors/{name}/oauth`
+  — **le statut et la déconnexion OAuth GÉNÉRIQUES**, capacités
+  `me.connector_status`/`me.connector_disconnect` (`capabilities/connectors/oauth_status.py`,
+  depuis le 2026-09-04, oto-dashboard#125 items 2/3) : le chemin fixe qui ne nomme pas
+  le connecteur, symétrique de `me.connector_connect` — `{name}` ∈ atlassian, folkmcp,
+  google (les seuls connecteurs OAuth fédérés) ; un autre nom rend `400 no_oauth_status`.
+  ⚠️ **`me.federation.*` ci-dessus RESTE en place** : le retrait est un lot séparé, une
+  fois le dashboard basculé sur ces deux-là (même discipline que #519/#670).
+  **Contrainte 1** (bloquante) : `me.connector_status` dérive `{connected, set_at,
+  health_ko, health_reason}` de la MÊME lecture que `/api/me` (`access.status_for`),
+  JAMAIS d'un second appel à `atlassian_oauth.status_for`/`folk_oauth.status_for`/
+  `google_oauth.list_accounts` qui pourrait diverger. ⚠️ Pour **google** spécifiquement,
+  `access.status_for` ne porte qu'UNE identité par défaut (mono-compte hérité) : ce
+  contrat commun ne rend donc RIEN de spécifique à google au-delà de ces quatre champs —
+  forcer un `accounts` ici recréerait la seconde vérité que la contrainte interdit. La
+  richesse multi-compte reste `connectors.identities` (op=list), hors de ce lot.
+  **Contrainte 2** (décision d'Alexis) : `me.connector_disconnect` est **irréversible,
+  en UN SEUL appel** — révoque chez le fournisseur quand le mécanisme le permet
+  (reprend EXACTEMENT `federated_oauth._federation()._disconnect`/`._google_revoke`) et
+  DANS TOUS LES CAS retire la ligne locale, jamais d'état intermédiaire « en attente de
+  confirmation ». Sortie `FederationDisconnected{ok, disconnected}`, réutilisée telle
+  quelle. **Pas de face MCP** sur les deux (`mcp=None`, comme `me.federation.*`).
 - `GET|POST|DELETE /api/admin/connectors/activation` + `GET|POST /api/admin/connectors/{provider}/platform-access`
   — **le palier PLATEFORME des connecteurs**, capacités
   `platform.connector.{activation_list,activation_set,activation_clear,access_list,access_set}`

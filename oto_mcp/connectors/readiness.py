@@ -126,12 +126,21 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
             f"{_account_url(sub)} pour continuer sans limite, ou reprends demain."))
 
     # Couche 2 (suite) — la clé résout, mais le FOURNISSEUR l'a refusée. Le verdict
-    # existait déjà en base (`meta.health_ko`, écrit par `oto_instance op=verify`) et
-    # n'avait aucun lecteur ici : une clé révoquée rendait `ready: true`, et son
-    # porteur n'apprenait le refus qu'au premier appel, sous la forme du message brut
-    # de l'amont (#541, org sur `linear` : « AUTHENTICATION_ERROR: Authentication
-    # required, not authenticated »). APRÈS `no_credential` à dessein — dire « rejetée »
-    # d'une clé qui n'existe pas enverrait reposer ce qu'on n'a jamais posé.
+    # existait déjà en base (`meta.health_ko`) et n'avait aucun lecteur ici : une clé
+    # révoquée rendait `ready: true`, et son porteur n'apprenait le refus qu'au premier
+    # appel, sous la forme du message brut de l'amont (#541, org sur `linear` :
+    # « AUTHENTICATION_ERROR: Authentication required, not authenticated »). APRÈS
+    # `no_credential` à dessein — dire « rejetée » d'une clé qui n'existe pas enverrait
+    # reposer ce qu'on n'a jamais posé.
+    #
+    # ⚠️ `meta.health_ko` a TROIS écrivains depuis oto#25 lot (a) (2026-09-04), pas un
+    # seul : la sonde `oto_instance op=verify` (couverture large, mais rien à lire tant
+    # que personne ne l'a rejouée) ; et `access_token_for` d'`auth/atlassian.py` /
+    # `auth/folk.py`, qui marquent leur PROPRE ligne au refresh raté, sans passer par
+    # `verify` — c'est le mécanisme qui rend `credential_rejected` observable pour ces
+    # deux connecteurs alors qu'ils n'ont toujours aucune sonde `verify` enregistrée
+    # (oto-backend#876). Ce diagnostic-ci lit le résultat, quel qu'en soit l'écrivain :
+    # ça n'a jamais eu à changer pour ça, et c'est le point.
     rejet = access.credential_rejection_for(sub, connector, org=org, group=group)
     if rejet:
         ou = (f"Repose-la sur {_account_url(sub)} (section {porteur.capitalize()})."

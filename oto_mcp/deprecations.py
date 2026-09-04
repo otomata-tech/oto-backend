@@ -91,7 +91,8 @@ RETRAIT = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
 
 
 # ── Retour OAuth : convention unifiée (lot oto-backend#670) ─────────────────
-# Un second renommage de surface, INDÉPENDANT du couple doctrine→guide ci-dessus :
+# Un second renommage de surface, INDÉPENDANT du couple `ANNONCE`/`RETRAIT` du
+# renommage de vocabulaire ci-dessus (#519) :
 # la query string du retour après consentement OAuth (`?connector=<nom>&connect=
 # connected|error|forbidden`, généralisée depuis la forme salesforce) remplace
 # cinq conventions locales — dont deux replis cassés (atlassian, folk). zoho et

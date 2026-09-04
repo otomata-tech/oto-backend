@@ -189,7 +189,10 @@ def test_google_state_carries_org(monkeypatch):
     monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "test-secret")
     from oto_mcp.auth import google as google_oauth
     state = google_oauth.make_state("u1", 42)
-    assert google_oauth.verify_state(state) == ("u1", 42)
+    # Le troisième membre est le front de retour (oto-backend#877) : vide quand la
+    # demande vient du dashboard d'oto. Ce test-ci porte sur l'ORG, qui doit
+    # continuer de voyager à l'identique.
+    assert google_oauth.verify_state(state) == ("u1", 42, "")
     # un state sans org (format pré-B3) est refusé, pas interprété org-agnostique
     import base64, hashlib, hmac as hm, json as js
     payload = js.dumps({"sub": "u1", "ts": 10**10}, separators=(",", ":")).encode()

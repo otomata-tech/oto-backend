@@ -73,7 +73,8 @@ def make_routes(
 
     # --- Google OAuth ----------------------------------------------------
 
-    def _retour(etat: str, *, legacy: bool = False) -> str:
+    def _retour(etat: str, *, legacy: bool = False, app: str = "",
+                org: int | None = None) -> str:
         """Où renvoyer le navigateur après le consentement Google.
 
         Convention unique de retour OAuth (oto-backend#670) : le suffixe vient du
@@ -88,6 +89,22 @@ def make_routes(
         from ..auth import flow as oauth_flow
         suffix = oauth_flow.connector_return_suffix(
             "google", etat, legacy=("google", etat) if legacy else None)
+        # Le front qui a DEMANDÉ la connexion, porté par le state signé depuis
+        # oto-backend#877. Sans lui, le retour partait sur le front d'oto en dur :
+        # un utilisateur venu d'un front tiers atterrissait chez nous après avoir
+        # consenti. Le callback arrive DEPUIS Google, sans en-tête ni session — il
+        # ne peut rien re-dériver, seul le state sait.
+        #
+        # ⚠️ Le chemin du défaut reste `/console/connectors`, composé ici à la main.
+        # Le fabricant partagé rendrait `/connectors` — et sa docstring compte
+        # pourtant google parmi ses usagers. La divergence est ANTÉRIEURE à ce lot :
+        # la trancher veut dire savoir laquelle des deux routes le dashboard sert
+        # vraiment, ce qui ne se lit pas d'ici. On n'y touche pas — corriger un
+        # retour cassé en cassant celui qui marche serait un mauvais échange.
+        if app:
+            return oauth_flow.connector_return_url(
+                app, "google", etat, org=org,
+                legacy=("google", etat) if legacy else None)
         return f"{_app_url()}/console/connectors{suffix}"
 
     async def google_oauth_callback(request: Request) -> Response:
@@ -102,7 +119,7 @@ def make_routes(
         if not parsed:
             logger.warning("google oauth callback: state illisible/expiré")
             return RedirectResponse(url=_retour("error"), status_code=302)
-        sub, org_id = parsed
+        sub, org_id, return_app = parsed
 
         def _finish() -> None:
             tokens = google_oauth.exchange_code(code)
@@ -116,15 +133,15 @@ def make_routes(
             logger.warning("google oauth callback: échange sans réponse au-delà "
                            "de %ss (sub=%s org=%s)", _OAUTH_EXCHANGE_TIMEOUT_S,
                            sub, org_id)
-            return RedirectResponse(url=_retour("error"), status_code=302)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
         except Exception:
             logger.exception("google oauth callback en échec (sub=%s org=%s)",
                              sub, org_id)
-            return RedirectResponse(url=_retour("error"), status_code=302)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
         # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
         # `datastore` n'est plus Google Sheets (ADR 0016, PG natif) → ex-signal
         # `?datastore=connected` retiré.
-        return RedirectResponse(url=_retour("connected", legacy=True), status_code=302)
+        return RedirectResponse(url=_retour("connected", legacy=True, app=return_app, org=org_id), status_code=302)
 
 
 

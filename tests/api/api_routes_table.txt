@@ -164,6 +164,8 @@ POST /api/admin/users/{sub}/suspension -> _handler
 OPTIONS /api/admin/users/{sub}/suspension -> options_handler
 POST /api/admin/outreach -> _handler
 OPTIONS /api/admin/outreach -> options_handler
+POST /api/admin/instances/{instance_id:int}/health -> _handler
+OPTIONS /api/admin/instances/{instance_id:int}/health -> options_handler
 GET,HEAD /api/admin/vault/health -> _handler
 OPTIONS /api/admin/vault/health -> options_handler
 GET,HEAD /api/admin/tenants/{slug}/admins -> _handler

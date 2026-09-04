@@ -124,6 +124,57 @@ class FinalizeResult(NamedTuple):
     warning: str = ""
 
 
+async def sonder(connector: str, context_id: str, account: str = "") -> "Verdict":
+    """Exécute la sonde de login d'un connecteur sur un contexte DONNÉ — y compris
+    celui de quelqu'un d'autre (oto-backend#863).
+
+    Le manque qu'elle comble : quand une personne signale que son connecteur à session
+    ne marche plus, la première question du support est « sa session est-elle encore
+    vivante ? », et de la réponse dépend tout le reste — soit elle n'a rien à faire,
+    soit elle doit refaire son login. Jusqu'ici aucune surface n'y répondait pour un
+    tiers : un outil résout toujours le credential de CELUI QUI L'APPELLE. La seule
+    voie était de se connecter à la machine de production et de piloter le navigateur
+    à la main, avec un script écrit à chaud. Vécu le 2026-09-03 : six relances d'une
+    connexion dont la session avait toujours été valide.
+
+    ⚠️ **Ce qu'elle ne fait PAS, et c'est le cœur de sa conception.** Elle n'exécute
+    que la sonde DÉCLARÉE par le connecteur (`_REGISTRY`) — jamais une requête choisie
+    par l'appelant. Ce serait un « agir en tant que » générique, c'est-à-dire convertir
+    une porte qui exige aujourd'hui un accès à la machine de production en une porte
+    qu'un jeton d'administration ouvre à distance. Le jour où ce jeton fuit, tous les
+    accès utilisateurs deviendraient exploitables de n'importe où. La lourdeur du
+    chemin serveur EST un garde-fou : elle fait qu'on n'y recourt pas à la légère, et
+    les cas qui dépassent la sonde y restent, avec leur friction assumée.
+
+    Elle ne rend donc qu'un `Verdict` — connecté ou non, et pourquoi. Aucune donnée
+    métier ne remonte par ce chemin, parce qu'aucune n'est lue.
+
+    ⚠️ La session ouverte est ÉPHÉMÈRE et refermée dans tous les cas : elle existe le
+    temps de la question. Une session laissée ouverte sur le contexte d'un tiers serait
+    exactement l'accès persistant que ce lot refuse de créer.
+
+    `ProbeUnavailable` remonte telle quelle : « je ne sais pas » n'est pas « pas
+    logué », et les confondre est ce qui a coûté une matinée le 2026-09-03."""
+    verify = _REGISTRY.get(connector)
+    if verify is None:
+        raise SessionError(f"{connector} n'est pas un connecteur à session navigateur.")
+    if not browserbase.is_configured():
+        raise ProbeUnavailable("substrat navigateur non configuré sur cette instance")
+    sess = browserbase.start_session(context_id, keep_alive=False, timeout=120)
+    try:
+        return (await verify(sess["id"], account) if connector in _ACCOUNT_AWARE
+                else await verify(sess["id"]))
+    finally:
+        try:
+            browserbase.release_session(sess["id"])
+        except Exception as e:                                   # noqa: BLE001
+            # Le verdict est déjà acquis ; une fermeture ratée ne doit pas l'effacer.
+            # Mais elle se JOURNALISE : une session non refermée sur le contexte d'un
+            # tiers est précisément ce qu'on s'interdit de laisser derrière soi.
+            logger.error("sonde %s : session %s non refermée : %s",
+                         connector, sess.get("id"), e)
+
+
 def _prune(now: float) -> None:
     for k, exp in list(_PENDING.items()):
         if exp < now:

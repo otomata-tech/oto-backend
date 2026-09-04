@@ -140,12 +140,21 @@ def test_le_callback_ramene_au_front_tiers(_echange_ok):
     assert "connect=connected" in url, "la convention de retour de #670 doit tenir"
 
 
-def test_le_callback_sans_front_declare_reste_chez_nous(_echange_ok):
-    """Le comportement d'avant, préservé : rien ne change pour qui vient du
-    dashboard d'oto."""
+def test_le_callback_sans_front_declare_ramene_sur_une_route_QUI_EXISTE(_echange_ok):
+    """Le défaut passe par le fabricant partagé, comme les quatre autres.
+
+    Il composait `/console/connectors` à la main — un chemin absent du dashboard
+    (mesuré le 04/09 : ses routes sont `/connectors`, `/my-connectors`,
+    `/library/connectors`, `/org/connectors`, `/team/connectors`). Un consentement
+    réussi déposait donc la personne sur un 404 : panne silencieuse, puisque
+    l'autorisation avait bien eu lieu. Le test d'avant figeait ce chemin mort —
+    un banc peut protéger une erreur aussi bien qu'une garantie."""
     etat = google_oauth.make_state("sub-1", 42)
     url = asyncio.run(_callback()(_requete(f"code=c&state={etat}"))).headers["location"]
-    assert "/console/connectors" in url and "tulina" not in url
+    chemin = urllib.parse.urlsplit(url).path
+    assert chemin == "/connectors", chemin
+    assert "console" not in url and "tulina" not in url
+    assert "connect=connected" in url
 
 
 def test_un_echec_ramene_AUSSI_au_front_tiers(monkeypatch):
@@ -167,7 +176,8 @@ def test_un_state_illisible_ne_peut_que_retomber_sur_le_defaut():
     le state ne se relit pas, on ignore d'où vient la personne. Il n'existe aucun
     autre porteur — le callback vient de Google, sans en-tête ni session."""
     url = asyncio.run(_callback()(_requete("code=c&state=nimportequoi"))).headers["location"]
-    assert "/console/connectors" in url and "connect=error" in url
+    assert urllib.parse.urlsplit(url).path == "/connectors"
+    assert "connect=error" in url
 
 
 def test_les_deux_fronts_ne_partagent_que_le_suffixe(_echange_ok):

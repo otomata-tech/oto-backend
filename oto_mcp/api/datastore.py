@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -50,10 +49,6 @@ AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 # (exchange_code + persist_token→_fetch_email, deux appels HTTP synchrones 15s
 # chacun ; voir google.py::_client_for_user_async pour la même justification).
 _OAUTH_EXCHANGE_TIMEOUT_S = 30
-
-
-def _app_url() -> str:
-    return os.environ.get("OTO_APP_URL", "https://app.oto.ninja").rstrip("/")
 
 
 def make_routes(
@@ -87,25 +82,24 @@ def make_routes(
         un statut qui n'a jamais existé n'a pas de lecteur à préserver, donc PUR
         AJOUT ici, aligné sur les quatre autres connecteurs."""
         from ..auth import flow as oauth_flow
-        suffix = oauth_flow.connector_return_suffix(
-            "google", etat, legacy=("google", etat) if legacy else None)
+
         # Le front qui a DEMANDÉ la connexion, porté par le state signé depuis
         # oto-backend#877. Sans lui, le retour partait sur le front d'oto en dur :
         # un utilisateur venu d'un front tiers atterrissait chez nous après avoir
         # consenti. Le callback arrive DEPUIS Google, sans en-tête ni session — il
         # ne peut rien re-dériver, seul le state sait.
         #
-        # ⚠️ Le chemin du défaut reste `/console/connectors`, composé ici à la main.
-        # Le fabricant partagé rendrait `/connectors` — et sa docstring compte
-        # pourtant google parmi ses usagers. La divergence est ANTÉRIEURE à ce lot :
-        # la trancher veut dire savoir laquelle des deux routes le dashboard sert
-        # vraiment, ce qui ne se lit pas d'ici. On n'y touche pas — corriger un
-        # retour cassé en cassant celui qui marche serait un mauvais échange.
-        if app:
-            return oauth_flow.connector_return_url(
-                app, "google", etat, org=org,
-                legacy=("google", etat) if legacy else None)
-        return f"{_app_url()}/console/connectors{suffix}"
+        # Le DÉFAUT passe par le même fabricant (`app` vide ⟹ base et chemin
+        # d'oto). Il composait `/console/connectors` à la main — un chemin qui
+        # n'existe nulle part dans le dashboard : mesuré le 04/09, ses routes sont
+        # `/connectors`, `/my-connectors`, `/library/connectors`, `/org/connectors`
+        # et `/team/connectors`. Un consentement réussi déposait donc la personne
+        # sur un 404, panne silencieuse puisque l'autorisation, elle, avait bien eu
+        # lieu — exactement le mode d'échec déjà vu sur le patron d'un front tiers
+        # (cf. le commentaire de `RETURN_APPS`).
+        return oauth_flow.connector_return_url(
+            app, "google", etat, org=org,
+            legacy=("google", etat) if legacy else None)
 
     async def google_oauth_callback(request: Request) -> Response:
         # Pas d'auth Logto — Google redirige depuis le navigateur user.

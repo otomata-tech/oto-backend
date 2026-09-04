@@ -333,6 +333,28 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
 _OPTION_WORKER = "runner_worker"
 
 
+def _depot_pose(org_id: int, depot: str) -> bool:
+    """Cette org a-t-elle DÉPOSÉ cette clé — présence seule, sans déchiffrer.
+
+    Sert à décider s'il y a quelque chose à refuser, donc quelque chose à dire.
+    `has_credential` lit la présence du chiffré (`secret_enc IS NOT NULL`) : le
+    secret n'est jamais touché pour écrire une ligne de journal.
+
+    `account=""` — le mono-compte, exactement ce que la remise lit : signaler un
+    refus sur un dépôt qu'on n'aurait de toute façon pas servi serait un faux.
+    """
+    from .. import credentials_store, providers
+    c = providers.connector_for_provider(depot)
+    if not c or c.kind != "credential":
+        return False
+    try:
+        return credentials_store.has_credential("org", str(org_id), depot, account="")
+    except Exception:
+        logger.warning("présence du dépôt `%s` illisible pour l'org %s",
+                       depot, org_id, exc_info=True)
+        return False
+
+
 def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
@@ -356,12 +378,21 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
         return job
     if not access.user_has_option(appelant, _OPTION_WORKER):
         # Silencieux POUR L'APPELANT — il reçoit son travail, sans clé : un refus
-        # explicite apprendrait qu'il y a une clé à obtenir. Bruyant pour NOUS :
-        # un membre qui nomme un dépôt cherche quelque chose.
-        logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
-                       "ce compte ne porte pas `%s`",
-                       depot, appelant, job.get("org_id"), job.get("id"),
-                       _OPTION_WORKER)
+        # explicite apprendrait qu'il y a une clé à obtenir.
+        #
+        # ⚠️ Et silencieux pour NOUS AUSSI tant qu'il n'y a RIEN À REFUSER. Ce
+        # journal n'a de sens que si l'org a effectivement déposé une clé :
+        # sinon le travail serait parti sans clé de toute façon, et la ligne ne
+        # décrit aucun événement. Sans ce filtre, les workers eux-mêmes — qui
+        # nomment leur dépôt à CHAQUE réservation, toutes les 15 s, à trois —
+        # écrivaient ~17 000 lignes par jour tant que la marque n'était pas
+        # posée. Un journal qu'on cesse de lire ne protège plus rien, et c'est
+        # la sonde qui aurait fabriqué son propre signal.
+        if _depot_pose(job["org_id"], depot):
+            logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
+                           "ce compte ne porte pas `%s`",
+                           depot, appelant, job["org_id"], job.get("id"),
+                           _OPTION_WORKER)
         return job
     cle = _cle_de_modele(job["org_id"], depot)
     if not cle:

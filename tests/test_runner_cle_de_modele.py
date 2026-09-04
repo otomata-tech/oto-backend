@@ -46,7 +46,11 @@ def _coffre(monkeypatch):
         demandes.append((entity_type, entity_id, connector))
         return {"anthropic": "sk-de-l-org", "folk": "secret-folk-de-l-org"}.get(connector)
 
+    def _has(entity_type, entity_id, connector, account=None):
+        return connector in ("anthropic", "folk")
+
     monkeypatch.setattr(credentials_store, "get_credential", _get)
+    monkeypatch.setattr(credentials_store, "has_credential", _has)
     return demandes
 
 
@@ -186,12 +190,41 @@ def test_un_membre_ordinaire_recoit_son_travail_SANS_la_cle(_coffre):
 
 def test_le_refus_est_muet_pour_l_appelant_et_ecrit_pour_nous(_coffre, caplog):
     """Un refus explicite apprendrait qu'il y a une clé à obtenir. Mais un membre
-    qui nomme un dépôt cherche quelque chose : ça, ça se journalise."""
+    qui nomme un dépôt RÉELLEMENT POSÉ cherche quelque chose : ça, ça se
+    journalise."""
     with caplog.at_level("WARNING"):
         job = _servi({"id": 2, "org_id": 42}, "anthropic", appelant=_MEMBRE)
     assert "error" not in job and "detail" not in job
     assert "REFUSÉE" in caplog.text and _MEMBRE in caplog.text
     assert "sk-de-l-org" not in caplog.text, "jamais la clé dans un journal"
+
+
+def test_sans_depot_pose_le_refus_ne_dit_RIEN(_coffre, caplog):
+    """⚠️ Le journal ne décrit un événement que s'il y a quelque chose à refuser.
+    Sans dépôt, le travail serait parti sans clé de toute façon — et les workers
+    eux-mêmes, qui nomment leur dépôt à chaque réservation, écriraient des
+    milliers de lignes par jour tant que la marque n'est pas posée. Une sonde qui
+    fabrique son propre signal fait cesser de lire le journal."""
+    with caplog.at_level("WARNING"):
+        _servi({"id": 5, "org_id": 42}, "mistral", appelant=_MEMBRE)
+    assert caplog.text == ""
+
+
+def test_vingt_reservations_sans_depot_ne_laissent_aucune_ligne(_coffre, caplog):
+    """Le volume, mesuré plutôt qu'espéré : c'est le régime réel de la production
+    tant que la marque n'est pas posée."""
+    with caplog.at_level("WARNING"):
+        for i in range(20):
+            _servi({"id": 100 + i, "org_id": 42}, "mistral", appelant=_MEMBRE)
+    assert caplog.text.count("REFUSÉE") == 0
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        for i in range(20):
+            _servi({"id": 200 + i, "org_id": 42}, "anthropic", appelant=_MEMBRE)
+    assert caplog.text.count("REFUSÉE") == 20, (
+        "quand il y a une clé, chaque tentative se voit — c'est le signal qu'on "
+        "veut garder")
 
 
 def test_la_marque_est_une_propriete_de_COMPTE_pas_d_ORG(monkeypatch, _coffre):

@@ -365,6 +365,9 @@ def _write_refusal(e: Exception) -> AuthzDenied:
     return AuthzDenied(400, "invalid_row_input", str(e))
 
 
+_ECRITURE_DETRUIT = (' ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne ouverte il n\'y a ni annulation ni historique, la valeur précédente disparaît au moment où la vôtre arrive. Le seul filet est le format `origine: "system"`, et il est plus étroit qu\'il n\'y paraît — la plateforme garde la valeur précédente UNE fois, à la première écriture qui CHANGE la valeur APRÈS la déclaration de ce format. Une colonne sans ce format ne garde rien ; un format déclaré tard capture ce que le dernier écrivain a laissé, qui peut être la valeur d\'un autre agent, présentée sous le nom `origine`. La face d\'appel n\'y change rien : une ligne créée ici et une ligne créée par l\'outil agent se comportent à l\'identique.')
+
+
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     ns, _ = _adresse(ctx, inp.namespace, ligne=False)
     _verifier_contenu(inp.row)
@@ -500,7 +503,7 @@ CAPABILITIES += [
         description=("Ajoute une ligne à un tableau (le corps EST la ligne). "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé."),
+                     "et journalisé." + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.get_row",
@@ -523,7 +526,7 @@ CAPABILITIES += [
         description=("Modifie une ligne (patch partiel ; le corps EST le patch). "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé."),
+                     "et journalisé." + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.delete_row",

@@ -150,14 +150,14 @@ def register(mcp: FastMCP) -> None:
                 _need(external_reference, "external_reference", op))
             return found if found else {"found": False}
         if op == "create":
-            return _ecrit(c.create_customer(
+            return _ecrit(lambda: c.create_customer(
                 name=_need(name, "name", op), emails=emails,
                 address=_need(address, "address", op),
                 postal_code=_need(postal_code, "postal_code", op),
                 city=_need(city, "city", op), country_alpha2=country_alpha2,
                 external_reference=external_reference), "la création de client")
         if op == "update":
-            return _ecrit(c.update_customer(_need(customer_id, "customer_id", op),
+            return _ecrit(lambda: c.update_customer(_need(customer_id, "customer_id", op),
                                             **(fields or {})),
                           "la mise à jour de client")
         raise _bad("op doit être 'list', 'find', 'create' ou 'update'")
@@ -270,28 +270,28 @@ def register(mcp: FastMCP) -> None:
                 customer_invoice_template_id=customer_invoice_template_id,
                 draft=True)
             if op == "create":
-                return _ecrit(c.create_customer_invoice(**kwargs), "la création de facture")
-            note = _ecrit(c.create_credit_note(**kwargs), "la création d'avoir")
+                return _ecrit(lambda: c.create_customer_invoice(**kwargs), "la création de facture")
+            note = _ecrit(lambda: c.create_credit_note(**kwargs), "la création d'avoir")
             if credited_invoice_id:
                 note_id = note.get("id") or (note.get("customer_invoice") or {}).get("id")
                 if not note_id:
                     return {"credit_note": note,
                             "link": "NON posé : id de l'avoir introuvable dans la réponse"}
                 return {"credit_note": note,
-                        "link": _ecrit(c.link_credit_note(credited_invoice_id, note_id),
+                        "link": _ecrit(lambda: c.link_credit_note(credited_invoice_id, note_id),
                                        "le rattachement de l'avoir à sa facture")}
             return note
         if op == "update":
-            return _ecrit(c.update_invoice(_need(invoice_id, "invoice_id", op),
+            return _ecrit(lambda: c.update_invoice(_need(invoice_id, "invoice_id", op),
                                            **(fields or {})), "la mise à jour de facture")
         if op == "finalize":
-            return _ecrit(c.finalize_invoice(_need(invoice_id, "invoice_id", op)),
+            return _ecrit(lambda: c.finalize_invoice(_need(invoice_id, "invoice_id", op)),
                           "la finalisation de facture")
         if op == "send":
-            return _ecrit(c.send_invoice(_need(invoice_id, "invoice_id", op)),
+            return _ecrit(lambda: c.send_invoice(_need(invoice_id, "invoice_id", op)),
                           "l'envoi de facture")
         if op == "delete":
-            return _ecrit(c.delete_invoice(_need(invoice_id, "invoice_id", op)),
+            return _ecrit(lambda: c.delete_invoice(_need(invoice_id, "invoice_id", op)),
                           "la suppression de facture")
         raise _bad("op doit être 'list', 'find', 'create', 'credit_note', 'update', "
                    "'finalize', 'send' ou 'delete'")
@@ -324,7 +324,7 @@ def register(mcp: FastMCP) -> None:
         if op == "list":
             return c.list_suppliers(max_pages=max_pages)
         if op == "create":
-            return _ecrit(c.create_supplier(_need(name, "name", op), **(fields or {})),
+            return _ecrit(lambda: c.create_supplier(_need(name, "name", op), **(fields or {})),
                           "la création de fournisseur")
         raise _bad("op doit être 'list' ou 'create'")
 
@@ -382,7 +382,7 @@ def register(mcp: FastMCP) -> None:
         if op == "list":
             return c.get_supplier_invoices(max_pages=max_pages)
         if op == "import":
-            return _ecrit(c.import_supplier_invoice(
+            return _ecrit(lambda: c.import_supplier_invoice(
                 file_attachment_id=_need(file_attachment_id, "file_attachment_id", op),
                 supplier_id=_need(supplier_id, "supplier_id", op),
                 date=_need(date, "date", op), deadline=_need(deadline, "deadline", op),
@@ -417,7 +417,7 @@ def register(mcp: FastMCP) -> None:
             rf = file_source.resolve(source)
         except file_source.FileSourceError as e:
             raise _bad(str(e))
-        res = _ecrit(
+        res = _ecrit(lambda: 
             _client().upload_file_bytes(rf.data, rf.filename, rf.mime or "application/pdf"),
             "le dépôt de fichier")
         if not res.get("id"):
@@ -483,5 +483,5 @@ def register(mcp: FastMCP) -> None:
             transaction_id: ID de la transaction bancaire.
             invoice_type: "customer" (ventes) ou "supplier" (achats).
         """
-        return _ecrit(_client().match_transaction(invoice_id, transaction_id, invoice_type),
+        return _ecrit(lambda: _client().match_transaction(invoice_id, transaction_id, invoice_type),
                       "le rapprochement banque/facture")

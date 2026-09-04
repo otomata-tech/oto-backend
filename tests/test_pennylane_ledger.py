@@ -120,8 +120,10 @@ def test_create_refuse_un_champ_requis_manquant_avant_tout_appel(client, manquan
 def test_un_refus_de_creation_leve_au_lieu_de_remonter_en_valeur(client):
     """Le geste le plus engageant du connecteur : un refus lu comme un succès
     laisserait croire qu'une écriture est passée."""
-    client.create_ledger_entry.return_value = {
-        "error": "422", "details": "Entry lines are not balanced", "status_code": 422}
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    client.create_ledger_entry.side_effect = UpstreamHTTPError(
+        422, "Entry lines are not balanced", service="pennylane")
     with pytest.raises(McpError, match="Entry lines are not balanced"):
         _tool("pennylane_ledger_entry")(op="create", date="2026-09-04", label="OD",
                                         journal_id=5, lines=[{}])

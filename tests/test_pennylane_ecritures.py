@@ -49,12 +49,19 @@ VERBES_ECRITURE = ("create_", "update_", "finalize_", "send_", "delete_",
 def _ecritures_nues(source: str) -> list[tuple[str, int]]:
     arbre = ast.parse(source)
 
+    # Seule la forme DIFFÉRÉE garde quoi que ce soit. Depuis oto-core#77 le client
+    # lève sur refus, et `_ecrit(c.create(…))` évaluerait l'appel AVANT d'entrer
+    # dans la garde : l'exception passerait à côté. L'ancienne forme est donc
+    # refusée, pas tolérée — elle ressemble à une garde sans en être une, ce qui
+    # est pire que pas de garde du tout.
     enveloppes = set()
     for n in ast.walk(arbre):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                 and n.func.id == "_ecrit" and n.args
-                and isinstance(n.args[0], ast.Call)):
-            enveloppes.add(id(n.args[0]))
+                and isinstance(n.args[0], ast.Lambda)):
+            for sous in ast.walk(n.args[0].body):
+                if isinstance(sous, ast.Call):
+                    enveloppes.add(id(sous))
 
     nues = []
     for n in ast.walk(arbre):
@@ -72,7 +79,7 @@ def test_aucune_ecriture_ne_contourne_la_traduction_du_refus():
     assert not nues, (
         "Ces appels engagent la comptabilité et rendent un refus de Pennylane comme "
         "une valeur ordinaire : l'agent enchaînera dessus en croyant avoir écrit. "
-        "Envelopper dans `_ecrit(<appel>, \"<le geste, en clair>\")` — "
+        "Envelopper dans `_ecrit(lambda: <appel>, \"<le geste, en clair>\")` — "
         + ", ".join(f"{nom} (ligne {ligne})" for nom, ligne in nues))
 
 
@@ -89,7 +96,17 @@ def test_le_detecteur_voit_une_ecriture_laissee_nue():
 def test_le_detecteur_laisse_passer_une_ecriture_enveloppee():
     """L'autre sens : un détecteur qui crie sur tout ne dit rien non plus."""
     assert _ecritures_nues(
-        "def f(c):\n    return _ecrit(c.create_thing(1), 'x')\n") == []
+        "def f(c):\n    return _ecrit(lambda: c.create_thing(1), 'x')\n") == []
+
+
+def test_le_detecteur_refuse_la_forme_non_differee():
+    """`_ecrit(c.create(…))` évalue l'appel AVANT d'entrer dans la garde : le
+    refus levé par le client passe à côté. Ça ressemble à une garde, ça n'en est
+    pas une — et une fausse garde est pire que pas de garde, parce qu'elle se
+    relit comme protégée."""
+    assert _ecritures_nues(
+        "def f(c):\n    return _ecrit(c.create_thing(1), 'x')\n") == [
+        ("create_thing", 2)]
 
 
 def test_le_detecteur_ne_confond_pas_une_lecture_avec_une_ecriture():
@@ -123,6 +140,15 @@ def _tool(nom: str):
     return asyncio.run(m.get_tool(nom)).fn
 
 
+def _refus(statut: int, detail: str):
+    """Un refus tel que le VRAI client le produit : une exception portant son
+    statut. Le double doit échouer comme l'original, sinon l'épreuve valide un
+    chemin qui n'existe pas."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    return UpstreamHTTPError(statut, detail, service="pennylane")
+
+
 GESTES = [
     ("pennylane_invoice", {"op": "finalize", "invoice_id": 1}, "finalize_invoice"),
     ("pennylane_invoice", {"op": "send", "invoice_id": 1}, "send_invoice"),
@@ -134,9 +160,11 @@ GESTES = [
 
 
 @pytest.mark.parametrize("tool,kwargs,methode", GESTES)
-def test_un_refus_leve_au_lieu_de_remonter_en_valeur(client, tool, kwargs, methode):
-    getattr(client, methode).return_value = {
-        "error": "422", "details": "Entry lines are not balanced", "status_code": 422}
+def test_un_refus_remonte_traduit_et_non_brut(client, tool, kwargs, methode):
+    """Le client LÈVE désormais (oto-core#77). La garde doit donc capter cette
+    exception et la traduire pour l'agent — sinon elle remonte telle quelle,
+    classée mais muette sur ce qu'il faut faire."""
+    getattr(client, methode).side_effect = _refus(422, "Entry lines are not balanced")
     with pytest.raises(McpError, match="Entry lines are not balanced"):
         _tool(tool)(**kwargs)
 
@@ -153,8 +181,7 @@ def test_un_droit_manquant_dit_ou_lire_les_droits_de_la_cle(client):
     """403 : le périmètre d'une clé est propre à qui l'a posée, et rien ne le
     montre avant l'échec. Le message doit envoyer l'agent le lire, sinon il
     rejoue à l'identique ou conclut à une panne."""
-    client.match_transaction.return_value = {
-        "error": "403", "details": "insufficient scope", "status_code": 403}
+    client.match_transaction.side_effect = _refus(403, "insufficient scope")
     with pytest.raises(McpError) as e:
         _tool("pennylane_match")(invoice_id=1, transaction_id=2)
     msg = str(e.value)

@@ -52,13 +52,14 @@ def test_delete_requires_invoice_id(client):
 
 
 def test_delete_raises_on_pennylane_refusal(client):
-    """Un document déjà finalisé : Pennylane répond une erreur (pas une
-    exception) — elle doit remonter actionnable, jamais passer pour un succès
-    silencieux."""
-    client.delete_invoice.return_value = {
-        "error": "422", "details": "Only drafts can be deleted",
-        "status_code": 422,
-    }
+    """Un document déjà finalisé : Pennylane refuse. Depuis oto-core#77 le client
+    LÈVE, et la garde du connecteur traduit — le refus doit remonter actionnable,
+    jamais passer pour un succès silencieux. Le double échoue comme le vrai,
+    sinon l'épreuve validerait un chemin qui n'existe plus."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    client.delete_invoice.side_effect = UpstreamHTTPError(
+        422, "Only drafts can be deleted", service="pennylane")
     with pytest.raises(McpError, match="Only drafts can be deleted"):
         _tool("pennylane_invoice")(op="delete", invoice_id=99)
 

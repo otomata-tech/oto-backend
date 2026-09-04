@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import billing_vat
 
@@ -108,17 +110,28 @@ def client():
     return PennylaneClient(api_key=key, field_filter=FieldFilter())
 
 
-def _ok(result: Any, what: str) -> dict:
-    """Un retour du client oto-core, ou une exception NOMMÉE.
+def _ok(appel: Callable[[], Any], what: str) -> dict:
+    """EXÉCUTE un appel Pennylane et rend son retour, ou lève une exception NOMMÉE.
 
-    `PennylaneClient.post/put` rendent `{"error", "details", "status_code"}` plutôt
-    que de lever — sans ce passage obligé, un refus 422 se lirait comme une facture
-    dont l'id est simplement absent."""
-    if isinstance(result, dict) and result.get("error"):
+    Le passage obligé prend une fonction, pas un résultat : depuis oto-core#77 le
+    client LÈVE sur refus amont, et une exception levée dans l'argument n'aurait
+    jamais atteint un contrôle placé après l'appel. Le geste doit donc se produire
+    ici, sous la garde.
+
+    Tout ce qui remonte du fournisseur est traduit en `PennylaneUnavailable`, avec
+    sa cause nommée : c'est ce que la chaîne d'émission attend, et rien d'autre ne
+    l'arrête proprement."""
+    try:
+        result = appel()
+    except PennylaneUnavailable:
+        raise
+    except UpstreamHTTPError as e:
         raise PennylaneUnavailable(
             "pennylane_error",
-            f"{what} — HTTP {result.get('status_code') or '?'} : "
-            f"{str(result.get('details') or result.get('error'))[:300]}")
+            f"{what} — HTTP {e.status_code} : {str(e.body)[:300]}") from e
+    except RuntimeError as e:
+        # Refus sans statut HTTP : réseau, débit limité, corps illisible.
+        raise PennylaneUnavailable("pennylane_error", f"{what} — {e}") from e
     if not isinstance(result, dict):
         raise PennylaneUnavailable("pennylane_bad_response",
                                    f"{what} — réponse inattendue ({type(result).__name__})")
@@ -186,12 +199,12 @@ def sync_customer(org_id: int, identity: dict) -> int:
         cid = int(found["id"])
         # Le client existe : on remet à jour ce qui a pu bouger depuis (raison
         # sociale, n° de TVA). Une facture doit porter l'identité COURANTE.
-        _ok(c.update_customer(cid, **{k: v for k, v in champs.items() if v}),
+        _ok(lambda: c.update_customer(cid, **{k: v for k, v in champs.items() if v}),
             f"mise à jour du client Pennylane {cid}")
         return cid
 
     emails = [identity["billing_email"]] if identity.get("billing_email") else None
-    cree = _ok(c.create_customer(
+    cree = _ok(lambda: c.create_customer(
         name=champs["name"], emails=emails, address=_address(identity),
         postal_code=identity.get("postal_code"), city=identity.get("city"),
         country_alpha2=identity.get("country_code") or "FR",
@@ -202,7 +215,7 @@ def sync_customer(org_id: int, identity: dict) -> int:
                                    f"client {ref} créé sans id")
     cid = int(cid)
     if champs["vat_number"]:
-        _ok(c.update_customer(cid, vat_number=champs["vat_number"]),
+        _ok(lambda: c.update_customer(cid, vat_number=champs["vat_number"]),
             f"n° de TVA du client Pennylane {cid}")
     return cid
 
@@ -262,13 +275,13 @@ def create_document(*, kind: str, customer_id: int, date: str, deadline: str,
     # `create_credit_note` inverse lui-même le signe des quantités : la nature
     # « avoir » est structurelle côté oto-core, jamais laissée à l'appelant.
     fn = c.create_credit_note if kind == "credit_note" else c.create_customer_invoice
-    return _ok(fn(**args), f"création du document {external_reference}")
+    return _ok(lambda: fn(**args), f"création du document {external_reference}")
 
 
 def finalize(invoice_id: int) -> dict:
     """Fige le document : c'est la finalisation qui lui donne son NUMÉRO (la
     numérotation continue appartient à Pennylane) et son PDF."""
-    return _ok(client().finalize_invoice(invoice_id),
+    return _ok(lambda: client().finalize_invoice(invoice_id),
                f"finalisation du document {invoice_id}")
 
 
@@ -278,7 +291,7 @@ def link_credit_note(invoice_id: int, credit_note_id: int) -> None:
     terminaison est le seul lien qui fonctionne. Un lien qui échoue ne perd pas
     l'avoir : il est émis, seule la liaison manque, et on le DIT."""
     try:
-        _ok(client().link_credit_note(invoice_id, credit_note_id),
+        _ok(lambda: client().link_credit_note(invoice_id, credit_note_id),
             f"liaison de l'avoir {credit_note_id} à la facture {invoice_id}")
     except PennylaneUnavailable as e:
         logger.error("facturation: avoir %s émis mais NON lié à la facture %s — %s",

@@ -105,14 +105,14 @@ def register(mcp: FastMCP) -> None:
             return c.get_lettered_lines(_need(line_id, "line_id", op),
                                         max_pages=max_pages)
         if op == "create":
-            return _ecrit(c.create_ledger_entry(
+            return _ecrit(lambda: c.create_ledger_entry(
                 date=_need(date, "date", op), label=_need(label, "label", op),
                 journal_id=_need(journal_id, "journal_id", op),
                 ledger_entry_lines=_need(lines, "lines", op),
                 due_date=due_date, currency=currency, piece_number=piece_number),
                 "la création d'écriture comptable")
         if op == "update":
-            return _ecrit(c.update_ledger_entry(_need(entry_id, "entry_id", op),
+            return _ecrit(lambda: c.update_ledger_entry(_need(entry_id, "entry_id", op),
                                                 **(fields or {})),
                           "la correction d'écriture comptable")
         raise _bad("op doit être 'list', 'get', 'lines', 'lettered', 'create' "
@@ -151,11 +151,11 @@ def register(mcp: FastMCP) -> None:
         """
         c = _client()
         if op == "set":
-            return _ecrit(
+            return _ecrit(lambda: 
                 c.letter_ledger_entry_lines(line_ids, unbalanced_lettering_strategy),
                 "le lettrage de lignes du grand livre")
         if op == "unset":
-            return _ecrit(
+            return _ecrit(lambda: 
                 c.unletter_ledger_entry_lines(line_ids, unbalanced_lettering_strategy),
                 "le délettrage de lignes du grand livre")
         raise _bad("op doit être 'set' ou 'unset'")

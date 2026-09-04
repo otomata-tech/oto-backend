@@ -695,8 +695,9 @@ def credential_health(entity_type: str, entity_id: str, connector: str,
     bien (ou n'existe pas). Lecture SANS déchiffrer — même patron qu'`instance_suspended`,
     et pour la même raison : c'est un chemin de statut, il n'a rien à faire du secret.
 
-    `meta.health_ko` / `meta.health_reason` sont écrits par la sonde
-    `oto_instance op=verify` (`capabilities/connectors/verify._record_health`). Ils
+    `meta.health_ko` / `meta.health_reason` sont écrits par l'aide partagée
+    `connectors/health.py` (`record_health`/`mark_rejected`, oto#25 lot b2 — extraite
+    de `capabilities/connectors/verify.py`, son seul écrivain jusque-là). Ils
     n'avaient jusqu'au 2026-09-03 qu'un seul lecteur, `access.status_for`, qui ne
     regarde QUE les clés de palier MEMBRE : le verdict porté par une clé d'ORG — le
     seul palier possible d'un connecteur `byo_org` only comme `linear` — n'était lu

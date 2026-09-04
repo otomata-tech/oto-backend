@@ -15,6 +15,7 @@ from ...mcp_errors import McpError
 from pydantic import BaseModel, ConfigDict
 
 from ... import access, credentials_store, status_hints
+from ...connectors import health as connector_health
 from ...connectors import verify as connector_verify
 from .._authz import ORG_ADMIN, ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
@@ -101,11 +102,6 @@ def _ref(entity_type: "str | None", entity_id: "str | None", provider: str) -> s
     return f"{entity_type}:{entity_id}:{provider}"
 
 
-# Paliers dont on accepte de FLAGUER la clé : ceux dont la portée ne dépasse pas l'org
-# de celui qui sonde. `tenant` et `platform` en sont exclus — cf. `_fields_config_scope`.
-_FLAGGABLE = (credentials_store.MEMBER, "group", "org")
-
-
 def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict, "tuple | None", dict, "tuple | None"]:
     """(champs, config, SCOPE-santé, INSTANCE sondée, CIBLE d'écriture) selon le niveau.
 
@@ -145,7 +141,7 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
     )
     etype, eid = getattr(rc, "entity_type", None), getattr(rc, "entity_id", None)
     scope = ((etype, eid, getattr(rc, "account", "") or "")
-             if etype in _FLAGGABLE and eid else None)
+             if etype in connector_health.FLAGGABLE_SCOPES and eid else None)
     # `level` et `ref` sont DÉRIVÉS de la même source — l'entité — pour qu'ils ne
     # puissent pas se contredire. La version précédente exposait `rc.mode`, dont le
     # vocabulaire diffère (`user` là où l'entité, le `ref` et `oto_instance op=list`
@@ -156,26 +152,6 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
     # plateforme, qui n'a pas de ligne de coffre à réécrire.
     cible = (etype, eid, getattr(rc, "account", "") or "") if etype else None
     return rc.fields, rc.config, scope, instance, cible
-
-
-def _record_health(provider: str, scope: "tuple | None", ok: bool, error: "str | None") -> None:
-    """Persiste l'état de santé du credential testé (`meta.health_ko` + raison) — lu par
-    `status_for` (fiche) et, depuis #541, par `access.credential_rejection_for`, donc par
-    le verdict `ready` de la carte connecteur. Merge (n'écrase rien), best-effort.
-    `scope=None` (clé partagée au-delà de l'org) → on ne flague pas.
-
-    ⚠️ Le COMPTE fait partie de la cible : sur un connecteur multi-compte, écrire sur
-    `account=""` flaguerait une autre ligne que celle qu'on vient de tester — verdict
-    invisible d'un côté, calomnie de l'autre."""
-    if scope is None:
-        return
-    try:
-        credentials_store.update_meta(
-            scope[0], scope[1], provider, scope[2],
-            {"health_ko": (not ok), "health_reason": (error if not ok else None)})
-    # noqa: SILENT — dette déclarée : le flag de santé non écrit devrait se journaliser (#424, verdict C)
-    except Exception:  # noqa: BLE001 — la santé est un bonus, jamais bloquant
-        pass
 
 
 async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
@@ -209,7 +185,11 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
         ok = False
         error = e.error.message if isinstance(e, McpError) else str(e)
     # La sonde EST le « health check » (read facile) → son verdict alimente le flag santé.
-    _record_health(inp.provider, scope, ok, error)
+    # `record_health` = aide partagée (`connectors/health.py`, oto#25 lot b2) : mêmes
+    # deux lignes qu'avant sous `_record_health`, extraites pour que d'autres modules
+    # (atlassian, folk, salesforce, zoho) réutilisent la MÊME garde de portée sans la
+    # redéfinir chacun de leur côté.
+    connector_health.record_health(inp.provider, scope, ok, error)
     out = {"ok": ok, "provider": inp.provider,
            "elapsed_ms": int((time.monotonic() - started) * 1000),
            # QUELLE instance a répondu — cf. `_fields_config_scope`.

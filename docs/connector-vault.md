@@ -623,6 +623,40 @@ PAS observable (`oto_instance op=verify`, faute de sonde enregistrée et d'un wa
 sache lire ce scope) dans `connector-model.md` §« Purge silencieuse des mounts OAuth ».
 Changement de comportement **servi** — à annoncer avant tag.
 
+### L'aide partagée, généralisée à salesforce/zoho (oto#25 lot b2, 2026-09-04)
+
+Le mécanisme du lot (a) était PRIVÉ à `capabilities/connectors/verify.py`
+(`_FLAGGABLE` + `_record_health`, sous ces noms). Extrait en module public
+`connectors/health.py` — `FLAGGABLE_SCOPES` (member/group/org, **et** le scope
+LEGACY `user` : aussi étroit que member, un seul utilisateur, jamais atteint par la
+cascade de `verify`) + `record_health` (utilisé par `verify.py`, démarque aussi sur
+succès) + `mark_rejected` (la façade neuve : un module qui connaît son ENTITÉ
+directement, sans passer par `ResolvedCtx`). `verify.py`, `auth/atlassian.py` et
+`auth/folk.py` appellent maintenant ce module au lieu de leurs anciennes
+définitions/appels directs à `credentials_store.update_meta` — même comportement,
+un seul endroit qui sait marquer une ligne rejetée.
+
+Deux connecteurs NEUFS rejoignent le mécanisme : `tools/salesforce.py` et
+`tools/zoho.py` marquent désormais leur ligne au refus du REFRESH
+(`SalesforceAuthError`/`ZohoAuthError`, exceptions **typées** que lève le CLIENT
+oto-core — jamais un 401 nu d'un geste applicatif ordinaire, ex. permission
+manquante sur un enregistrement précis avec une clé par ailleurs saine), PUIS
+RE-LÈVENT toujours l'exception d'origine — marquer n'est jamais un fallback qui
+avale l'erreur réelle. `tools/zoho.py` bascule au passage de
+`access.resolve_credential_fields("zoho")` vers
+`access.resolve_credential("zoho", want="byo")` (mêmes champs, plus l'entité
+gagnante — nécessaire pour marquer la bonne ligne).
+
+**`google` reste explicitement EXCLU de ce lot** : un WIP concurrent touche son
+retour OAuth (`auth/google.py`) au moment du lot b2 — à faire une fois ce WIP
+stabilisé, dans un lot séparé.
+
+Le **démarquage** (b3, à venir) n'est pas de ce lot : `record_health` sait déjà
+démarquer sur `ok=True` (comportement de `verify.py`, inchangé), mais aucun des
+appels neufs (`mark_rejected`) ne l'utilise — un connecteur qui a marqué une ligne
+rejetée au tool ne se démarque aujourd'hui QUE par `oto_instance op=verify` réussi,
+ou une clé reposée.
+
 ## Validation
 
 Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetable (docker)** + revue adversariale par phase. Migrations idempotentes au boot (`init_db` : ALTER additifs, PK 4-col, backfills, encrypt-existing, drop-plaintext gaté).

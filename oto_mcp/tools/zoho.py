@@ -2,9 +2,10 @@
 
 Credential = OAuth2 (self-client) à 3 secrets : client_id + client_secret +
 refresh_token → modèle générique multi-champs (ADR 0011), résolu par appel via
-`access.resolve_credential_fields("zoho")`. byo_user (pas de quota plateforme :
-le credential EST le grant). Le token d'accès est dérivé/caché en mémoire côté
-client.
+`access.resolve_credential("zoho", want="byo")` (l'ENTITÉ gagnante, pas seulement
+les champs — oto#25 lot b2 : elle sert à marquer une ligne rejetée sur un grant mort,
+`ZohoAuthError` au refresh). byo_user (pas de quota plateforme : le credential EST
+le grant). Le token d'accès est dérivé/caché en mémoire côté client.
 
 **Surface consolidée (ADR 0047 §Amendement, appliqué au connecteur zoho)** : un tool
 par OBJET métier, le verbe en paramètre `op` — `zoho_record` (list/get/search/create/
@@ -14,6 +15,7 @@ les deux autres consomment) et dépend d'un scope OAuth distinct (settings vs da
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Literal, Optional
 
 import requests
@@ -24,6 +26,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, providers, status_hints
 from ..auth import zoho as zoho_oauth
 from ..connectors import flow as connector_flow
+from ..connectors import health as connector_health
 from ..connectors import verify as connector_verify
 
 # Modules CRM standard sondés pour prouver un scope de LECTURE réel (au moins un
@@ -262,10 +265,16 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
 
 def register(mcp: FastMCP) -> None:
     connector_verify.register("zoho", _verify)
+    from oto.tools.zoho import ZohoAuthError
     from oto.tools.zoho.client import ZohoClient
 
-    def _client() -> ZohoClient:
-        creds = access.resolve_credential_fields("zoho")
+    def _client() -> tuple[ZohoClient, "access.ResolvedCredential"]:
+        # `resolve_credential(want="byo")` — pas `resolve_credential_fields`, qui n'en
+        # est qu'une vue mince (mêmes champs, cascade user > groupe > org identique,
+        # cf. `access/views.py`) — parce qu'on a besoin de l'ENTITÉ gagnante pour
+        # marquer une ligne rejetée (oto#25 lot b2, `rc` rendu à l'appelant).
+        rc = access.resolve_credential("zoho", want="byo")
+        creds = rc.fields
         # Connexion en DEUX temps : l'app peut être posée sans que le consentement ait
         # été donné (pas de refresh_token). Partir quand même produisait un échec OAuth
         # opaque au premier appel ; on rend l'ÉTAPE MANQUANTE, avec le libellé unique de
@@ -274,13 +283,29 @@ def register(mcp: FastMCP) -> None:
         if not state.complete:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=state.next_action))
         api_domain, accounts_url = _resolve_dc_domains(creds.get("data_center"))
-        return ZohoClient(
+        client = ZohoClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             refresh_token=creds.get("refresh_token"),
             api_domain=api_domain,
             accounts_url=accounts_url,
         )
+        return client, rc
+
+    @contextmanager
+    def _marks_rejection(rc):
+        """Sur `ZohoAuthError` (refus du REFRESH — grant mort ; jamais un 401 nu d'un
+        geste applicatif ordinaire, avec une clé par ailleurs saine — cf.
+        `oto.tools.zoho.auth`, seul point qui la lève), marque la ligne DE COFFRE
+        réellement servie rejetée (`connectors.health.mark_rejected`, même garde de
+        portée que `verify`), PUIS RE-LÈVE — marquer n'est jamais un fallback qui
+        avale l'erreur réelle (oto#25 lot b2)."""
+        try:
+            yield
+        except ZohoAuthError as e:
+            connector_health.mark_rejected(
+                rc.entity_type, rc.entity_id, "zoho", rc.account, str(e))
+            raise
 
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
@@ -302,8 +327,10 @@ def register(mcp: FastMCP) -> None:
         the settings scope added.
         """
         from oto.tools.common.errors import UpstreamHTTPError
+        client, rc = _client()
         try:
-            return {"modules": _client().list_modules()}
+            with _marks_rejection(rc):
+                return {"modules": client.list_modules()}
         except UpstreamHTTPError as e:
             if "OAUTH_SCOPE_MISMATCH" in str(e.body):
                 raise McpError(ErrorData(code=INVALID_PARAMS, message=(
@@ -348,25 +375,26 @@ def register(mcp: FastMCP) -> None:
             fields: op="list" — comma-separated field names. Optional — a sensible
                 default set is used per known module if omitted.
         """
-        client = _client()
+        client, rc = _client()
 
-        if op == "list":
-            return client.list_records(module, page=page, per_page=per_page,
-                                       fields=fields)
-        if op == "get":
-            return client.get_record(module, _need(record_id, "record_id", op))
-        if op == "search":
-            return client.search_records(module, _need(criteria, "criteria", op),
-                                         page=page, per_page=per_page)
-        if op == "create":
-            return client.create_record(module, _need(data, "data", op))
-        if op == "update":
-            return client.update_record(module, _need(record_id, "record_id", op),
-                                        _need(data, "data", op))
-        if op == "delete":
-            return client.delete_record(module, _need(record_id, "record_id", op))
-        raise _bad("op doit être 'list', 'get', 'search', 'create', 'update' "
-                   "ou 'delete'")
+        with _marks_rejection(rc):
+            if op == "list":
+                return client.list_records(module, page=page, per_page=per_page,
+                                           fields=fields)
+            if op == "get":
+                return client.get_record(module, _need(record_id, "record_id", op))
+            if op == "search":
+                return client.search_records(module, _need(criteria, "criteria", op),
+                                             page=page, per_page=per_page)
+            if op == "create":
+                return client.create_record(module, _need(data, "data", op))
+            if op == "update":
+                return client.update_record(module, _need(record_id, "record_id", op),
+                                            _need(data, "data", op))
+            if op == "delete":
+                return client.delete_record(module, _need(record_id, "record_id", op))
+            raise _bad("op doit être 'list', 'get', 'search', 'create', 'update' "
+                       "ou 'delete'")
 
     @mcp.tool()
     def zoho_note(
@@ -389,12 +417,13 @@ def register(mcp: FastMCP) -> None:
             title: op="create" — the note title.
             content: op="create" — the note body.
         """
-        client = _client()
+        client, rc = _client()
 
-        if op == "list":
-            return {"notes": client.list_notes(module, record_id)}
-        if op == "create":
-            return client.create_note(module, record_id,
-                                      _need(title, "title", op),
-                                      _need(content, "content", op))
-        raise _bad("op doit être 'list' ou 'create'")
+        with _marks_rejection(rc):
+            if op == "list":
+                return {"notes": client.list_notes(module, record_id)}
+            if op == "create":
+                return client.create_note(module, record_id,
+                                          _need(title, "title", op),
+                                          _need(content, "content", op))
+            raise _bad("op doit être 'list' ou 'create'")

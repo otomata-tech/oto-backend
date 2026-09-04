@@ -36,6 +36,7 @@ from typing import Optional
 from .. import credentials_store
 from . import pkce as oauth2_pkce, flow as oauth_flow
 from ..connectors import flow as connector_flow
+from ..connectors import health as connector_health
 from ..connectors import link as connector_link
 
 _AUTH_URL = "https://app.folk.app/oauth/authorize"
@@ -215,15 +216,14 @@ def access_token_for(sub: str) -> Optional[str]:
             # Grant mort : NE PURGE PLUS le credential (oto#25 lot a) — effacer la
             # ligne rendait « révoqué » indiscernable de « jamais posé », un repli qui
             # masque un problème plutôt que de le nommer. On MARQUE rejetée à la
-            # place : même mécanisme que la sonde `verify` d'un connecteur keyé
-            # (`capabilities/connectors/verify._record_health` → `meta.health_ko` +
-            # `meta.health_reason`), motif fournisseur BRUT en valeur de champ (pas la
-            # seule catégorie opaque `credential_rejected`). La ligne — et le refresh
-            # token mort qu'elle porte encore — reste en place ; elle se lève en la
-            # reposant (reconnexion : `persist_token` écrase `meta`, cf. plus haut).
-            credentials_store.update_meta(
-                "user", sub, _CONNECTOR, "",
-                {"health_ko": True, "health_reason": str(e) or None})
+            # place, via l'aide PARTAGÉE (oto#25 lot b2, `connectors/health.py`) — même
+            # mécanisme et même garde de portée que la sonde `verify` d'un connecteur
+            # keyé, motif fournisseur BRUT en valeur de champ (pas la seule catégorie
+            # opaque `credential_rejected`). La ligne — et le refresh token mort qu'elle
+            # porte encore — reste en place ; elle se lève en la reposant (reconnexion :
+            # `persist_token` écrase `meta`, cf. plus haut).
+            connector_health.mark_rejected(
+                credentials_store.USER, sub, _CONNECTOR, "", str(e) or None)
             return None
         access_token = resp["access_token"]
         new_refresh = resp.get("refresh_token", cred["secret"])  # rotation possible

@@ -65,10 +65,14 @@ def make_routes(
         milliseconde du callback, zéro erreur), et faute du moindre signe ils ont
         désinstallé puis réinstallé le connecteur en boucle pendant cinq heures.
         Nom générique : une clé nommée d'après un connecteur obligerait chaque surface
-        à en connaître le nom, exactement ce qu'on retire partout ailleurs."""
+        à en connaître le nom, exactement ce qu'on retire partout ailleurs.
+
+        Salesforce EST la forme cible (oto-backend#670) : `connector_return_url`
+        (le fabricant partagé) ne fait ici que ce que cette fonction composait déjà
+        à la main — aucun changement de comportement, salesforce n'a rien à doubler."""
         from ..auth import flow as oauth_flow
-        return oauth_flow.return_url(
-            return_app, f"?connector=salesforce&connect={etat}", org=org_id)
+        return oauth_flow.connector_return_url(
+            return_app, "salesforce", etat, org=org_id)
 
     async def callback(request: Request) -> Response:
         # Salesforce redirige ici (pas d'auth Logto) — l'identité + le scope

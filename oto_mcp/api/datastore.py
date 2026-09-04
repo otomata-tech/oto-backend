@@ -16,10 +16,19 @@ NAVIGATEUR de l'utilisateur : pas d'en-tête d'auth (l'identité vient du `state
 HMAC-signé), et la réponse est une **302** vers la page connecteurs, pas du JSON. Or
 `_rest_adapter` authentifie toujours et répond toujours en JSON. Il est hors du moule
 par construction, et classé par NATURE comme les autres callbacks OAuth.
+
+**oto-backend#670** : le succès portait `?google=connected` en dur, et l'échec ne
+redirigeait pas du tout (JSON brut 400/502/504) — deux formes hors de la convention
+unique suivie par les quatre autres connecteurs (`?connector=<nom>&connect=<etat>`).
+Le succès DOUBLE désormais les deux formes (`?google=connected` reste, le dashboard
+le lit) ; l'échec REDIRIGE avec `connect=error` — pur ajout, rien à doubler puisque
+rien n'existait à cette place. Le diagnostic (state illisible, timeout, échange
+refusé) va au journal, plus jamais dans le corps de la réponse.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Awaitable, Callable
 
@@ -30,6 +39,8 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from ..auth import google as google_oauth
+
+logger = logging.getLogger(__name__)
 
 
 # Type alias for the auth helper passed in from api_routes.
@@ -62,6 +73,22 @@ def make_routes(
 
     # --- Google OAuth ----------------------------------------------------
 
+    def _retour(etat: str, *, legacy: bool = False) -> str:
+        """Où renvoyer le navigateur après le consentement Google.
+
+        Convention unique de retour OAuth (oto-backend#670) : le suffixe vient du
+        fabricant partagé `oauth_flow.connector_return_suffix`. `legacy=True`
+        double l'ancienne forme `?google=connected` — encore lue par le dashboard
+        aujourd'hui — le temps du préavis (`deprecations.dans_le_preavis_retour_oauth`).
+
+        Les branches d'ÉCHEC (`legacy=False`, le défaut) ne redirigeaient PAS du
+        tout avant ce lot — un JSON brut 400/502/504 à la place. Rien à doubler :
+        un statut qui n'a jamais existé n'a pas de lecteur à préserver, donc PUR
+        AJOUT ici, aligné sur les quatre autres connecteurs."""
+        from ..auth import flow as oauth_flow
+        suffix = oauth_flow.connector_return_suffix(
+            "google", etat, legacy=("google", etat) if legacy else None)
+        return f"{_app_url()}/console/connectors{suffix}"
 
     async def google_oauth_callback(request: Request) -> Response:
         # Pas d'auth Logto — Google redirige depuis le navigateur user.
@@ -69,10 +96,12 @@ def make_routes(
         code = request.query_params.get("code")
         state = request.query_params.get("state")
         if not code or not state:
-            return json_error(request, 400, "missing_code_or_state")
+            logger.warning("google oauth callback: code ou state absent")
+            return RedirectResponse(url=_retour("error"), status_code=302)
         parsed = google_oauth.verify_state(state)
         if not parsed:
-            return json_error(request, 400, "invalid_state")
+            logger.warning("google oauth callback: state illisible/expiré")
+            return RedirectResponse(url=_retour("error"), status_code=302)
         sub, org_id = parsed
 
         def _finish() -> None:
@@ -84,15 +113,18 @@ def make_routes(
             await asyncio.wait_for(run_in_threadpool(_finish),
                                    timeout=_OAUTH_EXCHANGE_TIMEOUT_S)
         except asyncio.TimeoutError:
-            return json_error(request, 504,
-                              f"oauth_exchange_timeout: no response within "
-                              f"{_OAUTH_EXCHANGE_TIMEOUT_S}s")
-        except Exception as e:
-            return json_error(request, 502, f"oauth_exchange_failed: {e}")
+            logger.warning("google oauth callback: échange sans réponse au-delà "
+                           "de %ss (sub=%s org=%s)", _OAUTH_EXCHANGE_TIMEOUT_S,
+                           sub, org_id)
+            return RedirectResponse(url=_retour("error"), status_code=302)
+        except Exception:
+            logger.exception("google oauth callback en échec (sub=%s org=%s)",
+                             sub, org_id)
+            return RedirectResponse(url=_retour("error"), status_code=302)
         # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
         # `datastore` n'est plus Google Sheets (ADR 0016, PG natif) → ex-signal
         # `?datastore=connected` retiré.
-        return RedirectResponse(url=f"{_app_url()}/console/connectors?google=connected", status_code=302)
+        return RedirectResponse(url=_retour("connected", legacy=True), status_code=302)
 
 
 

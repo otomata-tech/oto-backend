@@ -203,6 +203,22 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   fournisseur) restent écrits à la main et le resteront : le fournisseur y redirige le
   NAVIGATEUR (302, sans en-tête d'auth), or l'adaptateur authentifie toujours et répond
   en JSON — hors du moule par construction.
+  ⚠️ **LA convention de retour, après ce consentement, est UNIQUE depuis
+  oto-backend#670** : `?connector=<nom>&connect=connected|error|forbidden`, généralisée
+  depuis la forme salesforce et fabriquée une seule fois
+  (`auth.flow.connector_return_suffix`/`connector_return_url`) plutôt que composée à la
+  main dans chaque callback — c'était le cas avant ce lot, avec cinq formes différentes
+  et deux replis cassés (une f-string à accolades doublées sur atlassian/folk, qui
+  rendait une chaîne littérale au lieu d'une URL). `zoho` et `google` servaient déjà un
+  suffixe LU par le dashboard (`?zoho=connected`, `?google=connected`) : il coexiste
+  avec le neuf dans la MÊME redirection, le temps d'un préavis distinct de celui du
+  renommage doctrine→guide (`deprecations.ANNONCE_RETOUR_OAUTH`/`RETRAIT_RETOUR_OAUTH`,
+  `docs/alias-deprecies.md`) — **la date de retrait n'est PAS encore fixée** : elle ne
+  peut être posée qu'au tag qui met ce lot en production (main = preprod), pas avant ;
+  tant qu'elle est absente, le doublage reste actif sans discontinuer. `atlassian` et
+  `folkmcp` gagnent `connect=` en pur ajout (leur `connector=` déjà servi ne bouge pas) ;
+  ils ne servaient AUCUNE distinction succès/échec avant ce lot (le repli cassé rendait
+  toujours la même destination), donc rien n'y avait de lecteur à préserver.
   **Deux familles, pas trois.** `atlassian` et `folkmcp` fédèrent un MCP distant (jeton
   per-user au coffre, injecté par `tools/mount.py`) : leur surface est identique au champ
   près, et cette symétrie est **contractuelle** — le dashboard les pilote par un client

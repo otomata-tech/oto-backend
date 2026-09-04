@@ -44,7 +44,8 @@ def make_routes(
     def _app_url() -> str:
         return config.dashboard_url()
 
-    def _retour(suffix: str, return_app: str = "", org_id: "int | None" = None) -> str:
+    def _retour(etat: str, return_app: str = "", org_id: "int | None" = None,
+               connector: str = "zoho") -> str:
         """Où renvoyer le navigateur après le consentement Zoho.
 
         `return_app` = le front qui a DEMANDÉ la connexion, relu du state signé (`""`
@@ -55,8 +56,20 @@ def make_routes(
 
         Le défaut reste `/console/connectors` À L'OCTET PRÈS : c'est un chemin propre
         au dashboard, que le patron générique `return_url` ne connaît pas — y
-        retomber renverrait l'appelant historique sur `/connectors`."""
+        retomber renverrait l'appelant historique sur `/connectors`.
+
+        Convention unique de retour OAuth (oto-backend#670) : le suffixe vient
+        maintenant du fabricant partagé `oauth_flow.connector_return_suffix`, qui
+        DOUBLE l'ancienne forme `?<connector>=connected` / `?zoho=error` — encore
+        lue par le dashboard aujourd'hui — le temps du préavis. `connector` par
+        défaut à `"zoho"` : c'est la valeur historique servie quand le state est
+        illisible (avant ce lot, l'échec portait TOUJOURS `?zoho=error`, même pour
+        zohodesk/zohoanalytics) — un choix qu'on préserve pour la forme héritée
+        SEULEMENT ; la forme neuve porte, elle, le connecteur réellement connecté."""
         from ..auth import flow as oauth_flow
+        legacy_cle = connector if etat == "connected" else "zoho"
+        suffix = oauth_flow.connector_return_suffix(
+            connector, etat, legacy=(legacy_cle, etat))
         if oauth_flow.resolve_return_app(return_app):
             return oauth_flow.return_url(return_app, suffix, org=org_id)
         return f"{_app_url()}/console/connectors{suffix}"
@@ -66,8 +79,9 @@ def make_routes(
         state = request.query_params.get("state")
         parsed = zoho_oauth.verify_state(state) if state else None
         if not code or not parsed:
-            # State illisible : ni `return_app` ni `org` (ils vivent dedans).
-            return RedirectResponse(_retour("?zoho=error"),
+            # State illisible : ni `return_app` ni `org` (ils vivent dedans), ni le
+            # connecteur réel — `_retour` retombe sur son défaut ("zoho").
+            return RedirectResponse(_retour("error"),
                                     status_code=302)
 
         def _finish() -> None:
@@ -88,11 +102,12 @@ def make_routes(
             # le diagnostic va au journal, sans secret (#284).
             logger.warning("zoho oauth callback failed: %s", type(e).__name__)
             return RedirectResponse(
-                _retour("?zoho=error", parsed["return_app"], parsed["org"]),
+                _retour("error", parsed["return_app"], parsed["org"],
+                        parsed["connector"]),
                 status_code=302)
         return RedirectResponse(
-            _retour(f"?{parsed['connector']}=connected",
-                    parsed["return_app"], parsed["org"]),
+            _retour("connected", parsed["return_app"], parsed["org"],
+                    parsed["connector"]),
             status_code=302)
 
     return [Route("/api/zoho/oauth/callback", callback, methods=["GET"])]

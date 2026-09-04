@@ -146,10 +146,13 @@ _NOMMES_TOLERES = {
     # quittés dès le 01/09. `me.federation.google.start` RESTE : mesuré à 2 appels/30j
     # dans la même fenêtre, donc pas mort — la mesure tranche route par route, jamais
     # par famille de connecteur.
+    #
+    # ⚠️ `.disconnect` d'atlassian/folkmcp SORTI le même jour, même mesure : 0 appel/30j
+    # AVANT et APRÈS le bascule dashboard vers `me.connector_disconnect` — zéro
+    # indépendant du timing. `.status` des deux RESTE : trafic réel mesuré 3 jours avant
+    # le bascule (folkmcp, 01/09) — remesure prévue après le 04/10/2026.
     "me.federation.atlassian.status",
-    "me.federation.atlassian.disconnect",
     "me.federation.folkmcp.status",
-    "me.federation.folkmcp.disconnect",
     "me.federation.google.start",
     "me.federation.google.status",
     "me.federation.google.revoke",

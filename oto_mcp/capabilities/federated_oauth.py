@@ -20,6 +20,17 @@ compatible avec un cache navigateur pas encore rafraîchi, mais non confirmé). 
 retrait des deux premiers et le maintien du troisième — la mesure décide route par
 route, jamais par famille.
 
+⚠️ **`.disconnect` d'atlassian et folkmcp RETIRÉ le 2026-09-04 (même lot, même mesure)**
+— `DELETE /api/{atlassian,folkmcp}/oauth` à **0 appel/30j, avant ET après** le bascule du
+dashboard vers `me.connector_disconnect` (`oto-dashboard v1.56.0`, `capabilities/
+connectors/oauth_status.py`) : zéro indépendant du timing, contrairement à `.status`
+(3 appels folkmcp le 01/09, 3 jours AVANT le bascule — trafic réel, pas un artefact,
+**gardé**, remesure prévue après le 04/10/2026 une fois 30 jours pleins écoulés depuis
+le bascule). `me.connector_disconnect` ne dépend PAS de cette capacité : il rappelle
+`atlassian_oauth.disconnect`/`folk_oauth.disconnect` directement
+(`capabilities/connectors/oauth_status.py`), donc son retrait ne change AUCUN
+comportement servi ailleurs.
+
 ⚠️ **Les CALLBACKS ne migrent pas** (`…/oauth/callback`, un par fournisseur) : le
 fournisseur y redirige le NAVIGATEUR, sans en-tête d'auth, et la réponse est une **302**,
 pas du JSON. L'adaptateur REST authentifie toujours et répond toujours en JSON : ils sont
@@ -58,10 +69,6 @@ class OAuthStatusInput(BaseModel):
     """Aucun paramètre."""
 
 
-class OAuthDisconnectInput(BaseModel):
-    """Aucun paramètre : la fédération est mono-compte."""
-
-
 class GoogleRevokeInput(BaseModel):
     # Compte précis à révoquer ; ABSENT = TOUS les comptes Google du sub.
     account: Optional[str] = None
@@ -87,7 +94,12 @@ class FederationStatus(BaseModel):
 
 
 class FederationDisconnected(BaseModel):
-    """`disconnected: false` = il n'y avait rien à déconnecter (idempotent), pas un échec."""
+    """`disconnected: false` = il n'y avait rien à déconnecter (idempotent), pas un échec.
+
+    ⚠️ Plus utilisée par une capacité DE CE FICHIER depuis le retrait de `.disconnect`
+    (2026-09-04, oto-dashboard#125) — importée telle quelle par
+    `capabilities/connectors/oauth_status.py::me.connector_disconnect`, qui la
+    réutilise comme contrat de sortie. Ne pas supprimer en la croyant morte."""
     ok: bool
     disconnected: bool
 
@@ -124,17 +136,22 @@ class GoogleDefaultSet(BaseModel):
 # --- Fédérations MCP per-user (atlassian, folkmcp) --------------------------
 
 def _federation(nom: str, module_attr: str):
-    """Les deux verbes restants d'une fédération, branchés sur SON module OAuth.
+    """Le seul verbe restant d'une fédération (`status`), branché sur SON module OAuth.
 
     Le module est résolu à l'APPEL (import paresseux) : ces modules montent des clients
     HTTP et lisent la config au chargement, on ne les tire pas à l'import du registre.
 
-    ⚠️ **Pas de `.start` ici** (retiré le 2026-09-04, oto-dashboard#125) : mesuré sur
-    `tool_calls` (30 jours, toutes origines, `oto_admin_monitoring op=rest route=…`)
-    à **0 appel** pour `atlassian` ET `folkmcp` — le dashboard s'en était détourné dès
-    le 01/09 (`startConnectorFlow` générique) et rien d'autre ne les appelait. `google`
-    a gardé le sien : 2 appels réels mesurés dans la même fenêtre, cf.
-    `_google_start` ci-dessous — ce n'est pas une famille, chaque route se mesure."""
+    ⚠️ **Pas de `.start` ni de `.disconnect` ici** (retirés le 2026-09-04,
+    oto-dashboard#125) : mesurés sur `tool_calls` (30 jours, toutes origines,
+    `oto_admin_monitoring op=rest route=…`) à **0 appel** pour `atlassian` ET
+    `folkmcp`, avant ET après le bascule dashboard (`.disconnect` était déjà à zéro
+    dans les deux fenêtres — zéro indépendant du timing). `me.connector_disconnect`
+    (`capabilities/connectors/oauth_status.py`) ne dépend pas de la capacité retirée :
+    il rappelle `atlassian_oauth.disconnect`/`folk_oauth.disconnect` directement.
+    `.status`, lui, est GARDÉ : du trafic réel a été mesuré 3 jours avant le bascule
+    (folkmcp, 01/09) — remesure prévue après le 04/10/2026 (30 jours pleins depuis le
+    bascule dashboard) avant de trancher son sort. `google` reste à part : cf.
+    `_google_start` ci-dessous, la mesure décide route par route, jamais par famille."""
     def _module():
         from ..auth import atlassian as atlassian_oauth
         from ..auth import folk as folk_oauth
@@ -142,9 +159,6 @@ def _federation(nom: str, module_attr: str):
 
     def _status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
         return _module().status_for(ctx.sub)
-
-    def _disconnect(ctx: ResolvedCtx, inp: OAuthDisconnectInput) -> dict:
-        return {"ok": True, "disconnected": _module().disconnect(ctx.sub)}
 
     base = f"/api/{nom}/oauth"
     return [
@@ -155,15 +169,6 @@ def _federation(nom: str, module_attr: str):
                          "`connected: false` avec `set_at: null` est l'état normal d'un "
                          "compte jamais connecté."),
             rest=RestBinding("GET", base + "/status"),
-        ),
-        Capability(
-            key=f"me.federation.{nom}.disconnect", handler=_disconnect,
-            Input=OAuthDisconnectInput, authz=SUB_ONLY, Output=FederationDisconnected,
-            mcp=None,
-            description=(f"Retire mon jeton {nom} du coffre. Idempotent : "
-                         "`disconnected: false` veut dire qu'il n'y avait rien à "
-                         "retirer, pas que le retrait a échoué."),
-            rest=RestBinding("DELETE", base),
         ),
     ]
 

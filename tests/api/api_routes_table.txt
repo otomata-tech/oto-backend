@@ -396,12 +396,8 @@ DELETE /api/me/unipile -> _handler
 OPTIONS /api/me/unipile -> options_handler
 GET,HEAD /api/atlassian/oauth/status -> _handler
 OPTIONS /api/atlassian/oauth/status -> options_handler
-DELETE /api/atlassian/oauth -> _handler
-OPTIONS /api/atlassian/oauth -> options_handler
 GET,HEAD /api/folkmcp/oauth/status -> _handler
 OPTIONS /api/folkmcp/oauth/status -> options_handler
-DELETE /api/folkmcp/oauth -> _handler
-OPTIONS /api/folkmcp/oauth -> options_handler
 GET,HEAD /api/google/oauth/start -> _handler
 OPTIONS /api/google/oauth/start -> options_handler
 GET,HEAD /api/google/oauth/status -> _handler

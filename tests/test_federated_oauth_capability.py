@@ -92,16 +92,17 @@ def test_jamais_connecte_rend_connected_false_et_set_at_null(monkeypatch, socle,
     assert out == {"connected": False, "set_at": None}
 
 
-@pytest.mark.parametrize("nom,rendu", [("atlassian", True), ("atlassian", False),
-                                       ("folkmcp", True), ("folkmcp", False)])
-def test_la_deconnexion_est_idempotente(monkeypatch, socle, nom, rendu):
-    """`disconnected: false` = il n'y avait rien à retirer, pas un échec. Le distinguer
-    d'une erreur évite qu'un front affiche « échec » sur un geste sans effet."""
-    stub_authz(monkeypatch)
-    mod = atlassian_oauth if nom == "atlassian" else folk_oauth
-    monkeypatch.setattr(mod, "disconnect", lambda sub: rendu)
-    code, out = call(f"me.federation.{nom}.disconnect")
-    assert (code, out) == (200, {"ok": True, "disconnected": rendu})
+@pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
+def test_disconnect_est_retire_mesure_a_zero(nom):
+    """oto-dashboard#125, 2026-09-04 : `.disconnect` d'atlassian/folkmcp est SORTI du
+    registre (mesuré à 0 appel/30j, AVANT et APRÈS le bascule dashboard — zéro
+    indépendant du timing, contrairement à `.status` qui reste). L'idempotence du
+    geste est désormais couverte par `me.connector_disconnect`
+    (`tests/connectors/test_oauth_status_capability.py`), qui rappelle directement
+    `atlassian_oauth.disconnect`/`folk_oauth.disconnect` sans dépendre de cette
+    capacité-ci. Un retour de cette clé serait une régression silencieuse du retrait."""
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    assert f"me.federation.{nom}.disconnect" not in {c.key for c in CAPABILITIES}
 
 
 # --- Google, multi-compte ---------------------------------------------------

@@ -25,10 +25,26 @@ l'appel ni n'avale l'exception métier, et l'INSERT part hors event loop
 (`asyncio.to_thread`) — le chemin chaud de chaque appel ne doit pas attendre PG.
 
 Colonnes canoniques : `server`, `kind`, `sub`, `email`, `tool`, `args` (**tronqués à
-l'écriture**), `ok`, `error`, `duration_ms`, `created_at`.
+l'écriture**), `ok`, `error`, `error_kind`, `duration_ms`, `created_at`.
 
 `kind` discrimine l'événement (ADR 0017, « un seul flux ») : `mcp` = invocation d'outil
 (défaut), `rest` = appel `/api/*`, `connector` = échec de résolution de credential.
+
+### `error_kind` — le résultat de la taxonomie, en colonne (oto#25 lot b1)
+
+`error` est un texte brut tronqué (`str(e)[:500]`) : lisible par un humain, pas
+filtrable. `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
+l'exception CAPTURÉE (ex. `not_authorized` sur un 401/403 amont, `upstream_timeout`,
+`internal`…) — écrit par `calllog._record` (via `calllog._error_kind`) sur un échec,
+`NULL` sur un succès et sur tout l'historique antérieur à ce lot (non
+reconstructible depuis le texte tronqué). Colonne additive, **sans index** — même
+règle que `request_id`/`call_uid`/`effective_sub` (`docs/live-migrations.md`) : c'est
+une lecture d'enquête, pas un chemin chaud. Exposée dans la fiche d'un appel
+(`oto_admin_monitoring op=call` / `oto_org_monitoring op=call`, `db.get_tool_call`).
+
+⚠️ **Ce que ce lot n'est PAS** : `error_kind` est un FAIT journalisé, rien de plus.
+Aucun lecteur n'en dérive encore une action (marquer un credential rejeté, par
+exemple) — ça viendra, séparément, avec son propre feu vert (lot b2 de l'issue).
 
 ### Ce que le journal ne porte JAMAIS : un jeton en clair
 

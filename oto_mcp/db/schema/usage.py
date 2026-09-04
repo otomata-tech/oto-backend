@@ -81,7 +81,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     --                   puisse trahir une réponse servie sous une autre identité.
     request_id TEXT,
     call_uid TEXT,
-    effective_sub TEXT
+    effective_sub TEXT,
+    -- oto#25 lot (b1) : résultat de `error_taxonomy.classify()` (son `.code`, ex.
+    -- `not_authorized`) sur un échec — écrit par `calllog._record`. NULL sur un
+    -- succès et sur tout l'historique antérieur à ce lot. PAS d'index (même
+    -- raison que les trois colonnes ci-dessus : enquête, pas chemin chaud).
+    error_kind TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);

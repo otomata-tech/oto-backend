@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 from fastmcp.server.middleware import Middleware
 
@@ -206,6 +206,26 @@ def _insert_rest(row: dict) -> None:
         logger.warning("insert tool_call rest en échec (%s)", row.get("tool"), exc_info=True)
 
 
+def _error_kind(exc: BaseException) -> Optional[str]:
+    """Résultat de la taxonomie (`error_taxonomy.classify(exc).code`) pour la colonne
+    `tool_calls.error_kind` (oto#25 lot b1) : un refus d'authentification amont
+    (ex. `not_authorized`) devient un FAIT structuré, en plus du texte tronqué déjà
+    porté par `error`. Appelé sur l'exception CAPTURÉE, avant que
+    `ErrorEnvelopeMiddleware` ne la normalise pour l'agent (calllog voit toujours le
+    brut, comme Sentry).
+
+    Import local : `error_taxonomy` importe `mcp_errors`/`mcp.types`, et ce module
+    est chargé très tôt (identité/middleware) — éviter tout risque de cycle au
+    chargement.
+    """
+    try:
+        from . import error_taxonomy
+        return error_taxonomy.classify(exc).code
+    # noqa: SILENT — best-effort de journal, error_kind reste absent plutôt que de risquer l'appel
+    except Exception:
+        return None
+
+
 class ToolCallLogger(Middleware):
     """Middleware FastMCP : journalise chaque on_call_tool via le sink fourni.
 
@@ -263,7 +283,8 @@ class ToolCallLogger(Middleware):
         try:
             result = await call_next(context)
         except Exception as e:
-            self._record({**row, "ok": False, "error": str(e)[:MAX_ERROR_CHARS]}, t0)
+            self._record({**row, "ok": False, "error": str(e)[:MAX_ERROR_CHARS],
+                          "error_kind": _error_kind(e)}, t0)
             raise
         self._record({**row, "ok": True, "error": None}, t0)
         return result
@@ -291,7 +312,8 @@ class ToolCallLogger(Middleware):
         try:
             result = await call_next(context)
         except Exception as e:
-            self._record({**row, "ok": False, "error": str(e)[:MAX_ERROR_CHARS]}, t0)
+            self._record({**row, "ok": False, "error": str(e)[:MAX_ERROR_CHARS],
+                          "error_kind": _error_kind(e)}, t0)
             raise
         self._record({**row, "ok": True, "error": None}, t0)
         return result

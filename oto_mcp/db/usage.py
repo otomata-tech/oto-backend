@@ -50,9 +50,9 @@ def insert_tool_call(row: dict) -> None:
             INSERT INTO tool_calls
                 (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
                  run_id, org_id, client_id, sentry_event_id,
-                 request_id, call_uid, effective_sub)
+                 request_id, call_uid, effective_sub, error_kind)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s)
+                    %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -64,6 +64,9 @@ def insert_tool_call(row: dict) -> None:
                 # #117 — discriminant par appel. Absents des gestes REST et des
                 # écritures hors MCP : la ligne les porte à NULL, sans branche ici.
                 row.get("request_id"), row.get("call_uid"), row.get("effective_sub"),
+                # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
+                # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
+                row.get("error_kind"),
             ),
         )
 
@@ -837,7 +840,8 @@ def get_tool_call(call_id: int) -> Optional[dict]:
         row = conn.execute(
             """
             SELECT l.id, l.kind, l.server, l.sub, COALESCE(u.email, l.email) AS email,
-                   u.name, l.tool, l.args, l.ok, l.error, l.duration_ms, l.created_at,
+                   u.name, l.tool, l.args, l.ok, l.error, l.error_kind, l.duration_ms,
+                   l.created_at,
                    l.session_id, l.run_id, l.org_id, o.name AS org_name, l.client_id,
                    l.sentry_event_id
             FROM tool_calls l

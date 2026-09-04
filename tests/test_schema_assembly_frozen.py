@@ -223,8 +223,17 @@ from oto_mcp.db import _schema, schema
 # « runner job 42 ». Filtrer sur du texte libre n'est pas une garantie.
 # ⚠️ Empreinte recalculée après avoir vérifié que le tronc SANS ce fragment rend
 # bien 8ebb0a70… / 139910, mesuré au moment du lot.
-EMPREINTE = "fdbf80b8ed6b1ead995a24778e3f12105bb95803c6540c8cebecd0b98d9818c6"
-LONGUEUR = 140769
+# 2026-09-04 (oto#25 lot b1) : `tool_calls.error_kind` — le RÉSULTAT de
+# `error_taxonomy.classify()` sur un échec (`.code`, ex. `not_authorized`), écrit
+# par `calllog._record`. NULLABLE, sans index (même raison que `request_id`/
+# `call_uid`/`effective_sub`) ; existe aussi en `ALTER … ADD COLUMN IF NOT
+# EXISTS` dans `_init.py` pour la base PARTAGÉE prod/preprod, où le `CREATE
+# TABLE` est sauté.
+# ⚠️ Empreinte recalculée après avoir vérifié que le tronc SANS ce fragment rend
+# bien fdbf80b8… / 140769 (isolé dans un clone jetable, sans le WIP d'autres
+# sessions) — la colonne ajoute exactement 339 caractères (140769 → 141108).
+EMPREINTE = "f7a74ee90970bbcddda63828d44ad6a462b2fae7c06176a23d6a70425d20deca"
+LONGUEUR = 141108
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

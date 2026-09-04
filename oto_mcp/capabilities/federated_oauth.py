@@ -1,4 +1,5 @@
-"""Les VERBES du consentement OAuth per-user : démarrer, lire l'état, déconnecter.
+"""Les VERBES du consentement OAuth per-user : lire l'état, déconnecter (et, pour
+`google` seul, démarrer — voir plus bas pourquoi les trois n'ont pas le même sort).
 
 Dix routes écrites à la main jusqu'au 2026-08-27, portées en capacités (ADR 0009) —
 mêmes chemins, mêmes codes, même corps sur le fil :
@@ -8,12 +9,16 @@ mêmes chemins, mêmes codes, même corps sur le fil :
 - `DELETE /api/{atlassian,folkmcp,google}/oauth`        → révoque
 - `POST   /api/google/oauth/default`                    → élit le compte Google par défaut
 
-⚠️ **`.start` candidate au retrait (oto-dashboard#125) — PAS encore fait.** Le dashboard
-oto démarre désormais ces trois flux par le chemin fixe générique
-(`POST /api/me/connectors/{name}/connect`, commit dashboard `433d563`), mais ce sont des
-routes REST PUBLIQUES : un front tiers (Tulina) peut les appeler directement sans que ce
-dépôt le voie. Retrait gelé tant que l'usage réel sur 30 j, toutes origines, n'est pas
-mesuré à zéro — cf. oto-dashboard#125 pour l'état de la mesure.
+⚠️ **`.start` d'atlassian et folkmcp RETIRÉ le 2026-09-04 (oto-dashboard#125), celui de
+google GARDÉ.** Le dashboard démarre les trois par le chemin fixe générique depuis le
+01/09 (`POST /api/me/connectors/{name}/connect`, commit dashboard `433d563`), mais ce
+sont des routes REST PUBLIQUES : mesuré sur `tool_calls` (30 jours, toutes origines,
+`oto_admin_monitoring op=rest route=…`) avant tout retrait, PAS supposé sur la seule
+disparition de l'appelant chez nous. Résultat : `atlassian`/`folkmcp` à **0 appel**,
+`google` à **2** (2 utilisateurs, dernier le 02/09 — un jour après le cutover dashboard,
+compatible avec un cache navigateur pas encore rafraîchi, mais non confirmé). D'où le
+retrait des deux premiers et le maintien du troisième — la mesure décide route par
+route, jamais par famille.
 
 ⚠️ **Les CALLBACKS ne migrent pas** (`…/oauth/callback`, un par fournisseur) : le
 fournisseur y redirige le NAVIGATEUR, sans en-tête d'auth, et la réponse est une **302**,
@@ -119,18 +124,21 @@ class GoogleDefaultSet(BaseModel):
 # --- Fédérations MCP per-user (atlassian, folkmcp) --------------------------
 
 def _federation(nom: str, module_attr: str):
-    """Les trois verbes d'une fédération, tous branchés sur SON module OAuth.
+    """Les deux verbes restants d'une fédération, branchés sur SON module OAuth.
 
     Le module est résolu à l'APPEL (import paresseux) : ces modules montent des clients
     HTTP et lisent la config au chargement, on ne les tire pas à l'import du registre.
-    """
+
+    ⚠️ **Pas de `.start` ici** (retiré le 2026-09-04, oto-dashboard#125) : mesuré sur
+    `tool_calls` (30 jours, toutes origines, `oto_admin_monitoring op=rest route=…`)
+    à **0 appel** pour `atlassian` ET `folkmcp` — le dashboard s'en était détourné dès
+    le 01/09 (`startConnectorFlow` générique) et rien d'autre ne les appelait. `google`
+    a gardé le sien : 2 appels réels mesurés dans la même fenêtre, cf.
+    `_google_start` ci-dessous — ce n'est pas une famille, chaque route se mesure."""
     def _module():
         from ..auth import atlassian as atlassian_oauth
         from ..auth import folk as folk_oauth
         return {"atlassian_oauth": atlassian_oauth, "folk_oauth": folk_oauth}[module_attr]
-
-    def _start(ctx: ResolvedCtx, inp: OAuthStartInput) -> dict:
-        return {"auth_url": _module().build_auth_url(ctx.sub)}
 
     def _status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
         return _module().status_for(ctx.sub)
@@ -140,14 +148,6 @@ def _federation(nom: str, module_attr: str):
 
     base = f"/api/{nom}/oauth"
     return [
-        Capability(
-            key=f"me.federation.{nom}.start", handler=_start, Input=OAuthStartInput,
-            authz=SUB_ONLY, Output=OAuthStart, mcp=None,
-            description=(f"Rend l'URL de consentement à ouvrir pour fédérer {nom} sous "
-                         "mon identité. Rien n'est connecté tant que l'utilisateur n'y "
-                         "est pas passé."),
-            rest=RestBinding("GET", base + "/start"),
-        ),
         Capability(
             key=f"me.federation.{nom}.status", handler=_status, Input=OAuthStatusInput,
             authz=SUB_ONLY, Output=FederationStatus, mcp=None,

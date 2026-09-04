@@ -3,10 +3,14 @@
 Flow web (calqué sur api/atlassian.py) — routes ancrées sur le NOM du
 connecteur `folkmcp` (le widget fédéré du dashboard appelle `/api/<name>/oauth/*`,
 name = `folkmcp`, comme atlassian) :
-- `GET    /api/folkmcp/oauth/start`    (auth Logto) → {auth_url} à ouvrir
 - `GET    /api/folkmcp/oauth/callback` (no auth, Folk redirige) → exchange + persist
 - `GET    /api/folkmcp/oauth/status`   (auth) → {connected, set_at}
 - `DELETE /api/folkmcp/oauth`          (auth) → déconnecte
+
+`/start` (capacité `me.federation.folkmcp.start`, dans `capabilities/federated_oauth.py`,
+pas ici) a été RETIRÉ le 2026-09-04 (oto-dashboard#125, mesuré à 0 appel/30j) : le
+consentement démarre désormais par le chemin fixe générique
+(`POST /api/me/connectors/folkmcp/connect`).
 
 Le token per-user est stocké dans le coffre (connector='folkmcp') ; le proxy de
 tools/mount.py l'injecte par requête (access.resolve_mount_token → refresh). Ne

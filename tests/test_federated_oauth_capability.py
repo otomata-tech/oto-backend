@@ -62,11 +62,13 @@ def socle(monkeypatch):
 # --- Les deux fédérations MCP, au champ près --------------------------------
 
 @pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
-def test_start_rend_l_url_de_consentement(monkeypatch, socle, nom):
-    stub_authz(monkeypatch)
-    code, out = call(f"me.federation.{nom}.start")
-    assert code == 200 and set(out) == {"auth_url"}
-    assert out["auth_url"].startswith("https://")
+def test_start_est_retire_mesure_a_zero(nom):
+    """oto-dashboard#125, 2026-09-04 : `.start` d'atlassian/folkmcp est SORTI du
+    registre (mesuré à 0 appel/30j, toutes origines — contrairement à
+    `me.federation.google.start`, resté). Un retour de cette clé serait une
+    régression silencieuse du retrait, pas une amélioration à fêter."""
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    assert f"me.federation.{nom}.start" not in {c.key for c in CAPABILITIES}
 
 
 @pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])

@@ -1,10 +1,14 @@
 """Routes REST OAuth Atlassian — fédération du Rovo Remote MCP per-user (#40).
 
 Flow web :
-- `GET    /api/atlassian/oauth/start`    (auth Logto) → {auth_url} à ouvrir
 - `GET    /api/atlassian/oauth/callback` (no auth, Atlassian redirige) → exchange + persist
 - `GET    /api/atlassian/oauth/status`   (auth) → {connected, set_at}
 - `DELETE /api/atlassian/oauth`          (auth) → déconnecte
+
+`/start` (capacité `me.federation.atlassian.start`, dans `capabilities/federated_oauth.py`,
+pas ici) a été RETIRÉ le 2026-09-04 (oto-dashboard#125, mesuré à 0 appel/30j) : le
+consentement démarre désormais par le chemin fixe générique
+(`POST /api/me/connectors/atlassian/connect`).
 
 Le token per-user est stocké dans le coffre (connector='atlassian') ; le proxy
 de tools/mount.py l'injecte par requête (access.resolve_mount_token → refresh).

@@ -410,6 +410,10 @@ DELETE /api/google/oauth -> _handler
 OPTIONS /api/google/oauth -> options_handler
 POST /api/google/oauth/default -> _handler
 OPTIONS /api/google/oauth/default -> options_handler
+GET,HEAD /api/me/connectors/{name}/oauth-status -> _handler
+OPTIONS /api/me/connectors/{name}/oauth-status -> options_handler
+DELETE /api/me/connectors/{name}/oauth -> _handler
+OPTIONS /api/me/connectors/{name}/oauth -> options_handler
 GET,HEAD /api/me/tokens -> _handler
 OPTIONS /api/me/tokens -> options_handler
 POST /api/me/tokens -> _handler

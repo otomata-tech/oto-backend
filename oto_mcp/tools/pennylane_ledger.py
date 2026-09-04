@@ -1,4 +1,4 @@
-"""Grand livre Pennylane — lecture des écritures, de leurs lignes, du lettrage.
+"""Grand livre Pennylane — lire les écritures, en poser, lettrer des lignes.
 
 Second module du connecteur `pennylane` (cf. `Connector.modules` au registre) :
 même clé, même client, domaine distinct. Les journaux, eux, sont un référentiel
@@ -17,94 +17,18 @@ lisent avec `pennylane_ref(kind="company")`, champ `scopes`.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import time
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
 from .pennylane_socle import _bad, _client, _ecrit, _need
 
-# Brouillon porté par oto, faute que Pennylane en ait un.
-#
-# Une écriture comptable est posée immédiatement et ne peut pas être supprimée ;
-# la corriger peut détruire des lignes. Une description d'outil ne suffit donc
-# pas : l'agent la relit à chaque appel, il ne la respecte pas forcément. La
-# garde est mécanique — `op="prepare"` rend le détail exact et un jeton,
-# `op="create"` refuse sans ce jeton. L'agent ne PEUT plus écrire sans avoir eu
-# le détail sous les yeux au tour précédent, et c'est là que la supervision
-# humaine se glisse.
-#
-# Le jeton est l'empreinte du détail : re-préparer le même détail rend le même
-# jeton, en changer un centime en rend un autre — un accord donné sur un détail
-# ne vaut donc pas pour un autre. Le registre, lui, porte l'instant : c'est ce
-# qui le fait expirer, et ce qui empêche de fabriquer un jeton sans être passé
-# par `prepare`.
-_PREPARES: dict[str, float] = {}
-_VALIDITE_S = 300.0
-
-
-def _jeton(detail: dict) -> str:
-    canon = json.dumps(detail, sort_keys=True, separators=(",", ":"),
-                       ensure_ascii=False, default=str)
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
-
-
-def _detail_creation(date, label, journal_id, lines, due_date, currency,
-                     piece_number) -> dict:
-    """Le détail exact qui sera posé — la seule chose qu'on montre et qu'on
-    signe. Construit ici pour les DEUX chemins : si `prepare` et `create` le
-    composaient chacun de leur côté, un écart entre eux invaliderait tous les
-    jetons sans qu'on comprenne pourquoi."""
-    return {"date": date, "label": label, "journal_id": journal_id,
-            "lignes": lines, "due_date": due_date, "currency": currency,
-            "piece_number": piece_number}
-
-
-def _poser_jeton(detail: dict) -> str:
-    maintenant = time.monotonic()
-    for vieux in [j for j, t in _PREPARES.items() if maintenant - t > _VALIDITE_S]:
-        _PREPARES.pop(vieux, None)
-    jeton = _jeton(detail)
-    _PREPARES[jeton] = maintenant
-    return jeton
-
-
-def _exiger_jeton(detail: dict, fourni: Optional[str], geste: str) -> None:
-    """Refuse le geste tant qu'il n'a pas été préparé, à l'identique et récemment."""
-    attendu = _jeton(detail)
-    if not fourni:
-        raise _bad(
-            f"{geste} exige un jeton de préparation, et ce n'est pas une "
-            "formalité : le geste est irréversible côté Pennylane. Appelle "
-            "d'abord `op=\"prepare\"` avec exactement ces arguments, MONTRE à "
-            "l'utilisateur le détail rendu, et ne rappelle ici qu'avec son "
-            "accord et le jeton reçu.")
-    if fourni != attendu:
-        raise _bad(
-            f"Ce jeton ne correspond pas à CE détail : il a été émis pour "
-            "d'autres valeurs. Un accord donné sur un détail ne vaut pas pour un "
-            "autre — reprends `op=\"prepare\"` avec les arguments d'ici, "
-            "re-soumets le détail à l'utilisateur, et utilise le nouveau jeton.")
-    pose = _PREPARES.get(fourni)
-    if pose is None:
-        raise _bad(
-            "Jeton inconnu : aucune préparation ne lui correspond. Soit elle n'a "
-            "jamais eu lieu, soit le serveur a redémarré depuis. Rappelle "
-            "`op=\"prepare\"`.")
-    if time.monotonic() - pose > _VALIDITE_S:
-        raise _bad(
-            f"Jeton périmé (plus de {int(_VALIDITE_S // 60)} minutes). Un accord "
-            "donné il y a longtemps ne vaut plus pour un geste irréversible : "
-            "rappelle `op=\"prepare\"` et re-soumets le détail.")
-
 
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pennylane_ledger_entry(
-        op: Literal["list", "get", "lines", "lettered", "prepare", "create",
+        op: Literal["list", "get", "lines", "lettered", "create",
                     "update"] = "list",
         entry_id: Optional[int] = None,
         line_id: Optional[int] = None,
@@ -118,21 +42,18 @@ def register(mcp: FastMCP) -> None:
         currency: Optional[str] = None,
         piece_number: Optional[str] = None,
         fields: Optional[dict] = None,
-        jeton: Optional[str] = None,
     ) -> dict | list:
         """Écritures du grand livre : lire, poser une écriture, la corriger.
 
-        ⚠️ **Écrire ici est irréversible, et le brouillon est porté par oto.**
-        Pennylane pose une écriture comptable immédiatement et ne sait pas la
-        supprimer ; la corriger peut détruire des lignes. Le palier « brouillon
-        puis validation » qui protège le reste de ce connecteur n'existe pas
-        chez lui, alors il est tenu ici : `op="prepare"` rend le détail exact et
-        un jeton, `op="create"` et `op="update"` REFUSENT sans ce jeton.
-
-        La marche à suivre, sans raccourci possible : appeler `op="prepare"`,
-        **montrer le détail rendu à l'utilisateur**, attendre son accord, puis
-        rappeler avec le jeton. Le jeton est l'empreinte du détail — en changer
-        un centime l'invalide — et il expire en quelques minutes.
+        ⚠️ **`op="create"` n'a PAS de brouillon, et le geste est irréversible.**
+        Partout ailleurs dans ce connecteur, une écriture engageante se pose en
+        brouillon puis se finalise dans un second geste, après validation
+        humaine. Pennylane n'offre pas ce palier pour une écriture comptable :
+        elle est posée immédiatement, et l'API ne sait pas la supprimer — le
+        seul recours est `op="update"`, qui peut lui-même détruire des lignes.
+        **Annoncer à l'utilisateur le détail exact — journal, date, libellé, et
+        chaque ligne avec son compte et son montant — et attendre son accord
+        AVANT d'appeler.**
 
         ⚠️ **`op="list"` sans `clauses` remonte TOUT l'historique** — sur une
         comptabilité réelle, des milliers d'écritures, bien au-delà de la limite
@@ -169,9 +90,8 @@ def register(mcp: FastMCP) -> None:
                 (devise EUR par défaut, numéro de pièce auto-généré).
             fields: op="update" — les champs à modifier sur l'écriture.
                 ⚠️ `ledger_entry_lines` y prend `create`/`update`/`delete` : ce
-                geste peut SUPPRIMER des lignes, d'où le même jeton que create.
-            jeton: op="create" et op="update" — le jeton rendu par `prepare`
-                pour EXACTEMENT ces arguments, après accord de l'utilisateur.
+                geste peut SUPPRIMER des lignes : il engage autant qu'une
+                création, et s'annonce de la même façon.
         """
         c = _client()
         if op == "list":
@@ -184,28 +104,7 @@ def register(mcp: FastMCP) -> None:
         if op == "lettered":
             return c.get_lettered_lines(_need(line_id, "line_id", op),
                                         max_pages=max_pages)
-        if op == "prepare":
-            lignes = _need(lines, "lines", op)
-            detail = _detail_creation(
-                _need(date, "date", op), _need(label, "label", op),
-                _need(journal_id, "journal_id", op), lignes,
-                due_date, currency, piece_number)
-            try:
-                recap = c.controler_ecriture(lignes)
-            except ValueError as e:
-                raise _bad(str(e))
-            return {"a_poser": detail, "recapitulatif": recap,
-                    "jeton": _poser_jeton(detail),
-                    "ensuite": "MONTRE `a_poser` et `recapitulatif` à "
-                               "l'utilisateur, attends son accord, puis rappelle "
-                               "op=\"create\" avec ces mêmes arguments et ce "
-                               "jeton. L'écriture ne sera pas supprimable."}
         if op == "create":
-            detail = _detail_creation(
-                _need(date, "date", op), _need(label, "label", op),
-                _need(journal_id, "journal_id", op), _need(lines, "lines", op),
-                due_date, currency, piece_number)
-            _exiger_jeton(detail, jeton, "La création d'écriture comptable")
             return _ecrit(c.create_ledger_entry(
                 date=_need(date, "date", op), label=_need(label, "label", op),
                 journal_id=_need(journal_id, "journal_id", op),
@@ -213,14 +112,11 @@ def register(mcp: FastMCP) -> None:
                 due_date=due_date, currency=currency, piece_number=piece_number),
                 "la création d'écriture comptable")
         if op == "update":
-            _exiger_jeton({"entry_id": _need(entry_id, "entry_id", op),
-                           "fields": fields or {}},
-                          jeton, "La correction d'écriture comptable")
             return _ecrit(c.update_ledger_entry(_need(entry_id, "entry_id", op),
                                                 **(fields or {})),
                           "la correction d'écriture comptable")
-        raise _bad("op doit être 'list', 'get', 'lines', 'lettered', 'prepare', "
-                   "'create' ou 'update'")
+        raise _bad("op doit être 'list', 'get', 'lines', 'lettered', 'create' "
+                   "ou 'update'")
 
     @mcp.tool()
     def pennylane_ledger_lettering(

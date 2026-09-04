@@ -8,7 +8,6 @@ juste celui d'une `McpError` (ex. data center Zoho manquant).
 """
 from __future__ import annotations
 
-import inspect
 import time
 from typing import Literal, Optional
 
@@ -198,16 +197,13 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     started = time.monotonic()
     ok, error = True, None
     try:
-        # La cible est passée à la sonde : sous rotation, sonder CONSOMME le jeton, et
-        # le remplaçant doit être réécrit sur la ligne testée — pas sur celle que la
-        # cascade aurait choisie. Sans ça, un `verify level=org` chez quelqu'un qui a
-        # aussi une clé perso tuait le jeton d'org (`ok:true`, puis mort). Vécu 03/08.
-        kw = {}
-        if cible is not None and "instance" in inspect.signature(probe).parameters:
-            kw["instance"] = cible
-        res = probe(fields, config, **kw)
-        if inspect.isawaitable(res):
-            await res
+        # Un seul endroit exécute les sondes (`connectors.verify.executer`) : hors
+        # de la boucle d'événements, sous une borne de temps, et il porte la
+        # résolution de `instance` — sous rotation, sonder CONSOMME le jeton, et le
+        # remplaçant doit être réécrit sur la ligne testée, pas sur celle que la
+        # cascade aurait choisie. Ce bloc dupliquait ce geste : corriger l'un
+        # laissait l'autre (oto-backend#867, lot 2).
+        await connector_verify.executer(probe, fields, config, cible)
     # noqa: SILENT — l'erreur d'auth EST le résultat de la sonde, rendue à l'appelant
     except Exception as e:  # noqa: BLE001 — l'erreur d'auth EST le résultat
         ok = False

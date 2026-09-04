@@ -14,6 +14,7 @@ son chargement) ; la SURFACE (capacité MCP+REST) est déclarée une seule fois 
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Awaitable, Callable, Optional, Union
 
@@ -41,6 +42,66 @@ def probe_for(connector: str) -> Optional[Probe]:
     return _REGISTRY.get(connector)
 
 
+# Borne de temps d'UNE sonde, alignée sur celle du bouton « tester » de
+# `capabilities/tools_me.py`. Les sondes ont des délais d'attente très inégaux —
+# 20 s ici, 120 s de lecture chez Unipile — et aucune n'a de raison de faire
+# patienter un humain plus longtemps que ça.
+_BORNE_S = 45.0
+
+
+async def executer(probe: Probe, fields: dict, config: Optional[dict] = None,
+                   instance: Optional[tuple] = None) -> None:
+    """Exécute UNE sonde HORS de la boucle d'événements, sous une borne de temps.
+
+    Point unique d'exécution des 34 sondes (oto-backend#867, lot 2). Elles sont
+    presque toutes synchrones et font du HTTP : appelées nûment depuis un handler
+    `async def`, elles bloquent tout le processus — MCP, REST et sondes de veille —
+    le temps que l'amont réponde. Le seam des capacités ne protège que les
+    handlers `def` ; par la porte `async` il ne protège rien, et c'est par là que
+    ces trois entrées passent.
+
+    La règle était écrite en double, ici et dans la capacité, avec la même
+    résolution de signature : les deux appelaient la sonde à leur façon. Elle
+    vit maintenant à un seul endroit, sinon corriger l'une laisse l'autre.
+
+    ⚠️ La borne libère la BOUCLE, elle n'interrompt pas le thread : un client
+    HTTP synchrone n'est pas annulable, et le thread vit jusqu'à ce que son
+    propre délai d'attente expire. Ce qui compte est tenu — le processus répond,
+    et l'appelant reçoit une erreur nommée au lieu d'attendre.
+    """
+    kwargs = {}
+    # `instance` = (entity_type, entity_id, account) de la clé RÉELLEMENT sondée.
+    # Indispensable dès qu'une sonde a un effet de bord sur le credential : sous
+    # rotation (Salesforce RTR), sonder CONSOMME le jeton, et le remplaçant doit
+    # être réécrit sur la bonne ligne. Sans cette information, la sonde ne peut
+    # que deviner via la cascade — qui désigne la clé la plus proche, pas celle
+    # qu'on teste. Un `verify level=org` tuait ainsi le jeton d'org en le
+    # rafraîchissant : `ok:true`, puis mort. Vécu 03/08. Passé UNIQUEMENT aux
+    # sondes qui le déclarent : les ~15 autres gardent leur signature à deux
+    # arguments.
+    if instance is not None and "instance" in inspect.signature(probe).parameters:
+        kwargs["instance"] = instance
+
+    async def _joue():
+        if inspect.iscoroutinefunction(probe):
+            await probe(fields, config or {}, **kwargs)
+            return
+        # Une sonde sync part au thread. Une sonde qui n'est pas déclarée `async
+        # def` mais rend un awaitable (callable, partial) traverse aussi : la
+        # créer dans un thread ne l'exécute pas, on l'attend ensuite ici.
+        res = await asyncio.to_thread(probe, fields, config or {}, **kwargs)
+        if inspect.isawaitable(res):
+            await res
+
+    try:
+        await asyncio.wait_for(_joue(), timeout=_BORNE_S)
+    except asyncio.TimeoutError as e:
+        raise TimeoutError(
+            f"le test de connexion n'a pas répondu en {int(_BORNE_S)} s — "
+            "le service distant est lent ou injoignable. Le credential n'est pas "
+            "invalide pour autant : réessayer plus tard.") from e
+
+
 async def run(connector: str, fields: dict, config: Optional[dict] = None,
               instance: Optional[tuple] = None) -> None:
     """Exécute la sonde du connecteur si elle existe (await si async) ; LÈVE
@@ -51,17 +112,4 @@ async def run(connector: str, fields: dict, config: Optional[dict] = None,
     probe = _REGISTRY.get(connector)
     if probe is None:
         return
-    # `instance` = (entity_type, entity_id, account) de la clé RÉELLEMENT sondée.
-    # Indispensable dès qu'une sonde a un effet de bord sur le credential : sous rotation
-    # (Salesforce RTR), sonder CONSOMME le jeton, et le remplaçant doit être réécrit sur
-    # la bonne ligne. Sans cette information, la sonde ne peut que deviner via la cascade
-    # — qui désigne la clé la plus proche, pas celle qu'on teste. Un `verify level=org`
-    # tuait ainsi le jeton d'org en le rafraîchissant : `ok:true`, puis mort. Vécu 03/08.
-    # Passé UNIQUEMENT aux sondes qui le déclarent : les ~15 autres gardent leur
-    # signature à deux arguments.
-    kwargs = {}
-    if instance is not None and "instance" in inspect.signature(probe).parameters:
-        kwargs["instance"] = instance
-    res = probe(fields, config or {}, **kwargs)
-    if inspect.isawaitable(res):
-        await res
+    await executer(probe, fields, config, instance)

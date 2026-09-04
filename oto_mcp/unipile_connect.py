@@ -241,7 +241,15 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
             alive = True
             try:
                 from oto.tools.unipile import make_unipile_client
-                alive = make_unipile_client(api_key=api_key).account_alive(mine["account_id"])
+                # Hors boucle : `account_alive` est un appel HTTP synchrone, et
+                # cette fonction est `async def`. Appelé nûment, il figeait tout le
+                # processus le temps qu'Unipile réponde — jusqu'à 120 s de lecture
+                # (oto-backend#867). Le `hosted_auth_link` quinze lignes plus bas
+                # était déjà protégé : même fichier, même client, une seule des deux
+                # lignes traitée. Corriger ce qu'on regarde ne ferme pas la classe.
+                alive = await asyncio.to_thread(
+                    lambda: make_unipile_client(api_key=api_key).account_alive(
+                        mine["account_id"]))
             # noqa: SILENT — fail-soft documenté : sonde indisponible ⇒ compte tenu pour vivant
             except Exception:  # noqa: BLE001 — sonde best-effort, jamais bloquante
                 alive = True

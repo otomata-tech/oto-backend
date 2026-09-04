@@ -75,7 +75,10 @@ Surfaces :
   activity,columns}.py`. Conséquences pratiques : les 22 opérations portent leur
   schéma d'entrée ET de réponse dans `/api/openapi.json` (un intégrateur les génère),
   et un **champ inconnu est refusé** (400 `unknown_fields`) au lieu d'être ignoré —
-  sauf le corps d'un ajout/patch de ligne, qui EST la donnée (`body_field`).
+  sauf le corps d'un ajout/patch de ligne, qui EST la donnée (`body_field`) — **UNE**
+  ligne par `POST …/rows`, jamais un lot : un corps à clé unique portant une liste
+  d'objets est refusé `400 batch_body` (oto#48) ; le lot = `data_write(rows=…)` ou
+  l'upload signé NDJSON/CSV.
   ⚠️ Éditer un de ces chemins = éditer sa capacité ; en rajouter un à la main casse
   le garde-fou `tests/test_rest_modules_are_capabilities.py`.
 

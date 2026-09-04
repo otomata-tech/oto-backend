@@ -44,6 +44,7 @@ from ...datastore.core import (
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import HORODATAGE, ns_not_found
+from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
 
 
@@ -374,6 +375,7 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     trace: dict = {}
     store = make_store(ctx.sub)
     try:
+        refuser_un_lot(store, ns, inp.row)  # oto#48 : un lot enveloppé n'est pas une ligne
         created = store.append_row(ns, inp.row, trace=trace,
                                    readonly_override=inp.readonly_override)
     except NamespaceNotFound:
@@ -500,7 +502,12 @@ CAPABILITIES += [
         mcp=None,
         # Corps LIBRE (les colonnes) + 201 : les deux contrats d'avant la migration.
         rest=RestBinding(verb="POST", path=_NS + "/rows", status=201, body_field="row"),
-        description=("Ajoute une ligne à un tableau (le corps EST la ligne). "
+        description=("Ajoute UNE ligne à un tableau — le corps EST la ligne : un objet, "
+                     "une clé par colonne. Pas de lot ici : un corps dont l'unique clé "
+                     "porte une liste d'objets est refusé (`400 batch_body`) ; le lot "
+                     "passe par `data_write(rows=[…])` côté agent, ou par un upload "
+                     "signé NDJSON/CSV (`oto_upload_url` → `PUT /api/upload/{token}`) "
+                     "pour les volumes. "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
                      "et journalisé." + _ECRITURE_DETRUIT),

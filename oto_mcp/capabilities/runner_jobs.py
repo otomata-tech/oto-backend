@@ -24,7 +24,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .. import db
+from .. import access, db
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -327,18 +327,51 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
         return None
 
 
-def _avec_cle(job: dict, depot: Optional[str]) -> dict:
+# La marque qui dit « ce compte EST un de nos workers ». Un admin plateforme la
+# pose sur le compte de service du runner (`oto_admin_set_option`), et sur lui
+# seul.
+_OPTION_WORKER = "runner_worker"
+
+
+def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
     Le worker fait partie du backend et a le droit de lire les clés que les orgs
     déposent (arbitrage du 02/09) ; ce droit s'exerce ici, une fois, avec le
     travail — jamais par un accès au coffre depuis le runner. Un worker qui
     saurait interroger le coffre pourrait lire autre chose que ce travail-ci.
+
+    ⚠️ **Mais la file n'est pas réservée aux workers** : cette capacité est
+    déclarée `ORG_MEMBER`, et rien, dans le protocole, ne distingue un worker
+    d'un membre — ils portent le même genre de jeton. Sans la garde ci-dessous,
+    n'importe quel membre enfilait un travail puis le réservait, et recevait la
+    clé de son org EN CLAIR. Un secret que le coffre ne rend à personne, et que
+    nous ne pouvons pas révoquer puisqu'il appartient au client.
+
+    La garde porte donc sur l'ACTEUR, et par `user_has_option` — jamais
+    `has_option`, qui répondrait vrai dès que l'ORG porte le don ou que son plan
+    inclut l'option, c'est-à-dire pour tous ses membres à la fois.
     """
     if not depot or not job.get("org_id") or job.get("delegation_refusee"):
         return job
+    if not access.user_has_option(appelant, _OPTION_WORKER):
+        # Silencieux POUR L'APPELANT — il reçoit son travail, sans clé : un refus
+        # explicite apprendrait qu'il y a une clé à obtenir. Bruyant pour NOUS :
+        # un membre qui nomme un dépôt cherche quelque chose.
+        logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
+                       "ce compte ne porte pas `%s`",
+                       depot, appelant, job.get("org_id"), job.get("id"),
+                       _OPTION_WORKER)
+        return job
     cle = _cle_de_modele(job["org_id"], depot)
-    return {**job, "model_key": cle} if cle else job
+    if not cle:
+        return job
+    # Trace de REMISE : qui, quelle org, quel dépôt, quel travail — jamais la clé.
+    # Sans elle, une remise anormale ne laisse aucune trace : le seul endroit où
+    # elle se verrait serait la facture de l'org.
+    logger.info("clé de modèle `%s` remise à %s pour l'org %s (travail %s)",
+                depot, appelant, job["org_id"], job.get("id"))
+    return {**job, "model_key": cle}
 
 
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
@@ -422,7 +455,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
         if job is None:
             return {"job": None}
-        return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider)}
+        return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub)}
 
     if inp.op == "list":
         # Surveillance (page Automatisations) : lecture org-scopée, jamais un

@@ -60,6 +60,26 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
     return org_has_option(org, option)
 
 
+def user_has_option(sub: str, option: str) -> bool:
+    """La moitié COMPTE du seam — « CET ACTEUR porte-t-il la marque », sans espace.
+
+    Miroir exact d'`org_has_option`, et pour la raison symétrique : certaines
+    questions portent sur l'identité de l'appelant et sur elle seule. `has_option`
+    ne convient pas — il répond vrai dès que l'ORG ACTIVE porte le don ou que son
+    plan inclut l'option, donc il transforme une marque de compte en propriété
+    d'espace, partagée par tous les membres.
+
+    ⚠️ C'est ce qui la rend indispensable pour `runner_worker` : la marque dit
+    « ce compte EST un de nos workers ». Passer par `has_option` aurait servi la
+    clé de modèle d'une org à **tous ses membres** dès qu'un don aurait été posé
+    sur l'org (ou qu'un plan l'aurait incluse) — soit exactement la fuite que la
+    garde existe pour fermer.
+
+    L'échéance mord dans `has_option_comp`, comme pour toutes les autres surfaces.
+    """
+    return db.has_option_comp("user", sub, option)
+
+
 def org_has_option(org: "int | None", option: str) -> bool:
     """La moitié ORG du seam — « cet ESPACE a-t-il l'option », sans acteur.
 

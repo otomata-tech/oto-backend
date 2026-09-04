@@ -16,8 +16,24 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp import providers
+from oto_mcp import access, providers
 from oto_mcp.capabilities import runner_jobs as RJ
+
+_WORKER = "svc-runner-worker"
+_MEMBRE = "un-membre-ordinaire"
+
+
+@pytest.fixture(autouse=True)
+def _marque_du_worker(monkeypatch):
+    """Seul `_WORKER` porte la marque `runner_worker`. C'est un don de COMPTE :
+    aucune org, aucun plan ne l'accorde (cf. `access.user_has_option`)."""
+    monkeypatch.setattr(access, "user_has_option",
+                        lambda sub, option: sub == _WORKER and option == "runner_worker")
+
+
+def _servi(job, depot, appelant=_WORKER):
+    """Le travail tel que servi au CLAIM, par défaut réservé par un worker."""
+    return RJ._avec_cle(job, depot, appelant)
 
 
 @pytest.fixture
@@ -58,18 +74,18 @@ def test_un_depot_de_cle_est_mono_compte_et_c_est_la_ou_on_le_lit():
 # ── la remise ─────────────────────────────────────────────────────────────────
 
 def test_le_travail_reserve_emporte_la_cle_deposee_par_son_org(_coffre):
-    job = RJ._avec_cle({"id": 1, "org_id": 42}, "anthropic")
+    job = _servi({"id": 1, "org_id": 42}, "anthropic")
     assert job["model_key"] == "sk-de-l-org"
     assert _coffre == [("org", "42", "anthropic")]
 
 
 def test_sans_depot_nomme_aucune_cle_ne_part(_coffre):
-    assert "model_key" not in RJ._avec_cle({"id": 1, "org_id": 42}, None)
+    assert "model_key" not in _servi({"id": 1, "org_id": 42}, None)
     assert _coffre == [], "le coffre n'est même pas interrogé"
 
 
 def test_une_org_qui_n_a_rien_depose_ne_recoit_pas_de_cle(_coffre):
-    assert "model_key" not in RJ._avec_cle({"id": 1, "org_id": 42}, "mistral")
+    assert "model_key" not in _servi({"id": 1, "org_id": 42}, "mistral")
 
 
 # ── la garde : le type, pas le nom ────────────────────────────────────────────
@@ -77,13 +93,13 @@ def test_une_org_qui_n_a_rien_depose_ne_recoit_pas_de_cle(_coffre):
 def test_un_connecteur_ordinaire_ne_se_laisse_pas_tirer_par_un_worker(_coffre):
     """`folk` a bien un secret dans cette org — et il ne sort pas. Réserver un
     travail ne doit jamais devenir un moyen de lire le coffre."""
-    job = RJ._avec_cle({"id": 1, "org_id": 42}, "folk")
+    job = _servi({"id": 1, "org_id": 42}, "folk")
     assert "model_key" not in job
     assert _coffre == [], "le coffre ne doit pas même être interrogé"
 
 
 def test_un_depot_inconnu_ne_fait_pas_tomber_la_reservation(_coffre):
-    assert "model_key" not in RJ._avec_cle({"id": 1, "org_id": 42}, "n-existe-pas")
+    assert "model_key" not in _servi({"id": 1, "org_id": 42}, "n-existe-pas")
 
 
 def test_aucun_connecteur_a_outils_ne_porte_le_type_depot():
@@ -100,14 +116,14 @@ def test_aucun_connecteur_a_outils_ne_porte_le_type_depot():
 def test_un_travail_refuse_pour_identite_ne_recoit_pas_de_cle(_coffre):
     """Il est déjà marqué échoué : lui remettre une clé serait armer un travail
     qui ne doit pas tourner."""
-    job = RJ._avec_cle(
+    job = _servi(
         {"id": 1, "org_id": 42, "delegation_refusee": "compte supprimé"}, "anthropic")
     assert "model_key" not in job
     assert _coffre == []
 
 
 def test_un_travail_sans_org_ne_recoit_pas_de_cle(_coffre):
-    assert "model_key" not in RJ._avec_cle({"id": 1, "org_id": None}, "anthropic")
+    assert "model_key" not in _servi({"id": 1, "org_id": None}, "anthropic")
 
 
 # ── le contrat servi le dit ───────────────────────────────────────────────────
@@ -152,5 +168,61 @@ def test_la_remise_ne_modifie_pas_le_travail_d_origine(_coffre):
     """`_avec_cle` rend une COPIE : le dict du claim, lui, peut être relu,
     compté ou tracé ailleurs sans emporter le secret."""
     origine = {"id": 1, "org_id": 42}
-    servi = RJ._avec_cle(origine, "anthropic")
+    servi = _servi(origine, "anthropic")
     assert servi is not origine and "model_key" not in origine
+
+
+# ── et la file n'est pas réservée aux workers ─────────────────────────────────
+
+def test_un_membre_ordinaire_recoit_son_travail_SANS_la_cle(_coffre):
+    """Le défaut du 04/09 : la capacité est `ORG_MEMBER`, et rien dans le
+    protocole ne distingue un worker d'un membre — même genre de jeton, même
+    route. Sans cette garde, `enqueue` puis `claim provider=anthropic` rendait
+    la clé de l'org en clair à n'importe lequel de ses membres."""
+    job = _servi({"id": 1, "org_id": 42}, "anthropic", appelant=_MEMBRE)
+    assert "model_key" not in job
+    assert job["id"] == 1, "il reçoit son travail — c'est la CLÉ qu'on lui retire"
+
+
+def test_le_refus_est_muet_pour_l_appelant_et_ecrit_pour_nous(_coffre, caplog):
+    """Un refus explicite apprendrait qu'il y a une clé à obtenir. Mais un membre
+    qui nomme un dépôt cherche quelque chose : ça, ça se journalise."""
+    with caplog.at_level("WARNING"):
+        job = _servi({"id": 2, "org_id": 42}, "anthropic", appelant=_MEMBRE)
+    assert "error" not in job and "detail" not in job
+    assert "REFUSÉE" in caplog.text and _MEMBRE in caplog.text
+    assert "sk-de-l-org" not in caplog.text, "jamais la clé dans un journal"
+
+
+def test_la_marque_est_une_propriete_de_COMPTE_pas_d_ORG(monkeypatch, _coffre):
+    """⚠️ Le piège que la garde évite. `access.has_option` répond vrai dès que
+    l'ORG ACTIVE porte le don, ou que son plan inclut l'option : passer par lui
+    aurait servi la clé à TOUS les membres de cette org — la fuite même qu'on
+    ferme. La garde lit `user_has_option`, qui ne regarde que le compte."""
+    import inspect
+    src = inspect.getsource(RJ._avec_cle)
+    assert "user_has_option" in src
+    assert "access.has_option(" not in src
+
+    # Et le seam lui-même ne consulte que le don de COMPTE. ⚠️ Lu sur le FICHIER :
+    # la façade `access` propage une écriture jusqu'au module porteur, donc le
+    # monkeypatch de ce banc remplace aussi `quotas.user_has_option` — inspecter
+    # l'objet rendrait la doublure et le contrôle ne verrait plus rien.
+    import pathlib
+    from oto_mcp.access import quotas
+    src_fichier = pathlib.Path(quotas.__file__).read_text()
+    corps = src_fichier.split("def user_has_option")[1].split("\ndef ")[0]
+    assert 'has_option_comp("user"' in corps
+    # L'APPEL, pas la mention : la docstring cite `org_has_option` pour dire de
+    # quoi elle est le miroir, et un contrôle qui confondrait les deux
+    # interdirait d'expliquer ce qu'on a fait.
+    assert "org_has_option(" not in corps
+    assert "current_org(" not in corps, "aucun contexte d'org ne doit entrer ici"
+
+
+def test_la_remise_a_un_worker_laisse_une_trace_sans_la_cle(_coffre, caplog):
+    with caplog.at_level("INFO"):
+        job = _servi({"id": 3, "org_id": 42}, "anthropic")
+    assert job["model_key"] == "sk-de-l-org"
+    assert "remise" in caplog.text and "org 42" in caplog.text
+    assert "sk-de-l-org" not in caplog.text

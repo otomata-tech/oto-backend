@@ -421,6 +421,14 @@ reçoit désormais son travail SANS clé, sans refus explicite (le refus
 apprendrait qu'il y a une clé à obtenir) mais avec une ligne de journal : un
 membre qui nomme un dépôt cherche quelque chose.
 
+⚠️ **Le refus ne se journalise que s'il y a quelque chose à refuser.** Les
+workers nomment leur dépôt à CHAQUE réservation — trois workers, toutes les
+15 secondes : sans ce filtre, la garde écrivait ~17 000 lignes par jour tant que
+la marque n'était pas posée, c'est-à-dire un journal que plus personne ne lit et
+une sonde qui fabrique son propre signal. La présence du dépôt se lit sans
+déchiffrer (`has_credential`, `secret_enc IS NOT NULL`) : le secret n'est jamais
+touché pour décider d'écrire une ligne.
+
 ⚠️ **La marque se lit par `access.user_has_option`, jamais `has_option`.** Ce
 dernier répond vrai dès que l'ORG ACTIVE porte le don ou que son plan inclut
 l'option : l'employer ici aurait servi la clé à **tous les membres** de cette

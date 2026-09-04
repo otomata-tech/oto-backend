@@ -5,6 +5,9 @@ Source payante (clé SIRENE) : INSEE SIRENE (SIRET, siège).
 """
 from __future__ import annotations
 
+import os
+import threading
+import time
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -424,12 +427,30 @@ def register(mcp: FastMCP) -> None:
     # juridique) là où un profil `fr_get` en ouvre trois à quatre. Le terrain
     # qualifie par tranches de cent (#612).
     _FR_DIRECTORS_BATCH_MAX = 100
+    # Espacement minimal entre deux départs vers l'amont (5 par seconde). Voir le
+    # commentaire du lot : choix prudent, le quota amont n'étant pas publié.
+    _FR_DIRECTORS_CADENCE_S = float(os.environ.get("FR_DIRECTORS_CADENCE_S", "0.2"))
 
     @mcp.tool()
     def fr_directors(siren: str | None = None, sirens: list | None = None) -> dict:
         """Directors declared at the French registry (RNE), for one company or a
-        LIST — `sirens=[…]` (max 100) returns `{entreprises, count, not_found,
-        synthese}`, one entry per SIREN in input order.
+        LIST — `sirens=[…]` (max 100) returns `{entreprises, count, obtenues,
+        en_echec, erreurs, not_found, synthese}`, one entry per SIREN in input
+        order.
+
+        ⚠️ **`count` counts the records OBTAINED, not the lines returned.** A batch
+        of 50 where 21 calls failed returns `count: 29`, `en_echec: 21` and names
+        those 21 SIRENs in `erreurs` — at the top level, like `not_found`, because
+        a hundred-line list is not re-read to find them. Reading `count` and
+        `not_found` alone used to say "50 records, none missing" while 21 companies
+        silently dropped out of the deliverable.
+
+        ⚠️ **An `error` other than `not_found` is an upstream failure, not a fact
+        about the company** — and it is RETRYABLE. The batch paces itself and
+        retries the upstream quota (429, honouring `Retry-After`), so what reaches
+        you has already been given a second chance; a SIREN still in `erreurs` says
+        the upstream is busy, never that the company has no director. Ask for those
+        SIRENs again, later or in a smaller batch.
 
         ⚠️ An empty `dirigeants` has THREE meanings, told apart by `registre`:
         the SIREN is unknown (`error: "not_found"`), the legal form is not
@@ -461,22 +482,54 @@ def register(mcp: FastMCP) -> None:
                 message=f"`sirens` est limité à {_FR_DIRECTORS_BATCH_MAX} par appel "
                         f"(reçu {len(cleaned)}) — découpe en lots"))
 
+        # Un PLAFOND en vol ne borne pas le DÉBIT : quatre requêtes qui se relaient
+        # dès qu'un slot se libère envoient aussi vite que l'amont répond. Le quota
+        # de Recherche Entreprises est par IP — celle de FOD, partagée par toute la
+        # plateforme — donc un lot de 50 déclenchait son propre 429, quand les mêmes
+        # SIREN redemandés en deux fois passaient sans erreur (otomata-tech/oto#44).
+        #
+        # ⚠️ La valeur ci-dessous est un choix PRUDENT, pas une mesure : le quota
+        # n'est pas publié. Repère observé — un lot de 50 échouait, des lots de 10
+        # et 11 passaient ; 5 départs par seconde restent nettement en deçà. À
+        # ajuster si quelqu'un mesure le vrai seuil, pas au ressenti.
+        cadence = _FR_DIRECTORS_CADENCE_S
+        verrou, dernier_depart = threading.Lock(), [0.0]
+
+        def _attendre_son_tour() -> None:
+            with verrou:
+                reste = cadence - (time.monotonic() - dernier_depart[0])
+                if reste > 0:
+                    time.sleep(reste)
+                dernier_depart[0] = time.monotonic()
+
         def _one(s: str) -> dict:
+            _attendre_son_tour()
             try:
                 return fr_registre.fiche(s, entreprises.get_by_siren(s))
             # noqa: SILENT — l'échec par siren est rendu dans la ligne de résultat
             except Exception as exc:  # un SIREN en échec ne fait pas tomber le lot
                 return {"error": f"{type(exc).__name__}: {exc}", "siren": s}
 
-        # 4 en vol, comme le lot de `fr_get` : c'est la même API amont
-        # (Recherche Entreprises) et la même pression, mesurée en production.
+        # 4 en vol, comme le lot de `fr_get` — mais étalés (cf. ci-dessus).
         with ThreadPoolExecutor(max_workers=4) as pool:
             fiches = list(pool.map(_one, cleaned))
+        # Un échec amont n'est PAS une fiche. `count` valait le nombre de lignes
+        # rendues, échecs compris : une réponse à 50 dont 21 avaient échoué se
+        # lisait « 50 fiches, aucune introuvable », et les 21 entreprises
+        # disparaissaient du livrable ou passaient pour « sans dirigeant »
+        # (otomata-tech/oto#44). Le partage est maintenant explicite, et les SIREN
+        # en échec sont nommés DEUX fois — dans leur ligne et ici — au même titre
+        # que les introuvables : une liste de cent fiches ne se relit pas pour les
+        # retrouver.
+        en_echec = [f["siren"] for f in fiches
+                    if f.get("error") and f.get("error") != "not_found"]
+        obtenues = [f for f in fiches if not f.get("error")]
         return {
             "entreprises": fiches,
-            "count": len(fiches),
-            # Les introuvables sont NOMMÉS deux fois : dans leur ligne, et ici —
-            # une liste de cent fiches ne se relit pas pour les retrouver.
+            "count": len(obtenues),
+            "obtenues": len(obtenues),
+            "en_echec": len(en_echec),
+            "erreurs": en_echec,
             "not_found": [f["siren"] for f in fiches if f.get("error") == "not_found"],
             "synthese": fr_registre.synthese(fiches),
         }

@@ -130,7 +130,10 @@ def test_siren_inconnu_se_nomme_au_lieu_de_rendre_une_liste_vide(fr_directors):
 
 def test_le_lot_nomme_ses_introuvables_deux_fois(fr_directors):
     out = fr_directors(sirens=["106974637", "000000000", "775676182"])
-    assert out["count"] == 3
+    # `count` = les fiches OBTENUES, pas les lignes rendues (otomata-tech/oto#44) :
+    # un introuvable n'est pas une fiche. Les trois lignes sont bien là.
+    assert out["count"] == 2
+    assert len(out["entreprises"]) == 3
     assert out["entreprises"][1] == {"error": "not_found", "siren": "000000000"}
     assert out["not_found"] == ["000000000"]
 
@@ -203,8 +206,12 @@ def test_la_synthese_partitionne_le_lot(fr_directors):
         "not_found": 1,
         "erreur": 1,
     }
-    # Exhaustive et exclusive : rien ne se perd entre les catégories.
-    assert sum(out["synthese"].values()) == out["count"] == len(sirens)
+    # Exhaustive et exclusive : rien ne se perd entre les catégories. La synthèse
+    # partitionne les LIGNES RENDUES — `count` ne compte que les fiches obtenues
+    # depuis oto#44, les deux totaux ne se confondent donc plus.
+    assert sum(out["synthese"].values()) == len(out["entreprises"]) == len(sirens)
+    assert out["obtenues"] + out["en_echec"] + len(out["not_found"]) == len(sirens), (
+        "obtenues / en échec / introuvables doivent partitionner le lot")
 
 
 def test_toutes_les_categories_sont_rendues_meme_a_zero(fr_directors):
@@ -224,7 +231,15 @@ def test_l_ordre_d_entree_est_conserve(fr_directors):
 
 def test_un_siren_en_echec_ne_fait_pas_tomber_le_lot_ni_disparaitre_de_la_reponse(fr_directors):
     out = fr_directors(sirens=["106974637", "999999999"])
-    assert out["count"] == 2
+    # LE point d'oto#44 : `count` valait 2 alors qu'une seule fiche avait été
+    # obtenue. Un agent qui lit `count` et `not_found` concluait « 2 fiches, aucune
+    # introuvable » — l'entreprise en échec passait pour « sans dirigeant » ou
+    # disparaissait du livrable.
+    assert out["count"] == 1 and out["obtenues"] == 1
+    assert out["en_echec"] == 1
+    assert out["erreurs"] == ["999999999"], (
+        "les SIREN en échec doivent être NOMMÉS au premier niveau, comme les "
+        "introuvables — une liste de cent fiches ne se relit pas pour les retrouver")
     assert out["entreprises"][1]["siren"] == "999999999"
     assert out["entreprises"][1]["error"].startswith("RuntimeError")
     # Un échec amont n'est PAS un « not_found » : le numéro peut être bon.

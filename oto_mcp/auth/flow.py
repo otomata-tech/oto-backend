@@ -35,7 +35,7 @@ import time
 from typing import Optional
 
 import requests
-from .. import config
+from .. import config, deprecations
 
 DEFAULT_STATE_TTL = 600   # 10 min — le temps de lire un écran de consentement
 
@@ -180,6 +180,56 @@ def return_url(app: Optional[str], suffix: str, *, org: Optional[int] = None) ->
         path_tmpl = _DEFAULT_RETURN_PATH
     path = path_tmpl.format(org=org if org is not None else "")
     return f"{base}{path}{suffix}"
+
+
+# --- LA convention unique de retour OAuth (oto-backend#670) --------------------
+#
+# Avant ce fabricant, chaque callback (`api/salesforce.py`, `api/zoho.py`,
+# `api/atlassian.py`, `api/folk.py`, `api/datastore.py`) composait SA propre
+# query string de retour, à la main : cinq formes différentes, dont deux replis
+# cassés (une f-string à accolades doublées qui rendait une chaîne littérale au
+# lieu d'une URL). La forme salesforce — `?connector=<nom>&connect=<etat>`,
+# `etat ∈ {connected, error, forbidden}` — devient LA convention, fabriquée ici
+# une fois plutôt que recopiée cinq fois.
+
+def connector_return_suffix(connector: str, etat: str, *,
+                            legacy: Optional[tuple] = None) -> str:
+    """`?connector=<connector>&connect=<etat>`.
+
+    `legacy` — un couple `(clé, valeur)` — double une ANCIENNE forme encore LUE par
+    un consommateur aujourd'hui (le dashboard sur `?zoho=connected`/`?google=
+    connected`) : ajoutée à la suite, dans le MÊME suffixe, tant que
+    `deprecations.dans_le_preavis_retour_oauth()` le dit — jamais deux
+    redirections, une seule URL qui porte les deux jeux de clés. Ne rien passer
+    pour un connecteur dont l'ancien statut n'a JAMAIS eu de lecteur (atlassian,
+    folk, et les branches d'échec de google qui ne redirigeaient pas du tout) :
+    doubler une valeur que personne n'a jamais pu lire ne protège personne, et
+    grossit l'URL pour rien."""
+    suffix = f"?connector={connector}&connect={etat}"
+    if legacy and deprecations.dans_le_preavis_retour_oauth():
+        cle, valeur = legacy
+        suffix += f"&{cle}={valeur}"
+    return suffix
+
+
+def connector_return_url(app: Optional[str], connector: str, etat: str, *,
+                         org: Optional[int] = None,
+                         legacy: Optional[tuple] = None) -> str:
+    """URL de retour complète : base+chemin de `return_url` (app tierce connue,
+    sinon défaut oto-dashboard) + `connector_return_suffix`. Le point d'entrée pour
+    un connecteur dont le retour suit déjà le gabarit `return_url`/`RETURN_APPS`
+    (salesforce, zoho, google) ; atlassian/folk résolvent leur base autrement
+    (`links.link_for`, patron par tenant) et utilisent `avec_connect` à la place."""
+    return return_url(app, connector_return_suffix(connector, etat, legacy=legacy), org=org)
+
+
+def avec_connect(url: str, etat: str) -> str:
+    """Ajoute `connect=<etat>` à une URL de retour qui porte déjà `connector=`
+    (le patron `links.connector_return`, utilisé par atlassian/folk) — jamais une
+    seconde redirection, le même paramètre rejoint la même URL, qu'elle ait ou non
+    déjà une query string."""
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}connect={etat}"
 
 
 # --- échange du code -----------------------------------------------------------

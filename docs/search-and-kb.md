@@ -116,6 +116,27 @@ le dispatch `docs/core.py` route resolve/list/create-proposal sur request_id/pro
 le gate doc_id** (une création doc_id NULL était sinon inatteignable) ; `me.inbox`
 (`GET /api/me/inbox`, 2 voies À traiter/Récent, 200-vide sans org).
 
+### Le classement est un cache, pas une seconde source
+
+`search_vec` accélère le classement ; le filtre, lui, reste l'expression indexée du
+contenu courant. Les écritures de docs, lignes, textes extraits, briefs/projets,
+procédures et pages/guides natifs maintiennent ce cache **dans leur transaction**.
+
+`stamp_rank_vector` **invalide d'abord à NULL**, puis recalcule sous savepoint.
+L'ordre n'est pas un détail : le rattrapage de fond ne reprend que les vecteurs
+absents. Une ligne qui gardait son ancien vecteur après un recalcul raté n'était
+donc **jamais** reprise — le classement n'était pas « daté de quelques secondes »
+comme le promettait le commentaire, il était faux indéfiniment.
+
+Donc : l'invalidation est **obligatoire** — si elle échoue, l'écriture échoue, parce
+qu'une colonne absente est une erreur de schéma et non une optimisation qu'on saute.
+Le recalcul, lui, reste best-effort et **journalisé** : le contenu reste écrit, le
+`COALESCE` calcule le rang sur le texte courant, et le worker reprend les NULL.
+C'est un coût de calcul explicite, jamais une lecture périmée tolérée.
+
+Ce maintien ne recopie aucun ancien contenu vers `nodes` : il tient une projection
+du contenu actif, ce qui est l'inverse d'une synchronisation entre deux modèles.
+
 ## Seam `pending_action`
 
 **Seam `pending_action`** (`status_hints.py`, patron connector_verify) : un connecteur à

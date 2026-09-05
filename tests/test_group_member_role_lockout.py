@@ -162,7 +162,10 @@ def test_add_resolves_an_email_before_guarding(monkeypatch):
     """`add` accepte un email : la garde doit voir le sub RÉSOLU, pas la chaîne saisie —
     sinon elle interroge le rôle d'une cible qui n'existe pas et laisse tout passer."""
     written = _patch(monkeypatch, role="group_admin", chiefs=1, org_admins=0)
-    monkeypatch.setattr(gm.db, "get_user_by_email", lambda e: {"sub": "chief"})
+    # L'ancrage a bougé : la résolution vit dans `_identite` (domicile unique de
+    # la garde d'homonymie). Ce que ce test garde est INCHANGÉ — la garde doit
+    # voir le sub résolu — seule la porte d'entrée de l'annuaire a changé.
+    monkeypatch.setattr(gm._identite.db, "get_users_by_email", lambda e: [{"sub": "chief"}])
     with pytest.raises(AuthzDenied) as e:
         gm._add_member(_ctx(), gm.AddGroupMemberInput(group_id=GROUP_ID,
                                                       target="chief@x.tld",

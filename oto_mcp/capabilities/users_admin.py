@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import (access, billing_grants, providers, credentials_store, db,
                 group_store, org_store)
+from . import _identite
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -28,13 +29,18 @@ _ID = {"id": "org_id"}
 
 
 def _resolve_target(target: str) -> str:
-    """Email → sub (404 si inconnu), sinon sub brut. Miroir de
-    `tools/meta._resolve_target_sub` pour le confort MCP (l'agent passe un email)."""
+    """Email → sub (404 si inconnu), sinon sub brut, pour le confort MCP.
+
+    ⚠️ L'ambiguïté est refusée par le seam (`_identite.porteurs_de`) : suspendre
+    ou changer le rôle du mauvais homonyme laisse un compte marqué qui
+    n'apparaîtra dans AUCUN inventaire — c'est le seul geste de cette classe où
+    rien ne se compte et où quelque chose demeure.
+    """
     if "@" in target:
-        u = db.get_user_by_email(target)
-        if not u:
+        porteurs = _identite.porteurs_de(target)
+        if not porteurs:
             raise AuthzDenied(404, "unknown_user", f"Aucun compte avec l'email {target!r}.")
-        return u["sub"]
+        return porteurs[0]["sub"]
     return target
 
 

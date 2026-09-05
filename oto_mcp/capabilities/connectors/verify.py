@@ -69,6 +69,21 @@ class VerifyResult(BaseModel):
     # mesuré l'authentification. Les deux appellent des conduites différentes.
     coverage: Optional[str] = None
 
+    # POURQUOI ça ne marche pas — `ok` | `unauthorized` | `no_quota` | `unknown`
+    # (oto#57). Trois causes qui appellent des conduites OPPOSÉES : remplacer la clé,
+    # recharger le compte, ou ne surtout rien refaire. Le booléen `ok` ne les
+    # distinguait pas, et il reste servi tel quel — un contrat servi ne se durcit pas
+    # en place, il se double.
+    #
+    # ⚠️ `unknown` se lit « je ne sais pas », JAMAIS « rien de grave ». C'est le
+    # verdict le plus fréquent tant que les sondes ne lèvent pas d'erreur typée, et le
+    # confondre avec un diagnostic ferait le mal que ce champ répare.
+    verdict: Optional[str] = None
+    # La conduite à tenir, en clair. Un diagnostic qui ne dit pas quoi faire renvoie
+    # chercher — c'est ainsi qu'une personne a relancé six fois une connexion valide.
+    # Absent quand tout va bien.
+    next_step: Optional[str] = None
+
 
 class MemberProviderStatus(BaseModel):
     """Entrée `ProviderStatus` d'un membre pour un connecteur — la MÊME forme que
@@ -182,11 +197,14 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     # ailleurs ». Même source que le verdict de la fiche (`status_hints`).
     st = status_hints.credential_state(inp.provider, fields)
     if st is not None and not st.complete:
+        # ⚠️ Pas de `verdict` ici, et c'est voulu : RIEN n'a été sondé. Poser
+        # `unknown` ferait croire à une mesure qui a échoué, alors que le credential
+        # est simplement incomplet — `pending` le dit déjà, et mieux.
         return {"ok": False, "pending": True, "provider": inp.provider,
                 "error": st.next_action, "elapsed_ms": 0,
                 "coverage": connector_verify.couverture(inp.provider), **instance}
     started = time.monotonic()
-    ok, error = True, None
+    ok, error, verdict = True, None, connector_verify.OK
     try:
         # Un seul endroit exécute les sondes (`connectors.verify.executer`) : hors
         # de la boucle d'événements, sous une borne de temps, et il porte la
@@ -199,6 +217,10 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     except Exception as e:  # noqa: BLE001 — l'erreur d'auth EST le résultat
         ok = False
         error = e.error.message if isinstance(e, McpError) else str(e)
+        # Classé sur ce que l'exception PORTE (type levé, puis `status_code`), jamais
+        # sur les mots de son message : un classement bâti sur du texte change de sens
+        # au premier reformatage amont, sans que personne s'en aperçoive.
+        verdict = connector_verify.classer(e)
     # La sonde EST le « health check » (read facile) → son verdict alimente le flag santé.
     # `record_health` = aide partagée (`connectors/health.py`, oto#25 lot b2) : mêmes
     # deux lignes qu'avant sous `_record_health`, extraites pour que d'autres modules
@@ -210,10 +232,16 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
            # Ce que ce verdict VAUT : servi avec lui, jamais à côté. Un client qui
            # lit `ok` sans lire ceci croit en savoir plus qu'il n'en sait.
            "coverage": connector_verify.couverture(inp.provider),
+           "verdict": verdict,
            # QUELLE instance a répondu — cf. `_fields_config_scope`.
            **instance}
     if not ok:
         out["error"] = error
+        # La conduite, servie AVEC le diagnostic : les trois causes appellent des
+        # gestes opposés, et « ne recommence pas » en est un.
+        conduite = connector_verify.CONDUITE.get(verdict)
+        if conduite:
+            out["next_step"] = conduite
     return out
 
 
@@ -230,7 +258,11 @@ CAP_DOC = (
     "there is something left to spend. `null` = this connector declares no probe at "
     "all, which is not the same as 'nothing to check'. A preflight built on `ok` alone "
     "reports green on an exhausted account and the work fails mid-flight, after side "
-    "effects."
+    "effects."    "⚠️ `verdict` says WHY when it fails — `unauthorized` (replace the key or widen "
+    "its scope; adding another one changes nothing), `no_quota` (the key is fine, the "
+    "balance is empty: top up, do NOT reconnect), or `unknown` (the probe failed "
+    "without saying why — read `error` as it stands). `next_step` spells out the move. "
+    "⚠️ `unknown` means 'I do not know', never 'nothing serious'."
 )
 
 class EffectForMemberInput(BaseModel):

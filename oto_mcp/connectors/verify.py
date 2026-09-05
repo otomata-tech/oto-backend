@@ -38,6 +38,69 @@ Probe = Callable[[dict, dict], Union[None, Awaitable[None]]]
 #: dire ce qu'on croyait. C'est la nuance qui décide du remède — il ne faut pas plus de
 #: sondes, il faut qu'une sonde DISE CE QU'ELLE COUVRE, pour qu'un vert dise ce qu'il
 #: vaut et qu'un appelant sache ce qu'il ne sait pas.
+#: Les VERDICTS d'une sonde. Trois états qui appellent des conduites OPPOSÉES, là où
+#: un booléen n'en distinguait aucune (oto#57) :
+#:   `ok`           — ça marche.
+#:   `unauthorized` — la clé n'autorise pas : la remplacer ou élargir son périmètre.
+#:                    En poser une de plus ne changera rien.
+#:   `no_quota`     — la clé est bonne, le solde est vide : recharger.
+#:   `unknown`      — la sonde a échoué sans qu'on puisse classer. ⚠️ Se lit « je ne
+#:                    sais pas », JAMAIS « rien de grave » : c'est la valeur la plus
+#:                    fréquente aujourd'hui, et la confondre avec un diagnostic ferait
+#:                    exactement le mal que ce lot répare.
+OK = "ok"
+UNAUTHORIZED = "unauthorized"
+NO_QUOTA = "no_quota"
+UNKNOWN = "unknown"
+VERDICTS = (OK, UNAUTHORIZED, NO_QUOTA, UNKNOWN)
+
+
+class SondeRefusee(Exception):
+    """Une sonde qui SAIT pourquoi elle échoue le dit en levant l'un des deux
+    ci-dessous. C'est la voie explicite, préférée au classement par code HTTP : elle
+    survit à un amont qui répondrait 200 avec un corps d'erreur."""
+
+
+class NonAutorise(SondeRefusee):
+    """La clé n'autorise pas — invalide, révoquée, ou périmètre insuffisant."""
+
+
+class QuotaEpuise(SondeRefusee):
+    """La clé authentifie, il n'y a plus rien à dépenser."""
+
+
+#: Les codes amont qui classent un échec quand la sonde n'a rien dit d'elle-même.
+#: ⚠️ Lus sur `status_code` (`UpstreamHTTPError`), **jamais devinés sur le texte** d'un
+#: message : un classement bâti sur des mots change de sens au premier reformatage
+#: amont, et personne ne s'en aperçoit.
+_PAR_CODE = {401: UNAUTHORIZED, 403: UNAUTHORIZED, 402: NO_QUOTA, 429: NO_QUOTA}
+
+
+def classer(erreur: BaseException) -> str:
+    """Le verdict d'un échec de sonde. `unknown` quand rien ne permet de trancher —
+    et c'est un verdict à part entière, pas un défaut."""
+    if isinstance(erreur, QuotaEpuise):
+        return NO_QUOTA
+    if isinstance(erreur, NonAutorise):
+        return UNAUTHORIZED
+    code = getattr(erreur, "status_code", None)
+    if isinstance(code, int):
+        return _PAR_CODE.get(code, UNKNOWN)
+    return UNKNOWN
+
+
+#: La conduite à tenir, par verdict. Un diagnostic qui ne dit pas quoi faire renvoie
+#: chercher — et c'est ainsi qu'une personne a relancé six fois une connexion valide.
+CONDUITE = {
+    UNAUTHORIZED: ("la clé n'autorise pas cet appel — remplace-la, ou élargis son "
+                   "périmètre chez le fournisseur. En poser une de PLUS ne changera "
+                   "rien."),
+    NO_QUOTA: ("la clé est bonne : c'est le solde qui est vide. Recharge le compte "
+               "chez le fournisseur — inutile de reconnecter quoi que ce soit."),
+    UNKNOWN: ("le test a échoué sans dire pourquoi. Lis `error` tel quel : il vient "
+              "du fournisseur, et c'est la seule chose qu'on sache."),
+}
+
 AUTH = "auth"                 # la clé authentifie. Ne dit RIEN du solde.
 AUTH_QUOTA = "auth+quota"     # la clé authentifie ET il reste de quoi travailler.
 COUVERTURES = (AUTH, AUTH_QUOTA)

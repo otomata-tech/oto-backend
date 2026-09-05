@@ -91,3 +91,55 @@ def test_la_capacite_sert_la_couverture_avec_le_verdict():
     couverture croit en savoir plus qu'il n'en sait."""
     from oto_mcp.capabilities.connectors.verify import VerifyResult
     assert "coverage" in VerifyResult.model_fields
+
+
+# ── le verdict : POURQUOI ça ne marche pas (oto#57, second volet) ─────────────
+# Trois causes qui appellent des conduites OPPOSÉES — remplacer la clé, recharger le
+# compte, ou ne surtout rien refaire — que le booléen `ok` ne distinguait pas. Le
+# 04/09, un 402 et un 403 se ressemblaient exactement depuis l'extérieur.
+
+def test_un_solde_vide_se_classe_no_quota():
+    from oto.tools.common.errors import UpstreamHTTPError
+    assert V.classer(UpstreamHTTPError(402, "no credits")) == V.NO_QUOTA
+
+
+def test_un_refus_d_autorisation_se_classe_unauthorized():
+    from oto.tools.common.errors import UpstreamHTTPError
+    assert V.classer(UpstreamHTTPError(403, "MISSING_SCOPES")) == V.UNAUTHORIZED
+    assert V.classer(UpstreamHTTPError(401, "Unauthorized")) == V.UNAUTHORIZED
+
+
+def test_une_sonde_qui_SAIT_le_dit_sans_passer_par_un_code():
+    """La voie explicite prime : elle survit à un amont qui répondrait 200 avec un
+    corps d'erreur."""
+    assert V.classer(V.QuotaEpuise("à sec")) == V.NO_QUOTA
+    assert V.classer(V.NonAutorise("périmètre")) == V.UNAUTHORIZED
+
+
+def test_ce_qu_on_ne_sait_pas_classer_est_unknown_pas_ok():
+    """⚠️ `unknown` est un verdict à part entière. Le replier sur `ok` — ou sur
+    `unauthorized` « par défaut » — ferait conclure à une cause qu'on n'a pas mesurée."""
+    assert V.classer(ValueError("boom")) == V.UNKNOWN
+    assert V.classer(TimeoutError("lent")) == V.UNKNOWN
+    from oto.tools.common.errors import UpstreamHTTPError
+    assert V.classer(UpstreamHTTPError(500, "amont HS")) == V.UNKNOWN
+
+
+def test_le_classement_ne_lit_JAMAIS_le_texte_du_message():
+    """Un classement bâti sur des mots change de sens au premier reformatage amont,
+    et personne ne s'en aperçoit. Un message qui PARLE de crédits sans porter le code
+    ne doit rien déclencher."""
+    assert V.classer(RuntimeError("insufficient credits, please top up")) == V.UNKNOWN
+
+
+def test_chaque_verdict_d_echec_porte_une_conduite():
+    """Un diagnostic qui ne dit pas quoi faire renvoie chercher — c'est ainsi qu'une
+    personne a relancé six fois une connexion parfaitement valide."""
+    for v in (V.UNAUTHORIZED, V.NO_QUOTA, V.UNKNOWN):
+        assert V.CONDUITE.get(v, "").strip(), v
+    assert V.OK not in V.CONDUITE, "il n'y a rien à faire quand ça marche"
+
+
+def test_la_capacite_sert_verdict_et_conduite():
+    from oto_mcp.capabilities.connectors.verify import VerifyResult
+    assert {"verdict", "next_step"} <= set(VerifyResult.model_fields)

@@ -557,8 +557,8 @@ def register(mcp: FastMCP) -> None:
           `field.readonly: true` refuses a write that CHANGES the value in place
           (layers stay open — what another source says goes in `<field>.comment`);
           `field.origine: "system"` has the platform keep the previous value in
-          `<field>.origine` — read `data_write` for WHICH previous value, it is not
-          always the one you would assume; `field.system: "run.id"|"run.started_at"|"write.at"` has
+          `<field>.origine` — the value AS IT STOOD when the format was declared
+          (`data_write` says what that does and does not mean); `field.system: "run.id"|"run.started_at"|"write.at"` has
           the PLATFORM write the VALUE on every write — do not send that column, it
           is stamped for you (a value you retype is what you believe, not what
           happened). Re-sending the SAME value is never a write, so re-emitting a
@@ -595,10 +595,9 @@ def register(mcp: FastMCP) -> None:
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
                 fate; a field may carry `readonly: true` (value locked, layers open),
-                `origine: "system"` (platform-kept `<field>.origine` — captured at
-                the FIRST value-changing write AFTER this format is declared, so
-                declaring it late captures whatever the last writer left, not what
-                the data owner supplied) or
+                `origine: "system"` (platform-kept `<field>.origine` — the value as
+                it stood WHEN THIS FORMAT WAS DECLARED, written onto every existing
+                row at that moment; the name says when, not who) or
                 `system: "<source>"` (platform-written value).
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
@@ -641,21 +640,24 @@ def register(mcp: FastMCP) -> None:
         nothing back — announce what you are about to change on a column you did not
         fill yourself.
 
-        The one safety net is `origine: "system"`, and it is narrower than it sounds.
-        The platform keeps the previous value in `<field>.origine` **once**, at the
-        FIRST write that CHANGES the value **after that format was declared** — not
-        at row creation, and never again afterwards. Three consequences worth knowing
-        before you rely on it:
+        The safety net is `origine: "system"`, and what it keeps is precise: **the
+        value as it stood when the format was declared**. Declaring the format
+        writes that value into `<field>.origine` on every existing row, once, in one
+        transaction — the reply says how many rows it touched. From then on, the
+        layer never moves again: later writes overwrite the value, never the origin.
 
-        - a column WITHOUT that format keeps nothing at all — overwriting is final ;
-        - declaring the format LATE captures whatever the last writer left, which may
-          be another agent's value, presented under the name `origine` as if it were
-          the owner's ;
-        - re-writing the SAME value changes nothing and captures nothing, by design.
+        Two things it does NOT mean:
 
-        It does not depend on how the row was created: a row appended through the
-        MCP tool and one created through the REST face behave identically (measured
-        2026-09-04, both faces call the same store).
+        - it is not "the value the data owner supplied". If agents had already
+          written before the format was declared, what is kept is what stood at
+          declaration time. The name says when, not who ;
+        - a column WITHOUT that format keeps nothing at all — overwriting is final,
+          and nothing will tell you afterwards.
+
+        Re-writing the SAME value changes nothing and captures nothing, by design.
+        And it does not depend on how the row was created: a row appended through
+        the MCP tool and one created through the REST face behave identically
+        (measured 2026-09-04, both faces call the same store).
 
         SINGLE (`row`): WITHOUT `id` = append a NEW row (new JSON keys auto-create
         columns, unless the table is CLOSED — see below) — UNLESS the table declares

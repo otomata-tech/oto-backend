@@ -398,7 +398,18 @@ def _write_refusal(e: Exception) -> AuthzDenied:
     return AuthzDenied(400, "invalid_row_input", str(e))
 
 
-_ECRITURE_DETRUIT = (' ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne ouverte il n\'y a ni annulation ni historique, la valeur précédente disparaît au moment où la vôtre arrive. Le seul filet est le format `origine: "system"`, et il est plus étroit qu\'il n\'y paraît — la plateforme garde la valeur précédente UNE fois, à la première écriture qui CHANGE la valeur APRÈS la déclaration de ce format. Une colonne sans ce format ne garde rien ; un format déclaré tard capture ce que le dernier écrivain a laissé, qui peut être la valeur d\'un autre agent, présentée sous le nom `origine`. La face d\'appel n\'y change rien : une ligne créée ici et une ligne créée par l\'outil agent se comportent à l\'identique.')
+_ECRITURE_DETRUIT = (
+    " ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne "
+    "ouverte il n'y a ni annulation ni historique, la valeur précédente "
+    "disparaît au moment où la vôtre arrive. Le filet est le format "
+    "`origine: \"system\"`, et ce qu'il garde est précis : la valeur TELLE "
+    "QU'ELLE ÉTAIT à la déclaration du format. Déclarer le format l'écrit "
+    "sur toutes les lignes existantes, une fois, dans une transaction ; "
+    "ensuite la couche ne bouge plus. Le nom dit QUAND, pas QUI : si des "
+    "agents avaient déjà écrit avant la déclaration, c'est leur valeur qui "
+    "est gardée. Une colonne sans ce format ne garde rien. La face d'appel "
+    "n'y change rien : une ligne créée ici et une ligne créée par l'outil "
+    "agent se comportent à l'identique.")
 
 
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:

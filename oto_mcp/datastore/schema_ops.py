@@ -38,6 +38,26 @@ class SchemaOpsMixin:
         ns = db.get_datastore_namespace_by_id(ns_id)
         return (ns or {}).get("schema")
 
+    def _capturer_origine_des_colonnes_neuves(self, ns_id: int,
+                                              avant: Optional[dict],
+                                              apres: Optional[dict]) -> int:
+        """Pose l'origine sur les lignes existantes des colonnes qui viennent de
+        GAGNER le format `origine: "system"`.
+
+        Sans ça, une ligne créée avant la déclaration n'a aucun filet : la capture
+        paresseuse ne garde que ce qui existait à la première écriture d'APRÈS, et
+        la valeur d'avant est perdue sans que rien ne le dise (otomata-tech/oto#46).
+
+        On ne regarde que les colonnes NEUVES au sens du format : re-déclarer un
+        schéma qui portait déjà `origine: "system"` ne recapture rien, sinon chaque
+        pose de schéma écraserait les origines déjà gardées — l'inverse du but.
+        """
+        neuves = (dsv2.system_origin_fields(apres)
+                  - dsv2.system_origin_fields(avant))
+        if not neuves:
+            return 0
+        return db.datastore_capturer_origine(ns_id, sorted(neuves))
+
     def set_schema(self, namespace: str, schema: Optional[dict], *,
                    retraits_annonces: Optional[list] = None) -> dict:
         """Pose (ou retire si None) le schéma typé d'un namespace. Exige le droit
@@ -72,9 +92,14 @@ class SchemaOpsMixin:
         # — c'est exactement pour ça que la réponse doit le porter. Lu une fois la
         # validation passée : un refus n'a rien effacé, l'annoncer ferait chercher
         # un dégât imaginaire (même patron qu'`effacements` sur une ligne).
-        efface = dsv2.declarations_effacees(self._schema_of(ns_id), schema,
-                                            retraits_annonces)
+        ancien = self._schema_of(ns_id)
+        efface = dsv2.declarations_effacees(ancien, schema, retraits_annonces)
         db.set_datastore_schema(ns_id, schema)
+        # Après l'écriture du schéma : la capture n'a de sens que si la déclaration
+        # a bien eu lieu. Avant, un refus plus bas laisserait des origines posées
+        # pour un format qui n'existe pas.
+        origines_posees = self._capturer_origine_des_colonnes_neuves(
+            ns_id, ancien, schema)
         # La pose de l'index est BORNÉE (incident du 2026-09-01 : elle a tenu la boucle
         # 12 min 48 s derrière une lecture ouverte). Quand la borne coupe, le schéma est
         # déjà écrit : rendre un 500 ferait chercher un dégât qui n'existe pas, et
@@ -97,6 +122,10 @@ class SchemaOpsMixin:
         # connaître.
         out = {"namespace": namespace, "schema": schema,
                "enforced": dsv2.enforced_keys()}
+        # Une écriture sur des lignes existantes ne se fait pas en silence : celui
+        # qui déclare doit savoir que sa pose a TOUCHÉ des données, et combien.
+        if origines_posees:
+            out["origines_capturees"] = origines_posees
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe,

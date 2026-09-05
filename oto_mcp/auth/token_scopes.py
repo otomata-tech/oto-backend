@@ -56,6 +56,31 @@ _CURRENT: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
 
 NAMESPACES, PROJECTS = "namespaces", "projects"
 
+# La portée du RUNNER — booléenne, et c'est ce qui la distingue des deux autres.
+#
+# ⚠️ Les familles ci-dessus nomment une ressource LUE DANS LE CHEMIN (un tableau,
+# un projet). Les routes du runner n'en portent aucune : le même chemin sert à
+# réserver, prolonger, conclure, enfiler — l'opération vit dans le CORPS. On ne
+# peut donc pas les borner plus finement sans faire monter l'opération dans l'URL,
+# ce qui est un changement de contrat public. `runner: true` ouvre la file, les
+# flottes et le fil, ET RIEN D'AUTRE.
+#
+# Ce que ça vaut, mesuré le 05/09/2026 : le jeton qui faisait tourner les workers
+# n'était pas porté, donc il ouvrait `/api/admin/users`, `/api/admin/platform-keys`
+# et la console de supervision — non parce qu'on l'avait voulu, mais parce que
+# RIEN NE LES FERMAIT. Un jeton porté `{"runner": true}` ne les atteint plus.
+RUNNER = "runner"
+
+# Les trois routes sans lesquelles un worker cesse de fonctionner — relevées dans
+# son client HTTP, pas supposées : la file (réserver, prolonger, conclure, lier),
+# les flottes (déclarer, armer, prendre, battre) et le fil (le rejeu d'un travail
+# interrompu). Compter des lignes se demande EN PLUS, par `namespaces`.
+_ALLOWED_RUNNER: tuple[tuple[re.Pattern, frozenset], ...] = (
+    (re.compile(r"^/api/me/runner/jobs$"), frozenset({"POST"})),
+    (re.compile(r"^/api/me/runner/fleets$"), frozenset({"POST"})),
+    (re.compile(r"^/api/me/runs/thread$"), frozenset({"POST"})),
+)
+
 # La ressource nommée par la portée, capturée dans l'URL : un nom de tableau, ou
 # l'id d'un projet. C'est ce que la requête ADRESSE — d'où la règle : ce qu'un
 # jeton porté peut atteindre doit se lire dans le chemin, jamais dans le corps.
@@ -151,17 +176,24 @@ def parse(raw: object) -> Optional[dict]:
         return None
     if not isinstance(raw, dict):
         raise ScopeError("scopes doit être un objet {\"namespaces\": {…}, \"projects\": {…}}")
-    unknown = set(raw) - {NAMESPACES, PROJECTS}
+    unknown = set(raw) - {NAMESPACES, PROJECTS, RUNNER}
     if unknown:
         raise ScopeError(f"clé(s) de portée inconnue(s) : {sorted(unknown)}")
-    if not (raw.get(NAMESPACES) or raw.get(PROJECTS)):
-        raise ScopeError("scopes doit nommer au moins un tableau ou un projet")
+    if not (raw.get(NAMESPACES) or raw.get(PROJECTS) or raw.get(RUNNER)):
+        raise ScopeError(
+            "scopes doit nommer au moins un tableau, un projet, ou le runner")
 
     out: dict[str, dict[str, str]] = {}
     if raw.get(NAMESPACES) is not None:
         out[NAMESPACES] = _parse_namespaces(raw.get(NAMESPACES))
     if raw.get(PROJECTS) is not None:
         out[PROJECTS] = _parse_projects(raw.get(PROJECTS))
+    if raw.get(RUNNER) is not None:
+        # Booléen STRICT : `"true"`, `1` ou `{}` seraient acceptés par un `if`
+        # complaisant et donneraient une portée que l'émetteur n'a pas écrite.
+        if raw.get(RUNNER) is not True:
+            raise ScopeError("scopes.runner vaut `true`, ou rien — pas de degré")
+        out[RUNNER] = True
     return out
 
 
@@ -191,6 +223,13 @@ def authorize(scopes: Optional[dict], method: str, path: str) -> bool:
     path = path.rstrip("/") or "/"
     if (method, path) == _FILTERED:
         return True                       # lecture filtrée par le handler
+    if scopes.get(RUNNER) is True:
+        for motif, methodes in _ALLOWED_RUNNER:
+            if method in methodes and motif.match(path):
+                return True
+        # Pas de `return False` ici : un jeton peut porter `runner` ET des
+        # tableaux (un ordonnanceur compte des lignes). La boucle ci-dessous
+        # tranche le reste, et ce qui n'y figure pas reste refusé.
     for pattern, methods, needed, family in _ALLOWED:
         if method not in methods:
             continue

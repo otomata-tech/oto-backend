@@ -474,6 +474,12 @@ def register(mcp: FastMCP) -> None:
         datetime|bool|json|object|list|url|email|enum",
         "display"?: "title", "role"?: "status|metric|note|qualif"}],
         "key"?: str, "strict"?: bool}.
+        ⚠️ **An attribute nobody reads is accepted in SILENCE**, so a typo disarms the
+        guard you thought you set: `read_only` instead of `readonly` locks nothing, and
+        nothing says so. The reply now carries `unknown_keys_warning` naming those keys
+        column by column — a warning, never a refusal, so existing schemas keep
+        working. The declared attributes, and who reads each one (validator /
+        front-end), are served at `GET /api/datastore/schema/keys`.
         ⚠️ This REPLACES the schema — it does not merge. Any setting absent from the
         body you send DISAPPEARS (a field note, a bound, options, the business key and
         its UNIQUE index). The response now names what it just removed

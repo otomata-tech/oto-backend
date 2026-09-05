@@ -37,6 +37,8 @@ ownership) — un tableau hors périmètre répond 404, comme partout dans le da
 """
 from __future__ import annotations
 
+from ...datastore import cles_inconnues
+
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -146,15 +148,24 @@ class PatchSchemaResult(BaseModel):
     # Avertissements héréités de la pose du schéma (file de travail sans état
     # terminal, bornes posées sur des données hors borne, colonnes orphelines).
     warning: Optional[str] = None
+    # Les attributs de colonne que PERSONNE ne lit (oto#56). `None` = rien à
+    # signaler ; la clé est toujours là, pour distinguer « rien à dire » d'un serveur
+    # trop vieux. Avertissement, jamais refus : refuser durcirait un contrat servi et
+    # casserait les schémas qui portent déjà des clés mortes.
+    unknown_keys_warning: Optional[str] = None
 
 
 def _patch_schema(ctx: ResolvedCtx, inp: PatchSchemaInput) -> dict:
     namespace = access.resolve_namespace_ref(inp.namespace)
     try:
-        return make_store(ctx.sub).patch_schema(
+        # Même avertissement qu'à la pose (oto#56) : un patch qui ajoute une colonne
+        # peut porter la même faute de frappe, et c'est le chemin d'édition RECOMMANDÉ
+        # — le rater ici laisserait la classe ouverte sur la route la plus empruntée.
+        return {**make_store(ctx.sub).patch_schema(
             namespace, fields=inp.fields, remove=inp.remove,
             strict=inp.strict, key=inp.key, key_required=inp.key_required,
-            unknown_fields=inp.unknown_fields)
+            unknown_fields=inp.unknown_fields),
+            **cles_inconnues.check({"fields": inp.fields or []})}
     except NamespaceNotFound:
         raise AuthzDenied(404, "namespace_not_found")
     except NamespaceReadOnly:

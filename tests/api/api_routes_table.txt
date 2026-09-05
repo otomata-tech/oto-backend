@@ -282,6 +282,8 @@ GET,HEAD /api/me/legal -> _handler
 OPTIONS /api/me/legal -> options_handler
 POST /api/me/legal/accept -> _handler
 OPTIONS /api/me/legal/accept -> options_handler
+GET,HEAD /api/datastore/schema/keys -> _handler
+OPTIONS /api/datastore/schema/keys -> options_handler
 GET,HEAD /api/admin/users/{sub}/legal/acceptances -> _handler
 OPTIONS /api/admin/users/{sub}/legal/acceptances -> options_handler
 GET,HEAD /api/admin/tenants/{tenant}/legal-docs -> _handler

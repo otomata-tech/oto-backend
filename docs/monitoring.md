@@ -42,6 +42,20 @@ règle que `request_id`/`call_uid`/`effective_sub` (`docs/live-migrations.md`) :
 une lecture d'enquête, pas un chemin chaud. Exposée dans la fiche d'un appel
 (`oto_admin_monitoring op=call` / `oto_org_monitoring op=call`, `db.get_tool_call`).
 
+⚠️ **`error` n'est PAS ce que l'appelant a reçu — et s'y fier fait conclure l'inverse
+de la vérité.** Le journal garde `str(e)`, l'exception telle qu'elle a été levée ; ce qui
+part vers le modèle est le rendu de `error_taxonomy.classify(exc)`, qui peut être tout
+autre chose. Une exception large et nue tombe en branche « interne » et devient **« Erreur
+interne du serveur. » sans écho du message** (anti-fuite) : le journal montre alors une
+phrase parfaitement actionnable que personne n'a jamais lue.
+
+Vécu le 05/09/2026 sur `oto-backend#473` : le journal affichait « Facebook exige une
+session ; cherche une autre source », ce qui a fait conclure que le défaut était réparé.
+Il ne l'était pas — `classify` rendait « Erreur interne du serveur. », et les agents
+abandonnaient. **La seule mesure qui vaut est `classify(exc)`, pas la colonne `error`** ;
+`error_kind` est d'ailleurs là pour ça, et un `internal` à côté d'un texte utile est
+exactement le signal de cet écart.
+
 ⚠️ **Ce que ce lot n'est PAS** : `error_kind` est un FAIT journalisé, rien de plus.
 Aucun lecteur n'en dérive encore une action (marquer un credential rejeté, par
 exemple) — ça viendra, séparément, avec son propre feu vert (lot b2 de l'issue).

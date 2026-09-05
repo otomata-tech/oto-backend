@@ -31,6 +31,7 @@ from . import pkce as oauth2_pkce, flow as oauth_flow
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
 from ..connectors import link as connector_link
+from ..connectors import verify as connector_verify
 
 _AUTH_URL = "https://mcp.atlassian.com/v1/authorize"
 _TOKEN_URL = "https://cf.mcp.atlassian.com/v1/token"
@@ -272,3 +273,39 @@ connector_flow.declare(
 
 def disconnect(sub: str) -> bool:
     return credentials_store.clear_credential("user", sub, _CONNECTOR)
+
+
+_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
+
+
+def _verify(fields: dict, config: dict, *, instance: Optional[tuple] = None) -> None:  # noqa: ARG001
+    """Sonde `oto_instance op=verify` (oto-backend#876 — le walker de cascade voit
+    enfin le scope legacy `("user", sub)`, cette sonde peut donc désormais être
+    ATTEINTE pour ce connecteur).
+
+    Le token vit dans `meta`, pas dans `fields` (le pack générique du modèle
+    multi-champs ne s'applique pas à ce connecteur) : on ignore `fields`/`config`
+    et on relit `access_token_for(sub)`, qui porte déjà le refresh transparent, le
+    marquage plutôt que la purge sur grant mort (oto#25 lot a) et la persistance
+    de la rotation — les MÊMES garanties que le chemin réel (`resolve_mount_token`).
+
+    Un refresh réussi ne suffit pas : le site a pu révoquer l'app côté Atlassian
+    Admin sans que le refresh_token lui-même expire — invisible tant qu'on ne
+    demande rien à l'API. `accessible-resources` est l'appel le plus léger qui
+    force une vérification réelle côté Atlassian, sans dépendre d'un cloud_id
+    qu'on n'a pas encore choisi."""
+    sub = instance[1] if instance else None
+    if not sub:
+        raise RuntimeError("Atlassian non connecté.")
+    token = access_token_for(sub)
+    if not token:
+        raise RuntimeError("Atlassian non connecté — reconnecte-toi.")
+    import requests
+    r = requests.get(_ACCESSIBLE_RESOURCES_URL,
+                     headers={"Authorization": f"Bearer {token}",
+                              "Accept": "application/json"},
+                     timeout=15)
+    r.raise_for_status()
+
+
+connector_verify.register(_CONNECTOR, _verify)

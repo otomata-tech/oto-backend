@@ -49,8 +49,9 @@ def _verify(fields: dict, config: dict | None = None) -> None:
       Folk, ce n'est PAS une ligne qui dit « gratuit » : c'est l'absence de tout
       compteur de crédits dans la documentation. Argument fort, pas preuve.
 
-    ⚠️ Cette sonde va plus loin que l'authentification, et c'est délibéré. La
-    réponse porte `scopes` — la liste exacte des droits de la clé. Une clé Pennylane
+    **Authentifié ≠ utilisable** (classe nommée sur oto#69, avec attio) : cette
+    sonde va plus loin que l'authentification, et c'est délibéré. La réponse
+    porte `scopes` — la liste exacte des droits de la clé. Une clé Pennylane
     peut parfaitement authentifier et ne rien pouvoir faire : le modèle est une clé
     par personne ou par équipe, chacune avec son périmètre, et Pennylane a éclaté
     ses scopes (`journals:*`, `ledger_accounts:*`, `ledger_entries:*`…). Rendre

@@ -316,9 +316,12 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     - **le coût** — aucune mention de crédit ni de limite de débit particulière
       pour cet appel. Absence de compteur, indice fort, pas une preuve.
 
+    **Authentifié ≠ utilisable** (classe nommée sur oto#69, avec pennylane) — DEUX
+    formes du même verdict creux, toutes deux vérifiées explicitement :
+
     ⚠️ Une clé morte ne LÈVE PAS ici : Attio répond 200 avec `{"active": false}`
     (contrat d'introspection), jamais un 401 — le laisser passer sous silence
-    dirait « connecté » d'un token révoqué. Vérifié explicitement.
+    dirait « connecté » d'un token révoqué.
 
     Va plus loin que l'authentification, même raison que la sonde Pennylane :
     `scope` est une CHAÎNE espace-séparée de permissions, et Attio scope son API

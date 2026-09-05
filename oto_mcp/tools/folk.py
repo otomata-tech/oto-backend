@@ -638,6 +638,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     réponse : les remonter ferait une sonde `auth+quota`. Ce n'est pas fait ici parce
     que le débit par minute n'est pas un solde — il ne dit rien de ce qui reste à
     dépenser, seulement de la cadence. Le rendre laisserait croire à une jauge.
+
+    **Authentifié ≠ utilisable** (classe nommée sur oto#69, cf. attio/pennylane) :
+    Folk n'expose aucun scope granulaire par clé — un `id` présent EST la preuve
+    d'utilisabilité, il n'y a rien de plus fin à distinguer ici. C'est pour ça que
+    la garde ci-dessous porte sur l'identité, pas sur un `active`/`scope` séparé.
     """
     from oto.tools.folk.client import FolkClient
 

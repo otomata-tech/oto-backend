@@ -39,6 +39,10 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
     une fraîcheur que la plateforme ne tient qu'en interrogeant, et interroger coûte.
     La fiche porte le verdict et sa date ; le chiffre vit dans la réponse de ce test,
     avec l'instant où il a été lu.
+
+    **Authentifié ≠ utilisable** (classe nommée sur oto#69, cf. attio/pennylane) :
+    ici l'axe n'est pas le SCOPE mais le SOLDE — `QuotaEpuise` ci-dessous EST la
+    distinction, une clé à sec authentifie très bien et ne peut plus rien chercher.
     """
     from oto.tools.hunter.client import HunterClient
 

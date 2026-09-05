@@ -79,6 +79,25 @@ VALUE_BOUND_LAYERS = tuple(k for k in LAYER_KEYS if k != ORIGIN_LAYER)
 # quarante et une, et c'était l'unique copie de la valeur remise).
 SYSTEM_ORIGIN = "system"
 
+#: Ce que porte `<champ>.origine` quand la valeur d'import n'est PAS connaissable :
+#: la ligne existait déjà quand le format a été déclaré, et personne ne peut dire si
+#: un agent l'a écrite entre-temps (oto#70).
+#:
+#: ⚠️ **Ce n'est pas une valeur, c'est l'aveu qu'il n'y en a pas.** Le guide le dit, et
+#: le marqueur est écrit en clair — entre parenthèses — pour qu'un agent qui le lit sans
+#: avoir lu le guide ne le prenne pas pour une donnée métier.
+#:
+#: Pourquoi pas la valeur courante, comme le faisait v1.207.0 : sur une ligne déjà
+#: travaillée, cette valeur est celle d'un AGENT. La présenter comme origine, c'est
+#: exactement ce que la définition interdit — et `A`, la vraie valeur d'import, est
+#: perdue sans que rien ne le dise.
+#:
+#: Pourquoi pas « la ligne n'a pas bougé depuis sa création, donc sa valeur courante
+#: EST son import » : `datastore_insert_row` accepte `created_at`/`updated_at` en
+#: paramètres (override de backfill). Les comparer serait une HEURISTIQUE, et on ne
+#: fonde pas la sémantique d'une donnée sur une heuristique.
+ORIGINE_INCONNUE = "(origine inconnue)"
+
 
 def same_value(a: Any, b: Any) -> bool:
     """Deux valeurs IDENTIQUES — au type près : `0` n'est pas `False`, `1` n'est pas

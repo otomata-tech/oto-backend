@@ -301,20 +301,64 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
     return dict(row) if row else None
 
 
-def _filtre_de_file(org_id: int, status: Optional[str]) -> tuple[str, list]:
+# D'OÙ vient un travail, en SQL. Le discriminant existe déjà dans la table : la
+# colonne `fleet_id` pour un passage, `payload->>'trigger_id'` pour un déclencheur
+# programmé, ni l'un ni l'autre pour un appel direct. Le filtre est SERVI, pas
+# laissé au client : la file est paginée (`id DESC`), et un passage de 2 000 lignes
+# remplit la première page à lui seul — un tri côté client rendrait « aucun travail
+# programmé » sur une org qui en joue un chaque matin. Un écran qui ment sur
+# l'absence est pire que pas d'écran.
+_SOURCES = {
+    "batch": "fleet_id IS NOT NULL",
+    "scheduled": "fleet_id IS NULL AND payload->>'trigger_id' IS NOT NULL",
+    "manual": "fleet_id IS NULL AND payload->>'trigger_id' IS NULL",
+}
+
+
+def _filtre_de_file(org_id: int, status: Optional[str],
+                    source: Optional[str] = None,
+                    fleet_id: Optional[int] = None,
+                    trigger_id: Optional[int] = None) -> tuple[str, list]:
     """Le WHERE commun à la page et à son compte — une seule définition de « la
     file », sinon le total finit par décrire une autre population que les lignes
-    qu'il accompagne."""
+    qu'il accompagne. `source` et `fleet_id` en font partie pour cette raison
+    exacte : servir un filtre à la page sans l'appliquer au compte redonnerait un
+    total qui décrit autre chose que ce qui est affiché."""
     q = " WHERE org_id = %s"
     params: list = [org_id]
     if status:
         q += " AND status = %s"
         params.append(status)
+    if source:
+        clause = _SOURCES.get(source)
+        if clause is None:
+            raise ValueError(f"source inconnue : {source}")
+        q += f" AND ({clause})"
+    if fleet_id is not None:
+        q += " AND fleet_id = %s"
+        params.append(int(fleet_id))
+    # Le déclencheur n'a pas de colonne : le tick le pose dans le payload
+    # (`runner_tick.py`). Même raison que `fleet_id` — l'historique d'un
+    # déclencheur trié côté client donne un total qui ne peut pas servir de
+    # dénominateur, donc des taux faux sans que rien ne le signale.
+    if trigger_id is not None:
+        # ⚠️ Comparaison en TEXTE, jamais `::bigint`. `payload` est un JSON libre : il
+        # suffit d'UNE ligne de l'org dont `trigger_id` n'est pas un nombre pour que le
+        # cast fasse échouer la requête ENTIÈRE — pas seulement cette ligne-là. Le
+        # filtre deviendrait alors une panne, sur des données qu'aucun de nos écrivains
+        # ne produit mais que rien n'empêche d'exister.
+        # La forme sûre était déjà deux fonctions plus haut (`perimer_travaux_du_
+        # declencheur`, `comptage_perime`) : c'est la même clé, lue de la même façon.
+        q += " AND payload->>'trigger_id' = %s"
+        params.append(str(int(trigger_id)))
     return q, params
 
 
 def list_jobs(org_id: int, status: Optional[str] = None,
-              limit: int = 50, before_id: Optional[int] = None) -> list[dict]:
+              limit: int = 50, before_id: Optional[int] = None,
+              source: Optional[str] = None,
+              fleet_id: Optional[int] = None,
+              trigger_id: Optional[int] = None) -> list[dict]:
     """La file vue d'en haut (surveillance dashboard) : les jobs de l'org, du
     plus récent au plus ancien, filtrables par statut. Le payload est rendu
     (références seulement, par contrat d'enqueue) mais jamais tronqué en
@@ -335,7 +379,7 @@ def list_jobs(org_id: int, status: Optional[str] = None,
     ENGAGE est celle du contrat (`capabilities/runner_jobs.py`) : c'est elle qui la
     déclare et qui rend le total + le curseur qui la disent. Une borne connue du
     seul SQL est exactement ce que #469 reprochait."""
-    ou, params = _filtre_de_file(org_id, status)
+    ou, params = _filtre_de_file(org_id, status, source, fleet_id, trigger_id)
     q = ("SELECT id, kind, run_id, payload, status, attempts, max_attempts, "
          "       claimed_by, lease_until, last_error, result, due_at, created_at, "
          "       finished_at, fleet_id, sub "
@@ -350,7 +394,10 @@ def list_jobs(org_id: int, status: Optional[str] = None,
     return [dict(r) for r in rows]
 
 
-def count_jobs(org_id: int, status: Optional[str] = None) -> int:
+def count_jobs(org_id: int, status: Optional[str] = None,
+               source: Optional[str] = None,
+               fleet_id: Optional[int] = None,
+               trigger_id: Optional[int] = None) -> int:
     """Le nombre de jobs de la file, MÊMES filtres que `list_jobs` et sans son
     plafond : c'est le chiffre qu'un bilan de vague vient chercher, et celui qui
     dit qu'une page est tronquée. Le curseur, lui, dit comment lire la suite.
@@ -362,7 +409,7 @@ def count_jobs(org_id: int, status: Optional[str] = None) -> int:
     coûterait un DDL au boot et une empreinte de schéma pour économiser des
     millisecondes sur une surface de surveillance. À revoir si la file change
     d'ordre de grandeur."""
-    ou, params = _filtre_de_file(org_id, status)
+    ou, params = _filtre_de_file(org_id, status, source, fleet_id, trigger_id)
     with _connect() as conn:
         row = conn.execute("SELECT count(*) AS n FROM runner_jobs" + ou,
                            tuple(params)).fetchone()

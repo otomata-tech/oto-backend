@@ -257,6 +257,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # EXISTS` NE MET PAS À JOUR la contrainte d'une table qui existe déjà : sans
     # ce remplacement, le boot passerait en vert et la base refuserait les deux
     # nouveaux états — un lot « déployé » dont la moitié est rejetée à l'écriture.
+    # Le dénominateur de l'avancement d'un passage (cf. le DDL). Sur une base qui
+    # existe déjà, le CREATE TABLE est sauté — seule la colonne manque.
+    conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS rows_at_launch INT")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ")
     _poser_domaine(conn, "runner_fleets", "runner_fleets_status_check", "status",

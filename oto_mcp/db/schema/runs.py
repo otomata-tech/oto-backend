@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS runner_fleets (
     -- rien ne le dise. (Un NUMERIC ne se sérialise même pas en JSON : la flotte
     -- serait illisible dès qu'elle porte une borne.)
     workers INT NOT NULL DEFAULT 1,
+    -- Combien de lignes VISAIENT le passage au moment de l'armement. Un compte,
+    -- pas une borne : `max_rows` est un plafond déclaré, celui-ci est ce que la
+    -- table contenait vraiment. Sans lui, l'avancement n'a pas de dénominateur —
+    -- « 1 240 lignes faites » ne se lit pas, et diviser par `max_rows` a déjà
+    -- produit un coût par ligne faux d'un facteur 46 sur un passage de démo.
+    -- Réécrit à CHAQUE armement (un passage relancé vise une table qui a bougé).
+    -- NULL = pas de cible déclarée, ou le compte n'a pas pu être lu : « inconnu »,
+    -- jamais zéro — un zéro se lirait « la table est vide ».
+    rows_at_launch INT,
     max_rows INT,
     max_tokens BIGINT,
     max_consecutive_failures INT,

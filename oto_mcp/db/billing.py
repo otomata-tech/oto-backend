@@ -159,6 +159,45 @@ def mark_cancel_at_period_end(org_id: int) -> bool:
     return n > 0
 
 
+def swap_mandate(org_id: int, *, mandate_id: str, mandate_rum: Optional[str] = None,
+                 method: Optional[str] = None) -> Optional[str]:
+    """Bascule l'abonnement sur un NOUVEAU mandat. Rend l'ANCIEN, ou `None`.
+
+    Mise à jour CIBLÉE, jamais `upsert_subscription` : celui-ci remplace tout
+    l'abonnement (plan, cycle, échéance) — l'utiliser pour changer une carte
+    réécrirait le cycle de facturation au passage. Ici on ne touche que le moyen.
+
+    ⚠️ **Rend l'ancien mandat parce qu'il faudra le révoquer APRÈS**, jamais avant :
+    tant que le nouveau n'est pas posé, l'ancien est le seul qui puisse encaisser. Le
+    `RETURNING` de l'ancienne valeur est ce qui permet de faire le ménage sans le
+    relire — donc sans fenêtre où l'on croirait révoquer l'ancien alors qu'un autre
+    écrivain vient de le remplacer.
+
+    ⚠️ **Ne bouge pas le statut.** Un abonnement `past_due` dont on répare la carte
+    reste `past_due` : c'est le prochain encaissement qui le remettra `active`, et
+    c'est le runner qui en décide. Prétendre le contraire ici rouvrirait des droits
+    sur la foi d'une carte qu'on n'a pas encore débitée."""
+    sets = ["mandate_id = %s", "mandate_rum = %s", "updated_at = NOW()"]
+    args: list = [mandate_id, mandate_rum]
+    if method:
+        sets.insert(2, "method = %s")
+        args.append(method)
+    with _connect() as conn:
+        # L'ancien est lu puis remplacé DANS LA MÊME transaction : un `RETURNING` avec
+        # sous-select dépendrait de subtilités de visibilité pour rendre l'avant plutôt
+        # que l'après. Sur la ligne qui décide de qui est débité, on ne s'appuie pas sur
+        # une subtilité.
+        avant = conn.execute(
+            "SELECT mandate_id FROM org_subscriptions WHERE org_id = %s FOR UPDATE",
+            (org_id,)).fetchone()
+        if avant is None:
+            return None
+        conn.execute(
+            f"UPDATE org_subscriptions SET {', '.join(sets)} WHERE org_id = %s",
+            (*args, org_id))
+    return avant.get("mandate_id")
+
+
 def resume_canceled(org_id: int) -> bool:
     """Annule une résiliation à fin de période. Rend False si rien n'était à reprendre.
 

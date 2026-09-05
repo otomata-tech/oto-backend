@@ -18,6 +18,8 @@ import asyncio
 import inspect
 from typing import Awaitable, Callable, Optional, Union
 
+from .. import providers
+
 # probe(fields, config) -> None : lève une exception sur échec d'authentification (son
 # message est rendu au client). Sync OU async (la capacité awaite si besoin). `fields` =
 # champs DÉCHIFFRÉS du credential (client_id/secret/refresh_token/data_center pour zoho) ;
@@ -146,15 +148,27 @@ def couverture(connector: str) -> Optional[str]:
     ⚠️ `None` se lit « aucune sonde », jamais « ne couvre rien » — les deux appellent
     des conduites différentes : dans un cas on ne peut pas mesurer, dans l'autre on a
     mesuré l'authentification seule."""
-    return _COUVERTURE.get(connector)
+    return _COUVERTURE.get(_porteur(connector))
+
+
+def _porteur(connector: str) -> str:
+    """Le connecteur qui PORTE la clé (délégation `Connector.credential_of`), même
+    normalisation que le walker de cascade (`access/cascade.py::walk_cascade`).
+
+    Six canaux Unipile (`linkedin_unipile`, `whatsapp`…) n'ont pas de sonde À EUX —
+    ils empruntent celle de `unipile`, enregistrée sous CE nom. Sans cette lecture
+    normalisée, chacun répondait `verify_unavailable` malgré une sonde qui teste
+    exactement leur clé (oto#69) : six trous qui n'en étaient pas un, tenus par le
+    même bug que celui que corrige la cascade pour la résolution de credential."""
+    return providers.credential_provider(connector)
 
 
 def supports(connector: str) -> bool:
-    return connector in _REGISTRY
+    return _porteur(connector) in _REGISTRY
 
 
 def probe_for(connector: str) -> Optional[Probe]:
-    return _REGISTRY.get(connector)
+    return _REGISTRY.get(_porteur(connector))
 
 
 # Borne de temps d'UNE sonde, alignée sur celle du bouton « tester » de
@@ -227,7 +241,7 @@ async def run(connector: str, fields: dict, config: Optional[dict] = None,
     enregistrée. Helper partagé entre la capacité `connectors.verify` (qui traduit
     l'exception en `{ok:false}`) et le verify-avant-persist de `api_key_save` (#106,
     qui la traduit en 400 et n'écrit pas le credential)."""
-    probe = _REGISTRY.get(connector)
+    probe = probe_for(connector)
     if probe is None:
         return
     return await executer(probe, fields, config, instance)

@@ -22,6 +22,8 @@ import uuid
 
 import pytest
 
+from oto_mcp.datastore import schema as dsv2
+
 
 @pytest.fixture(scope="module")
 def live(pg_dsn):
@@ -109,14 +111,22 @@ def test_la_face_de_creation_ne_change_RIEN_a_la_couche(live):
     assert _blob(id_b, rid_b)["priorite"] == attendu
 
 
-def test_declarer_le_format_capture_la_valeur_courante(live):
-    """LE geste d'oto#46. Avant, déclarer le format ne touchait aucune ligne : une
-    ligne existante n'avait donc AUCUN filet jusqu'à sa prochaine écriture, et la
-    valeur d'alors était perdue sans que rien ne le dise.
+def test_declarer_le_format_ne_capture_PAS_la_valeur_courante(live):
+    """INVERSÉ par oto#70 — ce banc figeait l'inverse de la définition.
 
-    Ce qui est gardé est la valeur telle qu'elle était À LA DÉCLARATION. Le nom dit
-    QUAND, pas QUI : si des agents avaient déjà écrit, c'est leur valeur — et c'est
-    exactement ce que la promesse annonce désormais."""
+    Alexis a fixé le sens : « l'origine est la valeur posée au départ, **à l'import** ».
+    Or déclarer le format sur une ligne DÉJÀ TRAVAILLÉE capturait sa valeur courante,
+    c'est-à-dire celle du dernier AGENT qui l'avait écrite — et la vraie valeur d'import
+    était perdue sans que rien ne le dise (S1). Sur une colonne vide à l'import, elle
+    devenait même indiscernable d'un import de la valeur d'agent (S2).
+
+    ⚠️ **Une valeur d'agent ne se présente jamais comme origine.** Quand on ne peut pas
+    savoir — la ligne existait avant la déclaration, et rien ne dit si elle a été écrite
+    depuis sa création — on écrit le marqueur qui l'avoue.
+
+    Pourquoi pas « comparer `created_at` et `updated_at` pour reconnaître une ligne
+    jamais retouchée » : `datastore_insert_row` accepte les deux en override de backfill.
+    Ce serait une heuristique, et on ne fonde pas la sémantique d'une donnée dessus."""
     from oto_mcp import db
 
     ns = "t-" + uuid.uuid4().hex[:6]
@@ -130,14 +140,17 @@ def test_declarer_le_format_capture_la_valeur_courante(live):
     assert _blob(ns_id, ligne["_id"])["priorite"] == "2"
 
     out = st.patch_schema(ns, fields=[{"key": "priorite", "origine": "system"}])
-    # La capture a lieu À LA DÉCLARATION, et elle se DIT : une écriture sur des
-    # lignes existantes ne se fait pas en silence.
+    # La pose a toujours lieu à la déclaration, et elle se DIT — mais ce qu'elle pose
+    # est l'aveu, pas la valeur d'un agent.
     assert out.get("origines_capturees") == 1, out
-    assert _blob(ns_id, ligne["_id"])["priorite"] == {"valeur": "2", "origine": "2"}
+    assert _blob(ns_id, ligne["_id"])["priorite"] == {
+        "valeur": "2", "origine": dsv2.ORIGINE_INCONNUE}
 
-    # Ensuite la couche ne bouge plus : la valeur change, l'origine tient.
+    # Ensuite la couche ne bouge plus : la valeur change, le marqueur tient. Une
+    # origine posée n'est jamais réécrite, fût-elle un aveu.
     st.update_row(ns, ligne["_id"], {"priorite": "3"})
-    assert _blob(ns_id, ligne["_id"])["priorite"] == {"valeur": "3", "origine": "2"}
+    assert _blob(ns_id, ligne["_id"])["priorite"] == {
+        "valeur": "3", "origine": dsv2.ORIGINE_INCONNUE}
 
 
 def test_declarer_le_format_ne_touche_PAS_une_origine_deja_posee(live):
@@ -254,8 +267,12 @@ def test_la_capture_tient_sur_une_table_de_dix_mille_lignes(live):
         "faire — vérifier qu'on est bien en UNE requête par colonne")
 
     # Et le contenu est juste, pas seulement le compte : un échantillon ouvert.
+    # ⚠️ Le marqueur, pas la valeur (oto#70) : ces 10 000 lignes existaient avant la
+    # déclaration, et rien ne dit si un agent les a écrites depuis leur création.
+    # Capturer leur valeur courante présenterait une valeur d'agent comme origine.
     blob = _blob(ns_id, "r3")
-    assert blob["priorite"] == {"valeur": "3", "origine": "3"}, blob
+    assert blob["priorite"] == {
+        "valeur": "3", "origine": dsv2.ORIGINE_INCONNUE}, blob
 
 
 def test_une_capture_interrompue_ne_laisse_pas_la_moitie_des_lignes(live):
@@ -290,3 +307,80 @@ def test_une_capture_interrompue_ne_laisse_pas_la_moitie_des_lignes(live):
     assert blob["a"] == "1", (
         f"la première colonne est restée capturée malgré l'échec de la seconde : "
         f"les deux écritures ne partagent pas de transaction — {blob}")
+
+
+# ── les quatre scénarios qui départagent « import » et « déclaration » (oto#70) ──
+#
+# Alexis a fixé le sens : « l'origine est la valeur posée au départ, à l'import ».
+# v1.207.0 capturait la valeur COURANTE à la déclaration du format — ce qui sert la
+# définition uniquement si le format précède toute écriture d'agent. Ces quatre bancs
+# fixent les quatre ordres possibles, et chacun tombe si le point de capture rebouge.
+
+def test_S1_import_puis_agent_puis_format_ne_capture_PAS_la_valeur_d_agent(live):
+    """S1 — import `A`, un agent écrit `B`, PUIS le format est déclaré.
+
+    Avant : `origine = B`, la valeur de l'agent, et `A` perdu sans un mot. C'est le
+    cas qui a fait rouvrir la question : un tableau importé, travaillé, puis doté du
+    format après coup portait comme origine la dernière valeur d'agent."""
+    from oto_mcp import db
+
+    ns = "t-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    st = _store()
+    st.set_schema(ns, {"key": "ref", "fields": [
+        {"key": "ref", "type": "text"}, {"key": "priorite", "type": "text"}]})
+    ligne = st.append_row(ns, {"ref": "r1", "priorite": "A"})   # import
+    st.update_row(ns, ligne["_id"], {"priorite": "B"})          # agent
+
+    st.patch_schema(ns, fields=[{"key": "priorite", "origine": "system"}])
+    origine = _blob(ns_id, ligne["_id"])["priorite"]["origine"]
+    assert origine != "B", "une valeur d'AGENT ne se présente jamais comme origine"
+    assert origine == dsv2.ORIGINE_INCONNUE, (
+        "`A` n'est plus connaissable ici — on l'avoue au lieu de servir `B`")
+
+
+def test_S2_colonne_vide_puis_agent_puis_format_ne_fabrique_pas_un_import(live):
+    """S2 — colonne VIDE à l'import, un agent écrit `B`, puis le format.
+
+    Avant : `origine = B`, **indiscernable d'un import de `B`** — le pire des quatre,
+    parce qu'il fabrique une valeur d'import qui n'a jamais existé."""
+    from oto_mcp import db
+
+    ns = "t-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    st = _store()
+    st.set_schema(ns, {"key": "ref", "fields": [
+        {"key": "ref", "type": "text"}, {"key": "priorite", "type": "text"}]})
+    ligne = st.append_row(ns, {"ref": "r1"})                    # vide à l'import
+    st.update_row(ns, ligne["_id"], {"priorite": "B"})          # agent
+
+    st.patch_schema(ns, fields=[{"key": "priorite", "origine": "system"}])
+    origine = _blob(ns_id, ligne["_id"])["priorite"]["origine"]
+    assert origine != "B", "sinon une origine d'import est FABRIQUÉE de toutes pièces"
+    assert origine == dsv2.ORIGINE_INCONNUE
+
+
+def test_S3_format_puis_import_puis_agent_garde_la_valeur_d_import(live):
+    """S3 — le format d'abord, puis l'import `A`, puis l'agent `B`.
+
+    C'est le cas qui marchait déjà, et il doit continuer : ici la capture paresseuse
+    voit la vraie valeur d'import, parce que rien n'a écrit avant elle."""
+    st, ns, ns_id = _table()
+    ligne = st.append_row(ns, {"ref": "r1", "priorite": "A"})
+    st.update_row(ns, ligne["_id"], {"priorite": "B"})
+    assert _blob(ns_id, ligne["_id"])["priorite"] == {"valeur": "B", "origine": "A"}
+
+
+def test_S3bis_format_puis_colonne_vide_puis_agent_marque_l_origine_vide(live):
+    """S3 bis — le format d'abord, colonne vide à l'import, puis l'agent `B`.
+
+    Le marqueur « rien n'avait été remis » (`""`), posé au premier écrasement. Sans
+    lui, la DEUXIÈME écriture de l'agent capturerait sa première valeur comme si elle
+    venait du client — et « origine vide » se confondrait avec « jamais modifié »."""
+    st, ns, ns_id = _table()
+    ligne = st.append_row(ns, {"ref": "r1"})
+    st.update_row(ns, ligne["_id"], {"priorite": "B"})
+    assert _blob(ns_id, ligne["_id"])["priorite"] == {"valeur": "B", "origine": ""}
+    # Et la deuxième écriture ne recapture rien : l'origine vide TIENT.
+    st.update_row(ns, ligne["_id"], {"priorite": "C"})
+    assert _blob(ns_id, ligne["_id"])["priorite"] == {"valeur": "C", "origine": ""}

@@ -171,6 +171,42 @@ Une **échéance** : le consentement a été donné à la souscription, `billing
 ne le rejoue pas — `_charge_one` ne prend d'ailleurs pas de `sub`, et un test le
 fige.
 
+### Changer de moyen de paiement, et annuler une résiliation (#845)
+
+Deux gestes que l'écran annonçait sans les offrir. **Le premier coûtait un abonné
+payant** : carte morte, toutes les relances en échec, et aucun moyen d'y remédier
+pendant les trois tentatives et les quatorze jours de grâce que les conditions de vente
+chiffrent.
+
+**Annuler une résiliation** (`POST /api/me/billing/resume`) est purement local :
+résilier ne révoque pas le mandat et laisse l'abonnement `active` jusqu'à l'échéance, on
+défait donc deux écritures — `canceled_at` et `next_billing_at`, qu'on **restaure** au
+lieu de recalculer. ⚠️ Refusé si la période est échue : le sweep a basculé le statut, et
+reprendre là rouvrirait l'entitlement sans qu'aucune échéance ne soit tirée — c'est un
+réabonnement, il passe par `subscribe`.
+
+**Changer de moyen** (`POST /api/me/billing/method` puis `…/method/confirm`) passe par un
+**premier paiement à 0,00 EUR**, seul chemin possible : Mollie n'a pas de portail de
+changement de carte, et `POST /mandates` refuse les cartes (« your customers need to
+perform a first payment »). Le zéro-montant est documenté pour carte et PayPal, et
+**aucun mouvement d'argent ⟹ aucun remboursement ⟹ aucun avoir** — c'est ce qui a fait
+écarter le montant symbolique.
+
+    first à 0,00 → mandat au retour → bascule → révocation de l'ancien
+
+⚠️ **La révocation vient après la bascule, et elle est best-effort.** Si elle échoue, le
+prochain encaissement prend quand même le nouveau mandat : un ancien mandat qui traîne
+coûte moins cher qu'une bascule annulée parce que le ménage a raté. ⚠️ **L'ancien moyen
+reste actif tant que le nouveau n'est pas confirmé**, et la réponse le DIT — sans cette
+phrase, qui abandonne le checkout croit s'être coupé.
+
+⚠️ **Ce qui n'a jamais été mesuré en réel, et que le banc simulé ne peut pas dire** : si
+un premier paiement à 0,00 apparaît dans les règlements Mollie (donc dans un
+rapprochement comptable), et ce qu'un remboursement fait au mandat. Il n'existe pas de
+clé de test ici (décision d'Alexis, 05/09/2026) : le premier vrai changement se fera en
+production, sous son œil. **Le banc est un contrat sur notre séquence, pas une preuve du
+comportement du prestataire.**
+
 ### La trace est un JOURNAL, et elle situe l'acte
 
 `legal_acceptances` portait une ligne par `(sub, doc_slug)`, écrasée à chaque

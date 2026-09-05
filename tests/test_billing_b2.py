@@ -302,8 +302,11 @@ def test_capabilities_registered_rest_only():
     # n'existait pas — l'écran annonçait la date de bascule sans offrir d'y revenir.
     # REST seule comme ses voisines : reprendre un abonnement n'a rien à faire dans un
     # contexte LLM, même si le geste n'encaisse rien.
+    # `billing.method_change{,_confirm}` s'ajoutent avec #845 ① : sans eux, un client
+    # dont la carte meurt n'a AUCUN moyen de la remplacer — on le perdait en silence.
     assert set(caps) == {"billing.plans", "billing.status", "billing.subscribe",
                          "billing.confirm", "billing.cancel", "billing.resume",
+                         "billing.method_change", "billing.method_change_confirm",
                          "billing.payments", "billing.admin_set_plan"}
     # pas d'URL de paiement dans un contexte LLM : seule la capacité ADMIN
     # (forcer un plan, pas de paiement) a une face MCP.

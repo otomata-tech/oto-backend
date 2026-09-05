@@ -238,8 +238,23 @@ from oto_mcp.db import _schema, schema
 # la longueur mesurée. Un delta qui ne tombe pas juste dirait qu'autre chose a bougé dans
 # le DDL assemblé — c'est le seul contrôle qui distingue « j'ai ajouté ma table » de
 # « j'ai recopié le nombre que le test m'a donné ».
-EMPREINTE = "c8334a2d6510edde6875be6f102faca6bab7697bf34c9756d69c1aee0fc8ab9f"
-LONGUEUR = 142575
+# 2026-09-04 — fragment `runs.py` : la colonne `runner_fleets.rows_at_launch`, le
+# dénominateur d'un passage (oto-backend#836). Écrite à l'armement, `NULL` = inconnu :
+# un taux calculé sur un total qui a bougé depuis est faux sans que rien ne le signale.
+# ⚠️ Empreinte recalculée APRÈS l'arithmétique, et la vérification a servi : le fragment
+# `runs.py` grandit de 653 caractères (17 067 → 17 720) et l'assemblé exactement de 653
+# aussi (140 769 → 141 422). Un premier comptage fait sur le DIFF donnait 680 — il
+# comptait des lignes de contexte : c'est la différence des ASSEMBLÉS qui fait foi, pas
+# un `grep` sur un patch.
+# ⚠️ 2026-09-05 — RECALCULÉE à la fusion de `main` dans la branche du fork (#836).
+# L'arithmétique a été vérifiée, pas supposée, et c'est elle qui autorise à écrire ce
+# nombre : le tronc rendait 142 575, le fragment `runs.py` de cette PR ajoute
+# exactement 653 caractères (17 067 → 17 720 mesuré par son auteur), et l'assemblé
+# rend 143 228 = 142 575 + 653. Le compte tombe juste, donc rien d'autre n'a bougé
+# dans le DDL — c'est la seule chose qui distingue « j'ai fusionné proprement » de
+# « j'ai recopié le nombre que le test m'a donné ».
+EMPREINTE = "fb55a3e0a68cc5a7e9998fdaf970824c7d8ebd85607614d8e7b4b78acfddde2a"
+LONGUEUR = 143228
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

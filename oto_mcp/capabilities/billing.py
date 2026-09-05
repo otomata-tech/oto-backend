@@ -547,6 +547,43 @@ def _cancel(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _domain(billing.cancel, ctx.org_id)
 
 
+class MethodChangeInput(BaseModel):
+    return_url: str = Field(
+        description=("Où ramener la personne après la page de paiement — le backend "
+                     "ne connaît pas l'écran d'où part le geste."))
+
+
+class MethodChangeStarted(BaseModel):
+    checkout_url: Optional[str] = None
+    payment_id: Optional[str] = None
+    #: ⚠️ À AFFICHER : l'ancien moyen reste actif tant que le nouveau n'est pas
+    #: confirmé. Sans cette phrase, qui abandonne le checkout croit s'être coupé.
+    notice: str = ""
+
+
+class MethodChangeResult(BaseModel):
+    #: `changed` | `pending` | `pending_mandate` | `failed` | `already_current`
+    status: str
+    payment_status: Optional[str] = None
+    mandate_id: Optional[str] = None
+    previous_mandate_id: Optional[str] = None
+    #: `false` avec `status:"changed"` = la bascule est FAITE, seul le ménage a raté.
+    #: L'encaissement suivant prend le nouveau moyen — un ancien mandat qui traîne
+    #: coûte moins cher qu'une bascule annulée.
+    previous_revoked: Optional[bool] = None
+    notice: str = ""
+
+
+def _method_change_start(ctx: ResolvedCtx, inp: MethodChangeInput) -> dict:
+    from .. import billing_method
+    return _domain(lambda: billing_method.start(ctx.org_id, inp.return_url))
+
+
+def _method_change_confirm(ctx: ResolvedCtx, inp: ConfirmInput) -> dict:
+    from .. import billing_method
+    return _domain(lambda: billing_method.confirm(ctx.org_id, inp.payment_ref))
+
+
 def _resume(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _domain(billing.resume, ctx.org_id)
 
@@ -613,6 +650,20 @@ _BILLING_CAPS = [
         key="billing.resume", handler=_resume, Input=NoInput,
         authz=ORG_ADMIN, Output=BillingStatus,
         rest=RestBinding("POST", "/api/me/billing/resume"),
+    ),
+    # Changer de moyen de paiement (#845 ①) — on perdait un abonné payant en silence :
+    # carte morte, relances qui échouent toutes, et aucun geste pour y remédier.
+    # Deux temps parce que la moitié se passe chez le prestataire : ouvrir la page,
+    # puis constater le retour (navigateur OU webhook).
+    Capability(
+        key="billing.method_change", handler=_method_change_start,
+        Input=MethodChangeInput, authz=ORG_ADMIN, Output=MethodChangeStarted,
+        rest=RestBinding("POST", "/api/me/billing/method"),
+    ),
+    Capability(
+        key="billing.method_change_confirm", handler=_method_change_confirm,
+        Input=ConfirmInput, authz=ORG_ADMIN, Output=MethodChangeResult,
+        rest=RestBinding("POST", "/api/me/billing/method/confirm"),
     ),
     Capability(
         key="billing.payments", handler=_payments, Input=PaymentsInput,

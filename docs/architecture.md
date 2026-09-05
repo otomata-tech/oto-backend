@@ -84,9 +84,15 @@ deploy/
 > du repo) : la procédure DNS + Caddy + systemd vit dans le repo privé `otomata-tech/infra`. Cet arbre — et la
 > carte `CLAUDE.md` — l'ont cité comme présent jusqu'au 2026-09-03.
 
-L'extension Chrome (Oto Companion) vit dans `oto-app/extension/` (repo
-`otomata-tech/oto-app`, monorepo des fronts). Elle parle au backend via REST :
-`POST /api/settings/linkedin` + endpoints `/api/whatsapp/pair/*` (SSE).
+> ⚠️ **L'extension Chrome (Oto Companion) n'a plus d'interlocuteur** — ce paragraphe a
+> décrit son couplage comme vivant jusqu'au 2026-09-05. Elle vit dans
+> `oto-websites/extension/` (et non `oto-app/extension/`, qui n'existe pas) et appelle
+> encore `POST|DELETE /api/settings/linkedin`, `/api/whatsapp/pair/*` et
+> `/api/whatsapp/status` : **aucune** de ces routes n'est servie (contrôlé sur
+> `tests/api/api_routes_table.txt`). Son dernier commit date du 2026-06-25. **Décision
+> d'Alexis du 05/09/2026 : elle est dépubliée du Chrome Web Store** — une extension
+> installable qui ne peut plus rien faire coûte davantage que pas d'extension du tout.
+> Cf. oto-backend#423.
 
 **4 couches à frontière à sens unique** (ADR 0004) : **backend-core** (`db`,
 `credentials_store`, `org_store`, `access`, `crypto`, `providers`, `auth.hooks`) —

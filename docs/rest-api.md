@@ -93,7 +93,13 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   corps servis au dashboard — même famille de décision que la toolbox (oto-backend#429).
 - `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo **uploadé** d'org (org_admin, multipart `file`). Le logo AFFICHÉ (`logo_url` des lectures + `active_org_logo_url` de `/api/me`) est l'**effectif** : upload sinon dérivé du CDN logo.dev via le `domain` déclaré (`org_store.effective_logo_url`, token `LOGODEV_TOKEN`) ; `logo_custom` (fiche org) dit si un upload existe.
 - `PATCH /api/orgs/{id}` (+ miroir `/api/admin/orgs/{id}`) — profil d'org (org_admin) : `name`, `description`, **`domain`** (domaine de marque, normalisé `org_store.normalize_domain` — `""` efface, saisie URL tolérée, invalide → 400 `invalid_domain`), `industry`, `location`. Capacité `org.update` (MCP `oto_org(op='update')`, console ADR 0047).
-- `POST|DELETE /api/settings/linkedin` — cookie li_at + UA
+> ⚠️ **`POST|DELETE /api/settings/linkedin` n'existe plus** — ce doc l'a annoncée comme
+> servie jusqu'au 2026-09-05. LinkedIn est passé par le connecteur hébergé Unipile, la
+> route a été retirée, la ligne est restée. Contrôlé sur la table de routes gelée
+> (`tests/api/api_routes_table.txt`) : **zéro** des routes servies ne la porte, pas plus
+> que `/api/whatsapp/pair/*` ni `/api/whatsapp/status`, que l'extension appelle encore.
+> Cf. oto-backend#423.
+
 - `POST /api/me/connectors/{name}/session/start` + `POST …/session/finalize` — **la
   connexion par SESSION NAVIGATEUR** (Live View Browserbase, ADR 0026), capacités
   `me.browser_session.{start,finalize}` depuis le 2026-08-27

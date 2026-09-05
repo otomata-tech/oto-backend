@@ -9,7 +9,16 @@ from __future__ import annotations
 
 import pytest
 
+from oto_mcp import credentials_store
 from oto_mcp.tools import folk as F
+
+
+def _fields(secret: str) -> dict:
+    """Champs EXACTEMENT comme la capacité verify les produit — coupler le test au
+    vrai unpack empêche le drift sonde↔schéma (vécu 2026-07-08 sur unipile, cf.
+    `tests/test_unipile_verify.py` : une sonde qui lisait `api_key` pendant que le
+    coffre range `key` était AVEUGLE en prod, un test non couplé ne l'avait pas vu)."""
+    return credentials_store.unpack_secret("folk", secret)
 
 
 class _FauxClient:
@@ -33,7 +42,7 @@ def _brancher(monkeypatch, client):
 def test_une_cle_valide_passe(monkeypatch):
     cli = _brancher(monkeypatch, _FauxClient(
         {"id": "u_1", "fullName": "Une Personne", "email": "x@y.z"}))
-    F._verify({"api_key": "k"})
+    F._verify(_fields("k"))
     assert cli.appels == ["users/me"], "un seul appel, en lecture"
 
 
@@ -42,7 +51,7 @@ def test_une_cle_refusee_leve(monkeypatch):
     doit remonter tel quel, pas être avalé."""
     _brancher(monkeypatch, _FauxClient(boom=RuntimeError("HTTP 401: invalid api key")))
     with pytest.raises(RuntimeError, match="401"):
-        F._verify({"api_key": "k"})
+        F._verify(_fields("k"))
 
 
 def test_une_reponse_200_SANS_identite_est_un_echec(monkeypatch):
@@ -51,7 +60,7 @@ def test_une_reponse_200_SANS_identite_est_un_echec(monkeypatch):
     peut pas nommer, c'est exactement le verdict creux qu'une sonde doit empêcher."""
     _brancher(monkeypatch, _FauxClient({}))
     with pytest.raises(RuntimeError, match="sans identifier"):
-        F._verify({"api_key": "k"})
+        F._verify(_fields("k"))
 
 
 def test_la_sonde_est_enregistree_au_registre():

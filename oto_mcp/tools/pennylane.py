@@ -62,7 +62,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.pennylane import PennylaneClient
 
-    infos = PennylaneClient(api_key=fields["api_key"]).get_company_info()
+    infos = PennylaneClient(api_key=fields["key"]).get_company_info()
     if not (infos or {}).get("company"):
         raise RuntimeError(
             "Pennylane a répondu sans désigner de société pour cette clé — "

@@ -12,8 +12,16 @@ from __future__ import annotations
 
 import pytest
 
+from oto_mcp import credentials_store
 from oto_mcp.connectors import verify as cv
 from oto_mcp.tools import hunter as H
+
+
+def _fields(secret: str) -> dict:
+    """Champs EXACTEMENT comme la capacité verify les produit — coupler le test au
+    vrai unpack empêche le drift sonde↔schéma (vécu 2026-07-08 sur unipile, cf.
+    `tests/test_unipile_verify.py`)."""
+    return credentials_store.unpack_secret("hunter", secret)
 
 
 class _FauxClient:
@@ -37,7 +45,7 @@ def _compte(dispo, utilise):
 
 def test_un_solde_disponible_est_rendu_avec_son_unite_et_son_instant(monkeypatch):
     _brancher(monkeypatch, _compte(500, 120))
-    out = H._verify({"api_key": "k"})
+    out = H._verify(_fields("k"))
     q = out["quota"]
     assert q["restant"] == 380 and q["utilise"] == 120 and q["inclus"] == 500
     assert q["unite"] == "recherches", (
@@ -50,7 +58,7 @@ def test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH(monkeypatch):
     recharger — pas de reconnecter, qui n'y changerait rien."""
     _brancher(monkeypatch, _compte(500, 500))
     with pytest.raises(cv.QuotaEpuise) as e:
-        H._verify({"api_key": "k"})
+        H._verify(_fields("k"))
     assert cv.classer(e.value) == cv.NO_QUOTA
     assert "recharge" in str(e.value).lower()
 
@@ -61,7 +69,7 @@ def test_une_cle_refusee_reste_un_refus_d_AUTH(monkeypatch):
     err.status_code = 401
     _brancher(monkeypatch, boom=err)
     with pytest.raises(RuntimeError) as e:
-        H._verify({"api_key": "k"})
+        H._verify(_fields("k"))
     assert cv.classer(e.value) == cv.UNAUTHORIZED
 
 
@@ -69,13 +77,13 @@ def test_un_solde_ILLISIBLE_ne_fabrique_pas_de_quota(monkeypatch):
     """Si Hunter changeait la forme de sa réponse, inventer un solde serait pire
     que n'en rendre aucun : la sonde dirait « il reste X » sans l'avoir mesuré."""
     _brancher(monkeypatch, {"data": {"first_name": "X"}})
-    assert H._verify({"api_key": "k"}) == {}
+    assert H._verify(_fields("k")) == {}
 
 
 def test_une_reponse_vide_est_un_echec(monkeypatch):
     _brancher(monkeypatch, {})
     with pytest.raises(RuntimeError, match="sans information de compte"):
-        H._verify({"api_key": "k"})
+        H._verify(_fields("k"))
 
 
 def test_la_couverture_declaree_est_auth_quota():

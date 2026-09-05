@@ -10,7 +10,15 @@ from __future__ import annotations
 
 import pytest
 
+from oto_mcp import credentials_store
 from oto_mcp.tools import pennylane as P
+
+
+def _fields(secret: str) -> dict:
+    """Champs EXACTEMENT comme la capacité verify les produit — coupler le test au
+    vrai unpack empêche le drift sonde↔schéma (vécu 2026-07-08 sur unipile, cf.
+    `tests/test_unipile_verify.py`)."""
+    return credentials_store.unpack_secret("pennylane", secret)
 
 
 class _FauxClient:
@@ -35,14 +43,14 @@ def test_une_cle_valide_avec_des_droits_passe(monkeypatch):
     cli = _brancher(monkeypatch, _FauxClient({
         "user": {"id": 1}, "company": {"id": 7, "name": "UNE SOCIÉTÉ"},
         "scopes": ["customers:all", "customer_invoices:all"]}))
-    P._verify({"api_key": "k"})
+    P._verify(_fields("k"))
     assert cli.appels == ["me"], "un seul appel, en lecture"
 
 
 def test_une_cle_refusee_leve(monkeypatch):
     _brancher(monkeypatch, _FauxClient(boom=RuntimeError("HTTP 401: invalid token")))
     with pytest.raises(RuntimeError, match="401"):
-        P._verify({"api_key": "k"})
+        P._verify(_fields("k"))
 
 
 def test_une_cle_SANS_AUCUN_DROIT_est_un_echec_nomme(monkeypatch):
@@ -52,7 +60,7 @@ def test_une_cle_SANS_AUCUN_DROIT_est_un_echec_nomme(monkeypatch):
     _brancher(monkeypatch, _FauxClient({
         "user": {"id": 1}, "company": {"id": 7, "name": "UNE SOCIÉTÉ"}, "scopes": []}))
     with pytest.raises(RuntimeError) as e:
-        P._verify({"api_key": "k"})
+        P._verify(_fields("k"))
     msg = str(e.value)
     assert "AUCUN droit" in msg and "UNE SOCIÉTÉ" in msg, msg
     assert "Régénère" in msg, "le refus doit dire quoi faire"
@@ -61,7 +69,7 @@ def test_une_cle_SANS_AUCUN_DROIT_est_un_echec_nomme(monkeypatch):
 def test_une_reponse_sans_societe_est_un_echec(monkeypatch):
     _brancher(monkeypatch, _FauxClient({"user": {"id": 1}}))
     with pytest.raises(RuntimeError, match="sans désigner de société"):
-        P._verify({"api_key": "k"})
+        P._verify(_fields("k"))
 
 
 def test_des_scopes_absents_ne_font_PAS_echouer(monkeypatch):
@@ -69,7 +77,7 @@ def test_des_scopes_absents_ne_font_PAS_echouer(monkeypatch):
     Un fournisseur qui cesserait de servir le champ ferait alors échouer toutes
     les clés valides — un garde-fou qui casse ce qu'il surveille."""
     _brancher(monkeypatch, _FauxClient({"user": {"id": 1}, "company": {"id": 7}}))
-    P._verify({"api_key": "k"})
+    P._verify(_fields("k"))
 
 
 def test_la_sonde_est_enregistree_au_registre():

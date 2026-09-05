@@ -641,7 +641,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.folk.client import FolkClient
 
-    utilisateur = FolkClient(api_key=fields["api_key"]).get_current_user()
+    utilisateur = FolkClient(api_key=fields["key"]).get_current_user()
     if not (utilisateur or {}).get("id"):
         # Une réponse 200 sans identité : la clé passe l'authentification mais ne
         # désigne personne. Le taire rendrait un verdict « connecté » sur un

@@ -42,7 +42,7 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
     """
     from oto.tools.hunter.client import HunterClient
 
-    infos = HunterClient(api_key=fields["api_key"]).account_info()
+    infos = HunterClient(api_key=fields["key"]).account_info()
     data = (infos or {}).get("data") or {}
     if not data:
         raise RuntimeError(

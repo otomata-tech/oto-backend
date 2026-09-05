@@ -56,6 +56,28 @@ def _parse_group_target(grantee: str) -> Optional[int]:
     return int(raw)
 
 
+def _un_seul_porteur(email: str) -> Optional[dict]:
+    """La fiche du compte portant cette adresse — ou un REFUS si elle en désigne
+    plusieurs. `None` quand personne ne la porte : l'appelant décide (l'octroi
+    lève 404, la révocation tolère et retombe sur la chaîne fournie).
+
+    ⚠️ Une adresse ne désigne pas un compte. Deux comptes peuvent la porter — le
+    nôtre et celui d'un tenant, ou deux des nôtres (mesuré : dix adresses, vingt
+    comptes, dont une paire sans aucun tenant). En choisir un en silence, c'est
+    accorder l'accès à son compte connecteur au mauvais destinataire, ou croire
+    l'avoir retiré au bon. Le `grantee` accepte DÉJÀ un sub : le refus a donc une
+    sortie immédiate, et il la nomme.
+    """
+    porteurs = db.get_users_by_email(email)
+    if len(porteurs) > 1:
+        subs = ", ".join(f"`{u['sub']}`" for u in porteurs)
+        raise AuthzDenied(
+            400, "ambiguous_email",
+            f"L'adresse `{email}` désigne {len(porteurs)} comptes : {subs}. "
+            "Reprends avec le `sub` de celui que tu vises — `grantee` l'accepte.")
+    return porteurs[0] if porteurs else None
+
+
 def _resolve_grantee(ctx: ResolvedCtx, grantee: str) -> dict:
     """`grantee` = sub OU email → fiche user. Le propriétaire partage SON PROPRE
     compte (owner := ctx.sub par construction) → il peut l'accorder à N'IMPORTE
@@ -63,7 +85,7 @@ def _resolve_grantee(ctx: ResolvedCtx, grantee: str) -> dict:
     freelance externe). Seuls garde-fous : l'user doit exister, et pas de
     self-grant (tu opères déjà ton compte)."""
     if "@" in grantee:
-        user = db.get_user_by_email(grantee)
+        user = _un_seul_porteur(grantee)
     else:
         user = db.get_user(grantee)
     if not user:
@@ -222,7 +244,10 @@ def _revoke(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
         return {"ok": True, "channel": inp.channel, "grantee_group_id": group_id,
                 "revoked": revoked}
     if "@" in inp.grantee:
-        user = db.get_user_by_email(inp.grantee)
+        # ⚠️ La révocation aussi : sur une adresse ambiguë, révoquer « un des deux »
+        # laisse l'accès au second — et le propriétaire croit l'avoir retiré. Le
+        # refus est donc le même ici que pour l'octroi, pour la raison inverse.
+        user = _un_seul_porteur(inp.grantee)
         grantee_sub = user["sub"] if user else inp.grantee
     else:
         grantee_sub = inp.grantee

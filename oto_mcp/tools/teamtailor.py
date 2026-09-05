@@ -15,10 +15,32 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /jobs` (déjà dans le client — `list_jobs`), `page_size=1` — le plus
+    petit format disponible, Teamtailor n'exposant ni `/me` ni solde. C'est
+    aussi une lecture RÉELLE du connecteur (`teamtailor_jobs`), pas un endpoint
+    inventé pour la sonde : si une clé valide ne peut pas lire les jobs, ce
+    tool est déjà cassé pour elle.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    aucune trace, dans la doc ou le client, d'une clé Teamtailor restreinte
+    par ressource (contrairement à Ashby, cf. décision de ne pas sonder ashby,
+    otomata-tech/oto#69).
+    """
+    from oto.tools.teamtailor.client import TeamtailorClient
+
+    TeamtailorClient(api_key=fields["key"]).list_jobs(page_size=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.teamtailor.client import TeamtailorClient
+
+    connector_verify.register("teamtailor", _verify)
 
     def _client() -> TeamtailorClient:
         key, _ = access.resolve_api_key("teamtailor")

@@ -15,10 +15,30 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/users` (`list_users`, déjà dans le client), `limit=1` — le plus
+    petit format disponible, Lever n'exposant ni `/me` ni solde. Basic auth
+    (clé en username, mot de passe vide), lecture sans effet de bord. Aucune
+    mention de coût ni de limite de débit particulière pour cet appel.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé Lever porte le périmètre entier du compte, pas de permission
+    granulaire par ressource.
+    """
+    from oto.tools.lever.client import LeverClient
+
+    LeverClient(api_key=fields["key"]).list_users(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.lever.client import LeverClient
+
+    connector_verify.register("lever", _verify)
 
     def _client() -> LeverClient:
         key, _ = access.resolve_api_key("lever")

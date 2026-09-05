@@ -42,6 +42,24 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/users` (`list_users`, déjà dans le client), `per_page=1` — le plus
+    petit format disponible, Greenhouse n'exposant ni `/me` ni solde. Basic
+    auth (clé en username, mot de passe vide), lecture sans effet de bord.
+    Aucune mention de coût ni de limite de débit particulière pour cet appel.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    Greenhouse n'a pas de permission par clé au-delà du périmètre Harvest
+    global de la clé elle-même.
+    """
+    from oto.tools.greenhouse.client import GreenhouseClient
+
+    GreenhouseClient(api_key=fields["key"]).list_users(per_page=1)
 
 
 def _bad(msg: str) -> McpError:
@@ -73,6 +91,8 @@ def _not_for(value, name: str, op: str, right_op: str) -> None:
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.greenhouse.client import GreenhouseClient
+
+    connector_verify.register("greenhouse", _verify)
 
     def _client() -> GreenhouseClient:
         key, _ = access.resolve_api_key("greenhouse")

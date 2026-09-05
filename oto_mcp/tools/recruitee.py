@@ -14,10 +14,31 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /c/<company_id>/candidates` (déjà dans le client — `list_candidates`),
+    `limit=1` — le plus petit format disponible, Recruitee n'exposant ni `/me`
+    ni solde. Bearer token + `company_id` (les deux champs du credential),
+    lecture sans effet de bord.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    un token personnel Recruitee porte le périmètre entier du compte qui l'a créé.
+    """
+    from oto.tools.recruitee.client import RecruiteeClient
+
+    RecruiteeClient(
+        api_token=fields["api_token"], company_id=fields["company_id"],
+    ).list_candidates(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.recruitee.client import RecruiteeClient
+
+    connector_verify.register("recruitee", _verify)
 
     def _client() -> RecruiteeClient:
         creds = access.resolve_credential_fields("recruitee")

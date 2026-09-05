@@ -75,6 +75,10 @@ def test_toutes_les_sondes_reelles_declarent_une_couverture_valide():
 QUOTA_AUTORISE = {
     # `tests/test_sonde_hunter.py::test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH`
     "hunter",
+    # `tests/test_sonde_fullenrich.py::test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH`
+    "fullenrich",
+    # `tests/test_sonde_lusha.py::test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH`
+    "lusha",
 }
 
 

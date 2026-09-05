@@ -21,6 +21,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
 
 _MAX_CONTACTS_PER_CALL = 100
 _REVEAL_VALUES = frozenset({"emails", "phones"})
@@ -30,8 +31,36 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+def _verify(fields: dict, config: dict | None = None) -> dict:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth+quota`.
+
+    `GET /account/usage`. Ce que la doc Lusha établit : « the Account Usage
+    endpoint itself has no charge for checking your balance (it's a utility
+    endpoint for monitoring) » — écrit noir sur blanc, pas seulement une
+    absence de compteur.
+
+    Le solde (`remaining`) distingue une clé morte d'un compte à sec —
+    recharger n'est pas reconnecter.
+    """
+    from oto.tools.lusha.client import LushaClient
+
+    infos = LushaClient(api_key=fields["key"])._request("GET", "/account/usage") or {}
+    restant = infos.get("remaining")
+    if not isinstance(restant, int):
+        raise RuntimeError(
+            f"Lusha a répondu sans solde de crédits lisible : {str(infos)[:200]}")
+    if restant <= 0:
+        raise connector_verify.QuotaEpuise(
+            "La clé Lusha est bonne, mais le compte est à sec (0 crédit "
+            "restant). Recharge le compte chez Lusha — reconnecter n'y "
+            "changerait rien.")
+    return {"quota": {"restant": restant, "unite": "crédits"}}
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.lusha.client import LushaClient
+
+    connector_verify.register("lusha", _verify, couvre=connector_verify.AUTH_QUOTA)
 
     def _client() -> LushaClient:
         key, _ = access.resolve_api_key("lusha")

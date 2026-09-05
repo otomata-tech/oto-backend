@@ -56,6 +56,27 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `verify_key()` (déjà dans le client — un appel `GET
+    entitlement/contactEntitlementSubscription`, écrit dans oto-core pour
+    exactement cet usage : « Valide la clé via un appel entitlement. Lève la
+    HTTPError amont (401 = clé invalide) si KO. »). Bearer token, lecture sans
+    effet de bord.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope
+    ici — l'entitlement Contact est une souscription DE BASE, pas une des deux
+    cibles (`contact`/`account`) que `_target()` refuse déjà en amont pour une
+    op inconnue.
+    """
+    from oto.tools.cognism.client import CognismClient
+
+    CognismClient(api_key=fields["key"]).verify_key()
+
 
 # Les deux CIBLES du connecteur, valeurs de `op` : le contact (la personne) et
 # l'account (la société). Source unique — la validation d'entrée ET le message de
@@ -85,6 +106,8 @@ def _target(op: str) -> str:
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.cognism.client import CognismClient
+
+    connector_verify.register("cognism", _verify)
 
     def _client() -> tuple[CognismClient, bool]:
         key, is_platform = access.resolve_api_key("cognism")

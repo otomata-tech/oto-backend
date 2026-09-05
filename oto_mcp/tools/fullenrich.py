@@ -17,10 +17,47 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+_CREDITS_URL = "https://app.fullenrich.com/api/v1/account/credits"
+
+
+def _verify(fields: dict, config: dict | None = None) -> dict:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth+quota`.
+
+    `GET /api/v1/account/credits` (⚠️ v1, PAS le v2 du reste du client — deux
+    préfixes de version distincts chez FullEnrich, vérifié). Bearer token,
+    lecture de solde sans effet de bord. Aucune mention explicite de
+    « gratuit » dans ce qu'on a trouvé — absence de mention, indice, pas une
+    preuve, comme Folk et Pennylane.
+
+    Le solde (`balance`) distingue une clé morte d'un compte à sec — recharger
+    n'est pas reconnecter.
+    """
+    import requests
+    from oto.tools.fullenrich.client import FullenrichClient
+
+    headers = FullenrichClient(api_key=fields["key"])._headers()
+    r = requests.get(_CREDITS_URL, headers=headers, timeout=15)
+    r.raise_for_status()
+    infos = r.json() or {}
+    restant = infos.get("balance")
+    if not isinstance(restant, int):
+        raise RuntimeError(
+            "FullEnrich a répondu sans solde de crédits lisible : "
+            f"{str(infos)[:200]}")
+    if restant <= 0:
+        raise connector_verify.QuotaEpuise(
+            "La clé FullEnrich est bonne, mais le compte est à sec (0 crédit "
+            "restant). Recharge le compte chez FullEnrich — reconnecter n'y "
+            "changerait rien.")
+    return {"quota": {"restant": restant, "unite": "crédits"}}
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.fullenrich.client import FullenrichClient
+
+    connector_verify.register("fullenrich", _verify, couvre=connector_verify.AUTH_QUOTA)
 
     def _client() -> tuple[FullenrichClient, bool]:
         key, is_platform = access.resolve_api_key("fullenrich")

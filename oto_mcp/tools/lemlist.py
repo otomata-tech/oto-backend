@@ -256,7 +256,13 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def lemlist_status() -> dict:
-        """Workspace status (account, credits, plan)."""
+        """Workspace status (account, credits, plan).
+
+        Never raises on a dead/invalid key — check `connected` first:
+        `{"connected": true, "campaigns_count", "campaigns_capped"}` on
+        success, `{"connected": false, "error": "<message>"}` on failure. A
+        200 response with `connected: false` IS the failure — don't treat a
+        non-empty result as automatically working."""
         client, is_platform = _client()
         result = client.status()
         _record_if_platform(is_platform)

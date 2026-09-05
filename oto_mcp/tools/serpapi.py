@@ -43,55 +43,14 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-import datetime as _dt
-
 from .. import access, url_perimeter
-from ..connectors import verify as connector_verify
 
-_ACCOUNT_URL = "https://serpapi.com/account"
-
-
-def _verify(fields: dict, config: dict | None = None) -> dict:
-    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth+quota`.
-
-    `GET https://serpapi.com/account`. Ce que la doc SerpApi établit, cité :
-
-    - **authentifié** — la clé (`api_key`) est un paramètre requis ;
-    - **sans effet de bord** — une lecture d'information de compte ;
-    - **gratuit, et là c'est ÉCRIT** — « Account API is free of charge, and using
-      it will not be counted toward your monthly quota. » Comme Hunter, pas
-      besoin de se contenter de l'absence de compteur comme indice.
-
-    Le solde vient au même appel : `total_searches_left` (le plan mensuel restant
-    PLUS les crédits ponctuels — c'est le nombre qui dit si un appel de recherche
-    passera, pas seulement le quota du plan). Compte à sec → `QuotaEpuise`, verdict
-    `no_quota`, conduite « recharge » — pas « reconnecte », qui n'y changerait rien.
-
-    Ne fabrique pas de solde s'il n'est pas lisible : mieux vaut n'en rendre aucun
-    que d'en inventer un si SerpApi changeait la forme de sa réponse.
-    """
-    import requests
-
-    r = requests.get(_ACCOUNT_URL, params={"api_key": fields["key"]}, timeout=15)
-    r.raise_for_status()
-    infos = r.json() or {}
-    if not infos.get("account_id"):
-        raise RuntimeError(
-            "SerpApi a répondu sans identifier de compte pour cette clé — "
-            f"réponse inattendue : {str(infos)[:200]}")
-    restant = infos.get("total_searches_left")
-    if isinstance(restant, int):
-        if restant <= 0:
-            raise connector_verify.QuotaEpuise(
-                f"La clé SerpApi est bonne, mais le compte est à sec (0 recherche "
-                "restante). Recharge le compte chez SerpApi — reconnecter n'y "
-                "changerait rien.")
-        return {"quota": {
-            "restant": restant,
-            "unite": "recherches",
-            "mesure_a": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-        }}
-    return {}
+# Pas de sonde `verify` ici (otomata-tech/oto#69) : TOUTE l'API SerpApi
+# authentifie par `api_key` en QUERY STRING, sans alternative (confirmé sur la
+# doc du compte ET sur `SerpAPIClient._request`, qui fait de même pour la
+# recherche elle-même) — `tests/test_no_secrets_in_query_string.py` l'interdit
+# à raison (#284 : une clé en URL finit dans les logs de proxy et l'historique
+# amont). Aucun appel conforme = pas de sonde, cf. la règle posée dans l'issue.
 
 # --- traduction des params partagés vers le nom natif de chaque moteur --------
 # Seuls les moteurs qui DIVERGENT de la convention Google/SerpApi sont listés ;
@@ -119,8 +78,6 @@ _SHARED_ORDER = ("query", "country", "language", "location", "page", "count", "d
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.serpapi.client import SerpAPIClient
-
-    connector_verify.register("serpapi", _verify, couvre=connector_verify.AUTH_QUOTA)
 
     def _client() -> tuple[SerpAPIClient, bool]:
         key, is_platform = access.resolve_api_key("serpapi")

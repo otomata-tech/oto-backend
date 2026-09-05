@@ -23,7 +23,6 @@ import pytest
 
 from oto_mcp.api import base as ab
 from oto_mcp.api import routes as ar
-from tests.test_rest_call_logger import _run_mw
 
 
 def _jwt(sub: str) -> str:

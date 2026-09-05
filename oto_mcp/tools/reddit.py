@@ -14,10 +14,33 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /api/reddit/search/communities` (déjà dans le client —
+    `search_subreddits`), une recherche générique (`q="a"`, `limit=1`) qui ne
+    dépend d'aucune cible existante : la passerelle redditapis.com n'expose ni
+    `/me` ni solde. Comme `hunter`/`folk`, cette sonde ne compte PAS dans le
+    quota plateforme (`record_platform_usage` n'est appelé que par les tools
+    réels, jamais par `_verify` — même précédent).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : `RedditClient._get` lève déjà
+    sur un refus (`RuntimeError` si le corps porte `error` en 200, sinon
+    `raise_for_status`) — rien de plus fin à distinguer, une clé redditapis
+    porte le périmètre entier de son quota.
+    """
+    from oto.tools.reddit import RedditClient
+
+    RedditClient(api_key=fields["key"]).search_subreddits("a", limit=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.reddit import RedditClient
+
+    connector_verify.register("reddit", _verify)
 
     def _client() -> tuple[RedditClient, bool]:
         key, is_platform = access.resolve_api_key("reddit")

@@ -13,10 +13,29 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /containers` (déjà dans le client — `list_containers`), sans
+    `agent_id` : liste les exécutions récentes du COMPTE entier, `limit=1` —
+    le plus petit format disponible, Phantombuster n'exposant ni `/me` ni
+    solde à cet appel. Une liste VIDE (aucune exécution) est un état normal.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé Phantombuster porte le périmètre entier du compte.
+    """
+    from oto.tools.phantombuster.client import PhantombusterClient
+
+    PhantombusterClient(api_key=fields["key"]).list_containers(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.phantombuster.client import PhantombusterClient
+
+    connector_verify.register("phantombuster", _verify)
 
     def _client() -> PhantombusterClient:
         key, _ = access.resolve_api_key("phantombuster")

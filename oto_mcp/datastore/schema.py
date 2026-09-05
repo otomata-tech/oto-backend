@@ -1451,20 +1451,12 @@ def off_schema_refusal(schema: Optional[dict],
     # `effectif_comment` au lieu de `effectif.comment`. Reconnaissance exacte, pas
     # rapprochement : cf. `couche_mal_ecrite`.
     couches = [(k, *c) for k in keys if (c := couche_mal_ecrite(k, set(dispo)))]
-    # ⚠️ L'autre moitié de la distinction : une clé POINTÉE dont la colonne de base
-    # n'est pas déclarée. Le message générique parlerait de `inconnue.comment` et
-    # ferait chercher du côté de la couche, alors que c'est la COLONNE qui manque —
-    # deux gestes de réparation opposés (déclarer une colonne, ou corriger un nom de
-    # couche). Le refus doit dire lequel des deux.
-    pointees = [(k, k.split(".", 1)[0]) for k in keys
-                if "." in k and k.split(".", 1)[1] in LAYER_KEYS
-                and k.split(".", 1)[0] not in set(dispo)]
-    if pointees and not couches:
-        quoi = " ; ".join(f"`{k}` (colonne `{base}`)" for k, base in pointees)
-        return ([f"{noms} : rien n'a été écrit. La COUCHE est bien écrite — c'est la "
-                 f"COLONNE qui n'est pas déclarée : {quoi}. Colonnes du tableau : "
-                 f"{cite}. Déclare la colonne (`data_patch_schema`) puis réécris ; "
-                 f"⚠️ ne corrige pas le nom de la couche, il n'est pas en cause."], {})
+    # ⚠️ PAS de branche pour la clé POINTÉE dont la colonne est absente, et c'est
+    # mesuré : `_refuse_dotted_names` (datastore/points.py) lève avant, sur les CINQ
+    # chemins d'écriture, avec un message meilleur que celui qu'on écrirait ici — il
+    # dit où il a cherché (« ni dans cette écriture, ni sur la ligne visée, ni au
+    # schéma ») et donne la forme imbriquée. Ajouter la nôtre aurait été du code que
+    # rien n'atteint, et qui aurait fait croire à un second chemin.
     if couches:
         quoi = " ; ".join(
             f"`{k}` → `{col}.{couche}`" for k, col, couche in couches)

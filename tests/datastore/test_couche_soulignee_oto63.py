@@ -73,12 +73,27 @@ def test_couche_mal_ecrite_le_refus_NOMME_la_colonne():
 
 
 def test_colonne_inconnue_sous_une_couche_BIEN_ecrite_dit_l_autre_geste():
-    """⚠️ La distinction qui évite de réparer le mauvais côté : ici la couche est
-    juste, c'est la colonne qui manque. Un message qui les confondrait enverrait
-    corriger un nom de couche qui n'est pas en cause."""
-    msgs, _ = off_schema_refusal(SCHEMA, {"inconnue.comment": "x"})
-    assert "COLONNE qui n'est pas déclarée" in msgs[0]
-    assert "ne corrige pas le nom de la couche" in msgs[0]
+    """⚠️ La distinction existe, et elle ne vient PAS d'ici — c'est ce que la
+    comparaison avant/après a établi.
+
+    `_refuse_dotted_names` (datastore/points.py) lève sur les CINQ chemins d'écriture,
+    avant que le refus des colonnes inconnues ne soit consulté, et son message est
+    meilleur que celui qu'on aurait écrit : il dit où il a cherché — « ni dans cette
+    écriture, ni sur la ligne visée, ni au schéma » — et donne la forme imbriquée.
+    Écrire notre version aurait ajouté du code que rien n'atteint, en laissant croire
+    à un second chemin.
+
+    Ce banc garde donc la distinction là où elle VIT, pas là où on aurait pu la
+    dupliquer."""
+    from oto_mcp.datastore.points import _refuse_dotted_names
+    from oto_mcp.datastore.errors import RowValidationError
+
+    with pytest.raises(RowValidationError) as e:
+        _refuse_dotted_names({"inconnue.comment": "x"})
+    message = str(e.value)
+    assert "n'est aucune colonne" in message
+    assert "ni au schéma" in message, "le refus doit dire OÙ il a cherché"
+    assert '{"inconnue": {"comment"' in message, "…et donner la forme imbriquée"
 
 
 def test_une_colonne_franchement_inconnue_garde_son_refus_SEC():

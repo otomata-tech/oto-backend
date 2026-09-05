@@ -53,6 +53,24 @@ def test_une_liste_PLEINE_passe_toujours(champ):
     assert ["a", "b"] in params
 
 
+def test_le_CHEMIN_de_lecture_d_un_agent_leve_vraiment():
+    """⚠️ Les bancs ci-dessus appellent `_ds_one_field_clause` : ils prouvent que la
+    fonction refuse, pas que l'agent rencontre ce refus. Celui-ci suit le chemin réel
+    de `data_rows` — `count_rows` et `cursor_rows` passent par `_ds_where`, donc par
+    la fonction ; si un jour ils prenaient une autre route, ce banc tomberait et les
+    autres resteraient verts.
+
+    ⚠️ Mesuré au passage, et hors de ce lot : `store.list_rows` (le filtrage k:v en
+    Python, qui sert une surface d'AFFICHAGE et le sync du feed) ne connaît AUCUN
+    opérateur — `{"in": […]}` y est comparé comme une chaîne littérale et rend zéro
+    ligne en silence. Ce n'est pas le chemin de l'agent, et ce défaut lui préexiste."""
+    from oto_mcp.db.query import _ds_where
+
+    with pytest.raises(ValueError) as e:
+        _ds_where(1, None, [{"field": "statut", "op": "in", "value": []}])
+    assert "statut" in str(e.value)
+
+
 @pytest.mark.parametrize("champ", ["statut", "_id"])
 def test_une_valeur_SEULE_non_listee_passe(champ):
     """`in` accepte aussi une valeur nue — elle ne doit pas être prise pour une liste

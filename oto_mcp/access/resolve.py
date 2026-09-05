@@ -271,6 +271,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # `group` passé en LAZY : l'équipe active (lookup DB) n'est résolue que si
     # aucun barreau plus proche n'a gagné.
     probe = cascade.CascadeProbe(member=_member_fetch, member_cross=cascade.FETCH_PROBE.member_cross,
+                         legacy_user=cascade.FETCH_PROBE.legacy_user,
                          group=_group_fetch, org=_org_fetch, tenant=_tenant_fetch,
                          platform=cascade.FETCH_PROBE.platform)
     # L7 (blueprint ADR 0053) — un DRAPEAU dit qui décide, la voie non retenue

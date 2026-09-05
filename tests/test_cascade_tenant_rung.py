@@ -58,6 +58,7 @@ def probe(*, member=False, cross=False, group=False, org=False, tenant=False,
     return access.CascadeProbe(
         member=lambda s, o, p: _note("member", ("MK", "") if member else None),
         member_cross=lambda s, o, p: _note("cross", "XK" if cross else None),
+        legacy_user=lambda s, p: None,
         group=lambda g, p: _note("group", "GK" if group else None),
         org=lambda o, p: _note("org", "OK" if org else None),
         tenant=lambda t, p: _note("tenant", "TK" if tenant else None),

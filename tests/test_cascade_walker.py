@@ -21,6 +21,7 @@ def probe(*, member=False, cross=False, group=False, org=False, platform=False):
     return access.CascadeProbe(
         member=lambda s, o, p: (("MK", "") if member else None),
         member_cross=lambda s, o, p: ("XK" if cross else None),
+        legacy_user=lambda s, p: None,
         group=lambda g, p: ("GK" if group else None),
         org=lambda o, p: ("OK" if org else None),
         tenant=lambda t, p: None,

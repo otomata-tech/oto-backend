@@ -117,6 +117,53 @@ def test_dead_grant_marks_rejected_row_survives(monkeypatch, modname, excname, c
         f"catégorie opaque : {meta['health_reason']!r}")
 
 
+class _RespOK:
+    """Réponse HTTP 200 avec un corps JSON réel — le cas RÉUSSI, absent de `_Resp`
+    (toujours `{}`, pensé pour les cas d'échec où seul le texte brut compte)."""
+
+    def __init__(self, body: dict):
+        self.status_code, self._body = 200, body
+
+    @property
+    def text(self) -> str:
+        import json
+        return json.dumps(self._body)
+
+    def json(self) -> dict:
+        return self._body
+
+    def raise_for_status(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("modname,connector", [("atlassian", "atlassian"), ("folk", "folkmcp")])
+def test_un_refresh_reussi_demarque_une_ligne_precedemment_rejetee(monkeypatch, modname, connector):
+    """oto#25 lot (b3) — le démarquage sur « refresh réussi ». Ce n'est PAS un geste
+    neuf : `set_credential` REMPLACE tout le `meta` (jamais un merge, cf. son
+    docstring) — le chemin nominal de `access_token_for` écrit `meta={access_token,
+    expires_at}` sans jamais reporter `health_ko`. Ce test fige ce comportement
+    (aujourd'hui accidentel, demain une garantie) : une régression de `set_credential`
+    vers un merge le ferait rougir."""
+    mod = importlib.import_module(f"oto_mcp.auth.{modname}")
+    vault = _FakeVault("sub-1", connector, "REFRESH-1")
+    key = ("user", "sub-1", connector, "")
+    vault.rows[key]["meta"] = {"health_ko": True, "health_reason": "invalid_grant: dead"}
+
+    monkeypatch.setattr(credentials_store, "get_credential_with_meta",
+                        vault.get_credential_with_meta)
+    monkeypatch.setattr(credentials_store, "update_meta", vault.update_meta)
+    monkeypatch.setattr(credentials_store, "clear_credential", vault.clear_credential)
+    monkeypatch.setattr(credentials_store, "set_credential", vault.set_credential)
+    _patch_post(monkeypatch, mod, _RespOK({"access_token": "AT-NEW", "expires_in": 3600}))
+
+    token = mod.access_token_for("sub-1")
+
+    assert token == "AT-NEW"
+    meta = vault.rows[key]["meta"]
+    assert "health_ko" not in meta and "health_reason" not in meta, (
+        f"le refresh a réussi, la marque de rejet aurait dû disparaître : {meta!r}")
+
+
 @pytest.mark.parametrize("modname,excname,connector", _CASES)
 def test_config_error_still_does_not_touch_the_row(monkeypatch, modname, excname, connector):
     """Contre-épreuve : un incident de CONFIG (`invalid_client`) ne lève pas

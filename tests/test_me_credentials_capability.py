@@ -169,3 +169,22 @@ def test_retrait_au_palier_org_exige_l_admin(monkeypatch, vault):
     code, out = call("me.credential.clear", path_params={"provider": "serper"},
                      query=b"scope=org")
     assert code == 403 and out["error"] == "forbidden"
+
+
+# --- démarquage (oto#25 lot b3) — « nouvelle clé posée » ---------------------
+
+def test_reposer_une_cle_ne_reporte_jamais_une_sante_precedente(monkeypatch, vault):
+    """`credentials_store.set_credential` REMPLACE tout le `meta` (jamais un merge,
+    cf. son docstring — un incident vécu le 03/08 dépend déjà de cette garantie) :
+    reposer une clé ici envoie TOUJOURS `meta=None` (non vérifié) ou
+    `{"verified_at": …}` (vérifié), jamais un `meta` qui reporterait un `health_ko`
+    d'avant. C'est ce qui fait qu'une reconnexion démarque une ligne rejetée, sans
+    geste dédié — figé ici pour qu'une régression future (un `meta` qui se mettrait
+    à lire l'ancien avant d'écrire) rougisse."""
+    stub_authz(monkeypatch)
+    code, out = _post({"key": "K-NOUVELLE"}, provider="serper")
+    assert code == 200, out
+    meta = vault[0]["meta"]
+    assert meta is None or "health_ko" not in meta, (
+        f"un `meta` qui reporterait `health_ko` empêcherait toute reconnexion de "
+        f"démarquer une ligne rejetée : {meta!r}")

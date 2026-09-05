@@ -651,11 +651,41 @@ gagnante — nécessaire pour marquer la bonne ligne).
 retour OAuth (`auth/google.py`) au moment du lot b2 — à faire une fois ce WIP
 stabilisé, dans un lot séparé.
 
-Le **démarquage** (b3, à venir) n'est pas de ce lot : `record_health` sait déjà
-démarquer sur `ok=True` (comportement de `verify.py`, inchangé), mais aucun des
-appels neufs (`mark_rejected`) ne l'utilise — un connecteur qui a marqué une ligne
-rejetée au tool ne se démarque aujourd'hui QUE par `oto_instance op=verify` réussi,
-ou une clé reposée.
+### Le démarquage (oto#25 lot b3, 2026-09-05)
+
+Trois déclencheurs, et AUCUN autre — surtout pas un appel `ok=true` quelconque, qui
+crierait au loup à tort sur un simple throttle passager :
+
+1. **`oto_instance op=verify` vert** — déjà en place depuis toujours (`record_health`
+   appelé avec `ok=True` par `verify.py`), rien à faire ici.
+2. **Une nouvelle clé posée (reconnexion)** — déjà acquis, mais par un mécanisme
+   ACCIDENTEL qu'il fallait vérifier plutôt que supposer :
+   `credentials_store.set_credential` REMPLACE tout le `meta` (jamais un merge, cf.
+   son propre docstring) — poser une clé, quel que soit le chemin
+   (`persist_token` d'atlassian/folk, ou `capabilities/me_credentials.py::_set` pour
+   salesforce/zoho et tous les connecteurs keyés) écrit un `meta` neuf qui ne reporte
+   JAMAIS un `health_ko` d'avant. Figé par des tests dédiés
+   (`tests/auth/test_oauth_dead_grant_marks_rejected.py`,
+   `tests/test_me_credentials_capability.py`) plutôt que laissé implicite : une
+   régression de `set_credential` vers un merge romprait cette garantie en silence.
+3. **Un refresh réussi** — le point qui manquait réellement :
+   - `atlassian`/`folk` : même mécanisme que le point 2 (`access_token_for` écrit
+     `meta={access_token, expires_at}` au chemin nominal, un remplacement qui efface
+     `health_ko` de la même façon).
+   - `salesforce` : `on_refresh` (`_rotation_writer`) n'est invoqué qu'APRÈS un
+     refresh d'access token réussi — démarquage ajouté ici, **inconditionnel**
+     (qu'il y ait ROTATION du refresh token ou non ; beaucoup de Connected Apps n'en
+     imposent pas, et le démarquage ne doit pas attendre un événement qui n'arrivera
+     peut-être jamais).
+   - `zoho` : **manque assumé.** Le client oto-core (`oto/tools/zoho/{auth,client}.py`)
+     n'expose AUCUN hook symétrique au `on_refresh` de Salesforce — un refresh réussi
+     y est entièrement interne (cache process-wide), invisible du backend. L'ajouter
+     demanderait de modifier oto-core (nouveau paramètre de callback, tag, bump du
+     pin) : hors de la portée d'un lot backend-only. En attendant, zoho ne se
+     démarque QUE par les points 1 et 2 ci-dessus — moins réactif que les trois
+     autres connecteurs de cette famille, mais jamais faux : un `health_ko` posé par
+     erreur transitoire reste visible plus longtemps, il ne s'efface pas tout seul
+     au hasard d'un appel qui aurait pu être un throttle.
 
 ## Validation
 

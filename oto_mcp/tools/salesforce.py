@@ -328,6 +328,13 @@ def _rotation_writer(rc, jeton_lu: str):
     from .. import credentials_store
 
     def _write(token_data: dict) -> None:
+        # `on_refresh` n'est invoqué qu'APRÈS un refresh d'access token RÉUSSI (jamais
+        # sur échec — cf. `oto.tools.salesforce.client`) : c'est le déclencheur
+        # "refresh réussi" du démarquage (oto#25 lot b3), inconditionnel — qu'il y ait
+        # ROTATION du refresh token ou non, contrairement à la persistance ci-dessous.
+        if rc.entity_type is not None:
+            connector_health.record_health(
+                "salesforce", (rc.entity_type, rc.entity_id, rc.account), True, None)
         nouveau = token_data.get("refresh_token")
         # Pas de rotation, ou grant plateforme (pas de ligne de coffre à réécrire).
         if not nouveau or nouveau == jeton_lu or rc.entity_type is None:

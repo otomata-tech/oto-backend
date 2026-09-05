@@ -12,7 +12,7 @@ agis sur ton Google Workspace : mails, calendrier, tâches, feuilles de calcul, 
 - « ajoute une tâche `relancer X` pour lundi », « lis l'onglet `leads` de cette sheet »
 - « partage ce dossier Drive en lecture à jane@… »
 
-## limite — l'app oto n'est pas publiée chez Google (décision du 2026-09-05)
+## note — l'app oto n'est pas publiée chez Google (décision du 2026-09-05)
 
 l'écran de consentement OAuth reste en mode **Testing**, et c'est un choix : passer en
 *published* avec le scope `gmail.modify` (RESTRICTED chez Google) impose un audit **CASA

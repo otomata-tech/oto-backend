@@ -463,3 +463,21 @@ a coûté treize minutes :
   déjà été appliqué deux fois (`node_view`, `node_edit`) sans que personne ne remonte
   d'un cran. Deux rustines au même endroit sont le signal qu'on répare un cas là où vit
   une classe.
+
+## Procédures : dispatch mixte sync/async
+
+Une console `async` peut choisir une branche synchrone : les lectures, listes et
+écritures de procédures faisaient encore du SQL dans la boucle, même après le
+correctif des adaptateurs. `capabilities/_execution.execute` exécute désormais la
+préparation et le handler synchrone dans le même thread ; un résultat awaitable
+est attendu dans la boucle de l'appel. Les deux adaptateurs et les consoles de
+procédures empruntent ce seuil, sans répéter l'autorisation.
+
+Les handlers de lecture/écriture séparent leur I/O synchrone de l'enrichissement
+asynchrone du manifeste d'outils. Les ContextVars déjà posées par l'appel sont
+copiées vers le thread ; les faits produits par l'autorisation reviennent dans
+`ResolvedCtx`, pas par une mutation de ContextVar dans le thread.
+`tests/orgs/test_instruction_execution.py` exerce les quatre opérations admin
+sur les deux faces, compte une autorisation, observe le thread des stores et
+celui du manifeste, et vérifie le contexte et les refus. Il ne mesure aucune
+latence de production.

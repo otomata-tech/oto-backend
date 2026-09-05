@@ -26,12 +26,46 @@ from typing import Awaitable, Callable, Optional, Union
 # tenant BYO) DOIT lire `config`, sinon elle teste la clé contre le mauvais tenant.
 Probe = Callable[[dict, dict], Union[None, Awaitable[None]]]
 
+#: Ce qu'une sonde COUVRE. Déclaré, jamais deviné (oto#57).
+#:
+#: Deux sondes voisines faisaient des choses différentes et rien ne les distinguait vu
+#: de l'extérieur : celle de `theirstack` lit le SOLDE (l'appel authentifié gratuit),
+#: celle d'`origami` liste des objets — ce qui répond parfaitement sur un compte à sec.
+#: Mesuré le 04/09/2026 : un préflight tout vert, puis 402 après quatre espaces, quatre
+#: tables et 28 lignes créés.
+#:
+#: ⚠️ **Le préflight n'avait pas menti** : il avait rapporté un vert qui ne voulait pas
+#: dire ce qu'on croyait. C'est la nuance qui décide du remède — il ne faut pas plus de
+#: sondes, il faut qu'une sonde DISE CE QU'ELLE COUVRE, pour qu'un vert dise ce qu'il
+#: vaut et qu'un appelant sache ce qu'il ne sait pas.
+AUTH = "auth"                 # la clé authentifie. Ne dit RIEN du solde.
+AUTH_QUOTA = "auth+quota"     # la clé authentifie ET il reste de quoi travailler.
+COUVERTURES = (AUTH, AUTH_QUOTA)
+
 _REGISTRY: dict[str, Probe] = {}
+_COUVERTURE: dict[str, str] = {}
 
 
-def register(connector: str, probe: Probe) -> None:
-    """Déclare la sonde de vérification d'un connecteur (appelé au chargement du module)."""
+def register(connector: str, probe: Probe, couvre: str = AUTH) -> None:
+    """Déclare la sonde de vérification d'un connecteur (appelé au chargement du module).
+
+    `couvre` par DÉFAUT `auth` — le défaut prudent : une sonde ne prouve que ce qu'elle
+    a mesuré, et déclarer `auth+quota` sans lire un solde ferait exactement le vert
+    trompeur qu'on cherche à supprimer. Ne le monter que si la sonde lit vraiment un
+    solde ou un quota."""
+    if couvre not in COUVERTURES:
+        raise ValueError(f"couverture inconnue {couvre!r} — attendu {COUVERTURES}")
     _REGISTRY[connector] = probe
+    _COUVERTURE[connector] = couvre
+
+
+def couverture(connector: str) -> Optional[str]:
+    """Ce que la sonde de ce connecteur couvre, ou `None` s'il n'en a pas.
+
+    ⚠️ `None` se lit « aucune sonde », jamais « ne couvre rien » — les deux appellent
+    des conduites différentes : dans un cas on ne peut pas mesurer, dans l'autre on a
+    mesuré l'authentification seule."""
+    return _COUVERTURE.get(connector)
 
 
 def supports(connector: str) -> bool:

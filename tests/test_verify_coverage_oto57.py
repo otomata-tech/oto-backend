@@ -1,0 +1,93 @@
+"""Une sonde dit ce qu'elle COUVRE — pour qu'un vert dise ce qu'il vaut (oto#57).
+
+Deux sondes voisines faisaient des choses différentes et rien ne les distinguait vu de
+l'extérieur : l'une lit un solde, l'autre liste des objets — ce qui répond parfaitement
+sur un compte à sec. Mesuré le 04/09/2026 : un préflight tout vert, puis 402 après
+quatre espaces de travail, quatre tables et 28 lignes créés.
+
+⚠️ **La sonde n'avait pas menti.** Elle avait rapporté un vert qui ne voulait pas dire
+ce qu'on croyait. C'est la nuance qui décide du remède : il ne faut pas plus de sondes,
+il faut qu'une sonde dise ce qu'elle couvre — pour qu'un appelant sache **ce qu'il ne
+sait pas**.
+"""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from oto_mcp.connectors import verify as V
+
+
+@pytest.fixture(autouse=True)
+def _registre_intact():
+    """Le registre est un état de module : on le restaure, sinon un test qui
+    enregistre une sonde bidon la laisse pour tous les suivants."""
+    probes, couv = dict(V._REGISTRY), dict(V._COUVERTURE)
+    yield
+    V._REGISTRY.clear(), V._REGISTRY.update(probes)
+    V._COUVERTURE.clear(), V._COUVERTURE.update(couv)
+
+
+def test_le_defaut_est_auth_le_moins_promettant():
+    """Une sonde ne prouve que ce qu'elle a mesuré. Déclarer `auth+quota` par défaut
+    fabriquerait exactement le vert trompeur qu'on supprime."""
+    V.register("bidon", lambda f, c: None)
+    assert V.couverture("bidon") == V.AUTH
+
+
+def test_une_couverture_se_declare_explicitement():
+    V.register("bidon", lambda f, c: None, couvre=V.AUTH_QUOTA)
+    assert V.couverture("bidon") == V.AUTH_QUOTA
+
+
+def test_une_couverture_inconnue_est_REFUSEE_a_l_enregistrement():
+    """Au chargement du module, devant celui qui peut corriger — jamais acceptée
+    puis inerte, ce qui redonnerait une déclaration à laquelle on ne peut pas se fier."""
+    with pytest.raises(ValueError):
+        V.register("bidon", lambda f, c: None, couvre="auth+tout")
+
+
+def test_sans_sonde_la_couverture_est_NULLE_pas_auth():
+    """`None` = « je n'ai pas pu mesurer », `auth` = « j'ai mesuré l'authentification ».
+    Les confondre ferait croire à un contrôle qui n'a pas eu lieu."""
+    assert V.couverture("connecteur-qui-n-existe-pas") is None
+
+
+def test_toutes_les_sondes_reelles_declarent_une_couverture_valide():
+    """Garde d'inventaire : une sonde enregistrée sans couverture valide ferait
+    répondre `null` à la capacité, donc « aucune sonde » sur un connecteur qui en a une."""
+    from fastmcp import FastMCP
+
+    from oto_mcp.tools import register_all
+    register_all(FastMCP("t"))
+    assert V._REGISTRY, "aucune sonde chargée — l'inventaire ne prouverait rien"
+    for nom in V._REGISTRY:
+        assert V.couverture(nom) in V.COUVERTURES, nom
+
+
+def test_aucune_sonde_ne_promet_le_quota_sans_le_mesurer():
+    """⚠️ Le banc le plus important du lot, et il rougira le jour où quelqu'un montera
+    une couverture par optimisme.
+
+    Aujourd'hui AUCUNE sonde ne couvre le quota — y compris celles qui LISENT un solde
+    sans tester sa valeur : à zéro, l'appel réussit et la sonde reste verte. Lire n'est
+    pas vérifier. Monter une sonde à `auth+quota` suppose donc de la faire ÉCHOUER sur
+    un compte à sec, et ce banc oblige à le dire ici en connaissance de cause."""
+    from fastmcp import FastMCP
+
+    from oto_mcp.tools import register_all
+    register_all(FastMCP("t"))
+    promettent = sorted(n for n in V._REGISTRY if V.couverture(n) == V.AUTH_QUOTA)
+    assert promettent == [], (
+        f"ces sondes promettent le quota : {promettent}. Chacune doit LEVER sur un "
+        "compte à sec — lire un solde sans tester sa valeur laisse la sonde verte, et "
+        "c'est le vert trompeur que ce lot supprime. Mets ce banc à jour en même temps "
+        "que la sonde, jamais avant.")
+
+
+def test_la_capacite_sert_la_couverture_avec_le_verdict():
+    """Servie AVEC `ok`, jamais à côté : un client qui lit le verdict sans la
+    couverture croit en savoir plus qu'il n'en sait."""
+    from oto_mcp.capabilities.connectors.verify import VerifyResult
+    assert "coverage" in VerifyResult.model_fields

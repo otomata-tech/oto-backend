@@ -55,6 +55,20 @@ class VerifyResult(BaseModel):
     # impossible.
     pending: Optional[bool] = None
 
+    # CE QUE LA SONDE A MESURÉ (oto#57) — `auth` : la clé authentifie, et rien de
+    # plus ; `auth+quota` : elle authentifie ET il reste de quoi travailler.
+    #
+    # ⚠️ Un `ok:true` sous `coverage:"auth"` ne dit RIEN du solde. C'est ce que le
+    # 04/09/2026 a coûté : un préflight tout vert, puis 402 après quatre espaces,
+    # quatre tables et 28 lignes créés. **La sonde n'avait pas menti** — elle avait
+    # rapporté un vert qui ne voulait pas dire ce qu'on croyait. Le champ existe pour
+    # qu'un appelant sache ce qu'il ne sait pas.
+    #
+    # ⚠️ `null` = aucune sonde n'est déclarée pour ce connecteur. Ce n'est pas
+    # « ne couvre rien » : dans un cas on n'a pas pu mesurer, dans l'autre on a
+    # mesuré l'authentification. Les deux appellent des conduites différentes.
+    coverage: Optional[str] = None
+
 
 class MemberProviderStatus(BaseModel):
     """Entrée `ProviderStatus` d'un membre pour un connecteur — la MÊME forme que
@@ -169,7 +183,8 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     st = status_hints.credential_state(inp.provider, fields)
     if st is not None and not st.complete:
         return {"ok": False, "pending": True, "provider": inp.provider,
-                "error": st.next_action, "elapsed_ms": 0, **instance}
+                "error": st.next_action, "elapsed_ms": 0,
+                "coverage": connector_verify.couverture(inp.provider), **instance}
     started = time.monotonic()
     ok, error = True, None
     try:
@@ -192,6 +207,9 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     connector_health.record_health(inp.provider, scope, ok, error)
     out = {"ok": ok, "provider": inp.provider,
            "elapsed_ms": int((time.monotonic() - started) * 1000),
+           # Ce que ce verdict VAUT : servi avec lui, jamais à côté. Un client qui
+           # lit `ok` sans lire ceci croit en savoir plus qu'il n'en sait.
+           "coverage": connector_verify.couverture(inp.provider),
            # QUELLE instance a répondu — cf. `_fields_config_scope`.
            **instance}
     if not ok:
@@ -205,7 +223,14 @@ CAP_DOC = (
     "that is set but not working (wrong region, expired token…) before reporting a gap. "
     "'auto' tests the credential that resolves for you; 'org' tests the org shared key. "
     "The reply names the instance actually probed (`level` + `ref`) — under 'auto' the "
-    "cascade may have fallen through to a shared key, and `ok` alone would not say so."
+    "cascade may have fallen through to a shared key, and `ok` alone would not say so. "
+    "⚠️ READ `coverage` WITH `ok`: it says what the probe actually measured. "
+    "`auth` = the key authenticates, and NOTHING about credit or quota — an `ok:true` "
+    "there does not mean the account can still work. `auth+quota` = it also checked "
+    "there is something left to spend. `null` = this connector declares no probe at "
+    "all, which is not the same as 'nothing to check'. A preflight built on `ok` alone "
+    "reports green on an exhausted account and the work fails mid-flight, after side "
+    "effects."
 )
 
 class EffectForMemberInput(BaseModel):

@@ -72,6 +72,50 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v2/token/authorized_by`. Ce que la doc Webflow établit :
+
+    - **authentifié** — Bearer token, comme le reste de l'API ;
+    - **sans effet de bord** — une lecture d'identité (`id`, `email`,
+      `firstName`, `lastName`) ;
+    - **le coût** — aucune mention de coût ni de limite de débit particulière
+      pour cet appel. Absence de mention, indice, pas une preuve.
+
+    ⚠️ **Quatrième règle d'oto#69 : une sonde ne transforme jamais sa propre
+    limite en verdict sur la clé.** Cet endpoint exige le scope
+    `authorized_user:read` — SÉPARÉ des scopes réels du connecteur
+    (`cms:read`/`sites:read`). Un jeton légitimement scopé pour le CMS peut
+    refuser CET appel sans être cassé. Webflow documente 401 pour un jeton
+    mort et 403 pour un scope manquant (`UpstreamHTTPError.status_code`,
+    jamais deviné sur le texte) : le 403 lève un `RuntimeError` NU (jamais
+    `NonAutorise`) pour tomber sur `unknown`, pas `unauthorized` — un faux
+    négatif ici pousserait à révoquer une clé qui marche sur son CMS.
+    """
+    from oto.tools.webflow.client import WebflowClient
+
+    try:
+        infos = WebflowClient(api_key=fields["token"])._request(
+            "GET", "token/authorized_by") or {}
+    except UpstreamHTTPError as e:
+        if e.status_code == 403:
+            raise RuntimeError(
+                "Webflow refuse CET appel de vérification (403, scope "
+                "authorized_user:read) — ça ne dit RIEN de la clé pour "
+                "l'usage réel du connecteur (CMS, un scope différent). Non "
+                "concluant, pas invalide.") from e
+        if e.status_code == 401:
+            raise connector_verify.NonAutorise(
+                f"Webflow refuse cette clé (401) : {str(e)[:200]}") from e
+        raise
+    if not infos.get("id"):
+        raise RuntimeError(
+            "Webflow a répondu sans identifier d'utilisateur pour cette clé — "
+            f"réponse inattendue : {str(infos)[:200]}")
 
 _BULK_MAX_ITEMS = 50
 
@@ -158,6 +202,8 @@ def _validate_field_data(collection: dict, field_data: dict, *, op: str,
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.webflow.client import WebflowClient
+
+    connector_verify.register("webflow", _verify)
 
     def _client() -> WebflowClient:
         key, _ = access.resolve_api_key("webflow")

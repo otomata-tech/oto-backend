@@ -14,7 +14,7 @@ from typing import Literal, Optional
 from ...mcp_errors import McpError
 from pydantic import BaseModel, ConfigDict
 
-from ... import access, credentials_store, status_hints
+from ... import access, credentials_store, providers, status_hints
 from ...connectors import health as connector_health
 from ...connectors import verify as connector_verify
 from .._authz import ORG_ADMIN, ORG_MEMBER
@@ -226,7 +226,12 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     # deux lignes qu'avant sous `_record_health`, extraites pour que d'autres modules
     # (atlassian, folk, salesforce, zoho) réutilisent la MÊME garde de portée sans la
     # redéfinir chacun de leur côté.
-    connector_health.record_health(inp.provider, scope, ok, error)
+    # ⚠️ Porteur normalisé (délégation, six canaux Unipile) : la ligne du coffre est
+    # rangée sous `unipile`, jamais sous `linkedin_unipile` — écrire au nom NU
+    # viserait une ligne qui n'existe pas et `update_meta` échouerait en silence
+    # (0 ligne touchée, aucune exception). Même normalisation que `probe_for`.
+    connector_health.record_health(providers.credential_provider(inp.provider),
+                                   scope, ok, error)
     out = {"ok": ok, "provider": inp.provider,
            "elapsed_ms": int((time.monotonic() - started) * 1000),
            # Ce que ce verdict VAUT : servi avec lui, jamais à côté. Un client qui

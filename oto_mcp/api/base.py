@@ -201,11 +201,28 @@ async def _authenticate(
                 granted.append(f"les tableaux {sorted(token_scopes.namespaces(scopes))}")
             if token_scopes.projects(scopes):
                 granted.append(f"les projets {sorted(token_scopes.projects(scopes))}")
-            return None, _json_error(
-                request, 403, "token_scope_forbidden",
-                f"Ce jeton est porté : il n'ouvre que {' et '.join(granted)}, en "
-                "lecture ou écriture selon sa portée. Rien d'autre de l'organisation "
-                "ne lui est accessible.")
+            # ⚠️ Le refus DIT LEQUEL des deux cas, sinon il se contredit : il
+            # listait les tableaux ouverts même quand le tableau demandé en
+            # faisait partie — et le lecteur en concluait que son jeton était
+            # cassé. Un refus qui nomme comme autorisé ce qu'il refuse est pire
+            # que pas de détail du tout.
+            cause, quoi = token_scopes.motif_du_refus(
+                scopes, request.method, request.url.path)
+            ouvre = f"Ce jeton ouvre {' et '.join(granted) or 'rien'}."
+            if cause == "geste":
+                # La liste RESTE — elle coûte une session de debug à l'intégrateur
+                # quand elle manque — mais elle vient APRÈS la cause, et la cause
+                # dit que le tableau n'y est pour rien.
+                detail = (
+                    "Ce geste n'est ouvert à AUCUN jeton porté, quelle que soit sa "
+                    "portée : gouvernance d'un tableau (créer, supprimer, renommer, "
+                    "partager) et tout ce qui sort du datastore. Il demande une "
+                    f"session interactive du propriétaire. {ouvre}")
+            else:
+                detail = (
+                    f"« {quoi} » n'est pas dans la portée de ce jeton, ou pas avec "
+                    f"le droit qu'exige ce geste. {ouvre}")
+            return None, _json_error(request, 403, "token_scope_forbidden", detail)
         # Compte en PAUSE : un jeton `oto_` ne porte aucune expiration obligatoire,
         # donc c'est ici que la pause serait la plus facilement contournée si on ne
         # la vérifiait qu'au login — il n'y a pas de login sur ce chemin. La garde

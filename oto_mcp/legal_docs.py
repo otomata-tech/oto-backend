@@ -9,7 +9,21 @@ le consentement.
 
 ⚠️ Tenir aligné avec `web/src/legal` : à chaque bump de `current` d'un doc côté site,
 bumper `version` ici — sinon un doc modifié ne redemande pas l'acceptation (ou en
-redemande une périmée). Versions au 2026-07-09 : terms 3.0, cgv 2.0, dpa 2.0.
+redemande une périmée). Versions au 2026-09-05 : terms 3.1, cgv 2.1, dpa 2.1.
+
+⚠️ **Cet alignement a dérivé une fois, et il a tenu huit jours** (oto-websites#74) :
+les textes v2.1/v3.1 étaient écrits et servis sur oto.cx depuis le 28/08, ce fichier
+était resté au 09/07. Conséquence pendant cette fenêtre : les clients gardaient
+l'acceptation d'une CGV qui nommait **Stancer** comme prestataire de paiement — alors
+que le service encaisse par Mollie depuis le 24/07 — et affichait des montants qui ne
+sont plus pratiqués. Les textes corrigés existaient, personne n'était invité à les
+accepter.
+
+⚠️ **Aucun banc ne peut détecter cette dérive**, et il faut le savoir plutôt que de
+croire le contraire : les deux vérités vivent dans deux dépôts (`current` dans
+`oto-websites/web/src/legal/*/index.ts`, `version` ici), et la CI du backend ne voit
+pas l'autre. La garde est humaine — le bump côté site et le bump ici sont **un seul
+geste en deux endroits**, et celui-ci est le second.
 
 **Un tenant tiers a ses PROPRES documents, pas les nôtres** — même besoin
 que `orgs.front_base_url`/`front_brand` (invitations) ou `guides` scope `tenant`
@@ -29,9 +43,9 @@ from . import db, tenancy
 # slug → métadonnées de la VERSION COURANTE (miroir de web/src/legal `current`).
 # Défaut plateforme — s'applique à tout tenant sans override déclaré.
 CURRENT_DOCS: dict[str, dict[str, str]] = {
-    "terms": {"version": "3.0", "label": "CGU", "url": "https://oto.cx/terms"},
-    "cgv":   {"version": "2.0", "label": "CGV", "url": "https://oto.cx/cgv"},
-    "dpa":   {"version": "2.0", "label": "DPA", "url": "https://oto.cx/dpa"},
+    "terms": {"version": "3.1", "label": "CGU", "url": "https://oto.cx/terms"},
+    "cgv":   {"version": "2.1", "label": "CGV", "url": "https://oto.cx/cgv"},
+    "dpa":   {"version": "2.1", "label": "DPA", "url": "https://oto.cx/dpa"},
 }
 
 # Contexte → docs requis. `access` = à l'inscription (CGU) ; `purchase` = à l'achat.

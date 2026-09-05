@@ -112,12 +112,17 @@ def verify_api_token(token: str) -> Optional[dict]:
         row = conn.execute(
             "UPDATE user_api_tokens SET last_used_at = NOW() "
             "WHERE token_hash = %s AND (expires_at IS NULL OR expires_at > NOW()) "
-            "RETURNING sub, scopes",
+            "RETURNING id, sub, scopes, kind",
             (h,),
         ).fetchone()
         if not row:
             return None
-        return {"sub": row["sub"], "scopes": _as_scopes(row.get("scopes"))}
+        # `id` et `kind` servent le JOURNAL : nommer le jeton employé sans jamais
+        # l'écrire. Deux appels du même compte par deux jetons différents étaient
+        # jusqu'ici indistinguables — et un jeton de délégation ressemblait à une
+        # session humaine.
+        return {"sub": row["sub"], "scopes": _as_scopes(row.get("scopes")),
+                "token_id": row["id"], "token_kind": row.get("kind")}
 
 
 def _as_scopes(raw: object) -> Optional[dict]:

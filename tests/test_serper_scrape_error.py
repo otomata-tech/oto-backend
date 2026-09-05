@@ -49,6 +49,16 @@ def tools(monkeypatch):
 
     monkeypatch.setattr("oto.tools.serper.SerperClient", _Client)
     monkeypatch.setattr("oto_mcp.access.resolve_api_key", lambda p: ("k", False))
+    # `serper_scrape` retente une lecture directe RÉELLE (`mail_obfuscation.repli`,
+    # réseau + horloge non mockés) sur un 404/5xx amont — sans ce stub, les deux
+    # tests qui empruntent cette branche dépendent d'un VRAI aller-retour vers
+    # https://example.com/page : généralement trop court pour passer le seuil
+    # `_EMPTY_TEXT_CHARS` (d'où le vert habituel), mais pas garanti — observé rouge
+    # sous charge concurrente (3 suites ciblées en parallèle, 05/09/2026), vert en
+    # isolation. Coupé ici plutôt que rendu "plus robuste" : ce test vérifie la mise
+    # en forme de l'erreur, pas le comportement d'un repli réseau réel.
+    monkeypatch.setattr("oto_mcp.tools.mail_obfuscation.repli",
+                        lambda *a, **k: (None, "repli non exercé en test"))
     from oto_mcp.tools import serper
     reg = _Reg()
     serper.register(reg)

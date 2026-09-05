@@ -1,4 +1,13 @@
-"""L'avertissement : ces clés de schéma ne sont lues par personne (oto#56, signal 658).
+"""L'avertissement : ces clés de schéma, oto ne les interprète pas (oto#56, signal 658).
+
+⚠️ **« Oto ne les interprète pas », jamais « personne ne les lit ».** La formule
+d'origine — « lues par PERSONNE » — a coûté cher : six attributs ont été portés comme
+morts sur la foi de cet avertissement, un seul l'était. Les cinq autres sont lus, sur
+des tableaux de production, par le consommateur qui les affiche. Le retrait a été
+arrêté à temps. La plateforme ne sait pas qui lit en aval : elle sait seulement ce
+qu'ELLE interprète, et c'est tout ce que le message a le droit de dire. Un texte qui
+porte un nom plus large que ce qu'il mesure fait prendre des décisions plus larges que
+ce qu'il autorise — et celui-ci est lu au moment de retirer.
 
 Le validateur acceptait n'importe quel attribut sur une colonne. `readonly` passe,
 `editable` passe, `zorglub` passe — aucune n'est refusée, aucune n'est signalée.
@@ -85,11 +94,15 @@ def check(schema: Any) -> dict:
             f"`{col}` : {', '.join('`' + k + '`' for k in cles)}"
             for col, cles in sorted(trouvees.items()))
         return {"unknown_keys_warning": (
-            f"ces clés ne sont lues par PERSONNE et n'ont donc aucun effet — {detail}. "
-            "Le schéma est bien posé, mais ce qu'elles devaient garder n'est pas gardé : "
-            "une faute de frappe sur un attribut (`read_only` pour `readonly`) désarme "
-            "le cran sans rien dire. La liste des attributs reconnus, avec qui lit "
-            "chacun, est servie sur `GET /api/datastore/schema/keys`.")}
+            f"ces clés ne sont interprétées par AUCUN contrôle de la plateforme — "
+            f"{detail}. Le schéma est bien posé, mais ce qu'elles devaient garder n'est "
+            "pas gardé : une faute de frappe sur un attribut (`read_only` pour "
+            "`readonly`) désarme le cran sans rien dire. ⚠️ Cela ne dit PAS qu'elles ne "
+            "servent à personne : un consommateur peut les lire en aval — un front "
+            "affiche des libellés, une éditabilité, un motif — et oto ne sait pas qui "
+            "lit quoi. Ne retire rien sur la seule foi de ce message. La liste des "
+            "attributs qu'oto interprète, avec le lecteur de chacun, est servie sur "
+            "`GET /api/datastore/schema/keys`.")}
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
     except Exception:  # noqa: BLE001 — cf. `digest_check`
         return {"unknown_keys_warning": None}

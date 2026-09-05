@@ -2927,7 +2927,9 @@ def unknown_keys_warning(inconnues: list[dict]) -> str:
     msg = (f"Clés non interprétées par oto : {champs}"
            + (" …" if len(inconnues) > 5 else "")
            + ". Elles sont stockées et rendues telles quelles, mais AUCUNE ne "
-             "contraint quoi que ce soit.")
+             "contraint quoi que ce soit ici. ⚠️ « Non interprétée par oto » ne veut "
+             "pas dire « inutile » : un consommateur peut la lire en aval, et la "
+             "plateforme ne sait pas qui lit quoi.")
     if corrections:
         msg += " Vouliez-vous écrire : " + ", ".join(sorted(set(corrections))) + " ?"
     return msg
@@ -2955,10 +2957,13 @@ def unknown_keys_read_warning(inconnues: list[dict]) -> str:
     # Ce qui FAIT FOI, quand la clé morte a une cousine vivante : c'est la seule
     # information qui permette d'écrire juste sans reposer le schéma.
     autorite = sorted({v for e in inconnues for v in (e.get("near_miss") or {}).values()})
-    msg = (f"Ce schéma porte des clés qu'oto NE LIT PAS : {champs}"
+    msg = (f"Ce schéma porte des clés qu'oto n'INTERPRÈTE PAS : {champs}"
            + (" …" if len(inconnues) > 5 else "")
-           + ". Elles sont stockées et rendues fidèlement, mais ne contraignent RIEN "
-             "— ne t'y fie pas pour savoir ce qui est admis.")
+           + ". Elles sont stockées et rendues fidèlement, mais aucun contrôle de la "
+             "plateforme ne s'appuie dessus — ne t'y fie pas pour savoir ce qui est "
+             "admis ICI. ⚠️ Cela ne dit PAS qu'elles sont inutiles : un consommateur "
+             "peut parfaitement les lire (un front les affiche), et oto ne sait pas "
+             "qui lit quoi en aval. Ne retire rien sur la seule foi de ce message.")
     if autorite:
         msg += (" Ce qui fait foi : " + ", ".join(f"`{k}`" for k in autorite)
                 + ". En cas de contradiction entre les deux, c'est cette clé-là qui "

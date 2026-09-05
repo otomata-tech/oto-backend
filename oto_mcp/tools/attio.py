@@ -89,6 +89,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access
+from ..connectors import verify as connector_verify
 
 # Ops de chaque objet, dans l'ordre lectures → écritures. Source unique : le
 # SCHÉMA MCP (`Literal` → `enum` JSON : depuis la consolidation le verbe n'est
@@ -302,8 +303,51 @@ def _rendre_le_refus_lisible(client):
     return client
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` + DROITS.
+
+    `GET /v2/self` — le SEUL endpoint Attio qui ne suit pas la forme `{"data":
+    ...}` du reste de l'API : une introspection RFC 7662. Ce que la doc établit,
+    cité :
+
+    - **authentifié** — Bearer token, comme tout le reste de l'API ;
+    - **sans effet de bord** — « Identify the current access token, the
+      workspace it is linked to, and any permissions it has » ;
+    - **le coût** — aucune mention de crédit ni de limite de débit particulière
+      pour cet appel. Absence de compteur, indice fort, pas une preuve.
+
+    ⚠️ Une clé morte ne LÈVE PAS ici : Attio répond 200 avec `{"active": false}`
+    (contrat d'introspection), jamais un 401 — le laisser passer sous silence
+    dirait « connecté » d'un token révoqué. Vérifié explicitement.
+
+    Va plus loin que l'authentification, même raison que la sonde Pennylane :
+    `scope` est une CHAÎNE espace-séparée de permissions, et Attio scope son API
+    objet par objet (`companies:read`, `people:write`…) — un token actif mais
+    SANS AUCUN scope authentifie et ne peut rien faire, le verdict creux que
+    cette sonde existe pour empêcher.
+
+    Ne lit PAS de quota : Attio n'a pas de solde consommable par défaut
+    (`access._QUOTA_DEFAULTS` ne le liste pas).
+    """
+    from oto.tools.attio.client import AttioClient
+
+    infos = AttioClient(api_key=fields["key"])._request("GET", "self") or {}
+    if not infos.get("active"):
+        raise RuntimeError(
+            "Attio dit ce token INACTIF (révoqué ou expiré) — reconnecte-toi "
+            f"depuis Attio. Réponse : {str(infos)[:200]}")
+    if not (infos.get("scope") or "").strip():
+        raise RuntimeError(
+            "La clé authentifie bien (workspace « "
+            f"{infos.get('workspace_name') or '?'} » reconnu) mais ne porte AUCUN "
+            "scope : elle ne pourra lire ni écrire quoi que ce soit. Régénère-la "
+            "chez Attio en cochant les permissions voulues.")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.attio.client import AttioClient
+
+    connector_verify.register("attio", _verify)
 
     def _client() -> tuple[AttioClient, bool]:
         key, is_platform = access.resolve_api_key("attio")

@@ -66,6 +66,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
 from ..output_projection import project
 
 #: Vocabulaire d'actions du bulk v2 de lemlist. Volontairement écrit à la main :
@@ -205,8 +206,45 @@ def _found_digest(data: dict) -> dict:
     return found
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` + DROITS.
+
+    `GET /team` (déjà dans le client — `LemlistClient.get_team`). Ce que la doc
+    établit :
+
+    - **authentifié** — Basic auth, la clé en mot de passe, comme le reste de
+      l'API lemlist ;
+    - **sans effet de bord** — une lecture d'équipe (`_id`, `name`, `billing`) ;
+    - **le coût** — aucune mention de coût pour cet appel de lecture. Absence de
+      mention, indice, pas une preuve — comme Folk et Pennylane.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : `billing.ok` distingue une
+    équipe dont l'abonnement est en règle d'une équipe dont il ne l'est plus
+    (impayé, suspendu) — un axe qui touche TOUT le connecteur. Ne lit PAS les
+    crédits d'enrichissement (`get_team_credits`) : ceux-ci ne gatent QU'une
+    fonctionnalité (`lemlist_enrich`) — les décréter « à sec » dirait « connecteur
+    mort » d'une clé qui peut encore tout faire sur campagnes/séquences/leads,
+    exactement l'inverse du vert trompeur que cette série corrige.
+    """
+    from oto.tools.lemlist import LemlistClient
+
+    infos = LemlistClient(api_key=fields["key"]).get_team() or {}
+    if not infos.get("_id"):
+        raise RuntimeError(
+            "Lemlist a répondu sans identifier d'équipe pour cette clé — "
+            f"réponse inattendue : {str(infos)[:200]}")
+    billing = infos.get("billing") or {}
+    if billing.get("ok") is False:
+        raise RuntimeError(
+            f"L'équipe « {infos.get('name') or '?'} » authentifie, mais sa "
+            "facturation Lemlist n'est pas en règle (abonnement impayé ou "
+            "suspendu) — réactive-la chez Lemlist.")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.lemlist import LemlistClient
+
+    connector_verify.register("lemlist", _verify)
 
     def _client() -> tuple[LemlistClient, bool]:
         key, is_platform = access.resolve_api_key("lemlist")

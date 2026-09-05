@@ -1951,7 +1951,8 @@ class DatastorePg(SchemaOpsMixin):
                    max_claims: Optional[int] = None,
                    warnings: Optional[list] = None,
                    trace: Optional[dict] = None,
-                   perimetre: Optional[dict] = None) -> Optional[dict]:
+                   perimetre: Optional[dict] = None,
+                   layers: str = dsl.DEFAUT) -> Optional[dict]:
         """Pick + claim atomique de la prochaine row claimable (bail NULL ou
         expiré), `FOR UPDATE SKIP LOCKED` — N workers drainent sans collision.
         `filter` = `{col: val}`, ou `{col: {op: val}}` pour un opérateur (même
@@ -1986,11 +1987,17 @@ class DatastorePg(SchemaOpsMixin):
                                       run_id=_current_run(), max_claims=max_claims)
         if row is not None:
             self._after_claim(ns_id, warnings=warnings, trace=trace, ns=ns)
-        return self._row_to_dict(row, schema) if row else None
+        # oto#63 : la RÉSERVATION est le seul chemin qu'un agent emprunte, et
+        # c'était le seul à ne pas porter `layers`. Ce qu'il voit ici est le
+        # modèle de ce qu'il réécrira — servir `champ.comment` à plat, c'est lui
+        # montrer une forme qu'il transformera en `champ_comment` faute de savoir
+        # qu'un point est adressable.
+        return self._row_to_dict(row, schema, layers=layers) if row else None
 
     def claim_row(self, namespace: str, row_id: str, *, worker: str,
                   lease_s: int = 900, warnings: Optional[list] = None,
-                  trace: Optional[dict] = None) -> dict:
+                  trace: Optional[dict] = None,
+                  layers: str = dsl.DEFAUT) -> dict:
         """Réserve une row NOMMÉE — la file pilotée par un humain (il choisit qui
         appeler), là où `claim_next` sert un worker qui draine.
 
@@ -2019,7 +2026,7 @@ class DatastorePg(SchemaOpsMixin):
                 raise RowOutsideClaimable(row_id, declare)
             raise RowClaimed(row_id, existing.get("claimed_by"), existing.get("claimed_until"))
         self._after_claim(ns_id, warnings=warnings, trace=trace, ns=ns)
-        return self._row_to_dict(row, schema)
+        return self._row_to_dict(row, schema, layers=layers)
 
     def _after_claim(self, ns_id: int, *, warnings: Optional[list],
                      trace: Optional[dict], ns: Optional[dict] = None) -> None:

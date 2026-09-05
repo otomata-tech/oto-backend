@@ -810,7 +810,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_claim_next(namespace: str, worker: str, filter: Optional[dict] = None,
-                        lease_s: int = 900, max_claims: Optional[int] = None) -> dict:
+                        lease_s: int = 900, max_claims: Optional[int] = None,
+                        layers: str = "flat") -> dict:
         """Atomically claim the NEXT unprocessed row of a namespace (work queue).
 
         The primitive for draining a table with N parallel (sub-)agents without
@@ -843,6 +844,15 @@ def register(mcp: FastMCP) -> None:
         an explicit data_write puts it back in the queue and resets the counter.
         Neither declared nor passed = no ceiling.
 
+        ⚠️ `layers="nested"` gives the row back in the SHAPE YOU WRITE — a cell
+        that carries layers comes as `{"valeur": …, "comment": …}` instead of the
+        flat pair `champ` + `champ.comment`. Use it whenever you mean to write
+        layers back. The flat form shows a key with a DOT, and a dot does not look
+        like a field name: agents turn `effectif.comment` into `effectif_comment`,
+        which creates a ghost column — or, on a table that refuses unknown columns,
+        loses the whole row. This is the only read that feeds a WRITE loop, so it is
+        the one where the shape matters.
+
         `namespace` also accepts `slot:<name>` (table bound by the active project).
         """
         store = _acting_store()
@@ -852,7 +862,8 @@ def register(mcp: FastMCP) -> None:
         try:
             row = store.claim_next(namespace, worker=worker, filter=filter,
                                    lease_s=lease_s, max_claims=max_claims,
-                                   warnings=warnings, perimetre=perimetre)
+                                   warnings=warnings, perimetre=perimetre,
+                                   layers=dsl.check(layers))
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         except NamespaceNotFound as e:

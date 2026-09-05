@@ -44,10 +44,15 @@ from ...datastore.core import (
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
+from ._forme import _LAYERS, _layers
 
 
 class ClaimNextInput(BaseModel):
     namespace: str
+    # oto#63 : la RÉSERVATION est le seul chemin qui alimente une boucle d'écriture,
+    # et c'était le seul à ne pas porter la forme. Réutilise le champ des lectures —
+    # même nom, même défaut, même refus nommé sur une valeur inconnue.
+    layers: str = _LAYERS
     # Défaut vide plutôt que champ requis : un `worker` manquant mérite un refus qui
     # DIT ce qu'est un worker (le `invalid_input` de pydantic ne le dirait pas).
     worker: str = ""
@@ -61,6 +66,7 @@ class ClaimNextInput(BaseModel):
 class ClaimRowInput(BaseModel):
     namespace: str
     row_id: str
+    layers: str = _LAYERS
     worker: str = ""
     lease_s: Optional[int] = None
 
@@ -103,7 +109,7 @@ def _claim_next(ctx: ResolvedCtx, inp: ClaimNextInput) -> dict:
         row = make_store(ctx.sub).claim_next(
             inp.namespace, worker=worker, filter=inp.filter,
             max_claims=inp.max_claims, warnings=warnings, trace=trace,
-            perimetre=perimetre, **_lease(inp))
+            perimetre=perimetre, layers=_layers(inp.layers), **_lease(inp))
     except NamespaceNotFound:
         raise AuthzDenied(404, "namespace_not_found")
     except NamespaceReadOnly:
@@ -136,7 +142,8 @@ def _claim_row(ctx: ResolvedCtx, inp: ClaimRowInput) -> dict:
     try:
         row = make_store(ctx.sub).claim_row(
             inp.namespace, inp.row_id, worker=worker,
-            warnings=warnings, trace=trace, **_lease(inp))
+            warnings=warnings, trace=trace, layers=_layers(inp.layers),
+            **_lease(inp))
     except NamespaceNotFound:
         raise AuthzDenied(404, "namespace_not_found")
     except NamespaceReadOnly:

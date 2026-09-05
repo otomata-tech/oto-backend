@@ -1378,6 +1378,42 @@ def unknown_fields_mode(schema: Optional[dict]) -> str:
     return mode if mode in UNKNOWN_FIELDS_MODES else "report"
 
 
+def couche_mal_ecrite(cle: str, declarees) -> Optional[tuple]:
+    """`effectif_comment` → `("effectif", "comment")` — ou `None` (oto#63).
+
+    ⚠️ **La seule suggestion qu'on s'autorise, et elle n'est pas une devinette.** La
+    règle de `off_schema_refusal` reste entière : on ne pointe jamais la colonne
+    « la plus proche », parce qu'une destination inventée envoie la valeur dans une
+    colonne juste — pire qu'un refus sec (#678). Ici on ne cherche rien de proche : on
+    RECONNAÎT une décomposition exacte. La clé refusée s'écrit `<colonne>_<couche>`,
+    la couche est l'un des trois noms que le serveur connaît, et la colonne est
+    DÉCLARÉE au schéma. Les trois conditions, sinon rien.
+
+    Le geste qu'on répare : l'agent lit sa ligne réservée à plat, y voit
+    `effectif.comment`, veut écrire un commentaire — et produit `effectif_comment`,
+    parce qu'un point n'a pas l'air d'un nom de champ et que rien ne lui dit qu'il est
+    adressable. Cinq colonnes fantômes sur une mission réelle sont exactement ça, et
+    **toutes sont des `comment`**, jamais des origines ni des liens.
+
+    ⚠️ **Sur un tableau qui refuse les colonnes inconnues, cette faute ne crée plus une
+    colonne invisible : elle fait perdre la fiche entière.** Le durcissement a
+    transformé une perte silencieuse en perte totale sans que le défaut bouge — plus on
+    durcit, plus il coûte, et c'est ce qui rend ce message urgent.
+
+    ⚠️ Ambiguïté écartée par construction : un nom de colonne ne peut pas se terminer
+    par `_comment` ET être déclaré, sans que ce soit précisément la colonne qu'on
+    cherche. Si `effectif_comment` était elle-même déclarée, la clé ne serait pas
+    refusée et on ne passerait pas ici.
+    """
+    for couche in LAYER_KEYS:
+        suffixe = f"_{couche}"
+        if cle.endswith(suffixe) and len(cle) > len(suffixe):
+            colonne = cle[:-len(suffixe)]
+            if colonne in declarees:
+                return colonne, couche
+    return None
+
+
 def off_schema_refusal(schema: Optional[dict],
                        data: dict) -> tuple[list[str], dict]:
     """Le refus des colonnes non déclarées au PREMIER niveau → `(messages, details)`.
@@ -1387,12 +1423,19 @@ def off_schema_refusal(schema: Optional[dict],
     référentiel ». Deux définitions de la même chose, et c'est l'appelant qui
     paierait la différence.
 
-    ⚠️ **Aucune destination n'est suggérée, et c'est le point.** Une colonne non
+    ⚠️ **Aucune destination n'est DEVINÉE, et c'est le point.** Une colonne non
     déclarée n'a, par construction, aucune destination : pointer la colonne « la
     plus proche » enverrait la valeur dans une colonne juste, ce qui est pire
     qu'un refus sec — *une destination inventée est pire qu'une destination
     absente* (#678). `details` reste donc vide, et le message DIT qu'aucune
-    colonne ne porte ce nom, au lieu de laisser deviner."""
+    colonne ne porte ce nom, au lieu de laisser deviner.
+
+    ⚠️ **Une seule exception, et elle ne devine rien** (oto#63) : quand la clé
+    refusée se décompose EXACTEMENT en `<colonne déclarée>_<couche connue>`, ce
+    n'est pas une colonne inconnue — c'est une couche dont le nom a été écrit avec
+    un souligné au lieu d'un point. Là, la destination n'est pas rapprochée, elle
+    est lue dans la clé elle-même ; se taire enverrait l'appelant déclarer une
+    colonne qui ne devrait pas exister. Cf. `couche_mal_ecrite`."""
     if unknown_fields_mode(schema) != "reject":
         return [], {}
     keys = off_schema_keys(schema, data)
@@ -1404,6 +1447,34 @@ def off_schema_refusal(schema: Optional[dict],
     if len(dispo) > _REFERENTIEL_CITE:
         cite += f" (+{len(dispo) - _REFERENTIEL_CITE} autres, `data_get_schema`)"
     noms = ", ".join(f"`{k}`" for k in keys)
+    # oto#63 : parmi les clés refusées, celles qui sont une COUCHE mal écrite —
+    # `effectif_comment` au lieu de `effectif.comment`. Reconnaissance exacte, pas
+    # rapprochement : cf. `couche_mal_ecrite`.
+    couches = [(k, *c) for k in keys if (c := couche_mal_ecrite(k, set(dispo)))]
+    # ⚠️ L'autre moitié de la distinction : une clé POINTÉE dont la colonne de base
+    # n'est pas déclarée. Le message générique parlerait de `inconnue.comment` et
+    # ferait chercher du côté de la couche, alors que c'est la COLONNE qui manque —
+    # deux gestes de réparation opposés (déclarer une colonne, ou corriger un nom de
+    # couche). Le refus doit dire lequel des deux.
+    pointees = [(k, k.split(".", 1)[0]) for k in keys
+                if "." in k and k.split(".", 1)[1] in LAYER_KEYS
+                and k.split(".", 1)[0] not in set(dispo)]
+    if pointees and not couches:
+        quoi = " ; ".join(f"`{k}` (colonne `{base}`)" for k, base in pointees)
+        return ([f"{noms} : rien n'a été écrit. La COUCHE est bien écrite — c'est la "
+                 f"COLONNE qui n'est pas déclarée : {quoi}. Colonnes du tableau : "
+                 f"{cite}. Déclare la colonne (`data_patch_schema`) puis réécris ; "
+                 f"⚠️ ne corrige pas le nom de la couche, il n'est pas en cause."], {})
+    if couches:
+        quoi = " ; ".join(
+            f"`{k}` → `{col}.{couche}`" for k, col, couche in couches)
+        details = {"expected_column": f"{couches[0][1]}.{couches[0][2]}"}
+        return ([f"{noms} : rien n'a été écrit. ⚠️ Ce n'est pas une colonne "
+                 f"inconnue, c'est une COUCHE dont le nom s'écrit avec un POINT — "
+                 f"{quoi}. La colonne existe, c'est la façon de l'adresser qui "
+                 f"diffère : `{{\"{couches[0][1]}\": {{\"{couches[0][2]}\": …}}}}` "
+                 f"écrit la même chose, et c'est la forme que "
+                 f"`layers=\"nested\"` te rend à la lecture."], details)
     return ([f"{noms} : aucune colonne déclarée ne porte ce nom, et ce tableau "
              f"refuse les colonnes non déclarées (`unknown_fields: \"reject\"`) — "
              f"rien n'a été écrit. Colonnes du tableau : {cite}. Écris sous un nom "

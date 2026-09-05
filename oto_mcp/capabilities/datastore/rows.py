@@ -48,6 +48,7 @@ from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import HORODATAGE, ns_not_found
 from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
+from ._forme import _LAYERS, _layers
 
 
 def _tolerant_int(v):
@@ -63,28 +64,6 @@ def _tolerant_int(v):
         return int(v)
     except (TypeError, ValueError):
         return None
-
-
-# oto#53 : la forme des cellules à couches. Typé `str` et non `Literal` pour que la
-# mauvaise valeur rende un refus qui NOMME le paramètre (`invalid_layers`, par
-# `_layers`), pas l'`invalid_input` nu que l'adaptateur rend sur une `ValidationError`.
-_LAYERS = Field(default=dsl.DEFAUT, description=(
-    "Forme des cellules à couches. On ÉCRIT imbriqué (`champ` = `{valeur, origine, "
-    "comment, link}`) et, par défaut, on relit À PLAT : ce paramètre lève cette "
-    "asymétrie. `flat` (défaut) sert `champ` = la valeur et `champ.origine`/`.comment`/"
-    "`.link` à plat à côté ; `nested` sert `champ` = `{valeur, origine, comment, link}` "
-    "(la valeur toujours, les couches renseignées seulement), la forme dans laquelle on "
-    "écrit ; une cellule sans couche est le même scalaire dans les deux. Toute autre "
-    "valeur est refusée. Le défaut basculera vers `nested`, avec préavis daté : un "
-    "client qui dépend d'une forme la nomme dès maintenant."))
-
-
-def _layers(raw) -> str:
-    """`?layers=` validé, ou un 400 qui nomme le paramètre et les valeurs admises."""
-    try:
-        return dsl.check(raw)
-    except ValueError as e:
-        raise AuthzDenied(400, "invalid_layers", str(e))
 
 
 class ListRowsInput(BaseModel):

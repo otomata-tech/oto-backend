@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from ... import db, group_store, org_store
 from .._authz import GROUP_ADMIN_OF
+from .. import _identite
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 
@@ -28,15 +29,21 @@ _GID = {"id": "group_id"}
 
 
 def _resolve_target(target: str) -> str:
+    """Cible d'un ajout/retrait de membre : email accepté, ambiguïté refusée.
+
+    ⚠️ Un groupe porte des données. Ajouter le mauvais homonyme les ouvre à
+    quelqu'un qu'on ne visait pas, et le retirer laisse l'autre dedans — les
+    deux erreurs sont silencieuses. Le refus vient de `_identite`.
+    """
     target = (target or "").strip()
     if not target:
         raise AuthzDenied(400, "missing_target", "Cible (email ou sub) requise.")
     if "@" in target:
-        user = db.get_user_by_email(target)
-        if not user:
+        porteurs = _identite.porteurs_de(target)
+        if not porteurs:
             raise AuthzDenied(400, "unknown_user",
                               f"Aucun user connu avec l'email `{target}`.")
-        return user["sub"]
+        return porteurs[0]["sub"]
     return target
 
 

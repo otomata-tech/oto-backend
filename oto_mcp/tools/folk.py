@@ -90,6 +90,8 @@ from threading import Lock
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
+
+from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -615,8 +617,44 @@ def _bulk_run(items: list, fn) -> list[tuple[int, bool, object]]:
     return [r for r in results if r is not None]
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/users/me`. Ce que la doc de Folk établit, cité :
+
+    - **authentifié** — « Authentication Required: `bearerApiKeyAuth` (HTTP Bearer
+      scheme with API key) » ;
+    - **sans effet de bord** — un GET qui rend « The current user associated with
+      the API key » (`id`, `fullName`, `email`). Il lit l'identité que porte la
+      clé, il ne touche à rien ;
+    - **le coût** : la doc ne mentionne AUCUN crédit ni facturation, ni sur cet
+      endpoint ni ailleurs — le régime est une limite de débit, « 600 requests per
+      minute ». ⚠️ Ce n'est pas la même chose qu'une ligne qui dirait « gratuit » :
+      l'absence de compteur de crédits dans toute la doc est un argument fort, pas
+      une preuve. Si Folk introduisait un jour une facturation à l'appel, c'est ici
+      qu'il faudrait revenir.
+
+    Ne lit PAS le quota. Les en-têtes `X-RateLimit-*` sont pourtant servis sur cette
+    réponse : les remonter ferait une sonde `auth+quota`. Ce n'est pas fait ici parce
+    que le débit par minute n'est pas un solde — il ne dit rien de ce qui reste à
+    dépenser, seulement de la cadence. Le rendre laisserait croire à une jauge.
+    """
+    from oto.tools.folk.client import FolkClient
+
+    utilisateur = FolkClient(api_key=fields["api_key"]).get_current_user()
+    if not (utilisateur or {}).get("id"):
+        # Une réponse 200 sans identité : la clé passe l'authentification mais ne
+        # désigne personne. Le taire rendrait un verdict « connecté » sur un
+        # compte qu'on ne peut pas nommer.
+        raise RuntimeError(
+            "Folk a répondu sans identifier l'utilisateur de cette clé — "
+            f"réponse inattendue : {str(utilisateur)[:200]}")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.folk.client import FolkClient, WEBHOOK_EVENT_TYPES
+
+    connector_verify.register("folk", _verify)
 
     def _client() -> FolkClient:
         key, _ = access.resolve_api_key("folk")

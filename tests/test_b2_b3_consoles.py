@@ -93,10 +93,11 @@ def test_procedure_carries_skills_index_anchor():
 
 # ── oto_admin_guide / oto_admin_signal ────────────────────────────────────
 def test_admin_guide_routes(monkeypatch):
-    monkeypatch.setattr(orgs_instructions, "_get_guide", _atag("get"))
-    monkeypatch.setattr(orgs_instructions, "_list_guides", _tag("list"))
-    monkeypatch.setattr(orgs_instructions, "_set_instruction", _atag("set"))
-    monkeypatch.setattr(orgs_instructions, "_delete_instruction", _tag("delete"))
+    from dataclasses import replace
+    monkeypatch.setattr(ac, "_GUIDE_OPERATIONS", {
+        op: replace(cap, handler=(_atag(op) if op in {"get", "set"} else _tag(op)))
+        for op, cap in ac._GUIDE_OPERATIONS.items()
+    })
     D = ac.GuideAdminInput
     run = lambda inp: asyncio.run(ac._guide(CTX, inp))
     out = run(D(op="get", org_id=5))

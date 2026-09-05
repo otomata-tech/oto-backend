@@ -16,7 +16,9 @@ from oto.tools.common import FieldFilter
 
 from oto_mcp import db, redaction
 from oto_mcp.field_filter_defaults import _CANDIDATE_PII
-from oto_mcp.server import mcp
+from _mcp_app import static_mcp
+
+mcp = static_mcp()
 from oto_mcp.tools import meta
 
 

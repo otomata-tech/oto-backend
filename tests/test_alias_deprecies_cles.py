@@ -26,6 +26,8 @@ Alors chaque clé est servie deux fois pendant le préavis, et ces tests gardent
 """
 from __future__ import annotations
 
+from _mcp_app import static_mcp as _test_mcp
+
 import pytest
 
 from oto_mcp import deprecations, openapi
@@ -92,7 +94,7 @@ async def test_run_start_accepte_les_deux_noms_de_parametre():
     """`run_start(doctrine=…)` est cité dans des procédures écrites il y a des mois,
     que personne ne réécrira d'un coup."""
     from oto_mcp import server
-    tool = await server.mcp.get_tool("run_start")
+    tool = await _test_mcp().get_tool("run_start")
     props = (tool.parameters or {}).get("properties", {})
     assert "guide" in props and "doctrine" in props
     requis = set((tool.parameters or {}).get("required", []))

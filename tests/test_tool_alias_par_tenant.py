@@ -23,6 +23,8 @@ Les invariants gardés ici, dans l'ordre de ce qui coûterait le plus cher :
 """
 from __future__ import annotations
 
+from _mcp_app import static_mcp as _test_mcp
+
 import re
 
 import mcp.types as mt
@@ -69,7 +71,7 @@ async def _liste_servie(monkeypatch, sub):
     """La liste telle qu'un client la reçoit — à travers le VRAI middleware, sur les
     VRAIS outils montés (le montage réel, pas trois objets de fixture)."""
     _comme(monkeypatch, sub)
-    tools = await server.mcp.list_tools(run_middleware=False)
+    tools = await _test_mcp().list_tools(run_middleware=False)
     ctx = MiddlewareContext(message=mt.ListToolsRequest(method="tools/list"),
                             method="tools/list")
     return await ToolAliasMiddleware().on_list_tools(ctx, lambda _c: _renvoie(tools))
@@ -158,7 +160,7 @@ async def test_la_traduction_est_reversible_sur_tout_le_registre(
         tenant_avec_prefixe, monkeypatch):
     """Sur le montage RÉEL : aucun nom ne se perd à l'aller-retour, sinon un outil
     listé serait injoignable."""
-    tools = await server.mcp.list_tools(run_middleware=False)
+    tools = await _test_mcp().list_tools(run_middleware=False)
     for t in tools:
         assert tool_alias.canonical(tool_alias.public(t.name, "acme"), "acme") == t.name
 
@@ -203,7 +205,7 @@ async def test_un_alias_ne_recouvre_jamais_un_outil_reel(
     """Ceinture ET bretelles : `normalize_prefix` interdit déjà le cas, mais si un
     alias tombait sur un nom pris, il éclipserait un outil sans que rien ne le dise."""
     _comme(monkeypatch, _SUB_TENANT)
-    faux = [t for t in await server.mcp.list_tools(run_middleware=False)
+    faux = [t for t in await _test_mcp().list_tools(run_middleware=False)
             if t.name in ("oto_doc", "oto_whoami")]
     assert len(faux) == 2
     occupant = faux[0].model_copy(update={"name": "acme_doc"})
@@ -252,7 +254,7 @@ def test_tout_token_oto_de_la_prose_servie_est_bien_un_outil():
     réels, et sa traduction reste juste.
     """
     import asyncio
-    noms = {t.name for t in asyncio.run(server.mcp.list_tools(run_middleware=False))}
+    noms = {t.name for t in asyncio.run(_test_mcp().list_tools(run_middleware=False))}
     tokens = set(re.findall(r"\boto_[a-z][a-z0-9_]*\b", instructions.render()))
     assert tokens, "la prose servie ne cite plus aucun outil — vérifier le seed"
     orphelins = [t for t in tokens
@@ -287,8 +289,8 @@ def compte_acme(tenant_avec_prefixe, monkeypatch):
 async def _appelle(nom_du_tool: str, args: dict):
     """Le tool RÉELLEMENT monté, exécuté dans un contexte fastmcp — pas la fonction
     Python recopiée (elle est une closure de `register`, invisible d'ici)."""
-    tool = await server.mcp.get_tool(nom_du_tool)
-    async with _fc.Context(fastmcp=server.mcp):
+    tool = await _test_mcp().get_tool(nom_du_tool)
+    async with _fc.Context(fastmcp=_test_mcp()):
         return (await tool.run(args)).structured_content
 
 
@@ -359,7 +361,7 @@ from mcp.types import ErrorData, INVALID_PARAMS  # noqa: E402
 async def test_les_descriptions_citent_les_noms_du_produit(
         tenant_avec_prefixe, monkeypatch):
     """Sur le montage RÉEL : c'est sur la description que le modèle choisit."""
-    tools = await server.mcp.list_tools(run_middleware=False)
+    tools = await _test_mcp().list_tools(run_middleware=False)
     citantes = [t.name for t in tools if "oto_" in (t.description or "")]
     assert citantes, ("aucune description ne cite d'outil — le cas que ce test garde "
                       "a disparu, vérifier avant de le supprimer")
@@ -473,7 +475,7 @@ async def test_un_renommage_qui_echoue_sert_la_liste_canonique(
     _comme(monkeypatch, _SUB_TENANT)
     monkeypatch.setattr(tool_alias, "public",
                         lambda *_a: (_ for _ in ()).throw(RuntimeError("boum")))
-    tools = await server.mcp.list_tools(run_middleware=False)
+    tools = await _test_mcp().list_tools(run_middleware=False)
     ctx = MiddlewareContext(message=mt.ListToolsRequest(method="tools/list"),
                             method="tools/list")
     rendus = await ToolAliasMiddleware().on_list_tools(ctx, lambda _c: _renvoie(tools))

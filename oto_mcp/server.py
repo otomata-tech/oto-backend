@@ -570,12 +570,17 @@ def _prepare_database() -> None:
                 (time.monotonic() - debut) * 1000)
 
 
-def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
-    # Le schéma et les backfills, UNE fois par process (ADR 0065 lot 0) : cette
-    # fonction est appelée deux fois (instance anonyme au niveau module, instance
-    # authentifiée dans `main`) et les deux tours faisaient le même travail.
-    _prepare_database()
+def _build_mcp(transport: str, verifier: JWTVerifier | None = None, *,
+               include_mounts: bool = False) -> FastMCP:
+    """Construit le catalogue. Ne prépare PAS la base, ne va PAS chercher les
+    catalogues distants sauf demande explicite.
 
+    Construire n'est pas démarrer. `main()` prépare la base puis demande les
+    catalogues distants ; un test, un script ou un outil qui veut seulement le
+    catalogue local n'a plus à payer — ni à subir — une entrée-sortie pour
+    l'obtenir. La fédération est derrière `include_mounts` parce qu'elle attend
+    un tiers, et qu'une attente n'a rien à faire dans un import (oto-backend#892).
+    """
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:
         kwargs["auth"] = _build_auth(verifier)
@@ -584,7 +589,7 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # manifeste « referenced_tools » sans se faire passer l'instance.
     from . import tool_registry
     tool_registry.bind(instance)
-    register_all(instance)
+    register_all(instance, include_mounts=include_mounts)
 
     # Couche capacité (ADR 0009) : monte un tool par capacité déclarée
     # (no-op tant que le registre est vide — canari). Après register_all pour
@@ -764,9 +769,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     return instance
 
 
-# Instance module-level (sans auth) pour les imports de test + l'enregistrement
-# des tools. Le serveur réel reconstruit avec le verifier dans main() (http).
-mcp = _build_mcp("noauth")
+# ⚠️ PAS d'instance construite ici. Une construction au niveau module s'exécute à
+# l'IMPORT — donc à la collecte de tout test qui touche ce module — et elle
+# entraînait avec elle la préparation de la base et le chargement des catalogues
+# distants, c'est-à-dire deux attentes sans délai maximal (oto-backend#892).
+# Un import doit définir, pas travailler. `main()` construit ; les tests qui ont
+# besoin du catalogue local le demandent par `tests/_mcp_app.static_mcp()`.
+mcp: FastMCP | None = None
 
 
 def build_root_app(app, anon_app):
@@ -830,6 +839,13 @@ def main():
     # le cas-limite sub=None disparaît. L'usage local passe par la CLI `oto`.
     transport = os.environ.get("MCP_TRANSPORT", "streamable_http")
 
+    # Le schéma et les backfills, UNE fois par process. Cet appel vivait dans
+    # `_build_mcp`, donc à l'import du module ; il est ici parce que préparer une
+    # base est un geste de DÉMARRAGE, et que `main` est le seul endroit qui
+    # démarre. Fail-open étape par étape, inchangé : un backfill qui casse ne
+    # doit pas empêcher le serveur de répondre — mais il le dit dans le journal.
+    _prepare_database()
+
     global mcp
     if transport in ("http", "streamable_http"):
         host = os.environ.get("HOST", "127.0.0.1")
@@ -844,7 +860,10 @@ def main():
         # `mcp` pointe encore ici sur l'instance no-auth ; on la capture AVANT de le
         # réassigner à l'authentifiée (tool_registry.bind finit donc lié à l'authentifiée).
         from .anon_visibility import AnonymousVisibilityMiddleware
-        anon_mcp = mcp
+        # Les catalogues distants sont demandés ICI, une fois la base prête —
+        # plus à l'import. `include_mounts=True` est le seul endroit du code qui
+        # accepte d'attendre un tiers, et c'est un démarrage, pas une collecte.
+        anon_mcp = _build_mcp("noauth", include_mounts=True)
         anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
         anon_app = anon_mcp.http_app()
         # Shim OAuth ANONYME (ADR 0032) : claude.ai/Mistral exigent un flux OAuth pour un
@@ -856,7 +875,7 @@ def main():
             anon_app.router.routes.insert(0, route)
 
         verifier = _build_verifier()
-        mcp = _build_mcp(transport, verifier)
+        mcp = _build_mcp(transport, verifier, include_mounts=True)
 
         # (Le `db.init_db()` qui était ici a été RETIRÉ — ADR 0065 lot 0. C'était le
         # TROISIÈME du boot : `_build_mcp` l'appelait déjà, deux fois, et il rejouait

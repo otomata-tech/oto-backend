@@ -7,11 +7,13 @@ qu'elle rendait, un `shown` plafonné à 40, et **jamais** le nombre de correspo
 10 rendus » corrigé ailleurs, en pire : là le total manquait, ici il était présent et
 faux. Et c'est la surface par laquelle un agent découvre ce qu'il sait faire.
 
-⚠️ Ces bancs exécutent le tool RÉELLEMENT MONTÉ (`server.mcp.get_tool`), jamais une
+⚠️ Ces bancs exécutent le tool RÉELLEMENT MONTÉ (`_test_mcp().get_tool`), jamais une
 fonction recopiée : c'est la leçon du 03/09 — un banc est une mesure, et il doit lire
 ce que le montage expose, pas l'objet intermédiaire dont on suppose qu'il le reflète.
 """
 from __future__ import annotations
+
+from _mcp_app import static_mcp as _test_mcp
 
 import fastmcp as _fc
 import pytest
@@ -37,8 +39,8 @@ def compte(monkeypatch):
 
 
 async def _appelle(args: dict) -> dict:
-    tool = await server.mcp.get_tool("oto_list_my_tools")
-    async with _fc.Context(fastmcp=server.mcp):
+    tool = await _test_mcp().get_tool("oto_list_my_tools")
+    async with _fc.Context(fastmcp=_test_mcp()):
         return (await tool.run(args)).structured_content
 
 

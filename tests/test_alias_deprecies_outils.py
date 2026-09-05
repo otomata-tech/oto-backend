@@ -26,6 +26,8 @@ Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
 """
 from __future__ import annotations
 
+from _mcp_app import static_mcp as _test_mcp
+
 import mcp.types as mt
 import pytest
 from fastmcp.server.middleware import MiddlewareContext
@@ -45,7 +47,7 @@ async def _liste_servie(monkeypatch, sub=None):
     outils montés."""
     monkeypatch.setattr("oto_mcp.middleware.alias.current_user_sub_from_token",
                         lambda: sub)
-    tools = await server.mcp.list_tools(run_middleware=False)
+    tools = await _test_mcp().list_tools(run_middleware=False)
     ctx = MiddlewareContext(message=mt.ListToolsRequest(method="tools/list"),
                             method="tools/list")
     return await ToolAliasMiddleware().on_list_tools(ctx, lambda _c: _renvoie(tools))
@@ -85,7 +87,7 @@ async def test_lancien_nom_appelle_exactement_le_nouvel_outil(
 async def test_le_serveur_ne_connait_pas_lancien_nom(ancien):
     """L'alias vit au BORD du protocole, pas dans le registre : c'est ce qui garantit
     qu'aucun gate, aucune denylist et aucun journal n'a deux noms à tenir en phase."""
-    noms = {t.name for t in await server.mcp.list_tools(run_middleware=False)}
+    noms = {t.name for t in await _test_mcp().list_tools(run_middleware=False)}
     assert ancien not in noms, (
         f"`{ancien}` est monté comme un VRAI outil. Un alias de dépréciation se sert "
         "au bord du protocole ; monté, il doublerait le journal, échapperait au "
@@ -146,7 +148,7 @@ async def test_la_date_servie_suit_la_constante(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_chaque_cible_est_un_outil_reellement_monte():
-    noms = {t.name for t in await server.mcp.list_tools(run_middleware=False)}
+    noms = {t.name for t in await _test_mcp().list_tools(run_middleware=False)}
     orphelines = sorted({c for c in deprecations.TOOLS.values() if c not in noms})
     assert not orphelines, (
         f"{orphelines} : cibles d'un alias déprécié, absentes du registre. L'ancien "
@@ -157,7 +159,7 @@ async def test_chaque_cible_est_un_outil_reellement_monte():
 async def test_aucun_ancien_nom_ne_recouvre_un_outil_reel(monkeypatch):
     """Ceinture ET bretelles : une collision ferait éclipser un outil par un alias,
     sans que rien ne le dise. La liste servie garde le nom RÉEL."""
-    vrais = [t for t in await server.mcp.list_tools(run_middleware=False)
+    vrais = [t for t in await _test_mcp().list_tools(run_middleware=False)
              if t.name in deprecations.TOOLS.values()]
     assert vrais, "aucun outil déprécié monté — table vide ou cible écorchée"
     usurpateur = vrais[0].model_copy(update={"name": next(iter(deprecations.TOOLS))})
@@ -231,4 +233,3 @@ def test_le_preavis_se_compte_en_mois_CALENDAIRES_jamais_en_jours():
     # fin de mois : on retombe sur le dernier jour existant, jamais sur un 31/02.
     assert d(datetime.date(2026, 12, 31), 2) == datetime.date(2027, 2, 28)
     assert d(datetime.date(2026, 11, 30), 2) == datetime.date(2027, 1, 30)
-

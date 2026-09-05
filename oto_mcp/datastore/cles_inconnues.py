@@ -26,13 +26,31 @@ par personne » sur presque tous les tableaux. **Un faux positif dans un signal 
 qualité est pire que pas de signal** : on apprend à l'ignorer, et il ne sert plus le jour
 où il a raison.
 
-La référence est donc `schema_keys.RECONNUES`, où chaque clé porte son lecteur.
+## Une seule référence, parce qu'il y en avait deux
+
+⚠️ Cet avertissement consultait `schema_keys.RECONNUES` — la déclaration écrite à la
+main — pendant qu'un SECOND avertissement, dérivé du code, était servi dans la même
+réponse. Chacun était aveugle exactement là où l'autre voyait : celui-ci dénonçait
+`options`, `required` et `max_items`, que le validateur applique ; l'autre dénonçait
+`label`, `help`, `hint`, `placeholder` et `description`, que le front lit. Ils ne
+s'accordaient que sur `read_only`, la seule vraie faute — et l'auteur d'un schéma
+recevait deux verdicts contradictoires sur le sien.
+
+⚠️ **Et celui-ci se trompait de sens sur le cas fondateur.** Un champ portant `enum`
+à côté d'`options` — la faute qui a laissé 504 valeurs libres sur un tableau qui se
+croyait contraint — passait ici en SILENCE (`enum` était déclarée), tandis
+qu'`options`, la clé qui fait foi, était accusée. Le message envoyait retirer la
+bonne et garder la mauvaise.
+
+La référence est désormais `schema.vocabulaire_vivant()` : le vocabulaire DÉRIVÉ du
+code (ce que le validateur lit) uni à la moitié `front` de `schema_keys`, la seule
+qu'aucune dérivation ne peut voir d'ici. Les deux avertissements la partagent.
 """
 from __future__ import annotations
 
 from typing import Any, Iterable
 
-from .schema_keys import RECONNUES
+from .schema import vocabulaire_vivant
 
 
 def inconnues(fields: Iterable) -> dict[str, list[str]]:
@@ -42,10 +60,12 @@ def inconnues(fields: Iterable) -> dict[str, list[str]]:
     les traite pareil, et c'est le validateur qui refuse celles qui n'ont de sens que
     sur une colonne."""
     out: dict[str, list[str]] = {}
+    vivantes = vocabulaire_vivant()
     for f in fields or []:
         if not isinstance(f, dict):
             continue
-        mortes = sorted(k for k in f if isinstance(k, str) and k not in RECONNUES)
+        mortes = sorted(k for k in f
+                        if isinstance(k, str) and k not in vivantes)
         if mortes:
             out[str(f.get("key") or "?")] = mortes
     return out

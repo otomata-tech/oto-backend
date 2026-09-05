@@ -2795,12 +2795,28 @@ def _read_keys() -> frozenset:
         # noqa: SILENT — clés de schéma illisibles ⇒ ensemble vide, la lecture continue
         except Exception:      # source illisible (zip, .pyc seul) : on n'invente pas
             return frozenset()
+        # Les constantes de MODULE (`FLAT_ALIAS = "flat_alias"`), pour résoudre
+        # `f.get(FLAT_ALIAS)` : sans elles, une clé lue par sa constante — la forme
+        # qu'on encourage justement pour ne pas répéter un littéral — passe pour
+        # jamais lue. C'est ainsi que `flat_alias` manquait au vocabulaire dérivé,
+        # et une garde bâtie dessus l'aurait accusée d'être morte.
+        constantes = {
+            n.targets[0].id: n.value.value
+            for n in arbre.body
+            if isinstance(n, ast.Assign) and len(n.targets) == 1
+            and isinstance(n.targets[0], ast.Name)
+            and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)}
         for n in ast.walk(arbre):
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "get" and n.args
-                    and isinstance(n.args[0], ast.Constant)
-                    and isinstance(n.args[0].value, str)):
-                keys.add(n.args[0].value)
+                    and n.func.attr == "get" and n.args):
+                arg = n.args[0]
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    keys.add(arg.value)
+                elif isinstance(arg, ast.Name) and arg.id in constantes:
+                    keys.add(constantes[arg.id])
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Name) \
+                    and n.slice.id in constantes:
+                keys.add(constantes[n.slice.id])
     return frozenset(keys)
 
 
@@ -2813,6 +2829,29 @@ def interpreted_keys() -> frozenset:
     if _READ_KEYS is None:
         _READ_KEYS = _read_keys()
     return _READ_KEYS
+
+
+def vocabulaire_vivant() -> frozenset:
+    """Toute clé qu'un lecteur consulte : le validateur OU le front. **La** référence.
+
+    ⚠️ Il y avait DEUX inventaires, et ils se trompaient sur des ensembles disjoints —
+    dans la même réponse. Le dérivé ci-dessus ne voit que le validateur : il dénonçait
+    `label`, `help`, `hint`, `placeholder`, `description`, cinq attributs vivants que
+    seul le front lit, donc presque tous les tableaux existants. La déclaration écrite
+    à la main (`schema_keys`) ne voyait pas ce que le validateur applique : elle
+    dénonçait `options`, `required` et `max_items`. Chacun était aveugle exactement là
+    où l'autre voyait, et un agent qui posait un schéma recevait deux verdicts
+    contradictoires sur le sien.
+
+    Un faux positif dans un signal de qualité est pire que pas de signal : on apprend à
+    l'ignorer, et il ne sert plus le jour où il a raison. Deux signaux qui se
+    contredisent apprennent la même chose deux fois plus vite.
+
+    La moitié `front` ne peut pas être dérivée d'ici — elle est lue dans un autre
+    dépôt. Elle reste donc déclarée, et c'est une dette assumée que `schema_keys`
+    documente. La moitié `validateur`, elle, est dérivée ET confrontée dans les DEUX
+    sens par `tests/test_schema_keys_oto56.py`."""
+    return interpreted_keys() | schema_keys.LUES_PAR_LE_FRONT
 
 
 # Fautes de frappe qui MÉRITENT d'être nommées : une clé inconnue proche d'une clé
@@ -2849,8 +2888,8 @@ def unknown_declaration_keys(schema: Optional[dict]) -> list[dict]:
     """
     if not isinstance(schema, dict):
         return []
-    lues = interpreted_keys()
-    if not lues:                       # dérivation indisponible : ne rien affirmer
+    lues = vocabulaire_vivant()
+    if not interpreted_keys():         # dérivation indisponible : ne rien affirmer
         return []
     out: list[dict] = []
 

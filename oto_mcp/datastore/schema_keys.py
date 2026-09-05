@@ -74,7 +74,17 @@ CLES: tuple[Cle, ...] = (
     Cle("pattern", ("validateur",), "forme exigée de la valeur"),
     Cle("required_when", ("validateur", "front"), "obligatoire sous condition"),
     Cle("lifecycle", ("validateur", "front"), "états et transitions permises"),
-    Cle("enum", ("validateur", "front"), "valeurs permises (avec `type: \"enum\"`)"),
+    # ⚠️ `enum` a été RETIRÉE d'ici : elle n'était lue par personne. C'est une VALEUR
+    # de `type` (`"type": "enum"`), jamais une clé — et la table des fautes de frappe
+    # la traite comme une erreur à corriger (`enum` → `options`). Cette liste est
+    # SERVIE sur `GET /api/datastore/schema/keys` : elle prescrivait donc, à qui la
+    # lit avant d'écrire, exactement ce que le validateur corrige ensuite. Trois
+    # tableaux de production (9 454 lignes) portent l'`enum` résiduel qu'elle
+    # légitimait, à côté de l'`options` qui fait foi.
+    Cle("options", ("validateur", "front"),
+        "les valeurs permises d'une colonne `type: \"enum\"` — c'est ELLE qui contraint"),
+    Cle("required", ("validateur", "front"), "la valeur ne peut pas être vide"),
+    Cle("max_items", ("validateur", "front"), "nombre maximum d'éléments d'une liste"),
     # — présentation, lues par le FRONT SEUL : invisibles au validateur, et c'est
     #   exactement ce qui a fait échouer la première forme de ce lot —
     Cle("label", ("front",), "le nom affiché de la colonne (le plus lu de tous)"),
@@ -102,6 +112,13 @@ COLONNE_SEULEMENT: tuple[str, ...] = tuple(c.nom for c in CLES if c.colonne_seul
 #: signale.
 LUES_PAR_LE_VALIDATEUR: frozenset[str] = frozenset(
     c.nom for c in CLES if "validateur" in c.lecteurs)
+
+#: La moitié que RIEN ne peut dériver ici : elle est lue dans un autre dépôt. C'est
+#: exactement ce qui manquait au vocabulaire dérivé du code, et ce qui lui faisait
+#: dénoncer `label` sur presque tous les tableaux. `schema.vocabulaire_vivant()` en
+#: fait l'union avec le dérivé — une seule référence pour les deux avertissements.
+LUES_PAR_LE_FRONT: frozenset[str] = frozenset(
+    c.nom for c in CLES if "front" in c.lecteurs)
 
 
 def servie() -> list[dict]:

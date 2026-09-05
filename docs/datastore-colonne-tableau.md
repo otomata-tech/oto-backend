@@ -89,8 +89,12 @@ s'étend en un résolveur de chemin unique — il ne se duplique pas.
 ```
 
 Les attributs se déclarent **exactement comme un field de premier niveau** (`key`,
-`type`, `label`, `description`, `required`, `max_length`, `enum`+`options`…) — scout
+`type`, `label`, `description`, `required`, `max_length`, `options`…) — scout
 dérive tous ses écrans du schéma, il n'a donc rien de spécial à apprendre.
+
+⚠️ `enum` n'est pas un attribut : c'est une VALEUR de `type` (`"type": "enum"`), et
+c'est `options` qui porte les valeurs permises. La liste faisant autorité, avec le
+lecteur de chaque attribut, est servie sur `GET /api/datastore/schema/keys`.
 
 **Deux ajouts** :
 

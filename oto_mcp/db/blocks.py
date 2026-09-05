@@ -40,8 +40,12 @@ copies d'une même donnée finissent par diverger. `code_of()` le dérive à la 
 ## ⚠️ Aujourd'hui ces blocs sont une PROJECTION
 
 Le corps courant reste `props->>'body_md'` (et, côté legacy, `docs.body_md`). Le
-parse est rejoué au boot pour tout nœud dont le corps a changé — marqueur
-`props->>'blocks_md5'`, donc **no-op** quand rien ne bouge. Le jour où les blocs
+parse est désormais maintenu **dans la transaction d'écriture** des pages et guides,
+donc une lecture qui suit une écriture voit des blocs à jour sans attendre personne.
+Le rejeu au boot reste en place et rattrape l'ancien stock — marqueur
+`props->>'blocks_md5_v2'`, donc **no-op** quand rien ne bouge ; il ne sortira du
+démarrage que le jour où les transitions versionnées seront livrées (oto-backend#891).
+Aucune surface n'édite aujourd'hui les blocs seuls. Le jour où les blocs
 deviennent la source de vérité, c'est l'ÉCRITURE qui les posera et ce module se
 réduira au parseur.
 """

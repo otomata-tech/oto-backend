@@ -76,14 +76,20 @@ _COLS = ("id, owner_type AS scope, owner_id, props->>'slug' AS slug, "
 
 # --- Conversion `guides` → `nodes` (lot M1) -----------------------------------
 
-# Exécutée à CHAQUE boot par `_init`, gardée `to_regclass` (docs/live-migrations.md) :
-# tant que la table legacy existe, on recopie — la PROD tourne l'ancien code sur la
-# MÊME base et continue d'y écrire pendant la fenêtre de promotion. **Newer-wins**
-# sur `updated_at` : une page éditée depuis la nouvelle surface (donc `updated_at`
-# = NOW(), postérieur au `guides` gelé) n'est jamais écrasée par la conversion, et
-# une écriture prod de la fenêtre est rattrapée au boot suivant. Rejouable par
-# construction : sans écriture entre deux passes, la garde `>` rend la seconde
-# passe intégralement no-op.
+# ⚠️ Exécutée à CHAQUE boot par `_init` (`_init.py`, garde `to_regclass`) : tant que
+# la table legacy existe, on recopie — la PROD tourne l'ancien code sur la MÊME base
+# et continue d'y écrire pendant la fenêtre de promotion. **Newer-wins** sur
+# `updated_at` : une page éditée depuis la nouvelle surface n'est jamais écrasée par
+# la conversion, et une écriture prod de la fenêtre est rattrapée au boot suivant.
+# Rejouable par construction : sans écriture entre deux passes, la garde `>` rend la
+# seconde passe intégralement no-op.
+#
+# Ce que ce lot change : rien ici. Il maintient les projections (blocs, rang) DANS la
+# transaction d'écriture, au lieu de compter sur un rattrapage. Sortir cette recopie
+# du démarrage est un autre chantier — et quand elle en sortira, le remplaçant devra
+# insérer les seuls absents plutôt que d'arbitrer sur les horodatages : la stratégie
+# newer-wins est bonne pour une fenêtre de promotion, pas comme synchronisation
+# permanente (oto-backend#891).
 #
 # `embed_dirty` est posé à TRUE sans regarder `g.embed_dirty` (#282) : le drapeau
 # legacy dit « embeddé sous `aux_embeddings(kind='guide', ref=guides.id)` », ce qui
@@ -108,6 +114,23 @@ CONVERT_GUIDES_TO_NODES_SQL = f"""
 
 
 # --- On-demand (catalogue `oto_guide`) : delivery='on-demand' UNIQUEMENT ------
+
+def _body_before_write(conn, scope: str, owner_id: str, slug: str) -> Optional[str]:
+    row = conn.execute(
+        f"SELECT COALESCE(props->>'body_md', '') AS body FROM nodes WHERE public_id = {_PID} FOR UPDATE",
+        (scope, str(owner_id), slug),
+    ).fetchone()
+    return row["body"] if row else None
+
+
+def _maintain_projections(conn, row: dict, body_md: Optional[str]) -> None:
+    # Corps explicite modifié seulement : une édition de titre ne réécrit aucun
+    # bloc. Même transaction que le contenu, aucune réparation nocturne requise.
+    from .blocks import write_node_blocks
+    from .search import stamp_rank_vector
+    if body_md is not None:
+        write_node_blocks(conn, row["id"], body_md)
+    stamp_rank_vector(conn, "nodes", "id = %s", (row["id"],))
 
 def list_guides_db(scope: str, owner_id: str) -> list[dict]:
     """Guides ON-DEMAND d'un (scope, owner), triés par slug — métadonnées + corps.
@@ -147,6 +170,7 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
     la prose (#282) : écrire une couche la remet dans l'outbox sémantique, comme
     `guides` le faisait par sa colonne."""
     with _connect() as conn:
+        previous_body = _body_before_write(conn, scope, owner_id, slug)
         row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
             f"VALUES ({_PID}, '{_KIND}', %s, %s, "
@@ -164,6 +188,7 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
              slug, title, description, body_md,                # props à l'insertion
              title, description, body_md),                     # prose à la mise à jour
         ).fetchone()
+        _maintain_projections(conn, row, body_md if body_md != previous_body else None)
         return dict(row)
 
 
@@ -173,16 +198,18 @@ def seed_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
     Ne touche JAMAIS une ligne déjà posée/éditée (les fichiers `guides/*.md` sont
     des seeds, la DB est la source de vérité éditable)."""
     with _connect() as conn:
-        conn.execute(
+        row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
             f"VALUES ({_PID}, '{_KIND}', %s, %s, "
             "        jsonb_build_object('slug', %s::text, 'delivery', 'on-demand', "
             "                           'title', %s::text, 'description', %s::text, "
             "                           'body_md', %s::text, 'embed_dirty', TRUE)) "
-            "ON CONFLICT ON CONSTRAINT nodes_public_id_key DO NOTHING",
+            "ON CONFLICT ON CONSTRAINT nodes_public_id_key DO NOTHING RETURNING id",
             (scope, str(owner_id), slug, scope, str(owner_id),
              slug, title, description, body_md),
-        )
+        ).fetchone()
+        if row is not None:
+            _maintain_projections(conn, row, body_md)
 
 
 def delete_guide_db(scope: str, owner_id: str, slug: str) -> bool:
@@ -206,6 +233,7 @@ def set_init_guide_db(scope: str, owner_id: str, slug: str, body_md: str) -> dic
     """Upsert d'un readme INIT (édition admin/org/user). Corps vide = readme effacé,
     la ligne reste (comme les ex-tables)."""
     with _connect() as conn:
+        previous_body = _body_before_write(conn, scope, owner_id, slug)
         row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
             f"VALUES ({_PID}, '{_KIND}', %s, %s, "
@@ -218,6 +246,7 @@ def set_init_guide_db(scope: str, owner_id: str, slug: str, body_md: str) -> dic
             (scope, str(owner_id), slug, scope, str(owner_id),
              slug, body_md or "", body_md or ""),
         ).fetchone()
+        _maintain_projections(conn, row, (body_md or "") if body_md != previous_body else None)
         return dict(row)
 
 
@@ -225,11 +254,13 @@ def seed_init_guide_db(scope: str, owner_id: str, slug: str, body_md: str) -> No
     """Pose le défaut d'un readme INIT s'il n'existe pas (boot, idempotent). Ne touche
     JAMAIS une ligne déjà éditée."""
     with _connect() as conn:
-        conn.execute(
+        row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
             f"VALUES ({_PID}, '{_KIND}', %s, %s, "
             "        jsonb_build_object('slug', %s::text, 'delivery', 'init', "
             "                           'body_md', %s::text)) "
-            "ON CONFLICT ON CONSTRAINT nodes_public_id_key DO NOTHING",
+            "ON CONFLICT ON CONSTRAINT nodes_public_id_key DO NOTHING RETURNING id",
             (scope, str(owner_id), slug, scope, str(owner_id), slug, body_md or ""),
-        )
+        ).fetchone()
+        if row is not None:
+            _maintain_projections(conn, row, body_md or "")

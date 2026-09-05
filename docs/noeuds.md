@@ -59,6 +59,22 @@ vit à côté de docs et part de vide »*.
 Rien ne traduit l'un vers l'autre. Un contenu créé dans l'ancien monde **n'apparaît
 pas** dans le nouveau, et c'est le comportement voulu, pas une régression.
 
+**Corps actif et projections.** `nodes.props.body_md` porte le corps courant ; les
+surfaces page et guide le modifient, et l'ouverture `oto_node` lit ses blocs. Ces
+écritures maintiennent désormais les blocs **dans la même transaction**, ainsi que
+le vecteur de classement (`docs/search-and-kb.md`) — une lecture qui suit une
+écriture voit donc un état à jour, sans attendre un rattrapage. Un changement de
+titre ne réécrit aucun bloc ; les seeds ne projettent que leurs propres insertions.
+
+Il n'existe pas encore de surface d'édition indépendante des blocs. En ajouter une
+imposerait de décider et de tenir le sens de synchronisation — pas d'introduire une
+seconde autorité implicite.
+
+⚠️ La recopie `guides → nodes` reste jouée **au démarrage**, avec sa stratégie
+*newer-wins*. La sortir du boot demande le moteur de transitions versionnées, qui
+n'est pas livré (oto-backend#891) : tant qu'il ne l'est pas, ce paragraphe décrit
+un maintien de projection, pas une migration.
+
 ## Qui voit ces verbes
 
 Les trois verbes MCP — `oto_node`, `oto_node_rows`, `oto_node_edit` — sont réservés aux

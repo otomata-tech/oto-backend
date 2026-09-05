@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .. import credentials_store
+from .. import credentials_store, providers
 from . import secret_repr
 
 
@@ -48,17 +48,18 @@ class ResolvedCredential:
 
     @property
     def fields(self) -> dict:
-        return credentials_store.unpack_secret(self.provider, self.secret)
+        return credentials_store.unpack_secret(providers.credential_provider(self.provider), self.secret)
 
     @property
     def config(self) -> dict:
         """Config non-secrète appariée à la clé gagnante. Lazy : aucun coût pour
         les appelants qui ne lisent que `key` (chemin chaud resolve_api_key)."""
-        _, cfg = credentials_store.split_secret_config(self.provider, self.fields)
+        porteur = providers.credential_provider(self.provider)
+        _, cfg = credentials_store.split_secret_config(porteur, self.fields)
         if self.entity_type is not None:
             try:
                 row = credentials_store.get_credential_with_meta(
-                    self.entity_type, self.entity_id, self.provider, self.account)
+                    self.entity_type, self.entity_id, porteur, self.account)
             # noqa: SILENT — config non-secrète absente ⇒ la clé gagnante reste utilisable
             except Exception:
                 row = None

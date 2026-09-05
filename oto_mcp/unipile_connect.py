@@ -14,11 +14,11 @@ import functools
 import logging
 import os
 import secrets
-from dataclasses import dataclass
 
 from .mcp_errors import McpError
-from . import access, db
-from .connectors import flow as connector_flow
+from . import access, db, unipile_binding
+from .access.resolve import CredentialUnavailable
+from .access.rbac import ConnectorAccessDenied
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -29,69 +29,6 @@ CHANNELS = ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER", "TWITT
 LINKEDIN_PREMIUM = ("recruiter", "sales_navigator")
 
 
-@dataclass(frozen=True)
-class BindOutcome:
-    """Ce qu'une tentative de liaison a RÉELLEMENT fait.
-
-    Pas un booléen : le refus a une CAUSE, et un appelant qui ne peut pas la lire ne
-    peut pas la journaliser — un refus muet est un refus que personne ne saura avoir
-    eu."""
-
-    bound: bool
-    reason: "str | None" = None
-
-
-def account_claimable(sub: str, account_id: str, *,
-                      foreign: "set | None" = None) -> bool:
-    """Ce `account_id` est-il réclamable par `sub` ?
-
-    **LA garde de toute liaison d'un compte de messagerie hébergée.** Née sur un seul
-    des deux chemins qui écrivaient alors (#559) : la réconciliation contrôlait, le
-    webhook de notification reprenait `body["account_id"]` tel quel. Le nonce prouve
-    « c'est bien la session de connexion de cette personne » ; il ne dit rien de
-    « c'est bien le compte qui vient d'être créé ». Et la clé fournisseur étant
-    **partagée entre les organisations**, un identifiant quelconque de l'abonnement —
-    le siège d'une autre org — était joignable sous cette liaison. Le webhook est
-    retiré depuis (#581, 2026-08-29) ; la garde reste, au point d'écriture.
-
-    Règle : un identifiant déjà attribué à QUELQU'UN D'AUTRE, binding vivant ou mort,
-    n'est pas réclamable. Une ligne morte d'un tiers vaut interdiction (Unipile
-    réutilise le même identifiant à la reconnexion : elle prouve une propriété qui
-    dure) ; les lignes du réclamant, elles, ne l'empêchent jamais de reprendre son
-    propre compte.
-
-    ⚠️ Ce qu'elle NE couvre pas : un siège présent sur l'abonnement partagé et lié à
-    PERSONNE côté oto. Le fermer demande de confronter l'identifiant au fournisseur
-    (date de création vs pending) — ce que la réconciliation fait déjà avec son
-    plancher de date ; une lecture de compte par identifiant est absente du client
-    oto-core.
-
-    `foreign` : l'inventaire déjà chargé par un appelant qui teste N candidats (la
-    réconciliation en voit tout l'abonnement). Absent, il est lu ici, au grain."""
-    if not account_id:
-        return False
-    if foreign is not None:
-        return account_id not in foreign
-    return not db.is_foreign_unipile_account(sub, account_id)
-
-
-def bind_account(sub: str, account_id: str, *, org_id: "int | None",
-                 provider: str = "LINKEDIN", platform_seat: bool = False,
-                 account_name: "str | None" = None,
-                 foreign: "set | None" = None) -> BindOutcome:
-    """Écrire la liaison `(sub, org, canal) → account_id`, **gardée**.
-
-    Le seul chemin d'écriture, et c'est le point : #559 n'était pas une garde oubliée
-    mais une garde posée UNE fois sur DEUX écritures parallèles. Les mettre sous la
-    même fonction est ce qui empêche une troisième de naître sans elle. Le webhook,
-    second écrivain, est retiré (#581, 2026-08-29) ; la garde reste ICI, au point
-    d'écriture, pour que le prochain chemin — un webhook v2 signé ? — naisse gardé."""
-    if not account_claimable(sub, account_id, foreign=foreign):
-        return BindOutcome(False, "account_not_claimable")
-    db.set_unipile_account(sub, account_id, account_name=account_name,
-                           org_id=org_id, provider=provider,
-                           platform_seat=platform_seat)
-    return BindOutcome(True)
 
 
 class ConnectRefused(Exception):
@@ -183,17 +120,21 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # namespace inconnu, inchangé.
     from . import providers as _providers
     canal_con = _providers.connector_for_hosted_channel(provider)
-    if canal_con is not None:
-        try:
-            access.require_connector_access(canal_con.name, sub)
-        except McpError as e:
-            raise ConnectRefused(403, "connector_restricted", e.error.message)
-    api_key = access.unipile_api_key_for(sub)
-    if not api_key:
+    # Le canal porte ses droits ; le résolveur suit sa délégation vers la clé
+    # unipile. Clé, mode et DSN viennent de LA MÊME instance, compte compris.
+    try:
+        credential = await asyncio.to_thread(
+            access.resolve_credential, canal_con.name if canal_con else "unipile",
+            sub=sub, check_usage=False, emit_on_failure=False)
+    except CredentialUnavailable:
         raise ConnectRefused(404, "unipile_not_configured",
                              "Unipile n'est pas configuré (ni clé BYO ni clé plateforme).")
-    # BYO = clé propre (user/groupe/ORG) — via le seam de résolution (mode).
-    byo = access.credential_mode_for(sub, "unipile") in access.BYO_MODES
+    except ConnectorAccessDenied as e:
+        raise ConnectRefused(403, "connector_restricted", e.error.message) from e
+    except McpError as e:
+        raise ConnectRefused(400, "credential_resolution_failed", e.error.message) from e
+    api_key = credential.key
+    byo = credential.mode in access.BYO_MODES
     org_id = access.current_org(sub)
     if org_id is None:
         raise ConnectRefused(400, "no_org_context",
@@ -292,14 +233,7 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     from oto.tools.unipile import make_unipile_client
     # DSN porté par le credential BYO gagnant (`config.dsn`) ; la plateforme reste
     # sur le défaut oto-core (api.unipile.com).
-    dsn = None
-    if byo:
-        try:
-            cfg = access.resolve_credential(
-                "unipile", want="byo", sub=sub, emit_on_failure=False).config
-            dsn = cfg.get("dsn")
-        except McpError:
-            pass
+    dsn = (await asyncio.to_thread(lambda: credential.config)).get("dsn") if byo else None
     client = make_unipile_client(api_key=api_key, dsn=dsn)
     # Activer un premium sur un compte DÉJÀ connecté = `type=reconnect` sur CE compte
     # (rattache le produit sans DOUBLON), pas un `create` (qui a produit les comptes
@@ -437,7 +371,7 @@ def reconcile_pending(sub: str) -> dict:
                 continue
             if (a.get("provider") or a.get("type") or "").upper() != provider:
                 continue
-            if not account_claimable(sub, aid, foreign=foreign):
+            if not unipile_binding.account_claimable(sub, aid, foreign=foreign):
                 continue  # à un TIERS (vivant ou mort) → jamais, la garde partagée
             if aid in mine_dead:
                 cand.append((_parse_dt(a.get("created_at")), a))
@@ -485,7 +419,7 @@ def reconcile_pending(sub: str) -> dict:
                            "redirection finale."),
             })
             continue
-        issue = bind_account(sub, chosen["id"], account_name=chosen.get("name"),
+        issue = unipile_binding.bind_account(sub, chosen["id"], account_name=chosen.get("name"),
                              org_id=pend["org_id"], provider=provider,
                              platform_seat=bool(pend.get("platform_seat")),
                              foreign=foreign)
@@ -508,11 +442,7 @@ def reconcile_pending(sub: str) -> dict:
                     sub, chosen["id"], pend["org_id"])
     out: dict = {"bound": bool(bound), "accounts": bound}
     if motifs and not bound:
-        # Rien n'a été lié ET on sait pourquoi : le dire. C'est la règle que ce
-        # module écrit pour `BindOutcome` en tête de fichier — « un refus muet est un
-        # refus que personne ne saura avoir eu » — et que cette fonction, sa voisine
-        # immédiate, n'appliquait pas (signal #689 : deux parcours suivis jusqu'au
-        # bout, plusieurs minutes d'attente, et `connected:false` sans un mot).
+        # Rien n'a été lié : rendre le motif établi, comme `unipile_binding` (#689).
         out["reason"] = motifs[0]["reason"]
         out["detail"] = motifs[0]["detail"]
         out["pendings"] = motifs
@@ -565,4 +495,3 @@ async def _start_flow(ctx, values: dict):
             "Aucun consentement à donner — relis tes identités pour le voir.")
     return connector_flow.FlowStart(auth_url=out["url"],
                                     details={"channel": out.get("channel")})
-

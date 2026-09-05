@@ -20,7 +20,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import providers, credentials_store, db, org_store
-from . import cascade, quotas, resolve, scope
+from . import cascade, chain_shadow, quotas, resolve, scope
 
 
 # La clé de TENANT est le BYO du tenant (L-clés PR 1) : il gère sa propre instance
@@ -110,41 +110,6 @@ def resolve_mount_token(provider: str) -> str:
     ))
 
 
-def unipile_api_key_for(sub: str) -> Optional[str]:
-    """Clé API Unipile pour `sub`, en cascade (sans lever) : clé de l'user (BYO),
-    secret de son org active (abonnement Otomata), puis **clé plateforme** si l'user
-    a un grant (mode revente — partage de la clé sans la copier dans chaque org).
-    None si aucune.
-
-    Pris pour `sub` EXPLICITE → utilisable hors contexte MCP (route REST connect).
-    Les tools MCP, eux, passent par `resolve_api_key("unipile")` (idiome keyed)."""
-    active_org = scope.current_org(sub)
-    key = db.get_member_api_key(sub, active_org, "unipile")
-    if key:
-        return key
-    # Instance personnelle cross-org (issue #172) : ma clé unipile posée dans une
-    # autre org me suit (miroir de resolve_credential — le connect ne doit pas croire
-    # « pas de BYO » alors que la résolution trouve ma clé perso ailleurs).
-    if providers.is_personal_cross_org("unipile"):
-        pio = cascade.personal_instance_org(sub, "unipile", exclude_org=active_org)
-        if pio is not None:
-            personal_key = db.get_member_api_key(sub, pio, "unipile")
-            if personal_key:
-                return personal_key
-    if active_org is not None:
-        org_key = org_store.get_org_secret(active_org, "unipile")
-        if org_key:
-            return org_key
-    # Mode plateforme (ADR 0044 §F R3) : instance PLATFORM utilisable par sub. Gate sur
-    # l'éligibilité `platform` du registre (défense en profondeur, comme resolve_api_key).
-    con = providers.connector_for_provider("unipile")
-    if con and "platform" in con.auth_modes:
-        grant = cascade._resolve_platform_grant(sub, "unipile", active_org)
-        if grant:
-            return grant["secret"]
-    return None
-
-
 def credential_mode_for(sub: str, provider: str, *,
                         org: "int | None | object" = scope._UNSET,
                         group: "int | None | object" = scope._UNSET,
@@ -172,8 +137,8 @@ def credential_mode_for(sub: str, provider: str, *,
     g = scope.current_group(sub) if group is scope._UNSET else group
     # Marche unique (walker) en sonde PRÉSENCE — plus de cascade recopiée ici :
     # le miroir est structurel, il ne peut plus diverger de la résolution.
-    win = cascade.cascade_winner(sub, provider, org=o, group=g,
-                         probe=probe or cascade.PRESENCE_PROBE, want="auto")
+    win = next(chain_shadow.resolution_rungs(sub, provider, org=o, group=g,
+                 probe=probe or cascade.PRESENCE_PROBE, want="auto"), None)
     if win is None:
         return "forbidden"
     if win.mode != "platform":
@@ -205,8 +170,8 @@ def credential_rejection_for(sub: str, provider: str, *,
     (une repose réécrit `meta`)."""
     o = scope.current_org(sub) if org is scope._UNSET else org
     g = scope.current_group(sub) if group is scope._UNSET else group
-    win = cascade.cascade_winner(sub, provider, org=o, group=g,
-                                 probe=probe or cascade.PRESENCE_PROBE, want="auto")
+    win = next(chain_shadow.resolution_rungs(sub, provider, org=o, group=g,
+                 probe=probe or cascade.PRESENCE_PROBE, want="auto"), None)
     if win is None or win.entity_type is None:
         return None
     return credentials_store.credential_health(

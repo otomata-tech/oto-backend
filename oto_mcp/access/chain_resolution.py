@@ -1,5 +1,8 @@
 """Ce que la chaîne de grants DÉSIGNE — la résolution de 0053, isolée (lot L7).
 
+Une lecture impossible LÈVE : elle ne signifie jamais « clé absente, essayer plus
+bas ». Seul l'observateur de comparaison peut absorber une erreur de cette chaîne.
+
 **Pourquoi ce module existe à part.** C'est la moitié du lot qui SURVIT : quand
 `walk_cascade` sera retiré (PR 3), l'observation et son compteur disparaissent, mais
 ceci reste — c'est la résolution servie. Les tenir dans le même fichier aurait mélangé
@@ -69,11 +72,7 @@ def _group_ids(sub: str, org: Optional[int]) -> list[int]:
     C'est là que 0053-D2 élargit, et l'élargissement est le sujet de la mesure."""
     if org is None:
         return []
-    try:
-        return sorted(int(g["group_id"]) for g in group_store.list_groups_for_user(sub, org))
-    except Exception:  # noqa: BLE001
-        logger.debug("shadow L7 : équipes illisibles", exc_info=True)
-        return []
+    return sorted(int(g["group_id"]) for g in group_store.list_groups_for_user(sub, org))
 
 
 def _platform_pick(sub: str, provider: str, org: Optional[int]) -> "tuple[Optional[ChainPick], Optional[str]]":
@@ -139,7 +138,8 @@ def _platform_pick(sub: str, provider: str, org: Optional[int]) -> "tuple[Option
     return (None, hors_modele)
 
 
-def _paliers(sub: str, provider: str, org: Optional[int], want: str):
+def _paliers(sub: str, provider: str, org: Optional[int], want: str,
+             *, group=scope._UNSET):
     """Les paliers ATTEIGNABLES, dans l'ordre, en **générateur** — et la nuance du
     trou en valeur de retour (PEP 380, lue par `StopIteration.value`).
 
@@ -165,61 +165,42 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str):
     """
     porteur = providers.credential_provider(provider)
     if org is not None and providers.is_byo_user(porteur):
-        try:
-            if (credentials_store.has_credential(
-                    credentials_store.MEMBER, credentials_store.member_id(org, sub),
-                    porteur, account=None)
-                    and not credentials_store.instance_suspended(
-                        credentials_store.MEMBER, credentials_store.member_id(org, sub),
-                        porteur)):
-                # Le drapeau free-tier ne sert QUE si la chaîne se tait : un
-                # palier gagnant le rend sans avoir lu les instances plateforme.
-                yield ChainPick("user", credentials_store.MEMBER,
-                                credentials_store.member_id(org, sub))
-        except Exception:  # noqa: BLE001
-            logger.debug("shadow L7 : palier membre illisible", exc_info=True)
+        if (credentials_store.has_credential(
+                credentials_store.MEMBER, credentials_store.member_id(org, sub),
+                porteur, account=None)
+                and not credentials_store.instance_suspended(
+                    credentials_store.MEMBER, credentials_store.member_id(org, sub), porteur)):
+            # Le drapeau free-tier ne sert QUE si la chaîne se tait.
+            yield ChainPick("user", credentials_store.MEMBER,
+                            credentials_store.member_id(org, sub))
     if porteur in providers.ORG_SHAREABLE_PROVIDERS:
         # À proximité égale, l'équipe ACTIVE d'abord — c'est la voie la plus
         # favorable au sens de D5, et ça rend la désignation déterministe quand le
         # sujet appartient à plusieurs équipes qui détiennent toutes une clé.
-        active = None
-        try:
-            active = scope.current_group(sub)
-        except Exception:  # noqa: BLE001
-            logger.debug("shadow L7 : équipe active illisible", exc_info=True)
+        active = scope.current_group(sub) if group is scope._UNSET else group
+        active = active() if callable(active) else active
         gids = _group_ids(sub, org)
         if active is not None and int(active) in gids:
             gids = [int(active)] + [g for g in gids if g != int(active)]
         for gid in gids:
-            try:
-                if group_store.has_group_secret(gid, porteur):
-                    yield ChainPick("group", "group", str(gid), group_id=gid)
-            except Exception:  # noqa: BLE001
-                logger.debug("shadow L7 : équipe %s illisible", gid, exc_info=True)
+            if group_store.has_group_secret(gid, porteur):
+                yield ChainPick("group", "group", str(gid), group_id=gid)
         if org is not None:
-            try:
-                if org_store.has_org_secret(org, porteur):
-                    yield ChainPick("org", "org", str(org))
-            except Exception:  # noqa: BLE001
-                logger.debug("shadow L7 : palier org illisible", exc_info=True)
+            if org_store.has_org_secret(org, porteur):
+                yield ChainPick("org", "org", str(org))
         # Étage TENANT (L-clés PR 1) : le même que dans le walker, lu à la même source
         # (`rung_tenant` — le sub qualifié, jamais l'org). Sans lui, chaque clé tenant
         # servie compterait une divergence `inconnu` que ce lot aurait créée.
         slug = tenant_vault.rung_tenant(sub)
         if slug is not None:
-            try:
-                if (credentials_store.has_credential(credentials_store.TENANT, slug, porteur)
-                        and not credentials_store.instance_suspended(
-                            credentials_store.TENANT, slug, porteur)):
-                    # L'arête tenant→org (PR 2), lue par la MÊME fonction que le
-                    # walker : MUETTE ⟹ appartenance ; ACCORDE ⟹ grant ; REFUSE ⟹ on
-                    # passe au palier suivant, comme lui (pas un « rien » précoce).
-                    verdict = grants_chain.tenant_rung(slug, porteur, org)
-                    if verdict is None or verdict.granted:
-                        yield ChainPick("tenant", credentials_store.TENANT, slug,
-                                        via="grant" if verdict else "appartenance")
-            except Exception:  # noqa: BLE001
-                logger.debug("shadow L7 : palier tenant illisible", exc_info=True)
+            if (credentials_store.has_credential(credentials_store.TENANT, slug, porteur)
+                    and not credentials_store.instance_suspended(
+                        credentials_store.TENANT, slug, porteur)):
+                # Même arête que le walker : MUETTE ⟹ appartenance ; REFUSE ⟹ suite.
+                verdict = grants_chain.tenant_rung(slug, porteur, org)
+                if verdict is None or verdict.granted:
+                    yield ChainPick("tenant", credentials_store.TENANT, slug,
+                                    via="grant" if verdict else "appartenance")
     if want != "byo":
         con = providers.connector_for_provider(porteur)
         if con is not None and "platform" in con.auth_modes:
@@ -257,14 +238,14 @@ def chain_verdict(sub: str, provider: str, *, org: Optional[int],
 
 
 def chain_paliers(sub: str, provider: str, *, org: Optional[int],
-                  want: str = "auto"):
+                  want: str = "auto", group=scope._UNSET):
     """Les paliers atteignables DANS L'ORDRE — ce que la lecture parcourt.
 
     C'est la surface que `rung_for_picks` consomme : elle s'arrête au premier palier
     qui RÉPOND, là où `chain_verdict` s'arrête au premier qui EXISTE. La différence
     entre les deux est tout le sujet de #673.
     """
-    return _paliers(sub, provider, org, want)
+    return _paliers(sub, provider, org, want, group=group)
 
 
 def chain_winner(sub: str, provider: str, *, org: Optional[int],
@@ -291,11 +272,15 @@ def rung_for_picks(paliers, probe, sub: str, provider: str, org: Optional[int]):
     palier suivant que si le précédent n'a rien rendu, et le cas nominal s'arrête au
     premier.
     """
+    return next(rungs_for_picks(paliers, probe, sub, provider, org), None)
+
+
+def rungs_for_picks(paliers, probe, sub: str, provider: str, org: Optional[int]):
+    """Les réponses de la sonde, sans consommer les paliers suivants en avance."""
     for pick in paliers:
         rung = rung_for_pick(pick, probe, sub, provider, org)
         if rung is not None:
-            return rung
-    return None
+            yield rung
 
 
 def rung_for_pick(pick: Optional[ChainPick], probe, sub: str, provider: str,
@@ -365,5 +350,3 @@ def rung_for_pick(pick: Optional[ChainPick], probe, sub: str, provider: str,
         return None
     return cascade.CascadeRung("platform", credentials_store.PLATFORM,
                                grant.get("label"), grant)
-
-

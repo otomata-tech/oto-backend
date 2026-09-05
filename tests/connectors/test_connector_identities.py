@@ -58,7 +58,7 @@ def _wire_byo(monkeypatch, mode="org"):
                         lambda prov, want="auto", sub=None: ResolvedCredential(
                             "unipile", "KEY", False, "org", "org", "39"))
     # config.dsn lu par _unipile_client
-    monkeypatch.setattr(access.credentials_store, "get_credential_with_meta",
+    monkeypatch.setattr(credentials_store, "get_credential_with_meta",
                         lambda *a, **k: {"meta": {"dsn": "api6.unipile.com:13616"}})
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeUnipile)
     monkeypatch.setattr(access, "current_org", lambda sub: 39)

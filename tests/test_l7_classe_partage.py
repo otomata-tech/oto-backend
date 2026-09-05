@@ -24,7 +24,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp import credentials_store, grants_chain, group_store, org_store
-from oto_mcp.access import cascade, chain_resolution, chain_shadow
+from oto_mcp.access import cascade, chain_resolution, chain_shadow, scope
 from oto_mcp.db import grants as db_grants
 
 # Les deux clés, telles qu'elles sont en prod : FERMÉES, une allowlist d'orgs qui
@@ -51,7 +51,7 @@ def sans_arete(monkeypatch):
     monkeypatch.setattr(group_store, "list_groups_for_user", lambda s, o=None: [])
     monkeypatch.setattr(group_store, "has_group_secret", lambda g, p: False)
     monkeypatch.setattr(org_store, "has_org_secret", lambda o, p: False)
-    monkeypatch.setattr(cascade, "current_group", lambda sub: None, raising=False)
+    monkeypatch.setattr(scope, "current_group", lambda sub: None)
     monkeypatch.setattr(db_grants, "edges_for", lambda ref, grantees: [])
     yield
 

@@ -58,8 +58,14 @@ _SURFACE = """
     resolve_api_key resolve_credential resolve_credential_fields
     resolve_field_filter resolve_mount_token resolve_namespace_ref
     resolve_slot_tableau session_org status_for status_hints
-    unipile_api_key_for walk_cascade
+    walk_cascade
 """.split()
+
+# `unipile_api_key_for` a quitté cette liste le 05/09/2026 : la route de connexion
+# Unipile résout désormais clé, mode et point d'accès par un SEUL appel à
+# `resolve_credential` (oto-backend#894 pour le motif). La fonction n'avait plus
+# aucun appelant — un nom retiré parce qu'il ne sert plus, avec sa raison, n'est
+# pas la même chose qu'une surface qu'on rabote pour faire passer un lot.
 
 PKG = pathlib.Path(access.__file__).parent
 
@@ -74,8 +80,14 @@ def test_aucun_nom_ne_quitte_la_surface_plate():
 
 
 def test_l_inventaire_n_est_pas_vide():
-    """Un inventaire vidé par accident rendrait le test vert et inutile."""
-    assert len(_SURFACE) == 92
+    """Un inventaire vidé par accident rendrait le test vert et inutile.
+
+    92 → 91 le 05/09/2026 : `unipile_api_key_for` retiré, un seul nom, parce
+    qu'il n'a plus d'appelant (cf. l'entête). Ce compte n'est pas décoratif —
+    c'est lui qui oblige à écrire POURQUOI la surface bouge. Une baisse qu'on
+    ne peut pas justifier nom par nom est un rabotage, pas un nettoyage.
+    """
+    assert len(_SURFACE) == 91
 
 
 def test_une_ecriture_sur_la_facade_traverse_les_sous_modules(monkeypatch):

@@ -34,17 +34,24 @@ logger = logging.getLogger(__name__)
 _ACCOUNT_URL = "https://manage.oto.cx/account"
 
 
+class CredentialUnavailable(McpError):
+    """Aucune clé atteignable ; distinct d'un compte ambigu ou d'un refus d'accès."""
+
+
 def resolve_credential(provider: str, want: str = "auto",
                        sub: Optional[str] = None, *,
                        account: Optional[str] = None,
-                       emit_on_failure: bool = True) -> ResolvedCredential:
+                       emit_on_failure: bool = True,
+                       check_usage: bool = True) -> ResolvedCredential:
     """Vue publique de la résolution. Sur **échec** (McpError actionnable — credential
     absent / quota dépassé / accès RBAC refusé), émet un événement de monitoring
     `kind='connector'` dans le flux unifié (ADR 0017) AVANT de relever : c'est LE
     signal d'un connecteur qui ne résout pas pour un user/org, invisible jusqu'ici
     (un compte actif sans clé valide n'apparaissait nulle part). `emit_on_failure=False`
-    pour les **sondes** qui avalent la McpError (ex. lookup de DSN), afin de ne pas
-    fausser le signal. Cascade et sémantique : voir `_resolve_credential_impl`."""
+    pour les **sondes** qui avalent la McpError, afin de ne pas fausser le signal.
+    `check_usage=False` pour CONFIGURER une connexion : mêmes gardes d'accès et
+    choix de compte, mais aucun quota d'usage ni débit tenant. Une exécution d'outil
+    garde toujours le défaut `True`. Cascade : voir `_resolve_credential_impl`."""
     if sub is None:
         # Endpoint MCP ANONYME (ADR 0032) : pas de sub → résolution contre l'org
         # propriétaire du projet (org secret > grant org > clé plateforme ouverte),
@@ -56,7 +63,8 @@ def resolve_credential(provider: str, want: str = "auto",
                 resolve_anon._resolve_credential_anon(provider, want, anon.org_id))
     sub = sub or scope.current_user_sub_or_raise()
     try:
-        resolved = _resolve_credential_impl(provider, want, sub, account=account)
+        resolved = _resolve_credential_impl(provider, want, sub, account=account,
+                                            check_usage=check_usage)
     except McpError:
         if emit_on_failure:
             _emit_connector_failure(provider, sub)
@@ -107,7 +115,8 @@ def _emit_connector_failure(provider: str, sub: str) -> None:
 
 
 def _resolve_credential_impl(provider: str, want: str, sub: str,
-                             account: Optional[str] = None) -> ResolvedCredential:
+                             account: Optional[str] = None, *,
+                             check_usage: bool = True) -> ResolvedCredential:
     """Résolveur substrat unique (ADR 0024) : marche la cascade EXACTE
     user > groupe actif > org active > tenant [> grant plateforme] **une fois** et renvoie
     le credential gagnant (clé + origine + config). `want="byo"` court-circuite le
@@ -294,7 +303,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     if win is None:
         # byo-only : pas de palier plateforme (mounts basic_auth, multi-secrets).
         if want == "byo":
-            raise McpError(ErrorData(
+            raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
                 message=(
                     f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
@@ -306,7 +315,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         # Défense en profondeur : le palier plateforme n'existe que si le registre
         # AUTORISE `platform` (gate DANS le walker) — un provider byo-only n'est
         # JAMAIS résolu via une clé plateforme résiduelle (audité 2026-06-11).
-        raise McpError(ErrorData(
+        raise CredentialUnavailable(ErrorData(
             code=INVALID_PARAMS,
             # La clé se pose sur le PORTEUR (délégation) : renvoyer quelqu'un à
             # « la section Whatsapp » de sa page compte, où il n'y a pas de champ,
@@ -321,7 +330,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             ),
         ))
 
-    if win.mode == "tenant":
+    if check_usage and win.mode == "tenant":
         # Budget par org de l'arête tenant→org (L-clés PR 2) — no-op sans arête.
         tenant_budget.enforce(win.entity_id, porteur, active_org)
     if win.mode != "platform":
@@ -335,7 +344,9 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # une variable de cette frame : les gardes de quota qui suivent peuvent lever,
     # et une frame qui lève garde ses locales dans le traceback. `win` est un
     # `CascadeRung`, dont le `repr` est expurgé (#564) ; un dict nu ne l'est pas.
-    used, limit = _win_quota(win, sub, provider, active_org)
+    # Une connexion configure le compte : elle ne consomme pas un appel fournisseur.
+    # Même choix de clé et mêmes gardes d'identité, sans débit tenant ni quota d'usage.
+    used, limit = _win_quota(win, sub, provider, active_org) if check_usage else (0, 0)
     if limit and used >= limit:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -392,7 +403,7 @@ def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[di
     sub = sub or scope.current_user_sub_or_raise()
     active_org = scope.current_org(sub)
     active_group = scope.current_group(sub)
-    hits = list(cascade.walk_cascade(sub, provider, org=active_org, group=active_group,
+    hits = list(chain_shadow.resolution_rungs(sub, provider, org=active_org, group=active_group,
                                      probe=cascade.PRESENCE_PROBE, want="auto"))
     winner = hits[0] if hits else None
     if winner is None or winner.mode != "platform":

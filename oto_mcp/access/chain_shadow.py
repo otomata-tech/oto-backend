@@ -236,8 +236,26 @@ def chain_decides() -> bool:
     return decide_mode() == DECIDE_CHAIN
 
 
+def resolution_rungs(sub, provider: str, *, org, group, probe, want="auto"):
+    """Traversée servie, commune aux appels et aux diagnostics sans déchiffrement.
+
+    Aucune observation, consommation ou tolérance aux erreurs ici. L'anonyme garde
+    sa politique org-only existante ; L7 ne change que la résolution identifiée.
+    Un contexte explicite (fiche d'un tiers) ne relit jamais celui du requérant.
+    """
+    from . import cascade
+    if sub is not None and chain_decides():
+        porteur = providers.credential_provider(provider)
+        yield from chain_resolution.rungs_for_picks(
+            chain_resolution.chain_paliers(sub, porteur, org=org, want=want, group=group),
+            probe, sub, porteur, org)
+    else:
+        yield from cascade.walk_cascade(sub, provider, org=org, group=group,
+                                        probe=probe, want=want)
+
+
 def decide(provider: str, sub: str, org: Optional[int], *, probe, want: str = "auto",
-           deja_observe: bool = False):
+           deja_observe: bool = False, group=scope._UNSET):
     """La chaîne DÉCIDE, l'ancien chemin calcule et se compare — le miroir exact de la
     PR 1, l'autorité retournée.
 
@@ -250,7 +268,6 @@ def decide(provider: str, sub: str, org: Optional[int], *, probe, want: str = "a
     `deja_observe` : le refus d'ACL a déjà été compté à son site (il se produit avant
     la marche), on ne le compte pas deux fois."""
     porteur = providers.credential_provider(provider)
-    pick, hors_modele = chain_resolution.chain_verdict(sub, porteur, org=org, want=want)
     # Le FETCH garde le nom que le walker lui passait — la traversée change, la
     # lecture non.
     #
@@ -260,17 +277,14 @@ def decide(provider: str, sub: str, org: Optional[int], *, probe, want: str = "a
     # rendait un refus sec là où le chemin historique passait au palier suivant.
     # `pick` reste la DÉSIGNATION servie au relevé de fenêtre — lui donner autre chose
     # ferait bouger ce qu'il mesure au moment où on corrige la lecture.
-    rung = chain_resolution.rung_for_picks(
-        chain_resolution.chain_paliers(sub, porteur, org=org, want=want),
-        probe, sub, provider, org)
+    rung = next(resolution_rungs(sub, provider, org=org, group=group,
+                                 probe=probe, want=want), None)
     if not deja_observe:
-        _observe_inverse(porteur, sub, org, pick, hors_modele, want=want)
+        _observe_inverse(porteur, sub, org, want=want)
     return rung
 
 
-def _observe_inverse(porteur: str, sub: str, org: Optional[int],
-                     chain: Optional[chain_resolution.ChainPick],
-                     hors_modele: Optional[str], *, want: str) -> None:
+def _observe_inverse(porteur: str, sub: str, org: Optional[int], *, want: str) -> None:
     """Sous l'autorité de la chaîne, c'est l'ANCIEN chemin qu'on relève — et à la
     sonde de PRÉSENCE, pas de fetch : la question posée est « quel barreau
     gagnerait », et y répondre ne doit pas déchiffrer une seconde clé par appel.
@@ -282,6 +296,7 @@ def _observe_inverse(porteur: str, sub: str, org: Optional[int],
         return
     try:
         from . import cascade, scope as _scope
+        chain, hors_modele = chain_resolution.chain_verdict(sub, porteur, org=org, want=want)
         legacy = cascade.cascade_winner(
             sub, porteur, org=org, group=lambda: _scope.current_group(sub),
             probe=cascade.PRESENCE_PROBE, want=want)
@@ -345,7 +360,7 @@ def barreau_gagnant(provider: str, sub: str, org: Optional[int], *, probe,
     from . import cascade
     if chain_decides():
         return decide(provider, sub, org, probe=probe, want=want,
-                      deja_observe=acl_refus)
+                      deja_observe=acl_refus, group=group)
     win = cascade.cascade_winner(sub, provider, org=org, group=group, probe=probe,
                                  want=want)
     observe(provider, sub, org, win, want=want)

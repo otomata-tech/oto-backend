@@ -160,7 +160,7 @@ def test_la_nuance_du_trou_survit_au_generateur(monkeypatch):
 
 # --- le consommateur RÉEL, pas seulement la fonction ---------------------------
 
-def test_le_chemin_servi_PARCOURT_les_paliers():
+def test_le_chemin_servi_PARCOURT_les_paliers(monkeypatch):
     """⚠️ Le cliquet qui manquait, et son absence a failli me tromper : les tests
     ci-dessus exercent `rung_for_picks` **directement**. En réintroduisant le défaut
     dans son appelant — relire le palier désigné au lieu de parcourir — ils restaient
@@ -169,12 +169,10 @@ def test_le_chemin_servi_PARCOURT_les_paliers():
 
     On lit donc le chemin réellement servi.
     """
-    import textwrap
     from oto_mcp.access import chain_shadow
-
-    src = textwrap.dedent(inspect.getsource(chain_shadow.decide))
-    assert "rung_for_picks" in src, (
-        "le chemin servi relit le palier DÉSIGNÉ au lieu de parcourir les paliers "
-        "atteignables : le repli est de nouveau mort (#673)")
-    assert "chain_paliers" in src, (
-        "le chemin servi ne consomme pas la traversée — il lui passe autre chose")
+    monkeypatch.setenv("OTO_L7_DECIDE", "chain")
+    monkeypatch.setenv("OTO_L7_SHADOW", "0")
+    monkeypatch.setattr(chain_resolution, "chain_paliers",
+                        lambda *a, **k: _paliers("user", "org"))
+    win = chain_shadow.decide("serper", "u-1", 7, probe=_Sonde(repond="org"))
+    assert win is not None and win.mode == "org"

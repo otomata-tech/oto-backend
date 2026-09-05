@@ -640,16 +640,29 @@ def system_value_fields(schema: Optional[dict]) -> dict:
             and isinstance(f.get("key"), str) and f["key"]}
 
 
-#: Ce que l'appelant lira quand il pose une origine sans en avoir le droit. Servi par
-#: le SERVEUR — l'écran comme l'agent le rendent tel quel — et il VOUVOIE : c'est une
+#: Ce que l'appelant lira quand il pose une origine sans le déclarer. Servi par le
+#: SERVEUR — l'écran comme l'agent le rendent tel quel — et il VOUVOIE : c'est une
 #: personne qui décidera d'agir dessus.
 #:
 #: ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
-#: passe encore. Le refus vient ensuite, à une date annoncée. On ne demande pas la
-#: permission d'écrire aux écrivains, on les prévient — et ce premier temps est aussi
-#: l'INSTRUMENT : le journal d'appels ne porte pas les couches (il ne garde que les clés
-#: de premier niveau, et tronque les arguments), donc seuls les écrivains eux-mêmes
-#: peuvent nous dire combien ils sont.
+#: passe encore. Ce qui sera refusé ensuite, à une date annoncée, n'est pas d'écrire
+#: l'origine — c'est de l'écrire en SILENCE ; le remplaçant est `PARAMETRE_ORIGINE`, et
+#: l'avertissement le nomme. On ne demande pas la permission d'écrire aux écrivains, on
+#: les prévient — et ce premier temps est aussi l'INSTRUMENT : le journal d'appels ne
+#: porte pas les couches (il ne garde que les clés de premier niveau, et tronque les
+#: arguments), donc seuls les écrivains eux-mêmes peuvent nous dire combien ils sont.
+#: Le paramètre par lequel un appelant DÉCLARE qu'il pose l'origine en connaissance de
+#: cause. Nommé par cohérence stricte avec `readonly_override` (#658) : même famille de
+#: geste — un cran qu'on lève EXPLICITEMENT sur l'appel, jamais par un état qu'on laisse
+#: traîner — et un agent qui connaît l'un devine l'autre.
+#:
+#: ⚠️ **Ce n'est pas un droit à accorder, c'est une déclaration à faire** (décision
+#: d'Alexis, 05/09/2026 : « c'est notre modèle d'agent experience »). Écrire l'origine
+#: reste possible pour tout le monde ; ce qui sera refusé, c'est de l'écrire EN SILENCE,
+#: sans dire qu'on sait ce qu'on fait. Rien à demander à personne, rien à provisionner :
+#: le paramètre suffit, et sa présence engage celui qui l'envoie.
+PARAMETRE_ORIGINE = "origine_override"
+
 #: Le réglage qui porte la DATE du refus. ⚠️ Jamais en dur dans le code : la fenêtre se
 #: déplacera si un écrivain se manifeste, et une date gravée demanderait un déploiement
 #: pour bouger. Absent = l'avertissement ne promet aucune échéance, ce qui est la vérité
@@ -658,11 +671,17 @@ ENV_ORIGINE_REFUS_LE = "OTO_ORIGINE_REFUS_LE"
 
 
 def avertissement_origine(colonnes: list) -> str:
-    """La phrase servie à qui pose une origine sans en avoir le droit.
+    """La phrase servie à qui pose une origine sans le déclarer.
 
-    ⚠️ Elle VOUVOIE et nomme le remplaçant : c'est une personne qui décidera d'agir
+    ⚠️ Elle VOUVOIE et nomme le geste exact : c'est une personne qui décidera d'agir
     dessus, et un avertissement qui ne dit pas quoi faire à la place ne fait que gêner.
     Servie par le SERVEUR — l'écran comme l'agent la rendent telle quelle.
+
+    ⚠️ **Elle est la SEULE annonce.** Décision d'Alexis (05/09/2026) : aucun client ne
+    sera prévenu par un envoi. Personne ne recevra de courriel, personne ne lira de note
+    de version — ce texte-ci, répété à chaque écriture, est tout ce que l'écrivain aura.
+    D'où le soin : il dit les DEUX chemins (ne plus écrire l'origine, ou la déclarer),
+    et il nomme le paramètre exact plutôt que d'annoncer une démarche.
 
     ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
     passe encore. Ce premier temps est aussi l'INSTRUMENT — le journal d'appels ne porte
@@ -672,14 +691,16 @@ def avertissement_origine(colonnes: list) -> str:
 
     quoi = ", ".join(f"`{c}`" for c in colonnes)
     quand = (os.environ.get(ENV_ORIGINE_REFUS_LE) or "").strip()
-    echeance = (f" à partir du {quand}" if quand else " prochainement")
+    echeance = (f"à partir du {quand}" if quand else "prochainement")
     return (
-        f"Cette écriture pose la couche `origine` de {quoi}. L'origine est la valeur "
-        f"du départ, à l'import : elle sera réservée{echeance}, et une écriture comme "
-        "celle-ci sera alors REFUSÉE. Écrivez la valeur seule — l'origine est "
-        "conservée, et posée par la plateforme quand elle manque. Si votre import doit "
-        "vraiment poser l'origine lui-même, demandez le droit correspondant sur le "
-        "jeton qui l'écrit.")
+        f"Cette écriture pose la couche `origine` de {quoi}. L'origine est la valeur du "
+        f"départ, à l'import : la poser SANS LE DIRE sera refusé {echeance}. Écrire "
+        "l'origine reste possible — ce qui change, c'est qu'il faudra le déclarer. Deux "
+        "gestes, l'un ou l'autre, dès maintenant : si vous n'avez pas besoin de "
+        "l'écrire, écrivez la valeur seule (l'origine est conservée, et posée par la "
+        "plateforme quand elle manque) ; si votre import doit vraiment la poser, ajoutez "
+        f"`{PARAMETRE_ORIGINE}: true` à cet appel. Rien à demander à personne : ce "
+        "paramètre déclare que vous savez ce que vous écrivez, et il suffit.")
 
 
 def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list[str]:

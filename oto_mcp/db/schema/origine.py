@@ -2,8 +2,9 @@
 
 **Une table, et elle existe pour être lue une fois puis disparaître.**
 
-`origine_ecritures` relève qui pose la couche `origine` d'une cellule, alors que ce
-droit va devenir réservé (oto#70 lot 2, premier temps du préavis).
+`origine_ecritures` relève qui pose la couche `origine` d'une cellule, alors que la
+poser SANS LE DÉCLARER va devenir refusé (oto#70 lot 2, premier temps du préavis).
+Écrire l'origine restera possible : ce qui disparaît, c'est de le faire en silence.
 
 ⚠️ **Elle existe parce que le journal d'appels ne peut pas répondre.** `tool_calls` ne
 garde que les clés de PREMIER NIVEAU d'un appel (`row`, `namespace`, `id`) et la fiche

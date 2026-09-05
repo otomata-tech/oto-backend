@@ -1,8 +1,14 @@
 """Premier temps du préavis sur la couche `origine` (oto#70 lot 2).
 
-L'origine est la valeur du départ, à l'import. Écrire cette couche va devenir un droit
-réservé — mais on ne coupe pas d'abord et on compte ensuite : **on prévient, on mesure,
+L'origine est la valeur du départ, à l'import. La poser SANS LE DÉCLARER va devenir
+refusé — mais on ne coupe pas d'abord et on compte ensuite : **on prévient, on mesure,
 puis on refuse à une date annoncée.**
+
+⚠️ **Ce n'est pas un droit qu'on réserve, c'est une déclaration qu'on exige** (décision
+d'Alexis, 05/09/2026 : « c'est notre modèle d'agent experience »). Écrire l'origine
+restera possible pour tout le monde ; ce qui disparaît, c'est de le faire en silence.
+Le remplaçant est donc un PARAMÈTRE nommé, absent par défaut, dont la présence engage
+celui qui l'envoie — rien à demander à personne, rien à provisionner.
 
 ⚠️ **Ce premier temps EST l'instrument.** Le journal d'appels ne peut pas dire qui écrit
 une couche : il ne garde que les clés de premier niveau et tronque les arguments. Seuls
@@ -49,15 +55,55 @@ def test_effacer_une_origine_est_releve_aussi():
 
 # ── la phrase servie ──────────────────────────────────────────────────────────
 
-def test_l_avertissement_VOUVOIE_et_nomme_le_remplacant(monkeypatch):
+def test_l_avertissement_VOUVOIE_et_nomme_les_DEUX_gestes(monkeypatch):
     """Elle est lue par une personne, et un avertissement qui ne dit pas quoi faire à
-    la place ne fait que gêner."""
+    la place ne fait que gêner. Deux gestes, parce que deux situations : celui qui n'a
+    pas besoin d'écrire l'origine ne doit pas ajouter un paramètre pour rien, et celui
+    qui en a besoin ne doit pas réécrire son import."""
     monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
     texte = dsv2.avertissement_origine(["prio"])
-    assert "Écrivez la valeur seule" in texte
+    assert "écrivez la valeur seule" in texte.lower()
+    assert f"`{dsv2.PARAMETRE_ORIGINE}: true`" in texte
     assert "`prio`" in texte
     import re
     assert not re.search(r"\b(ton|ta|tes|tu|écris)\b", texte, re.I), texte
+
+
+def test_l_avertissement_NOMME_le_parametre_et_le_lit_dans_la_constante(monkeypatch):
+    """⚠️ **Cette phrase est la SEULE annonce** : décision d'Alexis (05/09/2026), aucun
+    client ne sera prévenu par un envoi. Pas de courriel, pas de note de version — ce
+    texte, répété à chaque écriture, est tout ce que l'écrivain aura. Il doit donc porter
+    le geste EXACT, pas une démarche à entreprendre.
+
+    La substitution est ce qui rend ce banc utile : si la phrase recopiait le nom en
+    littéral, renommer la constante servirait un paramètre qui n'existe pas."""
+    monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
+    avant = dsv2.avertissement_origine(["prio"])
+    assert dsv2.PARAMETRE_ORIGINE in avant
+    monkeypatch.setattr(dsv2, "PARAMETRE_ORIGINE", "zzz_sentinelle")
+    apres = dsv2.avertissement_origine(["prio"])
+    assert apres != avant, "AUCUNE substitution : la phrase recopie un littéral"
+    assert "zzz_sentinelle" in apres
+
+
+def test_l_avertissement_ne_renvoie_vers_PERSONNE(monkeypatch):
+    """Il n'y a rien à demander, et le dire autrement enverrait un agent attendre une
+    réponse qui ne viendra jamais — ni de nous, ni de son propriétaire."""
+    monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
+    import re
+    texte = dsv2.avertissement_origine(["prio"])
+    interdits = r"\b(demandez|permission|autorisation|habilitation|contactez)\b"
+    assert not re.search(interdits, texte, re.I), texte
+
+
+def test_l_avertissement_dit_que_l_ecriture_RESTE_possible(monkeypatch):
+    """Le barreau 1 annonçait un droit à venir ; il annonce désormais une déclaration.
+    Un avertissement qui laisse croire que la capacité disparaît ferait réécrire des
+    imports qui n'ont rien à changer."""
+    monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
+    texte = dsv2.avertissement_origine(["prio"])
+    assert "reste possible" in texte
+    assert "SANS LE DIRE" in texte
 
 
 def test_la_date_de_refus_vient_d_un_REGLAGE_pas_du_code(monkeypatch):

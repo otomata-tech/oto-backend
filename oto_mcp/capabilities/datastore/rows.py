@@ -523,7 +523,10 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # `data_rows` tient déjà la face agent
         rest=RestBinding(verb="GET", path=_NS + "/rows"),
-        description="Page de lignes d'un tableau (tri, recherche, filtres serveur).",
+        description=("Page de lignes d’un tableau (tri, recherche, filtres serveur). "
+                     "Pagination par `offset` + `limit` avec `total` du jeu filtré, "
+                     "pas de curseur — la fin se calcule. Couches servies à plat "
+                     "(`champ.origine`) ; guide `datastore-semantics`."),
     ),
     Capability(
         key="me.datastore.append_row",
@@ -542,7 +545,8 @@ CAPABILITIES += [
                      "pour les volumes. "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé." + _ECRITURE_DETRUIT),
+                     "et journalisé. Couches, `readonly`, clé métier : guide "
+                     "`datastore-semantics`." + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.get_row",

@@ -72,8 +72,8 @@ Surfaces :
 - REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard. **Face DÉRIVÉE
   depuis le 2026-08-12** (#302) : plus une seule route écrite à la main, tout vient
   des capacités `capabilities/datastore/{namespaces,rows,schema,sharing,claim,
-  activity,columns}.py`. Conséquences pratiques : les 22 opérations portent leur
-  schéma d'entrée ET de réponse dans `/api/openapi.json` (un intégrateur les génère),
+  activity,columns}.py`. Conséquences pratiques : les 24 opérations (au 2026-09-04) portent
+  leur schéma d'entrée ET de réponse dans `/api/openapi.json` (un intégrateur les génère),
   et un **champ inconnu est refusé** (400 `unknown_fields`) au lieu d'être ignoré —
   sauf le corps d'un ajout/patch de ligne, qui EST la donnée (`body_field`) — **UNE**
   ligne par `POST …/rows`, jamais un lot : un corps à clé unique portant une liste
@@ -81,6 +81,13 @@ Surfaces :
   l'upload signé NDJSON/CSV.
   ⚠️ Éditer un de ces chemins = éditer sa capacité ; en rajouter un à la main casse
   le garde-fou `tests/test_rest_modules_are_capabilities.py`.
+- **Guide servi aux agents** `datastore-semantics` (seed `oto_mcp/guides/
+  datastore-semantics.md`, lu par `oto_guide op=read`) — couches, `readonly`, clé
+  métier, ce qui diverge entre les deux faces et ce qu’une réponse ne contient pas ;
+  chaque phrase y est ancrée dans le code (vérifié le 2026-09-05). `data_write`/
+  `data_rows` et leurs capacités REST (`list_rows`, `append_row`) y
+  renvoient en une ligne (otomata-tech/oto#51) : le contrat minimal reste dans la
+  description, le détail vit ici et dans le guide (cf. §`data_write` — deux sémantiques).
 
 > **Trier ET filtrer sur les dates système (05/08).** `order_by` acceptait déjà
 > `_created_at`/`_updated_at`/`_id` ; le WHERE, lui, ne connaissait que

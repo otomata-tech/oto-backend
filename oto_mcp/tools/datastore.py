@@ -618,6 +618,10 @@ def register(mcp: FastMCP) -> None:
                    readonly_override: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
+        Layers (`valeur`/`comment`/`link`/`origine`), what a write destroys, what
+        `readonly` and the business key protect, and where the REST face differs:
+        guide `datastore-semantics` (`oto_guide op=read slug=datastore-semantics`).
+
         ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
         undo and no history: the previous value is gone the moment yours lands. If
         the value was supplied by the table's owner and you overwrite it, they get
@@ -871,6 +875,10 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
+
+        Layers come back FLAT (`champ.origine`, `champ.comment`, `champ.link` next to
+        the bare name), never nested as written — guide `datastore-semantics`. The
+        REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
         List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
         there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/

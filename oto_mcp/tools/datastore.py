@@ -870,7 +870,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_claim_next(namespace: str, worker: str, filter: Optional[dict] = None,
                         lease_s: int = 900, max_claims: Optional[int] = None,
-                        layers: str = "flat") -> dict:
+                        layers: str = "flat",
+                        filters: Optional[list] = None) -> dict:
         """Atomically claim the NEXT unprocessed row of a namespace (work queue).
 
         The primitive for draining a table with N parallel (sub-)agents without
@@ -912,6 +913,11 @@ def register(mcp: FastMCP) -> None:
         loses the whole row. This is the only read that feeds a WRITE loop, so it is
         the one where the shape matters.
 
+        `filters` is the LIST form — `[{field, op, value}]`, ANDed with `filter`.
+        Use it when one column needs TWO bounds: `filter` accepts a single
+        operator per column, so a range (`score >= 10 AND score <= 20`) can only
+        be expressed here. Same grammar as `data_rows`.
+
         `namespace` also accepts `slot:<name>` (table bound by the active project).
         """
         store = _acting_store()
@@ -922,7 +928,7 @@ def register(mcp: FastMCP) -> None:
             row = store.claim_next(namespace, worker=worker, filter=filter,
                                    lease_s=lease_s, max_claims=max_claims,
                                    warnings=warnings, perimetre=perimetre,
-                                   layers=dsl.check(layers))
+                                   layers=dsl.check(layers), filters=filters)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         except NamespaceNotFound as e:

@@ -1973,12 +1973,25 @@ class DatastorePg(SchemaOpsMixin):
                    warnings: Optional[list] = None,
                    trace: Optional[dict] = None,
                    perimetre: Optional[dict] = None,
-                   layers: str = dsl.DEFAUT) -> Optional[dict]:
+                   layers: str = dsl.DEFAUT,
+                   filters: Optional[list] = None) -> Optional[dict]:
         """Pick + claim atomique de la prochaine row claimable (bail NULL ou
         expiré), `FOR UPDATE SKIP LOCKED` — N workers drainent sans collision.
         `filter` = `{col: val}`, ou `{col: {op: val}}` pour un opérateur (même
         grammaire que `data_rows`). Renvoie la row (avec `_claimed_by`/
         `_claimed_until`) ou None (file vide).
+
+        `filters` = la forme en LISTE `[{field, op, value}]`, qui se cumule avec
+        `filter` en ET (#356). Elle seule permet **deux bornes sur une même
+        colonne** — `filter` refuse plus d'un opérateur par colonne, donc une
+        plage `score >= 10 ET score <= 20` y était inexprimable, et le
+        contournement (une seule borne) sert des lignes hors plage à un worker
+        qui les traite quand même.
+
+        ⚠️ Rien de neuf en dessous : `db.datastore_claim_next` prend `filters`
+        depuis toujours, et `_filter_clauses` réunit déjà les deux formes. Ce qui
+        manquait était le chemin — comme pour `layers`, la réservation ne portait
+        pas ce que les lectures servaient depuis longtemps.
 
         Le périmètre déclaré au tableau (`lifecycle.claimable`, #517) passe DEVANT
         le filtre de l'appelant, en ET : celui-ci resserre, il n'élargit jamais.
@@ -2002,9 +2015,9 @@ class DatastorePg(SchemaOpsMixin):
         declare = dsv2.claimable_of(schema)
         if perimetre is not None and declare:
             perimetre.update(declare)
-        filters = claimable.clauses(declare) + _filter_clauses(filter, None)
+        clauses = claimable.clauses(declare) + _filter_clauses(filter, filters)
         row = db.datastore_claim_next(ns_id, worker=worker,
-                                      lease_seconds=int(lease_s), filters=filters,
+                                      lease_seconds=int(lease_s), filters=clauses,
                                       run_id=_current_run(), max_claims=max_claims)
         if row is not None:
             self._after_claim(ns_id, warnings=warnings, trace=trace, ns=ns)

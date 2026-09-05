@@ -57,6 +57,9 @@ class ClaimNextInput(BaseModel):
     # DIT ce qu'est un worker (le `invalid_input` de pydantic ne le dirait pas).
     worker: str = ""
     filter: Optional[dict] = None
+    # #356 : la forme en LISTE, seule capable de porter deux bornes sur une même
+    # colonne — `filter` refuse plus d'un opérateur par colonne. Cumulée en ET.
+    filters: Optional[list] = None
     lease_s: Optional[int] = None
     # Plafond de reprises pour CETTE passe (#433) — il serre le `lifecycle.max_claims`
     # du tableau sans le modifier. Absent = la déclaration du tableau fait foi.
@@ -109,7 +112,8 @@ def _claim_next(ctx: ResolvedCtx, inp: ClaimNextInput) -> dict:
         row = make_store(ctx.sub).claim_next(
             inp.namespace, worker=worker, filter=inp.filter,
             max_claims=inp.max_claims, warnings=warnings, trace=trace,
-            perimetre=perimetre, layers=_layers(inp.layers), **_lease(inp))
+            perimetre=perimetre, layers=_layers(inp.layers), filters=inp.filters,
+            **_lease(inp))
     except NamespaceNotFound:
         raise AuthzDenied(404, "namespace_not_found")
     except NamespaceReadOnly:

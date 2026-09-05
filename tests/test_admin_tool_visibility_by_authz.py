@@ -178,6 +178,12 @@ PLANCHERS = {
     # tenable (pas de consentement préalable, décision du 04/09) n'est pas la trace,
     # c'est l'étroitesse de ce qui est lisible par là — un seul verdict.
     "oto_admin_instance_health": "operator",
+    # oto#42 lot 2 — la PREUVE d'une acceptation légale. `operator` et pas
+    # `org_admin`, pour la même raison que #863 juste au-dessus : la réponse porte
+    # une ADRESSE RÉSEAU et un agent utilisateur, lus au sujet d'un tiers. Un
+    # plancher d'org ferait de la donnée personnelle d'un membre une lecture
+    # ordinaire pour l'admin de son org, alors que le geste est un acte de litige.
+    "oto_admin_legal_proof": "operator",
     "oto_admin_signal": "operator",
     "oto_admin_tenant": "operator",        # list/get PLATFORM, reload SUPER
     "oto_admin_unipile_seat": "super",

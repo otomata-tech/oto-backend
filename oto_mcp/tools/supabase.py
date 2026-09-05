@@ -11,10 +11,30 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/projects` (déjà dans le client — `list_projects`, appelée par
+    `supabase_list_projects`). Bearer token (PAT `sbp_…`), lecture sans effet
+    de bord. Aucune mention de coût ni de limite de débit particulière pour cet
+    appel dans la doc.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas ici — une
+    liste VIDE est un état normal (organisation Supabase sans projet), pas un
+    refus. Seul le fait que l'appel n'ait PAS levé compte.
+    """
+    from oto.tools.supabase import client as sb
+
+    sb.list_projects(token=fields["key"])
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.supabase import client as sb
+
+    connector_verify.register("supabase", _verify)
 
     def _token() -> str:
         key, _ = access.resolve_api_key("supabase")

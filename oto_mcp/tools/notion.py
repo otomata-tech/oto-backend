@@ -12,10 +12,41 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/users/me` (« Retrieve your token's bot user »). Ce que la doc
+    Notion établit :
+
+    - **authentifié** — Bearer token (jeton d'intégration), comme le reste de
+      l'API ;
+    - **sans effet de bord** — une lecture du bot user associé au jeton ;
+    - **le coût** — aucune mention de coût ni de limite de débit particulière
+      pour cet appel. Absence de mention, indice, pas une preuve.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope
+    granulaire ici — Notion n'accorde pas de permissions PAR CAPACITÉ sur un
+    jeton d'intégration, seulement un PARTAGE par page/base (côté workspace,
+    invisible depuis l'API). `cache_enabled=False`, comme `_client()` : le
+    cache disque n'est pas clefé par jeton (cf. docstring du module).
+    """
+    from oto.tools.notion.lib.notion_client import NotionClient
+
+    infos = NotionClient(token=fields["key"], cache_enabled=False)._request(
+        "GET", "users/me", use_cache=False) or {}
+    if not infos.get("id"):
+        raise RuntimeError(
+            "Notion a répondu sans identifier de bot user pour ce jeton — "
+            f"réponse inattendue : {str(infos)[:200]}")
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.notion.lib.notion_client import NotionClient
+
+    connector_verify.register("notion", _verify)
 
     def _client() -> NotionClient:
         key, _ = access.resolve_api_key("notion")

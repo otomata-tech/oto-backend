@@ -4,6 +4,7 @@ typée, happy path = nonce posé + lien Unipile rendu. Clients/DB stubés."""
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,9 +23,8 @@ class _FakeClient:
 
 def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0,
           limit=None, connected=None):
-    monkeypatch.setattr(access, "unipile_api_key_for", lambda sub: "KEY")
-    monkeypatch.setattr(access, "credential_mode_for",
-                        lambda sub, prov: "org" if byo else "platform")
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
+        key="KEY", mode="org" if byo else "platform", config={}))
     monkeypatch.setattr(access, "current_org", lambda sub: org)
     monkeypatch.setattr(access, "has_option", lambda sub, opt: option)
     # Garde-fou anti-doublon cross-org (#172) : comptes déjà connectés du sub, tous
@@ -80,7 +80,10 @@ def test_invalid_channel_refused(monkeypatch):
 
 def test_no_key_refused(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(access, "unipile_api_key_for", lambda sub: None)
+    from mcp.types import ErrorData, INVALID_PARAMS
+    def missing(*a, **k):
+        raise unipile_connect.CredentialUnavailable(ErrorData(code=INVALID_PARAMS, message="missing"))
+    monkeypatch.setattr(access, "resolve_credential", missing)
     with pytest.raises(ConnectRefused) as e:
         _run(hosted_auth_url("u1"))
     assert e.value.code == "unipile_not_configured" and e.value.status == 404
@@ -111,9 +114,11 @@ def test_byo_skips_option_and_cap(monkeypatch):
     _wire(monkeypatch, byo=True, option=False, count=99, limit=1)
     # resolve_credential (lookup DSN) stubé : la clé BYO porte son dsn
     class _RC:
+        key = "KEY"
+        mode = "org"
         config = {"dsn": "api6.unipile.com:13616"}
     monkeypatch.setattr(access, "resolve_credential",
-                        lambda prov, want=None, sub=None, emit_on_failure=True: _RC())
+                        lambda *a, **k: _RC())
     out = _run(hosted_auth_url("u1"))
     assert out["url"]
 
@@ -236,3 +241,58 @@ def test_unknown_app_never_becomes_a_redirect(monkeypatch, hostile, front_tiers)
     url = _FakeClient.last_kwargs["success_redirect_url"]
     assert url.endswith("/console/connections?unipile=connected&channel=linkedin")
     assert "evil.test" not in url
+
+
+# ── Ce que le résolveur reçoit, et ce qu'il refuse ──────────────────────────
+# Ces deux bancs ont été AJOUTÉS en reprenant ce lot. Le chantier d'origine avait
+# relâché les doublures en `lambda *a, **k` : plus aucun banc n'observait le nom
+# passé au résolveur, ni le refus qu'il peut rendre. Une garde que rien n'observe
+# a l'air d'exister — c'est la pire des trois façons de ne pas garder.
+
+def test_le_resolveur_recoit_le_nom_du_CANAL_pas_celui_du_porteur(monkeypatch):
+    """L'ACL est réglable canal par canal : `linkedin_unipile` porte ses propres
+    droits, distincts de ceux du porteur `unipile`. Si quelqu'un remplace le nom
+    du canal par celui du porteur, « qui peut connecter LinkedIn » cesse d'être
+    réglable — et sans ce banc, toute la suite resterait verte."""
+    _wire(monkeypatch)
+    vu = {}
+
+    def _capte(nom, **kwargs):
+        vu["nom"] = nom
+        vu["check_usage"] = kwargs.get("check_usage")
+        return SimpleNamespace(key="KEY", mode="platform", config={})
+
+    monkeypatch.setattr(access, "resolve_credential", _capte)
+    _run(hosted_auth_url("u1", "linkedin"))
+
+    from oto_mcp import providers
+    attendu = providers.connector_for_hosted_channel("linkedin")
+    assert attendu is not None, "le canal linkedin doit avoir son connecteur"
+    assert vu["nom"] == attendu.name, (
+        f"le résolveur a reçu {vu['nom']!r} au lieu du canal {attendu.name!r} : "
+        "l'autorisation ne serait plus réglable canal par canal")
+    assert vu["check_usage"] is False, (
+        "configurer une connexion ne consomme pas un appel fournisseur")
+
+
+def test_un_canal_refuse_par_ACL_rend_403_et_ne_va_PAS_chez_le_fournisseur(monkeypatch):
+    """Le refus existe dans le code, aucun banc ne le couvrait — ni avant ni après.
+    Un refus que rien n'éprouve n'est pas un refus, c'est une intention."""
+    from mcp.types import ErrorData, INVALID_REQUEST
+    from oto_mcp.access.rbac import ConnectorAccessDenied
+
+    _wire(monkeypatch)
+    _FakeClient.last_kwargs = None
+
+    def _refuse(*a, **k):
+        raise ConnectorAccessDenied(ErrorData(
+            code=INVALID_REQUEST, message="`linkedin_unipile` est réservé."))
+
+    monkeypatch.setattr(access, "resolve_credential", _refuse)
+    with pytest.raises(ConnectRefused) as e:
+        _run(hosted_auth_url("u1", "linkedin"))
+    assert e.value.status == 403
+    assert e.value.code == "connector_restricted"
+    assert _FakeClient.last_kwargs is None, (
+        "un canal refusé ne doit RIEN demander au fournisseur : sinon le refus "
+        "arrive après avoir déjà agi")

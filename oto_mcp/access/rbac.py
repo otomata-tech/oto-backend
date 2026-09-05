@@ -33,6 +33,10 @@ from . import cascade, scope
 logger = logging.getLogger(__name__)
 
 
+class ConnectorAccessDenied(McpError):
+    """Le connecteur est réservé par une ACL, indépendamment de la clé disponible."""
+
+
 def rbac_denied_connectors(sub: str, org: Optional[int]) -> set:
     """Connecteurs REFUSÉS à `sub` dans `org` par le RBAC interne (ADR 0025) — seam
     UNIQUE des 4 surfaces (call-time `require_connector_access`, visibilité session,
@@ -122,7 +126,7 @@ def require_connector_access(provider: str, sub: Optional[str] = None) -> None:
     except Exception as e:
         logger.warning("require_connector_access group fail-open %s/%s: %s", sub, provider, e)
     if denied:
-        raise McpError(ErrorData(
+        raise ConnectorAccessDenied(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 f"Le connecteur `{provider}` est réservé à certaines équipes/personnes "

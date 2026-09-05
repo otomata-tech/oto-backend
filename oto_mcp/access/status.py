@@ -19,7 +19,7 @@ import logging
 
 from .. import providers, credentials_store, db, group_store, status_hints
 from ..connectors import link as connector_link
-from . import cascade, quotas, rbac, scope
+from . import cascade, chain_shadow, quotas, rbac, scope
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
         # chemin /api/me) : le gagnant donne le mode, les barreaux suivants restent
         # affichables (flags par niveau). Miroir STRUCTUREL de resolve_api_key —
         # toute divergence ferait mentir /api/me sur le mode réel.
-        hits = list(cascade.walk_cascade(sub, provider, org=active_org, group=active_group,
+        hits = list(chain_shadow.resolution_rungs(sub, provider, org=active_org, group=active_group,
                                  probe=sonde, want="auto"))
         user_has = any(r.mode == "user" and r.via == "local" for r in hits)
         group_has = any(r.mode == "group" for r in hits)
@@ -191,7 +191,7 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
             continue
         # Même walker, `want='byo'` (le credential EST le grant — pas de palier
         # plateforme ni de quota, cf. resolve_credential_fields).
-        hits = list(cascade.walk_cascade(sub, c.name, org=active_org, group=active_group,
+        hits = list(chain_shadow.resolution_rungs(sub, c.name, org=active_org, group=active_group,
                                  probe=sonde, want="byo"))
         mode = hits[0].mode if hits else "forbidden"
         out["providers"][c.name] = {
@@ -240,6 +240,10 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
             mode = "org"
         else:
             mode = "forbidden"
+        if chain_shadow.chain_decides():
+            winner = next(chain_shadow.resolution_rungs(
+                sub, c.name, org=active_org, group=active_group, probe=sonde, want="byo"), None)
+            mode = winner.mode if winner else "forbidden"
         out["providers"][c.name] = {
             "mode": mode,
             "user_key_configured": st is not None,
@@ -290,6 +294,10 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
             "quota_used_today": 0,
             "quota_daily": None,
         }
+        if chain_shadow.chain_decides():
+            winner = next(chain_shadow.resolution_rungs(
+                sub, c.name, org=active_org, group=active_group, probe=sonde, want="byo"), None)
+            entry["mode"] = winner.mode if winner else "forbidden"
         # Santé (oto#25 lot a) : le batch générique juste plus bas ne voit QUE le
         # palier MEMBRE — invisible pour ce scope LEGACY (`("user", sub)`). Le module
         # a lu SA propre ligne (`_link_state`) ; on relaie sans la recalculer.
@@ -354,14 +362,16 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
     denied: set = set()
     illisibles: list[str] = []
     try:
-        denied |= rbac.rbac_denied_connectors(sub, active_org) if sub else set()
+        denied |= (rbac.rbac_denied_connectors(sub, active_org)
+                   if sub and not chain_shadow.chain_decides() else set())
     except Exception:
         illisibles.append("org")
         logger.warning("status_for: RBAC d'org indisponible pour %s — aucune "
                        "restriction annoncée, l'écart est dit dans la fiche",
                        sub, exc_info=True)
     try:
-        denied |= rbac.group_rbac_denied_connectors(sub, active_group) if sub else set()
+        denied |= (rbac.group_rbac_denied_connectors(sub, active_group)
+                   if sub and not chain_shadow.chain_decides() else set())
     except Exception:
         illisibles.append("équipe")
         logger.warning("status_for: RBAC d'équipe indisponible pour %s — aucune "

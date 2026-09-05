@@ -141,7 +141,7 @@ de paiement).
 >    connecteur `personal_cross_org` retombe sur ma clé membre d'une autre org (mode
 >    `user`, `entity_id='{org_porteuse}:{sub}'`) AVANT les paliers partagés/plateforme.
 >    Même `sub` ⟹ **zéro usurpation** ; ne mord qu'en l'absence de clé locale (nul impact
->    mono-org / déjà keyé). `credential_mode_for` + `unipile_api_key_for` **miroitent**
+>    mono-org / déjà keyé). `credential_mode_for` et la résolution du connect **miroitent**
 >    (sinon l'UI/le connect verrait « platform » là où la résolution trouve ma clé perso).
 > 2. **compte** — `connector_identities._own_unipile_account_id` (sous
 >    `resolve_operated_account_id`) : l'`account_id` du canal manquant dans l'org de
@@ -164,7 +164,7 @@ de paiement).
 
 > **Mode plateforme unipile** (revente) : `auth_modes` inclut `platform` → la clé
 > Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
-> `access.unipile_api_key_for` a le fallback platform-grant. Le gate d'option reste
+> `access.resolve_credential` porte aussi ce palier au connect. Le gate d'option reste
 > par org (un grant donne la clé, ne débloque pas l'option). **Débloquer l'option
 > = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
 > ⚠️ Les deux couches (clé=2, option=3) sont **orthogonales en base** mais l'**action
@@ -176,6 +176,13 @@ de paiement).
 > sans option (serpapi…) : lui se grant via la fiche admin (bouton « grant key » par
 > provider, auto-résout la clé unique) ou `oto_admin_key_grant` (par `key_id`).
 
+> **Une résolution au connect.** `hosted_auth_url` résout le canal demandé une seule
+> fois, via `resolve_credential(check_usage=False)` : clé, mode BYO et DSN proviennent
+> de la même instance. Équipe et tenant passent par la cascade commune ; les droits
+> restent ceux du canal. Configurer un compte ne débite pas le budget tenant et ne
+> vérifie pas le quota d'exécution. L'option et le plafond de sièges plateforme
+> restent vérifiés. Un compte ambigu/refusé ne se transforme pas en « aucune clé ».
+>
 > **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
 > à SON sous-domaine `api<NN>.unipile.com:port` ; le DSN vit dans le `meta` du credential
 > et voyage avec la clé via `resolve_credential` (défaut env `UNIPILE_DSN`=api25, instance
@@ -324,7 +331,7 @@ hébergé est **par-personne** → flag registre `Connector.personal_cross_org=T
 déterministe `access.personal_instance_org` (org perso > plus récente) partagé par la
 clé (`_resolve_credential_impl`, retombe cross-org AVANT groupe/org/plateforme quand la
 clé LOCALE manque — même sub = zéro usurpation), le miroir de statut (`credential_mode_for`/
-`unipile_api_key_for`) ET le compte (`connector_identities._own_unipile_account_id`, MÊME
+la résolution du connect) ET le compte (`connector_identities._own_unipile_account_id`, MÊME
 org que la clé → appariés). Surfacé pinnable par `oto_instance(op='list')`
 (`via='personal_cross_org'`). **Garde-fou** : `unipile_connect_start`/`POST /api/unipile/connect`
 refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e

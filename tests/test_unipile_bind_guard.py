@@ -70,7 +70,7 @@ def test_la_route_du_webhook_ne_repond_plus():
 # écriture parallèle née sans la garde de sa voisine.
 _ECRIVAINS_DIRECTS = {
     # L'écrivain GARDÉ — celui par lequel tout identifiant venu d'un tiers doit passer.
-    ("oto_mcp/unipile_connect.py", "bind_account"),
+    ("oto_mcp/unipile_binding.py", "bind_account"),
     # ADOPTION : l'identifiant sort d'une ligne que la base attribue déjà à ce `sub`
     # (`seat_binding_elsewhere` filtre dessus). Rien d'extérieur à confronter.
     ("oto_mcp/unipile_connect.py", "hosted_auth_url"),
@@ -229,9 +229,9 @@ def _pending(sub: str, org_id: int, provider: str = "LINKEDIN") -> str:
 
 
 def _bind(sub: str, account_id: str, org_id: int):
-    from oto_mcp import unipile_connect
+    from oto_mcp import unipile_binding
 
-    return unipile_connect.bind_account(sub, account_id, org_id=org_id,
+    return unipile_binding.bind_account(sub, account_id, org_id=org_id,
                                         provider="LINKEDIN", platform_seat=True)
 
 
@@ -324,7 +324,7 @@ def test_la_reconciliation_passe_par_la_garde(scene, monkeypatch):
     from oto_mcp import unipile_connect
 
     vus = []
-    monkeypatch.setattr(unipile_connect, "account_claimable",
+    monkeypatch.setattr(unipile_connect.unipile_binding, "account_claimable",
                         lambda sub, account_id, **k: vus.append(account_id) or True)
     _sur_cle_plateforme(monkeypatch, [
         {"id": "acc_tout_neuf", "provider": "linkedin",

@@ -69,8 +69,9 @@ def test_own_account_no_platform_fallback(monkeypatch):
 
 def _connect_env(monkeypatch, *, seat_elsewhere=SEAT, byo_rows=None, alive=True,
                  link_calls=None):
-    monkeypatch.setattr(access, "unipile_api_key_for", lambda s: "K")
-    monkeypatch.setattr(access, "credential_mode_for", lambda s, p, **k: "platform")
+    from types import SimpleNamespace
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
+        key="K", mode="platform", config={}))
     monkeypatch.setattr(access, "current_org", lambda s: 168)
     monkeypatch.setattr(access, "has_option", lambda s, o, **k: True)
     monkeypatch.setattr(db, "get_unipile_account", lambda s, o, p: None)

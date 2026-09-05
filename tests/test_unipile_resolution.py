@@ -2,6 +2,7 @@
 la clé gagnante de la cascade). Clé plateforme → DSN None (instance env/défaut).
 + #55 : le grant de compte partagé = SEULE exception au no-fallback anti-usurpation
 (pointeur « identité opérée » revalidé à chaque appel, pin projet accepté si accordé)."""
+from oto_mcp import credentials_store
 import pytest
 from oto_mcp.mcp_errors import McpError
 from oto_mcp import access
@@ -25,7 +26,7 @@ def test_unipile_client_byo_passes_dsn(monkeypatch):
     rc = ResolvedCredential("unipile", "KEY", False, "org", "org", "39")
     monkeypatch.setattr(access, "resolve_credential", lambda p, want="auto": rc)
     monkeypatch.setattr(
-        access.credentials_store, "get_credential_with_meta",
+        credentials_store, "get_credential_with_meta",
         lambda et, eid, prov, account="": {
             "meta": {"dsn": "api6.unipile.com:13616"}, "secret": "KEY", "set_at": None})
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")

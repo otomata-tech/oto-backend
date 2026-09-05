@@ -9,6 +9,9 @@ deux sondes sur TOUT le registre, dans le même contexte. Un barreau ajouté dem
 cascade cassera ce test si la préchargée ne sait pas y répondre — au lieu de diverger en
 silence, ce qui est le mode d'échec qu'on ferme.
 """
+from oto_mcp import db
+from oto_mcp import group_store
+from oto_mcp import org_store
 import pytest
 
 from oto_mcp import access
@@ -49,14 +52,14 @@ def coffre(monkeypatch):
         return []
 
     monkeypatch.setattr(cs, "list_credentials", _list_credentials)
-    monkeypatch.setattr(access.db, "has_member_api_key",
+    monkeypatch.setattr(db, "has_member_api_key",
                         lambda s, o, p, account=None: p in etat["membre"])
-    monkeypatch.setattr(access.db, "member_instance_suspended",
+    monkeypatch.setattr(db, "member_instance_suspended",
                         lambda s, o, p, account="": bool(
                             etat["membre"].get(p, {}).get("suspended")))
-    monkeypatch.setattr(access.group_store, "has_group_secret",
+    monkeypatch.setattr(group_store, "has_group_secret",
                         lambda g, p: p in etat["groupe"].get(int(g), ()))
-    monkeypatch.setattr(access.org_store, "has_org_secret",
+    monkeypatch.setattr(org_store, "has_org_secret",
                         lambda o, p: p in etat["org"])
     monkeypatch.setattr(cs, "has_credential",
                         lambda et, eid, p, account=None: (
@@ -74,7 +77,7 @@ def coffre(monkeypatch):
     # connecteurs personal_cross_org : il touche la base, on le neutralise ici. C'est
     # aussi ce qui documente la limite de la sonde préchargée — ce barreau-là n'est pas
     # préchargeable sans toucher au walker, et on refuse d'y toucher.
-    monkeypatch.setattr(access, "personal_instance_org",
+    monkeypatch.setattr(access.cascade, "personal_instance_org",
                         lambda sub, provider, exclude_org=None: None)
     return etat
 
@@ -146,12 +149,11 @@ def test_le_quota_reste_traduit_par_le_SEAM_pas_par_l_appelant(coffre, monkeypat
     fonction : passer la sonde EN PARAMÈTRE le garde, et c'est pour ça que le paramètre
     existe plutôt qu'un accès direct au walker.
     """
-    monkeypatch.setattr(access, "current_org", lambda s: 2)
-    monkeypatch.setattr(access, "current_group", lambda s: None)
-    monkeypatch.setattr(access.db, "get_usage_today", lambda s, p: 999)
+    monkeypatch.setattr(access.scope, "current_org", lambda s: 2)
+    monkeypatch.setattr(access.scope, "current_group", lambda s: None)
+    monkeypatch.setattr(db, "get_usage_today", lambda s, p: 999)
     sonde = access.preloaded_presence_probe("u1", org=2, groups=[])
-    monkeypatch.setattr(access, "cascade_winner",
-                        lambda *a, **k: access.CascadeRung(
-                            "platform", "platform", "lbl", {"daily_quota": 10}))
+    from dataclasses import replace
+    sonde = replace(sonde, platform=lambda *a: {"label": "lbl", "daily_quota": 10})
     assert access.credential_mode_for("u1", "serper", org=2, group=None,
                                       probe=sonde) == "over_quota"

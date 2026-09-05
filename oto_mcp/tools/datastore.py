@@ -364,6 +364,48 @@ def _ns(namespace: str) -> str:
     return access.resolve_namespace_ref(namespace)
 
 
+def _destinataire(email: str, recipient_sub: str) -> dict:
+    """Le compte qui va recevoir l'accès — jamais deviné.
+
+    Face MCP du même geste que `capabilities/datastore/sharing._destinataire`.
+    Les deux existent (dette assumée : `data_*` en MCP, `/api/datastore/*` en
+    REST) et c'est CELLE-CI que les agents empruntent. Corriger l'autre seule
+    aurait fermé la porte de derrière en laissant la principale ouverte.
+
+    ⚠️ Une adresse ne désigne pas un compte : dix en portent deux (mesuré le
+    05/09/2026). Partager sur l'une d'elles ouvrait le tableau à celui que
+    `fetchone()` rendait en premier, sans que le propriétaire l'apprenne.
+    """
+    email = (email or "").strip()
+    recipient_sub = (recipient_sub or "").strip()
+    if email and recipient_sub:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message="donne `email` OU `recipient_sub`, pas les deux : ils peuvent "
+                    "désigner des comptes différents, et le partage réussirait vers "
+                    "une cible que rien ne nommerait."))
+    if recipient_sub:
+        row = db.get_user(recipient_sub)
+        if not row:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"aucun compte oto avec le sub `{recipient_sub}`"))
+        return row
+    if not email:
+        raise McpError(ErrorData(code=INVALID_PARAMS,
+                                 message="`email` (ou `recipient_sub`) est requis."))
+    porteurs = db.get_users_by_email(email)
+    if not porteurs:
+        raise McpError(ErrorData(code=INVALID_PARAMS,
+                                 message=f"aucun utilisateur oto avec l'email {email}"))
+    if len(porteurs) > 1:
+        subs = ", ".join(f"`{u['sub']}`" for u in porteurs)
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"L'adresse `{email}` désigne {len(porteurs)} comptes : {subs}. "
+                    "Reprends avec `recipient_sub` (sans `email`) pour dire lequel tu vises."))
+    return porteurs[0]
+
+
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
@@ -1196,22 +1238,25 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_share(
-        namespace: str, email: str, permission: str = "read", remove: bool = False,
+        namespace: str, email: str = "", permission: str = "read", remove: bool = False,
+        recipient_sub: str = "",
     ) -> dict:
-        """Share (or with `remove=True`, unshare) a namespace with another oto user
-        (by email). The recipient accesses it with their own oto account.
+        """Share (or with `remove=True`, unshare) a namespace with another oto user.
+        The recipient accesses it with their own oto account.
+
+        Identify the recipient by `email`, or by `recipient_sub` when one address
+        carries several accounts — an ambiguous address is REFUSED, never guessed.
 
         Args:
             namespace: namespace to (un)share (must be owned by you).
             email: email of the recipient oto user.
             permission: 'read' or 'write' (default write) — when sharing.
             remove: True = revoke access instead of granting it.
+            recipient_sub: the recipient's `sub`, when `email` is ambiguous.
         """
         sub = access.current_user_sub_or_raise()
         namespace = _ns(namespace)
-        recipient = db.get_user_by_email(email)
-        if not recipient:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"aucun utilisateur oto avec l'email {email}"))
+        recipient = _destinataire(email, recipient_sub)
 
         # Le partage est une action de GOUVERNANCE (owner ∪ escalade roles.py).
         try:
@@ -1222,18 +1267,25 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message=f"tu n'as pas le droit de gérer le partage de `{namespace}`"))
 
+        # Ce qu'on rend nomme le compte SERVI, pas l'argument reçu : appelé par
+        # `recipient_sub`, `email` est vide, et « partagé avec ␣ » serait faux.
+        # `..._sub` est le seul identifiant qui désigne un compte et un seul.
+        cible = recipient.get("email") or recipient["sub"]
+
         if remove:
             removed = ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"])
             if not removed:
                 raise McpError(ErrorData(code=INVALID_PARAMS,
-                                         message=f"pas de partage actif pour {email} sur {namespace}"))
-            return {"ok": True, "namespace": namespace, "unshared_with": email}
+                                         message=f"pas de partage actif pour {cible} sur {namespace}"))
+            return {"ok": True, "namespace": namespace, "unshared_with": cible,
+                    "unshared_with_sub": recipient["sub"]}
 
         if permission not in ("read", "write"):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="permission must be 'read' or 'write'"))
         ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
                         permission, granted_by=sub)
-        return {"ok": True, "namespace": namespace, "shared_with": email, "permission": permission}
+        return {"ok": True, "namespace": namespace, "shared_with": cible,
+                "shared_with_sub": recipient["sub"], "permission": permission}
 
     # --- MCP App : variante à interface rendue du datastore (SEP-1865) --------
     # `data_app` rend le contenu d'un namespace INLINE (carte + table triable /

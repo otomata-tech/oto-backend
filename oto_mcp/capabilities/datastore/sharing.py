@@ -28,9 +28,20 @@ from .common import HORODATAGE, govern_ns
 from ..registry import CAPABILITIES
 
 
+# ⚠️ Une adresse ne DÉSIGNE PAS un compte : dix en portent deux (mesuré le
+# 05/09/2026), dont une paire sans aucun tenant. Partager sur une adresse ambiguë
+# revenait à donner l'accès à l'un des deux, en silence — le seul endroit de cette
+# classe où une erreur donne accès à des DONNÉES. D'où `sub`, qui lève l'ambiguïté,
+# et le refus qui la nomme.
+_SUB = ("Identifiant du compte destinataire, quand une adresse en désigne "
+        "plusieurs. À passer SEUL (jamais avec `email` : deux façons de nommer "
+        "la même chose, dont une pourrait mentir sur l'autre).")
+
+
 class ShareInput(BaseModel):
     namespace: str
     email: str = ""
+    sub: str = Field(default="", description=_SUB)
     # ADR 0068 : partager sans préciser donnait l'ÉCRITURE. « Partager », dans la tête
     # de qui le demande, veut dire « qu'il puisse le lire ».
     permission: str = "read"
@@ -39,6 +50,7 @@ class ShareInput(BaseModel):
 class UnshareInput(BaseModel):
     namespace: str
     email: str = ""
+    sub: str = Field(default="", description=_SUB)
 
 
 class NamespaceRefInput(BaseModel):
@@ -82,21 +94,50 @@ def _recipient(email: str) -> dict:
     l'identique — une migration de plomberie ne change pas le comportement observable ;
     l'inversion est un correctif à part, à trancher pour ses propres raisons.
     """
-    row = db.get_user_by_email(email)
-    if not row:
+    porteurs = db.get_users_by_email(email)
+    if not porteurs:
         raise AuthzDenied(404, f"no oto user with email {email}")
-    return row
+    if len(porteurs) > 1:
+        # ⚠️ On ne DEVINE pas : partager avec « un des deux » donnerait l'accès à
+        # un compte que le propriétaire ne visait peut-être pas, et rien ne le
+        # lui dirait. Le refus nomme les candidats ET la sortie.
+        subs = ", ".join(f"`{u['sub']}`" for u in porteurs)
+        raise AuthzDenied(
+            400, "ambiguous_email",
+            f"L'adresse `{email}` désigne {len(porteurs)} comptes : {subs}. "
+            "Reprends avec `sub` (sans `email`) pour dire lequel tu vises.")
+    return porteurs[0]
+
+
+def _destinataire(email: str, sub: str) -> dict:
+    """Le compte visé — par son adresse, ou par son identifiant s'il est ambigu.
+
+    Les deux ensemble sont REFUSÉS : ils peuvent se contredire, et rien ne dirait
+    lequel a servi. Un seul chemin, choisi par l'appelant.
+    """
+    email, sub = (email or "").strip(), (sub or "").strip()
+    if email and sub:
+        raise AuthzDenied(
+            400, "email_and_sub",
+            "Passe `email` OU `sub`, pas les deux : ils peuvent désigner des "
+            "comptes différents, et rien ne dirait lequel a servi.")
+    if sub:
+        row = db.get_user(sub)
+        if not row:
+            raise AuthzDenied(404, "unknown_user", f"Aucun compte `{sub}`.")
+        return row
+    if not email:
+        raise AuthzDenied(400, "email_required")
+    return _recipient(email)
 
 
 def _share(ctx: ResolvedCtx, inp: ShareInput) -> dict:
-    email = (inp.email or "").strip()
     permission = (inp.permission or "read").strip()
-    if not email:
-        raise AuthzDenied(400, "email_required")
     if permission not in ("read", "write"):
         # Le message EST le code ici — forme héritée de la route, gardée telle quelle.
         raise AuthzDenied(400, "permission must be 'read' or 'write'")
-    recipient = _recipient(email)
+    recipient = _destinataire(inp.email, inp.sub)
+    email = (inp.email or "").strip() or recipient["sub"]
     ns_id = govern_ns(ctx.sub, inp.namespace)
     ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
                     permission, granted_by=ctx.sub)
@@ -105,10 +146,8 @@ def _share(ctx: ResolvedCtx, inp: ShareInput) -> dict:
 
 
 def _unshare(ctx: ResolvedCtx, inp: UnshareInput) -> dict:
-    email = (inp.email or "").strip()
-    if not email:
-        raise AuthzDenied(400, "email_required")
-    recipient = _recipient(email)
+    recipient = _destinataire(inp.email, inp.sub)
+    email = (inp.email or "").strip() or recipient["sub"]
     ns_id = govern_ns(ctx.sub, inp.namespace)
     if not ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"]):
         raise AuthzDenied(404, f"no active share for {email} on {inp.namespace}")
@@ -146,7 +185,9 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,
         rest=RestBinding(verb="POST", path=_SHARE),
-        description="Partage un tableau avec un utilisateur oto, en lecture ou écriture.",
+        description=("Partage un tableau avec un utilisateur oto, en lecture ou écriture. "
+                     "Le destinataire se nomme par `email` — ou par `sub` quand une "
+                     "adresse désigne plusieurs comptes."),
     ),
     Capability(
         key="me.datastore.unshare",
@@ -157,6 +198,7 @@ CAPABILITIES += [
         mcp=None,
         # Corps sur un DELETE : forme historique du client `oto-core`, déclarée.
         rest=RestBinding(verb="DELETE", path=_SHARE, reads_body=True),
-        description="Retire le partage d'un tableau pour un utilisateur.",
+        description=("Retire le partage d'un tableau pour un utilisateur, nommé par "
+                     "`email` ou par `sub` si son adresse est ambiguë."),
     ),
 ]

@@ -113,8 +113,11 @@ def gouvernance(monkeypatch):
                         lambda sub: type("S", (), {"resolve_ns_id": lambda self, ns: 42})())
     monkeypatch.setattr("oto_mcp.capabilities.datastore.common.ownership.can_govern",
                         lambda *a: etat["can_govern"])
-    monkeypatch.setattr(dsh.db, "get_user_by_email",
-                        lambda email: {"sub": "u-2"} if email == "sarah@x.fr" else None)
+    # ⚠️ Depuis le 05/09 la résolution lit TOUS les porteurs d'une adresse : une
+    # adresse peut en désigner deux, et partager avec « un des deux » en silence
+    # était le défaut — le seul de la classe qui donne accès à des données.
+    monkeypatch.setattr(dsh.db, "get_users_by_email",
+                        lambda email: [{"sub": "u-2"}] if email == "sarah@x.fr" else [])
     return etat
 
 

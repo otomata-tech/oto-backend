@@ -17,10 +17,30 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /exposed/` (déjà dans le client — `list_actions`), le seul appel du
+    connecteur : Zapier n'expose ni `/me` ni solde. Une liste VIDE (aucune
+    action exposée) est un état normal, jamais un refus. `raise_for_upstream`
+    (typé).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé Zapier AI Actions porte exactement le jeu d'actions que l'utilisateur
+    lui a attaché, il n'y a rien de plus fin à distinguer.
+    """
+    from oto.tools.zapier import ZapierClient
+
+    ZapierClient(api_key=fields["key"]).list_actions()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.zapier import ZapierClient
+
+    connector_verify.register("zapier", _verify)
 
     def _client() -> ZapierClient:
         key, _ = access.resolve_api_key("zapier")

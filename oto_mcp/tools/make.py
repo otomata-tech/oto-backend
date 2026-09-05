@@ -15,10 +15,30 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /organizations` (déjà dans le client — `list_organizations`), le
+    premier appel de découverte du connecteur, pas un endpoint inventé pour la
+    sonde : Make n'expose ni `/me` ni solde. `raise_for_upstream` (typé).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    un token Make porte le périmètre entier du compte pour sa zone.
+    """
+    from oto.tools.make import MakeClient
+
+    MakeClient(
+        api_token=fields["api_token"], base_url=fields["base_url"],
+    ).list_organizations()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.make import MakeClient
+
+    connector_verify.register("make", _verify)
 
     def _client() -> MakeClient:
         creds = access.resolve_credential_fields("make")

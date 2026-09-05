@@ -12,10 +12,36 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /workflows` (déjà dans le client — `list_workflows`), `limit=1` — le
+    plus petit format disponible, n8n n'exposant ni `/me` ni solde.
+
+    ⚠️ `N8nClient._request` lève un `Exception` NU sur un refus HTTP (pas de
+    `status_code` typé) — comme ashby, mais SANS son mur : aucune trace d'un
+    modèle de clé scopée par ressource chez n8n (une API key n8n est liée au
+    compte utilisateur qui l'a créée, pas restreinte par endpoint). Le refus
+    tombe donc en `unknown` (jamais `unauthorized`) faute de code typé — honnête,
+    pas un renoncement : rouvrable si le client se met à typer ses erreurs.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé n8n porte le périmètre entier du compte.
+    """
+    from oto.tools.n8n import N8nClient
+
+    N8nClient(
+        api_key=fields["api_key"], base_url=fields["base_url"],
+    ).list_workflows(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.n8n import N8nClient
+
+    connector_verify.register("n8n", _verify)
 
     def _client() -> N8nClient:
         creds = access.resolve_credential_fields("n8n")

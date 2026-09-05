@@ -39,9 +39,17 @@ Il n'y a jamais de `adresse.valeur` ; une couche vide (`null`, `""`) n'est pas s
 Ces clés plates s'adressent comme des colonnes dans `fields` et `filters` :
 `[{"field": "email.origine", "op": "empty"}]` = les valeurs sans provenance.
 
-Les deux formes sont **asymétriques** (imbriqué à l'écriture, plat à la lecture) ; une
-option de lecture imbriquée (`layers=nested`) arrive dans un autre lot. En attendant,
-l'aller-retour tient : une clé plate `adresse.comment` réémise à l'écriture est
+Les deux formes sont **asymétriques** (imbriqué à l'écriture, plat à la lecture par
+défaut). Le paramètre `layers` de `data_rows`, `GET …/rows` et `GET …/rows/{row_id}`
+lève l'asymétrie : `flat` (défaut) = ce qui précède ; `nested` = `adresse` revient
+`{"valeur": …, "comment": …}` — `valeur` toujours, les couches renseignées seulement,
+la forme dans laquelle on écrit ; une cellule sans couche reste le même scalaire, une
+colonne-liste applique la règle dans ses items. Toute autre valeur est refusée en
+nommant le paramètre. En `nested`, `fields` nomme des colonnes (`adresse.comment`
+n'existe qu'en `flat`). **Le défaut basculera vers `nested`, avec préavis daté** :
+nomme `layers` dès maintenant si tu dépends d'une forme.
+
+Dans les deux formes l'aller-retour tient : une clé plate `adresse.comment` réémise à l'écriture est
 **rangée** sous `adresse` dès que la colonne existe quelque part — dans l'écriture, sur
 la ligne visée ou au schéma. Si elle n'existe nulle part, l'écriture est refusée en
 nommant la clé et les trois endroits regardés — jamais une colonne littérale
@@ -135,7 +143,7 @@ déclarée ; sur une ligne seule, seule la clé déclarée joue.
 côtés. Le descriptif complet (entrées, réponses, codes) est `GET /api/openapi.json`,
 sans auth ; la face REST s'appelle avec le même jeton que `/mcp`, ou un jeton API.
 
-**Identique** sur les deux faces : le stockage, les couches à la lecture (clés plates),
+**Identique** sur les deux faces : le stockage, les couches à la lecture (`layers`),
 la clé métier, `readonly`, les refus de schéma — une ligne créée d'un côté se lit de
 l'autre, à l'identique.
 

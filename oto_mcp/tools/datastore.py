@@ -876,9 +876,9 @@ def register(mcp: FastMCP) -> None:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
 
-        Layers come back FLAT (`champ.origine`, `champ.comment`, `champ.link` next to
-        the bare name), never nested as written — guide `datastore-semantics`. The
-        REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
+        Layers come back FLAT by default (`champ.origine` beside the bare name);
+        `layers="nested"` returns the shape you write — guide `datastore-semantics`.
+        The REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
         List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
         there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/

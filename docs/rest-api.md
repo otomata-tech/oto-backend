@@ -181,7 +181,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   - **agrégat** : `GET NS/{namespace}/aggregate` (`group_by` = UNE colonne ; `"a,b"` refusé `400 invalid_aggregate`, oto#50 — la forme liste n'existe que sur `data_aggregate`) ;
   - **partage** : `GET|POST|DELETE NS/{namespace}/share` (gouvernance) ;
   - **activité** : `GET NS/{namespace}/activity` · `GET …/rows/{row_id}/activity` — **sans face MCP** (opt-out explicite : lecture de cockpit).
-  Les couches d'une colonne (`comment`/`link`/`origine`) sont servies **à plat** (`champ.origine`) sur les deux faces, jamais imbriquées comme à l'écriture ; les refus sont nommés (`row_invalid`, `business_key_required`, `invalid_row_input`, `batch_body`, `unknown_fields`, `403 namespace_read_only`, `404 row_not_found`). La sémantique complète et les divergences MCP/REST sont dans le guide servi `datastore-semantics` (oto#51).
+  Les couches d'une colonne (`comment`/`link`/`origine`) sont servies **à plat** par défaut (`champ.origine`) sur les deux faces ; `?layers=nested` sur `GET …/rows` et `GET …/rows/{row_id}` rend la forme d'écriture `{valeur, + couches renseignées}` (oto#53 ; autre valeur → `400 invalid_layers` ; le défaut basculera vers `nested` avec préavis daté) ; les refus sont nommés (`row_invalid`, `business_key_required`, `invalid_row_input`, `batch_body`, `unknown_fields`, `403 namespace_read_only`, `404 row_not_found`). La sémantique complète et les divergences MCP/REST sont dans le guide servi `datastore-semantics` (oto#51).
 - `POST /api/me/unipile/connect` + `POST …/reconcile` + `GET|DELETE /api/me/unipile` —
   **la messagerie hébergée côté membre**, capacités
   `me.unipile.{connect,reconcile,status,disconnect}` depuis le 2026-08-27

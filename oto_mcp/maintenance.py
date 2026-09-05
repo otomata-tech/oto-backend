@@ -321,6 +321,95 @@ def portee_observation(*, dry_run: bool = True) -> dict:
             "detail": [dict(l) for l in lignes]}
 
 
+#: L'interrupteur de l'alerte. **OFF par défaut, et c'est le cœur du dispositif** : le
+#: mécanisme part au tag, l'effet attend une décision (oto#59). Un canal qu'on ouvre en
+#: devinant son volume est un canal qu'on referme au bout d'une semaine, après avoir
+#: appris à ses destinataires à l'ignorer.
+#:
+#: ⚠️ Lu à CHAQUE tir, jamais mis en cache au boot : ouvrir le canal ne doit pas
+#: demander de redémarrer le service.
+_ENV_ALERTE = "OTO_ALERTE_CREDENTIAL"
+
+
+def _alerte_activee() -> bool:
+    return os.environ.get(_ENV_ALERTE, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def alertes_credential(*, dry_run: bool = False) -> dict:
+    """Prévient le titulaire d'une org qu'une clé est partie sous ses agents programmés.
+
+    Le 03/09/2026, une clé a disparu et **une douzaine de passages programmés ont tourné
+    à l'aveugle pendant 36 heures**. Le canal qui aurait annoncé la panne tournait sur le
+    credential tombé : six fois par jour, un run découvrait qu'il était cassé, l'inscrivait
+    sur une ligne que personne ne regardait, et se taisait — correctement, selon ses
+    propres règles. La panne était silencieuse **par construction** (oto#59).
+
+    ⚠️ **Le courriel part par le courrier de PLATEFORME**, jamais par un connecteur de
+    l'org. C'est la seule propriété qui distingue cette alerte du registre qu'elle
+    remplace : le canal qui prévient ne doit pas pouvoir mourir avec ce dont il annonce
+    la mort.
+
+    ⚠️ **UN courriel par org**, pas un par ligne : trois clés retirées le même jour font
+    un message. Un destinataire qui en reçoit trois pour un incident apprend à les
+    ignorer.
+
+    ⚠️ **Rien ne part tant que `OTO_ALERTE_CREDENTIAL` n'est pas posé**, et le travail
+    le DIT dans son retour plutôt que de rendre un zéro qui se lirait « rien à
+    signaler ». `dry_run` fait la même chose en le disant autrement — les deux comptent
+    ce qui partirait.
+
+    ⚠️ Le marquage vient APRÈS l'envoi. Marquer d'abord transformerait un envoi raté en
+    silence définitif, c'est-à-dire en la panne même que ce travail supprime.
+    """
+    # ⚠️ `import email as _email` puis `_email._send(...)`, jamais
+    # `from .email import _send` : la seconde forme capture la référence à l'import et
+    # rend le module intestable (un banc qui patche `email._send` ne toucherait rien).
+    # C'est la convention d'`email_templates`, écrite pour cette raison exacte.
+    from . import email as _email
+    from .db import alertes_credential as db_alertes
+    from .db import users as db_users
+    from . import org_store
+
+    groupes = db_alertes.a_notifier()
+    actif = _alerte_activee()
+    envoyes, marques, sans_destinataire = 0, 0, 0
+    for g in groupes:
+        org_id = int(g["org_id"])
+        admins = [m["sub"] for m in org_store.list_org_members(org_id)
+                  if m.get("org_role") == "org_admin"]
+        adresses = [e for e in db_users.emails_by_subs(admins).values() if e]
+        if not adresses:
+            # On ne marque PAS : sans destinataire, la ligne reste à notifier. Le jour
+            # où l'org gagne un admin, elle partira — la perdre ici serait la perdre
+            # exactement quand elle devient délivrable.
+            sans_destinataire += 1
+            continue
+        if not actif or dry_run:
+            continue
+        connecteurs = ", ".join(g["connectors"] or [])
+        # Écrit pour un humain qui ne connaît pas le vocabulaire de la plateforme :
+        # ce qui est arrivé, ce que ça casse, et les deux gestes possibles.
+        corps = (
+            f"<p>Une clé de connecteur a été retirée de votre organisation "
+            f"({_email._esc(connecteurs)}), alors que "
+            f"{int(g['agents_max'] or 0)} agent(s) programmé(s) actif(s) "
+            "l'utilisaient.</p>"
+            "<p>Ils continueront de partir à l'heure et échoueront en vol, sans que "
+            "personne d'autre en soit averti : coupez-les, ou reposez une clé.</p>"
+            "<p>Oto, pour Alexis</p>")
+        if _email._send(to=adresses[0],
+                        subject="Une clé retirée sous vos agents programmés",
+                        html=corps):
+            envoyes += 1
+            marques += db_alertes.marquer_notifie(list(g["ids"] or []))
+    return {"orgs_a_prevenir": len(groupes), "envoyes": envoyes, "marques": marques,
+            "sans_destinataire": sans_destinataire,
+            "actif": actif,
+            "note": (None if actif else
+                     f"aucun envoi : {_ENV_ALERTE} n'est pas posé — le mécanisme "
+                     "tourne, l'effet attend une décision")}
+
+
 _TRAVAUX: dict[str, Callable[..., dict]] = {
     "retention": retention,
     "blocks": blocks,
@@ -330,11 +419,16 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "check-boot": check_boot,
     "residu-projete": residu_projete,
     "portee-observation": portee_observation,
+    "alertes-credential": alertes_credential,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
 _ACTES = ("journal-tokens", "residu-projete")
-_ALL = ("retention", "blocks", "key-indexes")
+# ⚠️ `alertes-credential` est dans `_ALL` — donc dans le timer quotidien — ET son
+# envoi est fermé par `OTO_ALERTE_CREDENTIAL`. Les deux ensemble sont le dispositif :
+# le mécanisme tourne dès le tag (on voit ce qui partirait), l'effet attend une
+# décision. Y mettre un travail qui écrit dehors ne se ferait pas autrement.
+_ALL = ("retention", "blocks", "key-indexes", "alertes-credential")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

@@ -61,6 +61,7 @@ from . import (
     # Les appelants écrivent `from ..db import outreach as db_outreach`.
     outreach,
     portee,
+    alertes_credential,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

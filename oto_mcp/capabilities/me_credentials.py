@@ -404,6 +404,16 @@ def _clear(ctx: ResolvedCtx, inp: CredentialClearInput) -> dict:
                     f"`{inp.provider}` : {noms}" + (f", et {reste} de plus" if reste > 0 else "")
                     + ". Ils continueront de partir à l'heure et échoueront en vol, "
                     "sans que personne en soit averti — coupe-les, ou repose une clé.")
+                # Et on l'ENREGISTRE, parce que celui qui lit cette réponse n'est pas
+                # forcément celui que ça concerne — ni celui qui sera là demain. Le
+                # drain hors bande (`maintenance alertes_credential`) préviendra le
+                # titulaire de l'org par le courrier de PLATEFORME, le seul canal qui
+                # ne meurt pas avec la clé retirée (oto#59).
+                from ..db import alertes_credential
+                alertes_credential.enregistrer(
+                    org_id=int(org_id), connector=inp.provider, account=account,
+                    acteur_sub=ctx.sub,
+                    agents=[t.get("label") or t.get("procedure") for t in casses])
         except Exception as e:  # noqa: BLE001
             # noqa: SILENT — l'avertissement est un service rendu, pas une garde : son
             # échec n'a pas à faire échouer un retrait légitime, déjà effectué.

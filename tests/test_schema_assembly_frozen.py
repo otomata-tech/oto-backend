@@ -232,8 +232,14 @@ from oto_mcp.db import _schema, schema
 # ⚠️ Empreinte recalculée après avoir vérifié que le tronc SANS ce fragment rend
 # bien fdbf80b8… / 140769 (isolé dans un clone jetable, sans le WIP d'autres
 # sessions) — la colonne ajoute exactement 339 caractères (140769 → 141108).
-EMPREINTE = "f7a74ee90970bbcddda63828d44ad6a462b2fae7c06176a23d6a70425d20deca"
-LONGUEUR = 141108
+# ⚠️ Recalculée pour `credential_disparitions` (oto#59 — les clés retirées sous des
+# agents programmés actifs). L'arithmétique a été VÉRIFIÉE, pas supposée : le fragment
+# `schema/alertes.ALERTES` fait exactement 1 467 caractères, et 141 108 + 1 467 = 142 575,
+# la longueur mesurée. Un delta qui ne tombe pas juste dirait qu'autre chose a bougé dans
+# le DDL assemblé — c'est le seul contrôle qui distingue « j'ai ajouté ma table » de
+# « j'ai recopié le nombre que le test m'a donné ».
+EMPREINTE = "c8334a2d6510edde6875be6f102faca6bab7697bf34c9756d69c1aee0fc8ab9f"
+LONGUEUR = 142575
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

@@ -50,9 +50,10 @@ def insert_tool_call(row: dict) -> None:
             INSERT INTO tool_calls
                 (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
                  run_id, org_id, client_id, sentry_event_id,
-                 request_id, call_uid, effective_sub, error_kind)
+                 request_id, call_uid, effective_sub, error_kind,
+                 token_id, token_kind)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -67,6 +68,7 @@ def insert_tool_call(row: dict) -> None:
                 # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
                 # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
                 row.get("error_kind"),
+                row.get("token_id"), row.get("token_kind"),
             ),
         )
 
@@ -1136,10 +1138,23 @@ def rest_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
     paramètre.
 
     ⚠️ Les axes n'ont pas la même solidité, et la réponse le DIT quand ils sont posés :
-    `sub` vient du jeton présenté (fiable) ; `org_id` vient de l'org de CONSULTATION
-    revendiquée en en-tête par le client (`RestCallLogger`, best-effort) — une requête
-    sans cet en-tête ne porte aucune org et sort donc du filtre. Un total à 0 sous
-    `org_id` ne prouve pas l'inactivité de l'org."""
+    `sub` vient du principal RÉSOLU PAR L'AUTHENTIFICATION (fiable, cf. ci-dessous) ;
+    `org_id` vient de l'org de CONSULTATION revendiquée en en-tête par le client
+    (`RestCallLogger`, best-effort) — une requête sans cet en-tête ne porte aucune org
+    et sort donc du filtre. Un total à 0 sous `org_id` ne prouve pas l'inactivité de
+    l'org.
+
+    ⚠️ **`sub` n'est fiable que DEPUIS le 2026-09-05** (#882), et cette phrase disait
+    « fiable » avant de l'être. Jusque-là, le middleware le DÉDUISAIT de l'en-tête via
+    `_claimed_sub`, qui ne décode qu'un JWT : tout appel par jeton API (`oto_…`) ou par
+    jeton de délégation s'écrivait **sans compte**. Filtrer par `sub` ne rendait donc
+    que les gestes faits depuis le dashboard, et l'écart entre le total d'une route et
+    la somme par compte passait pour normal.
+
+    Les lignes ANTÉRIEURES restent anonymes — on ne réécrit pas un journal. Un filtre
+    `sub` sur une fenêtre qui les couvre sous-déclare, et c'est l'HISTORIQUE qui
+    manque, pas l'activité. `token_kind` (`user` / `delegation`) distingue en outre,
+    depuis la même date, un geste fait par quelqu'un d'un travail exécuté en son nom."""
     since_days = max(1, min(int(since_days), 365))
 
     def _where() -> tuple[str, list]:

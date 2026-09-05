@@ -86,7 +86,18 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- `not_authorized`) sur un échec — écrit par `calllog._record`. NULL sur un
     -- succès et sur tout l'historique antérieur à ce lot. PAS d'index (même
     -- raison que les trois colonnes ci-dessus : enquête, pas chemin chaud).
-    error_kind TEXT
+    error_kind TEXT,
+    -- 2026-09-05 : QUEL JETON a servi, jamais sa valeur. Le journal n'attribuait
+    -- que les sessions JWT (`_claimed_sub` ne décode que celles-là) : tout appel
+    -- par jeton API ou par délégation du runner s'écrivait SANS compte, anonyme
+    -- dans le seul endroit où l'on cherche qui a fait quoi. `sub` est réparé côté
+    -- middleware ; ces deux colonnes disent en plus PAR QUEL MOYEN, ce que le seul
+    -- compte ne dit pas : deux appels du même utilisateur par deux jetons étaient
+    -- indistinguables, et une délégation ressemblait à une session humaine.
+    -- NULL sur une session interactive (pas de jeton nommé) et sur tout
+    -- l'historique. PAS d'index : enquête, pas chemin chaud.
+    token_id BIGINT,
+    token_kind TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);

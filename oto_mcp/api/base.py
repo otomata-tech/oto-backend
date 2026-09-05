@@ -127,22 +127,26 @@ def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
 CLE_PRINCIPAL = "oto_principal"
 
 
-def _publier_principal(request: Request, sub: str, *, servi: str | None = None,
+def _publier_principal(request: Request, sub: str, *,
                        token_id: int | None = None,
                        token_kind: str | None = None) -> None:
     """Dépose dans le scope QUI a été authentifié, pour le journal.
 
-    `sub` = le porteur RÉEL du bearer ; `servi` = celui sous lequel la requête
-    s'exécute quand un opérateur consulte « en tant que » quelqu'un — les deux
-    colonnes existent déjà (`sub`, `effective_sub`) et les confondre ferait passer
-    une consultation pour un geste de l'intéressé.
+    `sub` = le porteur RÉEL du bearer — celui qui s'est authentifié, jamais la
+    cible d'un « en tant que ».
+
+    ⚠️ Le view-as N'EST PAS journalisé, et surtout pas dans `effective_sub` : le
+    schéma en fait le compte relu APRÈS le handler, dont toute divergence d'avec
+    `sub` EST un défaut (elle trahirait une réponse servie sous une autre
+    identité). Y écrire une consultation rendrait normale la divergence que cette
+    colonne existe pour dénoncer. Le journal dit donc QUI A PRÉSENTÉ le bearer —
+    c'est ce qu'on cherche quand on demande « qui a fait ça ».
 
     ⚠️ Le jeton lui-même n'entre JAMAIS ici : on nomme son identifiant, pas sa
     valeur.
     """
     request.scope[CLE_PRINCIPAL] = {
-        "sub": sub, "effective_sub": servi if servi and servi != sub else None,
-        "token_id": token_id, "token_kind": token_kind,
+        "sub": sub, "token_id": token_id, "token_kind": token_kind,
     }
 
 
@@ -211,7 +215,7 @@ async def _authenticate(
         if (pause := await run_in_threadpool(account_suspension.refus, row["sub"])):
             return None, _json_error(request, 403, account_suspension.CODE, pause[0])
         servi = _maybe_view_as(row["sub"], apply_view_as)
-        _publier_principal(request, row["sub"], servi=servi,
+        _publier_principal(request, row["sub"],
                            token_id=row.get("token_id"),
                            token_kind=row.get("token_kind"))
         return servi, None
@@ -257,7 +261,7 @@ async def _authenticate(
     # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
     # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une
     # seule des deux formes de bearer serait attribuée.
-    _publier_principal(request, sub, servi=servi)
+    _publier_principal(request, sub)
     return servi, None
 
 

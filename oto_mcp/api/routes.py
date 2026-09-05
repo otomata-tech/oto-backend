@@ -337,8 +337,12 @@ class RestCallLogger:
                 # exploser la cardinalité du `GROUP BY tool` du monitoring) : il va
                 # dans `args`, où il répond à « le même jeton a-t-il été rejoué ? ».
                 "args": masques,
+                # ⚠️ `sub` = le PORTEUR du bearer, jamais la cible d'un « en tant
+                # que ». `effective_sub` n'est pas là pour ça : le schéma en fait
+                # le compte relu APRÈS le handler, dont toute divergence d'avec
+                # `sub` EST un défaut. Y écrire une consultation view-as rendrait
+                # normale la divergence que cette colonne existe pour dénoncer.
                 "sub": sub,
-                "effective_sub": principal.get("effective_sub"),
                 # Le jeton employé, NOMMÉ jamais écrit : deux appels du même compte
                 # par deux jetons étaient indistinguables, et une délégation du
                 # runner ressemblait à une session humaine.

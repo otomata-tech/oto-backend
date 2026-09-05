@@ -145,10 +145,10 @@ def _ECRIT_SCOPE(inp) -> str:
     return getattr(inp, "scope", None) or "user"
 
 
-async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
+def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
     oi, lib = orgs_instructions, guide_library
     if inp.op == "get":
-        return await oi._get_guide(ctx, oi.GuideGetInput(
+        return oi._get_guide(ctx, oi.GuideGetInput(
             slug=inp.slug, guide_id=inp.guide_id, doctrine_id=inp.doctrine_id,
             # Pas de repli sur "org" : `None` déclenche la CASCADE de lecture
             # (chez soi d'abord, puis l'org). Écrire à soi par défaut et relire
@@ -158,12 +158,12 @@ async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
     if inp.op == "list":
         return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope))
     if inp.op == "create":
-        return await oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
+        return oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour create."),
             body_md=inp.body_md, title=inp.title, description=inp.description,
             slots=inp.slots, org=inp.org, scope=_ECRIT_SCOPE(inp), group=inp.group))
     if inp.op == "set":
-        return await oi._set_instruction(ctx, oi.ConsoleInstrSetInput(
+        return oi._set_instruction(ctx, oi.ConsoleInstrSetInput(
             slug=inp.slug, body_md=inp.body_md, title=inp.title,
             description=inp.description, from_version=inp.from_version,
             expected_version=inp.expected_version,
@@ -206,6 +206,12 @@ async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
             new_slug=inp.new_slug))
     return lib._unpublish(ctx, lib.UnpublishInput(
         id=_need(inp.id, "missing_id", "`id` (entrée bibliothèque) requis pour unpublish.")))
+
+
+async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
+    from ._execution import execute
+    _, result = await execute(_dispatch_procedure, lambda: (ctx, inp))
+    return result
 
 
 CAPABILITIES += [

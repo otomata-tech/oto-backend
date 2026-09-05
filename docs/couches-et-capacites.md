@@ -40,4 +40,19 @@ Pour les opérations exposées sur **deux faces** (MCP + REST), arrêter de câb
 
 ## Console admin consolidée par concept (`*_op`)
 
+**Rationalisation des guides/procédures.** Les quatre opérations de
+`oto_admin_guide` référencent leurs capacités REST canoniques dans
+`admin_console._GUIDE_OPERATIONS` : le même descripteur fournit l'Input, la règle
+d'autorisation et le handler. La console conserve son entrée publique plate et
+ses refus de champ requis ; `ADMIN_BY_OP` dérive ses règles de ces références et
+ne les joue qu'une fois. Les autres consoles gardent encore leur câblage décrit
+ci-dessous. `registry.by_key` refuse une référence absente ou ambiguë.
+
+Les deux adaptateurs partagent `capabilities/_execution.execute` : préparation
+et handler synchrone dans un thread, résultat coroutine attendu dans la boucle.
+La console membre de procédures passe aussi par ce seuil pour ses branches
+synchrones. Les corps I/O de lecture/écriture restent synchrones ; seuls les
+manifestes d'outils sont enrichis dans la boucle. Ni schéma, ni nom d'outil, ni
+route publique ne change avec cette extraction.
+
 **Console admin consolidée par concept (`*_op`, 2026-06-25, commit 92462fe).** Les outils admin ci-dessus sont fusionnés de **36 → 12 `oto_admin_*`** — un outil par objet métier, verbe en param `op` : `oto_admin_{org,org_member,user,access,key_grant}`. Les handlers de domaine sont **réutilisés tels quels** (zéro duplication ; `capabilities/admin_console.py` construit l'`Input` spécifique et appelle `_create_org`/`_add_member`/…). Quand les paliers d'autz divergent dans un même outil (ex. `org` : create=`SUPER_ADMIN`, list=`PLATFORM_ADMIN`), le **combinateur op-aware `ADMIN_BY_OP({op: règle})`** (`_authz.py`) choisit la règle fermée selon `inp.op` → l'autz reste **déclarée au niveau capacité**, jamais redescendue dans le handler (esprit ADR 0009 préservé). ⚠️ Les faces **REST restent par-verbe** (idiomatique + dashboard) → l'autz d'un verbe fusionné est désormais déclarée 2× (MCP op-aware + route REST), même combinateur/handler dessous. **Règle de design — secret brut jamais en argument MCP** (il transiterait dans le contexte LLM) : la **pose** de secret (`set_org_secret`, `delete_org_secret`, `set_platform_key`, `set_quota`) est **dashboard-only** (binding `mcp` retiré, REST conservé) ; le MCP ne porte que les **droits/grants** (`oto_admin_key_grant`).

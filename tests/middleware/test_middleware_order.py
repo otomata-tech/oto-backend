@@ -28,6 +28,8 @@ invariants gardés ici :
 """
 from oto_mcp import server
 
+from _mcp_app import static_mcp as _test_mcp
+
 
 OURS = [
     "ToolAliasMiddleware",
@@ -45,7 +47,7 @@ OURS = [
 def test_mcp_middleware_order_contract():
     # fastmcp préfixe les siens (ex. DereferenceRefsMiddleware) — on fige l'ordre
     # relatif des NÔTRES, pas la liste brute.
-    names = [type(m).__name__ for m in server.mcp.middleware if type(m).__name__ in OURS]
+    names = [type(m).__name__ for m in _test_mcp().middleware if type(m).__name__ in OURS]
     assert names == OURS, (
         f"Ordre des middlewares modifié : {names}. Premier ajouté = plus EXTERNE — "
         "relire les invariants du docstring avant de changer quoi que ce soit."

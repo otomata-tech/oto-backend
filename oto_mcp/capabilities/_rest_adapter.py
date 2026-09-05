@@ -17,7 +17,6 @@ Dépend du core (sens unique ADR 0004).
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import logging
 import types
 import typing
@@ -25,7 +24,6 @@ from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from pydantic import ValidationError
-from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -35,6 +33,7 @@ logger = logging.getLogger(__name__)
 from .. import client_trace
 from ..json_body import InvalidJsonBody, read_json_body
 from ._types import AuthzDenied, Capability, NotModified, RawCtx
+from ._execution import execute
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -59,9 +58,6 @@ def _champs_liste(model) -> frozenset:
 
 def _make_handler(cap: Capability, binding, verifier, authenticate, json_response, json_error):
     champs_liste = _champs_liste(cap.Input)
-    # Décidé au montage (cf. la note jumelle de `_mcp_adapter._make_tool`) : un thread
-    # n'a pas de boucle où jouer une coroutine.
-    handler_async = inspect.iscoroutinefunction(cap.handler)
 
     async def _handler(request: Request) -> JSONResponse:
         # `allow_api_token` n'est passé QUE lorsqu'il vaut False : le défaut reste un
@@ -196,13 +192,9 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
                 # « pas mcp » serait la seule façon de reconnaître REST — donc un
                 # adaptateur muet passerait pour la face humaine.
                 ctx_ = dataclasses.replace(ctx_, channel="rest")
-                return ctx_, (None if handler_async else cap.handler(ctx_, inp))
+                return ctx_, inp
 
-            ctx, result = await run_in_threadpool(_amont)
-            if handler_async:
-                result = cap.handler(ctx, inp)        # handler async → dans la boucle
-            if inspect.isawaitable(result):           # handler async (ex. guide + manifeste)
-                result = await result
+            ctx, result = await execute(cap.handler, _amont)
         except AuthzDenied as d:
             # `message` EN 4e ARG, sinon il est jeté et le client ne voit qu'un code nu.
             # Les auteurs de capacités écrivent des refus actionnables (« Enregistre

@@ -7,13 +7,15 @@ du modèle dégénère dessus — il recopie la structure, boucle sur des centai
 d'outil dont le nom est la narration. 16 des 26 faux départs d'une campagne, 10 des
 11 d'une vague de production.
 
-Le banc fait traverser à un résultat la chaîne RÉELLE montée sur `server.mcp` (les
+Le banc fait traverser à un résultat la chaîne RÉELLE montée sur `_test_mcp()` (les
 instances de middleware du vrai serveur, dans leur vrai ordre) et lit ce qui sort
 côté client : l'ordre des middlewares est ici la moitié du correctif, un banc qui
 n'appellerait que la fonction de rendu ne prouverait donc rien. Aucune base n'est
 requise — le journal d'appels est best-effort et se contente de râler.
 """
 from __future__ import annotations
+
+from _mcp_app import static_mcp as _test_mcp
 
 import asyncio
 
@@ -30,7 +32,7 @@ VIDE_CAPTURE = {"total_count": 0, "rows": []}
 def _banc(fn, *, nom: str = "recherche"):
     """Un serveur d'un seul outil, sous la chaîne de middlewares du VRAI serveur."""
     m = FastMCP("banc")
-    for mw in server.mcp.middleware:
+    for mw in _test_mcp().middleware:
         m.add_middleware(mw)
     m.tool(name=nom)(fn)
     return m
@@ -287,7 +289,7 @@ def test_le_compteur_booleen_n_est_pas_un_compteur():
 def _outils_montes() -> list[str]:
     """Les outils du VRAI montage (connecteurs + capacités), pas une liste écrite
     à la main : c'est ce qui fait qu'un outil ajouté demain est couvert d'office."""
-    return [t.name for t in asyncio.run(server.mcp.list_tools(run_middleware=False))]
+    return [t.name for t in asyncio.run(_test_mcp().list_tools(run_middleware=False))]
 
 
 def _vides_reconnus() -> list[dict]:

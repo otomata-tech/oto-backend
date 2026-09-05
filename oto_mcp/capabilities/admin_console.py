@@ -24,7 +24,8 @@ from .orgs import (admin as orgs_admin, members as orgs_members,
                    reads as orgs_reads)
 from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, ORG_MEMBER_OF, PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx
-from .registry import CAPABILITIES
+from ._execution import execute
+from .registry import CAPABILITIES, by_key
 
 
 def _need(val, code: str, msg: str):
@@ -154,22 +155,31 @@ class GuideAdminInput(BaseModel):
     slots: Optional[list] = None      # set (ADR 0035)
 
 
+_GUIDE_OPERATIONS = {
+    op: by_key(key) for op, key in {
+        "get": "org.guide.admin_get", "list": "org.guide.admin_list",
+        "set": "org.instruction.admin_set", "delete": "org.instruction.admin_delete",
+    }.items()
+}
+
+
 async def _guide(ctx: ResolvedCtx, inp: GuideAdminInput) -> dict:
-    from .orgs import instructions as oi
-    if inp.op == "get":
-        return await oi._get_guide(ctx, oi.AdminGuideGetInput(
-            org_id=inp.org_id, slug=inp.slug, scope=inp.scope or "org",
-            version=inp.version, with_history=inp.with_history))
-    if inp.op == "list":
-        return oi._list_guides(ctx, oi.AdminGuideListInput(
-            org_id=inp.org_id, query=inp.query, scope=inp.scope))
-    if inp.op == "set":
-        return await oi._set_instruction(ctx, oi.AdminInstrSetInput(
-            org_id=inp.org_id, slug=inp.slug, body_md=inp.body_md, title=inp.title,
-            description=inp.description, from_version=inp.from_version, slots=inp.slots))
-    return oi._delete_instruction(ctx, oi.AdminSlugInput(
-        org_id=inp.org_id,
-        slug=_need(inp.slug, "missing_slug", "`slug` requis pour delete.")))
+    operation = _GUIDE_OPERATIONS[inp.op]
+
+    def prepare():
+        # Le schéma public de console reste plat ; le modèle du verbe REST est
+        # l'unique validation métier. Ses défauts s'appliquent aux champs absents.
+        data = inp.model_dump(include=set(operation.Input.model_fields))
+        if inp.op == "get":
+            data["scope"] = inp.scope or "org"
+        elif inp.op == "delete":
+            data["slug"] = _need(inp.slug, "missing_slug", "`slug` requis pour delete.")
+        return ctx, operation.Input(**data)
+
+    # L'autz du verbe a déjà été exécutée par l'adaptateur via ADMIN_BY_OP.
+    # Rejouer la capacité entière ici vérifierait deux fois la même règle.
+    _, result = await execute(operation.handler, prepare)
+    return result
 
 
 # ── oto_admin_invite : create / list / revoke (invitation plateforme, cascade) ─
@@ -348,8 +358,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="admin.guide", handler=_guide, Input=GuideAdminInput,
-        authz=ADMIN_BY_OP({"get": ORG_MEMBER_OF("org_id"), "list": ORG_MEMBER_OF("org_id"),
-                           "set": ORG_ADMIN_OF("org_id"), "delete": ORG_ADMIN_OF("org_id")}),
+        authz=ADMIN_BY_OP({op: operation.authz
+                           for op, operation in _GUIDE_OPERATIONS.items()}),
         description=("[ADMIN] Another org's guide, by `org_id` (cross-org = platform "
                      "admin). op=get (`slug` = one skill, none = base+index; `scope=group`) "
                      "/ list (named guides incl. base) / set (write: omit slug = base; "

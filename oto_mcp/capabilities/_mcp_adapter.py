@@ -33,6 +33,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import session_org
 from ..auth.hooks import current_user_sub_from_token
 from ..session_visibility import apply_session_visibility
+from ._execution import execute
 from ._types import (AuthzDenied, Capability, NotModified, RawCtx,
                      apply_flat_signature)
 
@@ -74,12 +75,6 @@ def reserved_org_tool_names(capabilities: list[Capability]) -> frozenset:
 
 def _make_tool(cap: Capability):
     org_reserved = _org_param_reserved(cap)
-    # Décidé au MONTAGE, pas à l'appel : appeler un `async def` ne l'exécute pas (il
-    # rend une coroutine), donc le tester après coup marcherait — mais il faut savoir
-    # AVANT s'il a le droit de partir au thread, et un thread n'a pas de boucle où
-    # jouer une coroutine.
-    handler_async = inspect.iscoroutinefunction(cap.handler)
-
     async def _tool(**kwargs):
         # `_org=` (axe-contexte, modèle sans état de session) est posé EN AMONT par
         # `CallContextMiddleware` (ContextVar per-appel, lue par `current_org`) → on le
@@ -89,6 +84,9 @@ def _make_tool(cap: Capability):
         # régression #108 vécue en prod le 2026-07-04).
         if org_reserved:
             kwargs.pop("_org", None)
+
+        raw = None
+        before_org = None
 
         def _amont():
             """Identité → validation → autz → org de référence → handler SYNC.
@@ -103,6 +101,7 @@ def _make_tool(cap: Capability):
             canonicalise le sub et repousse l'utilisateur — deux allers-retours DB sur
             CHAQUE appel.
             Le jeton se lit par ContextVar, que la copie de contexte transporte."""
+            nonlocal raw, before_org
             raw = RawCtx(sub=current_user_sub_from_token())
             inp = cap.Input(**kwargs)                 # validation (seule source : Input)
             ctx = cap.authz(raw, inp)                 # autz (peut lire inp pour ORG_ADMIN_OF)
@@ -110,7 +109,6 @@ def _make_tool(cap: Capability):
             # ne peut pas le savoir. `replace` plutôt qu'une mutation — un ctx est un
             # fait, pas un accumulateur.
             ctx = dataclasses.replace(ctx, channel="mcp")
-            before = None
             if ctx.org_id is not None and raw.sub:
                 # Org résolue AVANT le handler (même garde que l'écho plus bas — une cap
                 # non org-scopée, ou sans sub, n'a pas à toucher le seam) : sert de
@@ -118,21 +116,14 @@ def _make_tool(cap: Capability):
                 # PAR le handler (#110, cf. plus bas). Ce n'est QU'une référence : jamais
                 # ce qu'on échoue directement.
                 from .. import access
-                before = access.current_org(raw.sub)
-            # Un handler async, lui, doit être appelé DANS la boucle : on ne l'appelle
-            # pas ici, on rend de quoi le faire au retour.
-            return (raw, ctx, inp, before,
-                    None if handler_async else cap.handler(ctx, inp))
+                before_org = access.current_org(raw.sub)
+            return ctx, inp
 
         try:
             # `run_in_threadpool` (anyio) exécute sur une COPIE du contexte : les
             # ContextVars posées en amont (axe `_org` de CallContextMiddleware, jeton
             # de token, contexte FastMCP) sont lues normalement depuis le thread.
-            raw, ctx, inp, before_org, result = await run_in_threadpool(_amont)
-            if handler_async:
-                result = cap.handler(ctx, inp)        # handler async → dans la boucle
-            if inspect.isawaitable(result):           # handler async (ex. guide + manifeste)
-                result = await result
+            ctx, result = await execute(cap.handler, _amont)
         except AuthzDenied as d:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code))
         if isinstance(result, NotModified):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 
-def register_all(mcp: FastMCP) -> None:
+def register_all(mcp: FastMCP, *, include_mounts: bool = True) -> None:
     import logging
 
     log = logging.getLogger("oto_mcp.tools")
@@ -64,8 +64,12 @@ def register_all(mcp: FastMCP) -> None:
     # Connecteurs mount (fédération MCP, otomata#16) — monte un MCP distant via
     # proxy FastMCP, credential per-user injecté par requête. Inerte tant
     # qu'aucun connecteur kind="mount" n'est déclaré au registre (canari).
-    from . import mount
-    mount.register(mcp)
+    # `include_mounts=False` : le catalogue LOCAL sans aller chercher les
+    # catalogues distants. Le fetch attend un tiers sans délai maximal propre
+    # (oto-backend#892) ; il n'a sa place qu'au démarrage, jamais dans un import.
+    if include_mounts:
+        from . import mount
+        mount.register(mcp)
 
     # Connecteurs — chargement DÉRIVÉ DU REGISTRE (ADR 0010/0011, #24). Fin de la
     # liste hardcodée : pour chaque provider `kind="tools"`, on importe ses

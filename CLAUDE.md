@@ -133,11 +133,17 @@ plateforme) ; exceptions vers **Sentry** · ⚠️ ne trace ni la connexion d'un
 
 ## Démarrage, silences & infra
 
-**Au boot, le DDL additif et rien d'autre** (`_prepare_database()`, une fois par process) · ⚠️ **la fenêtre du
-healthcheck est finie (120 s)** : un travail one-shot ajouté au boot se mesure **avant** de poser son tag, et ce qui n'a
-rien à faire au boot va en maintenance (`oto-mcp maintenance …`, timer quotidien **prod seulement**) · ⚠️ **le boot se
-juge sur une base qui existe déjà**, jamais sur une base vierge — `test_boot_order_replay.py` rejoue la séquence sans
-les colonnes posées par `ALTER` (ADR 0065, `docs/live-migrations.md`, `docs/migrations-versionnees.md`).
+**Construire n'est pas démarrer** : `_build_mcp` monte le catalogue, `main()` seul prépare la base
+(`_prepare_database()`, une fois par process) et demande les catalogues fédérés (`include_mounts=True`). **Aucune
+instance au niveau module** — un import doit définir, pas travailler (`test_server_construction.py`) · **Au boot, le
+DDL additif et rien d'autre**, fail-open étape par étape : un backfill qui casse ne doit pas empêcher le serveur de
+répondre, mais il le **dit** dans le journal · ⚠️ **la fenêtre du healthcheck est finie (120 s)** : un travail one-shot
+ajouté au boot se mesure **avant** de poser son tag, ce qui n'a rien à faire au boot va en maintenance (`oto-mcp
+maintenance …`, timer quotidien **prod seulement**), et **tout ce qui attend un tiers doit avoir un délai maximal à son
+propre niveau** — une borne posée au plus profond ne borne rien si les enveloppes au-dessus attendent sans délai
+(oto-backend#892) · ⚠️ **le boot se juge sur une base qui existe déjà**, jamais sur une base vierge —
+`test_boot_order_replay.py` rejoue la séquence sans les colonnes posées par `ALTER` (ADR 0065,
+`docs/live-migrations.md`, `docs/migrations-versionnees.md`).
 ⚠️ **Le refus est bruyant, la divergence est muette** : `scripts/lint_silences.py` (joué par la suite) refuse un
 `except Exception` qui ne re-lève, ne journalise ni ne rend un refus nommé ; échappatoire unique `# noqa: SILENT —
 <raison>` (`docs/silences-2026-08-27.md`).

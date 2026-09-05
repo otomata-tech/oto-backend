@@ -29,6 +29,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
                 procedure_diagram, procedure_digest, procedure_retrait, roles,
@@ -755,7 +756,7 @@ def _scope_ref(owner: tuple[str, str]) -> dict:
 
 
 # ── Handlers (core ; owner depuis ctx → partagés membre/admin) ──────────────
-async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
+def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     """Bundle session-start (slug omis) OU un guide nommé. En mode membre
     (`inp.org_id` absent) complète avec le guide du département actif."""
     org_id = ctx.org_id
@@ -797,15 +798,14 @@ async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
             "org_id": parent_org, "guide_id": int(guide_id),
             "scope": owner_type, "slug": instr["slug"], "title": instr["title"],
             "description": instr["description"], "version": instr["version"],
-            "body_md": instr["body_md"], "slots": instr.get("slots") or [],
-            "referenced_tools": await tool_registry.manifest_for(instr["body_md"])})
+            "body_md": instr["body_md"], "slots": instr.get("slots") or []}), (instr["body_md"],)
 
     if slug is None:
         # Début de session : guide de base + index (vide gracieux si pas d'org).
         if org_id is None:
             return deprecations.avec_les_deux_noms({
                 "org_id": None, "org": None, "guide": "", "group_id": None,
-                "group": None, "group_guide": "", "guides": [], "referenced_tools": []})
+                "group": None, "group_guide": "", "guides": [], "referenced_tools": []}), None
         o = org_store.get_org(org_id)
         # Le readme d'org/équipe est un GUIDE `delivery='init'` (ADR 0042), plus une
         # instruction déguisée : on le lit sur sa surface, pas via le store de procédures.
@@ -828,9 +828,8 @@ async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
             "org_id": org_id, "org": o["name"] if o else None, "guide": guide_body,
             "group_id": group_id, "group": group_name, "group_guide": group_guide,
             "guides": index,
-            "referenced_tools": await tool_registry.manifest_for(guide_body, group_guide),
             **({"project_instance": pi} if pi else {}),
-        })
+        }), (guide_body, group_guide)
 
     # Un guide nommé précis.
     if scope is None and member_mode:
@@ -876,8 +875,7 @@ async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
                        + ". Vois `oto_procedure(op='list')`.")
     out = {**scope_ref, "scope": scope, "slug": instr["slug"], "title": instr["title"],
            "description": instr["description"], "version": instr["version"],
-           "body_md": instr["body_md"], "slots": instr.get("slots") or [],
-           "referenced_tools": await tool_registry.manifest_for(instr["body_md"])}
+           "body_md": instr["body_md"], "slots": instr.get("slots") or []}
     pi = _project_instance(member_mode)
     if pi:
         out["project_instance"] = pi
@@ -886,6 +884,13 @@ async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
     # une procédure d'équipe avait des versions que cette réponse taisait.
     if inp.with_history:
         out["versions"] = org_store.list_instruction_versions(*owner, slug)
+    return out, (instr["body_md"],)
+
+
+async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
+    out, bodies = await run_in_threadpool(_read_guide, ctx, inp)
+    if bodies is not None:
+        out["referenced_tools"] = await tool_registry.manifest_for(*bodies)
     return out
 
 
@@ -921,7 +926,7 @@ def _list_guides(ctx: ResolvedCtx, inp) -> dict:
         {"org_id": org_id, "group_id": group_id, "guides": out})
 
 
-async def _set_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> dict:
+def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tuple[dict, str]:
     """Crée/met à jour une instruction (incrémente la version + archive un snapshot).
     `from_version` = restaure une version passée comme nouvelle (revert MCP) — corps,
     métadonnées ET slots. `slots` (ADR 0035) : None = conserver l'existant.
@@ -1018,11 +1023,15 @@ async def _set_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> 
         effective_slots = (cur or {}).get("slots") or []
     return {"ok": True, **_scope_ref(owner), "slug": norm, "version": version, "set": True,
             **({"reverted_from": from_version} if from_version is not None else {}),
-            **await tool_registry.write_check(body_md),
             **slots_mod.slots_check(body_md, effective_slots),
             **procedure_diagram.diagram_check(body_md),
             **procedure_digest.digest_check(body_md),
-            **procedure_retrait.retrait_check(ancien_md, body_md)}
+            **procedure_retrait.retrait_check(ancien_md, body_md)}, body_md
+
+
+async def _set_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> dict:
+    out, body_md = await run_in_threadpool(_write_instruction, ctx, inp, must_create)
+    return {**await tool_registry.write_check(body_md), **out}
 
 
 async def _create_instruction(ctx: ResolvedCtx, inp) -> dict:

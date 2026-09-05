@@ -268,8 +268,32 @@ def _ds_filter_clauses(filters: Optional[list]) -> tuple[list[str], list]:
     return clauses, params
 
 
+def _refus_in_vide(field: str, val) -> ValueError:
+    """Le refus d'un filtre `in` dont la liste ne porte aucune valeur utilisable
+    (oto-backend#353).
+
+    ⚠️ Ce filtre DISPARAISSAIT — `if not vals: return None, []` — et la requête rendait
+    alors TOUT au lieu de rien : l'inverse exact de ce que `IN ()` veut dire. Une
+    moisson de tableau entier a été vécue les 15-16/08 par ce chemin.
+
+    ⚠️ **Pourquoi refuser plutôt que rendre zéro ligne**, alors que zéro serait la
+    sémantique SQL juste : une liste vide est presque toujours un accident de
+    l'appelant — une variable non remplie, une liste filtrée à zéro juste avant. Rendre
+    zéro le laisserait conclure « cette donnée n'existe pas », ce qui est faux et
+    silencieux ; refuser l'arrête là où il peut encore corriger. Le refus NOMME la
+    colonne et ce qu'il a reçu, pour qu'il regarde sa variable plutôt que ses données.
+    """
+    return ValueError(
+        f"filtre `{field}` : la liste de `in` ne porte aucune valeur "
+        f"(reçu {val!r}). Rien n'a été lu — un `in` vide n'est pas une demande "
+        f"lisible : selon la lecture, il rendrait TOUT le tableau ou rien. "
+        f"Vérifie la liste que tu passes ; pour viser les lignes SANS valeur, "
+        f"c'est `{{\"{field}\": {{\"empty\": true}}}}`.")
+
+
 def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]:
-    """Le prédicat sur UNE colonne — `(fragment, params)`, ou `(None, [])` s'il est
+    """Le prédicat sur UNE colonne — `(fragment, params)`. Depuis #353 il n'y a plus
+    de forme « inerte » : un filtre qui ne peut pas restreindre LÈVE, il ne s'évapore
     inerte. Point unique : `fields` boucle dessus, il n'en existe pas de copie."""
     if field in _DS_META_TS_COLS:
         if op not in _DS_META_TS_OPS:
@@ -288,7 +312,7 @@ def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]
             vals = [str(v) for v in (val if isinstance(val, list) else [val])
                     if v is not None and str(v) != ""]
             if not vals:
-                return None, []
+                raise _refus_in_vide(field, val)
             return f"{col} = ANY(%s)", [vals]
         if op == "contains":
             return f"{col} ILIKE %s", [f"%{val}%"]
@@ -308,9 +332,10 @@ def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]
         # scalaire, donc le seul qui ne peut pas passer par `field_read_sql`.
         colonne, _, reste = chemin
         V, fp = leaf_read_sql("_i.v", [], reste)
-        clause, cparams = _ds_leaf_predicate(V, fp, op, val)
-        if clause is None:
-            return None, []
+        # #353 : plus de `clause is None` à relayer — `_ds_leaf_predicate` rend
+        # toujours un fragment depuis que le `in` vide LÈVE au lieu de disparaître.
+        # Garder la branche laisserait croire qu'une clause peut encore s'évaporer.
+        clause, cparams = _ds_leaf_predicate(V, fp, op, val, field)
         # La garde de type est OBLIGATOIRE : `jsonb_array_elements` LÈVE sur une
         # valeur qui n'est pas un tableau, et pendant une conversion une partie
         # des lignes ne l'est pas encore — l'état NORMAL, pas un cas limite.
@@ -319,10 +344,11 @@ def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]
                 f"ELSE '[]'::jsonb END) AS _i(v) WHERE {clause})",
                 [colonne, colonne] + cparams)
     V, fp = field_read_sql(field)
-    return _ds_leaf_predicate(V, fp, op, val)
+    return _ds_leaf_predicate(V, fp, op, val, field)
 
 
-def _ds_leaf_predicate(V: str, fp: list, op: str, val) -> tuple:
+def _ds_leaf_predicate(V: str, fp: list, op: str, val,
+                       field: str = "?") -> tuple:
     """Le prédicat sur une FEUILLE déjà résolue — `(fragment, params)`.
 
     Séparé de la résolution du chemin pour que les deux vivent au même endroit quel
@@ -343,7 +369,7 @@ def _ds_leaf_predicate(V: str, fp: list, op: str, val) -> tuple:
         vals = [_ds_text(v) for v in (val if isinstance(val, list) else [val])
                 if v is not None and str(v) != ""]
         if not vals:
-            return None, []
+            raise _refus_in_vide(field, val)
         return f"{V} = ANY(%s)", fp + [vals]
     if op == "contains":
         return f"{V} ILIKE %s", fp + [f"%{_ds_text(val)}%"]

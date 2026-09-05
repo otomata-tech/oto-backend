@@ -93,7 +93,7 @@ def erreurs(lc: dict, *, declared: set, strict: bool,
     servira (`ds_filter_specs` + `_ds_filter_clauses`), jamais par une grammaire
     parallèle qui divergerait le jour où le moteur apprend un opérateur. S'y ajoutent
     ce qu'un filtre d'appel ne vérifie pas et qu'une déclaration doit : une clause
-    INERTE (`in: []`) ne restreint rien ; une colonne inconnue sous `strict` ; un
+    INERTE (`in: []`) est refusée à la source depuis #353 ; une colonne inconnue sous `strict` ; un
     état du statut que le cycle de vie ne déclare pas — la file serait vide pour
     toujours, sans un mot."""
     if CLE not in lc or lc[CLE] is None:
@@ -108,12 +108,13 @@ def erreurs(lc: dict, *, declared: set, strict: bool,
         specs = clauses(p)
         sql, _ = _ds_filter_clauses(specs)
     except ValueError as e:
+        # ⚠️ #353 : c'est désormais PAR ICI que passe la clause inerte (`in: []`).
+        # Elle était détectée en dessous, en comptant les fragments rendus — une
+        # clause qui « s'évaporait » en laissait un de moins. Depuis que le filtre
+        # vide LÈVE au lieu de disparaître, ce comptage ne peut plus rien voir, et
+        # le refus qui remonte ici nomme la colonne et la sortie, ce que le
+        # comptage ne pouvait pas faire.
         out.append(f"lifecycle.claimable: {e}")
-    else:
-        if len(sql) != len(specs):
-            out.append(
-                "lifecycle.claimable: une clause est INERTE (`in` sur une liste vide) "
-                "— elle ne restreindrait rien, retire-la ou donne-lui des valeurs")
     meta = set(_DS_META_TS_COLS) | set(_DS_META_TEXT_COLS)
     for col, val in p.items():
         tete = _TETE.split(str(col), 1)[0]

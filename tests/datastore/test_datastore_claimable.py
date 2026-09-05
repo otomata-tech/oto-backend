@@ -321,8 +321,21 @@ def test_une_forme_qui_n_est_pas_un_filtre_est_refusee(valeur):
 
 
 def test_une_clause_inerte_est_refusee():
+    """⚠️ Le refus vient d'ailleurs depuis oto-backend#353, et il dit plus.
+
+    Cette clause était détectée ICI, en comptant les fragments rendus : une clause qui
+    « s'évaporait » en laissait un de moins, et le message parlait d'une clause
+    « INERTE » sans pouvoir dire laquelle. Depuis que le filtre `in` vide LÈVE au lieu
+    de disparaître — c'est le lot #353, le même défaut qui avait moissonné un tableau
+    entier côté lecture — le refus remonte de la couche de requête et **nomme la
+    colonne** ainsi que la sortie pour qui visait les lignes sans valeur.
+
+    Ce qui est protégé ici n'a pas changé : poser un périmètre de réservation avec une
+    clause qui ne restreint rien est refusé, et l'appelant sait quoi corriger."""
     erreurs = _erreurs({"lot_test": {"in": []}})
-    assert any("INERTE" in e for e in erreurs)
+    assert len(erreurs) == 1, erreurs
+    assert "lot_test" in erreurs[0], "le refus doit NOMMER la clause fautive"
+    assert "empty" in erreurs[0], "…et la sortie pour viser les lignes sans valeur"
 
 
 def test_un_etat_que_le_cycle_ne_declare_pas_est_refuse():

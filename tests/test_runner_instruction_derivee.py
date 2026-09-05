@@ -98,8 +98,14 @@ def _launch_avec(monkeypatch, flotte):
         trace.append(("update", champs.get("input")))
         return flotte
 
-    def _armer(fid, org):
-        trace.append(("armer", None))
+    def _armer(fid, org, **kw):
+        # `**kw` et non une signature figée : `db.armer` a gagné `rows_at_launch`
+        # (oto-backend#836, le dénominateur d'un passage). Un stub qui épingle la
+        # signature exacte du seam qu'il remplace rougit à chaque paramètre ajouté
+        # ailleurs — et ce banc-ci ne parle pas de l'armement, il parle de l'ORDRE
+        # (réparer l'instruction AVANT d'armer). Il ne doit tomber que si cet ordre
+        # change.
+        trace.append(("armer", kw.get("rows_at_launch")))
         return dict(flotte, status="armed")
 
     monkeypatch.setattr(RF.db, "get_fleet", lambda fid, org: flotte)

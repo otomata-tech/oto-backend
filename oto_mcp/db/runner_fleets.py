@@ -30,8 +30,8 @@ from typing import Any, Optional
 from ._conn import _connect
 
 _COLS = ("id, org_id, sub, label, procedure, project_id, tools, input, max_steps, "
-         "namespace, row_filter, provider, model, workers, max_rows, max_tokens, "
-         "max_consecutive_failures, max_tokens_per_row, status, stop_reason, "
+         "namespace, row_filter, provider, model, workers, rows_at_launch, max_rows, "
+         "max_tokens, max_consecutive_failures, max_tokens_per_row, status, stop_reason, "
          "armed_at, started_at, stopping_at, heartbeat_at, stopped_at, created_at")
 
 # Ce qu'un passage a le droit de changer une fois déclaré. La CIBLE n'en est pas :
@@ -153,22 +153,28 @@ def set_status(fleet_id: int, org_id: int, statut: str,
 # Rendre `False` quand la transition n'était pas permise laisse l'appelant DIRE
 # qu'il n'a rien changé, au lieu de croire qu'il a agi.
 
-def armer(fleet_id: int, org_id: int) -> Optional[dict]:
+def armer(fleet_id: int, org_id: int,
+          rows_at_launch: Optional[int] = None) -> Optional[dict]:
     """`draft`/`stopped`/`done`/`failed` → `armed` : on DEMANDE que ça tourne.
 
     ⚠️ Ce n'est PAS `running`. Une intention déclarée et un fait constaté ne
     partagent jamais une colonne : `running` veut dire qu'un ordonnanceur l'a
     PRISE et donne signe. Une flotte armée que personne n'a réclamée doit se lire
     « armée, personne ne l'a prise » — pas « en cours ».
+
+    `rows_at_launch` est le compte des lignes visées À CET INSTANT (l'appelant le
+    lit sur la table ; cf. la capacité). Il est réécrit à chaque armement — un
+    passage relancé vise une table qui a bougé — et `None` l'efface plutôt que de
+    laisser en place le dénominateur d'un armement précédent, qui serait faux.
     """
     with _connect() as conn:
         row = conn.execute(
             f"UPDATE runner_fleets SET status = 'armed', armed_at = NOW(), "
-            f"    stop_reason = NULL, stopping_at = NULL "
+            f"    rows_at_launch = %s, stop_reason = NULL, stopping_at = NULL "
             f"WHERE id = %s AND org_id = %s "
             f"  AND status IN ('draft', 'stopped', 'done', 'failed') "
             f"RETURNING {_COLS}",
-            (fleet_id, org_id),
+            (None if rows_at_launch is None else int(rows_at_launch), fleet_id, org_id),
         ).fetchone()
     return dict(row) if row else None
 

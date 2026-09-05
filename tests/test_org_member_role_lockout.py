@@ -115,7 +115,7 @@ def test_add_resolves_an_email_before_guarding(monkeypatch):
     """`add` accepte un email : la garde doit voir le sub RÉSOLU, pas la chaîne saisie —
     sinon elle interroge le rôle d'une cible qui n'existe pas et laisse tout passer."""
     written = _patch(monkeypatch, role="org_admin", admins=1)
-    monkeypatch.setattr(om.db, "get_user_by_email", lambda e: {"sub": "boss"})
+    monkeypatch.setattr(om.db, "get_users_by_email", lambda e: [{"sub": "boss"}])
     with pytest.raises(AuthzDenied) as e:
         om._add_member(_ctx(), om.AddMemberInput(org_id=7, target="boss@x.tld", role="org_member"))
     assert e.value.code == "last_org_admin"

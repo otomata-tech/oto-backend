@@ -29,11 +29,32 @@ def _resolve_target(target: str) -> str:
     if not target:
         raise AuthzDenied(400, "missing_target", "Cible (email ou sub) requise.")
     if "@" in target:
-        user = db.get_user_by_email(target)
-        if not user:
+        # ⚠️ Une adresse ne désigne PAS un compte. Le même email peut porter
+        # plusieurs comptes — le nôtre et celui d'un tenant tiers, qualifiés par
+        # émetteur (ADR 0052). Jusqu'au 05/09/2026 on en prenait UN, celui que la
+        # base rendait en premier, sans ordre fixé et sans le dire.
+        #
+        # Ce que ça coûtait, mesuré : `alexis.laporte@gmail.com` porte deux
+        # comptes, 91 et 98 appels sur trente jours. Filtrer le monitoring par
+        # cette adresse rendait 91 et taisait 98 — un chiffre PLAUSIBLE, jamais un
+        # zéro, donc rien pour alerter. Et la même résolution sert à suspendre un
+        # compte et à changer un rôle : on y jouait à pile ou face entre deux
+        # homonymes.
+        #
+        # On refuse donc, en NOMMANT les candidats : l'appelant repasse avec un
+        # sub, qui est sans ambiguïté. Deviner à sa place serait pire que refuser.
+        users = db.get_users_by_email(target)
+        if not users:
             raise AuthzDenied(400, "unknown_user",
                               f"Aucun user connu avec l'email `{target}` (doit s'être connecté une fois).")
-        return user["sub"]
+        if len(users) > 1:
+            subs = ", ".join(f"`{u['sub']}`" for u in users)
+            raise AuthzDenied(
+                400, "ambiguous_email",
+                f"L'email `{target}` désigne {len(users)} comptes : {subs}. "
+                "Une adresse n'identifie pas un compte — deux émetteurs peuvent la "
+                "porter. Reprends avec le `sub` de celui que tu vises.")
+        return users[0]["sub"]
     return target
 
 

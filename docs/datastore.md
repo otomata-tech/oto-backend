@@ -406,6 +406,25 @@ oublier une clé la faisait disparaître sans un mot, la promesse inverse du pat
 ne change pas : sans déclaration, `filter` reste le seul périmètre (comportement
 historique) ; `abandon_reason IS NULL` reste le filet de plateforme, indépendant des deux.
 
+⚠️ **Et depuis le 05/09/2026 (oto#64), la fusion descend d'un cran de plus dans
+`transitions`** : `lifecycle: {transitions: {"perdu": ["en_cours"]}}` ajoute cette
+sortie **sans toucher aux autres états**. C'était le même défaut, une couche plus bas —
+et il frappait le geste de RÉPARATION : un état terminal n'enferme pas (la sortie se
+déclare), mais celui qui la déclarait en ne nommant qu'elle effaçait tout le reste du
+cycle de vie, sans un mot. Le retrait devient donc explicite : `transitions: {"perdu":
+null}` retire les sorties d'un état, `lifecycle: {transitions: null}` retire la table
+entière. La LISTE d'un état, elle, se remplace — c'est l'ensemble de ses sorties, et une
+fusion de listes rendrait le retrait d'une destination impossible sans une grammaire de
+plus. `claimable` ne descend pas non plus : c'est un filtre entier, dont le remplacement
+en bloc est le geste voulu.
+
+**Le refus de transition NOMME la porte** (`refus_de_transition`) : il ne disait que ce
+qui est fermé, et l'appelant en concluait qu'il n'y avait pas de sortie — un agent a
+préféré ne rien écrire du tout et rendre la main à un humain, sur un tableau qu'une
+ligne de schéma aurait rouvert (signal 726). ⚠️ Le patch qu'il conseille porte les
+destinations **déjà autorisées plus la nouvelle** : conseiller la nouvelle seule
+reformerait, dans le message écrit pour l'éviter, le défaut ci-dessus.
+
 Refus de schéma : `ds_append`/`ds_update_row` traduisent `RowValidationError` en
 **400 `row_invalid`** (détail = les champs/transitions fautifs), pas en 500 — c'est le
 chemin d'échec d'une annulation (transition de retour devenue illégale).

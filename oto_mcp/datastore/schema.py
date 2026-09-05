@@ -1036,6 +1036,60 @@ def claimable_of(schema: Optional[dict]) -> Optional[dict]:
     return claimable.perimetre_of(lifecycle_of(schema))
 
 
+def refus_de_transition(colonne: str, depuis: str, vers: str,
+                        autorisees: list) -> str:
+    """Le refus d'une transition de cycle de vie — et la PORTE, nommée (oto#64).
+
+    ⚠️ Il ne disait que ce qui est fermé. Mesuré le 05/09/2026 : la sortie d'un état
+    terminal **est déjà déclarable** — il suffit de la poser dans
+    `lifecycle.transitions`. L'appelant, lui, lisait « (état terminal) » et en
+    concluait qu'il n'y avait pas de porte : le signal 726 est un agent qui a préféré
+    ne rien écrire du tout et rendre la main à un humain, sur un tableau qu'une ligne
+    de schéma aurait rouvert.
+
+    ⚠️ **Ce message n'a pu être écrit qu'APRÈS avoir rendu le geste sûr.** Jusqu'au
+    même jour, poser cette transition en ne nommant qu'elle effaçait toutes les autres
+    (`merge_lifecycle` remplaçait `transitions` en bloc) : enseigner ce geste-là aurait
+    envoyé casser le cycle de vie qu'on cherche à rouvrir. Un message qui apprend un
+    geste attend que le geste soit sûr.
+
+    Il TUTOIE, comme les autres refus d'écriture de ce chemin (« reprends le lot à la
+    ligne 4 ») : c'est un agent qui le lit, au milieu d'un lot.
+
+    ⚠️ **Le patch proposé porte les destinations DÉJÀ autorisées, plus la nouvelle** —
+    et pas la nouvelle seule. La fusion descend par état, mais la LISTE d'un état se
+    remplace : conseiller `{"recorded": ["pushed"]}` à qui a déjà `['drafted',
+    'excluded']` lui ferait perdre les deux. Le défaut qu'on vient de fermer un cran
+    plus haut se reformerait ici, dans le message écrit pour l'éviter."""
+    quoi = (f" (autorisées: {autorisees})" if autorisees else " (état terminal)")
+    # Les sorties de CET état après le patch : celles qui existent + celle qu'on ajoute.
+    cibles = list(autorisees) + [vers]
+    patch = ('{"key": "%s", "lifecycle": {"transitions": {"%s": %s}}}'
+             % (colonne, depuis,
+                "[" + ", ".join(f'"{c}"' for c in cibles) + "]"))
+    return (
+        f"{colonne}: transition {depuis!r} → {vers!r} interdite{quoi}. Si cette "
+        f"transition est légitime, elle se DÉCLARE : "
+        f"`data_patch_schema(namespace=…, fields=[{patch}])` — la fusion ne touche que "
+        f"l'état nommé, le reste du cycle de vie ne bouge pas.")
+
+
+def merge_transitions(current: dict, patch: dict) -> dict:
+    """Fusion PAR ÉTAT des transitions — `null` retire l'état de la table (oto#64).
+
+    ⚠️ La liste de destinations d'un état, elle, se REMPLACE : c'est l'ensemble des
+    sorties de cet état, et une fusion de listes rendrait le retrait d'UNE destination
+    impossible sans une grammaire de plus.
+    """
+    out = dict(current)
+    for etat, cibles in patch.items():
+        if cibles is None:
+            out.pop(etat, None)
+        else:
+            out[etat] = cibles
+    return out
+
+
 def merge_lifecycle(current: dict, patch: dict) -> dict:
     """Fusion PAR CLÉ du cycle de vie — `null` LÈVE une clé (#517).
 
@@ -1045,11 +1099,30 @@ def merge_lifecycle(current: dict, patch: dict) -> dict:
     disparaître sans un mot, la promesse inverse de `data_patch_schema`. La fusion
     descend d'un cran ; `null` est le geste de retrait (même parti que
     `key_required=false` : un patch qui ne peut qu'ajouter rend le retrait
-    impossible)."""
+    impossible).
+
+    ⚠️ **Et elle descend d'un cran de PLUS dans `transitions` (oto#64, 05/09/2026)** —
+    le même défaut, une couche plus bas, trouvé en mesurant : ajouter une seule
+    transition en ne nommant qu'elle effaçait toutes les autres, sans un mot. Le geste
+    qui le déclenchait était celui de la RÉPARATION : l'agent enfermé dans un état
+    terminal apprend qu'une sortie se déclare, la déclare, et casse le cycle de vie
+    qu'il voulait assouplir.
+
+    Le retrait d'un état devient donc explicite : `transitions: {"perdu": null}` retire
+    ses sorties, `transitions: null` retire la table entière. On ne préavise pas la fin
+    d'une destruction silencieuse — ce que ce changement retire à l'appelant, c'est le
+    droit d'effacer sans le savoir.
+
+    ⚠️ `claimable` NE descend pas : c'est un périmètre de réservation, un filtre entier
+    dont le remplacement en bloc est le geste voulu. Une fusion par colonne y rendrait
+    impossible de restreindre une file en une fois."""
     out = dict(current)
     for k, v in patch.items():
         if v is None:
             out.pop(k, None)
+        elif (k == "transitions" and isinstance(v, dict)
+                and isinstance(out.get(k), dict)):
+            out[k] = merge_transitions(out[k], v)
         else:
             out[k] = v
     return out
@@ -2329,11 +2402,9 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                     allowed = {str(t)
                                for t in transitions.get(str(unwrap(prev_status))) or []}
                     if str(new) not in allowed:
-                        errors.append(
-                            f"{key}: transition {unwrap(prev_status)!r} → {new!r} "
-                            "interdite"
-                            + (f" (autorisées: {sorted(allowed)})" if allowed
-                               else " (état terminal)"))
+                        errors.append(refus_de_transition(
+                            str(key), str(unwrap(prev_status)), str(new),
+                            sorted(allowed)))
     return errors
 
 

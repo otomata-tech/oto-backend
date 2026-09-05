@@ -16,8 +16,14 @@ par-ligne — il s'ARRÊTE à la première ligne refusée :
 fautive est la PREMIÈRE, rien n'est écrit — l'appelant perd bien tout son lot. C'est ce
 cas-là, et non « le lot entier tombe toujours », qui coûte en production.
 
-Ces bancs DATENT le comportement. Le changer (rendu par ligne, refus partiel) devra les
-faire tomber délibérément, pas par surprise.
+**Deux des trois sont corrigés le même jour** : le refus nomme désormais la sortie, et
+la fusion de `transitions` descend par état — dans cet ordre, parce qu'un message qui
+apprend un geste doit attendre que le geste soit sûr. Le troisième, le contrat du lot,
+ne bouge pas : ce qui coûte est la fautive en TÊTE, pas la chute du lot, et un refus
+partiel changerait le contrat de `data_write` pour un cas qui n'est pas celui-là.
+
+Les bancs qui restent DATENT le comportement du lot. Le changer devra les faire tomber
+délibérément, pas par surprise.
 """
 from __future__ import annotations
 
@@ -190,40 +196,84 @@ def test_la_SORTIE_d_un_etat_terminal_est_DEJA_declarable(live):
     assert _etats(st, ns) == {"a": "en_cours"}
 
 
-def test_DECLARER_la_sortie_par_un_patch_DETRUIT_les_autres_transitions(live):
-    """⚠️⚠️ **Le défaut le plus grave des trois, et c'est le geste de RÉPARATION qui le
-    déclenche.** La sortie se déclare (banc précédent) — mais celui qui la déclare de la
-    façon naturelle, en ne nommant que ce qu'il ajoute, EFFACE toutes les autres
-    transitions. Silencieusement.
+def test_declarer_UNE_transition_laisse_les_AUTRES_en_place(live):
+    """⚠️ **Le défaut le plus grave des trois, corrigé — et c'était le geste de
+    RÉPARATION qui le déclenchait.** Jusqu'au 05/09/2026, celui qui déclarait la sortie
+    de la façon naturelle — ne nommer que ce qu'il ajoute — effaçait toutes les autres
+    transitions, silencieusement : `merge_lifecycle` remplaçait `transitions` en bloc.
 
-    `merge_lifecycle` fusionne au premier niveau de `lifecycle` : `transitions` est
-    donc REMPLACÉ en bloc, pas fusionné par état. C'est exactement le défaut que cette
-    fusion a corrigé un cran plus haut le 29/08/2026 (« en oublier un les faisait
-    disparaître sans un mot, la promesse inverse de `data_patch_schema` ») — elle est
-    descendue d'un cran, pas de deux.
+    C'est le défaut que cette fusion avait corrigé un cran plus haut le 29/08 (« en
+    oublier un les faisait disparaître sans un mot, la promesse inverse de
+    `data_patch_schema` ») : elle était descendue d'un cran, pas de deux.
 
-    Conséquence pour oto#64 : l'agent qui suit le conseil « déclare la sortie » casse
-    le cycle de vie qu'il voulait assouplir, et ne l'apprend nulle part. Ce banc DATE
-    l'état ; il devra tomber le jour où la fusion descendra."""
+    Ce banc tombe si la fusion REMONTE."""
     from oto_mcp import db
-    from oto_mcp.datastore.core import make_store
     from oto_mcp.datastore import schema as dsv2
+    from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore_namespace("user", "sub-lot", ns)
     st = make_store("sub-lot")
     st.set_schema(ns, SCHEMA)
 
-    # Le geste NAÏF : ne nommer que la transition qu'on veut ajouter.
     st.patch_schema(ns, fields=[{"key": "statut",
                                  "lifecycle": {"transitions": {"perdu": ["en_cours"]}}}])
 
     lc = dsv2.lifecycle_of(st._schema_of(st.resolve_ns_id(ns)))
-    assert lc["transitions"] == {"perdu": ["en_cours"]}, (
-        "la fusion descend désormais dans `transitions` — ce banc a fait son travail")
-    # `states` et `terminal`, eux, survivent : la fusion du premier niveau les garde.
+    assert lc["transitions"] == {"neuf": ["en_cours"],
+                                 "en_cours": ["gagne", "perdu"],
+                                 "perdu": ["en_cours"]}
     assert lc["states"] == ["neuf", "en_cours", "gagne", "perdu"]
     assert lc["terminal"] == ["gagne", "perdu"]
+
+    # …et la ligne enfermée repart pour de bon, sans autre geste.
+    _six_lignes(st, ns, enfermee="r1")
+    st.update_row(ns, _id(st, ns, "r1"), {"statut": "en_cours"})
+    assert _etats(st, ns)["r1"] == "en_cours"
+
+
+def test_RETIRER_une_transition_est_explicite(live):
+    """Le pendant obligé de la fusion : sans retrait nommé, plus de nettoyage. C'est ce
+    que le changement coûte à l'appelant, et il est dit dans la description servie —
+    on ne préavise pas la fin d'une destruction silencieuse, mais on la nomme."""
+    from oto_mcp import db
+    from oto_mcp.datastore import schema as dsv2
+    from oto_mcp.datastore.core import make_store
+
+    ns = "t-" + uuid.uuid4().hex[:6]
+    db.create_datastore_namespace("user", "sub-lot", ns)
+    st = make_store("sub-lot")
+    st.set_schema(ns, SCHEMA)
+
+    st.patch_schema(ns, fields=[{"key": "statut",
+                                 "lifecycle": {"transitions": {"neuf": None}}}])
+    lc = dsv2.lifecycle_of(st._schema_of(st.resolve_ns_id(ns)))
+    assert lc["transitions"] == {"en_cours": ["gagne", "perdu"]}
+
+    # Et la table entière se retire toujours d'un coup.
+    st.patch_schema(ns, fields=[{"key": "statut", "lifecycle": {"transitions": None}}])
+    lc = dsv2.lifecycle_of(st._schema_of(st.resolve_ns_id(ns)))
+    assert "transitions" not in lc
+
+
+def test_le_refus_NOMME_la_porte_et_le_patch_qu_il_conseille_ne_DETRUIT_rien(live):
+    """⚠️ Deux exigences dans un seul banc, parce qu'elles ne valent qu'ensemble.
+
+    Le refus doit nommer la sortie — sans quoi l'appelant conclut qu'il n'y en a pas,
+    ce qui a produit le signal 726. Et le patch qu'il conseille doit porter les
+    destinations DÉJÀ autorisées en plus de la nouvelle : la fusion descend par état,
+    mais la LISTE d'un état se remplace. Conseiller la nouvelle seule reformerait, dans
+    le message écrit pour l'éviter, le défaut qu'on vient de fermer."""
+    from oto_mcp.datastore import schema as dsv2
+
+    terminal = dsv2.refus_de_transition("statut", "perdu", "en_cours", [])
+    assert "data_patch_schema" in terminal
+    assert '{"perdu": ["en_cours"]}' in terminal
+
+    saut = dsv2.refus_de_transition("status", "recorded", "pushed",
+                                    ["drafted", "excluded"])
+    assert '{"recorded": ["drafted", "excluded", "pushed"]}' in saut, (
+        "le patch conseillé perdrait les sorties existantes de cet état")
 
 
 def test_un_etat_terminal_ENFERME_la_ligne_meme_seule(live):

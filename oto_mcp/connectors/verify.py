@@ -24,7 +24,25 @@ from typing import Awaitable, Callable, Optional, Union
 # `config` = satellites NON-secrets appariés à la clé gagnante (meta public : dsn
 # unipile…). Une sonde qui parle à un endpoint dont l'hôte dépend de la clé (unipile,
 # tenant BYO) DOIT lire `config`, sinon elle teste la clé contre le mauvais tenant.
-Probe = Callable[[dict, dict], Union[None, Awaitable[None]]]
+Probe = Callable[[dict, dict], Union[None, dict, Awaitable[Union[None, dict]]]]
+
+#: Ce qu'une sonde peut RENDRE, en plus de lever sur échec : un dict de mesures.
+#: Aujourd'hui le solde, pour les sondes `auth+quota` — `{"quota": {...}}`.
+#:
+#: ⚠️ Rendre est FACULTATIF et le restera : les sondes qui ne mesurent qu'une
+#: authentification rendent `None`, comme avant. Exiger un retour de toutes aurait
+#: obligé à inventer une forme vide pour la quinzaine qui n'a rien à dire — et une
+#: forme vide finit par se lire comme une mesure à zéro.
+_CLES_DE_MESURE = ("quota",)
+
+
+def _mesures(rendu) -> dict:
+    """Ce que la sonde a mesuré, réduit aux clés connues. Un rendu qui n'est pas un
+    dict — le cas de toutes les sondes `auth` — vaut « rien mesuré », jamais une
+    erreur : c'est le contrat d'avant, et il doit continuer de passer."""
+    if not isinstance(rendu, dict):
+        return {}
+    return {k: rendu[k] for k in _CLES_DE_MESURE if k in rendu}
 
 #: Ce qu'une sonde COUVRE. Déclaré, jamais deviné (oto#57).
 #:
@@ -161,6 +179,9 @@ async def executer(probe: Probe, fields: dict, config: Optional[dict] = None,
     résolution de signature : les deux appelaient la sonde à leur façon. Elle
     vit maintenant à un seul endroit, sinon corriger l'une laisse l'autre.
 
+    Rend les MESURES de la sonde (aujourd'hui `{"quota": …}`), ou `{}` si elle
+    n'en a pas — ce qui est le cas de toutes les sondes `auth`.
+
     ⚠️ La borne libère la BOUCLE, elle n'interrompt pas le thread : un client
     HTTP synchrone n'est pas annulable, et le thread vit jusqu'à ce que son
     propre délai d'attente expire. Ce qui compte est tenu — le processus répond,
@@ -181,17 +202,17 @@ async def executer(probe: Probe, fields: dict, config: Optional[dict] = None,
 
     async def _joue():
         if inspect.iscoroutinefunction(probe):
-            await probe(fields, config or {}, **kwargs)
-            return
+            return await probe(fields, config or {}, **kwargs)
         # Une sonde sync part au thread. Une sonde qui n'est pas déclarée `async
         # def` mais rend un awaitable (callable, partial) traverse aussi : la
         # créer dans un thread ne l'exécute pas, on l'attend ensuite ici.
         res = await asyncio.to_thread(probe, fields, config or {}, **kwargs)
         if inspect.isawaitable(res):
-            await res
+            return await res
+        return res
 
     try:
-        await asyncio.wait_for(_joue(), timeout=_BORNE_S)
+        return _mesures(await asyncio.wait_for(_joue(), timeout=_BORNE_S))
     except asyncio.TimeoutError as e:
         raise TimeoutError(
             f"le test de connexion n'a pas répondu en {int(_BORNE_S)} s — "
@@ -209,4 +230,4 @@ async def run(connector: str, fields: dict, config: Optional[dict] = None,
     probe = _REGISTRY.get(connector)
     if probe is None:
         return
-    await executer(probe, fields, config, instance)
+    return await executer(probe, fields, config, instance)

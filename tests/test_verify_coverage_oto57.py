@@ -66,25 +66,40 @@ def test_toutes_les_sondes_reelles_declarent_une_couverture_valide():
         assert V.couverture(nom) in V.COUVERTURES, nom
 
 
-def test_aucune_sonde_ne_promet_le_quota_sans_le_mesurer():
-    """⚠️ Le banc le plus important du lot, et il rougira le jour où quelqu'un montera
-    une couverture par optimisme.
+#: Les sondes qui ont le DROIT de promettre `auth+quota`. Une entrée ici est une
+#: affirmation : « celle-ci lit vraiment un solde ET lève quand il est vide ».
+#:
+#: ⚠️ Ajouter un nom sans la preuve qui va avec rendrait ce banc décoratif — c'est
+#: exactement le vert trompeur qu'oto#57 supprime. Chaque entrée doit avoir son
+#: épreuve de compte à sec, citée en regard.
+QUOTA_AUTORISE = {
+    # `tests/test_sonde_hunter.py::test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH`
+    "hunter",
+}
 
-    Aujourd'hui AUCUNE sonde ne couvre le quota — y compris celles qui LISENT un solde
-    sans tester sa valeur : à zéro, l'appel réussit et la sonde reste verte. Lire n'est
-    pas vérifier. Monter une sonde à `auth+quota` suppose donc de la faire ÉCHOUER sur
-    un compte à sec, et ce banc oblige à le dire ici en connaissance de cause."""
+
+def test_aucune_sonde_ne_promet_le_quota_sans_le_mesurer():
+    """Le cliquet. Il était à zéro tant qu'aucune sonde ne lisait de solde ; il
+    porte maintenant la liste de celles qui en lisent un, et rien d'autre.
+
+    Le message d'origine disait « mets ce banc à jour en même temps que la sonde,
+    jamais avant ». C'est fait dans cet ordre : la sonde Hunter lève `QuotaEpuise`
+    sur un compte à sec, son épreuve le prouve, et son nom entre ici ensuite."""
     from fastmcp import FastMCP
 
     from oto_mcp.tools import register_all
     register_all(FastMCP("t"))
-    promettent = sorted(n for n in V._REGISTRY if V.couverture(n) == V.AUTH_QUOTA)
-    assert promettent == [], (
-        f"ces sondes promettent le quota : {promettent}. Chacune doit LEVER sur un "
-        "compte à sec — lire un solde sans tester sa valeur laisse la sonde verte, et "
-        "c'est le vert trompeur que ce lot supprime. Mets ce banc à jour en même temps "
-        "que la sonde, jamais avant.")
-
+    promettent = {n for n in V._REGISTRY if V.couverture(n) == V.AUTH_QUOTA}
+    non_autorisees = sorted(promettent - QUOTA_AUTORISE)
+    assert not non_autorisees, (
+        f"ces sondes promettent le quota sans preuve : {non_autorisees}. Chacune doit "
+        "LEVER sur un compte à sec — lire un solde sans tester sa valeur laisse la "
+        "sonde verte, et c'est le vert trompeur que ce lot supprime. Écris l'épreuve "
+        "de compte à sec, PUIS ajoute le nom à QUOTA_AUTORISE avec son chemin.")
+    parties = sorted(QUOTA_AUTORISE - promettent)
+    assert not parties, (
+        f"{parties} sont listées comme mesurant le quota mais ne le déclarent plus : "
+        "la liste ment dans l'autre sens, elle autorise ce qui n'existe plus.")
 
 def test_la_capacite_sert_la_couverture_avec_le_verdict():
     """Servie AVEC `ok`, jamais à côté : un client qui lit le verdict sans la

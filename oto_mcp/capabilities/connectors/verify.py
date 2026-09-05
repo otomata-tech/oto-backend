@@ -204,7 +204,7 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
                 "error": st.next_action, "elapsed_ms": 0,
                 "coverage": connector_verify.couverture(inp.provider), **instance}
     started = time.monotonic()
-    ok, error, verdict = True, None, connector_verify.OK
+    ok, error, verdict, mesures = True, None, connector_verify.OK, {}
     try:
         # Un seul endroit exécute les sondes (`connectors.verify.executer`) : hors
         # de la boucle d'événements, sous une borne de temps, et il porte la
@@ -212,7 +212,7 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
         # remplaçant doit être réécrit sur la ligne testée, pas sur celle que la
         # cascade aurait choisie. Ce bloc dupliquait ce geste : corriger l'un
         # laissait l'autre (oto-backend#867, lot 2).
-        await connector_verify.executer(probe, fields, config, cible)
+        mesures = await connector_verify.executer(probe, fields, config, cible)
     # noqa: SILENT — l'erreur d'auth EST le résultat de la sonde, rendue à l'appelant
     except Exception as e:  # noqa: BLE001 — l'erreur d'auth EST le résultat
         ok = False
@@ -235,6 +235,13 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
            "verdict": verdict,
            # QUELLE instance a répondu — cf. `_fields_config_scope`.
            **instance}
+    # Ce que la sonde a MESURÉ, quand elle mesure quelque chose (`auth+quota`).
+    # Le solde vit ICI et nulle part ailleurs : la fiche du connecteur ne porte que
+    # le verdict et sa date. Un chiffre affiché promettrait une fraîcheur que la
+    # plateforme ne tient qu'en interrogeant, et interroger coûte — un verdict daté
+    # dit exactement ce qu'on sait, ni plus ni moins.
+    if mesures:
+        out.update(mesures)
     if not ok:
         out["error"] = error
         # La conduite, servie AVEC le diagnostic : les trois causes appellent des

@@ -22,6 +22,8 @@ import pkgutil
 
 import pytest
 
+from _dep_versions import trop_vieux
+
 # Décision explicite de NON-exposition, par module data FOD (la raison est le
 # contrat : un module qu'on choisit de ne pas exposer se justifie ici, un oubli
 # n'a pas de raison à donner → il casse le test).
@@ -187,6 +189,7 @@ def test_every_fod_data_module_is_wired_or_decided():
         "non-exposition dans FOD_NOT_EXPOSED avec sa raison")
 
 
+@pytest.mark.skipif(bool(trop_vieux("france-opendata")), reason=str(trop_vieux("france-opendata")))
 def test_fod_allowlists_are_not_stale():
     """Une entrée d'allowlist doit rester vraie : le module existe encore dans FOD,
     et (pour FOD_NOT_EXPOSED) il n'est toujours PAS câblé — sinon la décision est

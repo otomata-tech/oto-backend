@@ -29,6 +29,8 @@ from oto_mcp.connectors import verify as connector_verify
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tool_visibility import namespace_of
 
+from _dep_versions import trop_vieux
+
 EXPECTED = {
     "leexi": {"leexi_calls", "leexi_notes", "leexi_meetings", "leexi_users",
               "leexi_teams"},
@@ -363,6 +365,7 @@ def test_la_sonde_github_passe_quand_le_compte_est_nomme():
 
 # --- refus d'op et arguments requis ---------------------------------------------------
 
+@pytest.mark.skipif(bool(trop_vieux("fastmcp")), reason=str(trop_vieux("fastmcp")))
 @pytest.mark.parametrize("module,outil", [
     ("leexi", "leexi_calls"),
     ("productlane", "productlane_threads"),

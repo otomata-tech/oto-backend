@@ -5,6 +5,13 @@ from __future__ import annotations
 
 import pytest
 from oto_mcp.mcp_errors import McpError
+
+from _dep_versions import trop_vieux
+
+_MOTIF = trop_vieux("france-opendata")
+pytestmark = pytest.mark.skipif(bool(_MOTIF), reason=str(_MOTIF))
+
+
 class _Reg:
     def __init__(self):
         self.tools = {}

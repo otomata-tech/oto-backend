@@ -115,6 +115,41 @@ def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
     return target if (target and target != real_sub) else real_sub
 
 
+# Clé du principal résolu, déposée dans le `scope` ASGI — le MÊME dict que celui
+# du middleware de journal, qui le relit dans son `finally`.
+#
+# ⚠️ Pourquoi le publier au lieu de le redéduire : le middleware ne voit que
+# l'en-tête, et il n'en tire un compte QUE si le bearer est un JWT
+# (`_claimed_sub` : trois parts). Tout appel par jeton API ou par jeton de
+# délégation s'écrivait donc SANS compte — anonyme dans le seul journal où l'on
+# va chercher qui a fait quoi. L'authentification, elle, résout le porteur pour
+# de vrai ; il suffisait de ne pas jeter ce qu'elle avait déjà en main.
+CLE_PRINCIPAL = "oto_principal"
+
+
+def _publier_principal(request: Request, sub: str, *,
+                       token_id: int | None = None,
+                       token_kind: str | None = None) -> None:
+    """Dépose dans le scope QUI a été authentifié, pour le journal.
+
+    `sub` = le porteur RÉEL du bearer — celui qui s'est authentifié, jamais la
+    cible d'un « en tant que ».
+
+    ⚠️ Le view-as N'EST PAS journalisé, et surtout pas dans `effective_sub` : le
+    schéma en fait le compte relu APRÈS le handler, dont toute divergence d'avec
+    `sub` EST un défaut (elle trahirait une réponse servie sous une autre
+    identité). Y écrire une consultation rendrait normale la divergence que cette
+    colonne existe pour dénoncer. Le journal dit donc QUI A PRÉSENTÉ le bearer —
+    c'est ce qu'on cherche quand on demande « qui a fait ça ».
+
+    ⚠️ Le jeton lui-même n'entre JAMAIS ici : on nomme son identifiant, pas sa
+    valeur.
+    """
+    request.scope[CLE_PRINCIPAL] = {
+        "sub": sub, "token_id": token_id, "token_kind": token_kind,
+    }
+
+
 async def _authenticate(
     request: Request,
     verifier: JWTVerifier,
@@ -179,7 +214,11 @@ async def _authenticate(
         # même le premier geste de diagnostic après une mise en pause.
         if (pause := await run_in_threadpool(account_suspension.refus, row["sub"])):
             return None, _json_error(request, 403, account_suspension.CODE, pause[0])
-        return _maybe_view_as(row["sub"], apply_view_as), None
+        servi = _maybe_view_as(row["sub"], apply_view_as)
+        _publier_principal(request, row["sub"],
+                           token_id=row.get("token_id"),
+                           token_kind=row.get("token_kind"))
+        return servi, None
 
     # Sinon, JWT Logto (session interactive) — jamais de portée de jeton.
     token_scopes.set_current(None)
@@ -218,7 +257,12 @@ async def _authenticate(
         # un compte neutralisé. Sans ce refus, le porteur repartirait avec un compte
         # neuf et un espace personnel neuf — la résurrection déjà vécue.
         return None, _json_error(request, 403, db.CompteEnPause.code, str(refus))
-    return _maybe_view_as(sub, apply_view_as), None
+    servi = _maybe_view_as(sub, apply_view_as)
+    # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
+    # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une
+    # seule des deux formes de bearer serait attribuée.
+    _publier_principal(request, sub)
+    return servi, None
 
 
 def _json_error(request: Request, status: int, code: str,

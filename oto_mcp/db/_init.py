@@ -317,6 +317,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `effective_sub` ci-dessus : lecture d'enquête, pas un chemin chaud — un
     # index de plus sur `tool_calls` se paie à CHAQUE appel journalisé.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS error_kind TEXT")
+    # ⚠️ La base est PARTAGÉE prod/preprod : le `CREATE TABLE` est sauté sur une
+    # table qui existe déjà, donc une colonne neuve n'arrive QUE par ici.
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS token_id BIGINT")
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS token_kind TEXT")
     # #493 : le journal de paiement porte le customer Mollie de la tentative. Le
     # miroir `org_subscriptions` n'est posé qu'à `confirm` — entre deux clics de
     # souscription il n'y avait donc RIEN à relire, et un second customer Mollie

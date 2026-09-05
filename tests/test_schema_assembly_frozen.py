@@ -253,8 +253,18 @@ from oto_mcp.db import _schema, schema
 # rend 143 228 = 142 575 + 653. Le compte tombe juste, donc rien d'autre n'a bougé
 # dans le DDL — c'est la seule chose qui distingue « j'ai fusionné proprement » de
 # « j'ai recopié le nombre que le test m'a donné ».
-EMPREINTE = "fb55a3e0a68cc5a7e9998fdaf970824c7d8ebd85607614d8e7b4b78acfddde2a"
-LONGUEUR = 143228
+# ⚠️ 2026-09-05 (#882) — `tool_calls.token_id` / `token_kind` : PAR QUEL MOYEN un
+# appel a été fait, jamais le jeton lui-même. Le journal n'attribuait que les
+# sessions JWT, donc tout appel par jeton API était anonyme là où on cherche qui a
+# fait quoi.
+# ⚠️ Empreinte recalculée, arithmétique VÉRIFIÉE des deux côtés : le fragment
+# `schema/usage.py` grandit de 749 caractères (10 594 → 11 343) et l'assemblé
+# exactement de 749 aussi (143 228 → 143 977). Mesurer le fragment ET l'assemblé
+# est ce qui distingue « j'ai ajouté mes colonnes » de « j'ai recopié le nombre
+# que le test m'a donné » — un delta qui ne tombe pas juste dirait qu'autre chose
+# a bougé dans le DDL.
+EMPREINTE = "a67a83b15e6520b8d5671ad391af9b0d1f1bf1a7c3f327038b62c339f04bd97a"
+LONGUEUR = 143977
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

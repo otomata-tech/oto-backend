@@ -66,6 +66,7 @@ from ..capabilities import registry as _cap_registry
 # quitté ce fichier pour `base.py` le 2026-08-27, sous les modules de
 # domaine qui les appellent (sinon l'import serait circulaire). RÉ-EXPORTÉES ici :
 # `api.routes._authenticate` / `_cors_headers` / `_json` … restent valides.
+from . import base as api_base
 from .base import (  # noqa: F401 — ré-export de compatibilité
     AuthFn, _allowed_origins, _authenticate, _cors_headers, _json, _json_error,
     _maybe_view_as, bind, options_handler)
@@ -314,13 +315,20 @@ class RestCallLogger:
             await send(message)
 
         request = Request(scope, receive)  # headers/query only → ne consomme pas le body
-        sub = _claimed_sub(request)
         org = _parse_view_org(request)  # org de consultation revendiquée (header), best-effort
         started = time.monotonic()
         try:
             await self.app(scope, receive, _send)
         finally:
             code = status["code"]
+            # ⚠️ LU APRÈS la requête, pas avant : c'est l'authentification qui
+            # résout le porteur, et elle n'a pas encore tourné au moment où le
+            # middleware entre. Calculer le compte à l'entrée revenait à ne
+            # pouvoir le lire que dans l'en-tête — donc à n'attribuer QUE les
+            # JWT, et à écrire une ligne anonyme pour tout appel par jeton API ou
+            # par jeton de délégation.
+            principal = scope.get(api_base.CLE_PRINCIPAL) or {}
+            sub = principal.get("sub") or _claimed_sub(request)
             route, masques = journal_secrets.route_and_secrets(scope.get("path", ""))
             row = {
                 "kind": "rest",
@@ -329,7 +337,17 @@ class RestCallLogger:
                 # exploser la cardinalité du `GROUP BY tool` du monitoring) : il va
                 # dans `args`, où il répond à « le même jeton a-t-il été rejoué ? ».
                 "args": masques,
+                # ⚠️ `sub` = le PORTEUR du bearer, jamais la cible d'un « en tant
+                # que ». `effective_sub` n'est pas là pour ça : le schéma en fait
+                # le compte relu APRÈS le handler, dont toute divergence d'avec
+                # `sub` EST un défaut. Y écrire une consultation view-as rendrait
+                # normale la divergence que cette colonne existe pour dénoncer.
                 "sub": sub,
+                # Le jeton employé, NOMMÉ jamais écrit : deux appels du même compte
+                # par deux jetons étaient indistinguables, et une délégation du
+                # runner ressemblait à une session humaine.
+                "token_id": principal.get("token_id"),
+                "token_kind": principal.get("token_kind"),
                 "org_id": org,
                 "ok": 200 <= code < 400,
                 "error": (f"HTTP {code}" if code >= 400 else None),

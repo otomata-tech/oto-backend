@@ -194,6 +194,45 @@ def _merge_group_ids(current_groups, add, remove) -> list[dict]:
     return [{"id": gid} for gid in result]
 
 
+def _merge_custom_fields(current_cfv, patch: dict) -> dict:
+    """Fusionne `customFieldValues` et renvoie l'objet COMPLET attendu par l'API.
+
+    Même faute que `groups` juste au-dessus, et bien plus coûteuse : l'API Folk est en
+    *replace-all* sur cet objet aussi. Passer un seul champ personnalisé effaçait tous
+    les autres de ce groupe sur la fiche — silencieusement, avec `succeeded: 1` en
+    retour. Mesuré le 04/09/2026 : **quatre champs perdus en un appel**, dont une
+    consigne opérationnelle (oto-backend, signal 714).
+
+    ⚠️ La documentation de l'outil DIT que `groups` est un remplacement et offre
+    `add_to_groups`/`remove_from_groups` pour l'éviter. C'est cette précaution visible
+    sur le champ voisin qui trompe : elle fait conclure que la fusion est le défaut
+    ailleurs. Un remède qui ne traiterait que `groups` laisserait donc intact le champ
+    où le même défaut coûte le plus.
+
+    **Ce qui est fourni gagne, ce qui est absent survit.** La granularité est le CHAMP,
+    pas le groupe : les autres groupes de la fiche sont conservés tels quels, et dans le
+    groupe visé les clés non citées restent en place.
+
+    ⚠️ **Une valeur explicitement fournie est écrite telle quelle, `None` et `""`
+    compris** — c'est ainsi qu'on VIDE un champ, et il faut que ça reste possible :
+    l'incident fondateur s'est réparé par un second appel qui remettait à vide. Fusionner
+    « sauf les valeurs vides » enlèverait le seul geste d'effacement disponible.
+    """
+    out: dict = {}
+    for gid, champs in (current_cfv or {}).items():
+        out[str(gid)] = dict(champs) if isinstance(champs, dict) else champs
+    for gid, champs in (patch or {}).items():
+        gid = str(gid)
+        ancien = out.get(gid)
+        if isinstance(ancien, dict) and isinstance(champs, dict):
+            ancien.update(champs)
+        else:
+            # Groupe absent de la fiche, ou forme inattendue d'un côté : on écrit ce
+            # que l'appelant a fourni. Rien n'est écrasé qu'on aurait pu préserver.
+            out[gid] = dict(champs) if isinstance(champs, dict) else champs
+    return out
+
+
 # --- dispatch par entité, partagé entre modes singulier et bulk -------------
 #
 # `_create_one`/`_update_one`/`_delete_one` portent la logique de l'op sur UN
@@ -382,9 +421,26 @@ def _update_one(c, entity: str, id: str, fields: Optional[dict] = None,
     fields = dict(fields or {})
     _reject_forbidden_update_fields(entity, fields)
     current = None
-    if add_to_groups or remove_from_groups or dry_run:
+    # `customFieldValues` rejoint la liste des champs qui EXIGENT l'état actuel : sans
+    # lui, un patch partiel est une destruction (cf. `_merge_custom_fields`).
+    besoin_courant = bool(add_to_groups or remove_from_groups or dry_run
+                          or isinstance(fields.get("customFieldValues"), dict))
+    if besoin_courant:
         current = _get_one(c, entity, id, group_id=group_id,
                            object_type=object_type, entity_id=entity_id)
+    if isinstance(fields.get("customFieldValues"), dict):
+        # ⚠️ REFUSER plutôt qu'écrire à l'aveugle. Sans l'état actuel on ne peut pas
+        # fusionner, et envoyer le patch tel quel écraserait les champs qu'on n'a pas
+        # pu lire — exactement le dégât que ce lot corrige. Un refus nommé laisse
+        # l'appelant choisir ; un succès muet ne laisse rien.
+        if current is None:
+            raise _bad(
+                "Impossible de relire la fiche pour fusionner `customFieldValues` : "
+                "l'API Folk REMPLACE cet objet, donc écrire sans l'état actuel "
+                "effacerait les champs personnalisés non fournis. Réessaie, ou passe "
+                "l'objet complet après un op='get'.")
+        fields["customFieldValues"] = _merge_custom_fields(
+            current.get("customFieldValues"), fields["customFieldValues"])
     if add_to_groups or remove_from_groups:
         if entity not in _GROUP_ENTITIES:
             raise _bad("add_to_groups/remove_from_groups ne valent que pour "
@@ -786,6 +842,13 @@ def register(mcp: FastMCP) -> None:
                 Un champ custom passé à plat (`{"Status": …}`) est rejeté (422
                 "Unrecognized key"). La structure se découvre via op="search"
                 (customFieldValues groupée par group_id).
+                ✅ **Patch PARTIEL : les champs que tu ne cites pas sont
+                CONSERVÉS.** L'API Folk remplace cet objet en entier ; l'outil
+                relit la fiche et fusionne champ par champ avant d'écrire, donc
+                envoyer un seul champ n'efface plus les autres. Pour VIDER un
+                champ, envoie-le explicitement à `null` ou `""` — une valeur
+                fournie est écrite telle quelle. Si la fiche ne peut pas être
+                relue, l'appel est REFUSÉ plutôt qu'écrit à l'aveugle.
                 ⚠️ Un champ custom peut porter une valeur que tu n'as jamais
                 envoyée : folk remplit tout seul ses « AI fields » (notamment
                 quand une fiche entre dans un groupe), réglage invisible depuis

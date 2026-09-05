@@ -603,6 +603,28 @@ La borne (`JOBS_PAGE_MAX = 200`) reste appliquée dans le SQL en dernier ressort
 celle qui ENGAGE est désormais au contrat (`capabilities/runner_jobs.py`, patron
 `cap_limit` : on écrête, on ne refuse pas) — et l'écrêtage n'est plus muet.
 
+### Le BAIL est le seul mécanisme qui libère — décidé le 05/09/2026 (oto-backend#324)
+
+Il n'existe **aucun ramassage périodique des runs abandonnés**, et c'est un choix, pas
+un oubli. Un run qui meurt sans conclure laisse ses lignes réservées jusqu'à
+l'expiration de son bail, qui finit par les rendre à la file. C'est lent, et ça marche.
+
+**Pourquoi ne pas ajouter un ramasseur** : ce serait un **second mécanisme sur le même
+objet**. Deux gardes qui libèrent la même ligne peuvent diverger — sur le délai, sur ce
+qu'elles considèrent comme mort, sur ce qu'elles écrivent en partant — et la journée où
+elles divergeraient, personne ne saurait laquelle a agi. Le bail a déjà cette
+responsabilité et il la remplit ; la question n'est pas d'en ajouter une seconde, mais
+de raccourcir le bail si l'attente devient le problème.
+
+⚠️ **Ce que ce choix coûte, et qu'il faut savoir** : entre la mort d'un run et
+l'expiration de son bail, ses lignes sont invisibles pour la file — un poste de flotte
+qui les attend croit la file vide. La maintenance compte bien des objets périmés
+(`maintenance.py`), mais ce sont des **nœuds**, pas des runs : rien ne rend visible un
+run mort.
+
+**Ce qui rouvrirait le sujet** : une flotte qui laisse assez de runs morts pour que
+l'attente du bail se voie — c'est-à-dire un volume, pas une inquiétude.
+
 ### `complete` libère les baux du run et rend le compte — `0` écrit (#633, 29/08/2026)
 
 **Mesuré sur une campagne** : un poste de flotte lit « le témoin que la clôture du

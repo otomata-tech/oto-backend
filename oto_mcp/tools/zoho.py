@@ -263,6 +263,33 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
                      "(modules désactivés ou inaccessibles).")
 
 
+def _demarque_apres_refresh(rc):
+    """Démarque la ligne de coffre quand le refresh Zoho RÉUSSIT (oto#25 lot b3).
+
+    Symétrique du câblage Salesforce, qui n'existait pas ici : le démarquage
+    excluait Zoho, faute de savoir quand un credential recommence à marcher. Une
+    ligne marquée rejetée restait rouge jusqu'à une re-pose manuelle, même après
+    que son propriétaire ait réparé son application.
+
+    ⚠️ Le rappel n'est invoqué qu'après un refresh RÉUSSI, et jamais sur un succès
+    de cache (garanti côté oto-core) : c'est ce qui en fait une preuve de vie et
+    non une information périmée. Le cache Zoho dure une heure — un jeton valide
+    prouve un refresh d'il y a une heure, pas un credential sain maintenant.
+
+    Au niveau MODULE, hors de `register()` : une fabrique enfermée dans la closure
+    ne s'éprouve qu'en montant tout le connecteur, et c'est précisément le genre de
+    pièce qu'on veut pouvoir attaquer seule.
+    """
+    if rc.entity_type is None:
+        return None              # grant plateforme : aucune ligne de coffre à marquer
+
+    def _demarque(_token_data: dict) -> None:
+        connector_health.record_health(
+            "zoho", (rc.entity_type, rc.entity_id, rc.account), True, None)
+
+    return _demarque
+
+
 def register(mcp: FastMCP) -> None:
     connector_verify.register("zoho", _verify)
     from oto.tools.zoho import ZohoAuthError
@@ -289,6 +316,7 @@ def register(mcp: FastMCP) -> None:
             refresh_token=creds.get("refresh_token"),
             api_domain=api_domain,
             accounts_url=accounts_url,
+            on_refresh=_demarque_apres_refresh(rc),
         )
         return client, rc
 

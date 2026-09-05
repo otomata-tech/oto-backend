@@ -855,7 +855,16 @@ def register(mcp: FastMCP) -> None:
                 l'API. Relis la fiche si la valeur t'engage.
             filters: op="search" — Field → value, matched with `like` (e.g.
                 {"fullName": "Dupont", "emails": "@otomata.tech"} for people,
-                {"name": "Otomata"} for companies). For another operator, pass
+                {"name": "Otomata"} for companies).
+                ⚠️ **Le `like` de Folk est ANCRÉ EN DÉBUT de chaîne : c'est un
+                préfixe, pas un « contient ».** Mesuré le 04/09/2026 : chercher
+                `{"name": "Cradle"}` rend `count=0` alors qu'une société dont le nom
+                CONTIENT ce mot existe dans l'espace. ⚠️ Le coût n'est pas la
+                recherche ratée, c'est ce qui vient après : `count=0` se lit « cette
+                fiche n'existe pas », et le geste suivant est une CRÉATION — donc un
+                doublon de ce qu'on cherchait. **Avant de conclure à l'absence sur un
+                nom composé, cherche sur son premier mot, ou vérifie par un autre
+                champ (domaine, e-mail).** For another operator, pass
                 {field: {op: value}} — op ∈ eq, not_eq, like, not_like, empty,
                 not_empty, gt (dates), in / not_in (relations). For `note` and
                 `reminder`, Folk only has ONE filter: {"entity_id": "<id>"} (the

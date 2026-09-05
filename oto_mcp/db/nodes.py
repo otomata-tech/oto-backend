@@ -947,6 +947,8 @@ def create_page(*, owner_type: str, owner_id: str, title: str,
             place_at_end(conn, row["id"], parent_id=parent_id,
                          owner_type=owner_type, owner_id=str(owner_id))
             write_node_blocks(conn, row["id"], body_md or "")
+            from .search import stamp_rank_vector
+            stamp_rank_vector(conn, "nodes", "id = %s", (row["id"],))
     return dict(row)
 
 
@@ -978,6 +980,8 @@ def update_page(node_id: int, *, title: Optional[str] = None,
                 return False
             if body_md is not None:
                 write_node_blocks(conn, node_id, body_md)
+            from .search import stamp_rank_vector
+            stamp_rank_vector(conn, "nodes", "id = %s", (node_id,))
     return True
 
 

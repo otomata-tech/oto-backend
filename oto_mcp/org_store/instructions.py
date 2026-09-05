@@ -325,6 +325,11 @@ def _write_version(conn, org_id: int, otype: str, oid: str, slug: str, *, versio
         (org_id, otype, oid, slug, title, description, body_md, slots_json,
          version, set_by),
     )
+    # Le rang se maintient DANS la transaction qui écrit le corps : le rattrapage
+    # de fond ne repasse que sur les vecteurs absents, jamais sur un vecteur
+    # présent mais périmé — un cache laissé là serait faux indéfiniment.
+    from ..db.search import stamp_rank_vector
+    stamp_rank_vector(conn, "org_instructions", _OWNER_WHERE + " AND slug = %s", (otype, oid, slug))
     conn.execute(
         """
         INSERT INTO org_instruction_revisions

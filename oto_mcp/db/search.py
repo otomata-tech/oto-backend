@@ -16,11 +16,14 @@ début du texte (jamais un texte foldé rendu à l'utilisateur).
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
 
 from ._conn import _connect
 from .projects import _fold
+
+logger = logging.getLogger(__name__)
 
 # Textes indexés par table (mêmes expressions dans le DDL et le WHERE).
 DOCS_TEXT = "coalesce(title,'') || ' ' || coalesce(body_md,'')"
@@ -177,9 +180,10 @@ def stamp_rank_vector(conn, table: str, where: str, params: tuple = ()) -> None:
     de l'écriture qui vient de les modifier.
 
     C'est le maintien à l'écriture (#318, barreau 2) : sans lui, une ligne modifiée
-    garderait son ancien vecteur jusqu'au passage du rattrapage, donc un classement
-    daté de quelques secondes. Jamais faux — le FILTRE lit l'expression indexée, à
-    jour — mais daté, et c'est évitable.
+    garderait indéfiniment son ancien vecteur : le rattrapage ne traite que les
+    NULL. On invalide donc d'abord le cache dans la transaction métier, puis on
+    tente son calcul sous savepoint. En cas d'échec, le classement calcule le
+    contenu courant et le worker retrouve la ligne NULL ; jamais de rang périmé.
 
     ⚠️ **Un UPDATE séparé, volontairement, plutôt qu'une colonne de plus dans
     l'écriture** : en SQL, `SET data = <neuf>, vec = f(data)` calcule `f` sur
@@ -188,9 +192,9 @@ def stamp_rank_vector(conn, table: str, where: str, params: tuple = ()) -> None:
     faux si on comparait à la mauvaise chose. Le faire APRÈS, sur la ligne écrite,
     n'a pas ce piège.
 
-    Best-effort : une source non matérialisée ou une erreur ici ne doit pas faire
-    échouer l'écriture métier — le rattrapage repassera, et le repli du `COALESCE`
-    fait qu'entre-temps rien ne ment.
+    Seul le RECALCUL est best-effort, avec warning. L'invalidation est requise :
+    son échec refuse l'écriture métier plutôt que de conserver un rang périmé.
+    Une source non matérialisée n'a aucun cache à maintenir.
 
     ⚠️ **Le SAVEPOINT est ce qui rend le best-effort VRAI** (#333) : sans lui,
     l'erreur avalée laisse la transaction PARTAGÉE avortée — le COMMIT de
@@ -202,14 +206,14 @@ def stamp_rank_vector(conn, table: str, where: str, params: tuple = ()) -> None:
     expr = RANKED_SOURCES.get(table)
     if not expr:
         return
+    conn.execute(f"UPDATE {table} SET {RANK_VECTOR_COLUMN} = NULL WHERE {where}", params)
     try:
         with conn.transaction():
             conn.execute(
                 f"UPDATE {table} SET {RANK_VECTOR_COLUMN} = {_vec(expr)} WHERE {where}",
                 params)
-    # noqa: SILENT — le tampon de rang est un enrichissement, pas une condition d'écriture
-    except Exception:                      # noqa: BLE001 — jamais au prix de l'écriture
-        pass
+    except Exception:
+        logger.warning("Rank vector refresh failed for %s; cache invalidated", table, exc_info=True)
 
 
 def rank_pending_counts() -> dict:

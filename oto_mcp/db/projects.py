@@ -69,6 +69,8 @@ def create_project(owner_type: str, owner_id: str, name: str,
             "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (owner_type, owner_id, context_org_id, name, brief_md, created_by, copied_from),
         ).fetchone()
+        from .search import stamp_rank_vector
+        stamp_rank_vector(conn, "projects", "id = %s", (int(row["id"]),))
         return int(row["id"])
 
 
@@ -210,6 +212,9 @@ def update_project(project_id: int, *, name: Optional[str] = None,
     params.append(project_id)
     with _connect() as conn:
         conn.execute(f"UPDATE projects SET {', '.join(sets)} WHERE id = %s", tuple(params))
+        if name is not None or brief_md is not None:
+            from .search import stamp_rank_vector
+            stamp_rank_vector(conn, "projects", "id = %s", (project_id,))
 
 
 def archive_project(project_id: int) -> None:

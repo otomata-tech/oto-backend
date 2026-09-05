@@ -8,10 +8,10 @@ s'évapore pendant que l'appelant reçoit l'écho du RETURNING, rendu avant
 l'avortement : la fonction répond « écrit » pour une ligne qui n'existera
 jamais.
 
-Banc : la condition réelle de #333 — la colonne du vecteur ABSENTE de
-`datastore_rows` (un boot dont l'ALTER n'est pas passé ; c'est ce que le banc
-du module #332 déclenchait sans le vouloir). Chaque écriture métier fait alors
-échouer le stamp ; sans savepoint, tout tombe. La vérité se lit par une
+Banc : une erreur SQL pendant le RECALCUL, sur un schéma complet. L'invalidation
+préalable doit laisser NULL ; sans savepoint, tout tombe. Depuis le maintien des
+projections, une colonne absente est une erreur de schéma qui refuse l'écriture,
+pas une optimisation qu'on peut sauter. La vérité se lit par une
 connexion FRAÎCHE (`datastore_get_row`) — jamais par l'écho, c'est lui qui
 ment.
 """
@@ -23,9 +23,8 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def sans_colonne_vecteur(pg_dsn):
-    """Une base bootée par le VRAI `init_db`, puis amputée de `search_vec` sur
-    `datastore_rows` — le stamp y échoue à chaque écriture, comme dans #333."""
+def base_vecteur(pg_dsn):
+    """Une base bootée par le VRAI `init_db`, avec toutes les colonnes requises."""
     import os
 
     psycopg = pytest.importorskip("psycopg")
@@ -44,7 +43,6 @@ def sans_colonne_vecteur(pg_dsn):
         init_db()
         from oto_mcp.db._conn import _connect
         with _connect() as conn:
-            conn.execute("ALTER TABLE datastore_rows DROP COLUMN search_vec")
             ns = conn.execute(
                 "INSERT INTO user_datastores (owner_type, owner_id, namespace) "
                 "VALUES ('user', 'banc', 'banc_333') RETURNING id").fetchone()
@@ -61,10 +59,17 @@ def sans_colonne_vecteur(pg_dsn):
         root.close()
 
 
-def test_linsert_persiste_malgre_lechec_du_stamp(sans_colonne_vecteur):
+@pytest.fixture
+def recalcul_vecteur_en_echec(base_vecteur, monkeypatch):
+    from oto_mcp.db import search
+    monkeypatch.setattr(search, "_vec", lambda expr: "missing_rank_function()")
+    return base_vecteur
+
+
+def test_linsert_persiste_malgre_lechec_du_stamp(recalcul_vecteur_en_echec):
     from oto_mcp.db.datastore import datastore_get_row, datastore_insert_row
 
-    ns_id = sans_colonne_vecteur
+    ns_id = recalcul_vecteur_en_echec
     echo = datastore_insert_row(ns_id, "r1", {"nom": "durand"})
     assert echo["data"] == {"nom": "durand"}, "l'écho, lui, a toujours dit vrai"
 
@@ -74,11 +79,11 @@ def test_linsert_persiste_malgre_lechec_du_stamp(sans_colonne_vecteur):
     assert relu["data"] == {"nom": "durand"}
 
 
-def test_lupdate_persiste_et_lecho_dit_vrai(sans_colonne_vecteur):
+def test_lupdate_persiste_et_lecho_dit_vrai(recalcul_vecteur_en_echec):
     from oto_mcp.db.datastore import (datastore_get_row, datastore_insert_row,
                                       datastore_update_row)
 
-    ns_id = sans_colonne_vecteur
+    ns_id = recalcul_vecteur_en_echec
     datastore_insert_row(ns_id, "r2", {"etat": "avant"})
     echo = datastore_update_row(ns_id, "r2", {"etat": "apres"},
                                 "2026-08-14T00:00:00Z")
@@ -89,11 +94,26 @@ def test_lupdate_persiste_et_lecho_dit_vrai(sans_colonne_vecteur):
         "l'update annoncé a été roulé en arrière par l'échec du stamp (#333)"
 
 
-def test_lupsert_persiste_malgre_lechec_du_stamp(sans_colonne_vecteur):
+def test_lupsert_persiste_malgre_lechec_du_stamp(recalcul_vecteur_en_echec):
     from oto_mcp.db.datastore import datastore_get_row, datastore_upsert_row
 
-    ns_id = sans_colonne_vecteur
+    ns_id = recalcul_vecteur_en_echec
     _, inserted = datastore_upsert_row(ns_id, "r3", {"v": 1})
     assert inserted is True
     relu = datastore_get_row(ns_id, "r3")
     assert relu is not None and relu["data"] == {"v": 1}
+
+
+def test_invalidation_impossible_refuse_lecriture(base_vecteur):
+    import psycopg
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.db.datastore import datastore_get_row, datastore_insert_row
+    with _connect() as conn:
+        conn.execute("ALTER TABLE datastore_rows DROP COLUMN search_vec")
+    try:
+        with pytest.raises(psycopg.errors.UndefinedColumn):
+            datastore_insert_row(base_vecteur, "invalid-schema", {"nom": "refusé"})
+        assert datastore_get_row(base_vecteur, "invalid-schema") is None
+    finally:
+        with _connect() as conn:
+            conn.execute("ALTER TABLE datastore_rows ADD COLUMN search_vec tsvector")

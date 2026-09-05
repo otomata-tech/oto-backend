@@ -20,6 +20,7 @@ from . import platform_invites  # noqa: F401 — platform.invite.{create,list,re
 from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
 from . import account_suspension  # noqa: F401 — admin.account (pause d'un compte : neutraliser sans rien détruire)
 from . import outreach  # noqa: F401 — admin.outreach (relance des comptes jamais actifs)
+from . import instance_health  # noqa: F401 — admin.instance_health (session d'un tiers vivante ?, #863)
 from . import vault_health  # noqa: F401 — admin.vault_health (scan credentials indéchiffrables, #72)
 from . import tenants_admin  # noqa: F401 — admin.tenant{s,_console} (suivi de l'étage tenant, ADR 0052)
 from . import tenant_keys  # noqa: F401 — admin.tenant_key{s,_set,_clear} (la clé de connecteur d'un tenant, L-clés PR 1)
@@ -39,6 +40,8 @@ from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) 
 # Lentilles monitoring + console d'investigation (après usage : la console réutilise ses handlers).
 from . import monitoring  # noqa: F401 — monitoring.{summary,rest,connectors,funnel,calls,call} + oto_admin_monitoring
 from . import me_legal  # noqa: F401 — me.legal.{get,accept} (gate d'acceptation légale)
+from .datastore import schema_keys as _ds_schema_keys  # noqa: F401 — datastore.schema_keys (déclaration servie, oto#56)
+from . import legal_proof  # noqa: F401 — admin.legal_proof (la PREUVE d'acceptation, oto#42 lot 2)
 from . import tenant_legal_docs_admin  # noqa: F401 — admin.legal_docs.{list,set,delete} (override par tenant)
 # Abonnement par org (ADR 0043) — REST-only : subscribe/confirm/cancel (org_admin) + status.
 from . import billing  # noqa: F401 — billing.{plans,status,subscribe,confirm,cancel,payments}
@@ -75,6 +78,11 @@ from . import unipile_me  # noqa: F401 — me.unipile.{connect,reconcile,status,
 # deux fédérations MCP (atlassian, folkmcp) et Google (multi-compte). Ex-routes écrites
 # à la main ; les CALLBACKS restent écrits à la main (302 sans auth, hors du moule).
 from . import federated_oauth  # noqa: F401 — me.federation.{atlassian,folkmcp,google}.*
+# Statut/déconnexion OAuth GÉNÉRIQUES (oto-dashboard#125) — chemin fixe qui ne nomme pas
+# le connecteur, symétrique de `me.connector_connect` pour les items 2/3 de #125.
+# `me.federation.*` ci-dessus RESTE en place (retrait dans un lot séparé, après bascule
+# du dashboard) : import APRÈS, `oauth_status` réutilise `FederationDisconnected`.
+import oto_mcp.capabilities.connectors.oauth_status  # noqa: F401 — me.connector_{status,disconnect}
 # JETONS API `oto_` + CLÉS PLATEFORME (#121) — ex-routes écrites à la main. Les six
 # routes de jetons portent `RestBinding.allow_api_token=False` : un jeton ne fabrique
 # pas de jeton. C'est ce cran, absent de l'adaptateur jusqu'ici, qui les y retenait.

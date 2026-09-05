@@ -298,9 +298,13 @@ def test_capabilities_registered_rest_only():
     from oto_mcp.capabilities.registry import CAPABILITIES
 
     caps = {c.key: c for c in CAPABILITIES if c.key.startswith("billing.")}
+    # `billing.resume` s'ajoute avec #845 ② : l'inverse de la résiliation, qui
+    # n'existait pas — l'écran annonçait la date de bascule sans offrir d'y revenir.
+    # REST seule comme ses voisines : reprendre un abonnement n'a rien à faire dans un
+    # contexte LLM, même si le geste n'encaisse rien.
     assert set(caps) == {"billing.plans", "billing.status", "billing.subscribe",
-                         "billing.confirm", "billing.cancel", "billing.payments",
-                         "billing.admin_set_plan"}
+                         "billing.confirm", "billing.cancel", "billing.resume",
+                         "billing.payments", "billing.admin_set_plan"}
     # pas d'URL de paiement dans un contexte LLM : seule la capacité ADMIN
     # (forcer un plan, pas de paiement) a une face MCP.
     mcp_caps = {k for k, c in caps.items() if c.mcp is not None}

@@ -49,7 +49,12 @@ def test_le_schema_part_tel_quel_et_revient_tel_quel(monkeypatch):
     status, corps = call("me.datastore.set_schema", path_params=NS,
                          body={"schema": SCHEMA})
     assert status == 200
-    assert corps == {"namespace": "vivier", "schema": SCHEMA}
+    # `unknown_keys_warning` s'ajoute au corps depuis oto#56, TOUJOURS présent et à
+    # `None` quand il n'y a rien à dire : la clé constante est ce qui permet à un
+    # client de distinguer « rien à signaler » d'un serveur trop vieux. Le schéma,
+    # lui, part et revient inchangé — c'est ce que ce banc garde.
+    assert corps == {"namespace": "vivier", "schema": SCHEMA,
+                     "unknown_keys_warning": None}
     assert store.calls == [("vivier", SCHEMA)]
 
 

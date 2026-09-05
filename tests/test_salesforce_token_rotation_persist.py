@@ -97,6 +97,39 @@ def test_le_compte_nomme_est_respecte(coffre):
     assert store[("member", "2:sub-x", "prod")]["refresh_token"] == "RT-2"
 
 
+# --- démarquage (oto#25 lot b3) -------------------------------------------------
+#
+# `on_refresh` n'est invoqué qu'APRÈS un refresh d'access token RÉUSSI (jamais sur
+# échec — cf. `oto.tools.salesforce.client`) : c'est le déclencheur "refresh réussi"
+# du démarquage, à distinguer de la rotation du REFRESH token (une autre affaire,
+# qui n'a pas lieu à chaque refresh).
+
+def test_un_refresh_reussi_demarque_meme_sans_rotation(coffre, monkeypatch):
+    """Beaucoup de fournisseurs ne tournent pas le refresh token à chaque usage —
+    le démarquage, lui, ne doit PAS attendre une rotation qui n'arrivera peut-être
+    jamais : la clé a bien réussi un refresh, c'est un fait, il se rapporte."""
+    from oto_mcp.tools import salesforce as sf
+    store, ecritures, metas = coffre
+    _pose(store, "member", "2:sub-x", "RT-1")
+    vus = []
+    monkeypatch.setattr(sf.connector_health, "record_health",
+                        lambda *a: vus.append(a))
+    _rotation_writer(_RC("member", "2:sub-x"), "RT-1")({"access_token": "AT"})
+    assert vus == [("salesforce", ("member", "2:sub-x", ""), True, None)]
+    assert not ecritures        # aucune rotation à persister, deux gestes distincts
+
+
+def test_un_grant_plateforme_ne_demarque_rien(coffre, monkeypatch):
+    """Pas de ligne de coffre pour une clé plateforme (`entity_type is None`) : rien
+    à démarquer non plus — même garde que pour l'écriture de rotation."""
+    from oto_mcp.tools import salesforce as sf
+    vus = []
+    monkeypatch.setattr(sf.connector_health, "record_health",
+                        lambda *a: vus.append(a))
+    _rotation_writer(_RC(None, None), "RT-1")({"refresh_token": "RT-2"})
+    assert vus == []
+
+
 # --- les cas où il ne faut RIEN écrire -----------------------------------------
 
 def test_sans_rotation_aucune_ecriture(coffre):

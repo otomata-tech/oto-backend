@@ -32,6 +32,7 @@ from ... import access
 from ...auth import token_scopes
 from ...datastore import journal as datastore_journal
 from ...datastore import jetons
+from ...datastore import layers as dsl
 from ...datastore.errors import ClaimedRefUnresolved
 from ...datastore.core import (
     BusinessKeyRequired,
@@ -44,6 +45,7 @@ from ...datastore.core import (
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import HORODATAGE, ns_not_found
+from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
 
 
@@ -62,6 +64,28 @@ def _tolerant_int(v):
         return None
 
 
+# oto#53 : la forme des cellules à couches. Typé `str` et non `Literal` pour que la
+# mauvaise valeur rende un refus qui NOMME le paramètre (`invalid_layers`, par
+# `_layers`), pas l'`invalid_input` nu que l'adaptateur rend sur une `ValidationError`.
+_LAYERS = Field(default=dsl.DEFAUT, description=(
+    "Forme des cellules à couches. On ÉCRIT imbriqué (`champ` = `{valeur, origine, "
+    "comment, link}`) et, par défaut, on relit À PLAT : ce paramètre lève cette "
+    "asymétrie. `flat` (défaut) sert `champ` = la valeur et `champ.origine`/`.comment`/"
+    "`.link` à plat à côté ; `nested` sert `champ` = `{valeur, origine, comment, link}` "
+    "(la valeur toujours, les couches renseignées seulement), la forme dans laquelle on "
+    "écrit ; une cellule sans couche est le même scalaire dans les deux. Toute autre "
+    "valeur est refusée. Le défaut basculera vers `nested`, avec préavis daté : un "
+    "client qui dépend d'une forme la nomme dès maintenant."))
+
+
+def _layers(raw) -> str:
+    """`?layers=` validé, ou un 400 qui nomme le paramètre et les valeurs admises."""
+    try:
+        return dsl.check(raw)
+    except ValueError as e:
+        raise AuthzDenied(400, "invalid_layers", str(e))
+
+
 class ListRowsInput(BaseModel):
     namespace: str
     # `None` = le défaut du serveur (0 / 50) ; borné à [1, 500] pour `limit`.
@@ -78,6 +102,7 @@ class ListRowsInput(BaseModel):
     filter: Optional[str] = None
     # JSON encodé : liste de clauses `{field, op, value}`, combinées en ET.
     filters: Optional[str] = None
+    layers: str = _LAYERS
 
     _coerce = field_validator("offset", "limit", mode="before")(_tolerant_int)
 
@@ -102,6 +127,12 @@ class NamespaceRefInput(BaseModel):
 class RowRefInput(BaseModel):
     namespace: str
     row_id: str
+
+
+class GetRowInput(RowRefInput):
+    """La lecture d'une ligne seule porte `layers` ; `RowRefInput` reste partagé avec
+    la suppression, qui n'a pas de forme à choisir."""
+    layers: str = _LAYERS
 
 
 # #658 : le corps EST la ligne (`RestBinding.body_field`) — le forçage ne peut donc
@@ -279,11 +310,12 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
     limit = min(500, max(1, inp.limit if inp.limit is not None else 50))
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
     filters = _json_param(inp.filters, "invalid_filters", expect=list)
+    layers = _layers(inp.layers)
     try:
         return make_store(ctx.sub).page_rows(
             ns, offset=offset, limit=limit,
             order_by=inp.order_by or None, order_dir=inp.order_dir,
-            q=inp.q or None, filter=filter_eq, filters=filters)
+            q=inp.q or None, filter=filter_eq, filters=filters, layers=layers)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except ValueError as e:
@@ -326,10 +358,11 @@ def _queue(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
         raise ns_not_found(ctx.sub, ns)
 
 
-def _get_row(ctx: ResolvedCtx, inp: RowRefInput) -> dict:
+def _get_row(ctx: ResolvedCtx, inp: GetRowInput) -> dict:
     ns, rid = _adresse(ctx, inp.namespace, inp.row_id)
+    layers = _layers(inp.layers)
     try:
-        return make_store(ctx.sub).get_row(ns, rid)
+        return make_store(ctx.sub).get_row(ns, rid, layers=layers)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except RowNotFound:
@@ -365,12 +398,27 @@ def _write_refusal(e: Exception) -> AuthzDenied:
     return AuthzDenied(400, "invalid_row_input", str(e))
 
 
+_ECRITURE_DETRUIT = (
+    " ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne "
+    "ouverte il n'y a ni annulation ni historique, la valeur précédente "
+    "disparaît au moment où la vôtre arrive. Le filet est le format "
+    "`origine: \"system\"`, et ce qu'il garde est précis : la valeur TELLE "
+    "QU'ELLE ÉTAIT à la déclaration du format. Déclarer le format l'écrit "
+    "sur toutes les lignes existantes, une fois, dans une transaction ; "
+    "ensuite la couche ne bouge plus. Le nom dit QUAND, pas QUI : si des "
+    "agents avaient déjà écrit avant la déclaration, c'est leur valeur qui "
+    "est gardée. Une colonne sans ce format ne garde rien. La face d'appel "
+    "n'y change rien : une ligne créée ici et une ligne créée par l'outil "
+    "agent se comportent à l'identique.")
+
+
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     ns, _ = _adresse(ctx, inp.namespace, ligne=False)
     _verifier_contenu(inp.row)
     trace: dict = {}
     store = make_store(ctx.sub)
     try:
+        refuser_un_lot(store, ns, inp.row)  # oto#48 : un lot enveloppé n'est pas une ligne
         created = store.append_row(ns, inp.row, trace=trace,
                                    readonly_override=inp.readonly_override)
     except NamespaceNotFound:
@@ -486,7 +534,11 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # `data_rows` tient déjà la face agent
         rest=RestBinding(verb="GET", path=_NS + "/rows"),
-        description="Page de lignes d'un tableau (tri, recherche, filtres serveur).",
+        description=("Page de lignes d’un tableau (tri, recherche, filtres serveur). "
+                     "Pagination par `offset` + `limit` avec `total` du jeu filtré, "
+                     "pas de curseur — la fin se calcule. Couches à plat par défaut, "
+                     "`layers=nested` pour la forme d’écriture ; guide "
+                     "`datastore-semantics`."),
     ),
     Capability(
         key="me.datastore.append_row",
@@ -497,15 +549,21 @@ CAPABILITIES += [
         mcp=None,
         # Corps LIBRE (les colonnes) + 201 : les deux contrats d'avant la migration.
         rest=RestBinding(verb="POST", path=_NS + "/rows", status=201, body_field="row"),
-        description=("Ajoute une ligne à un tableau (le corps EST la ligne). "
+        description=("Ajoute UNE ligne à un tableau — le corps EST la ligne : un objet, "
+                     "une clé par colonne. Pas de lot ici : un corps dont l'unique clé "
+                     "porte une liste d'objets est refusé (`400 batch_body`) ; le lot "
+                     "passe par `data_write(rows=[…])` côté agent, ou par un upload "
+                     "signé NDJSON/CSV (`oto_upload_url` → `PUT /api/upload/{token}`) "
+                     "pour les volumes. "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé."),
+                     "et journalisé. Couches, `readonly`, clé métier : guide "
+                     "`datastore-semantics`." + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.get_row",
         handler=_get_row,
-        Input=RowRefInput,
+        Input=GetRowInput,
         Output=Row,
         authz=SUB_ONLY,
         mcp=None,
@@ -523,7 +581,7 @@ CAPABILITIES += [
         description=("Modifie une ligne (patch partiel ; le corps EST le patch). "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé."),
+                     "et journalisé." + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.delete_row",

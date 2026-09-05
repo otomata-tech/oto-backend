@@ -175,8 +175,10 @@ def test_sans_cle_plateforme_la_tentative_est_journalisee(live, monkeypatch):
 
 
 def test_un_refus_du_fournisseur_ne_passe_pas_pour_un_succes(live, monkeypatch):
-    """`PennylaneClient.post` REND `{"error", "status_code"}` au lieu de lever : sans
-    la traduction du seam, un 422 se lirait comme un document sans identifiant."""
+    """Un refus du fournisseur doit devenir une cause NOMMÉE, pas un document sans
+    identifiant. Depuis oto-core#77 le client lève ; le passage obligé de la
+    facturation exécute l'appel sous sa garde et traduit — le double échoue de la
+    même façon que le vrai, sans quoi cette épreuve ne prouverait rien."""
     from oto_mcp import billing_invoices
 
     faux = FauxPennylane()

@@ -8,7 +8,6 @@ juste celui d'une `McpError` (ex. data center Zoho manquant).
 """
 from __future__ import annotations
 
-import inspect
 import time
 from typing import Literal, Optional
 
@@ -16,6 +15,7 @@ from ...mcp_errors import McpError
 from pydantic import BaseModel, ConfigDict
 
 from ... import access, credentials_store, status_hints
+from ...connectors import health as connector_health
 from ...connectors import verify as connector_verify
 from .._authz import ORG_ADMIN, ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
@@ -54,6 +54,35 @@ class VerifyResult(BaseModel):
     # credential invalide — le confondre rouvre le formulaire sur une correction
     # impossible.
     pending: Optional[bool] = None
+
+    # CE QUE LA SONDE A MESURÉ (oto#57) — `auth` : la clé authentifie, et rien de
+    # plus ; `auth+quota` : elle authentifie ET il reste de quoi travailler.
+    #
+    # ⚠️ Un `ok:true` sous `coverage:"auth"` ne dit RIEN du solde. C'est ce que le
+    # 04/09/2026 a coûté : un préflight tout vert, puis 402 après quatre espaces,
+    # quatre tables et 28 lignes créés. **La sonde n'avait pas menti** — elle avait
+    # rapporté un vert qui ne voulait pas dire ce qu'on croyait. Le champ existe pour
+    # qu'un appelant sache ce qu'il ne sait pas.
+    #
+    # ⚠️ `null` = aucune sonde n'est déclarée pour ce connecteur. Ce n'est pas
+    # « ne couvre rien » : dans un cas on n'a pas pu mesurer, dans l'autre on a
+    # mesuré l'authentification. Les deux appellent des conduites différentes.
+    coverage: Optional[str] = None
+
+    # POURQUOI ça ne marche pas — `ok` | `unauthorized` | `no_quota` | `unknown`
+    # (oto#57). Trois causes qui appellent des conduites OPPOSÉES : remplacer la clé,
+    # recharger le compte, ou ne surtout rien refaire. Le booléen `ok` ne les
+    # distinguait pas, et il reste servi tel quel — un contrat servi ne se durcit pas
+    # en place, il se double.
+    #
+    # ⚠️ `unknown` se lit « je ne sais pas », JAMAIS « rien de grave ». C'est le
+    # verdict le plus fréquent tant que les sondes ne lèvent pas d'erreur typée, et le
+    # confondre avec un diagnostic ferait le mal que ce champ répare.
+    verdict: Optional[str] = None
+    # La conduite à tenir, en clair. Un diagnostic qui ne dit pas quoi faire renvoie
+    # chercher — c'est ainsi qu'une personne a relancé six fois une connexion valide.
+    # Absent quand tout va bien.
+    next_step: Optional[str] = None
 
 
 class MemberProviderStatus(BaseModel):
@@ -102,11 +131,6 @@ def _ref(entity_type: "str | None", entity_id: "str | None", provider: str) -> s
     return f"{entity_type}:{entity_id}:{provider}"
 
 
-# Paliers dont on accepte de FLAGUER la clé : ceux dont la portée ne dépasse pas l'org
-# de celui qui sonde. `tenant` et `platform` en sont exclus — cf. `_fields_config_scope`.
-_FLAGGABLE = (credentials_store.MEMBER, "group", "org")
-
-
 def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict, "tuple | None", dict, "tuple | None"]:
     """(champs, config, SCOPE-santé, INSTANCE sondée, CIBLE d'écriture) selon le niveau.
 
@@ -146,7 +170,7 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
     )
     etype, eid = getattr(rc, "entity_type", None), getattr(rc, "entity_id", None)
     scope = ((etype, eid, getattr(rc, "account", "") or "")
-             if etype in _FLAGGABLE and eid else None)
+             if etype in connector_health.FLAGGABLE_SCOPES and eid else None)
     # `level` et `ref` sont DÉRIVÉS de la même source — l'entité — pour qu'ils ne
     # puissent pas se contredire. La version précédente exposait `rc.mode`, dont le
     # vocabulaire diffère (`user` là où l'entité, le `ref` et `oto_instance op=list`
@@ -157,26 +181,6 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
     # plateforme, qui n'a pas de ligne de coffre à réécrire.
     cible = (etype, eid, getattr(rc, "account", "") or "") if etype else None
     return rc.fields, rc.config, scope, instance, cible
-
-
-def _record_health(provider: str, scope: "tuple | None", ok: bool, error: "str | None") -> None:
-    """Persiste l'état de santé du credential testé (`meta.health_ko` + raison) — lu par
-    `status_for` (fiche) et, depuis #541, par `access.credential_rejection_for`, donc par
-    le verdict `ready` de la carte connecteur. Merge (n'écrase rien), best-effort.
-    `scope=None` (clé partagée au-delà de l'org) → on ne flague pas.
-
-    ⚠️ Le COMPTE fait partie de la cible : sur un connecteur multi-compte, écrire sur
-    `account=""` flaguerait une autre ligne que celle qu'on vient de tester — verdict
-    invisible d'un côté, calomnie de l'autre."""
-    if scope is None:
-        return
-    try:
-        credentials_store.update_meta(
-            scope[0], scope[1], provider, scope[2],
-            {"health_ko": (not ok), "health_reason": (error if not ok else None)})
-    # noqa: SILENT — dette déclarée : le flag de santé non écrit devrait se journaliser (#424, verdict C)
-    except Exception:  # noqa: BLE001 — la santé est un bonus, jamais bloquant
-        pass
 
 
 async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
@@ -193,33 +197,58 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     # ailleurs ». Même source que le verdict de la fiche (`status_hints`).
     st = status_hints.credential_state(inp.provider, fields)
     if st is not None and not st.complete:
+        # ⚠️ Pas de `verdict` ici, et c'est voulu : RIEN n'a été sondé. Poser
+        # `unknown` ferait croire à une mesure qui a échoué, alors que le credential
+        # est simplement incomplet — `pending` le dit déjà, et mieux.
         return {"ok": False, "pending": True, "provider": inp.provider,
-                "error": st.next_action, "elapsed_ms": 0, **instance}
+                "error": st.next_action, "elapsed_ms": 0,
+                "coverage": connector_verify.couverture(inp.provider), **instance}
     started = time.monotonic()
-    ok, error = True, None
+    ok, error, verdict, mesures = True, None, connector_verify.OK, {}
     try:
-        # La cible est passée à la sonde : sous rotation, sonder CONSOMME le jeton, et
-        # le remplaçant doit être réécrit sur la ligne testée — pas sur celle que la
-        # cascade aurait choisie. Sans ça, un `verify level=org` chez quelqu'un qui a
-        # aussi une clé perso tuait le jeton d'org (`ok:true`, puis mort). Vécu 03/08.
-        kw = {}
-        if cible is not None and "instance" in inspect.signature(probe).parameters:
-            kw["instance"] = cible
-        res = probe(fields, config, **kw)
-        if inspect.isawaitable(res):
-            await res
+        # Un seul endroit exécute les sondes (`connectors.verify.executer`) : hors
+        # de la boucle d'événements, sous une borne de temps, et il porte la
+        # résolution de `instance` — sous rotation, sonder CONSOMME le jeton, et le
+        # remplaçant doit être réécrit sur la ligne testée, pas sur celle que la
+        # cascade aurait choisie. Ce bloc dupliquait ce geste : corriger l'un
+        # laissait l'autre (oto-backend#867, lot 2).
+        mesures = await connector_verify.executer(probe, fields, config, cible)
     # noqa: SILENT — l'erreur d'auth EST le résultat de la sonde, rendue à l'appelant
     except Exception as e:  # noqa: BLE001 — l'erreur d'auth EST le résultat
         ok = False
         error = e.error.message if isinstance(e, McpError) else str(e)
+        # Classé sur ce que l'exception PORTE (type levé, puis `status_code`), jamais
+        # sur les mots de son message : un classement bâti sur du texte change de sens
+        # au premier reformatage amont, sans que personne s'en aperçoive.
+        verdict = connector_verify.classer(e)
     # La sonde EST le « health check » (read facile) → son verdict alimente le flag santé.
-    _record_health(inp.provider, scope, ok, error)
+    # `record_health` = aide partagée (`connectors/health.py`, oto#25 lot b2) : mêmes
+    # deux lignes qu'avant sous `_record_health`, extraites pour que d'autres modules
+    # (atlassian, folk, salesforce, zoho) réutilisent la MÊME garde de portée sans la
+    # redéfinir chacun de leur côté.
+    connector_health.record_health(inp.provider, scope, ok, error)
     out = {"ok": ok, "provider": inp.provider,
            "elapsed_ms": int((time.monotonic() - started) * 1000),
+           # Ce que ce verdict VAUT : servi avec lui, jamais à côté. Un client qui
+           # lit `ok` sans lire ceci croit en savoir plus qu'il n'en sait.
+           "coverage": connector_verify.couverture(inp.provider),
+           "verdict": verdict,
            # QUELLE instance a répondu — cf. `_fields_config_scope`.
            **instance}
+    # Ce que la sonde a MESURÉ, quand elle mesure quelque chose (`auth+quota`).
+    # Le solde vit ICI et nulle part ailleurs : la fiche du connecteur ne porte que
+    # le verdict et sa date. Un chiffre affiché promettrait une fraîcheur que la
+    # plateforme ne tient qu'en interrogeant, et interroger coûte — un verdict daté
+    # dit exactement ce qu'on sait, ni plus ni moins.
+    if mesures:
+        out.update(mesures)
     if not ok:
         out["error"] = error
+        # La conduite, servie AVEC le diagnostic : les trois causes appellent des
+        # gestes opposés, et « ne recommence pas » en est un.
+        conduite = connector_verify.CONDUITE.get(verdict)
+        if conduite:
+            out["next_step"] = conduite
     return out
 
 
@@ -229,7 +258,18 @@ CAP_DOC = (
     "that is set but not working (wrong region, expired token…) before reporting a gap. "
     "'auto' tests the credential that resolves for you; 'org' tests the org shared key. "
     "The reply names the instance actually probed (`level` + `ref`) — under 'auto' the "
-    "cascade may have fallen through to a shared key, and `ok` alone would not say so."
+    "cascade may have fallen through to a shared key, and `ok` alone would not say so. "
+    "⚠️ READ `coverage` WITH `ok`: it says what the probe actually measured. "
+    "`auth` = the key authenticates, and NOTHING about credit or quota — an `ok:true` "
+    "there does not mean the account can still work. `auth+quota` = it also checked "
+    "there is something left to spend. `null` = this connector declares no probe at "
+    "all, which is not the same as 'nothing to check'. A preflight built on `ok` alone "
+    "reports green on an exhausted account and the work fails mid-flight, after side "
+    "effects."    "⚠️ `verdict` says WHY when it fails — `unauthorized` (replace the key or widen "
+    "its scope; adding another one changes nothing), `no_quota` (the key is fine, the "
+    "balance is empty: top up, do NOT reconnect), or `unknown` (the probe failed "
+    "without saying why — read `error` as it stands). `next_step` spells out the move. "
+    "⚠️ `unknown` means 'I do not know', never 'nothing serious'."
 )
 
 class EffectForMemberInput(BaseModel):

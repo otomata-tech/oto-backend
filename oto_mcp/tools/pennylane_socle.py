@@ -55,22 +55,29 @@ def _need(value, name: str, op: str):
     return value
 
 
-def _ecrit(res, geste: str):
-    """Rend le résultat d'une écriture, ou LÈVE si Pennylane l'a refusée.
+def _ecrit(appel, geste: str):
+    """EXÉCUTE une écriture Pennylane et rend son retour, ou LÈVE en orientant.
 
-    Le client rend un refus comme une **valeur** — `{"error": "422", "details":
-    …}` — et non comme une exception. Sans cette traduction, l'agent enchaîne
-    sur un refus en croyant avoir écrit ; sur une comptabilité, l'écart se
-    découvre au rapprochement, très loin du geste qui l'a créé.
+    Prend une fonction, pas un résultat : depuis oto-core#77 le client lève sur
+    refus amont, et une exception levée dans l'argument n'atteindrait jamais un
+    contrôle placé après l'appel. Le geste doit se produire ici, sous la garde.
 
-    Le message discrimine les causes, parce qu'elles n'appellent pas la même
-    suite : un droit manquant ne se corrige pas en changeant les arguments.
+    La taxonomie du backend classe déjà `UpstreamHTTPError` ; ce que cette garde
+    ajoute lui est propre au connecteur : dire à l'agent QUOI FAIRE. Un 401/403
+    sur Pennylane n'est presque jamais un argument à corriger, c'est un droit qui
+    manque à la clé — et rien ne le montrait avant l'échec.
     """
-    if not (isinstance(res, dict) and res.get("error")):
-        return res
-    st = str(res.get("status_code") or res.get("error"))
-    detail = str(res.get("details") or res.get("error"))[:400]
-    if st in ("401", "403"):
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    try:
+        return appel()
+    except UpstreamHTTPError as e:
+        st, detail = e.status_code, str(e.body)[:400]
+    except RuntimeError as e:
+        # Refus sans statut HTTP : réseau, débit limité, corps illisible.
+        raise _bad(f"Pennylane n'a pas répondu à {geste} : {e}") from e
+
+    if st in (401, 403):
         raise _bad(
             f"Pennylane a refusé {geste} ({st}) : c'est un DROIT qui manque à la "
             "clé, pas un argument à corriger — rejouer à l'identique échouera "
@@ -78,10 +85,10 @@ def _ecrit(res, geste: str):
             "périmètre : qu'un tool soit monté ne prouve donc AUCUN droit. Lis "
             "les droits réels de la clé avec `pennylane_ref(kind=\"company\")`, "
             f"champ `scopes`, puis dis à l'utilisateur lequel manque. Détail : {detail}")
-    if st == "422":
+    if st == 422:
         raise _bad(f"Pennylane a refusé le CONTENU de {geste} ({st}) : les valeurs "
                    f"envoyées ne passent pas ses contrôles. Détail : {detail}")
-    if st == "404":
+    if st == 404:
         raise _bad(f"Pennylane ne trouve pas la cible de {geste} ({st}) : l'id "
                    f"n'existe pas dans CETTE société. Détail : {detail}")
     raise _bad(f"Pennylane a refusé {geste} ({st}). Détail : {detail}")

@@ -297,6 +297,14 @@ def register(mcp: FastMCP) -> None:
         the user can review; it does NOT leave the mailbox. Say plainly which one you did
         (read `kind` in the answer) — never report "sent" for a draft, or the reverse.
 
+        ⚠️ **A freshly created draft can be MISSING from an already-open Gmail tab**,
+        for an indeterminate time. The write is fine and the API lists it; it is the
+        client view that lags. Measured 2026-09-04: the API confirmed the draft, three
+        reads found it, and the person staring at their Drafts folder saw one older
+        draft and nothing else — a full diagnosis was spent before the cause was found.
+        So `kind: "draft"` means SAVED, not VISIBLE: tell the person to reload the tab
+        or search `in:drafts` rather than to look again.
+
         Returns `kind` — **"sent" (the mail LEFT) or "draft" (saved, not sent)** — plus
         the message ids. Always read `kind` before reporting what you did: it is the
         only field that states the act.

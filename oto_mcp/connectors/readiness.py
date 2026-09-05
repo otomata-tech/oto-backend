@@ -126,12 +126,26 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
             f"{_account_url(sub)} pour continuer sans limite, ou reprends demain."))
 
     # Couche 2 (suite) — la clé résout, mais le FOURNISSEUR l'a refusée. Le verdict
-    # existait déjà en base (`meta.health_ko`, écrit par `oto_instance op=verify`) et
-    # n'avait aucun lecteur ici : une clé révoquée rendait `ready: true`, et son
-    # porteur n'apprenait le refus qu'au premier appel, sous la forme du message brut
-    # de l'amont (#541, org sur `linear` : « AUTHENTICATION_ERROR: Authentication
-    # required, not authenticated »). APRÈS `no_credential` à dessein — dire « rejetée »
-    # d'une clé qui n'existe pas enverrait reposer ce qu'on n'a jamais posé.
+    # existait déjà en base (`meta.health_ko`) et n'avait aucun lecteur ici : une clé
+    # révoquée rendait `ready: true`, et son porteur n'apprenait le refus qu'au premier
+    # appel, sous la forme du message brut de l'amont (#541, org sur `linear` :
+    # « AUTHENTICATION_ERROR: Authentication required, not authenticated »). APRÈS
+    # `no_credential` à dessein — dire « rejetée » d'une clé qui n'existe pas enverrait
+    # reposer ce qu'on n'a jamais posé.
+    #
+    # ⚠️ `meta.health_ko` a SIX écrivains depuis le lot google (2026-09-05, cinq
+    # depuis oto#25 lot b2, trois depuis lot a) : la sonde `oto_instance op=verify`
+    # (couverture large, mais rien à lire tant que personne ne l'a rejouée —
+    # enregistrée pour `atlassian` depuis oto-backend#876, toujours PAS pour
+    # `folkmcp`) ; `access_token_for` d'`auth/atlassian.py` / `auth/folk.py`, qui
+    # marquent leur PROPRE ligne au refresh raté sans passer par `verify` ;
+    # `credentials_for` d'`auth/google.py`, même geste au scope MEMBRE ; et
+    # `tools/salesforce.py` / `tools/zoho.py`, qui marquent au refus du refresh
+    # (`SalesforceAuthError`/`ZohoAuthError`) sur le tool lui-même, pas seulement
+    # sur leur sonde `verify`. Les six passent par la MÊME aide partagée et la
+    # MÊME garde de portée (`connectors/health.py`). Ce diagnostic-ci lit le
+    # résultat, quel qu'en soit l'écrivain : ça n'a jamais eu à changer pour ça, et
+    # c'est le point.
     rejet = access.credential_rejection_for(sub, connector, org=org, group=group)
     if rejet:
         ou = (f"Repose-la sur {_account_url(sub)} (section {porteur.capitalize()})."

@@ -27,6 +27,9 @@ def coffre(monkeypatch):
         "groupe": {9: {"serper"}},
         "org": {"hunter", "folk"},
         "tenant": {"serper", "folk"},
+        # Scope legacy (#876) : atlassian EST dans `LEGACY_USER_SCOPE_PROVIDERS`,
+        # folkmcp n'a rien posé — les deux cas du barreau, sur le registre réel.
+        "legacy": {"atlassian"},
     }
 
     from oto_mcp import credentials_store as cs
@@ -55,6 +58,9 @@ def coffre(monkeypatch):
                         lambda g, p: p in etat["groupe"].get(int(g), ()))
     monkeypatch.setattr(access.org_store, "has_org_secret",
                         lambda o, p: p in etat["org"])
+    monkeypatch.setattr(cs, "has_credential",
+                        lambda et, eid, p, account=None: (
+                            et == cs.USER and p in etat["legacy"]))
     from oto_mcp import tenancy, tenant_vault
     monkeypatch.setattr(tenant_vault, "has_tenant_secret",
                         lambda t, p: p in etat["tenant"])
@@ -87,6 +93,7 @@ def test_les_deux_sondes_rendent_le_MEME_verdict_sur_TOUT_le_registre(coffre):
             ("group", access.PRESENCE_PROBE.group(9, p), sonde.group(9, p)),
             ("org", access.PRESENCE_PROBE.org(2, p), sonde.org(2, p)),
             ("tenant", access.PRESENCE_PROBE.tenant("pilote", p), sonde.tenant("pilote", p)),
+            ("legacy", access.PRESENCE_PROBE.legacy_user("u1", p), sonde.legacy_user("u1", p)),
         ):
             if bool(a) != bool(b):
                 ecarts.append(f"{p}/{nom}: unitaire={a!r} préchargée={b!r}")

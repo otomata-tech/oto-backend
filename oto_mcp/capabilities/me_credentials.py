@@ -23,6 +23,10 @@ query string et les paramètres de chemin.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -129,6 +133,14 @@ class CredentialCleared(BaseModel):
     provider: str
     account: str
     scope: str
+    # Ce que ce retrait CASSE, dit à celui qui le fait (oto#59). Le retrait a eu lieu :
+    # c'est un avertissement, jamais un refus — retirer sa propre clé est un droit.
+    #
+    # ⚠️ `None` ne veut pas dire « rien ne dépend de cette clé ». Seules les
+    # dépendances DÉCLARÉES sont vues (la liste d'outils d'un déclencheur) ; un agent
+    # programmé qui dérive ses outils de sa procédure en dépend sans le déclarer. Cette
+    # mesure sous-estime, jamais l'inverse.
+    warning: Optional[str] = None
 
 
 # --- Garde partagée ---------------------------------------------------------
@@ -366,7 +378,48 @@ def _clear(ctx: ResolvedCtx, inp: CredentialClearInput) -> dict:
     entity_type, entity_id = _scoped_entity(ctx, scope, org_id)
     credentials_store.clear_credential(entity_type, entity_id, inp.provider,
                                        account=account)
-    return {"ok": True, "provider": inp.provider, "account": account, "scope": scope}
+    # `warning` TOUJOURS présent, `None` = rien à signaler : c'est ce qui distingue
+    # « aucun agent programmé n'en dépend » d'un serveur trop vieux pour le savoir.
+    out = {"ok": True, "provider": inp.provider, "account": account, "scope": scope,
+           "warning": None}
+    # ⚠️ DIRE ce que ce retrait casse, tout de suite et à celui qui le fait (oto#59).
+    # Le 03/09/2026, une clé a disparu et une douzaine de passages programmés ont
+    # tourné à l'aveugle pendant 36 h. Personne n'avait rien fait de mal : rien ne
+    # signalait que des agents programmés en dépendaient, et le canal qui aurait
+    # annoncé la panne tournait sur le credential tombé — la panne était donc
+    # **silencieuse par construction**. Le seul moment où quelqu'un est là pour
+    # entendre est CELUI-CI.
+    #
+    # ⚠️ Best-effort, et jamais bloquant : retirer sa propre clé est un droit, pas une
+    # demande d'autorisation. On informe, on n'empêche pas.
+    if org_id:
+        try:
+            casses = db.triggers_actifs_utilisant(int(org_id), inp.provider)
+            if casses:
+                noms = ", ".join(f"`{t.get('label') or t.get('procedure')}`"
+                                 for t in casses[:5])
+                reste = len(casses) - 5
+                out["warning"] = (
+                    f"{len(casses)} agent(s) programmé(s) de cette org utilisent "
+                    f"`{inp.provider}` : {noms}" + (f", et {reste} de plus" if reste > 0 else "")
+                    + ". Ils continueront de partir à l'heure et échoueront en vol, "
+                    "sans que personne en soit averti — coupe-les, ou repose une clé.")
+                # Et on l'ENREGISTRE, parce que celui qui lit cette réponse n'est pas
+                # forcément celui que ça concerne — ni celui qui sera là demain. Le
+                # drain hors bande (`maintenance alertes_credential`) préviendra le
+                # titulaire de l'org par le courrier de PLATEFORME, le seul canal qui
+                # ne meurt pas avec la clé retirée (oto#59).
+                from ..db import alertes_credential
+                alertes_credential.enregistrer(
+                    org_id=int(org_id), connector=inp.provider, account=account,
+                    acteur_sub=ctx.sub,
+                    agents=[t.get("label") or t.get("procedure") for t in casses])
+        except Exception as e:  # noqa: BLE001
+            # noqa: SILENT — l'avertissement est un service rendu, pas une garde : son
+            # échec n'a pas à faire échouer un retrait légitime, déjà effectué.
+            logger.warning("retrait %s : dépendances de déclencheurs illisibles (%s)",
+                           inp.provider, e)
+    return out
 
 
 _DOC_SET = (

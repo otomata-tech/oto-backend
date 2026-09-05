@@ -223,6 +223,21 @@ from oto_mcp.db import _schema, schema
 # « runner job 42 ». Filtrer sur du texte libre n'est pas une garantie.
 # ⚠️ Empreinte recalculée après avoir vérifié que le tronc SANS ce fragment rend
 # bien 8ebb0a70… / 139910, mesuré au moment du lot.
+# 2026-09-04 (oto#25 lot b1) : `tool_calls.error_kind` — le RÉSULTAT de
+# `error_taxonomy.classify()` sur un échec (`.code`, ex. `not_authorized`), écrit
+# par `calllog._record`. NULLABLE, sans index (même raison que `request_id`/
+# `call_uid`/`effective_sub`) ; existe aussi en `ALTER … ADD COLUMN IF NOT
+# EXISTS` dans `_init.py` pour la base PARTAGÉE prod/preprod, où le `CREATE
+# TABLE` est sauté.
+# ⚠️ Empreinte recalculée après avoir vérifié que le tronc SANS ce fragment rend
+# bien fdbf80b8… / 140769 (isolé dans un clone jetable, sans le WIP d'autres
+# sessions) — la colonne ajoute exactement 339 caractères (140769 → 141108).
+# ⚠️ Recalculée pour `credential_disparitions` (oto#59 — les clés retirées sous des
+# agents programmés actifs). L'arithmétique a été VÉRIFIÉE, pas supposée : le fragment
+# `schema/alertes.ALERTES` fait exactement 1 467 caractères, et 141 108 + 1 467 = 142 575,
+# la longueur mesurée. Un delta qui ne tombe pas juste dirait qu'autre chose a bougé dans
+# le DDL assemblé — c'est le seul contrôle qui distingue « j'ai ajouté ma table » de
+# « j'ai recopié le nombre que le test m'a donné ».
 # 2026-09-04 — fragment `runs.py` : la colonne `runner_fleets.rows_at_launch`, le
 # dénominateur d'un passage (oto-backend#836). Écrite à l'armement, `NULL` = inconnu :
 # un taux calculé sur un total qui a bougé depuis est faux sans que rien ne le signale.
@@ -231,8 +246,15 @@ from oto_mcp.db import _schema, schema
 # aussi (140 769 → 141 422). Un premier comptage fait sur le DIFF donnait 680 — il
 # comptait des lignes de contexte : c'est la différence des ASSEMBLÉS qui fait foi, pas
 # un `grep` sur un patch.
-EMPREINTE = "b079ffab84ac85d5636ce5689212d6353f6bff5f34027614e853c3c211007a09"
-LONGUEUR = 141422
+# ⚠️ 2026-09-05 — RECALCULÉE à la fusion de `main` dans la branche du fork (#836).
+# L'arithmétique a été vérifiée, pas supposée, et c'est elle qui autorise à écrire ce
+# nombre : le tronc rendait 142 575, le fragment `runs.py` de cette PR ajoute
+# exactement 653 caractères (17 067 → 17 720 mesuré par son auteur), et l'assemblé
+# rend 143 228 = 142 575 + 653. Le compte tombe juste, donc rien d'autre n'a bougé
+# dans le DDL — c'est la seule chose qui distingue « j'ai fusionné proprement » de
+# « j'ai recopié le nombre que le test m'a donné ».
+EMPREINTE = "fb55a3e0a68cc5a7e9998fdaf970824c7d8ebd85607614d8e7b4b78acfddde2a"
+LONGUEUR = 143228
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

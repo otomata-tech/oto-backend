@@ -623,6 +623,83 @@ PAS observable (`oto_instance op=verify`, faute de sonde enregistrée et d'un wa
 sache lire ce scope) dans `connector-model.md` §« Purge silencieuse des mounts OAuth ».
 Changement de comportement **servi** — à annoncer avant tag.
 
+### L'aide partagée, généralisée à salesforce/zoho (oto#25 lot b2, 2026-09-04)
+
+Le mécanisme du lot (a) était PRIVÉ à `capabilities/connectors/verify.py`
+(`_FLAGGABLE` + `_record_health`, sous ces noms). Extrait en module public
+`connectors/health.py` — `FLAGGABLE_SCOPES` (member/group/org, **et** le scope
+LEGACY `user` : aussi étroit que member, un seul utilisateur, jamais atteint par la
+cascade de `verify`) + `record_health` (utilisé par `verify.py`, démarque aussi sur
+succès) + `mark_rejected` (la façade neuve : un module qui connaît son ENTITÉ
+directement, sans passer par `ResolvedCtx`). `verify.py`, `auth/atlassian.py` et
+`auth/folk.py` appellent maintenant ce module au lieu de leurs anciennes
+définitions/appels directs à `credentials_store.update_meta` — même comportement,
+un seul endroit qui sait marquer une ligne rejetée.
+
+Deux connecteurs NEUFS rejoignent le mécanisme : `tools/salesforce.py` et
+`tools/zoho.py` marquent désormais leur ligne au refus du REFRESH
+(`SalesforceAuthError`/`ZohoAuthError`, exceptions **typées** que lève le CLIENT
+oto-core — jamais un 401 nu d'un geste applicatif ordinaire, ex. permission
+manquante sur un enregistrement précis avec une clé par ailleurs saine), PUIS
+RE-LÈVENT toujours l'exception d'origine — marquer n'est jamais un fallback qui
+avale l'erreur réelle. `tools/zoho.py` bascule au passage de
+`access.resolve_credential_fields("zoho")` vers
+`access.resolve_credential("zoho", want="byo")` (mêmes champs, plus l'entité
+gagnante — nécessaire pour marquer la bonne ligne).
+
+**`google` reste explicitement EXCLU de ce lot** : un WIP concurrent touche son
+retour OAuth (`auth/google.py`) au moment du lot b2 — à faire une fois ce WIP
+stabilisé, dans un lot séparé.
+
+✅ **Fait dans ce lot séparé (2026-09-05, une fois oto-backend#877 poussé et
+tagué)** : `credentials_for` (le seul appelant de `_refresh_access_token`) marque
+sur `invalid_grant` (`GoogleReauthRequired`, même règle `oauth_flow.grant_is_dead`)
+puis **relève toujours** — contrairement à atlassian/folk, `credentials_for` n'a
+jamais rendu de `None` muet et ce lot ne change pas ce contrat. Démarque
+explicitement au refresh réussi : `update_google_access_token` MERGE le meta
+(`update_meta`, JSONB `||`), donc un `health_ko` posé plus tôt n'aurait jamais
+disparu tout seul (même raison que le point 3 ci-dessous pour Salesforce —
+contrairement à atlassian/folk, dont le remplacement total du meta démarque déjà
+par accident). Bancs : `tests/auth/test_google_health_marking.py`.
+
+### Le démarquage (oto#25 lot b3, 2026-09-05)
+
+Trois déclencheurs, et AUCUN autre — surtout pas un appel `ok=true` quelconque, qui
+crierait au loup à tort sur un simple throttle passager :
+
+1. **`oto_instance op=verify` vert** — déjà en place depuis toujours (`record_health`
+   appelé avec `ok=True` par `verify.py`), rien à faire ici.
+2. **Une nouvelle clé posée (reconnexion)** — déjà acquis, mais par un mécanisme
+   ACCIDENTEL qu'il fallait vérifier plutôt que supposer :
+   `credentials_store.set_credential` REMPLACE tout le `meta` (jamais un merge, cf.
+   son propre docstring) — poser une clé, quel que soit le chemin
+   (`persist_token` d'atlassian/folk, ou `capabilities/me_credentials.py::_set` pour
+   salesforce/zoho et tous les connecteurs keyés) écrit un `meta` neuf qui ne reporte
+   JAMAIS un `health_ko` d'avant. Figé par des tests dédiés
+   (`tests/auth/test_oauth_dead_grant_marks_rejected.py`,
+   `tests/test_me_credentials_capability.py`) plutôt que laissé implicite : une
+   régression de `set_credential` vers un merge romprait cette garantie en silence.
+3. **Un refresh réussi** — le point qui manquait réellement :
+   - `atlassian`/`folk` : même mécanisme que le point 2 (`access_token_for` écrit
+     `meta={access_token, expires_at}` au chemin nominal, un remplacement qui efface
+     `health_ko` de la même façon).
+   - `salesforce` : `on_refresh` (`_rotation_writer`) n'est invoqué qu'APRÈS un
+     refresh d'access token réussi — démarquage ajouté ici, **inconditionnel**
+     (qu'il y ait ROTATION du refresh token ou non ; beaucoup de Connected Apps n'en
+     imposent pas, et le démarquage ne doit pas attendre un événement qui n'arrivera
+     peut-être jamais).
+   - `zoho` : **couvert depuis oto-core v1.116.0.** Le client expose désormais un
+     `on_refresh` symétrique à celui de Salesforce, et le backend le câble sur le
+     démarquage. C'était un manque assumé tant que le refresh réussi restait
+     entièrement interne au client (cache process-wide), donc invisible du backend :
+     le corriger demandait de toucher oto-core, ce qu'un lot backend-only ne pouvait
+     pas faire.
+     ⚠️ Le rappel ne part **jamais sur un succès de cache**, et c'est ce qui en fait
+     une preuve de vie. Le cache Zoho est process-wide et dure une heure : démarquer
+     sur un jeton qu'il a servi repeindrait une ligne en vert sur la foi d'un refresh
+     vieux d'une heure. Il ne part pas non plus sur un refresh en échec — un
+     credential refusé ne doit surtout pas se faire démarquer comme sain.
+
 ## Validation
 
 Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetable (docker)** + revue adversariale par phase. Migrations idempotentes au boot (`init_db` : ALTER additifs, PK 4-col, backfills, encrypt-existing, drop-plaintext gaté).

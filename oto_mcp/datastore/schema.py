@@ -31,6 +31,8 @@ une ValueError, jamais un refus muet.
 """
 from __future__ import annotations
 
+from . import schema_keys
+
 import re
 from collections.abc import Iterator
 from functools import lru_cache
@@ -1473,8 +1475,10 @@ def _erreurs_unknown_fields(schema: dict) -> list[str]:
 # son statut (`role`), se subdiviser (`fields`/`of`), répondre à un ancien nom plat
 # (`flat_alias`). Posées sur une couche, elles ne seraient lues nulle part — la forme
 # acceptée-inerte que #347 a fermée.
-_COLUMN_ONLY_KEYS = ("display", "fields", "of", FLAT_ALIAS, "role",
-                     "readonly", "origine", "system")
+# DÉRIVÉ de la déclaration unique des attributs (`schema_keys`), jamais recopié : le
+# validateur est le PREMIER client de cette liste, l'avertissement sur les clés
+# inconnues le second. Une liste parallèle mentirait au premier attribut ajouté.
+_COLUMN_ONLY_KEYS = schema_keys.COLONNE_SEULEMENT
 
 
 def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,

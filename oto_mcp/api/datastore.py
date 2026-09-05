@@ -16,11 +16,19 @@ NAVIGATEUR de l'utilisateur : pas d'en-tête d'auth (l'identité vient du `state
 HMAC-signé), et la réponse est une **302** vers la page connecteurs, pas du JSON. Or
 `_rest_adapter` authentifie toujours et répond toujours en JSON. Il est hors du moule
 par construction, et classé par NATURE comme les autres callbacks OAuth.
+
+**oto-backend#670** : le succès portait `?google=connected` en dur, et l'échec ne
+redirigeait pas du tout (JSON brut 400/502/504) — deux formes hors de la convention
+unique suivie par les quatre autres connecteurs (`?connector=<nom>&connect=<etat>`).
+Le succès DOUBLE désormais les deux formes (`?google=connected` reste, le dashboard
+le lit) ; l'échec REDIRIGE avec `connect=error` — pur ajout, rien à doubler puisque
+rien n'existait à cette place. Le diagnostic (state illisible, timeout, échange
+refusé) va au journal, plus jamais dans le corps de la réponse.
 """
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -31,6 +39,8 @@ from starlette.routing import Route
 
 from ..auth import google as google_oauth
 
+logger = logging.getLogger(__name__)
+
 
 # Type alias for the auth helper passed in from api_routes.
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
@@ -39,10 +49,6 @@ AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 # (exchange_code + persist_token→_fetch_email, deux appels HTTP synchrones 15s
 # chacun ; voir google.py::_client_for_user_async pour la même justification).
 _OAUTH_EXCHANGE_TIMEOUT_S = 30
-
-
-def _app_url() -> str:
-    return os.environ.get("OTO_APP_URL", "https://app.oto.ninja").rstrip("/")
 
 
 def make_routes(
@@ -62,6 +68,38 @@ def make_routes(
 
     # --- Google OAuth ----------------------------------------------------
 
+    def _retour(etat: str, *, legacy: bool = False, app: str = "",
+                org: int | None = None) -> str:
+        """Où renvoyer le navigateur après le consentement Google.
+
+        Convention unique de retour OAuth (oto-backend#670) : le suffixe vient du
+        fabricant partagé `oauth_flow.connector_return_suffix`. `legacy=True`
+        double l'ancienne forme `?google=connected` — encore lue par le dashboard
+        aujourd'hui — le temps du préavis (`deprecations.dans_le_preavis_retour_oauth`).
+
+        Les branches d'ÉCHEC (`legacy=False`, le défaut) ne redirigeaient PAS du
+        tout avant ce lot — un JSON brut 400/502/504 à la place. Rien à doubler :
+        un statut qui n'a jamais existé n'a pas de lecteur à préserver, donc PUR
+        AJOUT ici, aligné sur les quatre autres connecteurs."""
+        from ..auth import flow as oauth_flow
+
+        # Le front qui a DEMANDÉ la connexion, porté par le state signé depuis
+        # oto-backend#877. Sans lui, le retour partait sur le front d'oto en dur :
+        # un utilisateur venu d'un front tiers atterrissait chez nous après avoir
+        # consenti. Le callback arrive DEPUIS Google, sans en-tête ni session — il
+        # ne peut rien re-dériver, seul le state sait.
+        #
+        # Le DÉFAUT passe par le même fabricant (`app` vide ⟹ base et chemin
+        # d'oto). Il composait `/console/connectors` à la main — un chemin qui
+        # n'existe nulle part dans le dashboard : mesuré le 04/09, ses routes sont
+        # `/connectors`, `/my-connectors`, `/library/connectors`, `/org/connectors`
+        # et `/team/connectors`. Un consentement réussi déposait donc la personne
+        # sur un 404, panne silencieuse puisque l'autorisation, elle, avait bien eu
+        # lieu — exactement le mode d'échec déjà vu sur le patron d'un front tiers
+        # (cf. le commentaire de `RETURN_APPS`).
+        return oauth_flow.connector_return_url(
+            app, "google", etat, org=org,
+            legacy=("google", etat) if legacy else None)
 
     async def google_oauth_callback(request: Request) -> Response:
         # Pas d'auth Logto — Google redirige depuis le navigateur user.
@@ -69,11 +107,13 @@ def make_routes(
         code = request.query_params.get("code")
         state = request.query_params.get("state")
         if not code or not state:
-            return json_error(request, 400, "missing_code_or_state")
+            logger.warning("google oauth callback: code ou state absent")
+            return RedirectResponse(url=_retour("error"), status_code=302)
         parsed = google_oauth.verify_state(state)
         if not parsed:
-            return json_error(request, 400, "invalid_state")
-        sub, org_id = parsed
+            logger.warning("google oauth callback: state illisible/expiré")
+            return RedirectResponse(url=_retour("error"), status_code=302)
+        sub, org_id, return_app = parsed
 
         def _finish() -> None:
             tokens = google_oauth.exchange_code(code)
@@ -84,15 +124,18 @@ def make_routes(
             await asyncio.wait_for(run_in_threadpool(_finish),
                                    timeout=_OAUTH_EXCHANGE_TIMEOUT_S)
         except asyncio.TimeoutError:
-            return json_error(request, 504,
-                              f"oauth_exchange_timeout: no response within "
-                              f"{_OAUTH_EXCHANGE_TIMEOUT_S}s")
-        except Exception as e:
-            return json_error(request, 502, f"oauth_exchange_failed: {e}")
+            logger.warning("google oauth callback: échange sans réponse au-delà "
+                           "de %ss (sub=%s org=%s)", _OAUTH_EXCHANGE_TIMEOUT_S,
+                           sub, org_id)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
+        except Exception:
+            logger.exception("google oauth callback en échec (sub=%s org=%s)",
+                             sub, org_id)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
         # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
         # `datastore` n'est plus Google Sheets (ADR 0016, PG natif) → ex-signal
         # `?datastore=connected` retiré.
-        return RedirectResponse(url=f"{_app_url()}/console/connectors?google=connected", status_code=302)
+        return RedirectResponse(url=_retour("connected", legacy=True, app=return_app, org=org_id), status_code=302)
 
 
 

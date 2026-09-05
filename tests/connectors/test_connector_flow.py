@@ -133,19 +133,26 @@ _NOMMES_TOLERES = {
 
     # --- La FÉDÉRATION MCP per-user, découverte le même jour, pour la même raison.
     #
-    # `/api/<nom>/oauth/{start,status}` + `DELETE /api/<nom>/oauth` sont le **contrat du
+    # `/api/<nom>/oauth/{status}` + `DELETE /api/<nom>/oauth` sont le **contrat du
     # widget de fédération du dashboard** : celui-ci est GÉNÉRIQUE et construit son URL à
     # partir du nom du connecteur (`/api/${name}/oauth/…`, oto-dashboard
     # `src/api/console.ts`). Les vider n'est donc PAS un travail de backend — il faut
     # d'abord que le widget passe à un chemin fixe qui ne nomme personne, comme l'ont fait
     # zoho et salesforce en v1.19.0. C'est une DETTE DE FRONT, nommée ici pour qu'elle
     # cesse d'être invisible.
-    "me.federation.atlassian.start",
+    #
+    # ⚠️ `.start` d'atlassian/folkmcp est SORTI d'ici le 2026-09-04 (oto-dashboard#125,
+    # capacités retirées) : mesuré à 0 appel/30j, toutes origines — le widget les avait
+    # quittés dès le 01/09. `me.federation.google.start` RESTE : mesuré à 2 appels/30j
+    # dans la même fenêtre, donc pas mort — la mesure tranche route par route, jamais
+    # par famille de connecteur.
+    #
+    # ⚠️ `.disconnect` d'atlassian/folkmcp SORTI le même jour, même mesure : 0 appel/30j
+    # AVANT et APRÈS le bascule dashboard vers `me.connector_disconnect` — zéro
+    # indépendant du timing. `.status` des deux RESTE : trafic réel mesuré 3 jours avant
+    # le bascule (folkmcp, 01/09) — remesure prévue après le 04/10/2026.
     "me.federation.atlassian.status",
-    "me.federation.atlassian.disconnect",
-    "me.federation.folkmcp.start",
     "me.federation.folkmcp.status",
-    "me.federation.folkmcp.disconnect",
     "me.federation.google.start",
     "me.federation.google.status",
     "me.federation.google.revoke",

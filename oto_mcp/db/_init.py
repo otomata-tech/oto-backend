@@ -308,6 +308,15 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # Lien journal → traceback Sentry (investigation) : l'event id capturé pour
     # l'appel. Additif, NULL sur tout l'historique (non reconstructible).
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS sentry_event_id TEXT")
+    # oto#25 lot (b1) : le RÉSULTAT de `error_taxonomy.classify()` (son `.code`,
+    # ex. `not_authorized`), écrit par `calllog._record` sur un échec — un refus
+    # d'authentification amont devient un FAIT lisible dans la colonne, plus un
+    # texte à interpréter. NULL sur un succès (rien à rapporter) et sur tout
+    # l'historique antérieur (non reconstructible depuis le texte tronqué de
+    # `error`). ⚠️ PAS d'index ici, même raison que `request_id`/`call_uid`/
+    # `effective_sub` ci-dessus : lecture d'enquête, pas un chemin chaud — un
+    # index de plus sur `tool_calls` se paie à CHAQUE appel journalisé.
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS error_kind TEXT")
     # #493 : le journal de paiement porte le customer Mollie de la tentative. Le
     # miroir `org_subscriptions` n'est posé qu'à `confirm` — entre deux clics de
     # souscription il n'y avait donc RIEN à relire, et un second customer Mollie

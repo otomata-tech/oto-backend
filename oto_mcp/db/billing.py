@@ -159,6 +159,31 @@ def mark_cancel_at_period_end(org_id: int) -> bool:
     return n > 0
 
 
+def resume_canceled(org_id: int) -> bool:
+    """Annule une résiliation à fin de période. Rend False si rien n'était à reprendre.
+
+    Symétrique exact de `mark_cancel_at_period_end` : on efface `canceled_at` et on
+    **restaure** `next_billing_at = current_period_end` — la valeur que la résiliation
+    avait mise à NULL. ⚠️ On RESTAURE, on ne recalcule pas : le runner pose toujours les
+    deux au même instant (`schedule_next_billing(org_id, nxt, nxt)`), donc recalculer
+    ouvrirait une occasion de décaler le cycle là où il n'y a rien à décider.
+
+    ⚠️ **Les deux gardes sont dans le `WHERE`, pas au-dessus** : `status = 'active'`
+    (une période déjà échue est passée à `canceled` par le sweep du runner — la
+    reprendre ne serait pas une reprise, ce serait un réabonnement silencieux) et
+    `canceled_at IS NOT NULL` (rien à annuler). Les mettre dans l'appelant laisserait
+    une fenêtre entre la lecture et l'écriture, précisément sur l'objet où deux
+    écrivains existent — l'utilisateur et le runner."""
+    with _connect() as conn:
+        n = conn.execute(
+            "UPDATE org_subscriptions SET canceled_at = NULL, "
+            "next_billing_at = current_period_end, updated_at = NOW() "
+            "WHERE org_id = %s AND status = 'active' AND canceled_at IS NOT NULL",
+            (org_id,),
+        ).rowcount
+    return (n or 0) > 0
+
+
 def schedule_next_billing(
     org_id: int, current_period_end: str, next_billing_at: str
 ) -> bool:

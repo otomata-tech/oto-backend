@@ -40,11 +40,27 @@ class FauxPennylane:
         self.documents: dict[int, dict] = {}
         self.calls: list[tuple] = []
         self._seq = 100
-        # Leviers de panne, posés par un test : `refus` fait répondre au client la
-        # forme d'erreur RÉELLE (un dict, pas une exception), `ttc_faux` fabrique un
-        # brouillon qui ne dit pas ce qui a été débité.
+        # Leviers de panne, posés par un test : `refus` fait échouer le client
+        # comme le VRAI le fait — en levant `UpstreamHTTPError` (oto-core#77 :
+        # le transport lève, il ne rend plus un dict d'erreur) ; `ttc_faux`
+        # fabrique un brouillon qui ne dit pas ce qui a été débité.
+        #
+        # Ce levier a menti pendant tout le temps où il rendait un dict : après
+        # que le transport a changé, les tests de facturation sont restés VERTS
+        # alors que le code de production ne captait plus rien. Un double qui
+        # échoue autrement que l'original ne prouve pas ce qu'on croit.
         self.refus: dict | None = None
         self.ttc_faux: float | None = None
+
+    def _lever(self):
+        """Échoue comme le vrai client : une exception portant le statut HTTP."""
+        from oto.tools.common.errors import UpstreamHTTPError
+
+        refus = dict(self.refus or {})
+        statut = refus.get("status_code") or refus.get("error")
+        raise UpstreamHTTPError(int(statut) if str(statut).isdigit() else 500,
+                                refus.get("details") or refus.get("error") or "refus",
+                                service="pennylane")
 
     def _id(self) -> int:
         self._seq += 1
@@ -63,7 +79,7 @@ class FauxPennylane:
                         city=None, country_alpha2="FR", external_reference=None):
         self.calls.append(("create_customer", name, country_alpha2, external_reference))
         if self.refus:
-            return dict(self.refus)
+            self._lever()
         cid = self._id()
         self.customers[cid] = {
             "id": cid, "name": name, "emails": emails or [],
@@ -89,7 +105,7 @@ class FauxPennylane:
     def _document(self, *, customer_id, date, deadline, lines, external_reference,
                   pdf_free_text, currency, signe: int):
         if self.refus:
-            return dict(self.refus)
+            self._lever()
         ligne = dict(lines[0])
         ht = float(ligne["raw_currency_unit_price"]) * abs(ligne["quantity"]) * signe
         taux = _TAUX[ligne["vat_rate"]]
@@ -131,7 +147,7 @@ class FauxPennylane:
     def finalize_invoice(self, invoice_id: int):
         self.calls.append(("finalize", invoice_id))
         if self.refus:
-            return dict(self.refus)
+            self._lever()
         d = self.documents[invoice_id]
         d.update(draft=False, status="upcoming",
                  invoice_number=f"F2026{invoice_id:04d}",

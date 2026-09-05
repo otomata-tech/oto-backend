@@ -107,7 +107,24 @@ def test_serper_scrape_perimeter_precedes_the_clients_linkedin_rule(monkeypatch)
     spy.assert_not_called()
 
     monkeypatch.setattr(up, "perimeter_of_call", lambda: None)
-    with pytest.raises(RuntimeError) as e2:      # la règle du client, hors périmètre
+    # Hors périmètre, la règle du domaine refuse — et depuis `23ba7af0` (#473) elle
+    # refuse en `McpError`, plus en `RuntimeError` nu.
+    #
+    # ⚠️ Ce que ce banc garde n'a PAS changé : l'ordre « périmètre → règle du domaine →
+    # réseau », et le fait que rien ne parte sur le réseau. Ce qui a changé est QUI
+    # lève, et c'est délibéré : un `RuntimeError` nu tombe en branche « interne » de
+    # `error_taxonomy` et devient « Erreur interne du serveur. » **sans écho du
+    # message** — le modèle recevait « erreur interne » là où il devait lire « cherche
+    # une autre source », et abandonnait au lieu de contourner (6 220 appels par
+    # semaine sur cet outil).
+    #
+    # ⚠️ Les deux exigences ne se contredisent pas, et il faut voir pourquoi : #632
+    # reproche à la règle du client de nommer une porte que l'appelant n'a pas — mais
+    # SOUS périmètre, où le projet a mieux à dire. C'est exactement ce que la première
+    # moitié de ce banc continue d'exiger (`spy.assert_not_called()`). Hors périmètre,
+    # il n'y a rien de mieux à dire que la règle du domaine : la servir en clair vaut
+    # mieux que la remplacer par « erreur interne ».
+    with pytest.raises(McpError) as e2:          # la règle du domaine, hors périmètre
         fn(url=PROFILE)
     assert PROFILE in str(e2.value)
     spy.assert_called_once()

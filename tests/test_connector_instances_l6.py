@@ -74,6 +74,18 @@ _LECTEURS_ADMIS = {
     "db/schema/connectors.py",          # le DDL
     "capabilities/connectors/instances.py",  # la projection de lecture
     "credentials_store.py",             # le coffre : la naissance à la pose (pièce 2)
+    # #863 (04/09/2026) — sonder la session d'un tiers. Inscrit DÉLIBÉRÉMENT, comme
+    # cette table l'exige, et voici pourquoi ce n'est pas le lot L7 que le garde-fou
+    # retient : ce module ne RÉSOUT rien. Il traduit un `instance_id` en quadruplet de
+    # coffre, puis lit le credential par ce quadruplet — exactement comme la projection
+    # de lecture au-dessus. Ce que L7 vise, c'est le jour où `access/cascade.py`,
+    # `access/resolve.py`, `access/rbac.py` ou `grants_chain.py` liront une instance :
+    # là, la résolution cesserait de passer par la clé du coffre. Aucun d'eux n'est
+    # ici, et cette ligne ne les y fait pas entrer.
+    # ⚠️ Il n'existe pas de résolveur partagé à emprunter : `instance_refs.py` reste
+    # PUR et dit lui-même que résoudre un `inst:{id}` demande la base. Passer par lui
+    # aurait été mieux ; il ne le permet pas.
+    "capabilities/instance_health.py",
 }
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les

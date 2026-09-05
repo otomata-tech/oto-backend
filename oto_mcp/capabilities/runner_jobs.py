@@ -24,7 +24,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .. import db
+from .. import access, db
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -343,18 +343,88 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
         return None
 
 
-def _avec_cle(job: dict, depot: Optional[str]) -> dict:
+# La marque qui dit « ce compte EST un de nos workers ». Un admin plateforme la
+# pose sur le compte de service du runner (`oto_admin_set_option`), et sur lui
+# seul.
+_OPTION_WORKER = "runner_worker"
+
+
+def _depot_pose(org_id: int, depot: str) -> bool:
+    """Cette org a-t-elle DÉPOSÉ cette clé — présence seule, sans déchiffrer.
+
+    Sert à décider s'il y a quelque chose à refuser, donc quelque chose à dire.
+    `has_credential` lit la présence du chiffré (`secret_enc IS NOT NULL`) : le
+    secret n'est jamais touché pour écrire une ligne de journal.
+
+    `account=""` — le mono-compte, exactement ce que la remise lit : signaler un
+    refus sur un dépôt qu'on n'aurait de toute façon pas servi serait un faux.
+    """
+    from .. import credentials_store, providers
+    c = providers.connector_for_provider(depot)
+    if not c or c.kind != "credential":
+        return False
+    try:
+        return credentials_store.has_credential("org", str(org_id), depot, account="")
+    except Exception:
+        logger.warning("présence du dépôt `%s` illisible pour l'org %s",
+                       depot, org_id, exc_info=True)
+        return False
+
+
+def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
     Le worker fait partie du backend et a le droit de lire les clés que les orgs
     déposent (arbitrage du 02/09) ; ce droit s'exerce ici, une fois, avec le
     travail — jamais par un accès au coffre depuis le runner. Un worker qui
     saurait interroger le coffre pourrait lire autre chose que ce travail-ci.
+
+    ⚠️ **Mais la file n'est pas réservée aux workers** : cette capacité est
+    déclarée `ORG_MEMBER`, et rien, dans le protocole, ne distingue un worker
+    d'un membre — ils portent le même genre de jeton. Sans la garde ci-dessous,
+    n'importe quel membre enfilait un travail puis le réservait, et recevait la
+    clé de son org EN CLAIR. Un secret que le coffre ne rend à personne, et que
+    nous ne pouvons pas révoquer puisqu'il appartient au client.
+
+    La garde porte donc sur l'ACTEUR, et par `user_has_option` — jamais
+    `has_option`, qui répondrait vrai dès que l'ORG porte le don ou que son plan
+    inclut l'option, c'est-à-dire pour tous ses membres à la fois.
     """
     if not depot or not job.get("org_id") or job.get("delegation_refusee"):
         return job
+    if not access.user_has_option(appelant, _OPTION_WORKER):
+        # Silencieux POUR L'APPELANT — il reçoit son travail, sans clé : un refus
+        # explicite apprendrait qu'il y a une clé à obtenir.
+        #
+        # ⚠️ Et silencieux pour NOUS AUSSI tant qu'il n'y a RIEN À REFUSER. Ce
+        # journal n'a de sens que si l'org a effectivement déposé une clé :
+        # sinon le travail serait parti sans clé de toute façon, et la ligne ne
+        # décrit aucun événement. Sans ce filtre, les workers eux-mêmes — qui
+        # nomment leur dépôt à CHAQUE réservation, toutes les 15 s, à trois —
+        # écrivaient ~17 000 lignes par jour tant que la marque n'était pas
+        # posée. Un journal qu'on cesse de lire ne protège plus rien, et c'est
+        # la sonde qui aurait fabriqué son propre signal.
+        if _depot_pose(job["org_id"], depot):
+            logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
+                           "ce compte ne porte pas `%s`",
+                           depot, appelant, job["org_id"], job.get("id"),
+                           _OPTION_WORKER)
+        return job
     cle = _cle_de_modele(job["org_id"], depot)
-    return {**job, "model_key": cle} if cle else job
+    if not cle:
+        return job
+    # Trace de REMISE : qui, quelle org, quel dépôt, quel travail — jamais la clé.
+    # Sans elle, une remise anormale ne laisse aucune trace : le seul endroit où
+    # elle se verrait serait la facture de l'org.
+    logger.info("clé de modèle `%s` remise à %s pour l'org %s (travail %s)",
+                depot, appelant, job["org_id"], job.get("id"))
+    return {**job, "model_key": cle}
+
+
+_SANS_PORTEUR = (
+    "ce travail ne nomme personne — il a été enfilé avant que la file retienne "
+    "son demandeur (02/09/2026). Le worker n'a pas d'identité propre à lui "
+    "prêter : reprogramme-le, il partira au nom de qui le demande.")
 
 
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
@@ -370,9 +440,17 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     """
     porteur = job.get("sub")
     if not porteur:
-        # Travail d'avant le 02/09 : pas de porteur connu. On n'en invente pas, et
-        # on ne délègue rien — le worker retombe sur son propre jeton, comme avant.
-        return job
+        # ⚠️ Le worker est un SERVEUR DE BOUCLES AGENTIQUES : chaque boucle
+        # impersonne son user, et lui n'a **aucune identité métier**. Un travail
+        # sans porteur n'a donc personne à impersonner.
+        #
+        # Le servir nu — ce qu'on faisait pour les travaux d'avant le 02/09 —
+        # faisait retomber la boucle sur le jeton DU WORKER : un agent qui agit
+        # au nom du compte qui héberge le runner, et tout ce qu'il écrit signé
+        # par lui. Le défaut est silencieux par construction : les écritures
+        # aboutissent, seule l'attribution est fausse. On refuse, et on le DIT.
+        db.refuser_pour_identite(job["id"], claimant, _SANS_PORTEUR)
+        return {**job, "delegation_refusee": _SANS_PORTEUR}
     org_id = job.get("org_id")
     raison = _identite_invalide(porteur, org_id) if org_id else None
     if raison:
@@ -438,7 +516,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
         if job is None:
             return {"job": None}
-        return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider)}
+        return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub)}
 
     if inp.op == "list":
         # Surveillance (page Automatisations) : lecture org-scopée, jamais un

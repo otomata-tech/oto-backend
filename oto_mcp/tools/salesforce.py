@@ -40,6 +40,7 @@ sans `op` ne peut ni écrire, ni supprimer.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -48,6 +49,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, status_hints
 from ..connectors import flow as connector_flow
+from ..connectors import health as connector_health
 from ..connectors import verify as connector_verify
 
 
@@ -326,6 +328,13 @@ def _rotation_writer(rc, jeton_lu: str):
     from .. import credentials_store
 
     def _write(token_data: dict) -> None:
+        # `on_refresh` n'est invoqué qu'APRÈS un refresh d'access token RÉUSSI (jamais
+        # sur échec — cf. `oto.tools.salesforce.client`) : c'est le déclencheur
+        # "refresh réussi" du démarquage (oto#25 lot b3), inconditionnel — qu'il y ait
+        # ROTATION du refresh token ou non, contrairement à la persistance ci-dessous.
+        if rc.entity_type is not None:
+            connector_health.record_health(
+                "salesforce", (rc.entity_type, rc.entity_id, rc.account), True, None)
         nouveau = token_data.get("refresh_token")
         # Pas de rotation, ou grant plateforme (pas de ligne de coffre à réécrire).
         if not nouveau or nouveau == jeton_lu or rc.entity_type is None:
@@ -408,22 +417,40 @@ _NOTE_OPS_ERROR = "op doit être 'list' ou 'create'"
 
 def register(mcp: FastMCP) -> None:
     connector_verify.register("salesforce", _verify)
+    from oto.tools.salesforce import SalesforceAuthError
     from oto.tools.salesforce.client import SalesforceClient
 
-    def _client() -> SalesforceClient:
+    def _client() -> tuple[SalesforceClient, "access.ResolvedCredential"]:
         # On passe par `resolve_credential` (et non `resolve_credential_fields`) parce
         # qu'on a besoin de l'ENTITÉ gagnante de la cascade : sous rotation, il faut
         # réécrire le jeton renouvelé exactement là où il a été lu — clé membre, clé
-        # d'équipe ou clé d'org — sinon on le range au mauvais niveau.
+        # d'équipe ou clé d'org — sinon on le range au mauvais niveau. La même entité
+        # sert aussi à marquer une ligne rejetée (oto#25 lot b2, `rc` rendu à l'appelant).
         rc = access.resolve_credential("salesforce")
         creds = rc.fields
-        return SalesforceClient(
+        client = SalesforceClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             refresh_token=creds.get("refresh_token"),
             login_url=_login_url(creds.get("login_url")),
             on_refresh=_rotation_writer(rc, creds.get("refresh_token") or ""),
         )
+        return client, rc
+
+    @contextmanager
+    def _marks_rejection(rc):
+        """Sur `SalesforceAuthError` (refus du REFRESH — grant mort ; jamais un 401 nu
+        d'un geste applicatif sur un enregistrement précis, avec une clé par ailleurs
+        saine — cf. `oto.tools.salesforce.client`, seul point qui la lève), marque la
+        ligne DE COFFRE réellement servie rejetée (`connectors.health.mark_rejected`,
+        même garde de portée que `verify`), PUIS RE-LÈVE — marquer n'est jamais un
+        fallback qui avale l'erreur réelle (oto#25 lot b2)."""
+        try:
+            yield
+        except SalesforceAuthError as e:
+            connector_health.mark_rejected(
+                rc.entity_type, rc.entity_id, "salesforce", rc.account, str(e))
+            raise
 
     @mcp.tool()
     def salesforce_describe(sobject: str, verbose: bool = False) -> dict:
@@ -441,7 +468,9 @@ def register(mcp: FastMCP) -> None:
                 need something the projection drops (child relationships, layouts);
                 expect it to be truncated by the client.
         """
-        raw = _client().describe(sobject)
+        client, rc = _client()
+        with _marks_rejection(rc):
+            raw = client.describe(sobject)
         return raw if verbose else _project_describe(raw)
 
     @mcp.tool()
@@ -530,45 +559,46 @@ def register(mcp: FastMCP) -> None:
         # jamais le client — donc jamais, par un chemin dérivé, une écriture.
         if op not in _RECORD_OPS:
             raise _bad(_RECORD_OPS_ERROR)
-        client = _client()
+        client, rc = _client()
 
-        # ---- lectures --------------------------------------------------------
-        if op == "list":
-            return client.list_records(sobject, fields=fields, where=where,
-                                       limit=limit)
-        if op == "get":
-            return client.get_record(sobject, _need(record_id, "record_id", op),
-                                     fields=fields)
+        with _marks_rejection(rc):
+            # ---- lectures ------------------------------------------------------
+            if op == "list":
+                return client.list_records(sobject, fields=fields, where=where,
+                                           limit=limit)
+            if op == "get":
+                return client.get_record(sobject, _need(record_id, "record_id", op),
+                                         fields=fields)
 
-        # ---- écritures -------------------------------------------------------
-        if op == "create":
-            return client.create_record(sobject, _need(data, "data", op))
-        if op == "update":
-            return client.update_record(sobject,
-                                        _need(record_id, "record_id", op),
-                                        _need(data, "data", op))
-        if op == "delete":
-            return client.delete_record(sobject, _need(record_id, "record_id", op))
-        if op == "upsert":
-            return client.upsert_record(
-                sobject,
-                _need(external_id_field, "external_id_field", op),
-                _need(external_id, "external_id", op),
-                _need(data, "data", op))
-        if op == "bulk_create":
-            _validate_bulk_items(_need(items, "items", op))
-            raw = client.create_records(sobject, items, all_or_none=all_or_none)
-            return _bulk_receipt(raw)
-        if op == "bulk_update":
-            _validate_bulk_items(_need(items, "items", op))
-            _validate_update_items_have_id(items)
-            raw = client.update_records(sobject, items, all_or_none=all_or_none)
-            return _bulk_receipt(raw)
+            # ---- écritures -----------------------------------------------------
+            if op == "create":
+                return client.create_record(sobject, _need(data, "data", op))
+            if op == "update":
+                return client.update_record(sobject,
+                                            _need(record_id, "record_id", op),
+                                            _need(data, "data", op))
+            if op == "delete":
+                return client.delete_record(sobject, _need(record_id, "record_id", op))
+            if op == "upsert":
+                return client.upsert_record(
+                    sobject,
+                    _need(external_id_field, "external_id_field", op),
+                    _need(external_id, "external_id", op),
+                    _need(data, "data", op))
+            if op == "bulk_create":
+                _validate_bulk_items(_need(items, "items", op))
+                raw = client.create_records(sobject, items, all_or_none=all_or_none)
+                return _bulk_receipt(raw)
+            if op == "bulk_update":
+                _validate_bulk_items(_need(items, "items", op))
+                _validate_update_items_have_id(items)
+                raw = client.update_records(sobject, items, all_or_none=all_or_none)
+                return _bulk_receipt(raw)
 
-        # Structurellement inatteignable (garde d'entrée ci-dessus) — filet contre
-        # un `return None` implicite si une op était ajoutée à `_RECORD_OPS` sans sa
-        # branche : mieux vaut refuser que rendre « rien » pour un succès.
-        raise _bad(_RECORD_OPS_ERROR)
+            # Structurellement inatteignable (garde d'entrée ci-dessus) — filet contre
+            # un `return None` implicite si une op était ajoutée à `_RECORD_OPS` sans
+            # sa branche : mieux vaut refuser que rendre « rien » pour un succès.
+            raise _bad(_RECORD_OPS_ERROR)
 
     @mcp.tool()
     def salesforce_query(query: str, op: Literal[_QUERY_OPS] = "soql") -> dict:
@@ -592,12 +622,13 @@ def register(mcp: FastMCP) -> None:
         """
         if op not in _QUERY_OPS:
             raise _bad(_QUERY_OPS_ERROR)
-        client = _client()
-        if op == "soql":
-            return client.query(_need(query, "query", op))
-        if op == "sosl":
-            return client.search(_need(query, "query", op))
-        raise _bad(_QUERY_OPS_ERROR)   # inatteignable, cf. salesforce_record
+        client, rc = _client()
+        with _marks_rejection(rc):
+            if op == "soql":
+                return client.query(_need(query, "query", op))
+            if op == "sosl":
+                return client.search(_need(query, "query", op))
+            raise _bad(_QUERY_OPS_ERROR)   # inatteignable, cf. salesforce_record
 
     @mcp.tool()
     def salesforce_note(
@@ -623,10 +654,11 @@ def register(mcp: FastMCP) -> None:
         """
         if op not in _NOTE_OPS:
             raise _bad(_NOTE_OPS_ERROR)
-        client = _client()
-        if op == "list":
-            return {"notes": client.list_notes(record_id)}
-        if op == "create":
-            return client.create_note(record_id, _need(title, "title", op),
-                                      _need(body, "body", op))
-        raise _bad(_NOTE_OPS_ERROR)    # inatteignable, cf. salesforce_record
+        client, rc = _client()
+        with _marks_rejection(rc):
+            if op == "list":
+                return {"notes": client.list_notes(record_id)}
+            if op == "create":
+                return client.create_note(record_id, _need(title, "title", op),
+                                          _need(body, "body", op))
+            raise _bad(_NOTE_OPS_ERROR)    # inatteignable, cf. salesforce_record

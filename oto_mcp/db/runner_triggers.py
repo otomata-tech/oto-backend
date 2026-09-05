@@ -143,6 +143,37 @@ def triggers_for_procedure(org_id: int, procedure: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def triggers_actifs_utilisant(org_id: int, connector: str) -> list[dict]:
+    """Les déclencheurs ACTIFS de l'org dont les outils dépendent de `connector`.
+
+    Ce que ça sert : quand quelqu'un retire une clé, personne ne lui dit que des
+    agents programmés en dépendent. Le 03/09/2026, une clé a disparu et **une douzaine
+    de passages programmés ont tourné à l'aveugle pendant 36 h** — et le canal qui
+    aurait annoncé la panne tournait sur le credential tombé, donc la panne était
+    **silencieuse par construction** (oto#59, signaux 672 et 710).
+
+    ⚠️ **Ne rend que les dépendances DÉCLARÉES**, celles qui passent par la liste
+    d'outils du déclencheur. Un agent programmé créé depuis un objet dérive ses outils
+    de la procédure : la dépendance y est réelle mais implicite, et cette lecture ne
+    la voit pas. Elle sous-estime donc, jamais l'inverse — un résultat vide se lit
+    « je n'en connais pas », pas « il n'y en a pas ».
+
+    Le rattachement outil → connecteur passe par `namespace_of`, le seam qui gouverne
+    déjà les gates d'appel : refaire ici une correspondance par préfixe ferait diverger
+    les deux au premier connecteur multi-token.
+    """
+    from ..tool_visibility import namespace_of
+
+    out = []
+    for t in list_triggers(org_id):
+        if not t.get("enabled"):
+            continue
+        outils = t.get("tools") or []
+        if any(namespace_of(str(o)) == connector for o in outils if o):
+            out.append(t)
+    return out
+
+
 def due_triggers(limit: int = 50) -> list[dict]:
     """Les déclencheurs à échéance — lecture nue, TOUTES orgs (le tick est un
     service de plateforme). La consommation se fait par CAS, pas ici."""

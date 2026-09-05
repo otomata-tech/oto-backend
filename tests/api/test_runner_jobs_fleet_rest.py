@@ -133,19 +133,36 @@ def test_un_travail_enfile_pour_une_flotte_la_declare_et_la_rend(client, maison,
     assert r.json()["fleet_id"] == flotte["id"]
 
 
+def _etat(client, maison, flotte):
+    return client.post(FLEETS, headers=_h(maison["sub"]),
+                       json={"op": "state", "fleet_id": flotte["id"]}).json()["state"]
+
+
 def test_l_etat_du_passage_compte_les_travaux_enfiles_par_la_route(client, maison, flotte):
     """LE test que le lot précédent ne pouvait pas écrire : plus une seule
-    écriture SQL, tout le trajet passe par les routes servies."""
+    écriture SQL, tout le trajet passe par les routes servies.
+
+    ⚠️ Il MESURE SON PROPRE DELTA, et ne suppose rien de ce que la flotte porte
+    déjà. Il attendait `>= 3` en n'enfilant que 2 : le troisième venait d'un test
+    voisin, donc il ne passait que dans un certain ordre — et un cliquet qui ne
+    tient que dans un ordre ne tient pas. Le delta exact dit d'ailleurs plus que
+    le seuil : il prouve que la route compte CE qu'elle enfile, ni plus ni moins.
+    """
+    avant = _etat(client, maison, flotte)
+    base = 0 if avant["no_jobs_attached"] else avant["jobs_total"]
+    base_pending = 0 if avant["no_jobs_attached"] else (avant.get("pending") or 0)
+
     for _ in range(2):
         assert client.post(JOBS, headers=_h(maison["sub"]), json={
             "op": "enqueue", "kind": "start", "payload": {"procedure": "p"},
             "fleet_id": flotte["id"]}).status_code == 200
-    etat = client.post(FLEETS, headers=_h(maison["sub"]),
-                       json={"op": "state", "fleet_id": flotte["id"]}).json()["state"]
+
+    etat = _etat(client, maison, flotte)
     assert etat["no_jobs_attached"] is False, (
         "le passage doit compter ses travaux — s'il dit encore « aucun travail », "
         "c'est qu'aucun écrivain ne pose le rattachement")
-    assert etat["jobs_total"] >= 3 and etat["pending"] >= 3
+    assert etat["jobs_total"] == base + 2
+    assert (etat.get("pending") or 0) == base_pending + 2
 
 
 def test_un_travail_dit_a_quel_passage_il_appartient(client, maison, flotte):

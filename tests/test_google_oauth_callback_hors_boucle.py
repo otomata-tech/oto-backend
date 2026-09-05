@@ -59,8 +59,10 @@ def _joue(coro):
 
 @pytest.fixture
 def wired(monkeypatch):
+    # Trois valeurs depuis oto-backend#877 : le state porte aussi le front de
+    # retour. Ici vide — ce banc mesure la boucle, pas le routage du retour.
     monkeypatch.setattr(datastore_routes.google_oauth, "verify_state",
-                        lambda state: ("sub-1", 42))
+                        lambda state: ("sub-1", 42, ""))
     return datastore_routes
 
 
@@ -83,7 +85,16 @@ def test_echange_tourne_hors_boucle(monkeypatch, wired):
     assert not isinstance(result, dict) or result.get("status", 200) < 400
 
 
-def test_echange_lent_rend_un_504_nomme(monkeypatch, wired):
+def test_echange_lent_redirige_avec_connect_error(monkeypatch, wired):
+    """Jusqu'à oto-backend#670, un échange lent rendait un 504 JSON nommé
+    (`oauth_exchange_timeout`) — la seule branche d'échec de ce callback à
+    répondre en JSON plutôt qu'en redirection, un outlier parmi les cinq
+    connecteurs OAuth. Elle suit maintenant la même convention que les autres :
+    une redirection portant `connect=error` ; le diagnostic (délai dépassé) va au
+    journal, où `oauth_exchange_timeout` reste lisible (grep sur les logs)."""
+    import urllib.parse
+    from starlette.responses import RedirectResponse
+
     monkeypatch.setattr(wired, "_OAUTH_EXCHANGE_TIMEOUT_S", 0.05)
 
     def _lent(code):
@@ -94,8 +105,10 @@ def test_echange_lent_rend_un_504_nomme(monkeypatch, wired):
     handler = _callback_endpoint()
 
     _, result = _joue(handler(_get("code=c&state=s")))
-    assert result["status"] == 504 and result["error"].startswith("oauth_exchange_timeout"), (
-        f"un échange OAuth lent doit rendre un 504 nommé, pas un gel — reçu {result!r}")
+    assert isinstance(result, RedirectResponse), (
+        f"un échange OAuth lent doit rediriger, pas geler ni rendre du JSON — reçu {result!r}")
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(result.headers["location"]).query)
+    assert q["connector"] == ["google"] and q["connect"] == ["error"]
 
 
 def test_le_controle_mord__un_appel_NU_dans_la_boucle_est_detecte():

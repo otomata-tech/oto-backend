@@ -62,8 +62,13 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int]) ->
         key = org_store.get_org_secret(oid, mprov, eff)
         return (key, eff) if key else None
 
+    # `legacy_user` n'est jamais atteint ici (le barreau se gate sur `sub is not
+    # None`, et l'anonyme n'en a pas) — la sonde réelle est passée quand même,
+    # champ requis de `CascadeProbe` (#409 : une sonde qui l'omettrait le
+    # sauterait en silence si un jour ce barreau devenait atteignable ici).
     probe = cascade.CascadeProbe(member=cascade.FETCH_PROBE.member,
                          member_cross=cascade.FETCH_PROBE.member_cross,
+                         legacy_user=cascade.FETCH_PROBE.legacy_user,
                          group=cascade.FETCH_PROBE.group, org=_anon_org_fetch,
                          tenant=cascade.FETCH_PROBE.tenant,
                          platform=cascade.FETCH_PROBE.platform)

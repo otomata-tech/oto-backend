@@ -21,6 +21,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
 from ..datastore import claimable, jetons
+from ..datastore import layers as dsl
 from ..datastore import schema as dsv2
 from ..datastore.core import (
     ClaimedRefUnresolved,
@@ -394,6 +395,13 @@ def register(mcp: FastMCP) -> None:
         `owner: {type: "org"|"group", id: N}`. Tables created before 2026-09-04 keep
         the owner they have.
 
+        ⚠️ **`_org=` does NOT change the owner.** It decides which org you read and
+        write under — never who owns what you create. Create a table under `_org=N`
+        without an owner and it is still YOURS: every later call of yours keeps
+        working, so nothing looks wrong. It shows up at the second agent, or at the
+        colleague who cannot find the table and concludes it does not exist. The
+        reply tells you the owner, and warns you in exactly that case.
+
         Args:
             namespace: kebab-case identifier, unique per owner (e.g. `timetrack`).
         """
@@ -473,6 +481,12 @@ def register(mcp: FastMCP) -> None:
         datetime|bool|json|object|list|url|email|enum",
         "display"?: "title", "role"?: "status|metric|note|qualif"}],
         "key"?: str, "strict"?: bool}.
+        ⚠️ **An attribute nobody reads is accepted in SILENCE**, so a typo disarms the
+        guard you thought you set: `read_only` instead of `readonly` locks nothing, and
+        nothing says so. The reply now carries `unknown_keys_warning` naming those keys
+        column by column — a warning, never a refusal, so existing schemas keep
+        working. The declared attributes, and who reads each one (validator /
+        front-end), are served at `GET /api/datastore/schema/keys`.
         ⚠️ This REPLACES the schema — it does not merge. Any setting absent from the
         body you send DISAPPEARS (a field note, a bound, options, the business key and
         its UNIQUE index). The response now names what it just removed
@@ -543,7 +557,8 @@ def register(mcp: FastMCP) -> None:
           `field.readonly: true` refuses a write that CHANGES the value in place
           (layers stay open — what another source says goes in `<field>.comment`);
           `field.origine: "system"` has the platform keep the previous value in
-          `<field>.origine`; `field.system: "run.id"|"run.started_at"|"write.at"` has
+          `<field>.origine` — the value AS IT STOOD when the format was declared
+          (`data_write` says what that does and does not mean); `field.system: "run.id"|"run.started_at"|"write.at"` has
           the PLATFORM write the VALUE on every write — do not send that column, it
           is stamped for you (a value you retype is what you believe, not what
           happened). Re-sending the SAME value is never a write, so re-emitting a
@@ -580,7 +595,9 @@ def register(mcp: FastMCP) -> None:
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
                 fate; a field may carry `readonly: true` (value locked, layers open),
-                `origine: "system"` (platform-kept `<field>.origine`) or
+                `origine: "system"` (platform-kept `<field>.origine` — the value as
+                it stood WHEN THIS FORMAT WAS DECLARED, written onto every existing
+                row at that moment; the name says when, not who) or
                 `system: "<source>"` (platform-written value).
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
@@ -612,6 +629,35 @@ def register(mcp: FastMCP) -> None:
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
+
+        Layers (`valeur`/`comment`/`link`/`origine`), what a write destroys, what
+        `readonly` and the business key protect, and where the REST face differs:
+        guide `datastore-semantics` (`oto_guide op=read slug=datastore-semantics`).
+
+        ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
+        undo and no history: the previous value is gone the moment yours lands. If
+        the value was supplied by the table's owner and you overwrite it, they get
+        nothing back — announce what you are about to change on a column you did not
+        fill yourself.
+
+        The safety net is `origine: "system"`, and what it keeps is precise: **the
+        value as it stood when the format was declared**. Declaring the format
+        writes that value into `<field>.origine` on every existing row, once, in one
+        transaction — the reply says how many rows it touched. From then on, the
+        layer never moves again: later writes overwrite the value, never the origin.
+
+        Two things it does NOT mean:
+
+        - it is not "the value the data owner supplied". If agents had already
+          written before the format was declared, what is kept is what stood at
+          declaration time. The name says when, not who ;
+        - a column WITHOUT that format keeps nothing at all — overwriting is final,
+          and nothing will tell you afterwards.
+
+        Re-writing the SAME value changes nothing and captures nothing, by design.
+        And it does not depend on how the row was created: a row appended through
+        the MCP tool and one created through the REST face behave identically
+        (measured 2026-09-04, both faces call the same store).
 
         SINGLE (`row`): WITHOUT `id` = append a NEW row (new JSON keys auto-create
         columns, unless the table is CLOSED — see below) — UNLESS the table declares
@@ -840,10 +886,14 @@ def register(mcp: FastMCP) -> None:
         cursor: str | None = None, fields: Optional[list[str]] = None,
         count_only: bool = False, q: str | None = None,
         order_by: str | None = None, order_dir: str = "desc",
-        filters: Optional[list[dict]] = None,
+        filters: Optional[list[dict]] = None, layers: str = dsl.DEFAUT,
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
+
+        Layers come back FLAT by default (`champ.origine` beside the bare name);
+        `layers="nested"` returns the shape you write — guide `datastore-semantics`.
+        The REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
         List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
         there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/
@@ -915,20 +965,35 @@ def register(mcp: FastMCP) -> None:
                 `order_health: {off_type, empty}` — counts over the whole filtered
                 set, absent when everything conforms.
             order_dir: `desc` (default) or `asc`. Only meaningful with `order_by`.
+            layers: shape of a cell that carries layers (`origine`/`comment`/`link`).
+                You WRITE nested (`{"valeur": …, "origine": …}`) and, by default,
+                read back FLAT — this parameter lifts that asymmetry. `flat`
+                (default): `row["email"]` is the value, and each filled layer sits
+                BESIDE it as `row["email.origine"]`. `nested`: `row["email"]` is
+                `{"valeur": …, "origine": …, "comment": …, "link": …}` — `valeur`
+                always, the other keys only when filled — i.e. the shape you WRITE
+                with `data_write`. A cell without layers is the same plain value in
+                both shapes. Any other value is refused. With `nested`, `fields`
+                names columns (a nested cell keeps its layers); `email.origine` as
+                a field name only exists in `flat`. The default WILL switch to
+                `nested`, with dated notice: pass `layers` explicitly if you depend
+                on one shape.
         """
         store = _acting_store()
         namespace, id = _adresse_reservee(store, namespace, id)
         try:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
+            layers = dsl.check(layers)
             if count_only:
                 return {"total": store.count_rows(namespace, filter=filter, q=q,
                                                   filters=filters)}
             if id is not None:
-                row = store.get_row(namespace, id)
+                row = store.get_row(namespace, id, layers=layers)
                 return _project_row(row, fields) if fields else row
             page = store.cursor_rows(namespace, filter=filter, limit=limit,
                                      cursor=cursor, q=q, filters=filters,
-                                     order_by=order_by, order_dir=order_dir)
+                                     order_by=order_by, order_dir=order_dir,
+                                     layers=layers)
             rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
             out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"]}
@@ -1009,10 +1074,17 @@ def register(mcp: FastMCP) -> None:
         RATE without crossing two calls whose scopes can silently differ. Give such a
         metric a `label`, and it comes back under that name.
 
-        `group_by` also accepts a LIST of columns: their values are pooled, one row
+        `group_by` also accepts a LIST of columns: their values are POOLED, one row
         contributing one occurrence per filled column ("all ranks together"). Under a
         pooled group, `count` counts OCCURRENCES and `count_rows` counts ROWS — two
         different questions, so ask for the one you mean.
+
+        ⚠️ Pooling is NOT a two-dimensional group-by, and `group_by: "a,b"` is not one
+        either — it is REFUSED (oto#50). A comma-separated string used to be read as a
+        single column name containing a comma: no row carries it, so you got 200 with
+        ONE group of key `null` holding every row, and no way to tell that from empty
+        data. Group on one column per call, or pass the list if you meant to pool.
+        Crossing two dimensions is not served yet.
 
         Returns `{results: [...]}` — each entry carries the `group_by` value (when set)
         plus one key per metric (`count`, `sum_<field>`, `avg_<field>`, or `label`).

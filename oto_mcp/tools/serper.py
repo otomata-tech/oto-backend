@@ -12,7 +12,7 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_REQUEST
+from mcp.types import ErrorData, INVALID_PARAMS, INVALID_REQUEST
 
 from .. import access, output_projection, url_perimeter
 from ..connectors import verify as connector_verify
@@ -79,6 +79,40 @@ def register(mcp: FastMCP) -> None:
     def _client() -> tuple[SerperClient, bool]:
         key, is_platform = access.resolve_api_key("serper")
         return SerperClient(api_key=key), is_platform
+
+    def _refus_local(url: str) -> "str | None":
+        """La raison pour laquelle ce domaine n'est JAMAIS scrapable, ou `None`.
+
+        ⚠️ Interrogée AVANT l'appel, exprès. Le client d'oto-core connaît la table et
+        lève sur elle — mais il lève un `RuntimeError` NU, que la taxonomie du backend
+        ne sait pas distinguer d'un bug : elle le classe `internal` et sert « Erreur
+        interne du serveur. » **sans écho du message** (anti-fuite). Le modèle reçoit
+        donc « erreur interne » là où il devait lire « cherche une autre source » — et
+        il réessaie, ou s'arrête, au lieu de contourner (oto-backend#473).
+
+        ⚠️ Mesuré le 05/09/2026 : `classify(RuntimeError("… Facebook exige une session
+        …"))` rend bien `Erreur interne du serveur.`. **Le journal des appels, lui,
+        montre le vrai message** — il enregistre `str(exc)`, pas ce qui est servi. S'y
+        fier ferait conclure que le défaut est réparé alors qu'il ne l'est pas ; c'est
+        le piège de ce lot.
+
+        Pourquoi devant plutôt que derrière : classer APRÈS coup demanderait de lire le
+        TEXTE de l'exception, et un classement bâti sur des mots change de sens au
+        premier reformatage amont. Ici on pose la même question que le client, à la
+        même table, avant qu'il ne lève.
+
+        Best-effort sur un attribut privé d'oto-core : s'il disparaît, on retombe
+        exactement sur le comportement d'avant ce lot — jamais pire. Un banc de
+        version-skew rougit dans ce cas, pour que la dégradation se voie."""
+        try:
+            from oto.tools.serper import SerperClient
+            return SerperClient._refuses_scraping(url)
+        # Sonde d'AMÉLIORATION : son absence rend le refus opaque comme avant ce lot,
+        # elle n'aggrave rien. Journaliser à chaque URL scrapée noierait le journal pour
+        # une dégradation qui a déjà son signal — le banc de version-skew
+        # (`test_serper_refus_local_473`).
+        except Exception:  # noqa: SILENT — sonde best-effort, dégradation couverte par un banc
+            return None
 
     def _run(method: str, **kwargs) -> dict:
         """Résout la clé, appelle la méthode du client, compte l'usage plateforme.
@@ -432,6 +466,17 @@ def register(mcp: FastMCP) -> None:
         # `format`, avant la règle du client amont sur les hôtes clos.
         per = url_perimeter.perimeter_of_call()
         url_perimeter.refuse_if_excluded(url, per)
+        # oto-backend#473 : le domaine est-il de ceux qu'on ne scrape JAMAIS ? On le
+        # dit ICI, en clair et en actionnable, plutôt que de laisser le client lever un
+        # `RuntimeError` nu que la taxonomie rendra « Erreur interne du serveur. ».
+        # Régime permanent, pas incident : mesuré encore le 04/09/2026 sur des URL
+        # facebook.com, dans des runs qui n'avaient plus qu'à abandonner.
+        if (pourquoi := _refus_local(url)):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"{url} ne peut pas être lu par ce scraper : {pourquoi} "
+                         "Ce refus est DÉFINITIF pour ce domaine — ne réessaie pas la "
+                         "même adresse, prends une autre source.")))
         if format not in ("markdown", "text", "both", "html"):
             raise _bad(
                 f"`format` invalide : {format!r} (markdown | text | both | html).")

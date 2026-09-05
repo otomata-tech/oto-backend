@@ -299,20 +299,19 @@ trou « ces connecteurs n'ont aucune entrée dans `me.providers` ») relaie ces 
 champs sur l'entrée `ProviderStatus` — c'est ce que lit la fiche `/api/me` du
 dashboard.
 
-⚠️ **Ce que ce lot NE fait PAS** : `oto_instance op=verify` reste **indisponible**
-pour `atlassian`/`folkmcp` (`verify_unavailable` — aucune sonde enregistrée).
-Vérifié empiriquement : `access.resolve_credential("atlassian", sub=…)` lève
-`McpError("Aucune clé `atlassian` configurée pour toi…")` **même quand une ligne
-existe réellement** au scope legacy, parce que le walker (`_member_fetch` /
-`db.get_member_api_key`) ne cherche que `("member", "{org}:{sub}")`. Enregistrer
-une sonde `verify` sans corriger ce point ferait *pire* que l'absence actuelle :
-un utilisateur réellement connecté se verrait dire « aucune clé configurée » — un
-énoncé faux — là où `verify_unavailable` reste honnête (aucun test n'existe,
-sans se prononcer sur la connexion). Élargir le walker à ce scope legacy est le
-« barreau ultérieur d'ADR 0033 » déjà nommé par `tests/test_member_credential_scope.py`
-(§4, `_OAUTH_FAMILY_FILES`) — plus grand que ce lot, pas fait ici. La marque de
-santé écrite par `access_token_for` reste donc observable via `/api/me`
-uniquement, pas via `op=verify`, tant que ce barreau n'existe pas.
+✅ **Fermé depuis (oto-backend#876, 2026-09-05)** : le walker (`access/cascade.py`)
+porte désormais un barreau dédié au scope legacy `("user", sub)`, gaté par la
+liste FERMÉE `LEGACY_USER_SCOPE_PROVIDERS = ("atlassian", "folkmcp")` — à ne pas
+confondre avec `connectors.link.entries()` (google y est aussi, déjà migré au
+scope membre). `oto_instance op=verify` fonctionne maintenant pour `atlassian` :
+sa sonde relit `access_token_for` (refresh transparent, marque plutôt que purge)
+PUIS interroge réellement l'API Atlassian — un refresh qui réussit ne suffit pas
+à dire « connecté » si l'app a été révoquée côté Atlassian Admin. `folkmcp`
+profite du même barreau mais n'a pas encore de sonde enregistrée (aucune
+demande à ce jour). Détail et bancs : `tests/test_cascade_legacy_user_rung.py`,
+`tests/auth/test_atlassian_verify.py`. La migration ADR 0033 de ces deux
+connecteurs au scope membre (suivant Google, commit 79759702) reste une
+décision **séparée**, non prise ici — le walker élargi n'est pas un pari sur elle.
 
 Changement de comportement **servi** : un connecteur qui, avant ce lot, semblait
 redevenir « à connecter » (purge muette) après un grant mort dira désormais

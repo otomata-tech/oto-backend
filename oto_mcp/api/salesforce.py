@@ -29,6 +29,7 @@ import logging
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -65,10 +66,14 @@ def make_routes(
         milliseconde du callback, zéro erreur), et faute du moindre signe ils ont
         désinstallé puis réinstallé le connecteur en boucle pendant cinq heures.
         Nom générique : une clé nommée d'après un connecteur obligerait chaque surface
-        à en connaître le nom, exactement ce qu'on retire partout ailleurs."""
+        à en connaître le nom, exactement ce qu'on retire partout ailleurs.
+
+        Salesforce EST la forme cible (oto-backend#670) : `connector_return_url`
+        (le fabricant partagé) ne fait ici que ce que cette fonction composait déjà
+        à la main — aucun changement de comportement, salesforce n'a rien à doubler."""
         from ..auth import flow as oauth_flow
-        return oauth_flow.return_url(
-            return_app, f"?connector=salesforce&connect={etat}", org=org_id)
+        return oauth_flow.connector_return_url(
+            return_app, "salesforce", etat, org=org_id)
 
     async def callback(request: Request) -> Response:
         # Salesforce redirige ici (pas d'auth Logto) — l'identité + le scope
@@ -96,17 +101,27 @@ def make_routes(
             logger.warning("salesforce callback refusé : %s n'est plus admin du scope "
                            "%s (org=%s group=%s)", sub, scope, org_id, group_id)
             return RedirectResponse(_retour("forbidden", return_app, org_id), status_code=302)
-        try:
+        def _lire_et_echanger() -> dict:
             fields = salesforce_oauth.read_saved_fields(sub, org_id, scope, group_id)
             if not fields:
                 raise RuntimeError("Credential introuvable au retour de Salesforce.")
-            tokens = salesforce_oauth.exchange_code(
+            return salesforce_oauth.exchange_code(
                 code,
                 client_id=fields["client_id"],
                 client_secret=fields["client_secret"],
                 login_url=fields["login_url"],
                 verifier=verifier_pkce,
             )
+
+        try:
+            # DB + HTTP synchrones hors de la boucle : ce handler est
+            # `async def`, et l'échange de code parle à un serveur
+            # distant (15 à 30 s d'attente). Appelé nûment il fige tout
+            # le processus le temps que l'amont réponde
+            # (oto-backend#867). Même forme que le callback Zoho, qui
+            # était déjà protégé — la discipline existait, elle n'avait
+            # simplement pas été appliquée ici.
+            tokens = await run_in_threadpool(_lire_et_echanger)
             result = await salesforce_oauth.persist_token(sub, org_id, scope, tokens, group_id)
         except Exception:
             # Le client ne voit qu'un `?salesforce=error` : sans trace ici, un échec de

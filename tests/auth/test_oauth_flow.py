@@ -180,6 +180,55 @@ def test_return_url_respects_oto_app_url_override(monkeypatch):
     assert url == "https://dashboard.oto.cx/connectors?connector=zoho&zoho=connected"
 
 
+# --- LA convention unique de retour OAuth (oto-backend#670) --------------------
+#
+# Un seul fabricant remplace les cinq suffixes composés à la main dans
+# `api/salesforce.py`, `api/zoho.py`, `api/atlassian.py`, `api/folk.py` et
+# `api/datastore.py` — dont deux replis cassés (f-string à accolades doublées).
+
+def test_connector_return_suffix_forme_de_base():
+    assert of.connector_return_suffix("salesforce", "connected") == \
+        "?connector=salesforce&connect=connected"
+
+
+def test_connector_return_suffix_double_pendant_le_preavis(monkeypatch):
+    """zoho/google servent déjà un suffixe LU par le dashboard : il doit coexister
+    avec le neuf dans la MÊME query string, pas dans une seconde redirection."""
+    monkeypatch.setattr(of.deprecations, "dans_le_preavis_retour_oauth", lambda: True)
+    suffix = of.connector_return_suffix("zoho", "connected", legacy=("zoho", "connected"))
+    assert suffix == "?connector=zoho&connect=connected&zoho=connected"
+
+
+def test_connector_return_suffix_arrete_de_doubler_apres_le_preavis(monkeypatch):
+    monkeypatch.setattr(of.deprecations, "dans_le_preavis_retour_oauth", lambda: False)
+    suffix = of.connector_return_suffix("zoho", "connected", legacy=("zoho", "connected"))
+    assert suffix == "?connector=zoho&connect=connected"
+
+
+def test_connector_return_suffix_sans_legacy_ne_double_rien():
+    """atlassian/folk : `connector=` existait déjà, `connect=` est un pur ajout —
+    rien à doubler, donc pas de `legacy` à passer."""
+    assert of.connector_return_suffix("atlassian", "error") == \
+        "?connector=atlassian&connect=error"
+
+
+def test_connector_return_url_compose_base_et_suffixe(front_tiers):
+    url = of.connector_return_url("acme", "zoho", "connected", org=7,
+                                  legacy=("zoho", "connected"))
+    assert url == ("https://app.acme.test/org/7/connectors"
+                   "?connector=zoho&connect=connected&zoho=connected")
+
+
+def test_avec_connect_ajoute_le_parametre_a_une_url_existante():
+    assert of.avec_connect("https://x/connectors?connector=atlassian", "connected") == \
+        "https://x/connectors?connector=atlassian&connect=connected"
+
+
+def test_avec_connect_pose_le_point_dinterrogation_si_absent():
+    assert of.avec_connect("https://x/connectors", "error") == \
+        "https://x/connectors?connect=error"
+
+
 # --- la duplication doit DÉCROÎTRE --------------------------------------------
 
 def _modules_with(pattern: str) -> list[str]:

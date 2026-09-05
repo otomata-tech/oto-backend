@@ -30,6 +30,9 @@ from . import scope, secret_repr
 # whatsapp/crunchbase). Gate les barreaux groupe/org du walker.
 ORG_SHAREABLE_PROVIDERS = providers.ORG_SHAREABLE_PROVIDERS
 
+# Liste FERMÉE (#876) — PAS `connectors.link.entries()` (google, déjà migré, y est aussi).
+LEGACY_USER_SCOPE_PROVIDERS = ("atlassian", "folkmcp")
+
 
 def _is_multi_account(provider: str, org: "int | None" = None) -> bool:
     """Le connecteur porte-t-il plusieurs comptes dans le coffre (segment `account`) ?
@@ -247,6 +250,7 @@ class CascadeProbe:
     oublierait un barreau le sauterait en silence — le défaut de #409."""
     member: Callable[[str, int, str], Optional[tuple]]
     member_cross: Callable[[str, int, str], Optional[object]]
+    legacy_user: Callable[[str, str], Optional[object]]
     group: Callable[[int, str], Optional[object]]
     org: Callable[[int, str], Optional[object]]
     tenant: Callable[[str, str], Optional[object]]
@@ -265,6 +269,8 @@ PRESENCE_PROBE = CascadeProbe(
     member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p)
                             and not db.member_instance_suspended(s, o, p) else None),
     member_cross=lambda s, o, p: (True if db.has_member_api_key(s, o, p) else None),
+    legacy_user=lambda s, p: (True if credentials_store.has_credential(
+        credentials_store.USER, s, p) else None),
     group=lambda g, p: (True if group_store.has_group_secret(g, p) else None),
     org=lambda o, p: (True if org_store.has_org_secret(o, p) else None),
     tenant=lambda t, p: (True if tenant_vault.has_tenant_secret(t, p) else None),
@@ -281,6 +287,8 @@ FETCH_PROBE = CascadeProbe(
                              and not db.member_instance_suspended(s, o, p) else None)(
                                  db.get_member_api_key(s, o, p))),
     member_cross=lambda s, o, p: db.get_member_api_key(s, o, p),
+    legacy_user=lambda s, p: credentials_store.get_credential(
+        credentials_store.USER, s, p),
     group=lambda g, p: group_store.get_group_secret(g, p),
     org=lambda o, p: org_store.get_org_secret(o, p),
     tenant=lambda t, p: tenant_vault.get_tenant_secret(t, p),
@@ -380,6 +388,7 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
         # lecture d'origine. C'est un appel, pas trente-trois : le walker n'y arrive
         # que pour les connecteurs `personal_cross_org` mono-compte.
         member_cross=PRESENCE_PROBE.member_cross,
+        legacy_user=PRESENCE_PROBE.legacy_user,  # (#876) même exception que member_cross
         group=lambda g, p: (True if p in par_groupe.get(int(g), ()) else None),
         org=lambda o, p: (True if p in org_secrets else None),
         tenant=lambda t, p: (True if p in tenant_secrets else None),
@@ -425,6 +434,11 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
                 yield CascadeRung("user", credentials_store.MEMBER,
                                   credentials_store.member_id(pio, sub), payload,
                                   via="cross_org")
+    # Scope LEGACY (#876) : LA ligne du sub DEMANDEUR seul, liste fermée.
+    if sub is not None and provider in LEGACY_USER_SCOPE_PROVIDERS:
+        payload = probe.legacy_user(sub, provider)
+        if payload is not None:
+            yield CascadeRung("user", credentials_store.USER, sub, payload)
     if provider in ORG_SHAREABLE_PROVIDERS:
         # `group` accepte un callable zéro-arg (résolution PARESSEUSE de l'équipe
         # active) : le générateur s'arrête au premier barreau gagnant, donc une

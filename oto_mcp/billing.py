@@ -603,6 +603,43 @@ def cancel(org_id: int) -> dict:
     return status(org_id)
 
 
+def resume(org_id: int) -> dict:
+    """Annule une résiliation : l'abonnement repart sur son cycle, sans rien encaisser.
+
+    Le geste manquait, et son absence coûtait (#845) : l'écran annonçait la date de
+    bascule vers le palier gratuit sans offrir de revenir en arrière — **un clic de trop
+    était définitif jusqu'à la fin de la période**.
+
+    ⚠️ **Aucun appel au prestataire de paiement, aucun mouvement d'argent.** Résilier ne
+    révoque pas le mandat : il est toujours là, et l'abonnement n'a jamais cessé d'être
+    `active`. Reprendre, c'est donc défaire deux écritures locales — rien de plus, et
+    surtout rien qui touche l'encaissement.
+
+    Les refus NOMMENT ce qui bloque, parce que les trois appellent des gestes
+    différents : s'abonner, ne rien faire, ou se réabonner."""
+    row = db_billing.get_org_subscription(org_id)
+    if not row:
+        raise ValueError("not_subscribed: aucun abonnement sur cette org")
+    if row["status"] == "canceled":
+        # ⚠️ La période est ÉCHUE et le runner a basculé : reprendre ici rouvrirait
+        # l'entitlement sans qu'aucune échéance ne soit tirée — un abonnement gratuit
+        # créé par un bouton « annuler la résiliation ». C'est un réabonnement, il
+        # passe par `subscribe`.
+        raise ValueError(
+            "already_ended: la période est terminée et l'abonnement est clos — "
+            "reprends-le par une nouvelle souscription, pas par une reprise")
+    if not row.get("canceled_at"):
+        raise ValueError("not_canceled: cet abonnement n'est pas résilié")
+    if not db_billing.resume_canceled(org_id):
+        # Le `WHERE` n'a rien touché alors que la lecture disait le contraire : le
+        # runner est passé entre les deux. On le DIT plutôt que de rendre un succès
+        # qui n'a rien fait.
+        raise ValueError(
+            "already_ended: la résiliation s'est consommée pendant la reprise — "
+            "relis l'état avant de rejouer")
+    return status(org_id)
+
+
 # ── admin : forcer / retirer un plan (non payé) ──────────────────────────────
 
 def admin_set_plan(org_id: int, plan: str, *, granted_by: str) -> dict:

@@ -46,6 +46,7 @@ def socle(monkeypatch):
     """
     muette = access.CascadeProbe(
         member=lambda s, o, p: None, member_cross=lambda s, o, p: None,
+        legacy_user=lambda s, p: None,
         group=lambda g, p: None, org=lambda o, p: None, tenant=lambda t, p: None,
         platform=lambda s, p, o: None)
     monkeypatch.setattr(access, "preloaded_presence_probe",

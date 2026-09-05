@@ -30,14 +30,23 @@ def client(monkeypatch):
 
     `register()` construit son `_client()` en fermeture sur la classe importée dans
     la fonction : on patche donc la classe DANS le module oto-core, avant `register`.
-    """
+
+    ⚠️ Depuis oto#25 lot b2, `_client()` résout via `access.resolve_credential`
+    (want="byo") et non plus `resolve_credential_fields` — il lui faut l'ENTITÉ
+    gagnante (pas seulement les champs) pour marquer une ligne rejetée. D'où un
+    substitut de `ResolvedCredential`, même patron que `test_salesforce_op_dispatch.py`."""
     from oto.tools.zoho import client as zoho_client_mod
+    from oto_mcp import access
 
     inst = MagicMock()
     monkeypatch.setattr(zoho_client_mod, "ZohoClient", lambda **kw: inst)
-    monkeypatch.setattr("oto_mcp.access.resolve_credential_fields",
-                        lambda *a, **k: {"client_id": "c", "client_secret": "s",
-                                         "refresh_token": "r", "data_center": "eu"})
+
+    class _RC:
+        entity_type, entity_id, account = "member", "2:sub-x", ""
+        fields = {"client_id": "c", "client_secret": "s",
+                  "refresh_token": "r", "data_center": "eu"}
+
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _RC())
     return inst
 
 

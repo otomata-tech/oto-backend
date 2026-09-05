@@ -47,7 +47,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | `POST /api/me/avatar`, `POST /api/orgs/{id}/logo` | `api/media.py` | **multipart** → hors du moule par CONSTRUCTION (classé `NATURE`) |
 | `POST` d'un fichier de projet, `/api/me/projects/{id}/export` | `api/projects.py` | **multipart / ZIP** → hors du moule (classé `NATURE`) |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
-| SIRENE, accords, datastore, contact, webhook Mollie, **callbacks OAuth** zoho/google/atlassian/folk/salesforce | `api_routes_<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres |
+| SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/atlassian/folk/salesforce (`api/{zoho,datastore,atlassian,folk,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
   capacités `me.{get,calls,activity_summary}` depuis le 2026-08-27
@@ -172,6 +172,16 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).
 - `GET /api/public/projects/{token}` — **sans auth** : renvoie `{ciphertext, updated_at}` du snapshot chiffré. Déchiffrement côté navigateur (route `/p/p/{token}#<clé>`). Pendant public de `GET /api/public/docs/{token}` (#4a).
 - `PUT|POST|GET /api/upload/{token}` — **réception d'un upload signé out-of-bande** (issue #105), **pas de JWT** : le `{token}` est un jeton HMAC scellant `(sub, org, cible)` + TTL court + usage unique (émis par `oto_upload_url`, module `upload_tokens.py`). **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary @fichier`) ; **POST** multipart `file` = le formulaire humain ; **GET** = page HTML d'upload autoportée (fallback quand l'agent n'a pas de shell, ex. claude.ai : il transmet le lien à l'humain — le jeton n'est PAS consommé au GET). Le backend matérialise dans la cible en **réappliquant** son autz, consomme le jeton (anti-rejeu), renvoie un **accusé léger** (id + compteurs), jamais le body. Cibles : page Documents (`doc`), fichier brut de projet (`project_file`, autz `ownership.can_access(project, write)`), lot de lignes datastore (`datastore` — NDJSON/CSV batch-upsert sur clé, autz `ownership.can_access(datastore_namespace, write)`, ns_id scellé au mint). Évite de faire transiter du gros contenu par le contexte du LLM.
+- `POST /api/datastore/namespaces/{ns}/rows` — **UNE ligne** : le corps EST la ligne (un objet, une clé par colonne ; capacité `me.datastore.append_row`, 201). **Il n'y a pas de lot JSON sur REST** : un corps dont l'unique clé porte une liste d'objets est refusé `400 batch_body` — sans schéma il faisait une ligne imbriquée en 201 muet, sous `strict: true` une ligne imbriquée avec relevé `hors_schema` (oto#48, mesuré le 04/09/2026) ; une colonne DÉCLARÉE sous ce nom reste écrivable. Le lot = `data_write(rows=[…])` côté agent, ou l'upload signé NDJSON/CSV ci-dessus pour les volumes. Garde : `tests/datastore/test_lot_dans_ligne_oto48.py`.
+- **Datastore — les 24 chemins sous `/api/datastore/namespaces`** (= `NS` ; relevés le 2026-09-05 depuis l'`openapi.json` **servi** : `curl -s https://mcp.oto.ninja/api/openapi.json`), tous capacités `me.datastore.*` de `capabilities/datastore/` — aucune route écrite à la main depuis le 2026-08-12 (#302). `{namespace}` = le nom du tableau, `slot:<nom>` et `@claimed` compris (même résolution que la face agent, sinon `400 jeton_mal_place`) ; un tableau d'une autre de mes orgs rend `404 namespace_not_found` **avec l'org où il vit** (rejouer avec `X-Oto-Org`).
+  - **tableaux** : `GET NS` (possédés + partagés ; seule réponse *filtrée* par la portée d'un jeton porté) · `POST NS` (créer) · `PATCH NS/{namespace}` (renommer — id, URL et partages stables) · `DELETE NS/{namespace}` (gouvernance) · `GET NS/{namespace}/url` (deep-link dashboard) ;
+  - **lignes** : `GET NS/{namespace}/rows` (page `offset` + `limit` ≤ 500, `total` du jeu filtré, **pas de curseur** — la fin se calcule, un `offset` au-delà rend `rows: []` en 200 ; `filter`/`filters` = JSON dans UNE chaîne de query ; **pas de `fields`**, la ligne entière) · `POST …/rows` (UNE ligne, 201, ci-dessus) · `GET|PATCH|DELETE …/rows/{row_id}` (`?readonly_override=true` sur `POST`/`PATCH`, propriétaire ou gouvernant, journalisé) ;
+  - **schéma** : `GET|PUT|PATCH NS/{namespace}/schema` (`PUT` pose, ou retire avec `schema: null` ; `PATCH` par clé) · `POST NS/{namespace}/drop_column` (destructif, `confirm=true`) ;
+  - **file de travail** : `POST NS/{namespace}/claim_next` · `POST …/rows/{row_id}/claim` (409 si bail d'un autre) · `POST …/rows/{row_id}/release` (gardée avec `worker`, forcée sans) · `GET NS/{namespace}/queue` (lignes sous bail, lecture seule) ;
+  - **agrégat** : `GET NS/{namespace}/aggregate` (`group_by` = UNE colonne ; `"a,b"` refusé `400 invalid_aggregate`, oto#50 — la forme liste n'existe que sur `data_aggregate`) ;
+  - **partage** : `GET|POST|DELETE NS/{namespace}/share` (gouvernance) ;
+  - **activité** : `GET NS/{namespace}/activity` · `GET …/rows/{row_id}/activity` — **sans face MCP** (opt-out explicite : lecture de cockpit).
+  Les couches d'une colonne (`comment`/`link`/`origine`) sont servies **à plat** par défaut (`champ.origine`) sur les deux faces ; `?layers=nested` sur `GET …/rows` et `GET …/rows/{row_id}` rend la forme d'écriture `{valeur, + couches renseignées}` (oto#53 ; autre valeur → `400 invalid_layers` ; le défaut basculera vers `nested` avec préavis daté) ; les refus sont nommés (`row_invalid`, `business_key_required`, `invalid_row_input`, `batch_body`, `unknown_fields`, `403 namespace_read_only`, `404 row_not_found`). La sémantique complète et les divergences MCP/REST sont dans le guide servi `datastore-semantics` (oto#51).
 - `POST /api/me/unipile/connect` + `POST …/reconcile` + `GET|DELETE /api/me/unipile` —
   **la messagerie hébergée côté membre**, capacités
   `me.unipile.{connect,reconcile,status,disconnect}` depuis le 2026-08-27
@@ -203,6 +213,22 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   fournisseur) restent écrits à la main et le resteront : le fournisseur y redirige le
   NAVIGATEUR (302, sans en-tête d'auth), or l'adaptateur authentifie toujours et répond
   en JSON — hors du moule par construction.
+  ⚠️ **LA convention de retour, après ce consentement, est UNIQUE depuis
+  oto-backend#670** : `?connector=<nom>&connect=connected|error|forbidden`, généralisée
+  depuis la forme salesforce et fabriquée une seule fois
+  (`auth.flow.connector_return_suffix`/`connector_return_url`) plutôt que composée à la
+  main dans chaque callback — c'était le cas avant ce lot, avec cinq formes différentes
+  et deux replis cassés (une f-string à accolades doublées sur atlassian/folk, qui
+  rendait une chaîne littérale au lieu d'une URL). `zoho` et `google` servaient déjà un
+  suffixe LU par le dashboard (`?zoho=connected`, `?google=connected`) : il coexiste
+  avec le neuf dans la MÊME redirection, le temps d'un préavis distinct de celui du
+  renommage doctrine→guide (`deprecations.ANNONCE_RETOUR_OAUTH`/`RETRAIT_RETOUR_OAUTH`,
+  `docs/alias-deprecies.md`) — **la date de retrait n'est PAS encore fixée** : elle ne
+  peut être posée qu'au tag qui met ce lot en production (main = preprod), pas avant ;
+  tant qu'elle est absente, le doublage reste actif sans discontinuer. `atlassian` et
+  `folkmcp` gagnent `connect=` en pur ajout (leur `connector=` déjà servi ne bouge pas) ;
+  ils ne servaient AUCUNE distinction succès/échec avant ce lot (le repli cassé rendait
+  toujours la même destination), donc rien n'y avait de lecteur à préserver.
   **Deux familles, pas trois.** `atlassian` et `folkmcp` fédèrent un MCP distant (jeton
   per-user au coffre, injecté par `tools/mount.py`) : leur surface est identique au champ
   près, et cette symétrie est **contractuelle** — le dashboard les pilote par un client
@@ -221,6 +247,28 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   construire son URL à partir du nom du connecteur — **dette de front**, pas de backend.
   **Pas de face MCP** : ouvrir une page de consentement demande un navigateur, et le
   pendant agent générique existe (`me.connector_connect`).
+- `GET /api/me/connectors/{name}/oauth-status` + `DELETE /api/me/connectors/{name}/oauth`
+  — **le statut et la déconnexion OAuth GÉNÉRIQUES**, capacités
+  `me.connector_status`/`me.connector_disconnect` (`capabilities/connectors/oauth_status.py`,
+  depuis le 2026-09-04, oto-dashboard#125 items 2/3) : le chemin fixe qui ne nomme pas
+  le connecteur, symétrique de `me.connector_connect` — `{name}` ∈ atlassian, folkmcp,
+  google (les seuls connecteurs OAuth fédérés) ; un autre nom rend `400 no_oauth_status`.
+  ⚠️ **`me.federation.*` ci-dessus RESTE en place** : le retrait est un lot séparé, une
+  fois le dashboard basculé sur ces deux-là (même discipline que #519/#670).
+  **Contrainte 1** (bloquante) : `me.connector_status` dérive `{connected, set_at,
+  health_ko, health_reason}` de la MÊME lecture que `/api/me` (`access.status_for`),
+  JAMAIS d'un second appel à `atlassian_oauth.status_for`/`folk_oauth.status_for`/
+  `google_oauth.list_accounts` qui pourrait diverger. ⚠️ Pour **google** spécifiquement,
+  `access.status_for` ne porte qu'UNE identité par défaut (mono-compte hérité) : ce
+  contrat commun ne rend donc RIEN de spécifique à google au-delà de ces quatre champs —
+  forcer un `accounts` ici recréerait la seconde vérité que la contrainte interdit. La
+  richesse multi-compte reste `connectors.identities` (op=list), hors de ce lot.
+  **Contrainte 2** (décision d'Alexis) : `me.connector_disconnect` est **irréversible,
+  en UN SEUL appel** — révoque chez le fournisseur quand le mécanisme le permet
+  (reprend EXACTEMENT `federated_oauth._federation()._disconnect`/`._google_revoke`) et
+  DANS TOUS LES CAS retire la ligne locale, jamais d'état intermédiaire « en attente de
+  confirmation ». Sortie `FederationDisconnected{ok, disconnected}`, réutilisée telle
+  quelle. **Pas de face MCP** sur les deux (`mcp=None`, comme `me.federation.*`).
 - `GET|POST|DELETE /api/admin/connectors/activation` + `GET|POST /api/admin/connectors/{provider}/platform-access`
   — **le palier PLATEFORME des connecteurs**, capacités
   `platform.connector.{activation_list,activation_set,activation_clear,access_list,access_set}`
@@ -519,6 +567,34 @@ ne garde que la DERNIÈRE valeur. `?filter=a:1&filter=b:2` perdait `a` **sans er
 quand la face MCP recevait la liste entière : deux faces, deux résultats pour la même
 demande, et l'OpenAPI promettait la forme perdue. Les deux formes se combinent
 (`?k=a,b&k=c` → `["a,b", "c"]`, puis le champ découpe s'il le fait).
+
+## Créer un tableau : `POST /api/datastore/namespaces`
+
+Corps : `{"namespace": "<kebab-case>"}`, plus **`owner`** optionnel —
+`{"type": "org"|"group", "id": N}`. L'appartenance est vérifiée (403 sinon).
+
+⚠️ **Sans `owner`, le tableau est PERSONNEL** : visible de son créateur seul, ni des
+autres membres de l'org ni de ses administrateurs. C'est le défaut voulu, jamais
+implicite (ADR 0068).
+
+⚠️ **`X-Oto-Org` ne change pas le propriétaire.** L'en-tête décide sous quelle org on
+lit et on écrit — c'est même ce que la doc du datastore recommande partout pour « agir
+dans l'org » — mais il n'entre pas dans le choix du propriétaire. Créé sous cet en-tête
+sans `owner`, le tableau naît personnel **et toutes les requêtes suivantes de son
+créateur continuent de réussir** : rien ne cloche de son côté. Ça se découvre au second
+agent, ou au collègue qui ne trouve pas le tableau et conclut qu'il n'existe pas — une
+heure perdue, vécue (otomata-tech/oto#45).
+
+La réponse (201) rend donc **qui possède** : `{namespace, id, url, owner_type, owner_id,
+is_personal}`, plus un champ **`avertissement`** dans ce cas précis — et seulement dans
+ce cas : posé quand une org était *explicitement demandée* et que le tableau naît
+personnel quand même. Il n'apparaît pas quand l'org active est simplement celle par
+défaut, sans quoi il sortirait à chaque création et ne serait plus lu.
+
+Le propriétaire **ne se change pas après coup** : il se décide à la création.
+
+Côté oto-core : `DatastoreClient.create_namespace(namespace, owner=None)` (v1.115.0 —
+avant, la lib ne permettait pas de créer un tableau d'org).
 
 **Une clé répétée sur un champ SCALAIRE est REFUSÉE — `400 repeated_scalar`, qui nomme
 la clé** — jamais réduite à sa dernière valeur. C'est la même règle que `unknown_fields`

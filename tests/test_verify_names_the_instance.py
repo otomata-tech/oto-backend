@@ -122,7 +122,40 @@ def test_la_sonde_sait_ou_reecrire(monkeypatch, mode, etype, eid, cible_attendue
 
 def test_la_cible_est_transmise_a_la_sonde():
     """TRIPWIRE. La calculer sans la passer ne servirait à rien — c'est exactement
-    l'état d'avant, où l'information existait et se perdait."""
-    import inspect
-    src = inspect.getsource(cv._verify)
-    assert 'kw["instance"] = cible' in src and "probe(fields, config, **kw)" in src
+    l'état d'avant, où l'information existait et se perdait.
+
+    Il OBSERVE ce que la sonde reçoit, au lieu de lire le texte de la fonction :
+    la version d'avant cherchait `kw["instance"] = cible` dans la source, et
+    tombait dès que le geste changeait de place (oto-backend#867) alors que la
+    garantie tenait toujours. Un tripwire qui asserte une FORME de code se périme
+    au premier déplacement ; celui-ci ne tombera que si la cible cesse d'arriver.
+    """
+    import asyncio
+
+    from oto_mcp.connectors import verify as connector_verify
+
+    vu = {}
+
+    def _sonde(fields, config, instance=None):
+        vu["instance"] = instance
+
+    asyncio.run(connector_verify.executer(_sonde, {}, {}, ("org", "2", "")))
+    assert vu["instance"] == ("org", "2", ""), (
+        "la sonde n'a pas reçu la cible : sous rotation, le jeton rafraîchi serait "
+        "réécrit sur la mauvaise ligne — le bug du 03/08.")
+
+
+def test_une_sonde_sans_le_parametre_garde_sa_signature():
+    """Les ~15 sondes à deux arguments ne doivent pas recevoir `instance` : le
+    passer à toutes les casserait d'un coup."""
+    import asyncio
+
+    from oto_mcp.connectors import verify as connector_verify
+
+    appels = []
+
+    def _sonde_courte(fields, config):
+        appels.append((fields, config))
+
+    asyncio.run(connector_verify.executer(_sonde_courte, {"k": 1}, {}, ("org", "2", "")))
+    assert appels == [({"k": 1}, {})]

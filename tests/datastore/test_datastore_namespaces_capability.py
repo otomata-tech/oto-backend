@@ -90,9 +90,66 @@ def test_la_liste_reste_filtree_par_la_portee_du_jeton(store, monkeypatch):
 def test_la_creation_rend_201_et_le_tableau(store):
     code, corps = _call("me.datastore.create_namespace", body={"namespace": " vivier "})
     assert code == 201                       # le code d'avant la migration, à l'octet
-    assert corps == {"namespace": "vivier", "id": 42,
-                     "url": "https://dashboard.oto.ninja/data/42"}
+    # Les trois champs d'avant, à l'octet — l'ajout est ADDITIF (otomata-tech/oto#45).
+    assert {k: corps[k] for k in ("namespace", "id", "url")} == {
+        "namespace": "vivier", "id": 42,
+        "url": "https://dashboard.oto.ninja/data/42"}
+    # Et QUI le possède, donc qui le verra : la création rendait moins que la liste
+    # sur la seule information qui décide de ça.
+    assert corps["owner_type"] == "user" and corps["owner_id"] == "u-1"
+    assert corps["is_personal"] is True
+    # Aucun contexte d'org n'était posé : il n'y a rien à corriger, donc rien à dire.
+    assert "avertissement" not in corps, (
+        "rien à signaler ⟹ pas de champ : un `null` de plus dans chaque "
+        "réponse est du bruit, pas une information")
     assert store.calls[0] == ("create_namespace", "vivier", "user", "u-1")
+
+
+@pytest.fixture
+def org_demandee(monkeypatch):
+    """Quelqu'un a dit « agis dans l'org 7 » — en-tête de consultation côté REST.
+
+    ⚠️ À ne pas confondre avec l'org ACTIVE, que le gréement pose toujours (elle
+    retombe sur la maison). C'est toute la distinction d'oto#45 : brancher
+    l'avertissement sur l'org active le déclencherait à CHAQUE création, et un
+    avertissement qui se déclenche toujours ne se lit plus."""
+    from oto_mcp import session_org
+    monkeypatch.setattr(session_org, "current_view_org", lambda: 7)
+    return 7
+
+
+def test_sous_un_contexte_d_org_sans_owner_la_reponse_AVERTIT(store, org_demandee):
+    """Le cœur d'oto#45. Le tableau naît personnel — c'est juste (ADR 0068) — mais
+    sous un en-tête d'org, tout continue de marcher POUR SOI : l'erreur ne se
+    découvre qu'au second agent, ou au collègue qui ne trouve pas le tableau."""
+    code, corps = _call("me.datastore.create_namespace", body={"namespace": "vivier"})
+    assert code == 201
+    assert corps["owner_type"] == "user" and corps["is_personal"] is True
+    a = corps["avertissement"] or ""
+    assert "PERSONNEL" in a and "7" in a, a
+    assert "owner" in a, "l'avertissement doit dire le geste qui corrige"
+
+
+def test_avec_un_owner_explicite_aucun_avertissement(store, org_demandee, monkeypatch):
+    """Rien à signaler quand l'appelant a dit ce qu'il voulait."""
+    monkeypatch.setattr(dsn.roles, "is_org_member", lambda sub, org: True)
+    code, corps = _call("me.datastore.create_namespace",
+                        body={"namespace": "vivier", "owner": {"type": "org", "id": 7}})
+    assert code == 201
+    assert corps["owner_type"] == "org" and corps["owner_id"] == "7"
+    assert corps["is_personal"] is False
+    assert "avertissement" not in corps, (
+        "rien à signaler ⟹ pas de champ : un `null` de plus dans chaque "
+        "réponse est du bruit, pas une information")
+
+
+def test_l_org_ACTIVE_seule_n_avertit_pas(store):
+    """LE piège de ce lot, figé ici. Le gréement pose une org active (35) sans que
+    personne ne l'ait demandée : c'est le cas de TOUTE création ordinaire. Avertir
+    dessus noierait le signal — le message ne doit sortir que si quelqu'un a
+    réellement dit « agis dans l'org N »."""
+    code, corps = _call("me.datastore.create_namespace", body={"namespace": "vivier"})
+    assert code == 201 and "avertissement" not in corps
 
 
 def test_un_nom_vide_est_un_refus_nomme(store):

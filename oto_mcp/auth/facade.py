@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
@@ -473,7 +474,10 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
             # détient pas (oto-backend#274). Ses redirects sont donc posés à la main
             # avec son application — d'où le fail-open ci-dessous, déjà le régime.
             if entry is None:
-                _register_redirects(app_id, requested)
+                # Hors boucle : la Management API est un appel HTTP synchrone
+                # (15 s), et cette route est `async def` — nûment, elle fige tout
+                # le processus le temps de la réponse (oto-backend#867).
+                await run_in_threadpool(_register_redirects, app_id, requested)
         except Exception:
             _log.exception("DCR: enregistrement Logto échoué (redirects=%r)", requested)
         # Logto valide le redirect contre l'app : on renvoie le client_id partagé.

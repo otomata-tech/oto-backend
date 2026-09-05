@@ -298,6 +298,33 @@ encore due** (le tick filtrait avant, donc la garde ne tenait pas seule).
 qui rend des secondes rondes. *Une garantie qui tient par la propriété d'une
 bibliothèque tierce n'est pas une garantie.*
 
+### Le worker est un SERVEUR de boucles agentiques (05/09/2026)
+
+Le modèle, dit par Alexis et désormais tenu par le code : **le worker héberge des
+boucles agentiques qui impersonnent chacune leur user**. Deux couches, et ne pas
+les confondre est ce qui évite les deux défauts trouvés cette semaine :
+
+```
+ce que l'AGENT fait      au nom du user — jeton délégué, borné au bail
+                         (lire un doc, écrire une ligne, appeler un outil)
+ce que le RUNTIME        au nom de personne — la clé de modèle, ressource
+consomme pour tourner    d'exécution payée par l'org, jamais un droit du user
+```
+
+⚠️ **Le serveur n'a AUCUNE identité métier**, et c'est ce qui rend un repli
+inacceptable. Un travail sans porteur était servi nu, et le worker retombait sur
+son propre jeton : une boucle agissant au nom du compte qui héberge le runner,
+tout ce qu'elle écrit signé par lui. Le défaut est silencieux **par
+construction** — les écritures aboutissent, seule l'attribution est fausse, et
+rien ne la contredit. Un travail sans porteur est donc REFUSÉ, en base, avec la
+sortie nommée (le reprogrammer).
+
+⚠️ Et c'est la même distinction qui explique la garde de la clé : le user ne peut
+pas relire un secret du coffre — personne ne le peut. Si le worker obtient la
+clé, ce n'est donc pas par l'impersonation, c'est par un droit d'infrastructure.
+Un droit d'infrastructure exige une identité d'infrastructure : d'où la marque
+`runner_worker`, et d'où le fait qu'aucun compte de personne ne doit la porter.
+
 ### Un travail porte l'identité de qui l'a demandé (02/09/2026)
 
 **Premier barreau du chantier « agents autonomes », et le préalable de tout le
@@ -410,6 +437,31 @@ réponse au claim, pas dans ses arguments — le masque de #558/#564 ne la couvr
 donc pas et n'a pas à le faire) ; `_avec_cle` rend une copie ; Sentry a
 `include_local_variables=False` (#564) ; le runner n'a pas de Sentry et ne
 journalise que `job["id"]`.
+
+⚠️ **La clé n'est remise qu'à un compte MARQUÉ worker** (option de compte
+`runner_worker`, posée par un admin plateforme). Sans cette garde — c'est le
+défaut trouvé par dev 1 le 04/09, avant tout dépôt réel — n'importe quel membre
+de l'org faisait `enqueue` puis `claim provider=…` et recevait la clé EN CLAIR :
+la capacité est `ORG_MEMBER`, et **rien dans le protocole ne distingue un worker
+d'un membre**, ils portent le même genre de jeton sur la même route. Un membre
+reçoit désormais son travail SANS clé, sans refus explicite (le refus
+apprendrait qu'il y a une clé à obtenir) mais avec une ligne de journal : un
+membre qui nomme un dépôt cherche quelque chose.
+
+⚠️ **Le refus ne se journalise que s'il y a quelque chose à refuser.** Les
+workers nomment leur dépôt à CHAQUE réservation — trois workers, toutes les
+15 secondes : sans ce filtre, la garde écrivait ~17 000 lignes par jour tant que
+la marque n'était pas posée, c'est-à-dire un journal que plus personne ne lit et
+une sonde qui fabrique son propre signal. La présence du dépôt se lit sans
+déchiffrer (`has_credential`, `secret_enc IS NOT NULL`) : le secret n'est jamais
+touché pour décider d'écrire une ligne.
+
+⚠️ **La marque se lit par `access.user_has_option`, jamais `has_option`.** Ce
+dernier répond vrai dès que l'ORG ACTIVE porte le don ou que son plan inclut
+l'option : l'employer ici aurait servi la clé à **tous les membres** de cette
+org — la fuite même que la garde ferme. `user_has_option` est le miroir de
+`org_has_option` : la moitié COMPTE du seam, pour les questions qui portent sur
+l'acteur et sur lui seul.
 
 **Ce qui n'est pas ici** : la grille d'offre — qui a droit à la clé de la
 plateforme, qui doit déposer la sienne. Elle appartient au chantier « qui a le

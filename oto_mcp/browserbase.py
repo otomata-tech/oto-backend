@@ -18,6 +18,7 @@ Creds **plateforme** (infra, pas per-user) en env : `BROWSERBASE_API_KEY` +
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import urllib.error
@@ -155,7 +156,13 @@ async def run_page_eval(context_id: str, app: str, page_function: str,
     """
     from patchright.async_api import async_playwright
 
-    sess = start_session(context_id)
+    # Ouverture et libération de session sont des appels HTTP SYNCHRONES (urllib,
+    # 30 s de délai d'attente) au milieu d'une fonction `async def` : appelés
+    # nûment, ils figent tout le processus le temps que Browserbase réponde
+    # (oto-backend#867). Les protéger ici couvre d'un coup les quatre familles
+    # d'outils qui passent par ce substrat — c'est le segment, pas ses appelants,
+    # qui porte le défaut.
+    sess = await asyncio.to_thread(start_session, context_id)
     sid = sess["id"]
     try:
         async with async_playwright() as p:
@@ -168,7 +175,7 @@ async def run_page_eval(context_id: str, app: str, page_function: str,
             finally:
                 await b.close()
     finally:
-        release_session(sid)
+        await asyncio.to_thread(release_session, sid)
 
 
 async def fetch_page(context_id: str, url: str, *, as_html: bool = False,
@@ -190,7 +197,7 @@ async def fetch_page(context_id: str, url: str, *, as_html: bool = False,
     """
     from patchright.async_api import async_playwright
 
-    sess = start_session(context_id)
+    sess = await asyncio.to_thread(start_session, context_id)
     sid = sess["id"]
     try:
         async with async_playwright() as p:
@@ -208,7 +215,7 @@ async def fetch_page(context_id: str, url: str, *, as_html: bool = False,
             finally:
                 await b.close()
     finally:
-        release_session(sid)
+        await asyncio.to_thread(release_session, sid)
 
 
 async def fetch_page_ephemeral(url: str, *, as_html: bool = False,
@@ -220,7 +227,7 @@ async def fetch_page_ephemeral(url: str, *, as_html: bool = False,
     ({status, final_url, title, content})."""
     from patchright.async_api import async_playwright
 
-    sess = start_ephemeral_session()
+    sess = await asyncio.to_thread(start_ephemeral_session)
     sid = sess["id"]
     try:
         async with async_playwright() as p:
@@ -238,7 +245,7 @@ async def fetch_page_ephemeral(url: str, *, as_html: bool = False,
             finally:
                 await b.close()
     finally:
-        release_session(sid)
+        await asyncio.to_thread(release_session, sid)
 
 
 async def host_cookies(session_id: str, url: str) -> int:

@@ -24,19 +24,22 @@ partout ailleurs dans ce module. La face REST `/api/groups/{id}/instructions*`
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
-                procedure_diagram, procedure_digest, roles,
+                procedure_diagram, procedure_digest, procedure_retrait, roles,
                 slots as slots_mod, tool_registry)
 from .._authz import (ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
                       ORG_MEMBER_OF, SUB_ONLY, capacite_autorise)
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                       RestBinding)
 from ..registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 # ── Les droits ANNONCÉS par le bundle d'org ─────────────────────────────────
 #
@@ -344,6 +347,11 @@ class InstructionWritten(BaseModel):
     # Le DIGEST d'ouverture (`procedure_digest`) : ce que le dernier déroulé a appris.
     # Même régime — la procédure est enregistrée, il lui manque son bloc d'ouverture.
     digest_warning: Optional[str] = None
+    # Ce que cette version RETIRE (`procedure_retrait`, oto#61). Le digest raconte ce
+    # qu'on ajoute ; rien ne disait ce qu'on enlève, et une réécriture « resserrée »
+    # enlève par construction. `None` = aucune SECTION entière n'a disparu — ce qui ne
+    # veut pas dire que rien n'a été retiré.
+    retrait_warning: Optional[str] = None
 
 
 class InstructionDescribed(BaseModel):
@@ -963,6 +971,19 @@ async def _set_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> 
                           f"`{_BASE}` est le readme (prose injectée), pas une "
                           "procédure — édite-le sur la surface guide "
                           f"(scope='{owner[0]}', delivery='init').")
+    # Le corps AVANT écriture, pour dire ce que cette version RETIRE (oto#61).
+    # ⚠️ Best-effort, et lu APRÈS toutes les validations : un contrôle de forme ne
+    # change ni l'ordre des refus ni leur nature. Une création n'a rien à comparer.
+    ancien_md = ""
+    if not must_create:
+        try:
+            precedent = org_store.get_instruction(*owner, norm)
+            ancien_md = (precedent or {}).get("body_md") or ""
+        except Exception as e:  # noqa: BLE001 — cf. les autres checks de forme
+            # noqa: SILENT — l'avertissement de retrait est optionnel et ne doit jamais
+            # empêcher une écriture légitime ; journalisé pour qu'un silence durable se
+            # voie.
+            logger.warning("retrait: corps précédent illisible pour %s : %s", norm, e)
     # Idem : l'entrée de CRÉATION n'a pas de verrou optimiste (rien à verrouiller).
     expected_version = getattr(inp, "expected_version", None)
     try:
@@ -1000,7 +1021,8 @@ async def _set_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> 
             **await tool_registry.write_check(body_md),
             **slots_mod.slots_check(body_md, effective_slots),
             **procedure_diagram.diagram_check(body_md),
-            **procedure_digest.digest_check(body_md)}
+            **procedure_digest.digest_check(body_md),
+            **procedure_retrait.retrait_check(ancien_md, body_md)}
 
 
 async def _create_instruction(ctx: ResolvedCtx, inp) -> dict:

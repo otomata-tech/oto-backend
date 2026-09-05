@@ -37,8 +37,10 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from .. import db
+from .. import credentials_store, db
+from . import flow as oauth_flow
 from ..connectors import flow as connector_flow
+from ..connectors import health as connector_health
 from ..connectors import link as connector_link
 
 
@@ -114,19 +116,34 @@ def _ctx_org(sub: str) -> int:
     return org
 
 
-def make_state(sub: str, org_id: int) -> str:
-    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, org, ts}.
+def make_state(sub: str, org_id: int, return_app: str = "") -> str:
+    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, org, ts, app}.
+
     L'org du DÉMARRAGE voyage jusqu'au callback (qui vient de Google, sans les
     headers de consultation) : le compte est scopé à l'org où l'user a cliqué
-    « connecter » (ADR 0033 B3)."""
-    payload = json.dumps({"sub": sub, "org": org_id, "ts": int(time.time())},
+    « connecter » (ADR 0033 B3).
+
+    `return_app` porte quel FRONT a demandé la connexion. Même raison que l'org :
+    le callback arrive DEPUIS Google, sans en-tête ni session — ce que le state ne
+    porte pas est perdu. Sans lui, un utilisateur venu d'un front tiers atterrissait
+    chez nous après avoir consenti (oto-backend#877).
+
+    ⚠️ La valeur est validée par l'APPELANT (`resolve_return_app`) avant d'arriver
+    ici : le state ne doit jamais porter une clé de front non vérifiée, sinon il
+    signe une redirection ouverte."""
+    payload = json.dumps({"sub": sub, "org": org_id, "ts": int(time.time()),
+                          "app": return_app},
                          separators=(",", ":")).encode()
     sig = hmac.new(_state_secret(), payload, hashlib.sha256).digest()
     return f"{_b64url(payload)}.{_b64url(sig)}"
 
 
-def verify_state(state: str) -> Optional[tuple[str, int]]:
-    """Renvoie (sub, org_id) si state valide et non expiré, sinon None."""
+def verify_state(state: str) -> Optional[tuple[str, int, str]]:
+    """Renvoie (sub, org_id, return_app) si state valide et non expiré, sinon None.
+
+    `return_app` retombe sur `""` pour un state émis AVANT ce lot : ils vivent
+    quelques minutes, il y en a en vol au déploiement, et les casser renverrait
+    une erreur à quelqu'un qui vient d'autoriser correctement."""
     if not state or "." not in state:
         return None
     p_b64, sig_b64 = state.split(".", 1)
@@ -149,12 +166,29 @@ def verify_state(state: str) -> Optional[tuple[str, int]]:
     sub, org = data.get("sub"), data.get("org")
     if not isinstance(sub, str) or not isinstance(org, int):
         return None
-    return sub, org
+    # `app` absent = state émis avant oto-backend#877 : retour au front par défaut,
+    # jamais un refus. Re-validé ici bien qu'il ait déjà été filtré au départ : le
+    # state est signé, mais une clé retirée de `RETURN_APPS` entre le clic et le
+    # retour ne doit pas ressusciter par sa signature.
+    from . import flow as oauth_flow
+
+    return sub, org, oauth_flow.resolve_return_app(data.get("app") or "")
 
 
-def build_auth_url(sub: str) -> str:
+def build_auth_url(sub: str, return_app: str = "") -> str:
+    """L'URL de consentement Google.
+
+    `return_app` : clé de front déclarée par l'APPELANT (ex. un front tiers), jamais
+    un Origin sniffé — les capacités sont transport-agnostiques (ADR 0009). Validée
+    ICI, une seule fois, AVANT `make_state` : `resolve_return_app` réduit toute
+    valeur hors de sa liste fermée à `""`, donc le state ne porte jamais une valeur
+    de client non vérifiée (pas de redirection ouverte)."""
     from urllib.parse import urlencode
+
+    from . import flow as oauth_flow
+
     org_id = _ctx_org(sub)
+    resolved_app = oauth_flow.resolve_return_app(return_app)
     params = {
         "client_id": _client_id(),
         "redirect_uri": _redirect_uri(),
@@ -164,7 +198,7 @@ def build_auth_url(sub: str) -> str:
         # consent → force refresh_token ; select_account → laisse l'user choisir
         # quel compte Google connecter (clé du multi-compte).
         "prompt": "consent select_account",
-        "state": make_state(sub, org_id),
+        "state": make_state(sub, org_id, resolved_app),
         "include_granted_scopes": "true",
     }
     return f"{_AUTH_URL}?{urlencode(params)}"
@@ -239,6 +273,10 @@ def persist_token(sub: str, org_id: int, token_response: dict) -> str:
     return email
 
 
+class GoogleReauthRequired(Exception):
+    """Refresh token Google mort (invalid_grant) → l'user doit reconnecter."""
+
+
 def _refresh_access_token(refresh_token: str) -> dict:
     import requests
     r = requests.post(
@@ -251,6 +289,12 @@ def _refresh_access_token(refresh_token: str) -> dict:
         },
         timeout=15,
     )
+    # `invalid_grant` SEUL vaut « réauth » (même règle que atlassian/folk/zoho,
+    # `oauth_flow.grant_is_dead`) — un autre 4xx (client mal configuré) doit
+    # remonter, pas se confondre avec un grant mort.
+    body = (r.text or "")[:300]
+    if r.status_code in (400, 401) and oauth_flow.grant_is_dead(r.status_code, body):
+        raise GoogleReauthRequired(body)
     r.raise_for_status()
     return r.json()
 
@@ -320,11 +364,29 @@ def credentials_for(sub: str, account: Optional[str] = None):
             needs_refresh = True
 
     if needs_refresh:
-        resp = _refresh_access_token(row["refresh_token"])
+        member_id = credentials_store.member_id(org_id, sub)
+        account = row.get("google_email") or ""
+        scope = (credentials_store.MEMBER, member_id, account)
+        try:
+            resp = _refresh_access_token(row["refresh_token"])
+        except GoogleReauthRequired as e:
+            # Grant mort : on MARQUE (aide partagée oto#25 lot b2), jamais de purge —
+            # même garde de portée que atlassian/folk/salesforce/zoho. On relève
+            # ENSUITE, sans changer le contrat de `credentials_for` (toujours des
+            # `Credentials` valides ou une exception, jamais un `None` muet).
+            connector_health.mark_rejected(
+                credentials_store.MEMBER, member_id, "google", account, str(e) or None)
+            raise
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
         db.update_google_access_token(sub, org_id, row.get("google_email"), access_token, new_exp)
+        # `update_google_access_token` MERGE le meta (`update_meta`, JSONB ||) :
+        # un `health_ko` posé par un refresh mort précédent ne serait jamais
+        # effacé par ce chemin sans cet appel explicite (oto#25 lot b3, même
+        # raison que la rotation Salesforce — contrairement à atlassian/folk, dont
+        # le refresh REMPLACE tout le meta et démarque déjà pour ce seul fait).
+        connector_health.record_health("google", scope, True, None)
 
     return Credentials(
         token=access_token,
@@ -369,7 +431,12 @@ def _start_flow(ctx, values: dict) -> "connector_flow.FlowStart":
     """
     from ..capabilities._types import AuthzDenied
     try:
-        return connector_flow.FlowStart(auth_url=build_auth_url(ctx.sub))
+        # `app` est une clé CACHÉE, pas un `FlowParam` déclaré : le front la passe
+        # hors formulaire (le client sait qui il est), elle ne doit jamais devenir
+        # un champ visible à l'utilisateur. Même convention que les quatre autres
+        # connecteurs OAuth — Google était le seul à l'ignorer (oto-backend#877).
+        return connector_flow.FlowStart(
+            auth_url=build_auth_url(ctx.sub, (values or {}).get("app") or ""))
     except RuntimeError as e:
         raise AuthzDenied(503, "oauth_misconfigured", str(e))
 

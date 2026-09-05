@@ -35,6 +35,7 @@ def test_cascade_never_yields_platform_for_zoho():
     chemin SQL est vérifié au déploiement, convention du repo)."""
     yes = access.CascadeProbe(
         member=lambda s, o, p: (True, ""), member_cross=lambda s, o, p: True,
+        legacy_user=lambda s, p: True,
         group=lambda g, p: True, org=lambda o, p: True, tenant=lambda t, p: True,
         platform=lambda s, p, o: {"secret": "x", "label": "l"})
     modes = [r.mode for r in access.walk_cascade(

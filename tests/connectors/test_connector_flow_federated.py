@@ -43,7 +43,11 @@ def test_le_flux_est_declare(name, module):
 async def test_le_flux_rend_la_forme_commune(monkeypatch, name, module):
     """Le point de passage VÉRIFIE le type de retour : un flux qui rendrait un dict
     maison lèverait ici. C'est tout l'objet de l'exercice."""
-    monkeypatch.setattr(module, "build_auth_url", lambda sub: f"https://exemple/{sub}")
+    # `return_app` depuis oto-backend#877 : le front qui a demandé la connexion
+    # voyage jusqu'au state. Le double doit accepter la signature réelle, sinon il
+    # valide un appel qui n'existe plus.
+    monkeypatch.setattr(module, "build_auth_url",
+                        lambda sub, return_app="": f"https://exemple/{sub}")
     out = await connector_flow.start(name, _Ctx(), {})
     assert isinstance(out, connector_flow.FlowStart)
     assert out.as_dict() == {"auth_url": "https://exemple/user-1", "details": {}}
@@ -56,7 +60,7 @@ async def test_le_flux_part_du_compte_appelant(monkeypatch, name, module):
     jamais une valeur passée par l'appelant — sinon on signerait un état pour un tiers."""
     vus = []
     monkeypatch.setattr(module, "build_auth_url",
-                        lambda sub: vus.append(sub) or "https://exemple/x")
+                        lambda sub, return_app="": vus.append(sub) or "https://exemple/x")
     await connector_flow.start(name, _Ctx(), {"sub": "quelquun-dautre"})
     assert vus == ["user-1"]
 
@@ -75,7 +79,7 @@ def test_le_descripteur_reste_muet_sur_les_chemins():
 async def test_google_traduit_une_config_absente_en_refus_nomme(monkeypatch):
     """La route rendait 500 sur une app OAuth non configurée. Ce n'est pas une panne :
     c'est un état qui empêche d'aboutir, et réessayer n'y changera rien."""
-    def _boom(sub):
+    def _boom(sub, return_app=""):
         raise RuntimeError("GOOGLE_OAUTH_CLIENT_ID absente")
 
     monkeypatch.setattr(google_oauth, "build_auth_url", _boom)

@@ -547,6 +547,10 @@ def _cancel(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _domain(billing.cancel, ctx.org_id)
 
 
+def _resume(ctx: ResolvedCtx, inp: NoInput) -> dict:
+    return _domain(billing.resume, ctx.org_id)
+
+
 def _admin_set_plan(ctx: ResolvedCtx, inp: AdminPlanInput) -> dict:
     if inp.plan:
         return _domain(lambda: billing.admin_set_plan(
@@ -601,6 +605,14 @@ _BILLING_CAPS = [
         key="billing.cancel", handler=_cancel, Input=NoInput,
         authz=ORG_ADMIN, Output=BillingStatus,
         rest=RestBinding("POST", "/api/me/billing/cancel"),
+    ),
+    # L'inverse de la résiliation, qui n'existait pas : l'écran annonçait la date de
+    # bascule sans offrir de revenir en arrière (#845). Purement local — résilier ne
+    # révoque pas le mandat, donc reprendre n'encaisse rien et n'appelle personne.
+    Capability(
+        key="billing.resume", handler=_resume, Input=NoInput,
+        authz=ORG_ADMIN, Output=BillingStatus,
+        rest=RestBinding("POST", "/api/me/billing/resume"),
     ),
     Capability(
         key="billing.payments", handler=_payments, Input=PaymentsInput,

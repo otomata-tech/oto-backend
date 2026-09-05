@@ -28,6 +28,8 @@ trancher pour ses propres raisons.
 """
 from __future__ import annotations
 
+from ...datastore import cles_inconnues
+
 import warnings
 from typing import Optional
 
@@ -130,6 +132,12 @@ class SchemaPosed(BaseModel):
     # posées sur des données déjà hors borne, colonnes orphelines) : présent seulement
     # quand il y a quelque chose à dire, et adressé à l'auteur du schéma.
     warning: Optional[str] = None
+    # Les attributs de colonne que PERSONNE ne lit (oto#56). `None` = rien à
+    # signaler ; la clé est toujours là, pour distinguer « rien à dire » d'un serveur
+    # trop vieux. Avertissement, jamais refus : refuser durcirait un contrat servi et
+    # casserait les schémas qui portent déjà des clés mortes.
+    unknown_keys_warning: Optional[str] = None
+
     # #388 : ce que cette pose vient de RETIRER, avec les valeurs perdues — la
     # réponse en est la seule copie. Clé distincte de `warning` : les autres décrivent
     # une configuration douteuse et réparable, celle-ci nomme ce qui n'est plus.
@@ -139,7 +147,11 @@ class SchemaPosed(BaseModel):
 
 def _set_schema(ctx: ResolvedCtx, inp: SetSchemaInput) -> dict:
     try:
-        return make_store(ctx.sub).set_schema(inp.namespace, inp.schema)
+        # L'avertissement se calcule sur ce que l'appelant a ENVOYÉ, pas sur ce que le
+        # store rend : c'est son texte à lui qui porte la faute de frappe, et le store
+        # peut normaliser (oto#56).
+        return {**make_store(ctx.sub).set_schema(inp.namespace, inp.schema),
+                **cles_inconnues.check(inp.schema)}
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, inp.namespace)
     except NamespaceReadOnly:

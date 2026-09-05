@@ -90,6 +90,8 @@ from threading import Lock
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
+
+from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -192,6 +194,45 @@ def _merge_group_ids(current_groups, add, remove) -> list[dict]:
         if gid not in remove_set and gid not in result:
             result.append(gid)
     return [{"id": gid} for gid in result]
+
+
+def _merge_custom_fields(current_cfv, patch: dict) -> dict:
+    """Fusionne `customFieldValues` et renvoie l'objet COMPLET attendu par l'API.
+
+    Même faute que `groups` juste au-dessus, et bien plus coûteuse : l'API Folk est en
+    *replace-all* sur cet objet aussi. Passer un seul champ personnalisé effaçait tous
+    les autres de ce groupe sur la fiche — silencieusement, avec `succeeded: 1` en
+    retour. Mesuré le 04/09/2026 : **quatre champs perdus en un appel**, dont une
+    consigne opérationnelle (oto-backend, signal 714).
+
+    ⚠️ La documentation de l'outil DIT que `groups` est un remplacement et offre
+    `add_to_groups`/`remove_from_groups` pour l'éviter. C'est cette précaution visible
+    sur le champ voisin qui trompe : elle fait conclure que la fusion est le défaut
+    ailleurs. Un remède qui ne traiterait que `groups` laisserait donc intact le champ
+    où le même défaut coûte le plus.
+
+    **Ce qui est fourni gagne, ce qui est absent survit.** La granularité est le CHAMP,
+    pas le groupe : les autres groupes de la fiche sont conservés tels quels, et dans le
+    groupe visé les clés non citées restent en place.
+
+    ⚠️ **Une valeur explicitement fournie est écrite telle quelle, `None` et `""`
+    compris** — c'est ainsi qu'on VIDE un champ, et il faut que ça reste possible :
+    l'incident fondateur s'est réparé par un second appel qui remettait à vide. Fusionner
+    « sauf les valeurs vides » enlèverait le seul geste d'effacement disponible.
+    """
+    out: dict = {}
+    for gid, champs in (current_cfv or {}).items():
+        out[str(gid)] = dict(champs) if isinstance(champs, dict) else champs
+    for gid, champs in (patch or {}).items():
+        gid = str(gid)
+        ancien = out.get(gid)
+        if isinstance(ancien, dict) and isinstance(champs, dict):
+            ancien.update(champs)
+        else:
+            # Groupe absent de la fiche, ou forme inattendue d'un côté : on écrit ce
+            # que l'appelant a fourni. Rien n'est écrasé qu'on aurait pu préserver.
+            out[gid] = dict(champs) if isinstance(champs, dict) else champs
+    return out
 
 
 # --- dispatch par entité, partagé entre modes singulier et bulk -------------
@@ -382,9 +423,26 @@ def _update_one(c, entity: str, id: str, fields: Optional[dict] = None,
     fields = dict(fields or {})
     _reject_forbidden_update_fields(entity, fields)
     current = None
-    if add_to_groups or remove_from_groups or dry_run:
+    # `customFieldValues` rejoint la liste des champs qui EXIGENT l'état actuel : sans
+    # lui, un patch partiel est une destruction (cf. `_merge_custom_fields`).
+    besoin_courant = bool(add_to_groups or remove_from_groups or dry_run
+                          or isinstance(fields.get("customFieldValues"), dict))
+    if besoin_courant:
         current = _get_one(c, entity, id, group_id=group_id,
                            object_type=object_type, entity_id=entity_id)
+    if isinstance(fields.get("customFieldValues"), dict):
+        # ⚠️ REFUSER plutôt qu'écrire à l'aveugle. Sans l'état actuel on ne peut pas
+        # fusionner, et envoyer le patch tel quel écraserait les champs qu'on n'a pas
+        # pu lire — exactement le dégât que ce lot corrige. Un refus nommé laisse
+        # l'appelant choisir ; un succès muet ne laisse rien.
+        if current is None:
+            raise _bad(
+                "Impossible de relire la fiche pour fusionner `customFieldValues` : "
+                "l'API Folk REMPLACE cet objet, donc écrire sans l'état actuel "
+                "effacerait les champs personnalisés non fournis. Réessaie, ou passe "
+                "l'objet complet après un op='get'.")
+        fields["customFieldValues"] = _merge_custom_fields(
+            current.get("customFieldValues"), fields["customFieldValues"])
     if add_to_groups or remove_from_groups:
         if entity not in _GROUP_ENTITIES:
             raise _bad("add_to_groups/remove_from_groups ne valent que pour "
@@ -559,8 +617,44 @@ def _bulk_run(items: list, fn) -> list[tuple[int, bool, object]]:
     return [r for r in results if r is not None]
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /v1/users/me`. Ce que la doc de Folk établit, cité :
+
+    - **authentifié** — « Authentication Required: `bearerApiKeyAuth` (HTTP Bearer
+      scheme with API key) » ;
+    - **sans effet de bord** — un GET qui rend « The current user associated with
+      the API key » (`id`, `fullName`, `email`). Il lit l'identité que porte la
+      clé, il ne touche à rien ;
+    - **le coût** : la doc ne mentionne AUCUN crédit ni facturation, ni sur cet
+      endpoint ni ailleurs — le régime est une limite de débit, « 600 requests per
+      minute ». ⚠️ Ce n'est pas la même chose qu'une ligne qui dirait « gratuit » :
+      l'absence de compteur de crédits dans toute la doc est un argument fort, pas
+      une preuve. Si Folk introduisait un jour une facturation à l'appel, c'est ici
+      qu'il faudrait revenir.
+
+    Ne lit PAS le quota. Les en-têtes `X-RateLimit-*` sont pourtant servis sur cette
+    réponse : les remonter ferait une sonde `auth+quota`. Ce n'est pas fait ici parce
+    que le débit par minute n'est pas un solde — il ne dit rien de ce qui reste à
+    dépenser, seulement de la cadence. Le rendre laisserait croire à une jauge.
+    """
+    from oto.tools.folk.client import FolkClient
+
+    utilisateur = FolkClient(api_key=fields["api_key"]).get_current_user()
+    if not (utilisateur or {}).get("id"):
+        # Une réponse 200 sans identité : la clé passe l'authentification mais ne
+        # désigne personne. Le taire rendrait un verdict « connecté » sur un
+        # compte qu'on ne peut pas nommer.
+        raise RuntimeError(
+            "Folk a répondu sans identifier l'utilisateur de cette clé — "
+            f"réponse inattendue : {str(utilisateur)[:200]}")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.folk.client import FolkClient, WEBHOOK_EVENT_TYPES
+
+    connector_verify.register("folk", _verify)
 
     def _client() -> FolkClient:
         key, _ = access.resolve_api_key("folk")
@@ -786,13 +880,34 @@ def register(mcp: FastMCP) -> None:
                 Un champ custom passé à plat (`{"Status": …}`) est rejeté (422
                 "Unrecognized key"). La structure se découvre via op="search"
                 (customFieldValues groupée par group_id).
-                ⚠️ Un champ custom peut porter une valeur que tu n'as jamais
-                envoyée : folk remplit tout seul ses « AI fields » (notamment
-                quand une fiche entre dans un groupe), réglage invisible depuis
-                l'API. Relis la fiche si la valeur t'engage.
+                ✅ **Patch PARTIEL : les champs que tu ne cites pas sont
+                CONSERVÉS.** L'API Folk remplace cet objet en entier ; l'outil
+                relit la fiche et fusionne champ par champ avant d'écrire, donc
+                envoyer un seul champ n'efface plus les autres. Pour VIDER un
+                champ, envoie-le explicitement à `null` ou `""` — une valeur
+                fournie est écrite telle quelle. Si la fiche ne peut pas être
+                relue, l'appel est REFUSÉ plutôt qu'écrit à l'aveugle.
+                ⚠️ Un champ custom peut porter une valeur que tu n'as JAMAIS
+                envoyée : folk remplit tout seul ses « AI fields », réglage
+                invisible depuis l'API. ⚠️ Ça n'arrive PAS qu'à l'entrée dans un
+                groupe — mesuré le 04/09/2026 sur un `op="update"` ordinaire qui
+                n'envoyait que deux champs : un troisième est revenu peuplé en
+                relecture, `null` au read-back précédent. Une valeur relue n'est
+                donc pas une preuve de ce que TU as écrit. Relis la fiche si la
+                valeur t'engage, et ne conclus jamais d'un read-back que ton
+                écriture a porté.
             filters: op="search" — Field → value, matched with `like` (e.g.
                 {"fullName": "Dupont", "emails": "@otomata.tech"} for people,
-                {"name": "Otomata"} for companies). For another operator, pass
+                {"name": "Otomata"} for companies).
+                ⚠️ **Le `like` de Folk est ANCRÉ EN DÉBUT de chaîne : c'est un
+                préfixe, pas un « contient ».** Mesuré le 04/09/2026 : chercher
+                `{"name": "Cradle"}` rend `count=0` alors qu'une société dont le nom
+                CONTIENT ce mot existe dans l'espace. ⚠️ Le coût n'est pas la
+                recherche ratée, c'est ce qui vient après : `count=0` se lit « cette
+                fiche n'existe pas », et le geste suivant est une CRÉATION — donc un
+                doublon de ce qu'on cherchait. **Avant de conclure à l'absence sur un
+                nom composé, cherche sur son premier mot, ou vérifie par un autre
+                champ (domaine, e-mail).** For another operator, pass
                 {field: {op: value}} — op ∈ eq, not_eq, like, not_like, empty,
                 not_empty, gt (dates), in / not_in (relations). For `note` and
                 `reminder`, Folk only has ONE filter: {"entity_id": "<id>"} (the

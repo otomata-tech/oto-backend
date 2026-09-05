@@ -164,6 +164,61 @@ def _bkey_index_name(ns_id: int) -> str:
     return f"ds_bkey_{int(ns_id)}"
 
 
+def datastore_capturer_origine(ns_id: int, champs: list[str]) -> int:
+    """Pose `<champ>.origine` = la valeur COURANTE sur les lignes existantes, pour
+    les colonnes qui viennent de gagner le format `origine: "system"`.
+
+    Pourquoi à la DÉCLARATION et pas seulement à la première écriture
+    (otomata-tech/oto#46) : la capture paresseuse ne garde rien sur une ligne qui
+    existait déjà. Une valeur écrasée entre la création de la ligne et la première
+    écriture d'après la déclaration était perdue sans filet, et le nom `origine`
+    promettait davantage. Capturer ici rend la promesse exacte pour toute ligne,
+    au prix d'une écriture unique, à un moment choisi par celui qui déclare.
+
+    Trois règles, chacune fermant une porte :
+
+    - une couche DÉJÀ posée n'est jamais touchée — capturer par-dessus effacerait
+      justement ce qu'on cherche à garder ;
+    - une colonne ABSENTE de la ligne ne reçoit rien : « pas de valeur » n'est pas
+      « valeur vide », et poser `""` inventerait une origine ;
+    - une colonne déjà enveloppée (elle porte d'autres couches) reçoit son
+      `origine` **à côté** des couches existantes, sans les écraser.
+
+    Une seule requête par champ, dans UNE transaction : la déclaration réussit
+    entièrement ou pas du tout. Rend le nombre de lignes touchées.
+    """
+    from psycopg import sql as _sql
+
+    if not champs:
+        return 0
+    touchees = 0
+    with _connect() as conn:
+        with conn.transaction():
+            for champ in champs:
+                # On remplace la COLONNE entière, pas une sous-clé : `jsonb_set`
+                # ne sait pas créer un chemin dans une valeur plate (une chaîne
+                # reste une chaîne, et la mise à jour ne fait rien — silencieusement).
+                q = _sql.SQL(
+                    "UPDATE datastore_rows SET data = jsonb_set(data, {chemin}, "
+                    "  CASE WHEN jsonb_typeof(data->{k}) = 'object' "
+                    # déjà enveloppée : on AJOUTE l'origine à côté des autres
+                    # couches, en reprenant sa `valeur` courante
+                    "       THEN (data->{k}) || jsonb_build_object("
+                    "              'origine', COALESCE(data->{k}->'valeur', 'null'::jsonb)) "
+                    # plate : on l'enveloppe, la valeur devenant aussi l'origine
+                    "       ELSE jsonb_build_object('valeur', data->{k}, "
+                    "                               'origine', data->{k}) END, true) "
+                    "WHERE ns_id = %s "
+                    # existe, et n'a pas déjà une origine
+                    "  AND data ? {k} "
+                    "  AND NOT (jsonb_typeof(data->{k}) = 'object' "
+                    "           AND data->{k} ? 'origine')"
+                ).format(k=_sql.Literal(str(champ)),
+                         chemin=_sql.Literal("{" + str(champ) + "}"))
+                touchees += conn.execute(q, (ns_id,)).rowcount
+    return touchees
+
+
 def datastore_key_dup_groups(ns_id: int, key: str, limit: int = 10) -> list[dict]:
     """Valeurs de clé métier en DOUBLON dans les rows existantes — `[{value, n}]`,
     plus gros groupes d'abord. Sert le refus actionnable de `set_schema` (on ne

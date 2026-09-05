@@ -35,6 +35,7 @@ from typing import Any, Optional
 from psycopg.errors import UniqueViolation
 
 from . import ecartes as dsec
+from . import layers as dsl
 from . import schema as dsv2
 from . import claimable, hors_org
 # Les refus : extraits dans `errors` (#325), ré-importés ici pour que tout appelant
@@ -480,11 +481,15 @@ class DatastorePg(SchemaOpsMixin):
 
     @staticmethod
     def _row_to_dict(row: dict, schema: Optional[dict] = None, *,
-                     bail_echu: str = "taire") -> dict:
+                     bail_echu: str = "taire", layers: str = dsl.DEFAUT) -> dict:
         """Ligne `datastore_rows` → row API (`_id`/`_created_at`/`_updated_at` à
         plat + champs user). Le bail de claim (ADR 0046 D) n'apparaît que s'il est
         posé (une ligne libre n'a aucune des trois clés `_claimed_*` → absentes,
-        pas None)."""
+        pas None).
+
+        `layers` (oto#53) : la forme des cellules à couches — `flat` (défaut) les
+        aplatit à côté du nom nu, `nested` les rend comme elles s'écrivent. Le défaut
+        vit dans `layers.DEFAUT`, pas ici."""
         data = row.get("data") or {}
         out = {
             "_id": row["row_id"],
@@ -501,6 +506,11 @@ class DatastorePg(SchemaOpsMixin):
         # imposés, et projetables par `fields` comme n'importe quelle colonne.
         for k, v in data.items():
             if k in _META_COLS:
+                continue
+            # `layers="nested"` (oto#53) : la cellule revient comme elle s'écrit,
+            # `{valeur, origine, comment, link}` — rien n'est aplati à côté.
+            if layers == dsl.NESTED:
+                out[k] = dsl.nested_value(v)
                 continue
             # `served_value` descend dans une colonne-tableau : chaque attribut d'item
             # est une feuille, rendue comme telle (oto#22 §1).
@@ -1068,8 +1078,16 @@ class DatastorePg(SchemaOpsMixin):
     def create_namespace(
         self, namespace: str, *, owner_type: Optional[str] = None, owner_id: Optional[str] = None,
     ) -> dict:
-        """Crée un namespace. Défaut = **org active** de l'user (plus de perso). Pour un
-        classeur d'org/groupe précis, passer `owner_type`/`owner_id` — l'autorisation
+        """Crée un namespace. Défaut = **la personne** (`_default_owner`, ADR 0068).
+
+        ⚠️ Cette phrase disait « défaut = org active », quinze lignes sous le code
+        qui rend `("user", sub)` : elle datait du régime d'avant et personne ne
+        l'avait suivie jusqu'ici. Un commentaire périmé sur un défaut de
+        PROPRIÉTAIRE ne se contente pas d'être faux — il fait conclure à qui le lit
+        que le tableau sera visible de l'org (otomata-tech/oto#45).
+
+        Le contexte d'org de l'appel n'entre PAS dans ce choix : pour un classeur
+        d'org ou d'équipe, passer `owner_type`/`owner_id`, dont l'autorisation
         (appartenance) est vérifiée par l'appelant (capacité/route)."""
         if owner_type is None:
             owner_type, owner_id = self._default_owner()
@@ -1407,7 +1425,7 @@ class DatastorePg(SchemaOpsMixin):
         except NamespaceNotFound:
             _ot, _oid = self._default_owner()
             db.create_datastore_namespace(_ot, _oid, namespace)
-            self._active_scope_cache = None  # invalide le cache (le ns créé est dans l'org active)
+            self._active_scope_cache = None  # invalide le cache (le ns créé appartient à la PERSONNE (ADR 0068), pas à l'org active)
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         schema = self._schema_of(ns_id)
@@ -1611,12 +1629,13 @@ class DatastorePg(SchemaOpsMixin):
         return {"inserted": inserted, "updated": updated, "count": inserted + updated,
                 "key": key, "ids": ids}
 
-    def get_row(self, namespace: str, row_id: str) -> dict:
+    def get_row(self, namespace: str, row_id: str, *,
+                layers: str = dsl.DEFAUT) -> dict:
         ns_id = self._resolve(namespace)
         row = db.datastore_get_row(ns_id, row_id)
         if not row:
             raise RowNotFound(row_id)
-        return self._row_to_dict(row, self._schema_of(ns_id))
+        return self._row_to_dict(row, self._schema_of(ns_id), layers=layers)
 
     def list_rows(
         self,
@@ -1649,6 +1668,7 @@ class DatastorePg(SchemaOpsMixin):
         order_by: Optional[str] = None,
         order_dir: str = "desc",
         filters: Optional[list] = None,
+        layers: str = dsl.DEFAUT,
     ) -> dict:
         """Page pour l'agent (chemin MCP `data_rows`), filtre/recherche/tri poussés en
         SQL. Renvoie `{rows, next_cursor}` — `next_cursor` non nul ⇒ il reste des lignes
@@ -1687,7 +1707,7 @@ class DatastorePg(SchemaOpsMixin):
                            if len(rows) == limit else None)
             if sch is None and rows:
                 sch = self._schema_of(ns_id)
-            out = {"rows": [self._row_to_dict(r, sch) for r in rows],
+            out = {"rows": [self._row_to_dict(r, sch, layers=layers) for r in rows],
                    "next_cursor": next_cursor}
             health = self._order_health(ns_id, order_by, otype, oopts, q, filters)
             if health:
@@ -1700,7 +1720,7 @@ class DatastorePg(SchemaOpsMixin):
             ns_id, after_row_id=after, limit=limit, q=q, filters=filters)
         if sch is None and rows:
             sch = self._schema_of(ns_id)
-        out = [self._row_to_dict(r, sch) for r in rows]
+        out = [self._row_to_dict(r, sch, layers=layers) for r in rows]
         next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
         return {"rows": out, "next_cursor": next_cursor}
 
@@ -1757,6 +1777,7 @@ class DatastorePg(SchemaOpsMixin):
         q: Optional[str] = None,
         filter: Optional[dict] = None,
         filters: Optional[list] = None,
+        layers: str = dsl.DEFAUT,
     ) -> dict:
         """Page server-side (tri/recherche/filtres SQL) + total — pour le dashboard.
         Deux formes de filtre CUMULABLES, comme `aggregate` : `filter` exact
@@ -1787,7 +1808,7 @@ class DatastorePg(SchemaOpsMixin):
             order_dir=order_dir, q=q, filters=clauses,
             order_type=otype, order_options=oopts)
         out = {
-            "rows": [self._row_to_dict(r, sch) for r in rows],
+            "rows": [self._row_to_dict(r, sch, layers=layers) for r in rows],
             # Le total doit décrire le MÊME jeu que la page : filtré aussi, sinon la
             # pagination du dashboard annonce des lignes qu'elle ne servira jamais.
             "total": db.datastore_count_rows(ns_id, q=q, filters=clauses),

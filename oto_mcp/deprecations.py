@@ -89,6 +89,49 @@ def _plus_de_mois(depart: datetime.date, mois: int) -> datetime.date:
 # jamais poser un jour de calendrier au hasard.
 RETRAIT = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
 
+
+# ── Retour OAuth : convention unifiée (lot oto-backend#670) ─────────────────
+# Un second renommage de surface, INDÉPENDANT du couple `ANNONCE`/`RETRAIT` du
+# renommage de vocabulaire ci-dessus (#519) :
+# la query string du retour après consentement OAuth (`?connector=<nom>&connect=
+# connected|error|forbidden`, généralisée depuis la forme salesforce) remplace
+# cinq conventions locales — dont deux replis cassés (atlassian, folk). zoho et
+# google servaient déjà un suffixe LU par le dashboard (`?zoho=connected`,
+# `?google=connected`) : il se double, à la manière de #519, le temps d'un
+# préavis — mais PAS le même préavis : celui-ci n'a pas encore commencé à être
+# SERVI EN PRODUCTION, donc son horloge n'a pas de raison de partager `ANNONCE`,
+# qui date du tag `v1.159.0` d'un renommage sans rapport.
+#
+# ⚠️ `ANNONCE_RETOUR_OAUTH` reste `None` tant que CE lot n'est pas réellement
+# tagué en production — ni cette session ni Alexis ne décide d'un tag depuis ici
+# (`docs/alias-deprecies.md` : « un tag, pas un merge, aux deux bouts »). Tant
+# qu'elle est `None`, `RETRAIT_RETOUR_OAUTH` reste `None` lui aussi — rien à
+# comparer à une date fantôme — et `dans_le_preavis_retour_oauth()` rend
+# TOUJOURS `True` : le doublage reste actif sans discontinuer, ce qui est le
+# comportement sûr par défaut (servir trop longtemps l'ancienne forme ne casse
+# personne ; arrêter trop tôt casse le dashboard).
+# TODO(#670) : poser `ANNONCE_RETOUR_OAUTH` à la date du tag qui déploie ce lot
+# — alors, et seulement alors, `RETRAIT_RETOUR_OAUTH` se dérive comme `RETRAIT`
+# ci-dessus, avec le MÊME `PREAVIS_MOIS` (l'Art 8.2 ne distingue pas de quelle
+# surface il s'agit).
+ANNONCE_RETOUR_OAUTH: "datetime.date | None" = None
+RETRAIT_RETOUR_OAUTH: "datetime.date | None" = (
+    _plus_de_mois(ANNONCE_RETOUR_OAUTH, PREAVIS_MOIS) if ANNONCE_RETOUR_OAUTH else None
+)
+
+
+def dans_le_preavis_retour_oauth(aujourd_hui: "datetime.date | None" = None) -> bool:
+    """`True` tant que l'ancien suffixe de retour OAuth (zoho, google) doit rester
+    servi À CÔTÉ du nouveau — voir `auth.flow.connector_return_suffix`.
+
+    Sans date de retrait posée (voir `ANNONCE_RETOUR_OAUTH` ci-dessus), rend
+    TOUJOURS `True` : ce lot n'a pas encore de fenêtre à fermer, donc rien ne doit
+    la fermer tout seul avant qu'Alexis/le superviseur n'ait posé la date, au tag."""
+    if RETRAIT_RETOUR_OAUTH is None:
+        return True
+    return (aujourd_hui or datetime.date.today()) < RETRAIT_RETOUR_OAUTH
+
+
 # ── Outils MCP (lot B1) ─────────────────────────────────────────────────────
 # ancien nom SERVI → nom canonique. L'ancien reste listé et appelable jusqu'au
 # retrait ; le bord du protocole (`middleware/alias.ToolAliasMiddleware`) rétablit

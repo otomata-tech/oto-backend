@@ -25,10 +25,40 @@ l'appel ni n'avale l'exception métier, et l'INSERT part hors event loop
 (`asyncio.to_thread`) — le chemin chaud de chaque appel ne doit pas attendre PG.
 
 Colonnes canoniques : `server`, `kind`, `sub`, `email`, `tool`, `args` (**tronqués à
-l'écriture**), `ok`, `error`, `duration_ms`, `created_at`.
+l'écriture**), `ok`, `error`, `error_kind`, `duration_ms`, `created_at`.
 
 `kind` discrimine l'événement (ADR 0017, « un seul flux ») : `mcp` = invocation d'outil
 (défaut), `rest` = appel `/api/*`, `connector` = échec de résolution de credential.
+
+### `error_kind` — le résultat de la taxonomie, en colonne (oto#25 lot b1)
+
+`error` est un texte brut tronqué (`str(e)[:500]`) : lisible par un humain, pas
+filtrable. `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
+l'exception CAPTURÉE (ex. `not_authorized` sur un 401/403 amont, `upstream_timeout`,
+`internal`…) — écrit par `calllog._record` (via `calllog._error_kind`) sur un échec,
+`NULL` sur un succès et sur tout l'historique antérieur à ce lot (non
+reconstructible depuis le texte tronqué). Colonne additive, **sans index** — même
+règle que `request_id`/`call_uid`/`effective_sub` (`docs/live-migrations.md`) : c'est
+une lecture d'enquête, pas un chemin chaud. Exposée dans la fiche d'un appel
+(`oto_admin_monitoring op=call` / `oto_org_monitoring op=call`, `db.get_tool_call`).
+
+⚠️ **`error` n'est PAS ce que l'appelant a reçu — et s'y fier fait conclure l'inverse
+de la vérité.** Le journal garde `str(e)`, l'exception telle qu'elle a été levée ; ce qui
+part vers le modèle est le rendu de `error_taxonomy.classify(exc)`, qui peut être tout
+autre chose. Une exception large et nue tombe en branche « interne » et devient **« Erreur
+interne du serveur. » sans écho du message** (anti-fuite) : le journal montre alors une
+phrase parfaitement actionnable que personne n'a jamais lue.
+
+Vécu le 05/09/2026 sur `oto-backend#473` : le journal affichait « Facebook exige une
+session ; cherche une autre source », ce qui a fait conclure que le défaut était réparé.
+Il ne l'était pas — `classify` rendait « Erreur interne du serveur. », et les agents
+abandonnaient. **La seule mesure qui vaut est `classify(exc)`, pas la colonne `error`** ;
+`error_kind` est d'ailleurs là pour ça, et un `internal` à côté d'un texte utile est
+exactement le signal de cet écart.
+
+⚠️ **Ce que ce lot n'est PAS** : `error_kind` est un FAIT journalisé, rien de plus.
+Aucun lecteur n'en dérive encore une action (marquer un credential rejeté, par
+exemple) — ça viendra, séparément, avec son propre feu vert (lot b2 de l'issue).
 
 ### Ce que le journal ne porte JAMAIS : un jeton en clair
 

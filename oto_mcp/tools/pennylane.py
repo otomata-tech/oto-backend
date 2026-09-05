@@ -30,11 +30,54 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
+from ..connectors import verify as connector_verify
+
 from .. import file_source
 from .pennylane_socle import _bad, _client, _ecrit, _need
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` + DROITS.
+
+    `GET /api/external/v2/me`. Ce que la doc de Pennylane établit, cité :
+
+    - **authentifié** — « Authentication Required: OAuth2 », et un 401 documenté
+      « Access token is missing or invalid » ;
+    - **sans effet de bord** — un GET qui « Returns the user and the company » ;
+      la doc n'en mentionne aucun ;
+    - **le coût** — « Cost/Billing/Quotas: No information provided ». ⚠️ Comme pour
+      Folk, ce n'est PAS une ligne qui dit « gratuit » : c'est l'absence de tout
+      compteur de crédits dans la documentation. Argument fort, pas preuve.
+
+    ⚠️ Cette sonde va plus loin que l'authentification, et c'est délibéré. La
+    réponse porte `scopes` — la liste exacte des droits de la clé. Une clé Pennylane
+    peut parfaitement authentifier et ne rien pouvoir faire : le modèle est une clé
+    par personne ou par équipe, chacune avec son périmètre, et Pennylane a éclaté
+    ses scopes (`journals:*`, `ledger_accounts:*`, `ledger_entries:*`…). Rendre
+    « connecté » sur une clé à zéro droit serait le verdict creux que la sonde
+    existe pour empêcher — même leçon que la sonde Zoho (auth OK, zéro scope CRM)
+    et celle de Stripe (clé restreinte au seul Balance:read).
+
+    Ne lit PAS de quota : Pennylane n'en expose pas sur cet appel.
+    """
+    from oto.tools.pennylane import PennylaneClient
+
+    infos = PennylaneClient(api_key=fields["api_key"]).get_company_info()
+    if not (infos or {}).get("company"):
+        raise RuntimeError(
+            "Pennylane a répondu sans désigner de société pour cette clé — "
+            f"réponse inattendue : {str(infos)[:200]}")
+    scopes = infos.get("scopes")
+    if isinstance(scopes, list) and not scopes:
+        raise RuntimeError(
+            "La clé authentifie bien (société "
+            f"« {(infos.get('company') or {}).get('name') or '?'} » reconnue) mais ne "
+            "porte AUCUN droit : elle ne pourra lire ni écrire quoi que ce soit. "
+            "Régénère-la chez Pennylane en cochant les périmètres voulus.")
+
+
 def register(mcp: FastMCP) -> None:
+    connector_verify.register("pennylane", _verify)
     # --- référentiels (lecture seule) ---------------------------------------
 
     @mcp.tool()

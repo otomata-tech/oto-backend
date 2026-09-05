@@ -15,9 +15,11 @@ _OWNER = ResolvedCtx(sub="owner", org_id=3, role="member")
 def _wire(monkeypatch, *, users=None, connected="OWNER_ACC"):
     users = users or {"grantee": {"sub": "grantee", "email": "g@x.io"}}
     monkeypatch.setattr(cap.db, "get_user", lambda sub: users.get(sub))
-    monkeypatch.setattr(cap.db, "get_user_by_email",
-                        lambda email: next((u for u in users.values()
-                                            if u.get("email") == email), None))
+    # ⚠️ Depuis le 05/09 la résolution lit TOUS les porteurs d'une adresse : une
+    # adresse peut en désigner deux, et en choisir un en silence était le défaut.
+    monkeypatch.setattr(cap.db, "get_users_by_email",
+                        lambda email: [u for u in users.values()
+                                       if u.get("email") == email])
     monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, org, prov: connected)
 
 
@@ -94,8 +96,8 @@ def test_revoke_idempotent_and_clears_pointer(monkeypatch):
 
 
 def test_revoke_resolves_email(monkeypatch):
-    monkeypatch.setattr(cap.db, "get_user_by_email",
-                        lambda email: {"sub": "grantee", "email": email})
+    monkeypatch.setattr(cap.db, "get_users_by_email",
+                        lambda email: [{"sub": "grantee", "email": email}])
     seen = {}
     monkeypatch.setattr(cap.db, "clear_account_grant",
                         lambda owner, prov, grantee: seen.update(g=grantee) or True)

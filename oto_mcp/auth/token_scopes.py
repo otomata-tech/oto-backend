@@ -91,7 +91,7 @@ _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
     # consulter — personne ne décide ça, c'était un oubli, et l'asymétrie le
     # prouve (écrire est plus fort que lire).
     #
-    # Ce que ça coûtait : la doctrine servie aux agents leur dit de lire le
+    # Ce que ça coûtait : le guide servi aux agents leur dit de lire le
     # schéma AVANT d'écrire — c'est ce qui fait qu'une longueur maximale est un
     # contrat et pas une consigne. Un agent porté qui obéissait se prenait un
     # refus sur le geste exact qu'on lui demandait.

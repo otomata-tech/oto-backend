@@ -105,3 +105,52 @@ def test_rien_de_ce_qui_est_deja_partage_n_est_touche():
     import inspect
     for source in (inspect.getsource(DS), inspect.getsource(R._resolve_recipient)):
         assert "revoke" not in source or "ownership.revoke" in source
+
+
+# ── la face MCP : la porte que les agents empruntent ────────────────────────
+# Le datastore a DEUX implémentations du même geste (dette assumée, cf.
+# `test_platform_tools_are_capabilities._KNOWN`) : `data_*` en MCP,
+# `/api/datastore/*` en REST. Ne corriger que la seconde aurait laissé la
+# première ouverte — et c'est la première que les agents appellent.
+
+def test_la_face_MCP_refuse_aussi_une_adresse_ambigue(monkeypatch):
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import datastore as TD
+
+    monkeypatch.setattr(TD.db, "get_users_by_email",
+                        lambda e: [{"sub": "8ugqeq6cv40f"}, {"sub": "tulina:f3s740z39vfq"}])
+    with pytest.raises(McpError) as e:
+        TD._destinataire("double@x.fr", "")
+    msg = str(e.value)
+    assert "8ugqeq6cv40f" in msg and "tulina:f3s740z39vfq" in msg
+    assert "recipient_sub" in msg, "le refus nomme la sortie DE CETTE surface"
+
+
+def test_la_face_MCP_a_une_sortie(monkeypatch):
+    from oto_mcp.tools import datastore as TD
+    monkeypatch.setattr(TD.db, "get_user",
+                        lambda s: {"sub": s, "email": "double@x.fr"})
+    assert TD._destinataire("", "tulina:f3s740z39vfq")["sub"] == "tulina:f3s740z39vfq"
+
+
+def test_la_face_MCP_refuse_les_deux_ensemble(monkeypatch):
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import datastore as TD
+    with pytest.raises(McpError):
+        TD._destinataire("seule@x.fr", "u-seul")
+
+
+def test_la_face_MCP_laisse_passer_une_adresse_unique(monkeypatch):
+    from oto_mcp.tools import datastore as TD
+    monkeypatch.setattr(TD.db, "get_users_by_email", lambda e: [{"sub": "u-seul", "email": e}])
+    assert TD._destinataire("seule@x.fr", "")["sub"] == "u-seul"
+
+
+def test_le_partage_MCP_nomme_le_compte_servi_pas_l_argument(monkeypatch):
+    """Partagé par `recipient_sub`, `email` est vide : la réponse doit dire QUI
+    a reçu, sinon le propriétaire ne peut pas vérifier ce qu'il vient d'ouvrir."""
+    from oto_mcp.tools import datastore as TD
+    monkeypatch.setattr(TD.db, "get_user", lambda s: {"sub": s, "email": "double@x.fr"})
+    recu = TD._destinataire("", "tulina:f3s740z39vfq")
+    cible = recu.get("email") or recu["sub"]
+    assert cible == "double@x.fr" and recu["sub"] == "tulina:f3s740z39vfq"

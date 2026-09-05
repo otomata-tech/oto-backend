@@ -143,6 +143,30 @@ def _openapi_path(path: str) -> str:
     return path
 
 
+
+def _section(key: str) -> str:
+    """La section de la doc REST pour une capacité — sa RESSOURCE, pas sa portée
+    d'autorisation (oto-backend#330).
+
+    Le tag valait `key.split(".")[0]`, c'est-à-dire `me`, `org`, `admin` : le préfixe
+    dit QUI a le droit, pas SUR QUOI. Conséquence pour qui découvre l'API : les routes
+    d'un même objet étaient éparpillées entre deux sections selon qu'on les atteint pour
+    soi (`me.datastore.*`) ou pour son org (`org.datastore.*`), et il fallait connaître
+    notre modèle de droits pour trouver « les routes des tableaux ».
+
+    La ressource est le DEUXIÈME segment quand il existe (`me.datastore.append_row` →
+    `datastore`), le premier sinon. ⚠️ Les clés plates gardent donc leur portée pour
+    section — `admin.instance_health` reste sous `admin` — et c'est voulu : leur second
+    segment est un VERBE, en faire une section produirait une section par action, pire
+    que le classement qu'on remplace. Trente et une des trente-quatre capacités `admin`
+    sont dans ce cas.
+    """
+    parts = [p for p in key.split(".") if p]
+    if not parts:
+        return "_"
+    return parts[1] if len(parts) >= 3 else parts[0]
+
+
 def _operation(cap: Capability, binding: RestBinding) -> tuple[dict, dict]:
     """Opération OpenAPI d'un binding + les définitions `$defs` à hisser."""
     try:
@@ -185,7 +209,7 @@ def _operation(cap: Capability, binding: RestBinding) -> tuple[dict, dict]:
         "operationId": f"{cap.key}.{binding.verb.lower()}".replace(".", "_"),
         "summary": (cap.description or cap.key).strip().split(". ")[0][:180],
         "description": cap.description or "",
-        "tags": [cap.key.split(".")[0]],
+        "tags": [_section(cap.key)],
         "security": [{"bearerAuth": []}],
         # Le code de la réponse heureuse vient du binding (201 sur les créations
         # historiques) : le document décrit ce que le serveur REND, pas 200 par

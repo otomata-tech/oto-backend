@@ -67,8 +67,19 @@ METHODE = "creditcard"
 
 #: Ce que l'utilisateur doit lire, parce que la moitié du geste se passe chez Mollie et
 #: que l'autre moitié n'arrive qu'au webhook.
-ATTENTE = ("Ton moyen de paiement actuel reste actif tant que le nouveau n'est pas "
-           "confirmé — rien n'est coupé si tu abandonnes cette page.")
+#:
+#: ⚠️ **Ces phrases-ci s'adressent à une PERSONNE, pas à un agent** : l'écran
+#: d'abonnement les affiche mot pour mot. Elles vouvoient, comme tout le dashboard — le
+#: reste de ce module tutoie parce qu'il parle à un agent, et les deux registres coexistent
+#: à dessein. ⚠️ **La copy vue par un humain vient du serveur, jamais du front** : une
+#: phrase que le front invente faute de mieux diverge le jour où le serveur change d'avis.
+ATTENTE = ("Votre moyen de paiement actuel reste actif tant que le nouveau n'est pas "
+           "confirmé — rien n'est coupé si vous abandonnez cette page.")
+
+#: Le rejeu : le mandat proposé est déjà celui de l'abonnement. Servie parce que le front
+#: l'écrivait lui-même (« Ce moyen de paiement est déjà celui de l'abonnement. ») faute
+#: que le serveur la donne.
+DEJA_COURANT = "Ce moyen de paiement est déjà celui de votre abonnement."
 
 
 def start(org_id: int, return_url: str) -> dict:
@@ -156,7 +167,7 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
         # ⚠️ L'ancien moyen est INTACT : le refus d'une autorisation à zéro (une carte
         # qui ne l'accepte pas) ne doit rien coûter à celui qui essayait de bien faire.
         return {"status": "failed", "payment_status": pstatus,
-                "notice": "Ton moyen de paiement actuel n'a pas changé."}
+                "notice": "Votre moyen de paiement actuel n'a pas changé."}
     if pstatus != "paid":
         return {"status": "pending", "payment_status": pstatus, "notice": ATTENTE}
 
@@ -173,7 +184,8 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
     if nouveau and nouveau == row.get("mandate_id"):
         # Rejeu : le mandat courant est déjà celui-là. Ne rien révoquer — l'ancien
         # d'aujourd'hui EST le nouveau.
-        return {"status": "already_current", "mandate_id": nouveau}
+        return {"status": "already_current", "mandate_id": nouveau,
+                "notice": DEJA_COURANT}
 
     ancien = db_billing.swap_mandate(
         org_id, mandate_id=nouveau,
@@ -192,4 +204,4 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
                            "(%s) — la bascule tient", org_id, ancien, e)
     return {"status": "changed", "mandate_id": nouveau, "previous_mandate_id": ancien,
             "previous_revoked": revoque,
-            "notice": "Ton nouveau moyen de paiement est actif."}
+            "notice": "Votre nouveau moyen de paiement est actif."}

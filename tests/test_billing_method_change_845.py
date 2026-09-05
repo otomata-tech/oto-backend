@@ -16,6 +16,8 @@ qui refuse l'autorisation à zéro.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from oto_mcp import billing_method as M
@@ -217,3 +219,42 @@ def test_sans_changement_en_cours_le_refus_le_dit(monde):
     with pytest.raises(ValueError) as e:
         M.confirm(ORG)
     assert "no_pending_change" in str(e.value)
+
+
+# ── la copy vue par une PERSONNE (l'écran d'abonnement l'affiche mot pour mot) ──
+#
+# Ces phrases ne s'adressent pas à un agent : le dashboard les rend telles quelles. Elles
+# vouvoient, comme tout le reste de l'écran. Le tutoiement du serveur détonnait au milieu
+# d'une page qui vouvoie, et personne ne peut le corriger côté front sans le figer.
+
+def test_les_phrases_servies_a_un_humain_VOUVOIENT(monde):
+    """Le registre est une propriété de la phrase, pas du fichier : le reste du module
+    tutoie parce qu'il parle à un agent."""
+    etat, psp = monde
+    phrases = [M.start(ORG, "https://retour.invalid/b")["notice"]]
+    _ouvre(etat)
+    phrases.append(M.confirm(ORG, "tr_neuf")["notice"])
+    psp.statut = "failed"
+    _ouvre(etat)
+    phrases.append(M.confirm(ORG, "tr_neuf")["notice"])
+    # ⚠️ Sur les MOTS, pas sur des sous-chaînes entourées d'espaces : la première
+    # version cherchait `" ton "` et laissait passer « Ton … » en tête de phrase —
+    # exactement le cas réel. Elle ne gardait rien, et l'épreuve rouge l'a montré.
+    tutoiement = re.compile(r"\b(ton|ta|tes|tu|toi|abandonnes|changes)\b", re.I)
+    for p in phrases:
+        assert p, "une notice vide laisse le front inventer la phrase"
+        assert not tutoiement.search(p), p
+        assert p[0].isupper() and p.rstrip().endswith("."), p
+
+
+def test_le_rejeu_porte_SA_phrase_et_ne_laisse_pas_le_front_l_inventer(monde):
+    """⚠️ La copy vue par un humain vient du SERVEUR. `already_current` n'en servait
+    aucune, et le front en écrivait une de son côté — deux textes pour un état, qui
+    divergent au premier changement d'avis du serveur."""
+    etat, psp = monde
+    etat["sub"]["mandate_id"] = "mdt_neuf"
+    _ouvre(etat)
+    out = M.confirm(ORG, "tr_neuf")
+    assert out["status"] == "already_current"
+    assert out.get("notice"), "le serveur DOIT servir la phrase de cet état"
+    assert "déjà" in out["notice"].lower()

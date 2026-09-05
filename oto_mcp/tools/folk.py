@@ -849,10 +849,15 @@ def register(mcp: FastMCP) -> None:
                 champ, envoie-le explicitement à `null` ou `""` — une valeur
                 fournie est écrite telle quelle. Si la fiche ne peut pas être
                 relue, l'appel est REFUSÉ plutôt qu'écrit à l'aveugle.
-                ⚠️ Un champ custom peut porter une valeur que tu n'as jamais
-                envoyée : folk remplit tout seul ses « AI fields » (notamment
-                quand une fiche entre dans un groupe), réglage invisible depuis
-                l'API. Relis la fiche si la valeur t'engage.
+                ⚠️ Un champ custom peut porter une valeur que tu n'as JAMAIS
+                envoyée : folk remplit tout seul ses « AI fields », réglage
+                invisible depuis l'API. ⚠️ Ça n'arrive PAS qu'à l'entrée dans un
+                groupe — mesuré le 04/09/2026 sur un `op="update"` ordinaire qui
+                n'envoyait que deux champs : un troisième est revenu peuplé en
+                relecture, `null` au read-back précédent. Une valeur relue n'est
+                donc pas une preuve de ce que TU as écrit. Relis la fiche si la
+                valeur t'engage, et ne conclus jamais d'un read-back que ton
+                écriture a porté.
             filters: op="search" — Field → value, matched with `like` (e.g.
                 {"fullName": "Dupont", "emails": "@otomata.tech"} for people,
                 {"name": "Otomata"} for companies).

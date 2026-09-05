@@ -307,6 +307,13 @@ def register(mcp: FastMCP) -> None:
                 include/exclude matcher. Examples:
                 - name: {"name": {"any": {"include": {"mode": "SMART", "content": ["Amazon"]}}}}
                 - location: {"location": {"any": {"include": ["United States"]}}}
+                  ⚠️ C'est le **SIÈGE**, pas « a un bureau là ». Une société dont le
+                  siège est ailleurs rend `0` même si elle emploie des centaines de
+                  personnes dans le pays demandé, et l'échec est indiscernable de
+                  « personne ne correspond ». Mesuré le 04/09/2026 : `account.location
+                  = United Kingdom` sur une banque au siège new-yorkais → 0 ;
+                  `contact.location = United Kingdom` sur la même → 89 personnes.
+                  Pour « qui travaille dans ce pays », filtre sur `contact.location`.
                 - employee size: {"employeeSize": {"type": "RANGE", "range": [{"start": 1000, "end": 5000}]}}
                 - a company's site: {"domain": {"any": {"include": ["example.com"]}}}
                   — plain list, NOT the SMART wrapper (that one is for `name` only).
@@ -318,6 +325,14 @@ def register(mcp: FastMCP) -> None:
             contact: op="people" — filters on the person, e.g.
                 {"seniority": {"any": {"include": ["founder"]}}}. Supports seniority
                 and location.
+                ⚠️ `seniority` est un niveau **normalisé, dérivé de l'intitulé de
+                poste** — pas l'intitulé lui-même. Dans les secteurs où le titre ne
+                suit pas la hiérarchie (banque d'affaires, conseil), il écarte
+                massivement les bonnes personnes : mesuré le 04/09/2026, ajouter
+                `seniority: "director"` à une requête qui rendait 89 personnes l'a
+                ramenée à 2, dont la première était une directrice des ressources
+                humaines. Un « Managing Director » ne porte pas `director`. Utilise-le
+                pour réduire la pagination, jamais comme critère de sélection.
                 ⚠️ `title` and `department` are REFUSED for the same reason: AI Ark
                 accepts them and silently ignores them, so you get the company's first
                 page and pay for it. Filter on `seniority`, then sort client-side —
@@ -335,6 +350,14 @@ def register(mcp: FastMCP) -> None:
             fields: keep ONLY these keys on each record; the envelope (totals,
                 pagination, trackId) always stays — without it you would think you
                 saw everything. Combine with `full=True` to project the raw record.
+                ⚠️ Ce sont les clés RÉELLES de premier niveau : `id`, `profile`,
+                `link`, `location`, `department`, `company`, `last_updated`. Un nom
+                non reconnu est **écarté en silence**, pas refusé : une projection de
+                noms inventés rend des enregistrements qui ont l'air VIDES, et
+                l'absence se lit « pas de donnée » au lieu de « mauvaise clé »
+                (signal 717). Omettre `company` est d'ailleurs tout l'intérêt de la
+                projection — c'est le bloc répété à l'identique sur chaque personne
+                d'une même société.
         """
         _reject_dead_filters(account=account, contact=contact)
         if op == "people":

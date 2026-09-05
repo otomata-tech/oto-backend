@@ -1237,6 +1237,18 @@ def register(mcp: FastMCP) -> None:
           `attendee_profile_url` (résolus en batch — le `name` brut des fils 1-à-1
           est null et `attendee_provider_id` est opaque). `with_names=False` coupe
           cet enrichissement (payload brut, un appel API en moins).
+          ⚠️ **L'enrichissement peut ne pas avoir lieu, et la réponse le DIT** : un
+          champ `attendee_names` apparaît alors, avec son `status` et sa raison. Une
+          absence de `attendee_name` sur un fil ne veut donc PAS dire « pas
+          d'interlocuteur » — lis `attendee_names` avant de conclure, et replie-toi
+          sur `name` ou `last_message.sender`.
+          ⚠️ **Ne te sers PAS de `last_message.is_sender` pour savoir si TU as écrit
+          en dernier.** Observé à `false` sur la totalité des fils d'un compte le
+          03/09/2026 — y compris les 22 dont le dernier message venait du compte
+          lui-même, exactement comme les fils où l'interlocuteur avait répondu. Le
+          champ ne distingue rien : s'y fier fait conclure à une réponse sur chaque
+          fil, ou l'inverse. Compare `last_message.sender_id` (ou
+          `last_message.sender.display_name`) à l'identité du compte.
         - **"read"** : les messages d'un fil (`chat_id`).
         - **"send"** : envoie un message. `chat_id` → répond dans un fil existant ;
           sinon `recipient_id` (provider id du destinataire) → ouvre un nouveau fil.
@@ -1440,7 +1452,12 @@ def register(mcp: FastMCP) -> None:
           page `limit=100` rend 90-100 items, pas 100. Pour charger tout un réseau :
           dédupliquer par `member_id` (JAMAIS l'offset), garder ≤8 pages en parallèle
           (au-delà : 502 en cascade), prouver le tarissement par 2 passes décalées.
-          Guide dédié : `bulk-load-reseau`.
+          ⚠️ Ces six précautions sont TOUT ce qu'il y a à savoir : elles vivent ici,
+          il n'existe pas de page à aller lire. Le guide `bulk-load` traite d'autre
+          chose — déléguer un gros chargement à un sous-agent — et ne dit rien des
+          pièges de pagination ci-dessus. ⚠️ Un chargement incomplet ne LÈVE PAS,
+          il rend moins de monde : un traitement qui lit l'absence comme « pas une
+          relation » agira ensuite sur une réponse fausse.
         - **"invitations"** : les invitations de connexion. `direction`='received'
           (reçues, à accepter) ou 'sent' (envoyées, en attente). Paginé — `limit`
           (défaut 50 : sans borne le backlog entier dépasse la limite de tokens).

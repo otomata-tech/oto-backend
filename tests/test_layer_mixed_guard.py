@@ -87,7 +87,7 @@ def _monte(monkeypatch, schema=None):
 def test_une_couche_mal_orthographiee_ne_detruit_jamais_la_valeur(monkeypatch):
     s, db = _monte(monkeypatch)
     with pytest.raises(RowValidationError) as e:
-        s.update_row("t", "r1", {"naf": {"origine": "x", "sourse": "hunter"}})
+        s.update_row("t", "r1", {"naf": {"origine": "x", "sourse": "hunter"}}, origine_override=True)
     msg = str(e.value)
     assert "sourse" in msg and "origine" in msg, "le refus NOMME l'intruse et le vocabulaire"
     assert db.rows["r1"]["data"]["naf"] == "58.11Z", \
@@ -123,14 +123,14 @@ def test_une_colonne_declaree_json_est_exempte(monkeypatch):
     `json` est LA sortie légitime de l'ambiguïté — le refus la nomme."""
     schema = {"fields": [{"key": "meta", "type": "json"}]}
     s, db = _monte(monkeypatch, schema=schema)
-    s.update_row("t", "r1", {"meta": {"origine": "import", "batch": 7}})
+    s.update_row("t", "r1", {"meta": {"origine": "import", "batch": 7}}, origine_override=True)
     assert db.rows["r1"]["data"]["meta"] == {"origine": "import", "batch": 7}
 
 
 def test_le_refus_vaut_aussi_a_la_creation(monkeypatch):
     s, db = _monte(monkeypatch)
     with pytest.raises(RowValidationError):
-        s.append_row("t", {"naf": {"origine": "x", "sourse": "y"}})
+        s.append_row("t", {"naf": {"origine": "x", "sourse": "y"}}, origine_override=True)
 
 
 # ── volet 2 : le point dans un nom de colonne ────────────────────────────────
@@ -171,7 +171,7 @@ def test_le_rattrapage_origine_seule_marche_toujours(monkeypatch):
     """#326 : poser l'origine par-dessus une valeur existante — le geste nominal
     du rattrapage de socle. La garde ne doit PAS le toucher."""
     s, db = _monte(monkeypatch)
-    s.update_row("t", "r1", {"naf": {"origine": "INSEE"}})
+    s.update_row("t", "r1", {"naf": {"origine": "INSEE"}}, origine_override=True)
     assert db.rows["r1"]["data"]["naf"] == {"valeur": "58.11Z", "origine": "INSEE"}
 
 

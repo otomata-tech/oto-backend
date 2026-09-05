@@ -370,7 +370,7 @@ def test_la_valeur_vide_ecartee_nemporte_pas_lorigine_quelle_accompagne(table):
     par la porte de derrière."""
     st, ns, ns_id, rid = table
 
-    st.update_row(ns, rid, {"origine_ligne": {"valeur": "", "origine": "apollo"}})
+    st.update_row(ns, rid, {"origine_ligne": {"valeur": "", "origine": "apollo"}}, origine_override=True)
 
     apres = _donnees(ns_id, rid)
     assert apres.get("origine_ligne") == {"valeur": "fichier-client",

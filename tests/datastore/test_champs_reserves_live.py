@@ -106,7 +106,8 @@ def test_un_refus_ne_laisse_AUCUNE_trace(table):
         st.update_row(ns, rid, {"adresse": "2 rue B"})
     with pytest.raises(RowValidationError, match="raison_sociale.origine"):
         st.write_rows(ns, [{"siren": "552032534",
-                            "raison_sociale": {"origine": "moi"}}])
+                            "raison_sociale": {"origine": "moi"}}],
+                      origine_override=True)
     assert _donnees(ns_id, rid) == avant
 
 
@@ -146,7 +147,8 @@ def test_terrain_1_valeur_et_origine_identiques_acceptees_rien_de_perdu(terrain)
     """① `{"raison_sociale": {"valeur": <identique>, "origine": <identique>}}`."""
     st, ns, ns_id, rid = terrain
     st.update_row(ns, rid, {"raison_sociale": {"comment": "vérifiée"}})
-    st.update_row(ns, rid, {"raison_sociale": {"valeur": "TEMOIN", "origine": "TEMOIN"}})
+    st.update_row(ns, rid, {"raison_sociale": {"valeur": "TEMOIN", "origine": "TEMOIN"}},
+                  origine_override=True)
     assert _donnees(ns_id, rid)["raison_sociale"] == {"valeur": "TEMOIN", "origine": "TEMOIN",
                                                      "comment": "vérifiée"}
 
@@ -203,7 +205,8 @@ def test_patch_schema_pose_et_leve_sans_toucher_les_lignes(table):
     assert _donnees(ns_id, rid)["raison_sociale"] == {"valeur": "TEMOIN SA",
                                                      "origine": "TEMOIN"}
     st.update_row(ns, rid, {"adresse": "2 rue B",
-                            "raison_sociale": {"origine": "moi"}})
+                            "raison_sociale": {"origine": "moi"}},
+                  origine_override=True)
     d = _donnees(ns_id, rid)
     assert d["adresse"] == "2 rue B" and d["raison_sociale"]["origine"] == "moi"
     repose = st.patch_schema(ns, fields=[{"key": "adresse", "readonly": True}])

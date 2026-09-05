@@ -162,7 +162,8 @@ def test_annoter_SEULE_une_colonne_objet_que_la_ligne_porte_deja(table):
     sur la valeur en place, sans y toucher."""
     st, ns, ns_id = table
     row = st.append_row(ns, {"siren": "1", "entreprise_social": {"forme": "SAS"}})
-    st.update_row(ns, row["_id"], {"entreprise_social.origine": "registre"})
+    st.update_row(ns, row["_id"], {"entreprise_social.origine": "registre"},
+                  origine_override=True)
     lu = st.list_rows(ns)[0]
     assert lu["entreprise_social"] == {"forme": "SAS"}, "la valeur n'a pas bougé"
     assert lu["entreprise_social.origine"] == "registre"

@@ -190,11 +190,11 @@ class _StoreREST:
     def __init__(self):
         self.vu = []
 
-    def append_row(self, ns, data, *, trace=None, readonly_override=False):
+    def append_row(self, ns, data, *, trace=None, readonly_override=False, origine_override=False):
         self.vu.append(("append_row", ns, data))
         return {"_id": "r9", **data}
 
-    def update_row(self, ns, row_id, patch, *, trace=None, readonly_override=False):
+    def update_row(self, ns, row_id, patch, *, trace=None, readonly_override=False, origine_override=False):
         self.vu.append(("update_row", ns, row_id, patch))
         return {"_id": row_id, **patch}
 

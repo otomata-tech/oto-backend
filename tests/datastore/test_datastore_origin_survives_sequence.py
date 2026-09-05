@@ -74,7 +74,8 @@ def test_a_flat_rewrite_keeps_the_origin(store):
     courant d'un agent, et celui que ma correction initiale avait manqué."""
     s, db = store
     s.update_row("t", "r1", {"contact1_nom": {"valeur": "DUPONT Jean",
-                                              "origine": "DUPONT Jean"}})
+                                              "origine": "DUPONT Jean"}},
+                  origine_override=True)
     s.update_row("t", "r1", {"contact1_nom": "MARTIN Claire"})
     assert _val(db) == "MARTIN Claire"
     assert _origine(db) == "DUPONT Jean", "l'origine ne doit pas suivre la valeur"
@@ -83,7 +84,8 @@ def test_a_flat_rewrite_keeps_the_origin(store):
 def test_a_layered_rewrite_without_origin_keeps_it(store):
     s, db = store
     s.update_row("t", "r1", {"contact1_nom": {"valeur": "DUPONT Jean",
-                                              "origine": "DUPONT Jean"}})
+                                              "origine": "DUPONT Jean"}},
+                  origine_override=True)
     s.update_row("t", "r1", {"contact1_nom": {"valeur": "DURAND Paul",
                                               "comment": "registre"}})
     assert _val(db) == "DURAND Paul"
@@ -93,8 +95,8 @@ def test_a_layered_rewrite_without_origin_keeps_it(store):
 def test_an_explicit_origin_replaces_it(store):
     """Pas de verrou : un ré-import repose une nouvelle valeur de départ."""
     s, db = store
-    s.update_row("t", "r1", {"contact1_nom": {"valeur": "x", "origine": "vieux"}})
-    s.update_row("t", "r1", {"contact1_nom": {"valeur": "y", "origine": "neuf"}})
+    s.update_row("t", "r1", {"contact1_nom": {"valeur": "x", "origine": "vieux"}}, origine_override=True)
+    s.update_row("t", "r1", {"contact1_nom": {"valeur": "y", "origine": "neuf"}}, origine_override=True)
     assert _origine(db) == "neuf"
 
 
@@ -103,7 +105,7 @@ def test_the_socle_import_then_the_agent(store):
     champ qu'aucun agent n'a renseigné, puis l'agent le renseigne. C'est le cas
     NOMINAL, et c'est celui où la lecture rendait l'enveloppe."""
     s, db = store
-    s.update_row("t", "r1", {"contact1_nom": {"origine": "SOCLE Client"}})
+    s.update_row("t", "r1", {"contact1_nom": {"origine": "SOCLE Client"}}, origine_override=True)
     assert _val(db) is None, "pas d'objet rendu : la valeur n'est pas encore posée"
     assert _origine(db) == "SOCLE Client"
     s.update_row("t", "r1", {"contact1_nom": "Renseigné par agent"})
@@ -122,7 +124,7 @@ def test_the_write_protection_still_applies_to_a_layered_column(monkeypatch, sto
     appels = []
     monkeypatch.setattr(s, "_assert_writable",
                         lambda ns_id, row_id: appels.append(row_id))
-    s.update_row("t", "r1", {"contact1_nom": {"valeur": "x", "origine": "o"}})
+    s.update_row("t", "r1", {"contact1_nom": {"valeur": "x", "origine": "o"}}, origine_override=True)
     assert appels == ["r1"], "la garde de bail doit s'appliquer AUSSI sur une couche"
 
 
@@ -144,7 +146,7 @@ def test_un_null_sur_une_origine_VIDE_ne_laisse_pas_de_coquille(store):
     ⚠️ Par le CHEMIN, pas par `_merge_column` : c'est la leçon de l'en-tête de ce
     fichier, et elle vaut deux fois ici."""
     s, db = store
-    s.update_row("t", "r1", {"qualification": {"valeur": "qualifie", "origine": ""}})
+    s.update_row("t", "r1", {"qualification": {"valeur": "qualifie", "origine": ""}}, origine_override=True)
     s.update_row("t", "r1", {"qualification": None})
     ligne = DatastorePg._row_to_dict(db.rows["r1"])
     assert ligne.get("qualification") is None
@@ -166,7 +168,8 @@ def test_un_null_sur_une_origine_PLEINE_la_preserve(store):
     donnée que personne ne peut reconstituer."""
     s, db = store
     s.update_row("t", "r1", {"qualification": {"valeur": "qualifie",
-                                               "origine": "brut-source"}})
+                                               "origine": "brut-source"}},
+                  origine_override=True)
     s.update_row("t", "r1", {"qualification": None})
     ligne = DatastorePg._row_to_dict(db.rows["r1"])
     assert ligne.get("qualification") is None          # la valeur est bien effacée

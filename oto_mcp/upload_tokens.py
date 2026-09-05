@@ -279,7 +279,13 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
             store._schema_of(int(target["ns_id"])) if fmt == "csv" else None)
         try:
             out = store._write_rows_to_ns(
-                int(target["ns_id"]), rows, key=target.get("key"))
+                int(target["ns_id"]), rows, key=target.get("key"),
+                # oto#70 lot 2 : la déclaration a été faite au MINT et scellée dans
+                # le jeton. Un import qui pose la couche `origine` la déclare donc
+                # comme n'importe quel autre écrivain — mais celui qui appelle le
+                # PUT ne peut pas se l'accorder lui-même, il ne fait que livrer des
+                # octets à une URL signée.
+                origine_override=bool(target.get("origine_override")))
         except ValueError as e:
             raise UploadError(400, "bad_row", str(e))
         # Le chemin de bulk load est celui où le silence coûte le plus cher (#294) :

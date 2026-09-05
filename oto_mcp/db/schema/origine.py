@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS origine_ecritures (
     -- c'est justement celle qu'on cherche qui disparaîtrait dans l'autre.
     format_declare BOOLEAN NOT NULL DEFAULT false,
     ecritures BIGINT NOT NULL DEFAULT 1,
+    -- ⚠️ Un COMPTEUR de plus, pas une clé de plus. Ce qu'on veut savoir après la date
+    -- du refus est « cet écrivain s'est-il adapté, ou a-t-il disparu ? » — deux faits
+    -- que les écritures non déclarées ne distinguent pas, puisqu'elles tombent à zéro
+    -- dans les deux cas. Élargir la clé unique aurait répondu aussi, mais au prix du
+    -- comptage de POPULATION : deux lignes pour un seul écrivain sur une seule
+    -- colonne, et le nombre de gens à prévenir aurait doublé sans que personne
+    -- n'arrive.
+    ecritures_declarees BIGINT NOT NULL DEFAULT 0,
+    derniere_declaree_at TIMESTAMPTZ,
     premiere_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     derniere_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

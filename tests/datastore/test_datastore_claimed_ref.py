@@ -172,7 +172,7 @@ class _StoreEspion:
             raise self.boum
         return self.resolu
 
-    def update_row(self, namespace, row_id, row, *, readonly_override=False):
+    def update_row(self, namespace, row_id, row, *, readonly_override=False, origine_override=False):
         self.vu["update"] = (namespace, row_id, row)
         return {"_id": row_id, **row}
 
@@ -262,7 +262,7 @@ def test_row_not_found_names_the_expected_shape_and_what_the_run_holds(monkeypat
     choses qui manquent : à quoi ressemble un identifiant, et ce qu'il tient déjà."""
     from oto_mcp.mcp_errors import McpError
     class _StoreIntrouvable(_StoreEspion):
-        def update_row(self, namespace, row_id, row, *, readonly_override=False):
+        def update_row(self, namespace, row_id, row, *, readonly_override=False, origine_override=False):
             raise RowNotFound()
 
         def claimed_hint(self, namespace):
@@ -288,7 +288,7 @@ def test_the_hint_never_masks_the_refusal_when_it_cannot_be_built(monkeypatch):
     from oto_mcp.datastore.core import RowNotFound
 
     class _StoreCassé(_StoreEspion):
-        def update_row(self, namespace, row_id, row, *, readonly_override=False):
+        def update_row(self, namespace, row_id, row, *, readonly_override=False, origine_override=False):
             raise RowNotFound()
 
         def claimed_hint(self, namespace):

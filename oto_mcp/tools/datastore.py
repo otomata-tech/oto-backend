@@ -627,7 +627,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_write(namespace: str, row: dict | None = None, id: str | None = None,
                    rows: list | None = None, key: str | None = None,
-                   readonly_override: bool = False) -> dict:
+                   readonly_override: bool = False,
+                   origine_override: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         Layers (`valeur`/`comment`/`link`/`origine`), what a write destroys, what
@@ -688,6 +689,13 @@ def register(mcp: FastMCP) -> None:
         `data_patch_schema(namespace=…, key_required=false)`, your write, then
         `data_patch_schema(namespace=…, key_required=true)` to close it back.
 
+        ⚠️ The `origine` layer is the value at the START, at IMPORT time — not
+        yours. Setting it silently is refused from 2026-10-01 on: write the value
+        alone (`{"col": …}`) and the origin is kept, set by the platform when it
+        is missing. If your import really must set it, pass
+        `origine_override=true` ON THIS CALL — there is nobody to ask, the
+        parameter is the whole of it, and it applies to this call only.
+
         ⚠️ A COLUMN can be LOCKED by the schema (`readonly: true`) — it holds a
         value someone put there, and an ordinary write that CHANGES it is refused by
         name (writing the same value again is fine, and `<column>.comment` always
@@ -728,6 +736,11 @@ def register(mcp: FastMCP) -> None:
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
                 writes, instead of being refused. Owner or governor of the table
                 only ; valid for this call alone ; journaled.
+            origine_override: `true` = states that this call sets the `origine`
+                layer (the value at the START, at import time) knowingly. Without
+                it, writing an origin is refused from 2026-10-01 on. Nothing to
+                ask anyone for: the parameter is enough, and it applies to this
+                call only.
         """
         store = _acting_store()
         try:
@@ -749,7 +762,8 @@ def register(mcp: FastMCP) -> None:
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
                 out = {"namespace": namespace,
                        **store.write_rows(namespace, rows, key=key,
-                                          readonly_override=readonly_override)}
+                                          readonly_override=readonly_override,
+                                          origine_override=origine_override)}
             else:
                 if row is None:
                     raise McpError(ErrorData(code=INVALID_PARAMS,
@@ -757,10 +771,12 @@ def register(mcp: FastMCP) -> None:
                 if not isinstance(row, dict):
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
                 out = store.append_row(namespace, row,
-                                       readonly_override=readonly_override) \
+                                       readonly_override=readonly_override,
+                                       origine_override=origine_override) \
                     if id is None \
                     else store.update_row(namespace, id, row,
-                                          readonly_override=readonly_override)
+                                          readonly_override=readonly_override,
+                                          origine_override=origine_override)
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
             out = {**out, **store.off_schema_report()}

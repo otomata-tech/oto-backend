@@ -106,13 +106,18 @@ def test_l_avertissement_dit_que_l_ecriture_RESTE_possible(monkeypatch):
     assert "SANS LE DIRE" in texte
 
 
-def test_la_date_de_refus_vient_d_un_REGLAGE_pas_du_code(monkeypatch):
-    """⚠️ La fenêtre bougera si un écrivain se manifeste. Une date gravée dans le code
-    demanderait un déploiement pour se déplacer — et on la déplacerait donc moins."""
+def test_l_avertissement_ANNONCE_la_date_qui_refusera(monkeypatch):
+    """⚠️ La même date des deux côtés, et c'est tout l'objet d'un préavis : annoncer un
+    jour et couper un autre transformerait l'avertissement en bruit.
+
+    Le barreau 1 avait posé cette date dans un RÉGLAGE seul, au motif qu'une date gravée
+    demanderait un déploiement pour bouger. Renversé au barreau 2 : là où personne ne
+    pose le réglage, le produit annonçait « prochainement » et ne coupait jamais. La
+    date vit donc dans le code et le réglage la DÉPLACE — voir
+    `test_origine_refus_declare_oto70.py`, qui tient ce contrat."""
     monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
-    assert "prochainement" in dsv2.avertissement_origine(["c"])
-    monkeypatch.setenv(dsv2.ENV_ORIGINE_REFUS_LE, "1er octobre 2026")
-    assert "1er octobre 2026" in dsv2.avertissement_origine(["c"])
+    assert dsv2.date_refus_fr() in dsv2.avertissement_origine(["c"])
+    assert dsv2.date_refus_fr() in dsv2.refus_origine(["c"])
 
 
 def test_l_avertissement_part_a_CHAQUE_ecriture_pas_une_seule_fois():
@@ -151,11 +156,13 @@ def test_le_releve_SEPARE_le_cas_suspect(monkeypatch):
             self._origine_posee = set()
 
     schema = {"fields": [{"key": "declaree", "origine": "system"}, {"key": "libre"}]}
+    # Déclarée : ce banc-ci mesure le TRI des populations, pas la garde — et depuis le
+    # barreau 2 une écriture non déclarée est refusée avant d'être relevée.
     C._relever_origine_module(
         _Store(), 42,
         {"declaree": {"valeur": "x", "origine": "a"},
          "libre": {"valeur": "y", "origine": "b"}},
-        schema=schema)
+        schema=schema, declare=True)
     par_cas = {r["format_declare"]: r["colonnes"] for r in releves if r["colonnes"]}
     assert par_cas[False] == ["libre"], "le cas SUSPECT doit être relevé à part"
     assert par_cas[True] == ["declaree"]

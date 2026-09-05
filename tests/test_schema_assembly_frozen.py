@@ -269,8 +269,8 @@ from oto_mcp.db import _schema, schema
 # 145 991. ⚠️ Cette valeur a été RECALCULÉE après la fusion, jamais choisie entre les
 # deux versions en conflit — une empreinte dépend du contenu final, pas de qui écrit en
 # dernier.
-EMPREINTE = "16b9e01f93082c688559acaafdac00b69d4b7ebb740c372058c99d36bad29dbd"
-LONGUEUR = 145991
+EMPREINTE = "a44cf6a9c161a1fed9edc248868098c02211e3502611cfa99e3999c0c67ddc61"
+LONGUEUR = 146604
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

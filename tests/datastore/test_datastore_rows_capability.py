@@ -59,11 +59,11 @@ class _Store:
     def get_row(self, ns, row_id, *, layers="flat"):
         return self._out("get_row", ns, row_id)
 
-    def append_row(self, ns, data, *, trace=None, readonly_override=False):
+    def append_row(self, ns, data, *, trace=None, readonly_override=False, origine_override=False):
         self._out("append_row", ns, data)
         return {"_id": "r9", "_created_at": "2026-08-12 09:00:00", **data}
 
-    def update_row(self, ns, row_id, patch, *, trace=None, readonly_override=False):
+    def update_row(self, ns, row_id, patch, *, trace=None, readonly_override=False, origine_override=False):
         self._out("update_row", ns, row_id, patch)
         return {"_id": row_id, "_updated_at": "2026-08-12 09:00:00", **patch}
 

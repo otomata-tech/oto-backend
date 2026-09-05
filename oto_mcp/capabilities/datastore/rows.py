@@ -33,6 +33,7 @@ from ...auth import token_scopes
 from ...datastore import journal as datastore_journal
 from ...datastore import jetons
 from ...datastore import layers as dsl
+from ...datastore import schema as dsv2
 from ...datastore.errors import ClaimedRefUnresolved
 from ...datastore.core import (
     BusinessKeyRequired,
@@ -144,12 +145,21 @@ _FORCAGE = Field(default=False, description=(
     "d'être refusé. Réservé au propriétaire du tableau ou à qui le gouverne ; ne vaut "
     "que pour cet appel ; journalisé (ligne, colonne, valeur remplacée)."))
 
+# oto#70 lot 2 : la MÊME mécanique de passage que `_FORCAGE` (query, additif, publié
+# tel quel par l'OpenAPI) — mais pas le même objet. Le forçage demande un PALIER (qui
+# possède ou gouverne le tableau) ; celui-ci n'en demande aucun : ce n'est pas un droit
+# à obtenir, c'est une déclaration à faire. Ouvert à tout écrivain, et le texte le dit,
+# sans quoi on irait chercher à qui la demander.
+_ORIGINE = Field(default=False,
+                 description=dsv2.description_parametre_origine())
+
 
 class AppendRowInput(BaseModel):
     namespace: str
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
+    origine_override: bool = _ORIGINE
 
 
 class UpdateRowInput(BaseModel):
@@ -158,6 +168,7 @@ class UpdateRowInput(BaseModel):
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
     patch: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
+    origine_override: bool = _ORIGINE
 
 
 class ReleaseInput(BaseModel):
@@ -420,7 +431,8 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     try:
         refuser_un_lot(store, ns, inp.row)  # oto#48 : un lot enveloppé n'est pas une ligne
         created = store.append_row(ns, inp.row, trace=trace,
-                                   readonly_override=inp.readonly_override)
+                                   readonly_override=inp.readonly_override,
+                                   origine_override=inp.origine_override)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:
@@ -447,7 +459,8 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
     store = make_store(ctx.sub)
     try:
         updated = store.update_row(ns, rid, inp.patch, trace=trace,
-                                   readonly_override=inp.readonly_override)
+                                   readonly_override=inp.readonly_override,
+                                   origine_override=inp.origine_override)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:
@@ -557,7 +570,8 @@ CAPABILITIES += [
                      "pour les volumes. "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé. Couches, `readonly`, clé métier : guide "
+                     "et journalisé. " + dsv2.description_parametre_origine()
+                     + " Couches, `readonly`, clé métier : guide "
                      "`datastore-semantics`." + _ECRITURE_DETRUIT),
     ),
     Capability(
@@ -581,7 +595,8 @@ CAPABILITIES += [
         description=("Modifie une ligne (patch partiel ; le corps EST le patch). "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
-                     "et journalisé." + _ECRITURE_DETRUIT),
+                     "et journalisé. " + dsv2.description_parametre_origine()
+                     + _ECRITURE_DETRUIT),
     ),
     Capability(
         key="me.datastore.delete_row",

@@ -12,9 +12,10 @@ from __future__ import annotations
 import os
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import upload_tokens
+from ..datastore import schema as dsv2
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
@@ -34,6 +35,18 @@ class UploadUrlInput(BaseModel):
     namespace: Optional[str] = None                   # datastore (requis)
     format: Optional[Literal["ndjson", "csv"]] = None  # datastore (défaut ndjson)
     key: Optional[str] = None                         # datastore : clé de batch upsert (sinon schema.key)
+    #: datastore — l'upload est LA porte de l'import, donc celle où poser la couche
+    #: `origine` est le plus légitime (oto#70 lot 2). Le PUT, lui, ne porte aucun
+    #: paramètre : c'est une URL signée qu'un socle appelle sans rien décider. La
+    #: déclaration se fait donc ICI, au mint, par celui qui prépare l'import — et
+    #: elle est SCELLÉE dans le jeton, comme la cible : à la réception, personne ne
+    #: peut se la donner.
+    #:
+    #: ⚠️ DÉCRIT, pas seulement typé : un booléen sans phrase se lit « je ne sais pas à
+    #: quoi il sert », et un agent ne coche pas ce qu'il ne comprend pas. Le texte vient
+    #: de la même source que les deux autres faces.
+    origine_override: bool = Field(
+        default=False, description=dsv2.description_parametre_origine(en=True))
 
 
 def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
@@ -82,7 +95,8 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
         # Clé effective figée au mint (param explicite, sinon clé déclarée au schéma).
         eff_key = inp.key or store.declared_key(ns)
         target = {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
-                  "format": inp.format or "ndjson", "key": eff_key}
+                  "format": inp.format or "ndjson", "key": eff_key,
+                  "origine_override": bool(inp.origine_override)}
 
     # Fail-fast : refuse tout de suite sans l'écriture sur la cible (l'autz est
     # RÉAPPLIQUÉE à la réception — le jeton ne fait pas foi seul). Pour datastore
@@ -139,7 +153,10 @@ CAPABILITIES += [
             "raw file (project_id + filename [+ title, description, content_type]) — fills the "
             "agent gap of depositing a PDF/CSV ; target='datastore' bulk-loads rows into a "
             "table (namespace + format ndjson|csv [+ key]) — NDJSON/CSV body is batch-upserted "
-            "(dedup on `key`, else the namespace's schema.key) ; target='image' publishes ONE "
+            "(dedup on `key`, else the namespace's schema.key ; pass "
+            "`origine_override=true` HERE, at mint time, if the rows carry an `origine` "
+            "layer — from 2026-10-01 on, setting it without saying so is refused, and "
+            "the signed PUT itself carries no parameter) ; target='image' publishes ONE "
             "image (png/jpeg/gif/webp by magic bytes, 2 MB max) at a PUBLIC, permanent, "
             "content-addressed URL — the receipt carries `url`; upload once, reuse it in "
             "every `email_send(image_url=…)`. Requires write access to the target."

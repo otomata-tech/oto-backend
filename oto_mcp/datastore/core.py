@@ -1151,7 +1151,8 @@ class DatastorePg(SchemaOpsMixin):
 
     def append_row(self, namespace: str, data: dict, *,
                    trace: Optional[dict] = None,
-                   readonly_override: bool = False) -> dict:
+                   readonly_override: bool = False,
+                   origine_override: bool = False) -> dict:
         """Écrit UNE row. Si le namespace déclare une clé métier (`schema.key`),
         applique la MÊME dédup upsert que le batch `write_rows` : une row de même
         valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
@@ -1207,7 +1208,8 @@ class DatastorePg(SchemaOpsMixin):
         # #658 : tranché AVANT la fusion — c'est elle qui ouvre le verrou de ligne.
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
         refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
-        _relever_origine_module(self, ns_id, user_data, schema=schema)
+        _relever_origine_module(self, ns_id, user_data, schema=schema,
+                                declare=origine_override)
         self._trace(trace, ns_id, ns)
         # La clé métier sort du MÊME schéma que ci-dessus (`declared_key` re-résolvait
         # le namespace et relisait la ligne pour le même résultat).
@@ -1218,7 +1220,8 @@ class DatastorePg(SchemaOpsMixin):
             if existing_id is not None:
                 return self._row_to_dict(
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
-                                         forcage=forcage),
+                                         forcage=forcage,
+                                         origine_override=origine_override),
                     schema)
         # #516 : sur un tableau FERMÉ, on ne crée pas — on vise. Le geste est arrivé
         # jusqu'ici sans désigner de ligne : ni par son `_id` (promu plus haut, et
@@ -1259,7 +1262,8 @@ class DatastorePg(SchemaOpsMixin):
                 raise  # violation inexpliquée → erreur franche, pas de repli muet
             return self._row_to_dict(
                 self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
-                                     forcage=forcage),
+                                     forcage=forcage,
+                                     origine_override=origine_override),
                 schema)
         return self._row_to_dict(row, schema)
 
@@ -1347,7 +1351,8 @@ class DatastorePg(SchemaOpsMixin):
 
     def _merge_into_row(self, ns_id: int, row_id: str, user_data: dict,
                         *, schema: Optional[dict] = None,
-                        forcage: Optional[Forcage] = None) -> dict:
+                        forcage: Optional[Forcage] = None,
+                        origine_override: bool = False) -> dict:
         """MERGE `user_data` dans la row existante (dernier écrit gagne par champ),
         en appliquant le schéma v2 (ADR 0046) au résultat mergé : validation avec
         `prev_status` (transition de lifecycle) puis release du claim si l'état
@@ -1403,7 +1408,8 @@ class DatastorePg(SchemaOpsMixin):
             # que ce soit ne parte. Puis la plateforme pose l'origine qu'elle doit.
             refuser_champs_reserves(schema, pose, avant=current or {},
                                     pose_systeme=sys_pose, forcage=forcage)
-            _relever_origine_module(self, ns_id, pose, current or {}, schema=schema)
+            _relever_origine_module(self, ns_id, pose, current or {}, schema=schema,
+                                    declare=origine_override)
             poser_origine_systeme(schema, current, merged, set(pose))
             # #607 : l'estampille est reposée sur CHAQUE écriture — c'est le point du
             # cran. Après l'origine : sur une colonne qui porterait les deux, la
@@ -1428,7 +1434,8 @@ class DatastorePg(SchemaOpsMixin):
         self._terminal_write_notice(schema, ns_id, row_id, merged)
         return row
 
-    def upsert_row(self, namespace: str, row_id: str, data: dict) -> tuple[dict, bool]:
+    def upsert_row(self, namespace: str, row_id: str, data: dict, *,
+                   origine_override: bool = False) -> tuple[dict, bool]:
         """Écrit une row à une clé `row_id` EXPLICITE (≠ append_row qui génère un
         id), en remplaçant si elle existe. Crée le namespace au besoin. Sert le
         stockage dédupliqué par clé stable (ex. urn LinkedIn). Renvoie
@@ -1463,7 +1470,8 @@ class DatastorePg(SchemaOpsMixin):
                        **user_data}
             refuser_champs_reserves(schema, complet, avant=prev_data,
                                     pose_systeme=sys_pose)
-            _relever_origine_module(self, ns_id, complet, prev_data, schema=schema)
+            _relever_origine_module(self, ns_id, complet, prev_data, schema=schema,
+                                    declare=origine_override)
             if prev_data is not None:
                 poser_origine_systeme(schema, prev_data, user_data, set(complet))
         # #607 : hors du `if reserves` — un remplacement qui n'emporte QUE l'estampille
@@ -1485,7 +1493,8 @@ class DatastorePg(SchemaOpsMixin):
         return self._declared_key_of(self.get_schema(namespace))
 
     def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None,
-                   readonly_override: bool = False) -> dict:
+                   readonly_override: bool = False,
+                   origine_override: bool = False) -> dict:
         """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
         `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
         UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
@@ -1493,7 +1502,8 @@ class DatastorePg(SchemaOpsMixin):
         key, ids}. Résout le namespace UNE fois (write) pour tout le lot."""
         ns_id = self._resolve(namespace, write=True)
         return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(namespace),
-                                      readonly_override=readonly_override)
+                                      readonly_override=readonly_override,
+                                      origine_override=origine_override)
 
     @staticmethod
     def _designation_de_lot(rang: int, total: int, key: Optional[str],
@@ -1519,7 +1529,8 @@ class DatastorePg(SchemaOpsMixin):
         return f"ligne {rang}/{total} du lot{ref} · {etat}"
 
     def _write_rows_to_ns(self, ns_id: int, rows: list, *, key: Optional[str],
-                          readonly_override: bool = False) -> dict:
+                          readonly_override: bool = False,
+                          origine_override: bool = False) -> dict:
         """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
         d'org — matérialisation d'un upload signé, où l'org de session est absente).
         Le schéma v2 (validation/lifecycle, ADR 0046) s'applique à CHAQUE row du
@@ -1580,7 +1591,8 @@ class DatastorePg(SchemaOpsMixin):
                         raise _refus_de_creation(nom_ns, dk, dkv)
                 if existing_id is not None:
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
-                                         forcage=forcage)
+                                         forcage=forcage,
+                                     origine_override=origine_override)
                     updated += 1
                     ids.append(existing_id)
                     continue
@@ -1591,7 +1603,8 @@ class DatastorePg(SchemaOpsMixin):
                 # de lignes sans trace.
                 sys_pose = self._pose_systeme(schema)
                 refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
-                _relever_origine_module(self, ns_id, user_data, schema=schema)
+                _relever_origine_module(self, ns_id, user_data, schema=schema,
+                                        declare=origine_override)
                 poser_valeurs_systeme(schema, user_data, sys_pose)
                 self._check_row(schema, user_data)
                 try:
@@ -1611,7 +1624,8 @@ class DatastorePg(SchemaOpsMixin):
                     if existing_id is None:
                         raise  # violation inexpliquée → erreur franche, pas de repli muet
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
-                                         forcage=forcage)
+                                         forcage=forcage,
+                                     origine_override=origine_override)
                     updated += 1
                     ids.append(existing_id)
                     continue
@@ -1837,7 +1851,8 @@ class DatastorePg(SchemaOpsMixin):
 
     def update_row(self, namespace: str, row_id: str, patch: dict, *,
                    trace: Optional[dict] = None,
-                   readonly_override: bool = False) -> dict:
+                   readonly_override: bool = False,
+                   origine_override: bool = False) -> dict:
         """Patch partiel d'une row. `trace` (dict mutable, optionnel) = relevé pour
         le journal — dont l'état AVANT, celui-là même sur lequel la transition de
         cycle de vie est validée juste en dessous (cf. `_trace`).
@@ -1890,6 +1905,14 @@ class DatastorePg(SchemaOpsMixin):
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
         refuser_champs_reserves(schema, pose, avant=avant, pose_systeme=sys_pose,
                                 forcage=forcage)
+        # ⚠️ CE chemin-ci a déjà été oublié une fois, six lignes plus haut : l'origine
+        # n'avait été câblée que dans `_merge_into_row`, et le patch par `id` — le
+        # geste le plus courant d'un agent — l'effaçait quand même. Le barreau 1 a
+        # refait la MÊME omission sur le relevé : quatre chemins branchés, celui-ci
+        # non. Un instrument qui ne voit pas le geste le plus courant sous-compte
+        # exactement la population qu'il existe pour trouver.
+        _relever_origine_module(self, ns_id, pose, avant, schema=schema,
+                                declare=origine_override)
         poser_origine_systeme(schema, avant, data, written)
         # #607 : le patch par `id` est le geste le plus courant d'un agent — donc
         # celui où une estampille manquante se verrait le plus.
@@ -2226,12 +2249,23 @@ class DatastorePg(SchemaOpsMixin):
 
 
 def _relever_origine_module(store, ns_id, payload, avant=None,
-                            schema=None) -> None:
-    """Relève, et mémorise pour la réponse, les colonnes dont CET appel pose la couche
-    `origine` (oto#70 lot 2, premier temps du préavis).
+                            schema=None, declare: bool = False) -> None:
+    """Relève les colonnes dont CET appel pose la couche `origine`, et REFUSE l'appel
+    qui ne les déclare pas une fois la date passée (oto#70 lot 2).
 
-    ⚠️ **N'empêche rien.** Aujourd'hui cette écriture est encore permise : on prévient,
-    on ne refuse pas. Le refus vient au barreau suivant, à une date annoncée.
+    ⚠️ **Ce qui est refusé n'est pas l'écriture, c'est le SILENCE.** `declare` porte le
+    paramètre de l'appelant (`origine_override`) : avec, l'écriture passe et laisse une
+    trace distincte ; sans, elle passe aussi tant que la date n'est pas atteinte, avec
+    l'avertissement pour toute réponse. Après, elle est refusée par un message qui dit
+    exactement ce que l'avertissement disait.
+
+    ⚠️ **La date arme la garde toute seule**, sans déploiement (`dsv2.refus_arme()`).
+    C'est ce qui a été annoncé aux écrivains à chaque écriture depuis le barreau 1 ; un
+    refus qui attendrait qu'on y pense ne serait pas le préavis qu'on leur a promis.
+
+    ⚠️ **La trace distingue les deux populations** (`declare`), et c'est elle qui dira,
+    après la date, si un écrivain s'est ADAPTÉ ou a DISPARU. Deux faits que le même
+    compteur confondrait : dans les deux cas les écritures non déclarées tombent à zéro.
 
     ⚠️ **`face` reste NULL** : le store ne connaît pas le canal d'appel — il voit un
     `sub` et une org. `ResolvedCtx.channel` vit à l'adaptateur, deux couches plus haut.
@@ -2242,6 +2276,11 @@ def _relever_origine_module(store, ns_id, payload, avant=None,
     colonnes = dsv2.origine_posee(payload, avant)
     if not colonnes:
         return
+    if not declare and dsv2.refus_arme():
+        # Rien n'est relevé : rien n'a été écrit. Un refus n'est pas une écriture, et
+        # le compter gonflerait la population de gens qui, précisément, n'ont pas
+        # réussi à écrire.
+        raise ValueError(dsv2.refus_origine(colonnes))
     store._origine_posee.update(colonnes)
     # ⚠️ Les deux populations sont relevées SÉPARÉMENT. Sur une colonne qui ne déclare
     # pas le format, la plateforme ne pose JAMAIS d'origine : celle-ci vient donc
@@ -2254,7 +2293,7 @@ def _relever_origine_module(store, ns_id, payload, avant=None,
         db_origine.relever(sub=getattr(store, "sub", None),
                           org_id=getattr(store, "acting_org", None),
                           ns_id=ns_id, colonnes=lot,
-                          format_declare=format_declare)
+                          format_declare=format_declare, declare=declare)
 
 
 def make_store(sub: str) -> "DatastorePg":

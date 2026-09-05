@@ -31,6 +31,8 @@ une ValueError, jamais un refus muet.
 """
 from __future__ import annotations
 
+from datetime import date as _date, datetime as _datetime, timezone as _timezone
+
 from . import schema_keys
 
 import re
@@ -640,17 +642,6 @@ def system_value_fields(schema: Optional[dict]) -> dict:
             and isinstance(f.get("key"), str) and f["key"]}
 
 
-#: Ce que l'appelant lira quand il pose une origine sans le déclarer. Servi par le
-#: SERVEUR — l'écran comme l'agent le rendent tel quel — et il VOUVOIE : c'est une
-#: personne qui décidera d'agir dessus.
-#:
-#: ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
-#: passe encore. Ce qui sera refusé ensuite, à une date annoncée, n'est pas d'écrire
-#: l'origine — c'est de l'écrire en SILENCE ; le remplaçant est `PARAMETRE_ORIGINE`, et
-#: l'avertissement le nomme. On ne demande pas la permission d'écrire aux écrivains, on
-#: les prévient — et ce premier temps est aussi l'INSTRUMENT : le journal d'appels ne
-#: porte pas les couches (il ne garde que les clés de premier niveau, et tronque les
-#: arguments), donc seuls les écrivains eux-mêmes peuvent nous dire combien ils sont.
 #: Le paramètre par lequel un appelant DÉCLARE qu'il pose l'origine en connaissance de
 #: cause. Nommé par cohérence stricte avec `readonly_override` (#658) : même famille de
 #: geste — un cran qu'on lève EXPLICITEMENT sur l'appel, jamais par un état qu'on laisse
@@ -658,20 +649,151 @@ def system_value_fields(schema: Optional[dict]) -> dict:
 #:
 #: ⚠️ **Ce n'est pas un droit à accorder, c'est une déclaration à faire** (décision
 #: d'Alexis, 05/09/2026 : « c'est notre modèle d'agent experience »). Écrire l'origine
-#: reste possible pour tout le monde ; ce qui sera refusé, c'est de l'écrire EN SILENCE,
+#: reste possible pour tout le monde ; ce qui est refusé, c'est de l'écrire EN SILENCE,
 #: sans dire qu'on sait ce qu'on fait. Rien à demander à personne, rien à provisionner :
 #: le paramètre suffit, et sa présence engage celui qui l'envoie.
 PARAMETRE_ORIGINE = "origine_override"
 
-#: Le réglage qui porte la DATE du refus. ⚠️ Jamais en dur dans le code : la fenêtre se
-#: déplacera si un écrivain se manifeste, et une date gravée demanderait un déploiement
-#: pour bouger. Absent = l'avertissement ne promet aucune échéance, ce qui est la vérité
-#: tant qu'elle n'est pas fixée.
+#: La date à partir de laquelle une écriture d'origine NON DÉCLARÉE est refusée.
+#:
+#: ⚠️ **Elle vit ici, dans le code, et c'est délibéré** — le contraire de ce que ce
+#: commentaire disait au barreau 1. Une date qui n'existerait que dans l'env d'une box
+#: se lit « prochainement » partout où personne ne l'a posée : le produit annoncerait
+#: une échéance floue et n'en tiendrait aucune, et l'écart ne se verrait nulle part.
+#: Ici, ce que le tronc ANNONCE est exactement ce qu'il REFUSERA, sans dépendre d'un
+#: geste sur une machine.
+#:
+#: Le réglage ci-dessous la DÉPLACE sans déploiement (`YYYY-MM-DD`), ce qui était la
+#: vraie exigence : la fenêtre bougera si un écrivain se manifeste.
+#:
+#: Pourquoi le 1er octobre 2026 (arbitré le 05/09/2026, et contestable comme tel) : les
+#: écritures concernées vont de sept à cinquante-deux lignes par semaine et MONTENT, il
+#: faut donc couvrir plusieurs cycles hebdomadaires entiers — vingt-six jours en
+#: couvrent trois — et le lecteur de l'avertissement est un agent, qui peut s'adapter
+#: dès sa première lecture.
+ORIGINE_REFUS_LE = _date(2026, 10, 1)
+
+#: Déplace la date sans déployer. Format `YYYY-MM-DD` — la seule forme non ambiguë, et
+#: le texte français servi en est DÉRIVÉ : deux réglages (« la date affichée » et « la
+#: date qui refuse ») divergeraient, et c'est l'affichage qui aurait tort.
+#: ⚠️ Une valeur illisible LÈVE, elle ne retombe pas sur le défaut : un préavis dont la
+#: date est muette annoncerait une échéance que rien n'applique.
 ENV_ORIGINE_REFUS_LE = "OTO_ORIGINE_REFUS_LE"
+
+_MOIS_FR = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+            "août", "septembre", "octobre", "novembre", "décembre")
+
+
+def date_refus() -> "_date":
+    """La date en vigueur : le réglage s'il est posé, le défaut du code sinon."""
+    import os
+
+    brut = (os.environ.get(ENV_ORIGINE_REFUS_LE) or "").strip()
+    if not brut:
+        return ORIGINE_REFUS_LE
+    try:
+        return _date.fromisoformat(brut)
+    except ValueError:
+        raise ValueError(
+            f"{ENV_ORIGINE_REFUS_LE}={brut!r} n'est pas une date `YYYY-MM-DD`. "
+            "Ce réglage décide à la fois de ce qui est ANNONCÉ et de ce qui est "
+            "REFUSÉ : le lire de travers ferait promettre une échéance que rien "
+            "n'applique.") from None
+
+
+def date_refus_fr() -> str:
+    """La date en vigueur, telle qu'on l'écrit dans un texte servi."""
+    return _en_francais(date_refus())
+
+
+def description_parametre_origine(en: bool = False) -> str:
+    """Ce que les DEUX faces disent du paramètre, dans leur description servie.
+
+    ⚠️ **Une capacité qu'aucun texte ne nomme n'existe pas pour un agent** — il ne la
+    découvrira pas, il retombera sur la manœuvre qu'on cherche à supprimer. C'est
+    exactement ce qui s'est passé sur l'autre verrou (#658/#668) : le refus était exact,
+    la sortie n'était écrite nulle part, et deux agents ont réinventé « lever, écrire,
+    remettre ».
+
+    ⚠️ Une seule phrase pour les deux faces, dérivée comme le reste : la face REST et la
+    face MCP décriraient sinon le même paramètre en deux termes, et l'écart se lirait
+    comme deux paramètres différents.
+
+    Évaluée à l'appel, pas figée à l'import : la date peut être déplacée par le réglage
+    et la description doit dire celle qui refuse.
+
+    `en` = la face MCP, dont les descriptions d'outils sont en anglais. MÊME fonction
+    et non deux textes indépendants : le nom du paramètre et la date sortent d'une
+    seule source, et c'est sur ces deux-là qu'un écart se paierait — une description
+    qui nommerait un autre paramètre, ou une autre date, que celle qui refuse.
+
+    ⚠️ La face MCP ne peut pas COMPOSER sa description : `@mcp.tool()` lit la
+    docstring littérale du handler, et la remplacer par `description=` emporterait
+    aussi les descriptions d'arguments. Le texte anglais y est donc RECOPIÉ, et un
+    banc exige qu'il soit celui-ci, mot pour mot — la copie est surveillée, faute de
+    pouvoir être évitée."""
+    if en:
+        return (f"`{PARAMETRE_ORIGINE}=true` states that this call sets the "
+                f"`origine` layer (the value at the START, at import time) "
+                f"knowingly. Without it, writing an origin is refused from "
+                f"{date_refus()} on — write the value alone instead: the origin is "
+                f"kept, and the platform sets it when it is missing. There is "
+                f"nobody to ask: the parameter is enough, and it applies to this "
+                f"call only.")
+    return (f"`{PARAMETRE_ORIGINE}=true` déclare que cet appel pose la couche "
+            f"`origine` (la valeur du DÉPART, à l'import) en le sachant. Sans lui, une "
+            f"écriture d'origine est refusée à partir du {date_refus_fr()} — écrivez "
+            f"alors la valeur seule, l'origine est conservée et posée par la plateforme "
+            f"quand elle manque. Rien à demander à personne : le paramètre suffit, et "
+            f"il ne vaut que pour cet appel.")
+
+
+def _en_francais(quand: "_date") -> str:
+    """La date telle qu'une personne la lit. DÉRIVÉE de la date qui refuse — un texte
+    saisi à côté d'elle finirait par annoncer un autre jour que celui qui coupe."""
+    jour = "1er" if quand.day == 1 else str(quand.day)
+    return f"{jour} {_MOIS_FR[quand.month - 1]} {quand.year}"
+
+
+def refus_arme(aujourdhui: Optional["_date"] = None) -> bool:
+    """Le refus est-il tombé ? — `aujourdhui` en UTC, pas au fuseau du process : la
+    bascule doit tomber au même instant sur toutes les box, et le fuseau d'une machine
+    n'est pas un fait de produit."""
+    jour = aujourdhui or _datetime.now(_timezone.utc).date()
+    return jour >= date_refus()
+
+
+def _les_deux_gestes(maintenant: bool = False) -> str:
+    """Les deux issues, côte à côte — le CORPS que l'avertissement et le refus
+    partagent.
+
+    ⚠️ Partagé, pas recopié : le refus doit dire exactement ce que l'avertissement
+    disait, sinon celui qui s'est préparé pendant le préavis découvre au moment du
+    refus qu'on lui demandait autre chose.
+
+    ⚠️ **Les DEUX, toujours.** Celui qui n'a pas besoin d'écrire l'origine ne doit pas
+    ajouter un paramètre pour rien, et celui qui en a besoin ne doit pas réécrire son
+    import. Un texte qui ne dirait qu'une des deux issues ferait bouger des appels qui
+    n'ont rien à changer.
+
+    ⚠️ **Et le chemin de l'UPLOAD est nommé**, parce que c'est là que le conseil « ajoutez
+    le paramètre à cet appel » est impossible à suivre : un import par URL signée pousse
+    des octets, il ne passe aucun paramètre. Lui dire seulement où le paramètre va sur un
+    appel MCP, c'est l'envoyer chercher une manœuvre — il faut qu'il lise, là où il est,
+    que sa déclaration se fait au moment où l'URL est créée."""
+    quand = ", dès maintenant" if maintenant else ""
+    return (
+        f"Deux gestes, l'un ou l'autre{quand} : si vous n'avez pas besoin d'écrire "
+        "l'origine, écrivez la valeur seule (l'origine est conservée, et posée par la "
+        "plateforme quand elle manque) ; si votre import doit vraiment la poser, "
+        f"ajoutez `{PARAMETRE_ORIGINE}: true` à cet appel — ou, si vous chargez un "
+        f"fichier par URL signée, à l'appel qui a CRÉÉ l'URL (`oto_upload_url`), le PUT "
+        "ne portant aucun paramètre. Rien à demander à personne : ce paramètre déclare "
+        "que vous savez ce que vous écrivez, et il suffit.")
 
 
 def avertissement_origine(colonnes: list) -> str:
-    """La phrase servie à qui pose une origine sans le déclarer.
+    """La phrase servie à qui pose une origine sans le déclarer, AVANT la date.
 
     ⚠️ Elle VOUVOIE et nomme le geste exact : c'est une personne qui décidera d'agir
     dessus, et un avertissement qui ne dit pas quoi faire à la place ne fait que gêner.
@@ -680,27 +802,32 @@ def avertissement_origine(colonnes: list) -> str:
     ⚠️ **Elle est la SEULE annonce.** Décision d'Alexis (05/09/2026) : aucun client ne
     sera prévenu par un envoi. Personne ne recevra de courriel, personne ne lira de note
     de version — ce texte-ci, répété à chaque écriture, est tout ce que l'écrivain aura.
-    D'où le soin : il dit les DEUX chemins (ne plus écrire l'origine, ou la déclarer),
-    et il nomme le paramètre exact plutôt que d'annoncer une démarche.
 
-    ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
-    passe encore. Ce premier temps est aussi l'INSTRUMENT — le journal d'appels ne porte
-    pas les couches (clés de premier niveau seulement, arguments tronqués), donc seuls
-    les écrivains peuvent nous dire combien ils sont."""
-    import os
-
+    ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2). Ce premier temps est
+    aussi l'INSTRUMENT — le journal d'appels ne porte pas les couches (clés de premier
+    niveau seulement, arguments tronqués), donc seuls les écrivains peuvent nous dire
+    combien ils sont."""
     quoi = ", ".join(f"`{c}`" for c in colonnes)
-    quand = (os.environ.get(ENV_ORIGINE_REFUS_LE) or "").strip()
-    echeance = (f"à partir du {quand}" if quand else "prochainement")
     return (
         f"Cette écriture pose la couche `origine` de {quoi}. L'origine est la valeur du "
-        f"départ, à l'import : la poser SANS LE DIRE sera refusé {echeance}. Écrire "
-        "l'origine reste possible — ce qui change, c'est qu'il faudra le déclarer. Deux "
-        "gestes, l'un ou l'autre, dès maintenant : si vous n'avez pas besoin de "
-        "l'écrire, écrivez la valeur seule (l'origine est conservée, et posée par la "
-        "plateforme quand elle manque) ; si votre import doit vraiment la poser, ajoutez "
-        f"`{PARAMETRE_ORIGINE}: true` à cet appel. Rien à demander à personne : ce "
-        "paramètre déclare que vous savez ce que vous écrivez, et il suffit.")
+        f"départ, à l'import : la poser SANS LE DIRE sera refusé à partir du "
+        f"{_en_francais(date_refus())}. Écrire l'origine reste possible — ce qui change, "
+        f"c'est qu'il faudra le déclarer. {_les_deux_gestes(maintenant=True)}")
+
+
+def refus_origine(colonnes: list) -> str:
+    """Le refus, une fois la date passée. MÊME corps que l'avertissement.
+
+    ⚠️ Il ne renvoie vers personne, et c'est le fond de la décision : il n'y a pas de
+    droit à obtenir, donc pas de tiers à qui écrire. Un refus qui enverrait demander
+    quelque chose ferait attendre une réponse qui ne viendra jamais — et, comme sur
+    l'autre verrou de la plateforme (#668), enverrait chercher une manœuvre."""
+    quoi = ", ".join(f"`{c}`" for c in colonnes)
+    return (
+        f"Cette écriture pose la couche `origine` de {quoi} sans la déclarer — rien n'a "
+        f"été écrit. L'origine est la valeur du départ, à l'import : depuis le "
+        f"{_en_francais(date_refus())}, la poser exige de le dire. Écrire l'origine "
+        f"reste possible. {_les_deux_gestes()}")
 
 
 def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list[str]:

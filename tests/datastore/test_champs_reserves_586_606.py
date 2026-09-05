@@ -134,7 +134,8 @@ def test_le_refus_vaut_a_la_CREATION(banc):
     st, etat = banc
     with pytest.raises(RowValidationError, match="raison_sociale.origine"):
         st.append_row("viviers", {"siren": "389256712",
-                                  "raison_sociale": {"valeur": "X", "origine": "moi"}})
+                                  "raison_sociale": {"valeur": "X", "origine": "moi"}},
+                      origine_override=True)
     assert etat["creees"] == []
 
 
@@ -163,7 +164,8 @@ def test_une_couche_deja_ecrite_par_un_agent_reste_lue_telle_quelle(banc):
 def test_hors_declaration_l_origine_s_ecrit_comme_avant(banc):
     """Le défaut ne bouge pas : sur `libre`, l'agent pose et efface l'origine."""
     st, etat = banc
-    st.update_row("viviers", "r1", {"libre": {"valeur": "x", "origine": "moi"}})
+    st.update_row("viviers", "r1", {"libre": {"valeur": "x", "origine": "moi"}},
+                  origine_override=True)
     assert etat["lignes"]["r1"]["libre"] == {"valeur": "x", "origine": "moi"}
 
 
@@ -188,7 +190,8 @@ def test_les_couches_d_une_colonne_readonly_restent_OUVERTES(banc):
     n'est pas posée par le système — restent à l'appelant."""
     st, etat = banc
     st.update_row("viviers", "r1", {"adresse": {"comment": "registre — 2 rue B",
-                                                "link": "https://x", "origine": "fichier"}})
+                                                "link": "https://x", "origine": "fichier"}},
+                  origine_override=True)
     assert etat["lignes"]["r1"]["adresse"] == {"valeur": "1 rue A", "origine": "fichier",
                                               "comment": "registre — 2 rue B",
                                               "link": "https://x"}
@@ -202,7 +205,8 @@ def test_readonly_ET_origine_systeme_se_combinent(banc):
     with pytest.raises(RowValidationError, match="`naf`"):
         st.update_row("viviers", "r1", {"naf": "70.10Z"})
     with pytest.raises(RowValidationError, match="naf.origine"):
-        st.update_row("viviers", "r1", {"naf": {"origine": "moi"}})
+        st.update_row("viviers", "r1", {"naf": {"origine": "moi"}},
+                      origine_override=True)
     st.update_row("viviers", "r1", {"naf": {"comment": "registre — 70.10Z"}})
     assert etat["lignes"]["r1"]["naf"] == {"valeur": "62.01Z",
                                           "comment": "registre — 70.10Z"}

@@ -284,7 +284,8 @@ def test_une_couche_ne_sort_JAMAIS_en_hors_schema(table):
     format normal, jamais une colonne inventée."""
     st, ns, ns_id, rid = table
     st.update_row(ns, rid, {"raison_sociale": {"valeur": "A", "comment": "c",
-                                               "origine": "o", "link": "https://x.fr"}})
+                                               "origine": "o", "link": "https://x.fr"}},
+                  origine_override=True)
     assert _releve(st) == []
 
 

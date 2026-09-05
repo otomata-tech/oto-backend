@@ -722,6 +722,21 @@ de fin de passage détectait après coup.
   PostgreSQL (`test_champs_reserves_live.py::test_terrain_*`).
   `details.expected_column = "<colonne>.comment"` pour la face REST (#545) ; le code ne
   bouge pas (`row_invalid` / INVALID_PARAMS), c'est le texte qui enseigne.
+- **⚠️ Écrire l'origine se DÉCLARE, à partir du 1er octobre 2026 (oto#70 lot 2).** Ce
+  qui est refusé n'est pas l'écriture, c'est le **silence** : `origine_override=true`
+  sur l'appel (les deux faces) et elle passe ; sans lui, elle est refusée par un message
+  qui nomme les deux issues — écrire la valeur seule, ou déclarer. **Rien à demander à
+  personne**, aucun droit à provisionner : le paramètre engage celui qui l'envoie, et
+  c'est tout (décision d'Alexis, 05/09/2026 : « c'est notre modèle d'agent experience »).
+  La date vit dans le code (`ORIGINE_REFUS_LE`) pour que ce qui est annoncé soit ce qui
+  refuse, et le réglage `OTO_ORIGINE_REFUS_LE` la déplace sans déploiement. **Avant cette
+  date**, l'écriture passe et la réponse porte `origine_warning` — la seule annonce faite
+  aux écrivains, aucun envoi ne partira. **Un relevé** (`origine_ecritures`, une ligne
+  par écrivain × tableau × colonne) compte les deux populations séparément : le journal
+  d'appels ne peut pas dire qui écrit une COUCHE (il ne garde que les clés de premier
+  niveau et tronque les arguments), et les compteurs déclaré/non-déclaré sont ce qui
+  distinguera, après la date, l'écrivain qui s'est adapté de celui qui a disparu.
+
 - **`origine: "system"` — la copie de secours posée par la plateforme.** Sur 41 fiches
   portant une couche `<champ>.origine` censée conserver la valeur remise, **une** l'a
   réécrite avec la valeur nouvelle (un homonyme adopté comme raison sociale, recopié

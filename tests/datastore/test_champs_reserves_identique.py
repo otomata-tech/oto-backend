@@ -80,25 +80,29 @@ def test_ecrire_l_origine_EGALE_a_la_valeur_en_place_est_acceptee(banc):
     système poserait. Accepté ; rien de perdu, rien de refusé."""
     st, etat = banc
     st.update_row("viviers", "r1", {"raison_sociale": {"comment": "c"}})
-    st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME", "origine": "ACME"}})
+    st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME", "origine": "ACME"}},
+                  origine_override=True)
     assert etat["lignes"]["r1"]["raison_sociale"] == {"valeur": "ACME", "origine": "ACME",
                                                      "comment": "c"}
     # Puis l'agent modifie en réémettant l'origine STOCKÉE : accepté, jamais réécrite.
     st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME HOLDING",
-                                                       "origine": "ACME"}})
+                                                       "origine": "ACME"}},
+                  origine_override=True)
     assert etat["lignes"]["r1"]["raison_sociale"] == {"valeur": "ACME HOLDING",
                                                      "origine": "ACME"}
     # Une origine DIFFÉRENTE reste refusée, avec le message existant.
     with pytest.raises(RowValidationError, match="raison_sociale.origine"):
         st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME GROUP",
-                                                           "origine": "ACME GROUP"}})
+                                                           "origine": "ACME GROUP"}},
+                      origine_override=True)
     assert etat["lignes"]["r1"]["raison_sociale"]["valeur"] == "ACME HOLDING"
 
 
 def test_a_la_creation_une_origine_egale_a_la_valeur_est_acceptee(banc):
     st, etat = banc
     st.append_row("viviers", {"siren": "389256712",
-                              "raison_sociale": {"valeur": "X", "origine": "X"}})
+                              "raison_sociale": {"valeur": "X", "origine": "X"}},
+                  origine_override=True)
     assert etat["creees"][0]["raison_sociale"] == {"valeur": "X", "origine": "X"}
 
 
@@ -113,7 +117,8 @@ def test_une_valeur_nue_identique_PRESERVE_les_couches(banc):
     toute colonne, readonly ou non — ici `libre`, sur les trois chemins."""
     st, etat = banc
     st.update_row("viviers", "r1", {"libre": {"valeur": "x", "comment": "c",
-                                              "link": "https://l", "origine": "o"}})
+                                              "link": "https://l", "origine": "o"}},
+                  origine_override=True)
     couches = {"valeur": "x", "comment": "c", "link": "https://l", "origine": "o"}
     st.update_row("viviers", "r1", {"libre": "x"})
     assert etat["lignes"]["r1"]["libre"] == couches

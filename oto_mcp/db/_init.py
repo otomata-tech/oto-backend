@@ -1297,6 +1297,15 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS claimed_run TEXT")
     conn.execute("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS claims INTEGER NOT NULL DEFAULT 0")
     conn.execute("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS abandon_reason TEXT")
+    # oto#70 lot 2, barreau 2 : la trace de l'écriture DÉCLARÉE. La table est née au
+    # barreau 1 et vit déjà en base — `CREATE TABLE IF NOT EXISTS` ne la rattraperait
+    # pas. Ce sont deux compteurs, pas une clé de plus : après le 1er octobre, ils
+    # séparent l'écrivain qui s'est ADAPTÉ de celui qui a DISPARU, que les écritures
+    # non déclarées confondent (elles tombent à zéro dans les deux cas).
+    conn.execute("ALTER TABLE origine_ecritures "
+                 "ADD COLUMN IF NOT EXISTS ecritures_declarees BIGINT NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE origine_ecritures "
+                 "ADD COLUMN IF NOT EXISTS derniere_declaree_at TIMESTAMPTZ")
     # ⚠️ **Pas d'index de bail ici**, et c'est délibéré : le chemin de réservation
     # lit encore `datastore_rows`. Un index sur un prédicat que personne
     # n'interroge est un coût d'écriture pur, et sa forme utile dépend d'un

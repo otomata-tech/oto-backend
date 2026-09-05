@@ -158,7 +158,7 @@ def test_parse_rows_rejects_bad_ndjson():
 def test_materialize_datastore_batch(monkeypatch):
     seen = {}
     class FakeStore:
-        def _write_rows_to_ns(self, ns_id, rows, *, key):
+        def _write_rows_to_ns(self, ns_id, rows, *, key, origine_override=False):
             seen["ns_id"], seen["rows"], seen["key"] = ns_id, rows, key
             return {"inserted": 2, "updated": 0, "count": 2, "key": key, "ids": ["r1", "r2"]}
 
@@ -186,8 +186,13 @@ def test_mint_datastore_seals_resolved_ns_id(monkeypatch):
     monkeypatch.setattr(ut, "check_target_access", lambda sub, target: None)
     out = U._upload_url(CTX, U.UploadUrlInput(target="datastore", namespace="contacts"))
     p = ut.verify(out["url"].rsplit("/", 1)[1])
+    # ⚠️ `origine_override` fait partie de ce que le jeton SCELLE (oto#70 lot 2) : la
+    # déclaration se prend au mint, par celui qui prépare l'import, et ne peut donc pas
+    # être ajoutée par qui livre les octets. L'égalité stricte est ce qui le grave — une
+    # clé qui sortirait du sceau se lirait ici.
     assert p["target"] == {"kind": "datastore", "ns_id": 42, "namespace": "contacts",
-                           "format": "ndjson", "key": "email"}
+                           "format": "ndjson", "key": "email",
+                           "origine_override": False}
 
 
 def test_target_label():

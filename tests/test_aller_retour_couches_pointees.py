@@ -109,7 +109,8 @@ def test_aller_retour_relire_puis_reemettre_rend_la_ligne_IDENTIQUE(table):
     st.append_row(ns, {"siren": "552032534",
                        "site_web": {"valeur": "https://a.fr",
                                     "origine": "registre",
-                                    "comment": "site vérifié le 12/07"}})
+                                    "comment": "site vérifié le 12/07"}},
+                  origine_override=True)
     lu = st.list_rows(ns)[0]
     assert lu["site_web"] == "https://a.fr", "le nom nu rend la VALEUR"
     assert lu["site_web.comment"] == "site vérifié le 12/07", "les couches, à plat"
@@ -194,7 +195,8 @@ def test_annotation_seule_sur_une_colonne_DU_SCHEMA(table):
     pas encore renseignée. Rien dans le geste ni dans la ligne ne la porte."""
     st, ns, ns_id = table
     row = st.append_row(ns, {"siren": "1"})
-    st.update_row(ns, row["_id"], {"site_web.origine": "registre"})
+    st.update_row(ns, row["_id"], {"site_web.origine": "registre"},
+                  origine_override=True)
     assert st.list_rows(ns)[0]["site_web.origine"] == "registre"
     assert "site_web.origine" not in _colonnes(ns_id)
 

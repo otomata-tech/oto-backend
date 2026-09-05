@@ -81,15 +81,15 @@ def test_writing_an_origin_over_a_plain_value_keeps_it(store):
     """LE défaut de #326, dans sa forme exacte : le rattrapage de socle."""
     s, db = store
     s.update_row("t", "r1", {"naf": _NAF})
-    s.update_row("t", "r1", {"naf": {"origine": _NAF}})
+    s.update_row("t", "r1", {"naf": {"origine": _NAF}}, origine_override=True)
     assert _lu(db) == _NAF, "la valeur a été effacée par une écriture d'origine"
     assert _couche(db, "origine") == _NAF
 
 
 def test_writing_an_origin_over_a_layered_value_keeps_it(store):
     s, db = store
-    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "vieux"}})
-    s.update_row("t", "r1", {"naf": {"origine": "neuf"}})
+    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "vieux"}}, origine_override=True)
+    s.update_row("t", "r1", {"naf": {"origine": "neuf"}}, origine_override=True)
     assert _lu(db) == "X"
     assert _couche(db, "origine") == "neuf"
 
@@ -99,7 +99,7 @@ def test_an_origin_write_leaves_the_other_layers_alone(store):
     s, db = store
     s.update_row("t", "r1", {"naf": {"valeur": "X", "comment": "registre",
                                      "link": "https://x"}})
-    s.update_row("t", "r1", {"naf": {"origine": "socle"}})
+    s.update_row("t", "r1", {"naf": {"origine": "socle"}}, origine_override=True)
     assert (_lu(db), _couche(db, "comment"), _couche(db, "link")) == (
         "X", "registre", "https://x")
 
@@ -110,7 +110,7 @@ def test_writing_a_value_over_an_origin_only_column_keeps_the_origin(store):
     """L'acquis de #322, rejoué dans l'autre sens — c'est le fait que les deux
     directions doivent tenir qui rend le test nécessaire, pas la nouveauté du cas."""
     s, db = store
-    s.update_row("t", "r1", {"naf": {"origine": "socle"}})
+    s.update_row("t", "r1", {"naf": {"origine": "socle"}}, origine_override=True)
     assert _lu(db) is None, "aucune valeur n'a encore été posée"
     s.update_row("t", "r1", {"naf": "renseigné par agent"})
     assert _lu(db) == "renseigné par agent"
@@ -121,10 +121,10 @@ def test_both_orders_reach_the_same_state(store):
     """La propriété, dite en une phrase : l'ORDRE ne doit rien changer à l'état."""
     s, db = store
     s.update_row("t", "r1", {"naf": "X"})
-    s.update_row("t", "r1", {"naf": {"origine": "socle"}})
+    s.update_row("t", "r1", {"naf": {"origine": "socle"}}, origine_override=True)
     apres_a = dict(db.rows["r1"]["data"])
     db.rows["r1"]["data"] = {}
-    s.update_row("t", "r1", {"naf": {"origine": "socle"}})
+    s.update_row("t", "r1", {"naf": {"origine": "socle"}}, origine_override=True)
     s.update_row("t", "r1", {"naf": "X"})
     assert dict(db.rows["r1"]["data"]) == apres_a
 
@@ -136,7 +136,7 @@ def test_a_null_erases_the_value_and_leaves_the_origin(store):
     visée, donc pas touchée — sinon vider une case perdrait la trace du départ, ce
     qu'aucun agent ne verrait venir."""
     s, db = store
-    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}})
+    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}}, origine_override=True)
     s.update_row("t", "r1", {"naf": None})
     assert _lu(db) is None
     assert _couche(db, "origine") == "socle"
@@ -146,8 +146,8 @@ def test_erasing_the_origin_is_asked_for(store):
     """Et quand il ne reste que la valeur, la colonne redevient PLATE : une ligne sans
     couches ne doit pas se mettre à porter une enveloppe."""
     s, db = store
-    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}})
-    s.update_row("t", "r1", {"naf": {"origine": None}})
+    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}}, origine_override=True)
+    s.update_row("t", "r1", {"naf": {"origine": None}}, origine_override=True)
     assert _lu(db) == "X"
     assert _couche(db, "origine") is None
     assert _brut(db) == "X", f"enveloppe résiduelle : {_brut(db)!r}"
@@ -155,8 +155,8 @@ def test_erasing_the_origin_is_asked_for(store):
 
 def test_erasing_everything_empties_the_column(store):
     s, db = store
-    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}})
-    s.update_row("t", "r1", {"naf": {"valeur": None, "origine": None}})
+    s.update_row("t", "r1", {"naf": {"valeur": "X", "origine": "socle"}}, origine_override=True)
+    s.update_row("t", "r1", {"naf": {"valeur": None, "origine": None}}, origine_override=True)
     assert _lu(db) is None and _couche(db, "origine") is None
 
 
@@ -177,7 +177,7 @@ def test_a_json_value_that_happens_to_have_an_origin_field_is_refused(store):
 
     s, db = store
     with pytest.raises(RowValidationError) as e:
-        s.update_row("t", "r1", {"naf": {"a": 1, "origine": "x"}})
+        s.update_row("t", "r1", {"naf": {"a": 1, "origine": "x"}}, origine_override=True)
     assert "json" in str(e.value), "le refus PORTE la sortie légitime"
     assert _lu(db) is None, "rien n'est écrit"
 
@@ -189,7 +189,7 @@ def test_a_layer_from_a_newer_version_survives_a_rewrite(store):
     s, db = store
     db.rows["r1"]["data"] = {"naf": {"valeur": "X", "origine": "socle",
                                      "couche_du_futur": "z"}}
-    s.update_row("t", "r1", {"naf": {"origine": "neuf"}})
+    s.update_row("t", "r1", {"naf": {"origine": "neuf"}}, origine_override=True)
     assert _brut(db).get("couche_du_futur") == "z"
 
 

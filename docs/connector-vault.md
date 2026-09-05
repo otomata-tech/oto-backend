@@ -688,15 +688,17 @@ crierait au loup à tort sur un simple throttle passager :
      (qu'il y ait ROTATION du refresh token ou non ; beaucoup de Connected Apps n'en
      imposent pas, et le démarquage ne doit pas attendre un événement qui n'arrivera
      peut-être jamais).
-   - `zoho` : **manque assumé.** Le client oto-core (`oto/tools/zoho/{auth,client}.py`)
-     n'expose AUCUN hook symétrique au `on_refresh` de Salesforce — un refresh réussi
-     y est entièrement interne (cache process-wide), invisible du backend. L'ajouter
-     demanderait de modifier oto-core (nouveau paramètre de callback, tag, bump du
-     pin) : hors de la portée d'un lot backend-only. En attendant, zoho ne se
-     démarque QUE par les points 1 et 2 ci-dessus — moins réactif que les trois
-     autres connecteurs de cette famille, mais jamais faux : un `health_ko` posé par
-     erreur transitoire reste visible plus longtemps, il ne s'efface pas tout seul
-     au hasard d'un appel qui aurait pu être un throttle.
+   - `zoho` : **couvert depuis oto-core v1.116.0.** Le client expose désormais un
+     `on_refresh` symétrique à celui de Salesforce, et le backend le câble sur le
+     démarquage. C'était un manque assumé tant que le refresh réussi restait
+     entièrement interne au client (cache process-wide), donc invisible du backend :
+     le corriger demandait de toucher oto-core, ce qu'un lot backend-only ne pouvait
+     pas faire.
+     ⚠️ Le rappel ne part **jamais sur un succès de cache**, et c'est ce qui en fait
+     une preuve de vie. Le cache Zoho est process-wide et dure une heure : démarquer
+     sur un jeton qu'il a servi repeindrait une ligne en vert sur la foi d'un refresh
+     vieux d'une heure. Il ne part pas non plus sur un refresh en échec — un
+     credential refusé ne doit surtout pas se faire démarquer comme sain.
 
 ## Validation
 

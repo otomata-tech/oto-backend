@@ -43,7 +43,13 @@ class _FakeResponse:
     headers: dict = {}
 
     def json(self):
-        return {}
+        # `access_token`/`expires_in` : forme d'un mint de token OAuth2 réussi
+        # (client-credentials ou refresh) — un client comme Silae qui indexe
+        # `token_data["access_token"]` SANS `.get()` trébucherait sinon sur un
+        # KeyError qui n'a rien à voir avec la lecture de champs que ce banc
+        # vérifie. Purement additif : aucune sonde existante ne lit ces clés,
+        # donc rien d'autre ne change de comportement.
+        return {"access_token": "faux-jeton-de-banc", "expires_in": 3600}
 
     def raise_for_status(self):
         return None
@@ -63,17 +69,7 @@ def _fake_fields(connector: str) -> dict:
 #: Sondes qui ne peuvent PAS passer ce banc pour une raison légitime — déclarée,
 #: jamais silencieuse. Une entrée ici est une exemption ASSUMÉE : elle doit
 #: nommer pourquoi le banc générique ne peut pas la juger.
-EXEMPTS: dict[str, str] = {
-    "silae": (
-        "SilaeClient._get_access_token indexe token_data['access_token'] SANS "
-        ".get() au mint de token — le stub réseau de CE banc renvoie {} pour "
-        "toute réponse 200, donc le KeyError vient du MINT DE TOKEN du client "
-        "oto-core, pas de la lecture des champs de la sonde (vérifié par "
-        "traceback : oto_mcp/tools/silae.py appelle bien fields['client_id']/"
-        "['client_secret']/['subscription_key'], tous présents). "
-        "tests/test_sonde_silae.py couvre la sonde avec un client fictif dédié."
-    ),
-}
+EXEMPTS: dict[str, str] = {}
 
 
 def _registre() -> dict:

@@ -12,6 +12,22 @@ agis sur ton Google Workspace : mails, calendrier, tâches, feuilles de calcul, 
 - « ajoute une tâche `relancer X` pour lundi », « lis l'onglet `leads` de cette sheet »
 - « partage ce dossier Drive en lecture à jane@… »
 
+## limite — l'app oto n'est pas publiée chez Google (décision du 2026-09-05)
+
+l'écran de consentement OAuth reste en mode **Testing**, et c'est un choix : passer en
+*published* avec le scope `gmail.modify` (RESTRICTED chez Google) impose un audit **CASA
+Tier 2**, payant et annuel. deux conséquences, à connaître avant de compter dessus :
+
+- **cent comptes Google au maximum** peuvent autoriser oto. au-delà, la connexion est
+  refusée par Google, pas par nous.
+- **le jeton de rafraîchissement expire au bout de sept jours.** un compte connecté qui
+  ne revient pas dans la semaine devra se reconnecter — ce n'est pas une panne du
+  connecteur, et ça ne se répare pas de notre côté.
+
+la décision se rouvre le jour où quelqu'un doit amener ses propres utilisateurs
+(oto-backend#6). google tasks est *sensible* et non *restricted* : lui n'exigerait
+qu'une vérification, sans audit.
+
 ## note — périmètre de projet (#605, 2026-08-29)
 
 une pièce jointe `{kind: "url"}` de `gmail_compose` est lue côté serveur : sous un projet à `excluded_url_prefixes`, une url correspondante est refusée en nommant le motif (seam `file_source`). détail : `docs/projects.md`.

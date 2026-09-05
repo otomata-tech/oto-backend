@@ -16,10 +16,41 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    ⚠️ `GoCardlessClient.fetch()` NE LÈVE JAMAIS sur un refus HTTP — il rend un
+    dict `{"error", "status_code", "details"}` (choix du client, pour ses
+    boucles de pagination qui doivent pouvoir s'arrêter proprement plutôt que
+    lever au milieu d'une collecte). `list_creditors()` (déjà dans le client —
+    les comptes marchands du token, le plus proche d'une identité chez
+    GoCardless) hérite du même silence : sans lire ce dict et lever soi-même,
+    un token mort répondrait `ok:true` — classe nouvelle, distincte des trois
+    déjà nommées dans l'issue (un CLIENT qui n'échoue jamais par exception,
+    quel que soit le code HTTP amont).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    un token GoCardless (live ou sandbox) porte le périmètre entier du compte.
+    """
+    from oto.tools.gocardless import GoCardlessClient
+
+    infos = GoCardlessClient(api_key=fields["key"]).fetch("creditors")
+    if "error" not in infos:
+        return
+    code = infos.get("status_code")
+    detail = str(infos.get("details") or infos["error"])[:300]
+    if code in (401, 403):
+        raise connector_verify.NonAutorise(f"GoCardless HTTP {code}: {detail}")
+    raise RuntimeError(f"GoCardless: {detail}")
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.gocardless import GoCardlessClient
+
+    connector_verify.register("gocardless", _verify)
 
     def _client() -> GoCardlessClient:
         # Garde d'accès = la résolution du credential : `resolve_api_key` passe par

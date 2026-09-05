@@ -59,10 +59,44 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `POST v1/Dossiers/ListeDossiers` (déjà dans le client — `list_dossiers`),
+    le plus petit appel disponible : Silae n'expose ni `/me` ni solde. Le mint
+    de token (client_id/client_secret) lève NATURELLEMENT
+    (`resp.raise_for_status()`) sur ces deux champs — mais `call()` lui-même NE
+    LÈVE JAMAIS sur un refus HTTP (dict `{"error", "status_code"}`, déjà noté
+    dans le docstring de ce module) : une `subscription_key` fausse ou trop
+    étroite échouerait `list_dossiers()` SANS que le mint de token ne le
+    signale, d'où la lecture explicite ci-dessous.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : la `subscription_key` scope
+    quels dossiers/fonctions sont joignables — une liste VIDE (`[]`) est un
+    état normal (compte tout juste créé), jamais un refus.
+    """
+    from oto.tools.silae import SilaeClient
+
+    infos = SilaeClient(
+        client_id=fields["client_id"], client_secret=fields["client_secret"],
+        subscription_key=fields["subscription_key"],
+    ).list_dossiers()
+    if not (isinstance(infos, dict) and "error" in infos):
+        return
+    code = infos.get("status_code")
+    detail = str(infos.get("details") or infos["error"])[:300]
+    if code in (401, 403):
+        raise connector_verify.NonAutorise(f"Silae HTTP {code}: {detail}")
+    raise RuntimeError(f"Silae: {detail}")
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.silae import SilaeClient
+
+    connector_verify.register("silae", _verify)
 
     def _client() -> SilaeClient:
         creds = access.resolve_credential_fields("silae")

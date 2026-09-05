@@ -14,7 +14,8 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, status_hints
+from ..connectors import verify as connector_verify
 
 
 # Zoho héberge par data center régional ; le self-client ET le refresh token sont
@@ -48,8 +49,35 @@ def _resolve_dc_domains(data_center: Optional[str]) -> tuple[str, str]:
     return _DC_DOMAINS[dc]
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /restapi/v2/orgs` (déjà dans le client — `list_orgs`), le plus petit
+    appel disponible : pas de `/me` séparé chez Zoho Analytics, `list_orgs`
+    liste les organisations Zoho joignables par ce self-client. Le refresh
+    OAuth (`ZohoAnalyticsClient._get_access_token`) valide déjà client_id +
+    client_secret + refresh_token + data_center d'un coup ; l'appel de données
+    lève via `raise_for_upstream` (typé, `UpstreamHTTPError`).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    un self-client Zoho Analytics n'a qu'un scope (Analytics), pas de
+    permission granulaire par workspace au niveau de la sonde.
+    """
+    from oto.tools.zohoanalytics.client import ZohoAnalyticsClient
+
+    status_hints.require_complete("zohoanalytics", fields)
+    api_domain, accounts_url = _resolve_dc_domains(fields.get("data_center"))
+    ZohoAnalyticsClient(
+        client_id=fields.get("client_id"), client_secret=fields.get("client_secret"),
+        refresh_token=fields.get("refresh_token"), org_id=fields.get("org_id"),
+        api_domain=api_domain, accounts_url=accounts_url,
+    ).list_orgs()
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.zohoanalytics.client import ZohoAnalyticsClient
+
+    connector_verify.register("zohoanalytics", _verify)
 
     def _client() -> ZohoAnalyticsClient:
         creds = access.resolve_credential_fields("zohoanalytics")

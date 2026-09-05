@@ -63,7 +63,17 @@ def _fake_fields(connector: str) -> dict:
 #: Sondes qui ne peuvent PAS passer ce banc pour une raison légitime — déclarée,
 #: jamais silencieuse. Une entrée ici est une exemption ASSUMÉE : elle doit
 #: nommer pourquoi le banc générique ne peut pas la juger.
-EXEMPTS: dict[str, str] = {}
+EXEMPTS: dict[str, str] = {
+    "silae": (
+        "SilaeClient._get_access_token indexe token_data['access_token'] SANS "
+        ".get() au mint de token — le stub réseau de CE banc renvoie {} pour "
+        "toute réponse 200, donc le KeyError vient du MINT DE TOKEN du client "
+        "oto-core, pas de la lecture des champs de la sonde (vérifié par "
+        "traceback : oto_mcp/tools/silae.py appelle bien fields['client_id']/"
+        "['client_secret']/['subscription_key'], tous présents). "
+        "tests/test_sonde_silae.py couvre la sonde avec un client fictif dédié."
+    ),
+}
 
 
 def _registre() -> dict:

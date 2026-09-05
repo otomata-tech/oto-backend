@@ -79,12 +79,21 @@ glissé dans un gabarit à moitié rempli détruit une valeur en place.
 Déclaré au schéma (`{"key": "adresse", "origine": "system"}`), ce format fait garder la
 valeur d'avant dans `adresse.origine`. Le filet est plus étroit qu'il n'y paraît :
 
-- la capture a lieu **une seule fois**, à la **première écriture qui change la valeur
-  après la déclaration** du format — pas à la pose du schéma, pas à la création de la
-  ligne, jamais réécrite ensuite ; une valeur identique ne capture rien ;
-- un format déclaré **tard** capture ce que le dernier écrivain a laissé — possiblement
-  la valeur d'un autre agent, présentée sous le nom `origine` ;
-- un champ vide au départ reçoit un marqueur vide, que la lecture ne sert pas ;
+**L'origine est la valeur posée AU DÉPART, à l'import** — pas celle qui traînait au
+moment où le format a été déclaré.
+
+- sur une ligne créée **après** la déclaration, la capture a lieu **une seule fois**, à
+  la première écriture qui change la valeur — jamais réécrite ensuite, et une valeur
+  identique ne capture rien ;
+- sur une ligne qui existait **déjà** quand le format a été déclaré, l'origine vaut
+  `(origine inconnue)`. ⚠️ **Ce n'est pas une valeur, c'est l'aveu qu'il n'y en a pas** :
+  personne ne peut dire si un agent avait écrit dans cette cellule depuis sa création.
+  Avant, on y mettait la valeur courante — donc, sur une ligne déjà travaillée, **celle
+  d'un agent**, et la vraie valeur d'import était perdue sans un mot. Ne traite jamais ce
+  marqueur comme une donnée métier ;
+- un champ **vide** au départ reçoit un marqueur vide au premier écrasement, que la
+  lecture ne sert pas : « vide à l'origine » et « jamais modifié » se lisent pareil, et
+  c'est juste — dans les deux cas il n'y a rien à rétablir ;
 - une colonne **sans** ce format ne garde rien : écraser est définitif ;
 - écrire soi-même une autre `origine` sur une telle colonne est **refusé** (création
   comprise) ; la valeur que le système poserait est acceptée (no-op).

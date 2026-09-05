@@ -18,7 +18,7 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from ..datastore.schema import LAYER_KEYS, VALUE_LAYER
+from ..datastore.schema import LAYER_KEYS, ORIGINE_INCONNUE, VALUE_LAYER
 # Chemins et feuilles : extraits dans `paths` (#325), ré-exportés ici pour que la
 # surface plate `db.<fn>` et tous les appelants restent inchangés.
 from .paths import (  # noqa: F401
@@ -164,6 +164,12 @@ def _bkey_index_name(ns_id: int) -> str:
     return f"ds_bkey_{int(ns_id)}"
 
 
+#: Le marqueur, tel qu'il part au SQL. ⚠️ **Brut, pas sérialisé** :
+#: `jsonb_build_object('origine', 'texte')` convertit lui-même un `text` en chaîne JSON.
+#: Lui passer `json.dumps(...)` produisait `"\"(origine inconnue)\""` — les guillemets
+#: DANS la valeur. Attrapé par le banc, pas par la relecture.
+
+
 def datastore_capturer_origine(ns_id: int, champs: list[str]) -> int:
     """Pose `<champ>.origine` = la valeur COURANTE sur les lignes existantes, pour
     les colonnes qui viennent de gagner le format `origine: "system"`.
@@ -198,23 +204,34 @@ def datastore_capturer_origine(ns_id: int, champs: list[str]) -> int:
                 # On remplace la COLONNE entière, pas une sous-clé : `jsonb_set`
                 # ne sait pas créer un chemin dans une valeur plate (une chaîne
                 # reste une chaîne, et la mise à jour ne fait rien — silencieusement).
+                # ⚠️ On pose le marqueur « origine inconnue », PAS la valeur courante
+                # (oto#70). Sur une ligne déjà travaillée, cette valeur est celle d'un
+                # AGENT : la présenter comme origine est exactement ce que la définition
+                # interdit — « l'origine est la valeur posée au départ, à l'import ».
+                # v1.207.0 la capturait, et la vraie valeur d'import était perdue sans
+                # que rien ne le dise (S1) ; sur une colonne vide à l'import, l'origine
+                # devenait même indiscernable d'un import de la valeur d'agent (S2).
+                #
+                # ⚠️ Et on ne cherche PAS à distinguer « ligne jamais retouchée » :
+                # `datastore_insert_row` accepte `created_at`/`updated_at` en override,
+                # donc les comparer serait une heuristique. Une sémantique de donnée ne
+                # se fonde pas sur une heuristique — on dit qu'on ne sait pas.
                 q = _sql.SQL(
                     "UPDATE datastore_rows SET data = jsonb_set(data, {chemin}, "
                     "  CASE WHEN jsonb_typeof(data->{k}) = 'object' "
-                    # déjà enveloppée : on AJOUTE l'origine à côté des autres
-                    # couches, en reprenant sa `valeur` courante
-                    "       THEN (data->{k}) || jsonb_build_object("
-                    "              'origine', COALESCE(data->{k}->'valeur', 'null'::jsonb)) "
-                    # plate : on l'enveloppe, la valeur devenant aussi l'origine
+                    # déjà enveloppée : on AJOUTE l'origine à côté des autres couches
+                    "       THEN (data->{k}) || jsonb_build_object('origine', {inconnue}) "
+                    # plate : on l'enveloppe, sa valeur reste la valeur
                     "       ELSE jsonb_build_object('valeur', data->{k}, "
-                    "                               'origine', data->{k}) END, true) "
+                    "                               'origine', {inconnue}) END, true) "
                     "WHERE ns_id = %s "
                     # existe, et n'a pas déjà une origine
                     "  AND data ? {k} "
                     "  AND NOT (jsonb_typeof(data->{k}) = 'object' "
                     "           AND data->{k} ? 'origine')"
                 ).format(k=_sql.Literal(str(champ)),
-                         chemin=_sql.Literal("{" + str(champ) + "}"))
+                         chemin=_sql.Literal("{" + str(champ) + "}"),
+                         inconnue=_sql.Literal(ORIGINE_INCONNUE))
                 touchees += conn.execute(q, (ns_id,)).rowcount
     return touchees
 

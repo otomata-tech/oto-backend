@@ -133,8 +133,20 @@ class NamespaceForbidden(Exception):
     pass
 
 
-class RowLocked(Exception):
+class RowLocked(ValueError):
     """Écriture refusée sur une ligne sous bail ACTIF d'un autre (#317).
+
+    ⚠️ **Dérive de `ValueError` depuis le 05/09/2026, et c'est un correctif.** Elle
+    héritait d'`Exception` : aucune face REST ne l'attrapait, donc ce refus JUSTE
+    sortait en « 500, corps vide » — l'appelant ne savait ni qu'il s'agissait d'un
+    bail, ni qui le tenait, ni quoi faire. La face MCP, elle, traduisait correctement
+    depuis toujours. Une session a cru à une perte de données à cause de ça, et il a
+    fallu une épreuve complète pour établir qu'il ne s'était rien passé.
+
+    ⚠️ **Le code le SAVAIT** : la docstring de `BusinessKeyRequired`, écrite avant,
+    nomme ce cas — « sans cet héritage, le refus ressortirait en Erreur interne du
+    serveur — *le défaut déjà payé sur RowLocked* ». Un défaut connu, nommé à côté, et
+    laissé en place. Le savoir n'a jamais refusé personne.
 
     Le bail protégeait l'ATTRIBUTION, pas la donnée : deux agents ne prenaient pas la
     même ligne, mais rien n'empêchait le second d'écrire dessus. « Verrou natif » veut
@@ -145,20 +157,28 @@ class RowLocked(Exception):
     remplace un silence par un mur."""
 
     def __init__(self, row_id: str, claimed_by: Any = None, claimed_until: Any = None,
-                 claimed_run: Any = None):
+                 claimed_run: Any = None, row: Optional[str] = None):
         self.row_id = row_id
         self.claimed_by = claimed_by
         self.claimed_until = claimed_until
+        # La désignation de la ligne dans un LOT (#412), comme `BusinessKeyRequired` :
+        # le batch reconstruit le même refus en lui ajoutant OÙ il s'est arrêté et
+        # combien de lignes étaient déjà écrites. ⚠️ Sans ça, le lot le ré-emballait
+        # en `ValueError` nue et le refus PERDAIT sa classe — donc son code 409 et son
+        # message de bail, pour redevenir un « entrée invalide » qui n'apprend rien.
+        self.row = row
         # Le RUN qui tient le bail (#547). Porté sur l'exception — jamais dans le
         # message : le publier ferait du verrou une étiquette, puisqu'un `_run_id=`
         # n'autorise rien, il NOMME. La surface s'en sert pour un seul test, qui
         # n'apprend rien à un tiers : « ce run est-il le tien ? » (cf.
         # `tools/datastore._omitted_run_hint`).
         self.claimed_run = claimed_run
-        super().__init__(
+        motif = (
             f"ligne « {row_id} » réservée par « {claimed_by} » jusqu'à "
             f"{claimed_until} — écriture refusée. Si le travail est terminé ou "
             f"l'agent abandonné, libère la ligne (data_release), puis écris.")
+        self.motif = motif
+        super().__init__(f"{row} : {motif}" if row else motif)
 
 
 class ClaimedRefUnresolved(ValueError):

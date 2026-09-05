@@ -1755,7 +1755,23 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
             errors.append("lifecycle.states doit être une liste non vide")
         else:
             known = {str(s) for s in states}
-            for frm, tos in (lc.get("transitions") or {}).items():
+        # ⚠️ La FORME de `transitions` se juge AVANT de la parcourir. Elle ne le
+        # faisait pas : une chaîne, une liste ou un nombre y produisait un
+        # `AttributeError: 'str' object has no attribute 'items'` — une erreur
+        # TECHNIQUE, qui n'est pas une `ValueError`, donc que la face REST ne traduit
+        # pas : l'appelant recevait un 500 au corps vide sur un schéma qu'il venait
+        # d'écrire, et pouvait croire la pose réussie. Même famille que `RowLocked`
+        # (#317) : un refus juste qui ne sort pas comme un refus.
+        transitions = lc.get("transitions")
+        if transitions is not None and not isinstance(transitions, dict):
+            errors.append(
+                f"lifecycle.transitions doit être un objet "
+                f"{{\"état\": [\"états atteignables\"]}} — reçu "
+                f"{type(transitions).__name__}. Chaque clé est un état de départ, "
+                f"chaque valeur la liste de ceux qu'il peut atteindre.")
+            transitions = None
+        if isinstance(states, list) and states:
+            for frm, tos in (transitions or {}).items():
                 if str(frm) not in known:
                     errors.append(f"lifecycle.transitions: état source inconnu {frm!r}")
                 for to in tos if isinstance(tos, list) else [tos]:

@@ -188,7 +188,17 @@ def writing_as(worker: Optional[str]):
 
     Sert le cas « le titulaire du bail écrit hors de son run » : sans lui, seul le
     run identifie le titulaire, et un agent qui reprend son travail dans une autre
-    session se verrait refuser sa propre ligne."""
+    session se verrait refuser sa propre ligne.
+
+    ⚠️ **AUCUNE surface ne l'appelle aujourd'hui** (vérifié le 05/09/2026 : zéro
+    appelant dans `oto_mcp/`, trois fichiers de tests). Le cas qu'elle décrit est donc
+    décrit, pas servi — un agent qui reprend sa ligne depuis une autre session **se
+    verra bien refuser**, faute d'un chemin qui pose son worker.
+
+    Ce n'est pas du code mort à retirer : c'est une capacité non branchée, et la
+    brancher est une décision de produit (quelle surface déclare le worker, et sur
+    quelle foi). Ce qui serait fautif, c'est qu'un texte servi la présente à un agent
+    comme une issue disponible : elle ne l'est pas."""
     token = _WRITING_AS.set((worker or "").strip() or None)
     try:
         yield
@@ -1629,6 +1639,17 @@ class DatastorePg(SchemaOpsMixin):
                     updated += 1
                     ids.append(existing_id)
                     continue
+            except RowLocked as e:
+                # ⚠️ MÊME parti que les deux clauses suivantes, et pour la même
+                # raison : le refus garde sa CLASSE, seule sa désignation change.
+                # `RowLocked` dérive de `ValueError` depuis le 05/09/2026 ; sans
+                # cette clause, elle tomberait dans le `except ValueError` du bas et
+                # ressortirait en refus d'entrée invalide — perdant son code 409 et
+                # le message du bail, exactement le défaut qu'on vient de fermer.
+                raise RowLocked(
+                    e.row_id, e.claimed_by, e.claimed_until, e.claimed_run,
+                    row=self._designation_de_lot(rang, total, key, data,
+                                                 inserted + updated)) from None
             except BusinessKeyRequired as e:
                 # MÊME parti que ci-dessous : le refus garde sa classe (la face REST
                 # en dérive son code `business_key_required`), seule sa désignation

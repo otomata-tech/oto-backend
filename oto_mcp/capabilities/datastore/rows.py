@@ -39,6 +39,7 @@ from ...datastore.core import (
     BusinessKeyRequired,
     NamespaceNotFound,
     NamespaceReadOnly,
+    RowLocked,
     RowNotFound,
     RowValidationError,
     make_store,
@@ -370,6 +371,13 @@ def _write_refusal(e: Exception) -> AuthzDenied:
     ⚠️ `RowValidationError` DÉRIVE de `ValueError` : l'ordre des branches est le
     contrat, pas un détail de style.
 
+    ⚠️ `RowLocked` (#317) est le cas qui a coûté le plus longtemps : elle n'était
+    attrapée NULLE PART côté REST, donc un refus juste sortait en 500 muet pendant que
+    la face MCP le traduisait proprement. Elle dérive de `ValueError` depuis le
+    05/09/2026 ; sa branche est ici, et son code est un **409** — la requête est bien
+    formée, c'est l'état de la ligne qui s'y oppose, et un 400 enverrait corriger ce
+    qui n'a rien à corriger.
+
     ⚠️ `BusinessKeyRequired` (#516) est un troisième cas, et il mérite son propre code :
     un front qui reçoit `invalid_row_input` ne peut que réafficher une phrase, alors
     que `business_key_required` lui dit QUOI proposer — viser une ligne existante.
@@ -381,6 +389,11 @@ def _write_refusal(e: Exception) -> AuthzDenied:
     schéma reste `row_invalid`, et un code neuf ferait traiter comme nouveau ce que
     les clients gèrent déjà.
     """
+    if isinstance(e, RowLocked):
+        # 409 et pas 400 : la requête est bien formée, c'est l'ÉTAT de la ligne qui
+        # s'y oppose. Un 400 enverrait corriger une requête qui n'a rien à corriger —
+        # le geste est d'attendre la fin du bail, ou de libérer la ligne.
+        return AuthzDenied(409, "row_locked", str(e))
     if isinstance(e, BusinessKeyRequired):
         return AuthzDenied(400, "business_key_required", str(e))
     if isinstance(e, RowValidationError):

@@ -100,7 +100,7 @@ def test_share_to_unknown_org_404(monkeypatch):
 
 def test_share_to_user_still_works(monkeypatch):
     calls = _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "sharer@x.co"})
     monkeypatch.setattr(R.db, "get_project_by_id", lambda pid: {"name": "Campagne mutuelle"})
     sent = {}
@@ -123,9 +123,16 @@ def test_share_to_user_passes_recipient_locale_and_english_label(monkeypatch):
     jusqu'au gabarit, ET le `type_label` passé est déjà dans SA langue — le
     gabarit ne traduit pas un mot qu'on lui donne."""
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email",
-                        lambda e: {"sub": "u2", "email": e, "locale": "en"})
-    monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "sharer@x.co"})
+    monkeypatch.setattr(R.db, "get_users_by_email",
+                        lambda e: [{"sub": "u2", "email": e, "locale": "en"}])
+    # ⚠️ La doublure DISTINGUE les deux comptes : la notification lit désormais le
+    # destinataire par son `sub` (celui du grant qu'on vient de poser) au lieu de
+    # le re-chercher par adresse — une adresse peut désigner deux comptes, et on
+    # prendrait la langue du mauvais. Une doublure qui rend le même compte pour
+    # tout sub masquerait précisément ce que ce banc mesure.
+    monkeypatch.setattr(R.db, "get_user",
+                        lambda sub: ({"sub": "u2", "email": "dest@x.co", "locale": "en"}
+                                     if sub == "u2" else {"email": "sharer@x.co"}))
     monkeypatch.setattr(R.db, "get_project_by_id", lambda pid: {"name": "Campagne mutuelle"})
     sent = {}
     monkeypatch.setattr(R.email, "send_resource_shared_email",
@@ -138,7 +145,7 @@ def test_share_to_user_passes_recipient_locale_and_english_label(monkeypatch):
 
 def test_transfer_to_user_emails_new_owner(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "sharer@x.co"})
     monkeypatch.setattr(R.db, "get_project_by_id", lambda pid: {"name": "Campagne mutuelle"})
     sent = {}
@@ -215,7 +222,7 @@ def test_transfer_cascade_vers_une_PERSONNE_copie_la_procedure(monkeypatch):
     d'emploi manquant, et le rapport de cascade le disait sans que personne puisse y
     remédier."""
     calls = _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     out = R._resources(CTX, R.ResourceInput(op="transfer", resource_type="project",
                                             resource_id="7", new_owner_email="jane@x.co",
                                             cascade=True))

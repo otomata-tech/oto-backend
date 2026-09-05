@@ -141,8 +141,34 @@ def test_la_stricte_refuse_un_identifiant_non_numerique(famille, valeur):
 def test_la_stricte_herite_de_TOUS_les_champs_de_l_heritee():
     """Dériver plutôt que recopier : un champ ajouté à `ResourceInput` doit arriver
     sur la stricte sans qu'on y pense, sinon les deux surfaces divergent au premier
-    lot et la migration devient une réécriture."""
-    assert set(R.ResourceInput.model_fields) == set(V2.ResourceInputV2.model_fields)
+    lot et la migration devient une réécriture.
+
+    ⚠️ INCLUSION, pas égalité — corrigé le 05/09/2026. L'égalité disait deux
+    choses à la fois : « la stricte n'oublie aucun champ » (l'intention, juste) et
+    « la stricte n'en ajoute aucun » (jamais voulu, et contradictoire avec le
+    cliquet ci-dessus, qui dit que TOUTE évolution du contrat d'entrée passe par
+    la stricte). Les deux textes ne pouvaient pas être vrais ensemble : v2 était
+    la surface où faire évoluer le contrat, et le seul banc qui la regardait lui
+    interdisait d'évoluer.
+
+    Le sens qui reste est le seul qu'on voulait garder : rien de l'héritée ne
+    manque à la stricte."""
+    manquants = set(R.ResourceInput.model_fields) - set(V2.ResourceInputV2.model_fields)
+    assert not manquants, (
+        f"la stricte a perdu {sorted(manquants)} : elle DÉRIVE de l'héritée, "
+        "un champ ne peut pas s'y perdre sans qu'on l'ait retiré exprès")
+
+
+def test_la_stricte_n_ajoute_RIEN_de_son_cote():
+    """Le pendant de l'inclusion, et la trace d'un aller-retour : `sub` a d'abord
+    été posé sur la stricte, au motif que le schéma de l'héritée est gelé. C'était
+    contraire à la décision d'Alexis du 04/09 (ADR 0068, « pas de v2 ») — **on
+    corrige l'outil que les gens utilisent**, et le cliquet se regrave.
+
+    Un champ propre à la stricte reste possible ; il devra se déclarer ici,
+    puisqu'il voudra dire que l'héritée ne pouvait pas le recevoir."""
+    ajouts = set(V2.ResourceInputV2.model_fields) - set(R.ResourceInput.model_fields)
+    assert ajouts == set(), f"ajout non déclaré sur la stricte : {sorted(ajouts)}"
 
 
 def test_les_deux_surfaces_partagent_handler_autorisation_et_sortie():

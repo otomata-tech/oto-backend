@@ -47,7 +47,7 @@ def test_get_project_with_grants(monkeypatch):
 
 def test_transfer_routes_generically(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     seen = {}
     monkeypatch.setattr(R.ownership, "transfer",
                         lambda rt, rid, ot, oid: seen.update(rt=rt, rid=rid, ot=ot, oid=oid))
@@ -77,7 +77,7 @@ def test_transfer_loss_of_control_requires_confirmation(monkeypatch):
     """Cession à un tiers sans confirm_transfer → 409 confirm_loss_of_control, aucun
     transfert effectué (le garde-fou coupe AVANT ownership.transfer)."""
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     called = {"n": 0}
     monkeypatch.setattr(R.ownership, "transfer", lambda *a: called.update(n=called["n"] + 1))
     with pytest.raises(AuthzDenied) as e:
@@ -135,7 +135,7 @@ def test_unknown_type_sur_la_surface_stricte_est_refuse_a_la_validation():
 
 def test_share_role_manager_grants_manager(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
     monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
     seen = {}
@@ -150,7 +150,7 @@ def test_share_role_manager_grants_manager(monkeypatch):
 
 def test_share_legacy_permission_maps_to_role(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
     monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
     seen = {}
@@ -206,7 +206,7 @@ def test_un_partage_par_un_AGENT_est_observe(monkeypatch):
     bancs verts sur le seam n'avaient pas vu. Un seam testé seul prouve qu'il marche,
     jamais qu'on l'a appelé correctement."""
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
     monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
     monkeypatch.setattr(R.ownership, "grant", lambda *a, **k: None)
@@ -227,7 +227,7 @@ def test_un_partage_par_un_AGENT_est_observe(monkeypatch):
 def test_le_MEME_partage_depuis_le_dashboard_n_observe_rien(monkeypatch):
     """La face REST est celle où un humain clique : il vient de faire le geste."""
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
     monkeypatch.setattr(R.db, "get_user", lambda sub: {"email": "u2@x.co"})
     monkeypatch.setattr(R.email, "send_resource_shared_email", lambda *a, **k: True)
     monkeypatch.setattr(R.ownership, "grant", lambda *a, **k: None)

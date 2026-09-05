@@ -227,7 +227,7 @@ def test_refus_forbidden_le_gerant_ne_cede_pas_la_propriete(monkeypatch):
 
 def test_refus_unknown_user(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: None)
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [])
     with pytest.raises(AuthzDenied) as e:
         R._resources(CTX, _get("share", email="fantome@x.co"))
     assert (e.value.status, e.value.code) == (404, "unknown_user")
@@ -256,7 +256,7 @@ def test_refus_transfer_failed(monkeypatch):
     """Le store refuse la re-parentalisation : `ValueError` traduite en 409, et non
     laissée remonter — sinon c'est un 500."""
     _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_user_by_email", lambda e: {"sub": "u2", "email": e})
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
 
     def _boom(*a):
         raise ValueError("owner introuvable")

@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import access, db, email, group_store, org_store, ownership, roles
 from . import _portee
@@ -47,6 +47,20 @@ class ResourceInput(BaseModel):
     ressource. Il est documenté dans la description servie plutôt que retiré.
     """
     op: Literal["list", "get", "transfer", "share", "unshare"]
+    # ⚠️ Le destinataire par IDENTIFIANT — la sortie d'une adresse ambiguë. Dix
+    # adresses portent deux comptes (mesuré le 05/09/2026), dont une paire sans
+    # aucun tenant : partager sur l'une d'elles donnait l'accès à l'un des deux,
+    # en silence.
+    #
+    # Ajouté ICI, sur la surface que les gens utilisent, et pas sur `v2` — ADR
+    # 0068, décision d'Alexis « pas de v2 ». Le cliquet du schéma servi n'interdit
+    # pas d'ajouter : il protège d'une rupture qui FAIT ÉCHOUER un appel (#756
+    # rendait un champ obligatoire). Un champ optionnel ne casse aucun appelant ;
+    # l'empreinte est regravée dans le même commit, comme le 04/09 pour
+    # `permission`.
+    sub: str = Field(default="", description=(
+        "Identifiant du compte destinataire, quand une adresse en désigne "
+        "plusieurs. À passer SEUL, jamais avec `email`."))
     resource_type: str = "datastore_namespace"
     resource_id: Optional[str] = None
     new_owner_email: Optional[str] = None   # transfer → un utilisateur
@@ -141,6 +155,7 @@ def _resource_name(resource_type: str, rid: str) -> Optional[str]:
 
 
 def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
+                  dest_sub: Optional[str] = None,
                   *, event: str, permission: Optional[str] = None) -> bool:
     """Prévient par email l'utilisateur qui vient de recevoir un accès (`event`
     ='share') ou la propriété (`event`='transfer') d'une ressource. Best-effort,
@@ -152,8 +167,11 @@ def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
         # donc le comportement d'avant pour tout compte de la plateforme.
         # Ici l'adresse suffit — on pointe la racine du produit, pas une vue : aucun
         # patron de chemin n'est nécessaire (contrairement aux liens de projet).
-        dest_user = db.get_user_by_email(to_email) or {}
-        dest_sub = dest_user.get("sub")
+        # ⚠️ Le destinataire est DÉJÀ résolu par l'appelant : le re-chercher par
+        # adresse rouvrait la porte qu'on vient de fermer (une adresse peut
+        # désigner deux comptes, on prendrait la langue et la marque du mauvais).
+        # `dest_sub` vient du grant qu'on vient de poser, il ne peut pas mentir.
+        dest_user = db.get_user(dest_sub) or {} if dest_sub else {}
         # Préférence du DESTINATAIRE (oto-backend#700) : None (pas de compte, ou
         # compte sans préférence posée) ⟹ les deux gabarits servent FR, comme
         # avant ce lot.
@@ -273,14 +291,41 @@ def _grants_view(resource_type: str, resource_id: str) -> list[dict]:
     ]
 
 
-def _resolve_recipient(email: Optional[str]) -> dict:
-    email = (email or "").strip()
+def _resolve_recipient(email: Optional[str], sub: str = "") -> dict:
+    """Le compte destinataire — par son identifiant, ou par son adresse.
+
+    ⚠️ Une adresse ne DÉSIGNE PAS un compte : dix en portent deux (mesuré le
+    05/09/2026), dont une paire sans aucun tenant. Partager sur une adresse
+    ambiguë donnait l'accès à l'un des deux, choisi par l'ordre que rend la base
+    — et rien ne le disait au propriétaire. C'est le seul endroit de cette classe
+    où une erreur donne accès à des DONNÉES.
+
+    Les deux ensemble sont refusés : ils peuvent se contredire, et rien ne dirait
+    lequel a servi.
+    """
+    email, sub = (email or "").strip(), (sub or "").strip()
+    if email and sub:
+        raise AuthzDenied(
+            400, "email_and_sub",
+            "Passe `email` OU `sub`, pas les deux : ils peuvent désigner des "
+            "comptes différents, et rien ne dirait lequel a servi.")
+    if sub:
+        u = db.get_user(sub)
+        if not u:
+            raise AuthzDenied(404, "unknown_user", f"aucun compte `{sub}`.")
+        return u
     if not email:
         raise AuthzDenied(400, "email_required", "`email` requis.")
-    u = db.get_user_by_email(email)
-    if not u:
+    porteurs = db.get_users_by_email(email)
+    if not porteurs:
         raise AuthzDenied(404, "unknown_user", f"aucun utilisateur oto avec l'email {email}")
-    return u
+    if len(porteurs) > 1:
+        subs = ", ".join(f"`{u['sub']}`" for u in porteurs)
+        raise AuthzDenied(
+            400, "ambiguous_email",
+            f"L'adresse `{email}` désigne {len(porteurs)} comptes : {subs}. "
+            "Reprends avec `sub` (sans `email`) pour dire lequel tu vises.")
+    return porteurs[0]
 
 
 def _share_principal(sub: str, inp: ResourceInput, *, strict: bool = True) -> tuple[str, str, Optional[str]]:
@@ -305,7 +350,9 @@ def _share_principal(sub: str, inp: ResourceInput, *, strict: bool = True) -> tu
         if not o:
             raise AuthzDenied(404, "unknown_org", f"org #{inp.org_id} inconnue.")
         return "org", str(inp.org_id), o.get("name")
-    u = _resolve_recipient(inp.email)
+    # `getattr` : seule la surface v2 porte `sub` — l'héritée ne peut pas le
+    # recevoir sans faire rougir son cliquet de schéma servi.
+    u = _resolve_recipient(inp.email, inp.sub)
     return "user", u["sub"], u.get("email")
 
 
@@ -506,7 +553,8 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         # Notifier le nouveau propriétaire user (best-effort). Cf. _notify_grant.
         if new_owner_type == "user" and new_owner_label:
             out["notified"] = _notify_grant(ctx.sub, inp.resource_type, rid,
-                                            new_owner_label, event="transfer")
+                                            new_owner_label, dest_sub=new_owner_id,
+                                            event="transfer")
         return out
 
     if inp.op == "share":
@@ -538,7 +586,8 @@ def _resources(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         # jamais dans `ownership.grant` (un share en cascade y déclencherait N mails).
         if ptype == "user" and plabel:
             out["notified"] = _notify_grant(ctx.sub, inp.resource_type, rid, plabel,
-                                            event="share", permission=perm)
+                                            dest_sub=pid, event="share",
+                                            permission=perm)
         return out
 
     # unshare

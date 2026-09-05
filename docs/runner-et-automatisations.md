@@ -298,6 +298,33 @@ encore due** (le tick filtrait avant, donc la garde ne tenait pas seule).
 qui rend des secondes rondes. *Une garantie qui tient par la propriété d'une
 bibliothèque tierce n'est pas une garantie.*
 
+### Le worker est un SERVEUR de boucles agentiques (05/09/2026)
+
+Le modèle, dit par Alexis et désormais tenu par le code : **le worker héberge des
+boucles agentiques qui impersonnent chacune leur user**. Deux couches, et ne pas
+les confondre est ce qui évite les deux défauts trouvés cette semaine :
+
+```
+ce que l'AGENT fait      au nom du user — jeton délégué, borné au bail
+                         (lire un doc, écrire une ligne, appeler un outil)
+ce que le RUNTIME        au nom de personne — la clé de modèle, ressource
+consomme pour tourner    d'exécution payée par l'org, jamais un droit du user
+```
+
+⚠️ **Le serveur n'a AUCUNE identité métier**, et c'est ce qui rend un repli
+inacceptable. Un travail sans porteur était servi nu, et le worker retombait sur
+son propre jeton : une boucle agissant au nom du compte qui héberge le runner,
+tout ce qu'elle écrit signé par lui. Le défaut est silencieux **par
+construction** — les écritures aboutissent, seule l'attribution est fausse, et
+rien ne la contredit. Un travail sans porteur est donc REFUSÉ, en base, avec la
+sortie nommée (le reprogrammer).
+
+⚠️ Et c'est la même distinction qui explique la garde de la clé : le user ne peut
+pas relire un secret du coffre — personne ne le peut. Si le worker obtient la
+clé, ce n'est donc pas par l'impersonation, c'est par un droit d'infrastructure.
+Un droit d'infrastructure exige une identité d'infrastructure : d'où la marque
+`runner_worker`, et d'où le fait qu'aucun compte de personne ne doit la porter.
+
 ### Un travail porte l'identité de qui l'a demandé (02/09/2026)
 
 **Premier barreau du chantier « agents autonomes », et le préalable de tout le

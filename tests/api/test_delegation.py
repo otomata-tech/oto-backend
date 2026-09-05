@@ -159,16 +159,32 @@ def test_un_porteur_sans_role_arrete_le_travail_EN_LE_DISANT(client, org):
     assert "identité invalide" in (en_base["last_error"] or "")
 
 
-def test_un_travail_sans_porteur_connu_ne_delegue_rien(client, org):
-    """Les travaux d'avant le 02/09 n'ont pas de demandeur. On n'en invente pas —
-    le worker retombe sur son propre jeton, comme avant."""
+def test_un_travail_sans_porteur_connu_est_REFUSE(client, org):
+    """⚠️ Renversement assumé du 05/09/2026. Ce banc disait « ce n'est pas un
+    refus, c'est une absence » : les travaux d'avant le 02/09 n'ont pas de
+    demandeur, on n'en inventait pas, et le worker retombait sur son propre
+    jeton.
+
+    Ce qui a changé n'est pas le cas, c'est le MODÈLE. Le worker est un serveur
+    de boucles agentiques qui impersonnent chacune leur user ; il n'a **aucune
+    identité métier**. « Retomber sur son propre jeton » n'est donc pas une
+    absence de délégation : c'est une boucle qui agit au nom du compte hébergeant
+    le runner, et tout ce qu'elle écrit signé par lui. Silencieux par
+    construction — les écritures aboutissent, seule l'attribution est fausse.
+
+    Une absence de porteur est donc bien un refus, et il s'écrit en base."""
     _enfile(client, org, porteur=None)
     r = client.post(ROUTE, headers=_h(org["membre"]),
                     json={"op": "claim", "lease_seconds": 60})
     job = r.json()["job"]
     assert job["sub"] is None
     assert job.get("delegated_token") is None
-    assert job.get("delegation_refusee") is None, "ce n'est pas un refus, c'est une absence"
+    assert "ne nomme personne" in (job.get("delegation_refusee") or "")
+
+    from oto_mcp import db
+    en_base = db.get_job(job["id"], org["id"])
+    assert en_base["status"] == "failed", (
+        "le refus se pose EN BASE : sinon le travail repart au worker suivant")
 
 
 def test_une_file_vide_ne_delegue_rien_et_ne_casse_pas(client, org):

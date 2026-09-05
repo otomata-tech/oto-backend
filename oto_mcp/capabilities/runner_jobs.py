@@ -405,6 +405,12 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     return {**job, "model_key": cle}
 
 
+_SANS_PORTEUR = (
+    "ce travail ne nomme personne — il a été enfilé avant que la file retienne "
+    "son demandeur (02/09/2026). Le worker n'a pas d'identité propre à lui "
+    "prêter : reprogramme-le, il partira au nom de qui le demande.")
+
+
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     """Le travail, augmenté du moyen d'agir AU NOM de son porteur.
 
@@ -418,9 +424,17 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     """
     porteur = job.get("sub")
     if not porteur:
-        # Travail d'avant le 02/09 : pas de porteur connu. On n'en invente pas, et
-        # on ne délègue rien — le worker retombe sur son propre jeton, comme avant.
-        return job
+        # ⚠️ Le worker est un SERVEUR DE BOUCLES AGENTIQUES : chaque boucle
+        # impersonne son user, et lui n'a **aucune identité métier**. Un travail
+        # sans porteur n'a donc personne à impersonner.
+        #
+        # Le servir nu — ce qu'on faisait pour les travaux d'avant le 02/09 —
+        # faisait retomber la boucle sur le jeton DU WORKER : un agent qui agit
+        # au nom du compte qui héberge le runner, et tout ce qu'il écrit signé
+        # par lui. Le défaut est silencieux par construction : les écritures
+        # aboutissent, seule l'attribution est fausse. On refuse, et on le DIT.
+        db.refuser_pour_identite(job["id"], claimant, _SANS_PORTEUR)
+        return {**job, "delegation_refusee": _SANS_PORTEUR}
     org_id = job.get("org_id")
     raison = _identite_invalide(porteur, org_id) if org_id else None
     if raison:

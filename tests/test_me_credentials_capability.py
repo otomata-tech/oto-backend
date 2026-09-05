@@ -159,7 +159,11 @@ def test_retrait_d_un_compte_nomme(monkeypatch, vault):
     code, out = call("me.credential.clear", path_params={"provider": "serper"},
                      query=b"account=client-x")
     assert code == 200, out
-    assert out == {"ok": True, "provider": "serper", "account": "client-x", "scope": "member"}
+    # `warning` s'ajoute depuis oto#59, TOUJOURS présent et à `None` quand aucun agent
+    # programmé ne dépend de la clé retirée : la clé constante distingue « rien à
+    # signaler » d'un serveur trop vieux pour le savoir. Le retrait, lui, ne change pas.
+    assert out == {"ok": True, "provider": "serper", "account": "client-x",
+                   "scope": "member", "warning": None}
     assert cleared[0][2] == "client-x"
 
 

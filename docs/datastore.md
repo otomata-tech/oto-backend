@@ -736,6 +736,11 @@ de fin de passage détectait après coup.
   d'appels ne peut pas dire qui écrit une COUCHE (il ne garde que les clés de premier
   niveau et tronque les arguments), et les compteurs déclaré/non-déclaré sont ce qui
   distinguera, après la date, l'écrivain qui s'est adapté de celui qui a disparu.
+  **La manœuvre « lever le format, écrire, remettre » ne rouvre rien** : la garde
+  regarde ce que l'appelant écrit, pas ce que la colonne déclare (mesuré). En revanche
+  `data_drop_column` et `data_delete_row` **emportent** l'origine — rien n'y écrit une
+  couche, le paramètre n'a donc rien à y déclarer, et déclarer une destruction ne la
+  rendrait pas réversible ; ces deux portes attendent le verrou humain.
 
 - **`origine: "system"` — la copie de secours posée par la plateforme.** Sur 41 fiches
   portant une couche `<champ>.origine` censée conserver la valeur remise, **une** l'a

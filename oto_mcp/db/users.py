@@ -727,9 +727,33 @@ def reconcile_tenant_migration(new_sub: str, email_hint: Optional[str] = None) -
 
 
 def get_user_by_email(email: str) -> Optional[dict]:
+    """Le premier compte portant cette adresse — ⚠️ une adresse n'est PAS unique.
+
+    Un même email peut porter plusieurs comptes : le nôtre et celui d'un tenant
+    tiers (`tulina:…`), qualifiés par émetteur (ADR 0052). `fetchone()` en rend
+    un, dans un ordre que rien ne fixe. Pour DÉCIDER (résoudre une cible,
+    suspendre, changer un rôle), passer par `get_users_by_email` et refuser
+    l'ambiguïté — cf. `capabilities/orgs/members._resolve_target`.
+    """
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()
         return dict(row) if row else None
+
+
+def get_users_by_email(email: str) -> list[dict]:
+    """TOUS les comptes portant cette adresse, du plus ancien au plus récent.
+
+    Existe parce qu'une adresse ne désigne pas un compte : mesuré le 05/09/2026,
+    `alexis.laporte@gmail.com` en porte deux (`8ugqeq6cv40f` et
+    `tulina:f3s740z39vfq`), avec 91 et 98 appels sur trente jours. Un appelant qui
+    filtrait par cette adresse en voyait 91 et ignorait les 98 autres — sans
+    qu'aucun zéro ne l'alerte. Un chiffre plausible ne fait douter de rien.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM users WHERE email = %s ORDER BY created_at, sub",
+            (email,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def list_users() -> list[dict]:

@@ -74,7 +74,7 @@ _SURFACE = """
     get_project_by_mcp_slug get_project_file get_resource_grant
     get_row_embedding_sha get_run get_tool_call get_unipile_account
     get_unipile_account_id get_unipile_feed_synced_at get_usage_today get_user
-    get_user_by_email google grant_resource granted_accounts_for grants
+    get_user_by_email get_users_by_email google grant_resource granted_accounts_for grants
     group_key group_member_allowed_connectors group_restricted_connectors
     guides has_member_api_key has_option_comp hashlib increment_usage
     index_ddl init_db insert_billing_payment insert_grant insert_run

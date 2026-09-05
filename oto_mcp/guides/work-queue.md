@@ -48,9 +48,10 @@ Réponse : `{namespace, row}` avec `row = null` quand il n'y a plus rien à pren
 manquement le plus fréquent, et il coûte la ligne : le jeton est presque toujours
 passé au claim (la consigne est fraîche) puis oublié à l'écriture — et l'écriture est
 alors refusée sur la ligne qu'on tient soi-même. Le serveur ne le retient pas d'un
-appel au suivant : chaque appel arrive dans sa propre session. Si tu préfères ne pas
-porter de run, porte alors `worker=` — mais choisis, et tiens ton choix jusqu'au bout
-de la boucle.
+appel au suivant : chaque appel arrive dans sa propre session. ⚠️ **Il n'y a pas d'autre voie : `data_write` ne
+prend pas de `worker`.** Le jeton de run est le seul moyen de te faire reconnaître par
+le verrou à l'écriture — porte-le sur CHAQUE appel qui écrit, pas seulement sur celui
+qui a réservé.
 
 **Rendre la ligne est un geste, pas une conséquence.** Écrire un verdict ne la libère
 pas : le verrou ne connaît pas tes états métier, et il n'a pas à les connaître — « à
@@ -71,11 +72,17 @@ désormais la donnée, pas seulement l'attribution : une écriture venue d'aille
 refusée avec un message qui dit qui tient la ligne et jusqu'à quand.
 
 **Et « quelqu'un d'autre », c'est toi aussi dès que tu cesses de te nommer.** Tu es
-reconnu par ton run — à condition de passer `_run_id=` sur l'appel qui écrit, pas
-seulement sur celui qui a réservé — ou par ton `worker` si tu écris hors run. Un
-`data_write` qui ne porte ni l'un ni l'autre est un inconnu pour le verrou, même s'il
-vient du compte qui tient le bail : il est refusé, et la ligne reste bloquée jusqu'à
-l'expiration du bail.
+reconnu par ton **run**, et seulement par lui — à condition de passer `_run_id=` sur
+l'appel qui écrit, pas seulement sur celui qui a réservé. Un `data_write` qui ne le
+porte pas est un inconnu pour le verrou, même s'il vient du compte qui tient le bail :
+il est refusé, et la ligne reste bloquée jusqu'à l'expiration du bail.
+
+⚠️ **Ton `worker` ne te fait PAS reconnaître à l'écriture, contrairement à ce que ce
+guide a dit jusqu'au 05/09/2026.** Le serveur sait le faire — mais aucune surface ne
+lui passe ton libellé, et `data_write` n'a pas de paramètre où l'écrire. Le conseil
+« porte `worker=` si tu écris hors run » désignait donc un geste impossible, au moment
+précis où tu cherches quoi faire d'un refus. Le `worker` sert au claim et au release,
+nulle part ailleurs.
 
 ## Les trois paramètres qui comptent
 

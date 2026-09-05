@@ -379,6 +379,10 @@ class DatastorePg(SchemaOpsMixin):
                  allowed_ns_ids: Optional[set] = None, read_only: bool = False):
         self.sub = sub
         self.acting_org = acting_org
+        # Les colonnes dont CET appel a posé la couche `origine` (oto#70 lot 2) : le
+        # store est instancié par requête, donc ce set est celui d'un seul appel — et
+        # un lot qui écrit vingt lignes n'avertit qu'une fois par colonne.
+        self._origine_posee: set = set()
         # Scope dur (endpoint partagé) : None = pas de restriction ; set = ces ns_ids seuls.
         self.allowed_ns_ids: Optional[set] = (None if allowed_ns_ids is None
                                               else {int(x) for x in allowed_ns_ids})
@@ -922,6 +926,14 @@ class DatastorePg(SchemaOpsMixin):
         quoi en faire. Union sur un lot : un renommage fautif se voit une fois,
         pas une par row."""
         out: dict = {}
+        # oto#70 lot 2, premier temps : l'avertissement part avec CHAQUE écriture qui
+        # pose une origine, pas une seule fois. Un écrivain qui repasse sur une ligne
+        # par semaine ne verrait jamais un message servi une fois — et c'est précisément
+        # ce profil-là que la mesure a trouvé (52 lignes touchées sur une semaine, toutes
+        # réécrites après leur création).
+        if self._origine_posee:
+            out["origine_warning"] = dsv2.avertissement_origine(
+                sorted(self._origine_posee))
         keys = sorted(self.off_schema)
         if keys:
             out["hors_schema"] = keys
@@ -1195,6 +1207,7 @@ class DatastorePg(SchemaOpsMixin):
         # #658 : tranché AVANT la fusion — c'est elle qui ouvre le verrou de ligne.
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
         refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
+        _relever_origine_module(self, ns_id, user_data, schema=schema)
         self._trace(trace, ns_id, ns)
         # La clé métier sort du MÊME schéma que ci-dessus (`declared_key` re-résolvait
         # le namespace et relisait la ligne pour le même résultat).
@@ -1390,6 +1403,7 @@ class DatastorePg(SchemaOpsMixin):
             # que ce soit ne parte. Puis la plateforme pose l'origine qu'elle doit.
             refuser_champs_reserves(schema, pose, avant=current or {},
                                     pose_systeme=sys_pose, forcage=forcage)
+            _relever_origine_module(self, ns_id, pose, current or {}, schema=schema)
             poser_origine_systeme(schema, current, merged, set(pose))
             # #607 : l'estampille est reposée sur CHAQUE écriture — c'est le point du
             # cran. Après l'origine : sur une colonne qui porterait les deux, la
@@ -1449,6 +1463,7 @@ class DatastorePg(SchemaOpsMixin):
                        **user_data}
             refuser_champs_reserves(schema, complet, avant=prev_data,
                                     pose_systeme=sys_pose)
+            _relever_origine_module(self, ns_id, complet, prev_data, schema=schema)
             if prev_data is not None:
                 poser_origine_systeme(schema, prev_data, user_data, set(complet))
         # #607 : hors du `if reserves` — un remplacement qui n'emporte QUE l'estampille
@@ -1576,6 +1591,7 @@ class DatastorePg(SchemaOpsMixin):
                 # de lignes sans trace.
                 sys_pose = self._pose_systeme(schema)
                 refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
+                _relever_origine_module(self, ns_id, user_data, schema=schema)
                 poser_valeurs_systeme(schema, user_data, sys_pose)
                 self._check_row(schema, user_data)
                 try:
@@ -2207,6 +2223,38 @@ class DatastorePg(SchemaOpsMixin):
         self._assert_writable(ns_id, row_id)
         if not db.datastore_delete_row(ns_id, row_id):
             raise RowNotFound(row_id)
+
+
+def _relever_origine_module(store, ns_id, payload, avant=None,
+                            schema=None) -> None:
+    """Relève, et mémorise pour la réponse, les colonnes dont CET appel pose la couche
+    `origine` (oto#70 lot 2, premier temps du préavis).
+
+    ⚠️ **N'empêche rien.** Aujourd'hui cette écriture est encore permise : on prévient,
+    on ne refuse pas. Le refus vient au barreau suivant, à une date annoncée.
+
+    ⚠️ **`face` reste NULL** : le store ne connaît pas le canal d'appel — il voit un
+    `sub` et une org. `ResolvedCtx.channel` vit à l'adaptateur, deux couches plus haut.
+    Le DDL l'accepte, et une face inconnue vaut mieux qu'une face devinée.
+    """
+    from ..db import origine_ecritures as db_origine
+
+    colonnes = dsv2.origine_posee(payload, avant)
+    if not colonnes:
+        return
+    store._origine_posee.update(colonnes)
+    # ⚠️ Les deux populations sont relevées SÉPARÉMENT. Sur une colonne qui ne déclare
+    # pas le format, la plateforme ne pose JAMAIS d'origine : celle-ci vient donc
+    # forcément de l'écrivain — c'est le cas que la définition interdit, et le seul
+    # qu'on cherche. Les fondre dans un total ferait disparaître la population visée
+    # dans celle qui l'entoure (mesuré : 64 cellules contre 15 688).
+    declarees = dsv2.system_origin_fields(schema)
+    for format_declare, lot in ((False, [c for c in colonnes if c not in declarees]),
+                                (True, [c for c in colonnes if c in declarees])):
+        db_origine.relever(sub=getattr(store, "sub", None),
+                          org_id=getattr(store, "acting_org", None),
+                          ns_id=ns_id, colonnes=lot,
+                          format_declare=format_declare)
 
 
 def make_store(sub: str) -> "DatastorePg":

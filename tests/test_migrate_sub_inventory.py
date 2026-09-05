@@ -109,6 +109,21 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
 
     # Hors inventaire, chacune pour une raison STRUCTURELLE (pas un oubli) :
     allow = {
+        # oto#70 lot 2 — le relevé des écritures de couche `origine`. Trois raisons,
+        # et la première est structurelle : **son `sub` est NULLABLE par conception**,
+        # parce qu'un appel par jeton d'API n'en porte pas (oto-backend#882) et que
+        # cette population-là est justement celle qu'on cherche à joindre. Une colonne
+        # nullable ne peut pas entrer dans une clé primaire, donc `_PK_SUB_TABLES` ne
+        # s'applique pas ; et son index unique porte le sub, donc l'UPDATE nu de
+        # `_SUB_COLUMNS` y lèverait `UniqueViolation` dès que les deux comptes d'une
+        # personne ont écrit la même colonne — le cas nominal après une bascule.
+        #
+        # Ce que l'abandon coûte, mesuré et assumé : la ligne survit au merge avec un
+        # sub périmé. Cette table compte une POPULATION pour dimensionner un préavis,
+        # pas un historique — un écrivain de plus dans le compte est sans conséquence,
+        # et la table disparaît avec le préavis. C'est le seul endroit où cet argument
+        # vaut : ailleurs, une ligne abandonnée est une donnée perdue.
+        ("origine_ecritures", "sub"),
         # L'ENTITÉ du coffre entre dans l'AAD : une ligne repointée sans rechiffrement
         # est indéchiffrable — pire qu'absente (0052 §Migrer : l'utilisateur repose
         # ses clés, jamais d'UPDATE ici).

@@ -263,8 +263,14 @@ from oto_mcp.db import _schema, schema
 # est ce qui distingue « j'ai ajouté mes colonnes » de « j'ai recopié le nombre
 # que le test m'a donné » — un delta qui ne tombe pas juste dirait qu'autre chose
 # a bougé dans le DDL.
-EMPREINTE = "a67a83b15e6520b8d5671ad391af9b0d1f1bf1a7c3f327038b62c339f04bd97a"
-LONGUEUR = 143977
+# ⚠️ 2026-09-05 (oto#70 lot 2) — `origine_ecritures` : qui pose la couche `origine`,
+# l'instrument du préavis. Empilé sur le lot ci-dessus, arrivé entre-temps : le fragment
+# `schema/origine.ORIGINE` fait 2 014 caractères, et l'assemblé passe donc de 143 977 à
+# 145 991. ⚠️ Cette valeur a été RECALCULÉE après la fusion, jamais choisie entre les
+# deux versions en conflit — une empreinte dépend du contenu final, pas de qui écrit en
+# dernier.
+EMPREINTE = "16b9e01f93082c688559acaafdac00b69d4b7ebb740c372058c99d36bad29dbd"
+LONGUEUR = 145991
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

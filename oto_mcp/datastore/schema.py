@@ -640,6 +640,75 @@ def system_value_fields(schema: Optional[dict]) -> dict:
             and isinstance(f.get("key"), str) and f["key"]}
 
 
+#: Ce que l'appelant lira quand il pose une origine sans en avoir le droit. Servi par
+#: le SERVEUR — l'écran comme l'agent le rendent tel quel — et il VOUVOIE : c'est une
+#: personne qui décidera d'agir dessus.
+#:
+#: ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
+#: passe encore. Le refus vient ensuite, à une date annoncée. On ne demande pas la
+#: permission d'écrire aux écrivains, on les prévient — et ce premier temps est aussi
+#: l'INSTRUMENT : le journal d'appels ne porte pas les couches (il ne garde que les clés
+#: de premier niveau, et tronque les arguments), donc seuls les écrivains eux-mêmes
+#: peuvent nous dire combien ils sont.
+#: Le réglage qui porte la DATE du refus. ⚠️ Jamais en dur dans le code : la fenêtre se
+#: déplacera si un écrivain se manifeste, et une date gravée demanderait un déploiement
+#: pour bouger. Absent = l'avertissement ne promet aucune échéance, ce qui est la vérité
+#: tant qu'elle n'est pas fixée.
+ENV_ORIGINE_REFUS_LE = "OTO_ORIGINE_REFUS_LE"
+
+
+def avertissement_origine(colonnes: list) -> str:
+    """La phrase servie à qui pose une origine sans en avoir le droit.
+
+    ⚠️ Elle VOUVOIE et nomme le remplaçant : c'est une personne qui décidera d'agir
+    dessus, et un avertissement qui ne dit pas quoi faire à la place ne fait que gêner.
+    Servie par le SERVEUR — l'écran comme l'agent la rendent telle quelle.
+
+    ⚠️ Premier temps d'un préavis en DEUX temps (oto#70 lot 2) : aujourd'hui l'écriture
+    passe encore. Ce premier temps est aussi l'INSTRUMENT — le journal d'appels ne porte
+    pas les couches (clés de premier niveau seulement, arguments tronqués), donc seuls
+    les écrivains peuvent nous dire combien ils sont."""
+    import os
+
+    quoi = ", ".join(f"`{c}`" for c in colonnes)
+    quand = (os.environ.get(ENV_ORIGINE_REFUS_LE) or "").strip()
+    echeance = (f" à partir du {quand}" if quand else " prochainement")
+    return (
+        f"Cette écriture pose la couche `origine` de {quoi}. L'origine est la valeur "
+        f"du départ, à l'import : elle sera réservée{echeance}, et une écriture comme "
+        "celle-ci sera alors REFUSÉE. Écrivez la valeur seule — l'origine est "
+        "conservée, et posée par la plateforme quand elle manque. Si votre import doit "
+        "vraiment poser l'origine lui-même, demandez le droit correspondant sur le "
+        "jeton qui l'écrit.")
+
+
+def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list[str]:
+    """Les colonnes dont CET appel pose ou modifie la couche `origine`.
+
+    Sert l'avertissement du premier temps (oto#70 lot 2) : le journal d'appels ne peut
+    pas dire qui écrit une couche — `arg_keys` ne garde que le premier niveau, et la
+    fiche d'un appel tronque les arguments. Ce sont donc les écritures elles-mêmes qui
+    doivent se signaler.
+
+    ⚠️ **Une origine réécrite À L'IDENTIQUE ne compte pas.** Relire une ligne puis la
+    repousser telle quelle est un geste banal, et le compter ferait crier l'avertissement
+    sur des appels qui ne changent rien — un avertissement qu'on reçoit toujours cesse
+    d'être lu, et c'est justement l'instrument qu'on essaie de fabriquer.
+
+    ⚠️ Indépendante du format déclaré : elle regarde ce que l'APPELANT écrit, pas ce que
+    la colonne autorise. Sur une colonne déclarée, `reserved_refusals` refuse déjà — cette
+    liste-ci sert les autres, celles où l'écriture passe aujourd'hui sans un mot.
+    """
+    out: list[str] = []
+    for cle, neuf in (payload or {}).items():
+        if not (names_layers(neuf) and ORIGIN_LAYER in neuf):
+            continue
+        if same_value(neuf[ORIGIN_LAYER], _origine_attendue(avant, cle, neuf)):
+            continue
+        out.append(cle)
+    return sorted(out)
+
+
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
                       avant: Optional[dict] = None, *,
                       pose_systeme: Optional[dict] = None,

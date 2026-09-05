@@ -62,6 +62,7 @@ from . import (
     outreach,
     portee,
     alertes_credential,
+    origine_ecritures,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

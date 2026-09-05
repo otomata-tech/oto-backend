@@ -170,6 +170,23 @@ def _row_locked_message(e: RowLocked) -> str:
     return f"{e} {hint}" if hint else str(e)
 
 
+def _adresse_de_couche_valide(champ: str, present: set, declared: set) -> bool:
+    """`effectif.origine` vise-t-il une couche d'une colonne CONNUE ? (#350)
+
+    ⚠️ Reconnaissance exacte, jamais rapprochement : la couche doit être l'un des trois
+    noms que le serveur connaît, et la colonne doit être présente sur la page ou
+    déclarée au schéma. `effectif.bidule` reste inconnu, `inconnue.origine` aussi — on
+    ne se tait que sur ce qui est réellement adressable.
+
+    Le schéma ne déclare PAS les couches : elles sont natives et universelles (toute
+    colonne en a), donc `declared` ne les contiendra jamais. C'est ce qui rendait
+    l'avertissement inévitable dès que la couche était vide sur toute la page."""
+    base, point, couche = champ.partition(".")
+    if not point or couche not in dsv2.LAYER_KEYS:
+        return False
+    return base in present or base in declared
+
+
 def _namespace_keys(store, namespace: str) -> set[str]:
     """Clés réellement présentes dans les DONNÉES du namespace (relevé borné).
 
@@ -1092,6 +1109,19 @@ def register(mcp: FastMCP) -> None:
                 if unknown:
                     unknown = [f for f in unknown
                                if f not in _namespace_keys(store, namespace)]
+                # QUATRIÈME juge (#350) : une ADRESSE DE COUCHE — `effectif.origine`,
+                # `contact.comment` — est une projection parfaitement valide. Elle
+                # n'apparaît dans `present` que si la couche est renseignée sur AU
+                # MOINS une ligne de la page, et jamais dans `declared` (le schéma
+                # déclare des colonnes, pas leurs couches, qui sont natives et
+                # universelles). Sur une page où la couche est vide partout,
+                # l'avertissement accusait donc une adresse juste — et l'appelant,
+                # relisant un appel correct, en conclut que l'annotation n'existe pas
+                # sur ce tableau. Encore une cause fausse désignée, la troisième de la
+                # journée : le refus doit se taire quand il n'a rien à reprocher.
+                if unknown:
+                    unknown = [f for f in unknown
+                               if not _adresse_de_couche_valide(f, present, declared)]
                 if unknown:
                     out["warning"] = (
                         f"colonne(s) de `fields` inconnue(s) dans ce namespace : "

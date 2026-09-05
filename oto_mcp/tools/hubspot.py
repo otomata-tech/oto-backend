@@ -69,6 +69,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
 
 
 #: Les clés que `batch_read_objects` rend TOUJOURS, toutes les deux, jamais à
@@ -250,10 +251,42 @@ def _scope_refusal(e, object_type) -> Optional[McpError]:
         "l'appel : les autres objets répondent avec la MÊME clé.")))
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /account-info/v3/details`. Ce que la doc HubSpot établit :
+
+    - **authentifié** — Bearer token (jeton d'app privée), comme le reste de
+      l'API ;
+    - **sans effet de bord** — une lecture de compte (`portalId`, `accountType`,
+      `timeZone`…) ;
+    - **le coût** — aucune mention de coût ni de limite de débit particulière
+      pour cet appel. Absence de mention, indice, pas une preuve.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue PAS ici — cet
+    appel ne révèle aucun scope, et HubSpot les accorde OBJET PAR OBJET
+    (`crm.objects.contacts.*`, `tickets`…, cf. `_scope_refusal` ci-dessus) :
+    un jeton peut lire les contacts et pas les tickets, ce qui n'est PAS un état
+    « connecteur mort », c'est un manque LOCAL à un objet (403 `MISSING_SCOPES`
+    déjà traduit à l'appel réel). Troisième règle d'oto#69 : un scope partiel ne
+    se mesure pas dans le verdict de connexion.
+    """
+    from oto.tools.hubspot.client import HubSpotClient
+
+    infos = HubSpotClient(api_key=fields["key"])._request(
+        "GET", "/account-info/v3/details") or {}
+    if not infos.get("portalId"):
+        raise RuntimeError(
+            "HubSpot a répondu sans identifier de compte pour cette clé — "
+            f"réponse inattendue : {str(infos)[:200]}")
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
 
     from oto.tools.hubspot.client import HubSpotClient
+
+    connector_verify.register("hubspot", _verify)
 
     def _client() -> HubSpotClient:
         key, _ = access.resolve_api_key("hubspot")

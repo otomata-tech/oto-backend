@@ -1078,8 +1078,16 @@ class DatastorePg(SchemaOpsMixin):
     def create_namespace(
         self, namespace: str, *, owner_type: Optional[str] = None, owner_id: Optional[str] = None,
     ) -> dict:
-        """Crée un namespace. Défaut = **org active** de l'user (plus de perso). Pour un
-        classeur d'org/groupe précis, passer `owner_type`/`owner_id` — l'autorisation
+        """Crée un namespace. Défaut = **la personne** (`_default_owner`, ADR 0068).
+
+        ⚠️ Cette phrase disait « défaut = org active », quinze lignes sous le code
+        qui rend `("user", sub)` : elle datait du régime d'avant et personne ne
+        l'avait suivie jusqu'ici. Un commentaire périmé sur un défaut de
+        PROPRIÉTAIRE ne se contente pas d'être faux — il fait conclure à qui le lit
+        que le tableau sera visible de l'org (otomata-tech/oto#45).
+
+        Le contexte d'org de l'appel n'entre PAS dans ce choix : pour un classeur
+        d'org ou d'équipe, passer `owner_type`/`owner_id`, dont l'autorisation
         (appartenance) est vérifiée par l'appelant (capacité/route)."""
         if owner_type is None:
             owner_type, owner_id = self._default_owner()
@@ -1417,7 +1425,7 @@ class DatastorePg(SchemaOpsMixin):
         except NamespaceNotFound:
             _ot, _oid = self._default_owner()
             db.create_datastore_namespace(_ot, _oid, namespace)
-            self._active_scope_cache = None  # invalide le cache (le ns créé est dans l'org active)
+            self._active_scope_cache = None  # invalide le cache (le ns créé appartient à la PERSONNE (ADR 0068), pas à l'org active)
             ns_id = self._resolve(namespace, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         schema = self._schema_of(ns_id)

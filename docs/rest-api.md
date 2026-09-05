@@ -568,6 +568,34 @@ quand la face MCP recevait la liste entière : deux faces, deux résultats pour 
 demande, et l'OpenAPI promettait la forme perdue. Les deux formes se combinent
 (`?k=a,b&k=c` → `["a,b", "c"]`, puis le champ découpe s'il le fait).
 
+## Créer un tableau : `POST /api/datastore/namespaces`
+
+Corps : `{"namespace": "<kebab-case>"}`, plus **`owner`** optionnel —
+`{"type": "org"|"group", "id": N}`. L'appartenance est vérifiée (403 sinon).
+
+⚠️ **Sans `owner`, le tableau est PERSONNEL** : visible de son créateur seul, ni des
+autres membres de l'org ni de ses administrateurs. C'est le défaut voulu, jamais
+implicite (ADR 0068).
+
+⚠️ **`X-Oto-Org` ne change pas le propriétaire.** L'en-tête décide sous quelle org on
+lit et on écrit — c'est même ce que la doc du datastore recommande partout pour « agir
+dans l'org » — mais il n'entre pas dans le choix du propriétaire. Créé sous cet en-tête
+sans `owner`, le tableau naît personnel **et toutes les requêtes suivantes de son
+créateur continuent de réussir** : rien ne cloche de son côté. Ça se découvre au second
+agent, ou au collègue qui ne trouve pas le tableau et conclut qu'il n'existe pas — une
+heure perdue, vécue (otomata-tech/oto#45).
+
+La réponse (201) rend donc **qui possède** : `{namespace, id, url, owner_type, owner_id,
+is_personal}`, plus un champ **`avertissement`** dans ce cas précis — et seulement dans
+ce cas : posé quand une org était *explicitement demandée* et que le tableau naît
+personnel quand même. Il n'apparaît pas quand l'org active est simplement celle par
+défaut, sans quoi il sortirait à chaque création et ne serait plus lu.
+
+Le propriétaire **ne se change pas après coup** : il se décide à la création.
+
+Côté oto-core : `DatastoreClient.create_namespace(namespace, owner=None)` (v1.115.0 —
+avant, la lib ne permettait pas de créer un tableau d'org).
+
 **Une clé répétée sur un champ SCALAIRE est REFUSÉE — `400 repeated_scalar`, qui nomme
 la clé** — jamais réduite à sa dernière valeur. C'est la même règle que `unknown_fields`
 et que le corps illisible : refuser plutôt qu'ignorer. `filters` de

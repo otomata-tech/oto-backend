@@ -395,6 +395,13 @@ def register(mcp: FastMCP) -> None:
         `owner: {type: "org"|"group", id: N}`. Tables created before 2026-09-04 keep
         the owner they have.
 
+        ⚠️ **`_org=` does NOT change the owner.** It decides which org you read and
+        write under — never who owns what you create. Create a table under `_org=N`
+        without an owner and it is still YOURS: every later call of yours keeps
+        working, so nothing looks wrong. It shows up at the second agent, or at the
+        colleague who cannot find the table and concludes it does not exist. The
+        reply tells you the owner, and warns you in exactly that case.
+
         Args:
             namespace: kebab-case identifier, unique per owner (e.g. `timetrack`).
         """

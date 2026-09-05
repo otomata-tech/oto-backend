@@ -102,6 +102,16 @@ class CreatedNamespace(BaseModel):
     namespace: str
     id: int
     url: str
+    # QUI possède le tableau — donc qui le verra. La création rendait moins que la
+    # liste sur la seule information qui décide de ça (otomata-tech/oto#45) : le
+    # serveur le savait, la réponse ne le disait pas.
+    owner_type: str = "user"
+    owner_id: str = ""
+    is_personal: bool = True
+    # Posé QUAND le contexte d'org était là et que le tableau naît personnel quand
+    # même. Un avertissement, jamais un refus : le défaut privé est voulu
+    # (ADR 0068), c'est son silence qui coûtait une heure.
+    avertissement: Optional[str] = None
 
 
 class DeletedNamespace(BaseModel):
@@ -154,10 +164,38 @@ def _create_namespace(ctx: ResolvedCtx, inp: CreateNamespaceInput) -> dict:
     elif owner_type != "user":
         raise AuthzDenied(400, "invalid_owner_type")
     try:
-        return make_store(ctx.sub).create_namespace(
+        cree = make_store(ctx.sub).create_namespace(
             namespace, owner_type=owner_type, owner_id=owner_id)
     except NamespaceExists:
         raise AuthzDenied(409, "namespace_exists")
+
+    personnel = owner_type == "user"
+    out = {**cree, "owner_type": owner_type, "owner_id": owner_id,
+           "is_personal": personnel}
+    # Le contexte d'org était posé (`X-Oto-Org` côté REST, `_org=` côté agent) et
+    # le tableau naît quand même personnel : c'est juste — le propriétaire ne se
+    # déduit JAMAIS du contexte (ADR 0068) — mais c'est le contraire de ce qu'on
+    # attend d'un en-tête que toute la doc du datastore recommande pour « agir dans
+    # l'org ». Sans cette phrase, tout marche sous cet en-tête et personne d'autre
+    # ne voit le tableau : l'erreur ne se découvre qu'au second agent.
+    # ⚠️ On regarde l'org EXPLICITEMENT demandée pour cet appel — la consultation
+    # `X-Oto-Org` (REST) ou l'org du jeton `_org=` (agent) — jamais `ctx.org_id`.
+    # Celui-ci vaut l'org ACTIVE, toujours posée puisqu'elle retombe sur la maison :
+    # avertir dessus, ce serait avertir à CHAQUE création, y compris quand personne
+    # n'a rien demandé de particulier. Un avertissement qui se déclenche toujours
+    # ne se lit plus.
+    from ... import session_org
+
+    demandee = session_org.current_view_org() or session_org.current_call_org()
+    if personnel and demandee and not (inp.owner or {}):
+        out["avertissement"] = (
+            f"Tableau créé PERSONNEL : toi seul le vois, même si l'organisation "
+            f"{demandee} était le contexte de cet appel. Le contexte d'org ne "
+            f"décide pas du propriétaire — seul `owner` le fait. Pour qu'il "
+            f"appartienne à l'organisation : `owner: {{\"type\": \"org\", "
+            f"\"id\": {demandee}}}` à la création (le propriétaire ne se change "
+            f"pas après coup).")
+    return out
 
 
 def _delete_namespace(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
@@ -225,7 +263,13 @@ CAPABILITIES += [
                      "seul — ni les autres membres de ton org, ni ses administrateurs) ; "
                      "passe `owner: {type: \"org\"|\"group\", id: N}` pour qu'il "
                      "appartienne à l'org ou à l'équipe, et soit lisible de tous ses "
-                     "membres."),
+                     "membres. ⚠️ L'en-tête `X-Oto-Org` NE CHANGE PAS le propriétaire : "
+                     "il décide sous quelle org on lit et écrit, jamais à qui appartient "
+                     "ce qu'on crée — seul `owner` le fait, et il ne se change pas après "
+                     "coup. Créé sous cet en-tête sans `owner`, le tableau naît personnel "
+                     "et tout continue de fonctionner pour TOI : c'est au second agent, "
+                     "ou au collègue qui ne le trouve pas, que ça se voit. La réponse "
+                     "rend le propriétaire et vous avertit dans ce cas précis."),
     ),
     Capability(
         key="me.datastore.delete_namespace",

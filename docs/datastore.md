@@ -1218,6 +1218,21 @@ s'atteignent comme des colonnes : `{"field": "email.origine", "op": "empty"}` r�
 vérifiable d'une provenance décorative. Pas de `COALESCE` sur une couche : sur une
 colonne scalaire elle est NULL, et c'est la bonne réponse.
 
+**Deux formes de lecture — `layers` (oto#53).** L'écriture est imbriquée, la lecture par
+défaut est plate : c'est l'asymétrie de oto#47 (un client qui relit `row["champ"]` en
+attendant la forme qu'il a écrite conclut que sa couche a disparu). `layers=nested` sur
+`data_rows` (MCP) et sur `GET …/rows` / `GET …/rows/{id}` (REST) rend une cellule à
+couches comme elle s'écrit, `{"valeur": …, "origine": …, "comment": …, "link": …}` —
+`valeur` toujours (`None` quand seule une provenance est posée), les couches seulement
+renseignées ; une cellule sans couche reste un scalaire ; dans une colonne-liste, la même
+règle un cran plus bas (`item["email"]["link"]`). Toute autre valeur est refusée en
+nommant le paramètre (`invalid_layers`). Mise en forme dans `datastore/layers.py` ; le
+défaut (`layers.DEFAUT`) y vit seul et les deux faces le recopient — palier 3 : bascule
+vers `nested` avec préavis daté et double-service ; d'ici là `flat` reste le défaut, et
+l'épreuve « le défaut reste flat » tombe seule si quelqu'un le bouge. Les réponses
+d'écriture (`data_write`, `POST/PATCH …/rows`), `queue`, `claim_next`, `data_app` et la
+vue nœud restent plates : l'option ne couvre que les deux lectures nommées.
+
 **La table reste MIXTE pour toujours** (personne ne réécrira les lignes existantes) :
 tout lecteur adressé par champ passe donc par `db.field_value_sql` /
 `field_read_sql` — filtres, tri, agrégats, clé métier, contrôles de schéma — et aucun

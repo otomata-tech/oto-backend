@@ -56,7 +56,7 @@ class _Store:
     def queue(self, ns):
         return self._out("queue", ns) or []
 
-    def get_row(self, ns, row_id):
+    def get_row(self, ns, row_id, *, layers="flat"):
         return self._out("get_row", ns, row_id)
 
     def append_row(self, ns, data, *, trace=None, readonly_override=False):

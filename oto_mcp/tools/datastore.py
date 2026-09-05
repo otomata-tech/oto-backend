@@ -21,6 +21,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
 from ..datastore import claimable, jetons
+from ..datastore import layers as dsl
 from ..datastore import schema as dsv2
 from ..datastore.core import (
     ClaimedRefUnresolved,
@@ -866,7 +867,7 @@ def register(mcp: FastMCP) -> None:
         cursor: str | None = None, fields: Optional[list[str]] = None,
         count_only: bool = False, q: str | None = None,
         order_by: str | None = None, order_dir: str = "desc",
-        filters: Optional[list[dict]] = None,
+        filters: Optional[list[dict]] = None, layers: str = dsl.DEFAUT,
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
@@ -941,20 +942,31 @@ def register(mcp: FastMCP) -> None:
                 `order_health: {off_type, empty}` — counts over the whole filtered
                 set, absent when everything conforms.
             order_dir: `desc` (default) or `asc`. Only meaningful with `order_by`.
+            layers: shape of a cell that carries layers (`origine`/`comment`/`link`).
+                `flat` (default): `row["email"]` is the value, and each filled layer
+                sits BESIDE it as `row["email.origine"]`. `nested`: `row["email"]`
+                is `{"valeur": …, "origine": …, "comment": …, "link": …}` — `valeur`
+                always, the other keys only when filled — i.e. the shape you WRITE
+                with `data_write`. A cell without layers is the same plain value in
+                both shapes. Any other value is refused. With `nested`, `fields`
+                names columns (a nested cell keeps its layers); `email.origine` as
+                a field name only exists in `flat`.
         """
         store = _acting_store()
         namespace, id = _adresse_reservee(store, namespace, id)
         try:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
+            layers = dsl.check(layers)
             if count_only:
                 return {"total": store.count_rows(namespace, filter=filter, q=q,
                                                   filters=filters)}
             if id is not None:
-                row = store.get_row(namespace, id)
+                row = store.get_row(namespace, id, layers=layers)
                 return _project_row(row, fields) if fields else row
             page = store.cursor_rows(namespace, filter=filter, limit=limit,
                                      cursor=cursor, q=q, filters=filters,
-                                     order_by=order_by, order_dir=order_dir)
+                                     order_by=order_by, order_dir=order_dir,
+                                     layers=layers)
             rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
             out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"]}

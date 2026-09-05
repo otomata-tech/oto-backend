@@ -184,7 +184,7 @@ class _StoreEspion:
 
     ligne = {"_id": "01a04aef-26c0-7c16-9c58-42f8", "siren": "1"}
 
-    def get_row(self, namespace, row_id):
+    def get_row(self, namespace, row_id, *, layers="flat"):
         self.vu["get"] = (namespace, row_id)
         return self.ligne
 

@@ -50,10 +50,33 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /api/users/current/` (déjà dans le client — `get_current_user`),
+    documenté « Free » dans le client ET dans `forager_account` (op="me") —
+    le seul appel confirmé sans coût de ce connecteur payant au crédit.
+
+    Pas `auth+quota` : `credits_balance` vit PAR COMPTE dans `accounts[]`, et
+    une clé avec accès à plusieurs comptes n'en désigne aucun par défaut
+    (`resolve_account_id` REFUSE plutôt que deviner, cf. docstring du module)
+    — lire un solde ici demanderait de choisir un compte au hasard.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    rien de plus fin que l'identité à distinguer sur cet appel.
+    """
+    from oto.tools.forager import ForagerClient
+
+    ForagerClient(api_key=fields["api_key"]).get_current_user()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.forager import ForagerClient
+
+    connector_verify.register("forager", _verify)
 
     def _client() -> ForagerClient:
         creds = access.resolve_credential_fields("forager")

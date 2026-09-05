@@ -49,6 +49,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from ..connectors import verify as connector_verify
 
 
 def _bad(msg: str) -> McpError:
@@ -64,8 +65,32 @@ def _require(op: str, **fields) -> None:
         raise _bad(f"promptwatch(op='{op}') requires {', '.join(missing)}.")
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET projects` (déjà dans le client — `list_projects`), le premier appel
+    de découverte du connecteur (`promptwatch_project`) : PromptWatch n'expose
+    ni `/me` ni solde à cet endpoint. `raise_for_upstream` (typé,
+    `UpstreamHTTPError` avec `status_code`) — le tool `_run` de ce module sait
+    déjà distinguer 401 (clé) de 402 (quota) sur CET appel, signe qu'un compte
+    suspendu peut y répondre 402 ; non lu ici (`auth` seul), le classement
+    générique par code (401/402) s'applique tel quel si ça se produit.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé project-level est déjà scopée à un seul projet, `list_projects`
+    la sert quand même (voir `promptwatch_project`).
+    """
+    from oto.tools.promptwatch.client import PromptWatchClient
+
+    PromptWatchClient(
+        api_key=fields["api_key"], project_id=fields.get("project_id") or None,
+    ).list_projects()
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.promptwatch.client import PromptWatchClient
+
+    connector_verify.register("promptwatch", _verify)
 
     def _creds() -> dict:
         return access.resolve_credential_fields("promptwatch")

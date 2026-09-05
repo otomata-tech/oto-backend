@@ -20,10 +20,28 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from .. import access
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET invoices` (déjà dans le client — `list_invoices`), Finkare n'exposant
+    ni `/me` ni solde. Lecture sans effet de bord ; une liste VIDE (aucune
+    créance) est un état normal, jamais un refus.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope —
+    une clé Finkare porte le périmètre entier des créances d'UNE entreprise.
+    """
+    from oto.tools.finkare import FinkareClient
+
+    FinkareClient(api_key=fields["key"]).list_invoices()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.finkare import FinkareClient
+
+    connector_verify.register("finkare", _verify)
 
     def _client() -> FinkareClient:
         key, _ = access.resolve_api_key("finkare")

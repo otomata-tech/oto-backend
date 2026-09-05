@@ -29,12 +29,35 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, url_perimeter
+from ..connectors import verify as connector_verify
 
 _BASE_URL = "https://www.searchapi.io/api/v1/search"
+_ACCOUNT_URL = "https://www.searchapi.io/api/v1/me"
 _TIMEOUT = 30.0
 
 
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET /api/v1/me` — endpoint dédié « account usage » (crédits restants,
+    limite horaire), documenté « without requiring a specific plan level » :
+    gratuit, contrairement à `/api/v1/search` (facturé à la requête, ce que
+    ce module wrappe). Bearer header (jamais en query — `_run` de ce module
+    applique déjà cette règle sur `/search`, cf. #284).
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne lit pas le solde (pas de
+    forme de champ confirmée dans le temps imparti) — `auth` seul.
+    """
+    import requests
+
+    r = requests.get(_ACCOUNT_URL, headers={"Authorization": f"Bearer {fields['key']}"},
+                     timeout=15)
+    r.raise_for_status()
+
+
 def register(mcp: FastMCP) -> None:
+    connector_verify.register("searchapi", _verify)
+
 
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))

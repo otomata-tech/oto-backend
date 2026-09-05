@@ -25,10 +25,35 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, file_source
+from ..connectors import verify as connector_verify
+
+
+def _verify(fields: dict, config: dict | None = None) -> None:
+    """Sonde « tester la connexion » — otomata-tech/oto#69. Couvre `auth` SEUL.
+
+    `GET workspaces` (déjà dans le client — `list_workspaces`) : LightOn
+    facture l'ingestion (à la page), le retrieval (`search`/`ask`, à la
+    requête) et le stockage vectoriel — PAS listé workspaces, une opération de
+    gestion, pas de retrieval. Aucun `/me` ni solde par ailleurs.
+
+    ⚠️ `LightOnClient._request` lève un `RuntimeError` NU (pas de `status_code`
+    typé) sur un refus — tombe en `unknown`, jamais `unauthorized`. Aucun
+    modèle de clé scopée par ressource documenté chez LightOn : honnête plutôt
+    que précis, rouvrable si le client se met à typer ses erreurs.
+
+    **Authentifié ≠ utilisable** (classe oto#69) : ne distingue pas de scope.
+    """
+    from oto.tools.lighton import LightOnClient
+
+    LightOnClient(
+        api_key=fields["api_key"], base_url=fields.get("base_url"),
+    ).list_workspaces()
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.lighton import LightOnClient
+
+    connector_verify.register("lighton", _verify)
 
     def _creds() -> dict:
         return access.resolve_credential_fields("lighton")

@@ -147,6 +147,7 @@ class SchemaOpsMixin:
                                 # Et le fait, sur les champs `json` : stockés, rendus,
                                 # mais pas interrogeables en profondeur.
                                 dsv2.json_depth_warning(dsv2.json_fields_depth(schema)),
+                                self._missing_required_warning(ns_id, schema),
                                 self._overlong_warning(ns_id, schema),
                                 self._offpattern_warning(ns_id, schema),
                                 self._offending_enum_warning(ns_id, schema),
@@ -281,6 +282,41 @@ class SchemaOpsMixin:
                 "écritures futures sont refusées, ces lignes-là restent en place "
                 "jusqu'à ce qu'on réécrive le champ (un patch d'un AUTRE champ "
                 "passe).")
+
+    @staticmethod
+    def _missing_required_warning(ns_id: int, schema: Optional[dict]) -> Optional[str]:
+        """Des rows existantes ne portent pas un champ fraîchement déclaré `required`
+        (oto-backend#284) : le dire à celui qui le déclare, AU MOMENT où il le fait.
+
+        ⚠️ **Celui-ci n'annonce pas une non-conformité, il annonce un BLOCAGE** — et
+        c'est ce qui le sépare de ses deux voisins. Une borne ou un motif posés après
+        coup ne jugent que les clés qu'un geste ÉCRIT : un patch d'un autre champ
+        passe. Un champ requis est vérifié sur la ligne entière ; tant qu'il manque,
+        **plus rien ne s'écrit sur cette ligne**, et le refus nomme un champ que
+        l'appelant n'essayait pas d'écrire.
+
+        Mesuré le 05/09/2026 : ajouter une colonne obligatoire à un tableau qui a déjà
+        des lignes est un geste ordinaire, et il rend ces lignes inécrivables sans que
+        rien ne le dise. On le découvrait plus tard, par des écritures qui échouent
+        ailleurs — au pire endroit et au pire moment.
+
+        AVERTIT, ne refuse pas : déclarer un champ obligatoire reste légitime, et
+        l'ordre normal des choses est d'écrire d'abord et de formaliser ensuite. Ce
+        qui manquait, c'est de connaître le prix avant de le payer."""
+        champs = [f.get("key") for f in dsv2._fields(schema)
+                  if isinstance(f, dict) and f.get("required") and f.get("key")]
+        if not champs:
+            return None
+        manquants = db.datastore_rows_missing_required(ns_id, champs)
+        if not manquants:
+            return None
+        detail = ", ".join(f"`{m['field']}` : {m['rows']} ligne(s)" for m in manquants)
+        return (f"champ obligatoire déclaré sur des lignes qui ne le portent pas — "
+                f"{detail}. ⚠️ Ces lignes-là n'accepteront PLUS AUCUNE écriture, sur "
+                f"aucune colonne, tant que ce champ n'est pas rempli — et le refus "
+                f"nommera ce champ, pas celui qu'on essayait d'écrire. Remplis-le sur "
+                f"ces lignes, ou retire `required` (`data_patch_schema` avec "
+                f"`required: null`).")
 
     @staticmethod
     def _offpattern_warning(ns_id: int, schema: Optional[dict]) -> Optional[str]:

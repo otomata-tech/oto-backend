@@ -273,6 +273,35 @@ def datastore_overlong_fields(ns_id: int, bounds: dict) -> list[dict]:
 
 
 
+def datastore_rows_missing_required(ns_id: int, champs: list) -> list[dict]:
+    """Lignes DÉJÀ EN BASE qui ne portent pas un champ fraîchement déclaré
+    `required` — `[{field, rows}]`, le plus large d'abord (oto-backend#284).
+
+    ⚠️ **Ce comptage n'a pas la même portée que ses voisins.** Une borne ou un motif
+    posés après coup ne gèlent rien : ils ne jugent que les clés qu'un geste ÉCRIT,
+    donc un patch d'un autre champ passe. Un champ REQUIS, lui, est vérifié sur la
+    ligne entière : tant qu'il manque, **plus aucune écriture n'aboutit sur cette
+    ligne**, quelle que soit la colonne visée. C'est ce que compte cette fonction —
+    non pas des lignes non conformes, mais des lignes devenues inécrivables.
+
+    Une valeur vide (`''`) compte comme absente : c'est ce que le contrôle de
+    `required` refuse aussi, et compter autrement annoncerait moins de lignes
+    bloquées qu'il n'y en a.
+    """
+    from psycopg import sql as _sql
+    out: list[dict] = []
+    with _connect() as conn:
+        for champ in champs or []:
+            q = _sql.SQL(
+                "SELECT COUNT(*) AS rows FROM datastore_rows "
+                "WHERE ns_id = %s AND ({v} IS NULL OR {v} = '')"
+            ).format(v=field_value_sql(champ))
+            r = conn.execute(q, (ns_id,)).fetchone()
+            if r and (r["rows"] or 0) > 0:
+                out.append({"field": champ, "rows": int(r["rows"])})
+    return sorted(out, key=lambda d: d["rows"], reverse=True)
+
+
 def datastore_offending_enum_values(ns_id: int, options: dict,
                                     per_field: int = 5) -> list[dict]:
     """Valeurs DÉJÀ EN BASE qu'un enum fraîchement déclaré condamne —

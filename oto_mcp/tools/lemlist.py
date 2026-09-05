@@ -359,11 +359,21 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def lemlist_get_leads(campaign_id: str) -> dict:
-        """List all leads for a campaign with their state (sent, replied…)."""
+        """List all leads for a campaign with their state (sent, replied…).
+
+        ⚠️ Passe par l'export JSON, PAS par `get_all_leads` : ce dernier appelle
+        l'export sans `state`, donc avec le défaut de lemlist — qui filtre tout et
+        rend une liste vide se lisant « pas de leads ». Une campagne d'un lead
+        revenait ainsi vide (signal 719) alors que la route unitaire le rendait très
+        bien, et le guide annonçait le forçage comme acquis pour tout le connecteur.
+        `export_campaign_leads` porte le défaut `state="all"`, vérifié en live le
+        2026-08-31 : on prend la surface qui a la garde plutôt que d'en refaire une.
+        """
         client, is_platform = _client()
-        leads = client.get_all_leads(campaign_id)
+        exported = client.export_campaign_leads(campaign_id, format="json")
         _record_if_platform(is_platform)
-        return {"leads": leads}
+        return {"leads": exported if isinstance(exported, list)
+                else (exported or {}).get("leads", exported)}
 
     @mcp.tool()
     def lemlist_create_lead(
@@ -1182,7 +1192,10 @@ def register(mcp: FastMCP) -> None:
 
         Args by op:
         - `get`: `lead_id` or `email`. `list`: `campaign_id` + optional `state`
-          (`sent`, `replied`, `paused`…) and `limit`.
+          (`sent`, `replied`, `paused`…) and `limit`. ⚠️ `state` defaults to
+          `"all"` HERE, which is NOT lemlist's own default: without it the API
+          filters everything out and returns an empty list that reads as "no
+          leads on this campaign". Pass a state only to narrow deliberately.
         - `update`: `campaign_id` + `lead_id` + `fields` (`firstName`,
           `lastName`, `companyName`, `jobTitle`, `preferredContactMethod`).
         - `delete`: `campaign_id` + `lead_id`/`email` — really removes it.
@@ -1218,8 +1231,17 @@ def register(mcp: FastMCP) -> None:
         elif op == "list":
             if not campaign_id:
                 raise _bad("`campaign_id` requis")
+            # ⚠️ `state="all"` par DÉFAUT — le défaut de lemlist filtre TOUT et rend
+            # une liste vide qui se lit « pas de leads » (vérifié en live le
+            # 2026-08-31, cf. `export_campaign_leads` côté client). Le guide
+            # `lemlist-playbook` annonçait ce forçage comme acquis pour le connecteur
+            # entier ; il n'existait que sur la route d'export, et cette route-ci
+            # rendait donc `[]` sur une campagne qui contient bien des leads
+            # (signal 719). Un `state` explicite reste maître ; il n'y a PAS
+            # d'échappatoire vers le brut — une valeur magique non documentée serait
+            # le défaut d'à côté, et le brut n'est utile à personne : il filtre tout.
             result = {"leads": client.get_campaign_leads(
-                campaign_id, state=state, limit=limit)}
+                campaign_id, state=(state or "all"), limit=limit)}
 
         elif op == "update":
             if not (campaign_id and lead_id and fields):

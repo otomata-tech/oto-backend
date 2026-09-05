@@ -42,10 +42,13 @@ NON_EXPOSEES = {
     # Une seule page de campagnes. Les tools passent par `list_all_campaigns`,
     # qui l'appelle en boucle et rend en plus le drapeau de troncature.
     "list_campaigns": "atteinte via list_all_campaigns",
-    # Export CSV historique `/campaigns/{id}/export`. `lemlist_get_leads` s'en
-    # sert INDIRECTEMENT via `get_all_leads` ; l'exposer en direct rendrait un
-    # CSV brut là où le tool rend des lignes.
-    "export_leads": "atteint via get_all_leads (lemlist_get_leads)",
+    # Export CSV historique `/campaigns/{id}/export`, appelé SANS `state` : le
+    # défaut de lemlist filtre alors tout et rend un CSV réduit à son en-tête.
+    # Ni lui ni son enveloppe `get_all_leads` ne sont plus servis — c'est
+    # `export_campaign_leads` (défaut `state="all"`) qui porte le geste depuis le
+    # 05/09/2026, signal 719. Les exposer serait servir le piège lui-même.
+    "export_leads": "route brute sans `state` — remplacée par export_campaign_leads",
+    "get_all_leads": "enveloppe d'export_leads, hérite de son `state` absent",
     # Le geste doux de `delete_lead`, que `lemlist_lead(op="unsubscribe")`
     # obtient en passant `action=None` — un seul chemin d'appel, pas deux.
     "unsubscribe_lead": "alias de delete_lead sans action",

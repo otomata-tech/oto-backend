@@ -651,6 +651,17 @@ gagnante — nécessaire pour marquer la bonne ligne).
 retour OAuth (`auth/google.py`) au moment du lot b2 — à faire une fois ce WIP
 stabilisé, dans un lot séparé.
 
+✅ **Fait dans ce lot séparé (2026-09-05, une fois oto-backend#877 poussé et
+tagué)** : `credentials_for` (le seul appelant de `_refresh_access_token`) marque
+sur `invalid_grant` (`GoogleReauthRequired`, même règle `oauth_flow.grant_is_dead`)
+puis **relève toujours** — contrairement à atlassian/folk, `credentials_for` n'a
+jamais rendu de `None` muet et ce lot ne change pas ce contrat. Démarque
+explicitement au refresh réussi : `update_google_access_token` MERGE le meta
+(`update_meta`, JSONB `||`), donc un `health_ko` posé plus tôt n'aurait jamais
+disparu tout seul (même raison que le point 3 ci-dessous pour Salesforce —
+contrairement à atlassian/folk, dont le remplacement total du meta démarque déjà
+par accident). Bancs : `tests/auth/test_google_health_marking.py`.
+
 ### Le démarquage (oto#25 lot b3, 2026-09-05)
 
 Trois déclencheurs, et AUCUN autre — surtout pas un appel `ok=true` quelconque, qui

@@ -37,8 +37,10 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from .. import db
+from .. import credentials_store, db
+from . import flow as oauth_flow
 from ..connectors import flow as connector_flow
+from ..connectors import health as connector_health
 from ..connectors import link as connector_link
 
 
@@ -271,6 +273,10 @@ def persist_token(sub: str, org_id: int, token_response: dict) -> str:
     return email
 
 
+class GoogleReauthRequired(Exception):
+    """Refresh token Google mort (invalid_grant) → l'user doit reconnecter."""
+
+
 def _refresh_access_token(refresh_token: str) -> dict:
     import requests
     r = requests.post(
@@ -283,6 +289,12 @@ def _refresh_access_token(refresh_token: str) -> dict:
         },
         timeout=15,
     )
+    # `invalid_grant` SEUL vaut « réauth » (même règle que atlassian/folk/zoho,
+    # `oauth_flow.grant_is_dead`) — un autre 4xx (client mal configuré) doit
+    # remonter, pas se confondre avec un grant mort.
+    body = (r.text or "")[:300]
+    if r.status_code in (400, 401) and oauth_flow.grant_is_dead(r.status_code, body):
+        raise GoogleReauthRequired(body)
     r.raise_for_status()
     return r.json()
 
@@ -352,11 +364,29 @@ def credentials_for(sub: str, account: Optional[str] = None):
             needs_refresh = True
 
     if needs_refresh:
-        resp = _refresh_access_token(row["refresh_token"])
+        member_id = credentials_store.member_id(org_id, sub)
+        account = row.get("google_email") or ""
+        scope = (credentials_store.MEMBER, member_id, account)
+        try:
+            resp = _refresh_access_token(row["refresh_token"])
+        except GoogleReauthRequired as e:
+            # Grant mort : on MARQUE (aide partagée oto#25 lot b2), jamais de purge —
+            # même garde de portée que atlassian/folk/salesforce/zoho. On relève
+            # ENSUITE, sans changer le contrat de `credentials_for` (toujours des
+            # `Credentials` valides ou une exception, jamais un `None` muet).
+            connector_health.mark_rejected(
+                credentials_store.MEMBER, member_id, "google", account, str(e) or None)
+            raise
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
         db.update_google_access_token(sub, org_id, row.get("google_email"), access_token, new_exp)
+        # `update_google_access_token` MERGE le meta (`update_meta`, JSONB ||) :
+        # un `health_ko` posé par un refresh mort précédent ne serait jamais
+        # effacé par ce chemin sans cet appel explicite (oto#25 lot b3, même
+        # raison que la rotation Salesforce — contrairement à atlassian/folk, dont
+        # le refresh REMPLACE tout le meta et démarque déjà pour ce seul fait).
+        connector_health.record_health("google", scope, True, None)
 
     return Credentials(
         token=access_token,

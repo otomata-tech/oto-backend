@@ -26,6 +26,7 @@ survit au filtre parce qu'elle contient déjà « passed ».
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import time
 import uuid
@@ -37,6 +38,62 @@ import pytest
 from _oto_core_pin import (MARQUEUR, categorie_non_concluante, ecart,
                            lignes_de_banniere, skips_autorises)
 from _pg_hygiene import Guard, docker_available, run_args, sweep_orphans
+
+
+# --------------------------------------------------------------------------- #
+# Garde-fou réseau : aucune connexion sortante réelle dans la suite
+# --------------------------------------------------------------------------- #
+#
+# Mesure du 05/09/2026 (serper flaky, otomata-tech/oto#69) : sockets sortants
+# bloqués pour toute la suite (10881 tests), UN SEUL a réellement dialé —
+# `test_une_url_ordinaire_n_est_PAS_refusee` visait `serper._client`, qui
+# n'existe pas au niveau module (fermeture locale de `register()`) ; le
+# monkeypatch posait un attribut mort, `_Faux` n'était jamais exercé, et le
+# `except Exception: pass` du test avalait l'appel réseau réel qui suivait
+# (vers `exemple.invalid`, RFC 2606, pourtant résolu vers une IP live).
+#
+# Un test qui ouvre une connexion réelle est non déterministe PAR
+# CONSTRUCTION : son issue dépend de l'horloge, du réseau et des conditions du
+# moment — et un rouge intermittent se fait accuser au dernier commit poussé,
+# jamais à sa vraie cause. Fermé structurellement plutôt que corrigé au cas
+# par cas : le loopback (tests DB réels, `pg_dsn`) reste libre, tout le reste
+# est bloqué par défaut. Le besoin légitime existe : il se déclare, avec sa
+# raison, à l'endroit où il se présente — jamais une exemption muette.
+_MARQUEUR_RESEAU = "reseau_reel"
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_reseau_autorise_pour: list[str] = []  # pile de raisons — le test courant, s'il a le droit
+
+
+def _connexion_gardee(self: socket.socket, address):
+    host = address[0] if isinstance(address, tuple) else address
+    if host in _LOOPBACK or _reseau_autorise_pour:
+        return _SOCKET_CONNECT_ORIGINAL(self, address)
+    raise AssertionError(
+        f"connexion sortante bloquée vers {address!r} — cette suite n'ouvre "
+        f"aucune connexion réseau réelle (otomata-tech/oto#69, 05/09/2026). "
+        f"Un test qui en a légitimement besoin le déclare avec "
+        f"@pytest.mark.{_MARQUEUR_RESEAU}(\"pourquoi un stub ne suffit pas ici\").")
+
+
+_SOCKET_CONNECT_ORIGINAL = socket.socket.connect
+socket.socket.connect = _connexion_gardee
+
+
+@pytest.fixture(autouse=True)
+def _garde_reseau_sortant(request: pytest.FixtureRequest) -> Iterator[None]:
+    marker = request.node.get_closest_marker(_MARQUEUR_RESEAU)
+    if marker is None:
+        yield
+        return
+    if not marker.args or not str(marker.args[0]).strip():
+        raise TypeError(
+            f"@pytest.mark.{_MARQUEUR_RESEAU} exige une raison : "
+            f'@pytest.mark.{_MARQUEUR_RESEAU}("pourquoi un stub ne suffit pas ici")')
+    _reseau_autorise_pour.append(marker.args[0])
+    try:
+        yield
+    finally:
+        _reseau_autorise_pour.pop()
 
 
 # --------------------------------------------------------------------------- #
@@ -61,6 +118,11 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{MARQUEUR}: ce test n'a de SENS que face à l'oto-core épinglé — il est "
         "passé (non concluant) en local quand le venv est en retard sur le pin, "
         "et reste mordant en CI.")
+    config.addinivalue_line(
+        "markers",
+        f"{_MARQUEUR_RESEAU}(raison): autorise CE test à ouvrir une connexion "
+        "réseau sortante réelle (non-loopback) — la raison est OBLIGATOIRE, "
+        "elle documente pourquoi un stub ne suffit pas ici.")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items) -> None:

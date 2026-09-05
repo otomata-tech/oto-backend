@@ -72,10 +72,19 @@ def test_le_defaut_d_origine_est_bien_celui_qu_on_croit():
 
 
 def test_une_url_ordinaire_n_est_PAS_refusee(monkeypatch):
-    """L'autre moitié : le refus ne doit pas mordre sur ce qui se scrape très bien."""
+    """L'autre moitié : le refus ne doit pas mordre sur ce qui se scrape très bien.
+
+    ⚠️ Mesure outbound (05/09/2026) : `serper._client` n'existe PAS au niveau module
+    (fermeture locale de `register()`) — `monkeypatch.setattr(serper, "_client", ...,
+    raising=False)` posait donc un attribut mort que rien ne lit, et `_Faux` n'était
+    JAMAIS exercé. Le `except Exception: pass` en bas avalait l'échec réel qui
+    suivait : un VRAI appel réseau vers `exemple.invalid` (RFC 2606, jamais censé
+    résoudre) atterrissait quand même sur une IP live — trouvé en bloquant les
+    sockets sortants au niveau suite. Fix : patcher `SerperClient` là où `_client()`
+    le lit réellement (même patron que `test_serper_scrape_error.py`)."""
     from oto_mcp.tools import serper
     vu = {}
-    monkeypatch.setattr(serper, "_client", lambda *a, **k: (_Faux(vu), False), raising=False)
+    monkeypatch.setattr("oto.tools.serper.SerperClient", lambda **kw: _Faux(vu))
     try:
         _scrape("https://exemple.invalid/page", monkeypatch)
     except McpError as e:

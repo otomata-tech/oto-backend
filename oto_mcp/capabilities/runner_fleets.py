@@ -207,6 +207,13 @@ def _lignes_visees(ctx: ResolvedCtx, fleet_id: int) -> Optional[int]:
     doit pas empêcher d'armer : le passage part avec un dénominateur inconnu, ce
     que l'écran sait dire. Refuser ici transformerait un défaut d'affichage en
     panne de lancement.
+
+    ⚠️ Compté sous l'identité de QUI ARME, pas de l'agent qui travaillera — ce
+    sont deux regards différents sur la même table (filtres de champs, partages).
+    Le compte dit donc « ce que voyait celui qui a lancé », et c'est suffisant
+    pour un dénominateur d'écran ; ça ne le serait pas pour une borne, et c'est
+    une des raisons pour lesquelles il n'en est pas une (cf. le banc qui sépare
+    `rows_at_launch` de `max_rows`).
     """
     f = db.get_fleet(fleet_id, ctx.org_id)
     if not f or not f.get("namespace"):

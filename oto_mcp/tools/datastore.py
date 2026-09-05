@@ -943,14 +943,18 @@ def register(mcp: FastMCP) -> None:
                 set, absent when everything conforms.
             order_dir: `desc` (default) or `asc`. Only meaningful with `order_by`.
             layers: shape of a cell that carries layers (`origine`/`comment`/`link`).
-                `flat` (default): `row["email"]` is the value, and each filled layer
-                sits BESIDE it as `row["email.origine"]`. `nested`: `row["email"]`
-                is `{"valeur": …, "origine": …, "comment": …, "link": …}` — `valeur`
+                You WRITE nested (`{"valeur": …, "origine": …}`) and, by default,
+                read back FLAT — this parameter lifts that asymmetry. `flat`
+                (default): `row["email"]` is the value, and each filled layer sits
+                BESIDE it as `row["email.origine"]`. `nested`: `row["email"]` is
+                `{"valeur": …, "origine": …, "comment": …, "link": …}` — `valeur`
                 always, the other keys only when filled — i.e. the shape you WRITE
                 with `data_write`. A cell without layers is the same plain value in
                 both shapes. Any other value is refused. With `nested`, `fields`
                 names columns (a nested cell keeps its layers); `email.origine` as
-                a field name only exists in `flat`.
+                a field name only exists in `flat`. The default WILL switch to
+                `nested`, with dated notice: pass `layers` explicitly if you depend
+                on one shape.
         """
         store = _acting_store()
         namespace, id = _adresse_reservee(store, namespace, id)

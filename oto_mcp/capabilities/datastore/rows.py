@@ -68,10 +68,14 @@ def _tolerant_int(v):
 # mauvaise valeur rende un refus qui NOMME le paramètre (`invalid_layers`, par
 # `_layers`), pas l'`invalid_input` nu que l'adaptateur rend sur une `ValidationError`.
 _LAYERS = Field(default=dsl.DEFAUT, description=(
-    "Forme des cellules à couches : `flat` (défaut) sert `champ` = la valeur et "
-    "`champ.origine`/`.comment`/`.link` à plat à côté ; `nested` sert `champ` = "
-    "`{valeur, origine, comment, link}` (la valeur toujours, les couches renseignées "
-    "seulement), la forme dans laquelle on écrit."))
+    "Forme des cellules à couches. On ÉCRIT imbriqué (`champ` = `{valeur, origine, "
+    "comment, link}`) et, par défaut, on relit À PLAT : ce paramètre lève cette "
+    "asymétrie. `flat` (défaut) sert `champ` = la valeur et `champ.origine`/`.comment`/"
+    "`.link` à plat à côté ; `nested` sert `champ` = `{valeur, origine, comment, link}` "
+    "(la valeur toujours, les couches renseignées seulement), la forme dans laquelle on "
+    "écrit ; une cellule sans couche est le même scalaire dans les deux. Toute autre "
+    "valeur est refusée. Le défaut basculera vers `nested`, avec préavis daté : un "
+    "client qui dépend d'une forme la nomme dès maintenant."))
 
 
 def _layers(raw) -> str:

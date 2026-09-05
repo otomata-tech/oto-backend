@@ -111,8 +111,19 @@ _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
     (re.compile(rf"^/api/datastore/namespaces/{_RES}/aggregate$"),
      frozenset({"GET"}), READ, NAMESPACES),
     (re.compile(rf"^/api/datastore/namespaces/{_RES}/url$"), frozenset({"GET"}), READ, NAMESPACES),
+    # ⚠️ Le schéma se LIT avant de s'écrire, et la lecture manquait : `PUT` était
+    # ouvert, `GET` non. On pouvait donc poser un schéma sans pouvoir le
+    # consulter — personne ne décide ça, c'était un oubli, et l'asymétrie le
+    # prouve (écrire est plus fort que lire).
+    #
+    # Ce que ça coûtait : le guide servi aux agents leur dit de lire le
+    # schéma AVANT d'écrire — c'est ce qui fait qu'une longueur maximale est un
+    # contrat et pas une consigne. Un agent porté qui obéissait se prenait un
+    # refus sur le geste exact qu'on lui demandait.
     (re.compile(rf"^/api/datastore/namespaces/{_RES}/schema$"),
-     frozenset({"PUT"}), WRITE, NAMESPACES),
+     frozenset({"GET"}), READ, NAMESPACES),
+    (re.compile(rf"^/api/datastore/namespaces/{_RES}/schema$"),
+     frozenset({"PUT", "PATCH"}), WRITE, NAMESPACES),
     # Le projet nommé : son brief et ses liens. Lecture seule, et par id — la
     # capacité `oto_project` (POST /api/me/projects) reste, elle, hors de portée
     # d'un jeton porté : sa cible vit dans le corps, on ne saurait pas la borner.
@@ -239,6 +250,27 @@ def authorize(scopes: Optional[dict], method: str, path: str) -> bool:
         granted = ((scopes or {}).get(family) or {}).get(unquote(m.group("res")))
         return granted is not None and needed in _IMPLIES[granted]
     return False
+
+
+def motif_du_refus(scopes: Optional[dict], method: str, path: str) -> tuple[str, str]:
+    """POURQUOI la requête est hors portée — le refus doit cesser de se contredire.
+
+    ⚠️ Deux situations très différentes finissaient dans le même message, qui
+    listait les tableaux ouverts. Refuser une requête SUR un tableau ouvert en le
+    nommant comme autorisé fait conclure au lecteur que son jeton est cassé —
+    c'est le pire des deux états, quel que soit le correctif.
+
+    Rend `("ressource", <nom>)` quand le GESTE est ouvert aux jetons portés mais
+    que cette ressource-là n'est pas dans la portée (ou pas avec ce droit), et
+    `("geste", "")` quand aucune entrée n'ouvre ce couple méthode+chemin — la
+    portée n'y peut rien, c'est le geste qui est fermé.
+    """
+    method = (method or "").upper()
+    path = (path or "").rstrip("/") or "/"
+    for pattern, methods, _needed, _family in _ALLOWED:
+        if method in methods and (m := pattern.match(path)):
+            return "ressource", unquote(m.group("res"))
+    return "geste", ""
 
 
 # ── Portée de la requête courante ────────────────────────────────────────────

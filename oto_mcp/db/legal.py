@@ -95,6 +95,49 @@ def record_legal_acceptances(sub: str, items: list[tuple[str, str]], *,
             )
 
 
+def list_acceptance_events(sub: str, *, doc_slug: str | None = None,
+                           limit: int = 200) -> tuple[list[dict], int]:
+    """L'HISTORIQUE complet des acceptations de `sub` — la preuve, pas l'état.
+
+    Rend `(lignes, total)`. `get_legal_acceptances` répond « a-t-il accepté la version
+    courante ? » et n'expose donc qu'une ligne par document ; ici on rend **chaque**
+    acceptation avec ce qui la situe — l'adresse, l'agent, le contexte, l'org payeuse.
+    C'est ce qu'on oppose à une contestation, et c'était en base sans aucune surface
+    pour le sortir (oto#42 lot 2).
+
+    ⚠️ **Le total est celui du jeu ENTIER, pas de la page rendue** (oto#42 règle 2) :
+    un historique coupé à `limit` sans dire combien il en reste ferait écrire « il a
+    accepté deux fois » à qui en compte deux sur trente.
+
+    ⚠️ **Les quatre satellites NULS ne veulent pas dire « recopié ».** Le DDL du
+    journal pose cette équivalence ; elle ne tient que dans un sens. La recopie de la
+    projection (`_init.py`) les laisse bien à NULL — mais `record_legal_acceptances`
+    aussi, dès qu'un appel arrive sans trace de transport. On ne peut donc pas
+    DÉDUIRE l'origine d'une ligne, et cette lecture ne s'y risque pas : elle rend
+    `null` tel quel, et c'est à la personne qui lit la preuve de savoir que `null`
+    signifie « aucune trace enregistrée », jamais « aucune trace n'existait ».
+
+    Le tri descend sur `(accepted_at, id)` pour la même raison que `DISTINCT ON` : les
+    trois documents d'un achat portent l'horodatage de la TRANSACTION, donc le même,
+    et seul `id` les ordonne."""
+    where, args = ["sub = %s"], [sub]
+    if doc_slug:
+        where.append("doc_slug = %s")
+        args.append(doc_slug)
+    clause = " WHERE " + " AND ".join(where)
+    borne = max(1, min(int(limit), 1000))
+    with _connect() as conn:
+        total = int(conn.execute(
+            f"SELECT count(*) AS n FROM legal_acceptance_events{clause}",
+            tuple(args)).fetchone()["n"])
+        rows = conn.execute(
+            "SELECT id, doc_slug, version, accepted_at, context, ip, user_agent, org_id "
+            f"FROM legal_acceptance_events{clause} "
+            "ORDER BY accepted_at DESC, id DESC LIMIT %s", tuple(args) + (borne,),
+        ).fetchall()
+    return list(rows), total
+
+
 def get_tenant_legal_docs(tenant_slug: str) -> dict[str, dict]:
     """slug → {version, label, url} déclarés par CE tenant. Vide = aucun override —
     `legal_docs.docs_for` retombe alors sur `CURRENT_DOCS` tel quel."""

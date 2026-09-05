@@ -191,6 +191,25 @@ l'adaptateur REST autour du handler (un handler ne voit pas la requête, ADR 000
 l'IP réelle se lit `CF-Connecting-IP` > **premier** hop de `X-Forwarded-For` >
 socket. Hors requête REST, les deux valent `NULL` — une trace absente reste absente.
 
+**Et la preuve se SORT** : `oto_admin_legal_proof` / `GET /api/admin/users/{sub}/legal/
+acceptances` (palier plateforme) rend l'historique entier d'un compte — chaque
+acceptation avec sa date, son IP, son agent, son contexte et son org payeuse. Jusqu'au
+05/09/2026 ces colonnes étaient écrites et **aucune surface ne les rendait** : en cas de
+contestation, la preuve était en base et il fallait un accès à la production pour la
+lire (oto#42 lot 2). `me.legal.get` ne la remplace pas — il répond « est-il à jour ? »
+et ne garde qu'une ligne par document, ce qui est l'état, pas la preuve.
+
+⚠️ **Deux limites que cette surface affiche au lieu de les masquer.** D'abord, `ip` /
+`user_agent` / `context` / `org_id` à `NULL` signifient « aucune trace enregistrée » et
+**jamais** « ligne recopiée d'avant le journal » : le DDL pose cette équivalence, mais
+elle ne tient que dans un sens — la recopie de la projection laisse bien ces colonnes
+nulles, et une acceptation ordinaire arrivée hors requête REST aussi (paragraphe
+ci-dessus). L'origine d'une ligne ne se déduit donc pas. Ensuite, `legal_docs.
+CURRENT_DOCS` ne garde que la version **courante** de chaque document : une acceptation
+d'une version passée ne peut pas être reliée au texte qu'elle a accepté, et l'`url` reste
+`null` plutôt que de pointer le texte d'aujourd'hui. Retrouver le texte d'époque se fait
+dans le dépôt du site, pas ici.
+
 ### Le pont : `legal_acceptances` devient une projection, et elle a une date de fin
 
 **Rien n'est retiré à la production.** `legal_acceptances` garde sa PK

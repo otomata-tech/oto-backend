@@ -40,6 +40,7 @@ from . import usage  # noqa: F401 — usage.feedback (signal=tool_feedback|gap) 
 # Lentilles monitoring + console d'investigation (après usage : la console réutilise ses handlers).
 from . import monitoring  # noqa: F401 — monitoring.{summary,rest,connectors,funnel,calls,call} + oto_admin_monitoring
 from . import me_legal  # noqa: F401 — me.legal.{get,accept} (gate d'acceptation légale)
+from . import legal_proof  # noqa: F401 — admin.legal_proof (la PREUVE d'acceptation, oto#42 lot 2)
 from . import tenant_legal_docs_admin  # noqa: F401 — admin.legal_docs.{list,set,delete} (override par tenant)
 # Abonnement par org (ADR 0043) — REST-only : subscribe/confirm/cancel (org_admin) + status.
 from . import billing  # noqa: F401 — billing.{plans,status,subscribe,confirm,cancel,payments}

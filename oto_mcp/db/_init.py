@@ -321,6 +321,17 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # table qui existe déjà, donc une colonne neuve n'arrive QUE par ici.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS token_id BIGINT")
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS token_kind TEXT")
+    # #340 : la taille du texte SERVI à l'appelant, en caractères. La durée dit ce
+    # qu'un appel a coûté au serveur, jamais ce qu'il a coûté à la fenêtre de
+    # l'agent. NULL sur tout l'historique — non reconstructible, et c'est `sized`
+    # dans les agrégats qui dit sur combien d'appels la mesure porte.
+    # ⚠️ Cet ALTER était d'abord posé dans `_migrate_tool_call_log`, qui a l'air
+    # d'être « l'endroit des colonnes de tool_calls » et qui n'en est PAS un : elle
+    # sort dès la première ligne quand `tool_call_log` n'existe plus, ce qui est le
+    # cas partout depuis juin 2026. La colonne ne serait jamais arrivée en base, et
+    # le tableau de bord aurait affiché des vides qu'on aurait lus « ces outils ne
+    # servent rien ». Un banc joue désormais ce scénario (DROP COLUMN puis init_db).
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS result_size INTEGER")
     # #493 : le journal de paiement porte le customer Mollie de la tentative. Le
     # miroir `org_subscriptions` n'est posé qu'à `confirm` — entre deux clics de
     # souscription il n'y avait donc RIEN à relire, et un second customer Mollie

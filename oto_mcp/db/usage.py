@@ -51,9 +51,9 @@ def insert_tool_call(row: dict) -> None:
                 (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
                  run_id, org_id, client_id, sentry_event_id,
                  request_id, call_uid, effective_sub, error_kind,
-                 token_id, token_kind)
+                 token_id, token_kind, result_size)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -69,6 +69,10 @@ def insert_tool_call(row: dict) -> None:
                 # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
                 row.get("error_kind"),
                 row.get("token_id"), row.get("token_kind"),
+                # oto-backend#340 — taille du texte servi. NULL partout où elle n'a
+                # pas été mesurée : les échecs (le middleware ne la calcule que sur le
+                # chemin heureux) et les gestes REST, qui ne passent pas par lui.
+                row.get("result_size"),
             ),
         )
 
@@ -1038,7 +1042,14 @@ def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
     Défaut = PLATEFORME-wide (console `/platform/monitoring`). `org_id`/`sub`
     RESTREIGNENT la fenêtre : `org_id` = l'activité d'UN workspace,
     `sub` = celle d'UN membre — la vue « activité de CE workspace / de moi » de
-    l'overview ne fuite plus le trafic des autres orgs/users (oto/#5.2)."""
+    l'overview ne fuite plus le trafic des autres orgs/users (oto/#5.2).
+
+    ⚠️ **La taille servie (#340) ne remonte qu'à partir du 2026-09-05**, date où la
+    colonne a été posée. Les lignes antérieures la portent à NULL et sont exclues des
+    agrégats de taille — d'où `sized` par outil et `sized_calls` au total : ils disent
+    sur COMBIEN d'appels la mesure porte. Une fenêtre qui couvre l'avant rend des
+    moyennes justes sur un échantillon partiel, et un `total_chars` qui sous-déclare
+    la période. On ne réécrit pas un journal ; on l'étiquette."""
     since_days = max(1, min(int(since_days), 365))
 
     def _where(prefix: str = "") -> tuple[str, list]:
@@ -1058,7 +1069,9 @@ def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
             f"""
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   COUNT(DISTINCT sub) AS users
+                   COUNT(DISTINCT sub) AS users,
+                   COALESCE(SUM(result_size), 0) AS served_chars,
+                   COUNT(result_size) AS sized_calls
             FROM tool_calls WHERE {w}
             """,
             tuple(wp),
@@ -1069,7 +1082,21 @@ def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
                    COUNT(*) AS calls,
                    COUNT(*) FILTER (WHERE NOT ok) AS errors,
                    ROUND(AVG(duration_ms))::int AS avg_ms,
-                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms,
+                   -- #340 : ce que l'outil coûte à la FENÊTRE de l'agent, en
+                   -- caractères de texte servis — la durée ne l'a jamais dit.
+                   -- `total_chars` est le chiffre qui CLASSE : un outil appelé 500
+                   -- fois à 2 000 caractères pèse plus qu'un appelé deux fois à
+                   -- 200 000.
+                   COALESCE(SUM(result_size), 0) AS total_chars,
+                   ROUND(AVG(result_size))::int AS avg_chars,
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY result_size))::int AS p95_chars,
+                   -- ⚠️ L'étiquette, sans laquelle les trois précédents se lisent
+                   -- faux : ils ne portent QUE sur les appels mesurés — ni les
+                   -- échecs, ni les lignes antérieures à la colonne. Sur un outil
+                   -- où `sized` est loin sous `calls`, la moyenne est exacte et ne
+                   -- dit rien de la période.
+                   COUNT(result_size) AS sized
             FROM tool_calls WHERE {w}
             GROUP BY tool ORDER BY calls DESC LIMIT 100
             """,
@@ -1102,6 +1129,11 @@ def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
         "total_calls": int((totals or {}).get("total") or 0),
         "error_count": int((totals or {}).get("errors") or 0),
         "active_users": int((totals or {}).get("users") or 0),
+        # #340 — le volume servi, et sur combien d'appels il est mesuré. Les deux
+        # ensemble : un total sans son dénominateur invite à le diviser par
+        # `total_calls`, qui compte aussi les appels non mesurés.
+        "served_chars": int((totals or {}).get("served_chars") or 0),
+        "sized_calls": int((totals or {}).get("sized_calls") or 0),
         "by_tool": list(by_tool),
         "by_user": list(by_user),
         "by_day": list(by_day),

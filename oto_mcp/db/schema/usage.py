@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     ok BOOLEAN NOT NULL DEFAULT TRUE,
     error TEXT,
     duration_ms INTEGER,
+    -- Taille du texte SERVI à l'appelant, en caractères (oto-backend#340).
+    -- ⚠️ La seule mesure qui manquait pour savoir quels outils coûtent du
+    -- CONTEXTE : la durée dit ce qu'un appel a pris au serveur, jamais ce qu'il
+    -- a pris à la fenêtre de l'agent. Sans elle, on ne peut ni classer les
+    -- outils bavards ni suivre une dérive — et ce qu'on ne mesure pas ne produit
+    -- aucun signal, donc aucune plainte : l'absence de plainte n'a jamais prouvé
+    -- l'absence de coût.
+    -- NULL = non mesurée (appel en échec, ou forme de résultat non lisible) —
+    -- distinct de 0, qui est une réponse réellement vide.
+    result_size INTEGER,
     -- Corrélation (ADR 0017, extension OTO-LOCALE — PAS dans le contrat canonique
     -- calllog/otomata-mcp) : session_id = session mcp transport (grossier) ; run_id =
     -- déroulé/run (fin, posé par run_start, stampé ici). NULL hors run.

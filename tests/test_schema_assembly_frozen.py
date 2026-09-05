@@ -269,8 +269,14 @@ from oto_mcp.db import _schema, schema
 # 145 991. ⚠️ Cette valeur a été RECALCULÉE après la fusion, jamais choisie entre les
 # deux versions en conflit — une empreinte dépend du contenu final, pas de qui écrit en
 # dernier.
-EMPREINTE = "a44cf6a9c161a1fed9edc248868098c02211e3502611cfa99e3999c0c67ddc61"
-LONGUEUR = 146604
+# ⚠️ 2026-09-05 (#340) — `tool_calls.result_size` : la taille du texte SERVI, en
+# caractères. La durée disait ce qu'un appel coûtait au serveur, jamais ce qu'il
+# coûtait à la fenêtre de l'agent — et ce qu'on ne mesure pas ne produit aucune
+# plainte. Arithmétique vérifiée des deux côtés : le fragment `schema/usage.py`
+# grandit de 661 caractères, et l'assemblé exactement de 661 aussi (146 604 →
+# 147 265). Un delta qui ne tombe pas juste dirait qu'autre chose a bougé.
+EMPREINTE = "494384e10a67104a8e0a3a4cfb05aa8a72523366aa5c5601e390c94db23f2d2c"
+LONGUEUR = 147265
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

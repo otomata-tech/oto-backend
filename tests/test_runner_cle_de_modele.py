@@ -151,21 +151,70 @@ def test_la_cle_ne_sort_que_de_la_reservation_jamais_d_une_lecture():
 
 # ── ce que le journal peut en voir : rien ─────────────────────────────────────
 
+MOTS_DE_RESULTAT = ("result", "response", "output", "reponse", "resultat")
+TYPES_QUI_NE_PORTENT_PAS_DE_TEXTE = ("integer", "bigint", "smallint", "numeric",
+                                     "boolean", "double precision", "real")
+
+
+def _colonnes_de_resultat_non_numeriques(insert: str, ddl: str) -> list[str]:
+    """Les colonnes du journal qui évoquent une réponse ET pourraient en porter une.
+
+    Une colonne dont le nom évoque un résultat n'est pas une fuite en soi — c'est ce
+    qu'elle peut CONTENIR qui l'est. Un entier ne peut porter ni une clé de modèle ni
+    un extrait de réponse ; un TEXT ou un JSONB le peut."""
+    colonnes = [c.strip() for c in
+                insert.split("INSERT INTO tool_calls")[1].split(")")[0]
+                .strip().lstrip("(").split(",")]
+    types = {}
+    for ligne in ddl.splitlines():
+        morceaux = ligne.strip().rstrip(",").split()
+        if len(morceaux) >= 2 and not morceaux[0].upper() in ("CREATE", "PRIMARY", "--"):
+            types[morceaux[0]] = " ".join(morceaux[1:]).lower()
+    suspectes = [c for c in colonnes
+                 if any(m in c.lower() for m in MOTS_DE_RESULTAT)]
+    return [c for c in suspectes
+            if not any(types.get(c, "?").startswith(t)
+                       for t in TYPES_QUI_NE_PORTENT_PAS_DE_TEXTE)]
+
+
 def test_le_journal_des_appels_ne_garde_aucune_reponse():
     """La clé part dans la RÉPONSE au claim, pas dans ses arguments — le masque
     de `tool_calls.args` (#558/#564) ne la couvre donc pas, et n'a pas à le
-    faire : le journal ne stocke aucune réponse. Le jour où une colonne de
-    résultat s'ajouterait, ce banc tombe et force à reposer la question — un
-    travail réservé journalisé avec sa clé serait une fuite."""
+    faire : le journal ne stocke aucune réponse.
+
+    ⚠️ **Ce banc a déjà servi**, et c'est pourquoi il a changé de forme. Il visait le
+    MOT et il est tombé sur `result_size` (#340), une colonne qui compte les
+    caractères servis sans en garder un seul. La question qu'il exige de reposer a
+    donc été reposée, et la réponse est : mesurer n'est pas stocker.
+
+    Il garde désormais ce qu'il protégeait vraiment — qu'aucune colonne de résultat ne
+    puisse CONTENIR quoi que ce soit. Un `INTEGER` ne porte ni clé ni extrait ; un
+    `TEXT` ou un `JSONB` le porterait, et le banc tombe alors comme avant. Fermer sur
+    le mot laissait passer le vrai danger sous un nom neutre (`payload`, `body`) tout
+    en refusant une mesure inoffensive."""
     import inspect
 
     from oto_mcp.db import usage
-    sql = inspect.getsource(usage.insert_tool_call)
-    colonnes = sql.split("INSERT INTO tool_calls")[1].split(")")[0]
-    for mot in ("result", "response", "output", "reponse", "resultat"):
-        assert mot not in colonnes.lower(), (
-            f"`tool_calls` garde maintenant une {mot} : la clé de modèle servie "
-            "au claim y passerait")
+    from oto_mcp.db.schema.usage import USAGE
+
+    fautives = _colonnes_de_resultat_non_numeriques(
+        inspect.getsource(usage.insert_tool_call), USAGE)
+    assert fautives == [], (
+        f"`tool_calls` garde maintenant une réponse : {fautives}. Un travail réservé "
+        "journalisé avec sa clé de modèle serait une fuite. Si la colonne ne fait que "
+        "MESURER, donne-lui un type numérique ; si elle stocke, ne la pose pas.")
+
+
+def test_la_garde_tombe_bien_sur_une_colonne_qui_STOCKERAIT():
+    """⚠️ Une garde qui ne tombe jamais ne garde rien. On lui présente les deux cas :
+    la mesure passe, le stockage est refusé — y compris sous le même préfixe."""
+    insert = ("INSERT INTO tool_calls (tool, result_size, result_text)\n"
+              "VALUES (%s, %s, %s)")
+    ddl = ("CREATE TABLE IF NOT EXISTS tool_calls (\n"
+           "    tool TEXT NOT NULL,\n"
+           "    result_size INTEGER,\n"
+           "    result_text TEXT\n);")
+    assert _colonnes_de_resultat_non_numeriques(insert, ddl) == ["result_text"]
 
 
 def test_la_remise_ne_modifie_pas_le_travail_d_origine(_coffre):

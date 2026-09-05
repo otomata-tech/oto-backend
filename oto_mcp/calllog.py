@@ -226,6 +226,37 @@ def _error_kind(exc: BaseException) -> Optional[str]:
         return None
 
 
+def taille_servie(result) -> Optional[int]:
+    """Le nombre de caractères de TEXTE servis à l'appelant (oto-backend#340).
+
+    ⚠️ **Ce qu'elle mesure, et ce qu'elle ne mesure pas.** Elle additionne les blocs
+    de `content` — ce que tout client reçoit, quel que soit son support des résultats
+    structurés. Elle ne sérialise PAS `structured_content` : le faire coûterait un
+    `json.dumps` complet sur le chemin de CHAQUE appel, pour une charge que `content`
+    porte déjà sous forme de texte. Une mesure qui ralentit ce qu'elle observe finit
+    par être retirée.
+
+    ⚠️ Rend `None` — jamais 0 — dès qu'elle ne sait pas lire la forme. `0` doit rester
+    la réponse réellement vide : les confondre ferait compter un outil muet comme un
+    outil gratuit, l'inverse exact de ce qu'on cherche.
+
+    Jamais bloquante : appelée sur le chemin de chaque appel, une mesure qui casse le
+    service qu'elle observe n'a aucune valeur.
+    """
+    try:
+        blocs = getattr(result, "content", None)
+        if blocs is None:
+            return None
+        total = 0
+        for b in blocs:
+            texte = getattr(b, "text", None)
+            if isinstance(texte, str):
+                total += len(texte)
+        return total
+    except Exception:  # noqa: SILENT — une mesure ne casse jamais l'appel qu'elle observe ; forme illisible = `None`, lu « non mesurée »
+        return None
+
+
 class ToolCallLogger(Middleware):
     """Middleware FastMCP : journalise chaque on_call_tool via le sink fourni.
 
@@ -315,7 +346,8 @@ class ToolCallLogger(Middleware):
             self._record({**row, "ok": False, "error": str(e)[:MAX_ERROR_CHARS],
                           "error_kind": _error_kind(e)}, t0)
             raise
-        self._record({**row, "ok": True, "error": None}, t0)
+        self._record({**row, "ok": True, "error": None,
+                      "result_size": taille_servie(result)}, t0)
         return result
 
     def _record(self, row: dict, t0: float) -> None:

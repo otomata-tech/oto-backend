@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, egress
 from ..connectors import verify as connector_verify
 
 
@@ -33,6 +33,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.n8n import N8nClient
 
+    egress.check_url(fields["base_url"], connector="n8n")
     N8nClient(
         api_key=fields["api_key"], base_url=fields["base_url"],
     ).list_workflows(limit=1)
@@ -45,6 +46,10 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> N8nClient:
         creds = access.resolve_credential_fields("n8n")
+        # n8n s'auto-héberge : une instance sur le réseau interne de la
+        # plateforme est exactement le cas que la garde doit refuser sans
+        # exception déclarée (`oto_mcp/egress.py`).
+        egress.check_url(creds.get("base_url") or "", connector="n8n")
         return N8nClient(api_key=creds.get("api_key"),
                          base_url=creds.get("base_url"))
 

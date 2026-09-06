@@ -47,8 +47,20 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, egress
 from ..connectors import verify as connector_verify
+
+
+def _check_host(host) -> None:
+    """Garde d'egress sur l'hôte PostHog, quand il est posé.
+
+    Vide = le SaaS, une constante de la lib. Renseigné, il désigne une instance
+    auto-hébergée — donc potentiellement un hôte du réseau interne de la
+    plateforme (`oto_mcp/egress.py`)."""
+    valeur = (host or "").strip()
+    if valeur:
+        egress.check_url(valeur, connector="posthog", field="host")
+
 
 _DEFAULT_LIMIT = 100
 
@@ -114,6 +126,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.posthog.client import PostHogClient
     cfg = config or {}
+    _check_host(cfg.get("host"))
     client = PostHogClient(fields["api_key"], host=cfg.get("host") or None,
                            project_id=cfg.get("project_id") or None)
     client.current_user()
@@ -135,6 +148,7 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> PostHogClient:
         fields = access.resolve_credential_fields("posthog")
+        _check_host(fields.get("host"))
         return PostHogClient(fields["api_key"], host=fields.get("host") or None,
                              project_id=fields.get("project_id") or None)
 

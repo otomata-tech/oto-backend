@@ -47,7 +47,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, status_hints
+from .. import access, egress, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
 from ..connectors import verify as connector_verify
@@ -70,7 +70,18 @@ def _need(value, name: str, op: str):
 
 
 def _login_url(login_url: Optional[str]) -> str:
-    return (login_url or "").strip().rstrip("/") or "https://login.salesforce.com"
+    """Le serveur d'auth à appeler — point de passage UNIQUE des deux chemins
+    (sonde et tools), donc l'endroit où la garde d'egress mord une seule fois.
+
+    Le défaut est une constante de ce module : rien à contrôler. Une valeur
+    SAISIE, elle, vient de la carte d'une organisation, et un `login_url` qui
+    résout vers l'intérieur enverrait le refresh token — donc un secret — vers
+    un service de la machine (`oto_mcp/egress.py`)."""
+    valeur = (login_url or "").strip().rstrip("/")
+    if not valeur:
+        return "https://login.salesforce.com"
+    egress.check_url(valeur, connector="salesforce", field="login_url")
+    return valeur
 
 
 # Ce qu'il faut d'un champ pour le LIRE ou l'ÉCRIRE — le reste des 57 clés que

@@ -12,10 +12,11 @@ en McpError. Trois tools : `http_get` (lecture), `http_post` (POST avec corps
 JSON — recherche paginée, écritures), `http_doc` (le contrat de l'API, si
 l'opérateur a renseigné `doc_path` sur la carte — ex. `/openapi.json` pour un
 bridge qui l'expose derrière le même auth que le reste).
-C'est un « nœud HTTP » (comme n8n/Zapier) :
-la protection SSRF est un contrôle d'egress réseau au niveau plateforme, pas du
-code par-connecteur ; ce qu'un POST est autorisé à faire relève de l'API cible
-(et, derrière un bridge, de SA propre allowlist). Étant des tools MCP ordinaires,
+C'est un « nœud HTTP » (comme n8n/Zapier), mais la destination est contrôlée :
+`oto_mcp/egress.py` refuse une `base_url` (ou un `token_url`) qui RÉSOUT vers une
+adresse interne, sauf exception nommée déclarée au déploiement. Ce qu'un POST est
+autorisé à faire relève, lui, de l'API cible (et, derrière un pont, de SA propre
+allowlist). Étant des tools MCP ordinaires,
 le résultat repasse par la rédaction de champs (FieldRedactionMiddleware).
 """
 from __future__ import annotations
@@ -28,7 +29,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.http import HttpConnectorClient
 
-from .. import access
+from .. import access, egress
 from ..auth.hooks import current_user_sub_from_token
 
 log = logging.getLogger("oto_mcp.tools.http")
@@ -147,11 +148,13 @@ def _client() -> HttpConnectorClient:
     Lève une McpError actionnable si l'org n'a pas configuré son connecteur ou si
     la config est invalide (schéma non http(s), mode inconnu, champ du mode manquant).
 
-    ⚠️ **Aucune garde SSRF applicative ici, et c'est voulu** : un `http` d'org vise
-    légitimement l'intérieur du réseau (pont sur VPC privé, service en loopback).
-    Le filtrage du trafic sortant est un contrôle d'egress de plateforme. Cette
-    docstring a annoncé un « hôte non public anti-SSRF » qui n'a jamais existé sur
-    ce chemin — corrigé le 2026-08-27 (oto-backend#449)."""
+    ⚠️ Cette docstring a annoncé un « hôte non public anti-SSRF » qui n'existait
+    pas (corrigé le 2026-08-27, oto-backend#449), puis a affirmé que l'absence de
+    garde était voulue et compensée par le filtrage d'egress de la plateforme.
+    Ce filtrage ne bloque qu'une plage (le lien-local) : la boucle locale et les
+    plages privées restaient joignables depuis une `base_url` d'org. La garde
+    existe désormais, dans `oto_mcp/egress.py` — elle refuse une destination
+    interne non déclarée, `base_url` comme `token_url` (mode oauth2)."""
     sub = current_user_sub_from_token()
     if sub is None:
         raise McpError(ErrorData(
@@ -169,6 +172,17 @@ def _client() -> HttpConnectorClient:
                 "`auth_mode` (+ le secret du mode) sur la carte HTTP du dashboard."
             ),
         ))
+    # Les DEUX destinations que la carte porte : la base appelée, et — en mode
+    # oauth2 — le serveur de jetons, qui part en `requests.post` depuis oto-core
+    # sans repasser par `base_url`. Ne garder que la première laisserait un
+    # chemin sortant entier hors de la garde.
+    try:
+        egress.check_url(base_url, connector="http", field="base_url")
+        token_url = (f.get("token_url") or "").strip()
+        if mode.lower() == "oauth2" and token_url:
+            egress.check_url(token_url, connector="http", field="token_url")
+    except egress.EgressRefused as e:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     try:
         return HttpConnectorClient(base_url, mode, f, timeout=TIMEOUT)
     except ValueError as e:

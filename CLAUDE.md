@@ -166,7 +166,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   retard sur le pin**, registre d'outils vide)
 - `architecture.md` — l'arbre des modules, les 4 couches
 - `couches-et-capacites.md` — ADR 0004 + capacités
-- `connector-vault.md` — registre, coffre, instances
+- `connector-vault.md` — registre, coffre, instances, **garde d'egress** (`OTO_EGRESS_ALLOW`)
 - `roles-and-resolution.md` — paliers, cascade de clé
 - `groups-and-roles.md` — hiérarchie de droits
 - `org-context.md` — session / maison / consultation

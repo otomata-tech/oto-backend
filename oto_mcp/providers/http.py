@@ -17,10 +17,12 @@ from ._model import CredentialField, _c
 #
 # ⚠️ Ce commentaire a annoncé « lecture seule (GET), garde-fou anti-SSRF sur
 # l'hôte » jusqu'au 2026-08-27 — DEUX affirmations fausses (oto-backend#449) : le
-# connecteur porte aussi `http_post`, et aucune garde SSRF applicative n'existe sur
-# ce chemin. C'est VOULU : un `http` d'org vise légitimement un pont sur VPC privé
-# ou un service en loopback ; le filtrage sortant est un contrôle d'egress de
-# plateforme, pas du code par-connecteur.
+# connecteur porte aussi `http_post`, et aucune garde SSRF n'existait. La seconde
+# a ensuite été présentée comme voulue, au motif que le filtrage d'egress de la
+# plateforme compensait ; il ne bloque qu'une plage (le lien-local), la boucle
+# locale et les plages privées restaient joignables. La garde existe désormais
+# dans le code — `oto_mcp/egress.py`, appelée par `tools/http.py:_client()` —
+# et une destination interne légitime se déclare comme exception NOMMÉE.
 # Jeu FERMÉ des modes d'auth. RECOPIÉ de `oto.tools.http.AUTH_MODES` — pas importé :
 # le registre reste pur (aucune dépendance runtime au niveau module, sinon une dép
 # absente retirerait le connecteur du catalogue au lieu de le dégrader). La copie est
@@ -44,8 +46,10 @@ CONNECTOR = _c(
     credential_fields=(
         CredentialField("base_url", "URL de base", secret=False,
                         help="racine de l'API (ex. https://api.acme.com). `http://` "
-                             "est accepté et légitime : pont sur réseau privé, "
-                             "service en loopback"),
+                             "est accepté. Une adresse INTERNE (boucle locale, "
+                             "réseau privé) est refusée tant qu'elle n'a pas été "
+                             "déclarée comme exception nommée par l'opérateur de "
+                             "la plateforme — le refus dit comment"),
         CredentialField("auth_mode", "Mode d'auth", secret=False,
                         choices=AUTH_MODES,
                         help="ce que l'API attend pour t'authentifier — il décide des "

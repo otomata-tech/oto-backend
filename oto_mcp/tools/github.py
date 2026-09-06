@@ -36,7 +36,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, egress
 from ..connectors import verify as connector_verify
 
 
@@ -88,6 +88,17 @@ def _upstream_message(e) -> str:
     return f"GitHub a refusé la requête (HTTP {status}): {e.body}"
 
 
+def _check_base_url(base_url) -> None:
+    """Garde d'egress sur l'URL d'API Enterprise Server, quand elle est posée.
+
+    Vide = github.com, une constante de la lib : rien à contrôler. Renseignée,
+    elle désigne un serveur auto-hébergé — donc, potentiellement, un hôte du
+    réseau interne de la plateforme (`oto_mcp/egress.py`)."""
+    valeur = (base_url or "").strip()
+    if valeur:
+        egress.check_url(valeur, connector="github")
+
+
 def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     """Sonde « tester la connexion » : `GET /user`, puis l'état des quotas.
 
@@ -102,6 +113,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     qui il est » — et c'est exactement ce qu'elle promet.
     """
     from oto.tools.github.client import GitHubClient
+    _check_base_url(fields.get("base_url"))
     client = GitHubClient(token=fields["token"],
                           base_url=(fields.get("base_url") or None))
     who = client.me()
@@ -119,6 +131,7 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> GitHubClient:
         creds = access.resolve_credential_fields("github")
+        _check_base_url(creds.get("base_url"))
         return GitHubClient(token=creds["token"],
                             base_url=(creds.get("base_url") or None))
 

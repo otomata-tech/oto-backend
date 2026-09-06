@@ -24,8 +24,19 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, file_source
+from .. import access, egress, file_source
 from ..connectors import verify as connector_verify
+
+
+def _check_base_url(base_url) -> None:
+    """Garde d'egress sur l'URL d'instance privée, quand elle est posée.
+
+    Vide = le SaaS, une constante de la lib. Renseignée, elle désigne une
+    instance auto-hébergée — donc potentiellement un hôte du réseau interne de
+    la plateforme (`oto_mcp/egress.py`)."""
+    valeur = (base_url or "").strip()
+    if valeur:
+        egress.check_url(valeur, connector="lighton")
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
@@ -45,6 +56,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.lighton import LightOnClient
 
+    _check_base_url(fields.get("base_url"))
     LightOnClient(
         api_key=fields["api_key"], base_url=fields.get("base_url"),
     ).list_workspaces()
@@ -59,6 +71,7 @@ def register(mcp: FastMCP) -> None:
         return access.resolve_credential_fields("lighton")
 
     def _client(creds: dict) -> LightOnClient:
+        _check_base_url(creds.get("base_url"))
         return LightOnClient(api_key=creds.get("api_key"),
                              base_url=creds.get("base_url") or None)
 

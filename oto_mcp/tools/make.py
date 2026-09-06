@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, egress
 from ..connectors import verify as connector_verify
 
 
@@ -30,6 +30,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.make import MakeClient
 
+    egress.check_url(fields["base_url"], connector="make")
     MakeClient(
         api_token=fields["api_token"], base_url=fields["base_url"],
     ).list_organizations()
@@ -42,6 +43,7 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> MakeClient:
         creds = access.resolve_credential_fields("make")
+        egress.check_url(creds.get("base_url") or "", connector="make")
         return MakeClient(api_token=creds.get("api_token"),
                           base_url=creds.get("base_url"))
 

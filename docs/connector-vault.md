@@ -224,6 +224,52 @@ de pont en production a été abandonné devant ce formulaire.
 `http` se faisait répondre « connecteur inconnu » en lecture comme en retrait, même à
 un admin d'org. C'est `is_org_shareable` qui décide aux paliers équipe et org.
 
+## Egress — la destination d'un connecteur (`oto_mcp/egress.py`)
+
+Sept connecteurs prennent leur destination dans le credential, donc chez un **admin
+d'org cliente** : `http` (`base_url` ET `token_url`), `n8n`, `make`, `github`
+(Enterprise), `lighton`, `posthog`, `salesforce` (`login_url` — celui-là reçoit le
+refresh token, donc un secret). Le process tourne en root, sans conteneur : sa boucle
+locale porte l'administration du proxy web, le pilotage du navigateur et les autres
+services de la machine.
+
+**Ce qui est refusé** : toute destination dont l'hôte **résout** vers une adresse non
+publique — boucle locale, plages privées (RFC 1918 / ULA), lien-local (les métadonnées
+d'infra), réservées, multicast, non spécifiée. Le contrôle porte sur la RÉSOLUTION, pas
+sur la forme du texte : un nom de domaine public qui pointe vers l'intérieur est refusé
+comme une adresse écrite en clair, et un hôte qui résout à la fois public et interne est
+refusé tout court. Le refus nomme la raison, l'adresse jointe, la carte à corriger, et
+l'entrée exacte à déclarer.
+
+**Les exceptions se DÉCLARENT** — variable d'environnement du service :
+
+```
+OTO_EGRESS_ALLOW="pont-local=127.0.0.1:9000, service-interne=10.0.0.5:9002"
+```
+
+Une entrée = `nom=adresse:port`. **Adresse littérale obligatoire** (un nom d'hôte peut
+se déplacer sous nous) et **port obligatoire** (une exception par adresse seule
+ouvrirait toute la machine : le pont sur 9000 donnerait aussi l'administration du proxy
+sur 9001). Le défaut est **vide** : ce dépôt est public, les destinations réelles ne s'y
+écrivent pas. Une entrée illisible **lève** au lieu d'être lue « comme vide » — mais
+seulement sur le chemin d'une destination interne, donc une faute de frappe ne coupe pas
+le trafic public.
+
+⚠️ **Un pont oublié dans la liste échoue bruyamment**, avec le message ci-dessus : c'est
+voulu. Avant d'armer sur un déploiement, établir les destinations des instances
+existantes — `GET /api/settings/api-keys/{provider}` rend les champs NON secrets, donc
+`base_url`, sans jamais rendre de secret (scope `org`/`group` = admin du palier).
+
+⚠️ **Deux fenêtres restent ouvertes, et c'est nommé** : le DNS rebinding (le client
+résout une seconde fois après le contrôle) et une redirection 3xx vers l'intérieur — la
+garde tient là où le backend construit le client, pas dans le transport d'oto-core. Les
+fermer demande d'épingler l'adresse résolue dans la lib, donc un bump de pin.
+
+⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
+renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin
+naît ». Ce proxy n'a jamais existé ; le seul filtrage réel est un `IPAddressDeny` du
+lien-local. L'ADR est à amender.
+
 ## Coffre — `connector_credentials` (table unique)
 
 A remplacé (et les a fait DROP, purge 2026-06-11) les 9 colonnes `users.<provider>_api_key`, `org_secrets`, les colonnes session (`users.linkedin_*`/`crunchbase_*`) et la table `user_google_oauth`. `init_db._drop_legacy_plaintext_stores` exécute les `DROP … IF EXISTS` (idempotent, no-op sur DB fraîche on-prem).

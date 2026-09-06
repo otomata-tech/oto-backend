@@ -109,8 +109,8 @@ plateforme) ; exceptions vers **Sentry** · ⚠️ ne trace ni la connexion d'un
   (`origine_override=true`, les deux faces + au mint d'un upload signé) : à partir du **1er octobre 2026** la poser
   sans le dire est refusé — ce n'est pas un droit à obtenir, la date vit dans le code et `OTO_ORIGINE_REFUS_LE` la
   déplace · ⚠️ **une colonne peut EXIGER sa provenance** (`required_layers: ["comment"]`, oto#75) : la valeur non
-  vide ne s'écrit pas sans la couche, sur les deux faces — capacité livrée, **posée sur aucun tableau**
-  (`docs/datastore.md`).
+  vide ne s'écrit pas sans la couche, sur les deux faces — capacité livrée, **aucun tableau n'exige de couche**
+  (quatre la déclarent VIDE, ce qui n'exige rien et **reste accepté à la pose**) (`docs/datastore.md`).
 - **Browser & cookie-bound** (ADR 0026) : aucun browser sur la box — **Browserbase** pour l'API privée cookie-bound,
   Unipile pour LinkedIn, le générique `browser` traite un site comme un compte du coffre (`docs/browser-automation.md`).
 - **Messagerie** : `unipile` = le **compte**, plus six **connexions** au nom du réseau, noms de tools inchangés ·

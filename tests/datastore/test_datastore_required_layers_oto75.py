@@ -168,7 +168,7 @@ def test_le_refus_nomme_la_colonne_ET_sa_destination():
 
 # ── la déclaration : refusée à la POSE, muette à l'écriture ────────────────
 
-@pytest.mark.parametrize("mauvaise", ["comment", [], ["commentaire"], {"comment": 1}, 3])
+@pytest.mark.parametrize("mauvaise", ["comment", ["commentaire"], {"comment": 1}, 3])
 def test_une_declaration_illisible_est_refusee_DEVANT_CELUI_QUI_LA_POSE(mauvaise):
     """La règle de famille (#329/#331/#347) : une forme non interprétée se refuse à la
     pose. C'est l'exacte faute que cet attribut a commise pendant trois schémas — une
@@ -177,6 +177,24 @@ def test_une_declaration_illisible_est_refusee_DEVANT_CELUI_QUI_LA_POSE(mauvaise
     errors = dsv2.validate_schema_def(
         {"fields": [{"key": "q", "type": "text", "required_layers": mauvaise}]})
     assert any("required_layers" in e for e in errors), (mauvaise, errors)
+    # …et il NOMME la colonne : sans elle, l'auteur d'un schéma à trente champs
+    # relit trente déclarations pour trouver la sienne.
+    assert any("fields.q: required_layers" in e for e in errors), errors
+
+
+def test_la_liste_VIDE_est_ACCEPTEE_a_la_pose_comme_a_l_ecriture():
+    """L'asymétrie corrigée. `required_layers_of` lit `[]` comme « aucune couche
+    exigée » depuis le premier jour ; la pose la refusait. Quatre tableaux VIVANTS la
+    portent — deux chez une organisation cliente — et le refus les rendait
+    inpatchables, y compris pour un patch sur une tout autre colonne (le schéma
+    fusionné repasse ENTIER par la validation). Un geste qui marchait aurait cessé de
+    marcher sur un schéma que personne n'a modifié."""
+    vide = {"fields": [{"key": "q", "type": "text", "required_layers": []}]}
+    assert [e for e in dsv2.validate_schema_def(vide)
+            if "required_layers" in e] == []
+    # les deux moitiés disent la même chose de la même valeur
+    assert dsv2.required_layers_of(vide["fields"][0]) == ()
+    assert dsv2.validate_row(vide, {"q": "x"}, written={"q"}) == []
 
 
 def test_un_schema_DEJA_EN_BASE_ne_fait_pas_exploser_une_ecriture():
@@ -353,3 +371,72 @@ def test_face_REST_le_PATCH_partiel_reste_ecrivable(live, monkeypatch):
                        body={"qualif": "ETI"}, sub=SUB)
     assert code == 400 and corps["error"] == "row_invalid"
     assert "qualif" in corps["detail"]
+
+
+# ── la POSE et le PATCH, par le store (pas par la fonction de décision) ────
+
+_VIDE = {"fields": [
+    {"key": "ref", "type": "text"},
+    {"key": "qualif", "type": "text", "required_layers": []},
+    {"key": "libre", "type": "text"},
+]}
+
+
+def test_store_une_pose_portant_la_liste_VIDE_passe(live):
+    """Par `set_schema`, pas par `validate_schema_def` : c'est le chemin que prend un
+    propriétaire de tableau, et c'est lui qui refusait."""
+    from oto_mcp import db
+
+    ns = "rl75v-" + uuid.uuid4().hex[:6]
+    db.create_datastore_namespace("user", SUB, ns)
+    out = _store().set_schema(ns, _VIDE)
+    assert out["schema"]["fields"][1]["required_layers"] == []
+
+
+def test_store_un_patch_sur_une_AUTRE_colonne_d_un_schema_qui_porte_la_liste_vide(live):
+    """Le défaut mesuré, dans sa forme exacte : `patch_schema` recopie le schéma
+    courant, le FUSIONNE, et le repasse ENTIER par `set_schema`. Un `[]` déjà en base
+    sur `qualif` refusait donc un patch qui ne touche que `libre` — sur un tableau de
+    8 900 lignes, ce refus n'a aucune cause visible pour son auteur."""
+    from oto_mcp import db
+
+    ns = "rl75p-" + uuid.uuid4().hex[:6]
+    db.create_datastore_namespace("user", SUB, ns)
+    _store().set_schema(ns, _VIDE)
+
+    out = _store().patch_schema(ns, fields=[{"key": "libre", "type": "text",
+                                             "max_length": 200}])
+    champs = {f["key"]: f for f in out["schema"]["fields"]}
+    assert champs["libre"]["max_length"] == 200
+    assert champs["qualif"]["required_layers"] == []   # intacte, et non ressaisie
+
+
+def test_store_une_ecriture_sur_la_colonne_a_liste_vide_n_exige_RIEN(live, face_outil):
+    """L'autre sens de « inchangé » : `[]` n'exige rien, la valeur nue passe. C'est ce
+    que faisait déjà l'écriture — le banc le fige pour que la correction de la pose ne
+    puisse pas dériver vers « la liste vide exige tout »."""
+    from oto_mcp import db
+
+    ns = "rl75w-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    _store().set_schema(ns, _VIDE)
+    _appeler(face_outil, namespace=ns, rows=[{"ref": "r1", "qualif": "PME"}])
+    (ligne,) = _lignes(ns_id)
+    assert ligne["qualif"] == "PME"
+
+
+@pytest.mark.parametrize("mauvaise", ["comment", ["commentaire"]])
+def test_store_une_pose_illisible_reste_REFUSEE_en_nommant_la_colonne(live, mauvaise):
+    """Le trou qu'il ne fallait pas ouvrir en acceptant `[]` : une chaîne nue et une
+    couche inconnue restent refusées, DEVANT celui qui pose, et la colonne est
+    nommée. C'est précisément ce qui évite qu'un propriétaire croie sa colonne gardée
+    alors qu'elle ne l'est pas."""
+    from oto_mcp import db
+
+    ns = "rl75r-" + uuid.uuid4().hex[:6]
+    db.create_datastore_namespace("user", SUB, ns)
+    with pytest.raises(ValueError) as capture:
+        _store().set_schema(ns, {"fields": [
+            {"key": "ref", "type": "text"},
+            {"key": "qualif", "type": "text", "required_layers": mauvaise}]})
+    assert "qualif: required_layers" in str(capture.value), capture.value

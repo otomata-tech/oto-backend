@@ -2079,15 +2079,25 @@ def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
         # interprétée se REFUSE devant celui qui la pose. Une couche mal
         # orthographiée (`commentaire`) serait stockée sans rien exiger, et
         # l'attribut a déjà vécu trois schémas de production dans cet état.
+        # ⚠️ **La liste VIDE est ACCEPTÉE, et ce n'est pas une tolérance.** À
+        # l'écriture, `required_layers_of` lit déjà `[]` comme « aucune couche
+        # exigée » — la refuser ICI serait une asymétrie entre les deux moitiés du
+        # même attribut. Elle a un coût mesuré : quatre tableaux VIVANTS portent
+        # `required_layers: []`, dont deux chez une organisation cliente ; les
+        # refuser rendrait leur schéma inpatchable — y compris pour un patch portant
+        # sur une TOUT AUTRE colonne, puisque `patch_schema` repasse le schéma
+        # FUSIONNÉ par `set_schema` (`schema_ops.py`). Un geste qui marchait aurait
+        # cessé de marcher sur un schéma que personne n'a modifié.
         rl = f.get("required_layers")
         if rl is not None and not (
-                isinstance(rl, (list, tuple)) and len(rl) > 0
+                isinstance(rl, (list, tuple))
                 and all(isinstance(c, str) and c in LAYER_KEYS for c in rl)):
             errors.append(
-                f"{fpath}: required_layers doit être une liste non vide de "
-                f"couches parmi {', '.join(repr(c) for c in LAYER_KEYS)} ; "
-                f"reçu {rl!r} — une couche que la plateforme ne connaît pas "
-                f"n'exigerait rien, et son auteur croirait la provenance exigée")
+                f"{fpath}: required_layers doit être une liste de couches parmi "
+                f"{', '.join(repr(c) for c in LAYER_KEYS)} — la liste vide "
+                f"n'exige rien et reste acceptée ; reçu {rl!r} — une couche que la "
+                f"plateforme ne connaît pas n'exigerait rien, et son auteur croirait "
+                f"la provenance exigée")
         ml = f.get("max_length")
         if ml is not None:
             if isinstance(ml, bool) or not isinstance(ml, int) or ml <= 0:
@@ -2524,6 +2534,11 @@ def required_layers_of(field: Any) -> tuple[str, ...]:
     refuse à la POSE (`_validate_fields_def`) et reste MUETTE ici. Un vieux schéma
     déjà en base ne doit pas faire exploser une écriture — l'attribut dort dans des
     tableaux de production depuis avant ce lecteur.
+
+    ⚠️ **`[]` n'est PAS une déclaration illisible** : c'est « aucune couche exigée »,
+    et le `not declarees` ci-dessous en est le lecteur. La pose l'accepte donc aussi —
+    les deux moitiés de l'attribut disent la même chose de la même valeur. Quatre
+    tableaux vivants la portent ; une pose qui la refuserait les gèlerait.
 
     `origine` est retirée d'une colonne déclarée `origine: "system"` : là, la
     plateforme pose la couche elle-même et REFUSE que l'appelant la nomme

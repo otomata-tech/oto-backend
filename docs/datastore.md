@@ -938,11 +938,23 @@ l'élargir ferait basculer dans ce régime, du jour au lendemain, les tableaux q
 déjà l'attribut, sur des règles qu'ils n'ont jamais demandées.
 
 **Une déclaration illisible est refusée à la POSE** (`["commentaire"]`, `"comment"` nu,
-liste vide) : une couche que la plateforme ne connaît pas n'exigerait rien, et son auteur
-croirait la provenance exigée — la faute exacte que l'attribut a commise pendant trois
-schémas. Le **lecteur**, lui, reste muet sur une déclaration illisible déjà en base : un
-vieux schéma ne doit pas faire exploser une écriture (même parti pris que `max_length_of`
-/ `pattern_of`).
+un objet, un nombre) : une couche que la plateforme ne connaît pas n'exigerait rien, et
+son auteur croirait la provenance exigée — la faute exacte que l'attribut a commise
+pendant trois schémas. Le **lecteur**, lui, reste muet sur une déclaration illisible déjà
+en base : un vieux schéma ne doit pas faire exploser une écriture (même parti pris que
+`max_length_of` / `pattern_of`).
+
+**⚠️ La liste VIDE est acceptée, et ce n'est pas une tolérance.** `required_layers: []`
+veut dire « aucune couche exigée » — c'est ce que l'**écriture** en fait depuis le premier
+jour (`required_layers_of` rend `()`). La pose la refusait : la même valeur avait deux
+sens dans les deux moitiés du même attribut. Le coût était mesuré et immédiat — **quatre
+tableaux vivants portent `required_layers: []`**, dont deux chez une organisation
+cliente, et le refus les rendait **inpatchables** : `patch_schema` recopie le schéma
+courant, le fusionne et le repasse **entier** par `set_schema`, donc un patch portant sur
+une **tout autre colonne** aurait été refusé lui aussi. Un geste qui marchait aurait cessé
+de marcher sur un schéma que personne n'a modifié. Ce qui reste refusé à la pose est ce
+qui protège vraiment : une valeur qui n'est **pas** une liste, ou une liste contenant une
+couche **inconnue**.
 
 **Les deux faces, prouvées par une épreuve chacune.** Le seam d'écriture est unique
 (`_check_row`), mais « unique » est une lecture de code : l'avertissement voisin sur les
@@ -951,9 +963,11 @@ promet le contraire. Le banc joue donc `data_write` (face outil, `McpError`) **e
 route `POST /rows` / `PATCH /rows/{row_id}` (face REST, `400 row_invalid`), et vérifie que
 **rien n'est écrit** dans les deux cas.
 
-**Ce lot livre la capacité et ne l'active nulle part** : `required_layers` n'est posé sur
-aucun tableau. Restent les barreaux 2 (un motif sur le CONTENU d'une couche) et 3 (lier la
-présence d'une couche au contenu d'une autre) — oto#75.
+**Ce lot n'active la capacité nulle part** : aucun tableau ne déclare de couche exigée.
+Il en existe pourtant qui portent l'attribut — **quatre tableaux vivants**, tous avec la
+liste **vide**, donc sans rien exiger (relevé du 06/09/2026). Restent les barreaux 2 (un
+motif sur le CONTENU d'une couche) et 3 (lier la présence d'une couche au contenu d'une
+autre) — oto#75.
 
 ## `agent_access` — à qui une colonne est servie (oto#83, 06/09/2026)
 

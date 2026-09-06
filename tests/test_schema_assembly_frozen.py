@@ -275,8 +275,24 @@ from oto_mcp.db import _schema, schema
 # plainte. Arithmétique vérifiée des deux côtés : le fragment `schema/usage.py`
 # grandit de 661 caractères, et l'assemblé exactement de 661 aussi (146 604 →
 # 147 265). Un delta qui ne tombe pas juste dirait qu'autre chose a bougé.
-EMPREINTE = "494384e10a67104a8e0a3a4cfb05aa8a72523366aa5c5601e390c94db23f2d2c"
-LONGUEUR = 147265
+# ⚠️ 2026-09-06 (4b23cb27, scrub du dépôt public) : AUCUN ordre SQL n'a changé.
+# Un seul COMMENTAIRE bouge, dans le fragment `MEMBERSHIP` de `schema/orgs.py` — il
+# nommait un client en clair parmi les exemples de credentials d'org (règle du
+# meta-repo : jamais de nom de client ni de personne dans un dépôt public), remplacé
+# par un exemple générique. L'empreinte porte la chaîne entière, commentaires compris,
+# donc elle bouge ; la preuve que l'EXÉCUTÉ est intact est MESURÉE, pas supposée : les
+# deux versions du fragment COMMENTAIRES RETIRÉS sont identiques au caractère près
+# (1 034 des deux côtés).
+# ⚠️ Arithmétique vérifiée des deux côtés : `MEMBERSHIP` grandit de 12 caractères
+# (3 521 → 3 533) et l'assemblé exactement de 12 aussi (147 265 → 147 277). Un delta
+# qui ne tombe pas juste dirait qu'autre chose a bougé dans le DDL — c'est le seul
+# contrôle qui distingue « je sais ce qui a bougé » de « j'ai recopié le nombre que le
+# test m'a donné ».
+# ⚠️ Mis à jour SÉPARÉMENT du commit qui a changé le DDL — ce que le docstring
+# ci-dessus interdit, et pour cause : 4b23cb27 n'a pas rejoué cette garde, et le tronc
+# est resté rouge de 08h37 jusqu'ici, bloquant toute mise en production.
+EMPREINTE = "5b4237b6b78493f2b5e66a8d92f5ece7b3f4fd60697a8bb3589e43aba3827b64"
+LONGUEUR = 147277
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

@@ -26,13 +26,13 @@ from oto_mcp.capabilities.datastore import sharing as DS
 def _annuaire(monkeypatch):
     porteurs = {
         "seule@x.fr": [{"sub": "u-seul", "email": "seule@x.fr"}],
-        "double@x.fr": [{"sub": "8ugqeq6cv40f"}, {"sub": "tulina:f3s740z39vfq"}],
+        "double@x.fr": [{"sub": "u-nu-1"}, {"sub": "acme:u-tiers-1"}],
     }
     for mod in (R, DS):
         monkeypatch.setattr(mod.db, "get_users_by_email",
                             lambda e: list(porteurs.get(e, [])))
         monkeypatch.setattr(mod.db, "get_user",
-                            lambda s: {"sub": s, "email": "x@y.z"} if s.startswith(("u-", "8", "tulina")) else None)
+                            lambda s: {"sub": s, "email": "x@y.z"} if s.startswith(("u-", "acme:")) else None)
     return porteurs
 
 
@@ -42,12 +42,12 @@ def test_un_tableau_ne_se_partage_pas_sur_une_adresse_ambigue(_annuaire):
     with pytest.raises(AuthzDenied) as e:
         DS._destinataire("double@x.fr", "")
     assert e.value.code == "ambiguous_email"
-    assert "8ugqeq6cv40f" in e.value.message and "tulina:f3s740z39vfq" in e.value.message
+    assert "u-nu-1" in e.value.message and "acme:u-tiers-1" in e.value.message
     assert "`sub`" in e.value.message, "le refus nomme la sortie"
 
 
 def test_le_sub_est_la_sortie(_annuaire):
-    assert DS._destinataire("", "tulina:f3s740z39vfq")["sub"] == "tulina:f3s740z39vfq"
+    assert DS._destinataire("", "acme:u-tiers-1")["sub"] == "acme:u-tiers-1"
 
 
 def test_les_deux_ensemble_sont_refuses(_annuaire):
@@ -118,11 +118,11 @@ def test_la_face_MCP_refuse_aussi_une_adresse_ambigue(monkeypatch):
     from oto_mcp.tools import datastore as TD
 
     monkeypatch.setattr(TD.db, "get_users_by_email",
-                        lambda e: [{"sub": "8ugqeq6cv40f"}, {"sub": "tulina:f3s740z39vfq"}])
+                        lambda e: [{"sub": "u-nu-1"}, {"sub": "acme:u-tiers-1"}])
     with pytest.raises(McpError) as e:
         TD._destinataire("double@x.fr", "")
     msg = str(e.value)
-    assert "8ugqeq6cv40f" in msg and "tulina:f3s740z39vfq" in msg
+    assert "u-nu-1" in msg and "acme:u-tiers-1" in msg
     assert "recipient_sub" in msg, "le refus nomme la sortie DE CETTE surface"
 
 
@@ -130,7 +130,7 @@ def test_la_face_MCP_a_une_sortie(monkeypatch):
     from oto_mcp.tools import datastore as TD
     monkeypatch.setattr(TD.db, "get_user",
                         lambda s: {"sub": s, "email": "double@x.fr"})
-    assert TD._destinataire("", "tulina:f3s740z39vfq")["sub"] == "tulina:f3s740z39vfq"
+    assert TD._destinataire("", "acme:u-tiers-1")["sub"] == "acme:u-tiers-1"
 
 
 def test_la_face_MCP_refuse_les_deux_ensemble(monkeypatch):
@@ -151,6 +151,6 @@ def test_le_partage_MCP_nomme_le_compte_servi_pas_l_argument(monkeypatch):
     a reçu, sinon le propriétaire ne peut pas vérifier ce qu'il vient d'ouvrir."""
     from oto_mcp.tools import datastore as TD
     monkeypatch.setattr(TD.db, "get_user", lambda s: {"sub": s, "email": "double@x.fr"})
-    recu = TD._destinataire("", "tulina:f3s740z39vfq")
+    recu = TD._destinataire("", "acme:u-tiers-1")
     cible = recu.get("email") or recu["sub"]
-    assert cible == "double@x.fr" and recu["sub"] == "tulina:f3s740z39vfq"
+    assert cible == "double@x.fr" and recu["sub"] == "acme:u-tiers-1"

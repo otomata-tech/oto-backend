@@ -22,7 +22,7 @@ from oto_mcp.capabilities import users_admin as UA
 from oto_mcp.capabilities.groups import members as GM
 from oto_mcp.capabilities._types import AuthzDenied
 
-DEUX = [{"sub": "8ugqeq6cv40f"}, {"sub": "tulina:f3s740z39vfq"}]
+DEUX = [{"sub": "u-nu-1"}, {"sub": "acme:u-tiers-1"}]
 
 
 @pytest.fixture
@@ -39,13 +39,13 @@ def test_un_role_ne_se_pose_pas_sur_une_adresse_ambigue(_annuaire):
     with pytest.raises(AuthzDenied) as e:
         UA._resolve_target("double@x.fr")
     assert e.value.code == "ambiguous_email"
-    assert "8ugqeq6cv40f" in e.value.message and "tulina:f3s740z39vfq" in e.value.message
+    assert "u-nu-1" in e.value.message and "acme:u-tiers-1" in e.value.message
     assert "`sub`" in e.value.message, "le refus nomme la sortie"
 
 
 def test_le_sub_reste_la_sortie(_annuaire):
     """`target` accepte déjà un sub : refuser l'ambiguïté n'enferme personne."""
-    assert UA._resolve_target("tulina:f3s740z39vfq") == "tulina:f3s740z39vfq"
+    assert UA._resolve_target("acme:u-tiers-1") == "acme:u-tiers-1"
 
 
 def test_une_adresse_unique_passe_comme_avant(_annuaire):

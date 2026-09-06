@@ -107,10 +107,10 @@ def _accounts(monkeypatch, emails):
 
 def test_un_alias_pris_pour_un_email_est_corrige_par_le_message(monkeypatch):
     # `otomata` est un alias de la convention CLI (`oto -a otomata`), pas un email.
-    _accounts(monkeypatch, ["alexis@otomata.tech", "alexis.laporte@gmail.com"])
+    _accounts(monkeypatch, ["alexis@otomata.tech", "jane.doe@acme.test"])
     msg = G._no_account_message("u1", 2, "otomata")
     assert "otomata" in msg
-    assert "alexis@otomata.tech" in msg and "alexis.laporte@gmail.com" in msg
+    assert "alexis@otomata.tech" in msg and "jane.doe@acme.test" in msg
     assert "EMAIL" in msg and "alias" in msg
     assert "gmail_list_accounts" in msg
 

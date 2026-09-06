@@ -744,8 +744,8 @@ def get_users_by_email(email: str) -> list[dict]:
     """TOUS les comptes portant cette adresse, du plus ancien au plus récent.
 
     Existe parce qu'une adresse ne désigne pas un compte : mesuré le 05/09/2026,
-    `alexis.laporte@gmail.com` en porte deux (`8ugqeq6cv40f` et
-    `tulina:f3s740z39vfq`), avec 91 et 98 appels sur trente jours. Un appelant qui
+    une adresse personnelle en porte deux — un sub nu chez nous, un sub qualifié
+    `<tenant>:…` chez un tiers —, avec 91 et 98 appels sur trente jours. Un appelant qui
     filtrait par cette adresse en voyait 91 et ignorait les 98 autres — sans
     qu'aucun zéro ne l'alerte. Un chiffre plausible ne fait douter de rien.
     """

@@ -34,7 +34,7 @@ def _resolve_target(target: str) -> str:
         # émetteur (ADR 0052). Jusqu'au 05/09/2026 on en prenait UN, celui que la
         # base rendait en premier, sans ordre fixé et sans le dire.
         #
-        # Ce que ça coûtait, mesuré : `alexis.laporte@gmail.com` porte deux
+        # Ce que ça coûtait, mesuré : une même adresse personnelle porte deux
         # comptes, 91 et 98 appels sur trente jours. Filtrer le monitoring par
         # cette adresse rendait 91 et taisait 98 — un chiffre PLAUSIBLE, jamais un
         # zéro, donc rien pour alerter. Et la même résolution sert à suspendre un

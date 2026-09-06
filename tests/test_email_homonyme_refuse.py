@@ -1,8 +1,8 @@
 """Une adresse ne désigne pas un compte — et le silence coûtait plus qu'un zéro.
 
-⚠️ Mesuré le 05/09/2026 sur la production : `alexis.laporte@gmail.com` porte DEUX
-comptes, le nôtre (`8ugqeq6cv40f`) et celui d'un tenant tiers
-(`tulina:f3s740z39vfq`), qualifiés par émetteur (ADR 0052). Sur trente jours, ils
+⚠️ Mesuré le 05/09/2026 sur la production : une même adresse personnelle porte DEUX
+comptes, le nôtre (un sub nu) et celui d'un tenant tiers (un sub qualifié
+`<tenant>:…`), qualifiés par émetteur (ADR 0052). Sur trente jours, ils
 ont respectivement 91 et 98 appels.
 
 Filtrer le monitoring par cette adresse rendait **91**, et taisait les 98 autres.
@@ -26,8 +26,8 @@ def _annuaire(monkeypatch):
     """Ce que la base rend pour une adresse — la vraie forme du défaut."""
     par_email = {
         "seul@exemple.fr": [{"sub": "u-seul"}],
-        "double@exemple.fr": [{"sub": "8ugqeq6cv40f"},
-                              {"sub": "tulina:f3s740z39vfq"}],
+        "double@exemple.fr": [{"sub": "u-nu-1"},
+                              {"sub": "acme:u-tiers-1"}],
         "inconnu@exemple.fr": [],
     }
     monkeypatch.setattr(M.db, "get_users_by_email",
@@ -43,7 +43,7 @@ def test_un_sub_passe_tel_quel_sans_toucher_a_l_annuaire(monkeypatch):
     """Le chemin sans ambiguïté possible ne doit pas coûter une lecture."""
     monkeypatch.setattr(M.db, "get_users_by_email",
                         lambda e: pytest.fail("l'annuaire ne doit pas être lu"))
-    assert M._resolve_target("tulina:f3s740z39vfq") == "tulina:f3s740z39vfq"
+    assert M._resolve_target("acme:u-tiers-1") == "acme:u-tiers-1"
 
 
 def test_une_adresse_inconnue_est_refusee_en_le_disant(_annuaire):
@@ -65,8 +65,8 @@ def test_le_refus_NOMME_les_candidats_pour_etre_actionnable(_annuaire):
     ailleurs — et l'appelant n'a souvent pas la surface pour le faire."""
     with pytest.raises(AuthzDenied) as e:
         M._resolve_target("double@exemple.fr")
-    assert "8ugqeq6cv40f" in e.value.message
-    assert "tulina:f3s740z39vfq" in e.value.message
+    assert "u-nu-1" in e.value.message
+    assert "acme:u-tiers-1" in e.value.message
     assert "sub" in e.value.message, "le refus dit AVEC QUOI reprendre"
 
 

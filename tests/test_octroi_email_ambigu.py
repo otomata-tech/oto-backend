@@ -25,7 +25,7 @@ from oto_mcp.capabilities.connectors import account_grants as AG
 def _annuaire(monkeypatch):
     par_email = {
         "seul@x.fr": [{"sub": "u-seul"}],
-        "double@x.fr": [{"sub": "8ugqeq6cv40f"}, {"sub": "tulina:f3s740z39vfq"}],
+        "double@x.fr": [{"sub": "u-nu-1"}, {"sub": "acme:u-tiers-1"}],
         "inconnu@x.fr": [],
     }
     monkeypatch.setattr(AG.db, "get_users_by_email",
@@ -47,8 +47,8 @@ def test_deux_porteurs_REFUSENT_et_le_refus_est_actionnable(_annuaire):
     with pytest.raises(AuthzDenied) as e:
         AG._un_seul_porteur("double@x.fr")
     assert e.value.code == "ambiguous_email"
-    assert "8ugqeq6cv40f" in e.value.message
-    assert "tulina:f3s740z39vfq" in e.value.message
+    assert "u-nu-1" in e.value.message
+    assert "acme:u-tiers-1" in e.value.message
     assert "grantee" in e.value.message, "le refus nomme la sortie, pas que le manque"
 
 
@@ -74,7 +74,7 @@ def test_un_sub_ne_consulte_pas_l_annuaire(monkeypatch):
     monkeypatch.setattr(AG.db, "get_users_by_email",
                         lambda e: pytest.fail("l'annuaire ne doit pas être lu"))
     monkeypatch.setattr(AG.db, "get_user", lambda s: {"sub": s})
-    assert AG._resolve_grantee(_ctx(), "tulina:f3s740z39vfq")["sub"] == "tulina:f3s740z39vfq"
+    assert AG._resolve_grantee(_ctx(), "acme:u-tiers-1")["sub"] == "acme:u-tiers-1"
 
 
 def test_aucune_resolution_par_adresse_ne_prend_le_premier_venu():

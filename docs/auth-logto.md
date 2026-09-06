@@ -116,8 +116,8 @@ secondaires, vide = no-op), resource Logto dédiée, PRM Host-aware
 (`config.mcp_audience_alt_hosts`). DNS `mcp.oto.cx` = grey+ACME direct box.
 
 Env requis : `LOGTO_ENDPOINT`, `MCP_AUDIENCE`, `OTO_MCP_PUBLIC_URL`,
-`OTO_MCP_ADMIN_SUB` (sub Logto admin = **otomata `eufbvubidpyp`**, canonique, pas
-le gmail dual-sub), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_*`
+`OTO_MCP_ADMIN_SUB` (le sub Logto du compte admin **canonique**, pas celui du
+dual-sub gmail), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_*`
 (M2M dédié pour la façade DCR). S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`)
 pour les avatars/logos. Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
 

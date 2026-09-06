@@ -1,83 +1,112 @@
-# Local test gate — TheirStack + Origami connectors
+# Porte de test locale — connecteurs TheirStack + Origami
 
-Run this in full before anyone pushes `feat/theirstack-origami-connectors`. Nothing here needs a running server:
-the tools are mounted on a bare FastMCP exactly as the cloud runner will call them.
+Ce document est la **porte de test** qu'un connecteur *keyed* doit passer en local avant d'être poussé.
+Elle a été écrite pour la paire TheirStack + Origami ; les quatre couches et la plupart des assertions
+valent pour n'importe quel connecteur keyed à outils mutants. Rien ici n'exige un serveur en marche :
+les outils sont montés sur un FastMCP nu, exactement comme le runner hébergé les appellera.
 
-## 0. Environment (once)
+## 0. Environnement (une fois)
 
 ```bash
-cd ~/Desktop/oto-backend
+cd <ton checkout d'oto-backend>
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"            # backend + pinned oto-core from GitHub
-pip install -e ~/Desktop/oto-core  # then OVERRIDE with the local oto-core branch that holds the new clients
+pip install -e ".[dev]"                   # backend + oto-core pinné sur son tag GitHub
+pip install -e <ton checkout d'oto-core>  # puis ÉCRASE avec la branche locale d'oto-core qui porte les nouveaux clients
 python -c "import oto.tools.theirstack.client, oto.tools.origami.client; print('local clients resolve')"
 ```
 
-Baseline before the new code (measured 17 Aug 2026): `pytest tests/test_cognism.py tests/test_tools_client_methods_exist.py` → 61 passed.
+⚠️ Le second `pip install -e` n'est pas facultatif : sans lui le pin GitHub gagne et la suite tourne
+verte contre l'**ancien** client (`docs/conventions.md` → garde anti-version-skew).
 
-## 1. Unit layer (mocked clients) — must be green
+Relever la **baseline avant le nouveau code** — le compte de verts sur les fichiers de tests voisins.
+C'est la seule lecture utile du « après » : tout ce qui était vert doit le rester.
+
+## 1. Couche unitaire (clients mockés) — doit être verte
 
 ```bash
 pytest -q tests/test_theirstack.py tests/test_origami.py
-pytest -q tests/test_tools_client_methods_exist.py     # version-skew guard: every tool→client method exists
-pytest -q                                              # whole suite; nothing that was green may go red
+pytest -q tests/test_tools_client_methods_exist.py   # anti-version-skew : chaque tool → méthode client existe
+pytest -q                                            # suite entière ; rien de vert ne passe au rouge
 ```
 
-Assertions the new tests must carry (reject the PR if any is missing):
-- registry entry present, `keyed=True`, `auth_modes == {"byo_user","byo_org"}`, `secret_kind == "api_key"`, `in_default_bundle is False`
-- every registered `theirstack_*` / `origami_*` tool has a NON-EMPTY `.description` (the f-string-docstring trap)
-- Origami: every mutating tool honours `dry_run` (validation runs, final call skipped, response echoes `dry_run: true`)
-- Origami: `origami_campaign_launch` defaults to `dry_run=True`
-- Origami: `origami_campaign_delete` after `confirm=True` re-GETs and reports whether the campaign is really gone
-- Origami: `origami_campaign_create` exposes `block_prior_contacts` / `block_active_duplicates` and passes them as `settings`
+Assertions que les nouveaux tests doivent porter (refuser la PR s'il en manque une) :
+- entrée au registre présente, `keyed=True`, `auth_modes == {"byo_user","byo_org"}`, `secret_kind == "api_key"`, `in_default_bundle is False`
+- chaque tool `theirstack_*` / `origami_*` enregistré a une `.description` NON VIDE (le piège de la docstring en f-string)
+- Origami : chaque tool mutant honore `dry_run` — la validation tourne, l'appel final est sauté, la réponse renvoie `dry_run: true`
+- Origami : `origami_campaign_launch` a `dry_run=True` **par défaut**
+- Origami : `origami_campaign_delete` après `confirm=True` re-GET la campagne et dit si elle a réellement disparu
+- Origami : `origami_campaign_create` expose `block_prior_contacts` / `block_active_duplicates` et les passe en `settings`
 
-## 2. MCP layer with REAL keys, read-only — must succeed
+## 2. Couche MCP avec de VRAIES clés, en lecture seule — doit réussir
 
-Keys come from a local outreach `.env` file (`THEIRSTACK_API_KEY`, `ORIGAMI_API_KEY`). Never print them.
-Patch `oto_mcp.access.resolve_api_key` to return the env key, mount with `register_all`, call the tool `fn`s.
+Les clés viennent d'un `.env` local (`THEIRSTACK_API_KEY`, `ORIGAMI_API_KEY`) — ne jamais les imprimer.
+Patcher `oto_mcp.access.resolve_api_key` pour rendre la clé d'env, monter avec `register_all`, appeler les `fn` des tools.
 
-TheirStack:
-- `theirstack_companies_search(company_names=["PUIG & FILS","ARTEXTYL"], company_country_code_or=["FR"])` → 200, envelope present; a hit for at least one is expected but an empty list is NOT a failure (coverage ~8%)
-- `theirstack_jobs_search(company_names=["SPIRIDOM"], posted_at_max_age_days=365)` → 200; expect the "Responsable Administratif et Financier" posting seen on 17 Aug (may have aged out — then just assert shape)
-- projection: default result carries only the sourcing fields; `full=True` returns the raw record
+TheirStack :
+- `theirstack_companies_search(company_names=[…], company_country_code_or=["FR"])` → 200, enveloppe présente ;
+  une liste **vide n'est pas un échec** (la couverture de la source est partielle)
+- `theirstack_jobs_search(company_names=[…], posted_at_max_age_days=365)` → 200 ; une annonce donnée peut avoir
+  expiré entre deux passages — n'asserter que la **forme**, jamais un contenu daté
+- projection : le résultat par défaut ne porte que les champs de sourcing ; `full=True` rend l'enregistrement brut
 
-Origami (READ ONLY — no create/upsert/launch/delete against production):
-- `origami_workspaces(op="list")` → contains workspace `5071dde1-db17-410c-908e-6f45137c0854` ("Grossistes FR")
-- `origami_tables(op="list")` → contains tables `20b15cd8-…` (hyper standing) and `a86c8074-…` (site standing)
-- `origami_tables(op="columns", table_id="a86c8074-8af3-442c-b138-0379baf1226c")` → includes slug `opener-fr`, kind `input`
-- `origami_rows(op="list", table_id=<site>, max_pages=2)` → follows `nextCursor` (table has 52 rows; page 1 is 50)
-- `origami_campaigns(op="stats", campaign_id="a7d0addd-391d-438b-a127-ded7b0841e40")` → `found == 52`, `noMessagingCount == 0`
-- `origami_sequences(workspace_id="5071dde1-…")` → ≥ 369 sequences across ≥ 4 distinct campaignIds
-- `origami_campaign_launch(campaign_id=<site>)` with the DEFAULT args → must be a dry run: response `dryRun: true`, `wouldLaunch: true`, and campaign status unchanged afterwards (re-GET)
+Origami (LECTURE SEULE — aucun create / upsert / launch / delete contre la production) :
+- `origami_workspaces(op="list")` → contient l'espace de travail attendu
+- `origami_tables(op="list")` → contient les tables attendues
+- `origami_tables(op="columns", table_id=<table>)` → expose les slugs de colonnes et leur `kind`
+- `origami_rows(op="list", table_id=<table>, max_pages=2)` → suit `nextCursor`. **Choisir une table de plus de
+  50 lignes** : la page 1 en rend 50, et c'est exactement là que le défaut de pagination se voit
+- `origami_campaigns(op="stats", campaign_id=<campagne>)` → les compteurs sont servis
+- `origami_sequences(workspace_id=<espace>)` → plusieurs **pages** et plusieurs `campaignId` distincts
+- `origami_campaign_launch(campaign_id=<table>)` avec les args **par défaut** → doit être un dry run :
+  réponse `dryRun: true`, `wouldLaunch: true`, et statut de campagne inchangé au re-GET
 
-## 3. MCP layer, WRITE path, against a throwaway table only
+## 3. Couche MCP, chemin d'ÉCRITURE, contre une table jetable uniquement
 
-Create a scratch workspace `smoke-<date>` and do the whole loop there, then leave it (no table delete endpoint exists):
-- `origami_upload_csv` a 2-row CSV with an `opener_fr` column → `table_id` + `table_slug` at the TOP level of the response (the created table lives at `result.results[0].table.id`; a harness missed it at that depth, so the tool surfaces it; a `kind: "error"` entry comes back as `error`, never as a silent success)
-- `origami_rows(op="upsert", dry_run=True)` → preview only, table unchanged (re-list)
-- `origami_rows(op="upsert")` with a wrong slug (`opener_fr`) → refused BEFORE the API call, naming the unknown slug and the valid input slugs (`clés refusées — slugs inconnus ['opener_fr'] ; slugs d'entrée valides : [...]`); never a swallowed 400
-- `origami_rows(op="upsert")` with `opener-fr` → 201; re-list shows the value
-- `origami_campaign_create(dry_run=True)` → preview, no agent run started (re-list campaigns on the table: still 0)
-- `origami_campaign_delete(confirm=True)` on a nonexistent id → 404 translated (`ressource introuvable`), never a claimed success
-- Do NOT create a real campaign in the smoke test; the agentic create costs a run and cannot be deleted cleanly by API.
+Créer un espace de travail de test `smoke-<date>`, y faire toute la boucle, puis le laisser
+(il n'existe pas d'endpoint de suppression de table) :
+- `origami_upload_csv` d'un CSV de 2 lignes avec une colonne d'entrée → `table_id` + `table_slug` au
+  **premier niveau** de la réponse. La table créée vit en `result.results[0].table.id` ; un harnais l'a
+  manquée à cette profondeur, d'où la remontée par l'outil. Une entrée `kind: "error"` revient en
+  `error`, jamais en succès silencieux
+- `origami_rows(op="upsert", dry_run=True)` → aperçu seul, table inchangée (re-list)
+- `origami_rows(op="upsert")` avec un slug **faux** → refusé AVANT l'appel API, en nommant le slug inconnu
+  et les slugs d'entrée valides (`clés refusées — slugs inconnus [...] ; slugs d'entrée valides : [...]`) ;
+  jamais un 400 avalé
+- `origami_rows(op="upsert")` avec le bon slug → 201 ; le re-list montre la valeur
+- `origami_campaign_create(dry_run=True)` → aperçu, aucun run d'agent démarré (re-list des campagnes : toujours 0)
+- `origami_campaign_delete(confirm=True)` sur un id inexistant → 404 traduit (`ressource introuvable`), jamais un succès affirmé
+- **Ne pas** créer de vraie campagne dans le smoke test : le create agentique coûte un run et ne se supprime pas proprement par API
 
-## 4. Behaviour the tools must NOT have
+## 4. Comportements que les outils ne doivent PAS avoir
 
-- No tool prints or returns the API key — check tool output, the 401 error text (`og_live_…` prefix only) and both `_verify` probes (return `None`).
-- No `f"""` docstrings; every registered `origami_*` / `theirstack_*` tool has a non-empty description.
-- Origami tools never call `/launch` without dry_run unless `dry_run=False` was passed explicitly (check the schema default AND the client call: `launch_campaign("c1", dry_run=True)` with default args).
-- `origami_campaign_delete` never claims success on the step-1 `200`: with a mocked 200 + campaign still readable → `really_deleted: false` and a note.
+- Aucun outil n'imprime ni ne rend la clé d'API — vérifier la sortie des tools, le texte de l'erreur 401
+  (le préfixe de clé seul) et les deux sondes `_verify` (elles rendent `None`)
+- Pas de docstring en f-string ; chaque tool `origami_*` / `theirstack_*` enregistré a une description non vide
+- Les tools Origami n'appellent jamais `/launch` sans dry run à moins que `dry_run=False` ait été passé
+  explicitement — vérifier le défaut du schéma **et** l'appel client (`launch_campaign("c1", dry_run=True)`
+  avec les args par défaut)
+- `origami_campaign_delete` ne revendique jamais un succès sur le `200` de l'étape 1 : avec un 200 mocké et
+  la campagne encore lisible → `really_deleted: false` et une note
 
-## 5. Sign-off
+## 5. Ce que la porte a effectivement attrapé
 
-Record in the PR: unit counts, the read-only MCP results (with the 52 / 369 numbers), the throwaway-table loop result, and the
-two maintainer questions — write-capable mount acceptable? which oto-core tag to pin?
+Deux défauts que seule la couche 2 (vraies clés) pouvait rendre :
 
-### Results — 17 Aug 2026 (local, Mac, real keys, before any push)
+- **`origami_sequences` ne rendait qu'une page** — 50 séquences, une seule campagne, là où l'espace en
+  portait plusieurs centaines réparties sur plusieurs campagnes. Corrigé en suivant `nextCursor`
+  (`max_pages`, `campaign_ids`) puis revérifié en live. Une couche unitaire mockée ne l'aurait jamais vu :
+  le mock rend une page, et une page est toujours complète.
+- **Le crédit épuisé revient en 402**, pas en erreur réseau — traduit en `crédits épuisés (402)` plutôt que
+  remonté brut. Corollaire de méthode : un compte de test à sec ne prouve rien sur la couche 2, il faut
+  distinguer « la porte échoue » de « le compte est vide ».
 
-- **Layer 1** — `tests/test_origami.py` + `tests/test_theirstack.py` + `tests/test_tools_client_methods_exist.py`: **104 passed** (incl. `test_sequences_follows_next_cursor_and_lists_distinct_campaigns` and `test_upload_csv_surfaces_table_id_from_flat_shape_and_error_kind`, added by this gate). Whole backend suite: **4869 passed / 1 failed / 258 errors** — the failing/erroring test ids are **byte-identical to the base commit `bb44a71`** (4808 passed there): all are the testcontainers fixture failing on `docker info` (no Docker on the Mac) and `DATABASE_URL not set`; none import origami/theirstack. oto-core `feat/theirstack-origami-clients`: 492 passed.
-- **Layer 2** (real keys, read-only, through `FastMCP.call_tool`) — workspaces list contains `5071dde1…`; tables list contains `20b15cd8…` and `a86c8074…`; `columns` on the site table shows slug `opener-fr` kind `input`; `rows(list, max_pages=2)` follows `nextCursor` (52 rows, page 1 = 50); `campaigns(stats)` on `a7d0addd…` → `found 52`, `noMessagingCount 0`; **`origami_sequences` was single-page** (50 seqs / 1 campaign) — fixed to follow `nextCursor` (`max_pages=10`, `campaign_ids`), verified live: **369 sequences / 8 pages / 4 campaigns**; `origami_campaign_launch(campaign_id)` with default args → `dry_run: true`, status still `active` afterwards. TheirStack: `companies_search` 200/empty then 402 once credits ran out, `jobs_search` 402 — both translated to `crédits épuisés (402)`.
-- **Layer 3** (scratch workspace `5fd41634-d137-4efd-ad4f-2365479eb3b7`, tables `5609ece4…`, `97ecb9e9…`) — upload → top-level `table_id`/`table_slug` ✓; upsert dry-run leaves `opener-fr = "Ligne un."` ✓; wrong slug refused client-side with the valid-slug list ✓; real upsert reads back `MODIFIÉ` ✓; `campaign_create(dry_run=True)` → 0 campaigns on the table, settings echoed `{blockPriorContacts: true, blockActiveDuplicates: true}` ✓; delete of a nonexistent id → 404 translated ✓.
-- **Layer 4** — no f-string docstrings; 14 tools, all described; key absent from outputs, 401 text and `_verify` returns; `launch_campaign` called with `dry_run=True` on default args and `dry_run=False` only when passed; delete with 200-but-still-readable → `really_deleted: false`; step-1 (no confirm) → `delete_campaign(confirm=False)`.
-- **Smoke scripts** — `scripts.origami_smoke_test` exit 0 (lists the 5 live tables + pilot); `scripts.theirstack_smoke_test` fails cleanly on 402 (account out of credits — expected until refilled).
-- **Open for the maintainer** — (1) the Origami mount is write-capable (`upsert`, `campaign_create`, `launch`, `delete`) with `dry_run` on every mutating tool and `launch` defaulting to dry-run: acceptable as `in_default_bundle=False`, byo-only? (2) which oto-core tag to pin in `pyproject.toml` once `feat/theirstack-origami-clients` is tagged (currently `v1.82.0` + TODO).
+## 6. Sign-off
+
+Consigner dans la PR : les comptes de tests unitaires (avant / après), les résultats de la couche MCP en
+lecture seule, le résultat de la boucle sur table jetable, et les questions laissées au mainteneur —
+typiquement : un mount capable d'écrire est-il acceptable pour ce connecteur ? quel tag oto-core épingler ?
+
+⚠️ Les rouges de la suite complète se lisent **par différentiel avec le commit de base**, jamais en absolu :
+sur un poste sans Docker, la fixture testcontainers et `DATABASE_URL not set` produisent une grappe
+d'erreurs qui n'a rien à voir avec le lot. Ce qui compte est que les identifiants des tests en échec soient
+**identiques à l'octet** entre la base et la branche.

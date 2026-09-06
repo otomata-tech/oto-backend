@@ -416,8 +416,8 @@ ligne 1.x a été refusé (`not_planned`, #3142), et `v1.x` est en « security f
 
 ### La source de la churn : c'est NOTRE workload, pas un tiers
 
-Les 3 IP Azure de l'incident (`4.223.142.177`, `20.240.139.18`, `4.225.216.254`) portent
-`User-Agent: MistralAI-MCPClient/1.0` (+ `X-Internal-Service: harmattan-api`) et sont
+Les 3 IP Azure de l'incident portent `User-Agent: MistralAI-MCPClient/1.0` (+ un en-tête
+`X-Internal-Service` qui nomme un service interne de l'appelant) et sont
 **pleinement authentifiées** — zéro 401, zéro 403 sur 16 122 requêtes en 8,4 h. C'est le
 client MCP hébergé de Mistral, exécutant notre propre charge d'enrichissement (38 782
 appels sur 48 h : `data_write`, `data_rows`, `data_claim_next`, `serper_*`, `fr_*`).

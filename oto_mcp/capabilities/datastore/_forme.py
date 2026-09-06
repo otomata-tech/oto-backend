@@ -20,8 +20,10 @@ from .._types import AuthzDenied
 # NOMME le paramètre (`invalid_layers`), pas l'`invalid_input` nu que l'adaptateur rend
 # sur une `ValidationError`.
 _LAYERS = Field(default=dsl.DEFAUT, description=(
-    "Forme des cellules à couches. On ÉCRIT imbriqué (`champ` = `{valeur, origine, "
-    "comment, link}`) et, par défaut, on relit À PLAT : ce paramètre lève cette "
+    "Forme des cellules à couches. ⚠️ C'est une LECTURE : ne renvoyez pas la ligne "
+    "lue. N'écrivez que ce que vous avez établi — et jamais `champ.origine`, qui se "
+    "lit ici et que pose la plateforme, jamais un agent. On ÉCRIT imbriqué (`champ` = "
+    "`{valeur, comment, link}`) et, par défaut, on relit À PLAT : ce paramètre lève cette "
     "asymétrie. `flat` (défaut) sert `champ` = la valeur et `champ.origine`/`.comment`/"
     "`.link` à plat à côté ; `nested` sert `champ` = `{valeur, origine, comment, link}` "
     "(la valeur toujours, les couches renseignées seulement), la forme dans laquelle on "

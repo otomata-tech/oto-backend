@@ -690,9 +690,16 @@ def register(mcp: FastMCP) -> None:
                    origine_override: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
-        Layers (`valeur`/`comment`/`link`/`origine`), what a write destroys, what
-        `readonly` and the business key protect, and where the REST face differs:
-        guide `datastore-semantics` (`oto_guide op=read slug=datastore-semantics`).
+        ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
+        established and WHERE it came from in `<field>.comment`, and the page in
+        `<field>.link`. `origine` is the platform's layer — an agent never writes
+        it. On a column whose schema declares `origine: "system"`, writing
+        `<field>.origine` is REFUSED, today, and no parameter lifts that.
+
+        Layers: `valeur`/`comment`/`link` are yours to write, `origine` is read
+        only. What a write destroys, what `readonly` and the business key protect,
+        and where the REST face differs: guide `datastore-semantics`
+        (`oto_guide op=read slug=datastore-semantics`).
 
         ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
         undo and no history: the previous value is gone the moment yours lands. If
@@ -748,12 +755,10 @@ def register(mcp: FastMCP) -> None:
         `data_patch_schema(namespace=…, key_required=false)`, your write, then
         `data_patch_schema(namespace=…, key_required=true)` to close it back.
 
-        ⚠️ The `origine` layer is the value at the START, at IMPORT time — not
-        yours. Setting it silently is refused from 2026-10-01 on: write the value
-        alone (`{"col": …}`) and the origin is kept, set by the platform when it
-        is missing. If your import really must set it, pass
-        `origine_override=true` ON THIS CALL — there is nobody to ask, the
-        parameter is the whole of it, and it applies to this call only.
+        `origine_override=true` belongs to an IMPORT, not to a write of your own:
+        it declares that this call sets `origine` on a column that has NO
+        `origine: "system"` format — refused without it from 2026-10-01 on. It
+        never lifts the refusal above.
 
         ⚠️ A COLUMN can be LOCKED by the schema (`readonly: true`) — it holds a
         value someone put there, and an ordinary write that CHANGES it is refused by
@@ -795,11 +800,10 @@ def register(mcp: FastMCP) -> None:
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
                 writes, instead of being refused. Owner or governor of the table
                 only ; valid for this call alone ; journaled.
-            origine_override: `true` = states that this call sets the `origine`
-                layer (the value at the START, at import time) knowingly. Without
-                it, writing an origin is refused from 2026-10-01 on. Nothing to
-                ask anyone for: the parameter is enough, and it applies to this
-                call only.
+            origine_override: IMPORT path only — declares that this call sets the
+                `origine` layer knowingly, on a column with NO `origine: "system"`
+                format (without it, such a write is refused from 2026-10-01 on).
+                It never lifts the refusal on a formatted column. This call only.
         """
         store = _acting_store()
         try:
@@ -906,8 +910,10 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ `layers="nested"` gives the row back in the SHAPE YOU WRITE — a cell
         that carries layers comes as `{"valeur": …, "comment": …}` instead of the
-        flat pair `champ` + `champ.comment`. Use it whenever you mean to write
-        layers back. The flat form shows a key with a DOT, and a dot does not look
+        flat pair `champ` + `champ.comment`. ⚠️ It stays a READ: do NOT send this
+        row back. Write only the fields you established — and never
+        `<field>.origine`, which is read here and set by the platform, never by an
+        agent. The flat form shows a key with a DOT, and a dot does not look
         like a field name: agents turn `effectif.comment` into `effectif_comment`,
         which creates a ghost column — or, on a table that refuses unknown columns,
         loses the whole row. This is the only read that feeds a WRITE loop, so it is
@@ -1058,7 +1064,10 @@ def register(mcp: FastMCP) -> None:
                 set, absent when everything conforms.
             order_dir: `desc` (default) or `asc`. Only meaningful with `order_by`.
             layers: shape of a cell that carries layers (`origine`/`comment`/`link`).
-                You WRITE nested (`{"valeur": …, "origine": …}`) and, by default,
+                ⚠️ This is a READ: do NOT send the row back. Write only the fields
+                you established — and never `<field>.origine`, which is read here
+                and set by the platform, never by an agent.
+                You WRITE nested (`{"valeur": …, "comment": …}`) and, by default,
                 read back FLAT — this parameter lifts that asymmetry. `flat`
                 (default): `row["email"]` is the value, and each filled layer sits
                 BESIDE it as `row["email.origine"]`. `nested`: `row["email"]` is

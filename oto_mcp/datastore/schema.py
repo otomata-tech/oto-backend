@@ -739,13 +739,15 @@ def description_parametre_origine(en: bool = False) -> str:
                 f"{date_refus()} on — write the value alone instead: the origin is "
                 f"kept, and the platform sets it when it is missing. There is "
                 f"nobody to ask: the parameter is enough, and it applies to this "
-                f"call only.")
+                f"call only. It does NOT lift the refusal on a column whose schema "
+                f"declares `origine: \"system\"`.")
     return (f"`{PARAMETRE_ORIGINE}=true` déclare que cet appel pose la couche "
             f"`origine` (la valeur du DÉPART, à l'import) en le sachant. Sans lui, une "
             f"écriture d'origine est refusée à partir du {date_refus_fr()} — écrivez "
             f"alors la valeur seule, l'origine est conservée et posée par la plateforme "
             f"quand elle manque. Rien à demander à personne : le paramètre suffit, et "
-            f"il ne vaut que pour cet appel.")
+            f"il ne vaut que pour cet appel. Il ne lève PAS le refus sur une colonne "
+            f"dont le schéma déclare `origine: \"system\"`.")
 
 
 def _en_francais(quand: "_date") -> str:

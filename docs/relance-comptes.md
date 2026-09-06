@@ -30,7 +30,7 @@ Recensé le 2026-09-04 : **91 comptes, 77 adresses distinctes, 10 adresses port�
 
 | motif | combien | ce que ça donne dans l'audience |
 |---|---|---|
-| un sub qualifié `tulina:` **et** un sub nu, même humain | **9** | le filtre partenaire écarte déjà la moitié qualifiée : pas de doublon |
+| un sub qualifié `<tenant>:` **et** un sub nu, même humain | **9** | le filtre partenaire écarte déjà la moitié qualifiée : pas de doublon |
 | **deux subs nus** — une vraie double inscription chez nous | **1** | deux lignes, deux mails |
 
 ⚠️ **L'index unique `(campagne, sub)` ne pouvait rien y voir** : les deux comptes sont

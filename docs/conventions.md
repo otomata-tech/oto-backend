@@ -230,9 +230,20 @@ rien ne rendait navigable et que rien ne tenait.
   n'a pas été tenue POUR ça ; c'est ce qui la rend démonstrative — **elle a payé un
   changement que personne n'avait anticipé en la posant.** À citer quand on demande
   pourquoi on s'impose des codes nommés.
-- **Ce dépôt est PUBLIC : aucun nom de client, de personne réelle ou de domaine client.**
-  Remplacer par `acme`, `Jane Doe`, de la prose générique, un TLD `.test`. La règle se tient
-  **à la relecture** : il n'existe aucun contrôle automatique, et aucun n'est souhaité.
+- **Ce dépôt est PUBLIC : on n'y écrit JAMAIS de donnée réelle de tiers ni d'identifiant réel.**
+  Ni nom de client ou de partenaire, ni nom de personne, ni adresse (postale, e-mail), ni
+  identifiant de compte, d'organisation, de projet, de run, d'appel, de ligne ou
+  d'infrastructure, ni adresse IP de tiers. **Peu importe le contexte** : une preuve datée,
+  une note de travail et un exemple sont soumis à la même règle.
+  **Ce qu'on écrit à la place, c'est la FORME ou la CLASSE** — « une org cliente », « un
+  identifiant de ligne », `org_id=<l'org du run>`, `~/.ssh/<clé>`. Un exemple purement
+  illustratif prend `acme`, `Jane Doe`, un TLD `.test` ; mais **on ne fabrique jamais une
+  valeur là où la phrase affirme un fait vérifiable** — une donnée fausse donnée pour vraie
+  est un autre défaut, pas une correction. Troisième voie quand la valeur est fonctionnelle
+  et que la doc mentirait sans elle : écrire le GABARIT (`<tenant>:`, `<slug>`), et garder la
+  valeur seulement là où le CODE en a besoin, sous un `# noqa: CLIENT — <raison>` motivé.
+  C'est une **règle d'écriture, pas un contrôle** : il n'existe aucun garde-fou automatique,
+  et aucun n'est souhaité — **rien ne l'attrapera à votre place.**
 - **Tree partagé entre sessions : deux sessions ne partagent JAMAIS un fichier — le
   séquencement prime, le staging n'est qu'un filet.** Vécu 13/08 (main rouge) : un
   `git add <chemin>` EXPLICITE a absorbé ~148 lignes du WIP d'une session voisine dans

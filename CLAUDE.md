@@ -8,8 +8,10 @@ directement — aucune dépendance à la CLI) et une face REST `/api/*` sur le m
 > **Ce fichier est une CARTE, pas un journal** : où vit quoi, les règles en vigueur, les pointeurs — ni date ni récit
 > d'incident ; l'histoire qui a produit chaque règle vit dans `docs/` (index en bas). **Un lot qui change un concept
 > met à jour le doc du concept dans le même commit**, pas la carte. **`docs/conventions.md` se lit avant d'écrire du
-> code ici.** **Ce dépôt est PUBLIC** : aucun nom de client, de personne ni de domaine client (`acme`, `Jane Doe`,
-> TLD `.test`) — hygiène tenue à la relecture, sans contrôle automatique.
+> code ici.** **Ce dépôt est PUBLIC** : on n'y écrit **jamais** un nom de client ou de partenaire, une adresse,
+> un identifiant de compte, d'organisation, de run ou d'infrastructure réels, ni une adresse IP de tiers — on
+> écrit la **forme** ou la **classe**. C'est une règle d'écriture, pas un contrôle : **rien ne l'attrapera à
+> votre place.**
 
 ## Stack & environnement
 

@@ -354,6 +354,13 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   sinon l'`org`. **Fork** réutilise `org_store.set_instruction` → skill d'org versionné. Surface
   ANONYME pour la vitrine : routes écrites à la main `GET /api/guide-library[/{slug}]`
   (deny-by-default `visibility='public'`, l'adaptateur capacité authentifie toujours).
+  ⚠️ **Deny-by-default aussi sur les CHAMPS** (`_VITRINE_META` / `_VITRINE_ENTREE` dans
+  `api/public.py`) : la vitrine sert le contenu du guide, jamais les identifiants qui le
+  rattachent à quelqu'un — `published_by` (identifiant d'utilisateur, forme
+  `<tenant>:<sub>`), `author_org_id`, `source_org_id`, `id`, `forked_from` restent
+  dedans. C'est une **allowlist** : une colonne ajoutée à `guide_library` ne sort pas
+  tant qu'on ne l'y a pas nommée. La face authentifiée `/api/me/guide-library`, elle,
+  sert la ligne entière — `library.fork`/`library.unpublish` visent une entrée par `id`.
   ⚠️ **`/api/guide-library` ≠ `/api/guides/library`** : le premier est le MARCHÉ des guides
   publiés par les orgs (forkables), le second les guides PLATEFORME. Deux objets, deux
   tables — la ressemblance des noms est ancienne, elle ne dit pas une parenté.

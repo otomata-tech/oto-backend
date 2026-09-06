@@ -166,14 +166,48 @@ async def connectors_catalog(request: Request, *, verifier: JWTVerifier) -> JSON
     return _json(request, {"connectors": connector_cardinality.overlay_for_org(cat, org)})
 
 
+# --- Ce que la vitrine anonyme a le droit de voir d'une entrée de bibliothèque ---
+#
+# Une entrée publiée est du CONTENU public ; les identifiants qui la rattachent à
+# quelqu'un ne le sont pas. La ligne `guide_library` porte les deux, et les deux
+# sortaient : `published_by` (identifiant d'UTILISATEUR, forme `<tenant>:<sub>` —
+# son préfixe nomme le tenant d'où l'entrée a été publiée), `author_org_id` et
+# `source_org_id` (identifiants d'ORG), `id` et `forked_from` (identifiants de
+# LIGNE). Servis à un appelant sans jeton, ils faisaient de la vitrine un
+# annuaire des orgs et des comptes qui publient.
+#
+# **Allowlist, pas liste de champs retirés.** Ce qui n'est pas nommé ici ne sort
+# pas : une colonne ajoutée demain à `guide_library` ne peut donc pas fuir par
+# inadvertance. Une liste de champs à retirer, elle, ne protège que du passé —
+# elle est muette sur la colonne qui n'existe pas encore, c'est-à-dire sur le
+# seul cas qu'on ne relira pas.
+#
+# Ces champs sont ceux, et seulement ceux, que lit le consommateur réel (oto.cx :
+# `web/src/views/` pour la page de détail, `web/scripts/refresh-catalog.mjs`
+# pour le cliché du build), plus ce qui décrit le guide lui-même. La face
+# AUTHENTIFIÉE `/api/me/guide-library` n'est pas touchée et continue de tout
+# servir — c'est elle qui porte le fork et la dépublication, qui visent une
+# entrée par son `id`.
+_VITRINE_META = ("slug", "title", "description", "author_kind", "author_display",
+                 "category", "tags", "visibility", "version", "created_at",
+                 "updated_at", "snippet")
+_VITRINE_ENTREE = _VITRINE_META + ("body_md", "slots", "source_slug")
+
+
+def _vitrine(entree: dict, champs: tuple) -> dict:
+    """Une entrée de bibliothèque réduite aux champs publiables."""
+    return {k: v for k, v in entree.items() if k in champs}
+
+
 async def guide_library_public(request: Request) -> JSONResponse:
     """Catalogue PUBLIC des guides (bibliothèque/marketplace) — pas d'auth.
 
-    Alimente le site vitrine oto.ninja. Deny-by-default : `visibility='public'`
-    UNIQUEMENT (jamais 'unlisted' ni les brouillons d'org). Filtres gros grain
-    en query params (`q`/`category`/`author`) ; le filtrage fin reste client.
-    Route écrite à la main car l'adaptateur REST des capacités authentifie
-    toujours (l'anonyme ne peut pas y passer).
+    Alimente le site vitrine oto.ninja. Deny-by-default sur DEUX axes : quelles
+    ENTRÉES (`visibility='public'` uniquement, jamais 'unlisted' ni les brouillons
+    d'org) et quels CHAMPS (`_VITRINE_META`). Filtres gros grain en query params
+    (`q`/`category`/`author`) ; le filtrage fin reste client. Route écrite à la
+    main car l'adaptateur REST des capacités authentifie toujours (l'anonyme ne
+    peut pas y passer).
     """
     q = request.query_params
     try:
@@ -183,6 +217,10 @@ async def guide_library_public(request: Request) -> JSONResponse:
     items = org_store.list_library(
         query=q.get("q"), category=q.get("category"),
         author_kind=q.get("author"), include_unlisted=False, limit=limit)
+    # ⚠️ Projeter AVANT le doublage des noms : `avec_les_deux_noms` republie la
+    # MÊME liste sous l'ancien nom, et une projection posée après servirait des
+    # entrées réduites sous un nom et complètes sous l'autre.
+    items = [_vitrine(e, _VITRINE_META) for e in items]
     # Les deux noms le temps du préavis (#519) : le build de la vitrine lit encore
     # `doctrines`, et il est déployé ailleurs que dans ce dépôt.
     return _json(request, deprecations.avec_les_deux_noms({"guides": items}))
@@ -190,12 +228,13 @@ async def guide_library_public(request: Request) -> JSONResponse:
 
 async def guide_library_public_get(request: Request) -> JSONResponse:
     """Un guide PUBLIC complet (markdown) par slug — vitrine, pas d'auth.
-    Public-only : une entrée 'unlisted' n'est jamais servie ici."""
+    Public-only : une entrée 'unlisted' n'est jamais servie ici, et seuls les
+    champs de `_VITRINE_ENTREE` en sortent (les identifiants restent dedans)."""
     entry = org_store.get_library_entry(
         slug=request.path_params["slug"], include_unlisted=False)
     if not entry:
         return _json_error(request, 404, "unknown_entry")
-    return _json(request, entry)
+    return _json(request, _vitrine(entry, _VITRINE_ENTREE))
 
 
 async def guides_library_public(request: Request) -> JSONResponse:

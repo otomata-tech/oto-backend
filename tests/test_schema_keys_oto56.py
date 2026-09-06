@@ -56,7 +56,8 @@ _VALEURS = {"readonly": True, "system": "now", "role": "status", "required": Tru
             "max_items": 3, "options": ["a"], "max_length": 5, "pattern": "^a",
             "required_when": {"field": "x", "equals": 1}, "display": "title",
             "lifecycle": {"states": ["a"], "transitions": {}}, "flat_alias": "x",
-            "origine": "manuel", "of": "text", "fields": []}
+            "origine": "manuel", "of": "text", "fields": [],
+            "required_layers": ["comment"]}
 
 
 def _sondes():

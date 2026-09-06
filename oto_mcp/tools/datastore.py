@@ -600,6 +600,16 @@ def register(mcp: FastMCP) -> None:
           the cost of a regex is bounded against what it reads, and oto refuses what
           it cannot price — an ambiguous repeated group, a backreference, a lookaround
           are rejected AT DECLARATION TIME, each naming why.
+          `field.required_layers: ["comment"]` refuses a write that leaves a
+          NON-EMPTY value in that column without posting the layer — the value must
+          arrive WITH its provenance, in the SAME call
+          (`"col": {"valeur": …, "comment": "where it comes from"}`). A null or
+          empty value, and a layer posted alone without a value, trigger nothing.
+          Applies to sub-fields of objects and of list items too; never to
+          `readonly` / `system` / the lifecycle column; never to a column this
+          write does not name. It arms ITSELF — no `strict` needed. ⚠️ It does NOT
+          make a comment TRUE: it forces you to NAME a source, which makes a lie
+          checkable — the truth is still established on the documents.
           Validation is active when `strict: true` or any field has required/
           required_when/max_length. A non-conforming write FAILS naming the culprit
           (max_length reports the actual length AND the bound; pattern reports the

@@ -76,6 +76,13 @@ CLES: tuple[Cle, ...] = (
     Cle("max_length", ("validateur", "front"), "borne de longueur, publiée dans le contrat"),
     Cle("pattern", ("validateur",), "forme exigée de la valeur"),
     Cle("required_when", ("validateur", "front"), "obligatoire sous condition"),
+    # oto#75 barreau 1. ⚠️ Elle a vécu TROIS schémas de production sans aucun
+    # lecteur : posée, servie, et sans effet — l'auteur croyait la provenance
+    # exigée. C'est le cas fondateur de ce fichier, à un cran de plus : ici la
+    # clé était bien orthographiée, et personne ne la lisait.
+    Cle("required_layers", ("validateur", "front"),
+        "les couches sans lesquelles une valeur non vide ne s'écrit pas "
+        "(`[\"comment\"]`) — la provenance voyage avec la valeur", True),
     Cle("lifecycle", ("validateur", "front"), "états et transitions permises"),
     # ⚠️ `enum` a été RETIRÉE d'ici : elle n'était lue par personne. C'est une VALEUR
     # de `type` (`"type": "enum"`), jamais une clé — et la table des fautes de frappe

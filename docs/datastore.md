@@ -881,6 +881,80 @@ Ce qui le remplace, en trois pièces (`datastore/forcage.py`) :
   restera. Arbitré en connaissance de cause le 02/09/2026 — pas de colonne de plus sur la
   ligne.
 
+## `required_layers` — la valeur n'arrive pas sans sa provenance (oto#75, 06/09/2026)
+
+**Le cinquième cran de la famille, et celui qui n'existait qu'en apparence.** L'attribut
+était posé dans **trois schémas de production** et n'avait **aucun lecteur** : accepté en
+silence, servi dans le contrat, sans le moindre effet. Quelqu'un avait écrit ce qu'il
+voulait obtenir, la plateforme l'avait pris, et personne ne s'en était aperçu. Ce lot lui
+donne son lecteur.
+
+```json
+{"key": "qualification", "type": "text", "required_layers": ["comment"]}
+```
+
+Une écriture qui laisse une **valeur non vide** dans cette colonne sans y poser la couche
+est **refusée**, en nommant la colonne et **en disant où écrire** :
+
+> `qualification: valeur posée sans \`comment\` — cette colonne exige que la valeur
+> arrive AVEC sa provenance. Écris-la en couches, dans le MÊME appel :
+> `"qualification": {"valeur": <ta valeur>, "comment": "…"}` (\`comment\` = d'où vient la
+> valeur, en clair). Poser la valeur seule au tour suivant emporterait la couche. Une
+> valeur vide, ou une couche posée sans valeur, ne déclenche rien.`
+
+**Ce que la garde ne fait pas.** Elle n'empêche pas un commentaire **faux**. Elle oblige à
+**nommer une source**, ce qui rend le mensonge vérifiable ; la vérité reste à la relecture
+sur pièces.
+
+**Ce qui la déclenche, et ce qui ne la déclenche pas :**
+
+- une valeur nulle, vide, ou une **couche posée seule sans valeur** ne déclenche rien —
+  c'est la forme légitime d'une remarque ;
+- la portée descend dans les composites : sous-champs d'un `object`, et sous-champs des
+  éléments d'une `list` (une liste réémise remplace l'ancienne **en bloc**, couches
+  comprises — c'est là que la perte est la plus lourde). Un sous-champ fautif se nomme
+  **une fois** pour toute la colonne, sur le premier élément qui le porte ;
+- elle ne s'applique **ni** à `readonly`, **ni** à `system`, **ni** à la colonne qui porte
+  le cycle de vie : exiger une provenance de qui n'écrit pas la valeur refuserait des
+  écritures que personne ne peut corriger ;
+- sur une colonne `origine: "system"`, la couche `origine` est **retirée** de l'exigence —
+  la plateforme la pose elle-même et REFUSE que l'appelant la nomme.
+
+**⚠️ La restriction qui évite le gel, et le piège qu'elle a failli reproduire.** La garde
+ne juge que les colonnes que **le geste nomme** (`written`), comme `max_length` et
+`pattern`. Sans elle, un patch sur une autre colonne serait refusé pour une couche absente
+ailleurs — le gel silencieux d'oto-backend#284, sous un nom neuf.
+
+Mais `written` ne contient **que des clés de premier niveau**, et c'est mesuré : une borne
+déclarée sur une clé **pointée** (`qualification.comment`, #377) n'y figure jamais, donc
+elle ne refuse rien sur un patch — **pas même sur le patch qui écrit la colonne**. C'est
+l'état actuel de `pattern`/`max_length` posés sur une couche : ils ne mordent qu'à
+l'insertion. La garde de ce lot se restreint donc par la colonne de **base**, et le banc
+exerce les deux côte à côte (`tests/datastore/test_datastore_required_layers_oto75.py`).
+
+**Armée par sa PROPRE déclaration**, jamais par `validation_active` — comme le cycle de
+vie. `validation_active` arme la validation *entière* (types, requis, composites fermés) :
+l'élargir ferait basculer dans ce régime, du jour au lendemain, les tableaux qui portent
+déjà l'attribut, sur des règles qu'ils n'ont jamais demandées.
+
+**Une déclaration illisible est refusée à la POSE** (`["commentaire"]`, `"comment"` nu,
+liste vide) : une couche que la plateforme ne connaît pas n'exigerait rien, et son auteur
+croirait la provenance exigée — la faute exacte que l'attribut a commise pendant trois
+schémas. Le **lecteur**, lui, reste muet sur une déclaration illisible déjà en base : un
+vieux schéma ne doit pas faire exploser une écriture (même parti pris que `max_length_of`
+/ `pattern_of`).
+
+**Les deux faces, prouvées par une épreuve chacune.** Le seam d'écriture est unique
+(`_check_row`), mais « unique » est une lecture de code : l'avertissement voisin sur les
+clés de schéma non reconnues ne sort que côté REST alors que la description de l'outil
+promet le contraire. Le banc joue donc `data_write` (face outil, `McpError`) **et** la
+route `POST /rows` / `PATCH /rows/{row_id}` (face REST, `400 row_invalid`), et vérifie que
+**rien n'est écrit** dans les deux cas.
+
+**Ce lot livre la capacité et ne l'active nulle part** : `required_layers` n'est posé sur
+aucun tableau. Restent les barreaux 2 (un motif sur le CONTENU d'une couche) et 3 (lier la
+présence d'une couche au contenu d'une autre) — oto#75.
+
 ## `agent_access` — à qui une colonne est servie (oto#83, 06/09/2026)
 
 **Le quatrième cran de la même famille, et le premier qui soit CIBLÉ.** Les trois

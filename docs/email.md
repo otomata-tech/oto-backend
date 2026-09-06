@@ -19,8 +19,9 @@ champ transport sur l'expéditeur).
 
 - **Le DESSIN suit la marque du destinataire** (`email_brand.py`, 2026-09-02). Le
   texte des gabarits écrivait le nom du produit du destinataire depuis 7d10a798,
-  mais la couleur restait celle d'oto pour tout le monde : un client de Tulina lisait
-  « sur tulina » en brun otomata, puis cliquait vers une application blanc-et-ardoise.
+  mais la couleur restait celle d'oto pour tout le monde : le client d'un partenaire
+  lisait le nom de SON produit en brun otomata, puis cliquait vers une application
+  blanc-et-ardoise.
   `email_brand.marque(<slug>)` (le MÊME slug que le texte : `orgs.front_brand` /
   `config.front_for`) porte nom, site et palette ; `page()` rend le document complet
   et `bouton()` le CTA. Un slug **inconnu** prend un gabarit neutre **portant son

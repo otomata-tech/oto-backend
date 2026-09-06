@@ -75,8 +75,8 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > canonique (id) depuis que `link` normalise nom/slug→id, mais les lignes d'avant portent le
 > NOM du namespace ou le SLUG du guide — bien vivantes, résolues à la lecture (#117). L'unlink
 > canonisait la réf demandée puis supprimait cet id : zéro ligne quand la ligne porte l'autre
-> écriture, et le lien devenait **indélogeable** par le MCP (vécu sur le projet 59,
-> `suivi-commercial-index` → id 108). `_unlink_refs` confronte les deux côtés **canonisés** et
+> écriture, et le lien devenait **indélogeable** par le MCP (vécu en prod : un lien
+> stocké sous le NOM du tableau, l'unlink visant son id). `_unlink_refs` confronte les deux côtés **canonisés** et
 > vise les refs BRUTES stockées, dans les deux sens. `op=link` reste inchangé : il canonise, et
 > refuse un nom introuvable (`unknown_tableau`) — on ne rouvre pas la porte aux liens morts.
 

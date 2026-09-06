@@ -37,7 +37,7 @@ d'échappatoire — un rattachement qu'on ne sait pas dériver se tranche à la 
    ne soutient. L'écraser effacerait l'information qui dit qu'il y a un problème.
 
     # sur la box, après déploiement :
-    ssh -i ~/.ssh/alexis root@<box> \\
+    ssh -i ~/.ssh/<clé> root@<box> \\
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.migrate_org_tenant"
     #   ^ à blanc par défaut : joue la migration et la défait, n'écrit rien
     #     --apply pour valider la transaction

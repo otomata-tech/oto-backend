@@ -30,8 +30,8 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 
 **Sans axe `_org=`, un appel fait DANS un run se résout dans l'org du run
 (`runs.org_id`), pas dans l'org maison du sub.** Mesuré en prod le 29/08 (#631/#638) :
-un `data_write` sans `_org`, dans un run ouvert sur l'org 226, résolu dans l'org 2 (la
-maison du sub) et refusé « namespace inconnu » sur un tableau que la réservation du même
+un `data_write` sans `_org`, dans un run ouvert sur une org, résolu dans l'org maison
+du sub et refusé « namespace inconnu » sur un tableau que la réservation du même
 run venait de résoudre — 82 refus sur sept jours, 109 sur les sept suivants, tous des
 `data_write` du runner ; et le journal stampait la maison, donc la vue filtrée par org ne
 montrait pas l'appel (#630). Le contournement de #638 (résolution par la réservation)
@@ -51,7 +51,7 @@ Ce que l'étage fait, et ne fait pas :
 - **l'appartenance reste exigée** : un sub qui n'est pas (plus) membre de l'org du run
   est refusé, nommément (« le run se déroule dans l'org X, dont tu n'es pas membre… ») —
   jamais un repli silencieux sur la maison. Mesuré : 40 appels sur sept jours (un sub,
-  deux runs ouverts en org 178 par un sub qui n'en est plus membre) deviendraient ce
+  deux runs ouverts dans une org dont il n'est plus membre) deviendraient ce
   refus ;
 - **un run inconnu de `runs`, ou hors org, ne pose rien** : `_run_id` y reste ce qu'il
   était, un identifiant de corrélation ; l'appel se résout comme avant (maison) ;

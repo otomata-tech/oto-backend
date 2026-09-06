@@ -24,7 +24,7 @@ est donc portée par un **index unique** avec `NULLS NOT DISTINCT`, qui accepte 
 lignes ambiguës tout en gardant l'unicité — y compris entre elles.
 
     # sur la box, après déploiement :
-    ssh -i ~/.ssh/alexis root@<box> \
+    ssh -i ~/.ssh/<clé> root@<box> \
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.migrate_shadow_origine"
     #   ^ dry-run par défaut : dit l'état et ce qu'il ferait, n'écrit rien
     #     --apply pour exécuter

@@ -231,10 +231,10 @@ de paiement).
 
 ## « Mon LinkedIn est-il connecté ? » → `linkedin_unipile_account(op="status")`
 
-Ajouté le 28/08/2026 (signal **#452**, org 2, 14/08). Le NOM du tool promettait l'état
+Ajouté le 28/08/2026 (signal **#452**, 14/08). Le NOM du tool promettait l'état
 du compte, l'outil ne servait que **l'ardoise premium** (contrats Recruiter / Sales
 Navigator). Un agent venu vérifier la connexion a inventé `op='status'`, s'est pris un
-`invalid_arguments` (appel 248959) et en a conclu « pas connecté » — alors que le canal
+`invalid_arguments` et en a conclu « pas connecté » — alors que le canal
 l'était, et un utilisateur a signalé « ça ne marche pas ». Relevé du 28/08 : ce tool
 n'a que **trois** appels dans tout `tool_calls`, et les trois ont échoué.
 

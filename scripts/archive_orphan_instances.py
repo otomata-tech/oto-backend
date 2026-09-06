@@ -23,7 +23,7 @@ Archive (`revoked_at`, motif `vault_row_missing`), jamais un DELETE : « elle a 
 retirée » et « elle n'a jamais existé » ne sont pas le même verdict.
 
     # sur la box, après déploiement :
-    ssh -i ~/.ssh/alexis root@<box> \
+    ssh -i ~/.ssh/<clé> root@<box> \
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.archive_orphan_instances"
     #   ^ dry-run par défaut : liste et compte, n'écrit rien
     #     --apply pour exécuter

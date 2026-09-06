@@ -24,13 +24,13 @@ jeton `_org=` n'existe encore : le seam retombe donc sur la **maison**. Une sess
 planifiée (runner, procédure) épingle ensuite `_org=` à **chaque appel**, sur une toolbox
 figée pour une AUTRE org.
 
-Prouvé par différentiel sur la prod le 28/08/2026 : le sub qui fait tourner
-`daily-brain-ingestion` a pour maison l'org **42** (`folk`, `grain` sélectionnés) et
-travaille sur l'org **196** (treize connecteurs, dont `granola`, `slack`, `linear`,
-`folk`). Le `ToolSearch` de Step 0 n'a rendu que les outils méta et spine — et les sept
+Prouvé par différentiel sur la prod le 28/08/2026 : le sub qui fait tourner un job
+planifié quotidien a pour maison une org à deux connecteurs (`folk`, `grain`
+sélectionnés) et travaille sur une AUTRE org, qui en porte treize (dont `granola`,
+`slack`, `linear`, `folk`). Le `ToolSearch` de Step 0 n'a rendu que les outils méta et spine — et les sept
 outils réputés « manquants » **existaient, résolvaient, et ont répondu du premier coup
 via `oto_call`** (vérifié par `connectors/readiness.diagnose` : `granola` et `linear`
-sont `READY` sur 196 pour ce sub). Coût réel : trois matinées de faux rapports « Linear
+sont `READY` sur l'org de travail pour ce sub). Coût réel : trois matinées de faux rapports « Linear
 est en panne » (20-22/08/2026).
 
 **Un outil absent de la liste n'est donc PAS un connecteur en panne.** En attendant que

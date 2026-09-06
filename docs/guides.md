@@ -184,8 +184,8 @@ tool↔oto-core, `connector_docs/<nom>.md` se relit en PR, mais **rien ne lit `o
 suite verte ne dit donc rien de l'état des procédures.
 
 Vécu le 2026-07-31 (consolidation pennylane 25→9 outils, v1.38.0, ADR 0047 étendu aux
-connecteurs) : `rapprochement-pennylane` (org 2, qui arme une routine planifiée quotidienne) et
-`agent-avoirs-compta` (org 35, agent client sous supervision) sont parties **en prod** avec
+connecteurs) : `rapprochement-pennylane` (org maison, qui arme une routine planifiée quotidienne) et
+`agent-avoirs-compta` (une org cliente, agent sous supervision) sont parties **en prod** avec
 respectivement 2 et 10 refs mortes, réparées seulement après coup.
 
 Le détecteur, lui, existe déjà : `tool_registry.manifest_for(body_md)` rend

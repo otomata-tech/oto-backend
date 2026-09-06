@@ -16,7 +16,7 @@ l'ancre, pour que le prochain `op="ensure"` reparte d'une KB neuve si l'org en
 veut vraiment une un jour.
 
     # sur la box, après déploiement :
-    ssh -i ~/.ssh/alexis root@<box> \
+    ssh -i ~/.ssh/<clé> root@<box> \
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.archive_empty_kb_projects"
     #   ^ dry-run par défaut : compte et liste, n'écrit rien
     #     --apply pour exécuter

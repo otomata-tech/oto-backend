@@ -202,7 +202,7 @@ l'activation du plan (`billing.apply_plan_entitlements`).
 signaux #476, #504, #574 et #452 — quatre formes d'un même défaut : *une surface
 publie UNE couche en laissant croire qu'elle répond pour les trois*.
 
-Le cas fondateur (**#476**, org 196, 16/08) : la carte rendait `state:"active"` +
+Le cas fondateur (**#476**, 16/08) : la carte rendait `state:"active"` +
 `recommended:true`, `oto_instance(op="verify")` répondait `ok:true` — et rien ne
 pouvait partir, aucun canal hébergé n'était lié. **Trois lectures vertes, capacité
 absente.** L'opérateur a lu « active » comme « connecté », ce qui est la lecture
@@ -324,8 +324,8 @@ La toolbox d'une session MCP est calculée **au handshake**
 jeton `_org=` n'existe, donc `current_org` retombe sur l'**org maison**. Une session
 planifiée épingle ensuite `_org=` à **chaque appel** — mais le registre d'outils, lui,
 reste figé sur la maison. Prouvé par différentiel le 28/08 : le sub qui fait tourner la
-procédure de #577 a pour maison l'org **42** (`folk`, `grain`) et travaille sur l'org
-**196** (treize connecteurs). Les sept outils « manquants » **existaient, résolvaient, et
+procédure de #577 a pour maison une org à deux connecteurs (`folk`, `grain`) et
+travaille sur une AUTRE org, qui en porte treize. Les sept outils « manquants » **existaient, résolvaient, et
 ont répondu du premier coup via `oto_call`** — trois matinées de faux rapports « Linear
 est en panne » (20-22/08).
 

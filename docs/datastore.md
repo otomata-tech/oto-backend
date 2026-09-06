@@ -544,7 +544,7 @@ REST `400 business_key_required`) au lieu de créer une ligne.
 ⚠️ **« Sans clé » couvre DEUX gestes, et le refus les distingue** — dire « clé requise »
 à qui vient d'en fournir une le ferait chercher longtemps :
 - **la clé n'est pas renseignée** — le cas du 28/08 : 8 911 lignes pour 8 910 sur un
-  tableau de production, la ligne `01a04956-…` née sans `siren`, contenu bon, doublon
+  tableau de production, une ligne née sans `siren`, contenu bon, doublon
   parfait que rien ne rapprochera ;
 - **la clé ne désigne aucune ligne** — le cas du 29/08, plus grave : deux agents refusés
   sur un identifiant INVENTÉ (deux conventions étrangères, aucune n'a la forme d'un `_id`
@@ -591,9 +591,9 @@ avait documenté `key_required` dans `data_set_schema`, l'outil qui le POSE, et 
 `docs/` ne l'est jamais par un agent.*
 
 Le coût, daté des deux côtés sur la **même** procédure de journalisation de mails :
-le 01/09 (run `493e624c…`) l'agent refusé relit le schéma, trouve seul la manœuvre —
+le 01/09, l'agent refusé relit le schéma, trouve seul la manœuvre —
 `key_required=false`, le lot de 47 lignes, `key_required=true` — et c'est de là que
-viennent les lignes du tableau ; le 02/09 (run `a2da6c1e…`) un autre passage ne la
+viennent les lignes du tableau ; le 02/09, un autre passage ne la
 retrouve pas, essaie les trois formes d'écriture, et s'arrête sur 19 lignes non
 journalisées. Même refus, même tableau, deux issues : la différence tenait à ce que le
 refus ne disait pas.
@@ -1135,8 +1135,8 @@ rien à rétablir) + `valeurs_effacees_hint`, relevé dans les deux chemins qui 
 TAILLE. Le geste reste PERMIS — vider une valeur fausse n'a pas d'autre porte.
 ⚠️ **Erreur d'attribution à connaître** : trois signaux du 13/08 accusaient l'écriture
 partielle d'avoir mis à `null` un champ *qu'elle ne nommait pas*. Le journal des appels
-dit l'inverse (`tool_calls` 224531 puis 224704, même ligne) — huit minutes plus tôt, la
-même session avait écrit `row={'moteur': None, …}` ligne par ligne. La règle du merge
+dit l'inverse (deux appels consécutifs du journal `tool_calls`, même ligne) — huit
+minutes plus tôt, la même session avait écrit `row={'moteur': None, …}` ligne par ligne. La règle du merge
 tenait ; c'est le silence qui a fait chercher le défaut au mauvais endroit.
 
 ⚠️ **Une chaîne vide n'est PAS une valeur (28/08, #608) — et l'annoncer ne suffisait
@@ -1493,7 +1493,7 @@ group_by=[…])`, et le même `filters` côté REST.
 
 Bootstrap d'un token CLI (pour Alexis) :
 ```bash
-ssh -i ~/.ssh/alexis root@<box> \
+ssh -i ~/.ssh/<clé> root@<box> \
   "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.issue_token <SUB> cli"
 # → imprime un `oto_…` à stocker dans SOPS comme OTO_API_KEY
 ```
@@ -1614,7 +1614,7 @@ tient. Rien à recopier, rien à deviner.
 agent devait repasser les trente-deux caractères que sa réservation venait de lui
 rendre. Mesuré sur trois passages d'une campagne réelle, il en altère un
 (`…-7c06-…` pour `…-7c16-…`) ou en fabrique un dans une convention étrangère
-(`670d56b3-…` en uuid v4, `6723d393f9b0…` en 24 hexadécimaux, `temp_blocage_20260826`).
+(un uuid v4, 24 hexadécimaux à la mode ObjectId, une chaîne fabriquée `temp_blocage_<date>`).
 **Recopier une chaîne aléatoire n'est pas une question de rigueur** : aucune consigne ne
 l'obtient, et l'agent a par ailleurs tout ce qu'il faut dans son bail.
 
@@ -1646,7 +1646,7 @@ quelle, et ce que le run tient déjà.
 
 Trois appels d'un même travail, même `_run_id` à l'octet : `data_claim_next` ok, puis
 `data_write(namespace="@claimed")` refusé « ton travail ne tient aucune ligne », puis
-`data_write(id="6738f4c2-57c0-43b9-9d78-XXXXXXXXXXXX")` refusé « introuvable ». Lu
+`data_write(id="<un id de ligne>")` refusé « introuvable ». Lu
 d'abord comme « le claim pose une identité que l'alias ne retrouve pas » — **faux**, et
 c'est figé par un test contre PostgreSQL sur le chemin réel (middleware + outil) : la
 réservation s'écrit sur le run (`claimed_run` = le `_run_id` de l'appel, posé par le
@@ -1726,8 +1726,8 @@ Deux gestes, sur le seul chemin qui échouait (`datastore/hors_org.py`) :
 Ce que ce lot NE fait PAS, et pourquoi : « l'org du run devient l'org de l'appel par
 défaut » aurait aussi corrigé le stamp du journal (#630) — mais mesuré sur 7 jours,
 2 010 appels sur 30 828 dans un run ont une org d'appel ≠ org du run, et presque tous
-sont LÉGITIMES (un agent multi-org ouvre son run en 196 et travaille en 255/259 avec
-`_org=` explicite). Seuls 82 étaient le défaut, tous des `data_write` refusés. Changer le
+sont LÉGITIMES (un agent multi-org ouvre son run dans une org et travaille dans deux
+autres avec `_org=` explicite). Seuls 82 étaient le défaut, tous des `data_write` refusés. Changer le
 seam d'org pour ces 82 engage les credentials de tous les connecteurs : c'est un lot à
 part, pas un correctif de datastore.
 

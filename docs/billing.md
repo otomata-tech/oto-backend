@@ -721,7 +721,7 @@ Un encaissement journalisé `paid` est **terminal** : il quitte
   n'est **pas** ouvert. Sans elle, un payeur qui ferme son onglet pendant la course
   au mandat resterait débité et sans droits, personne ne re-interrogeant le mandat.
 
-## L'incident du 2026-08-25 (org 219, 38 € pour un abonnement à 19 €)
+## L'incident du 2026-08-25 (38 € pour un abonnement à 19 €)
 
 Premier et seul encaissement réel de la plateforme à cette date. Chronologie
 vérifiée en base, rejouée par `tests/test_billing_double_debit_493.py` :

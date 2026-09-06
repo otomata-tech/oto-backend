@@ -77,7 +77,7 @@ champ transport sur l'expéditeur).
 - **Vérif de domaine d'envoi = déléguée au provider** (les deux connecteurs sont
   BYO) : Scaleway TEM comme Resend refusent un `from` hors domaine vérifié dans le
   compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).
-  Otomata (org 2) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
+  Otomata (l'org maison) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
   vault `SCW_TEM_*`).
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG

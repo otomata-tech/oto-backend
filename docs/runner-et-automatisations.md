@@ -148,7 +148,7 @@ Le tick ENFILE, le worker EXÉCUTE. Sans worker armé pour l'org, le job reste
 `next_due` que l'agent rapporte comme une promesse tenue. C'est le pire des deux
 malentendus : **ça ressemble à un succès.**
 
-**Ce qui l'a daté.** Relevé le 02/09 dans l'org 196 : cinq déclencheurs actifs
+**Ce qui l'a daté.** Relevé le 02/09 dans une org de production : cinq déclencheurs actifs
 enfilent chaque matin (dernier enfilement le jour même à 07:00), et un sixième
 porte son autopsie **dans son propre libellé** — « DISABLED 26 Aug, oto_trigger
 jobs do not execute ». Quelqu'un a diagnostiqué la panne et n'a eu que le NOM de

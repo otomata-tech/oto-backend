@@ -128,11 +128,11 @@ git tag v1.2.3 && git push origin v1.2.3   # → PROD (tags v* immuables, rulese
 # passer sur main (`git checkout main`). guard-main + sync-main-to-canari retirés.
 
 # Logs
-ssh -i ~/.ssh/alexis root@<box> "journalctl -u oto-mcp -f"
+ssh -i ~/.ssh/<clé> root@<box> "journalctl -u oto-mcp -f"
 
 # DB inspect (PG managed) — depuis la box (env du process inclut DATABASE_URL via .env)
 # ⚠️ `psql` n'est PAS installé sur la box dédiée → passer par le venv + psycopg :
-ssh -i ~/.ssh/alexis root@<box> 'cd /opt/oto-mcp && set -a; . .env; set +a; ./.venv/bin/python -c "
+ssh -i ~/.ssh/<clé> root@<box> 'cd /opt/oto-mcp && set -a; . .env; set +a; ./.venv/bin/python -c "
 import os, psycopg
 with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)

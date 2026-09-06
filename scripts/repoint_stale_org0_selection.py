@@ -31,7 +31,7 @@ qu'on ne pouvait même pas voir serait réveillé sans qu'on l'ait demandé. Sin
 (rien sous l'org réelle) : la ligne `org_id=0` est simplement repointée, avec
 son état inchangé — il n'y a alors rien avec quoi arbitrer.
 
-    ssh -i ~/.ssh/alexis root@<box> \\
+    ssh -i ~/.ssh/<clé> root@<box> \\
       "cd /opt/oto-mcp && ./.venv/bin/python -m scripts.repoint_stale_org0_selection"
     #   ^ dry-run par défaut : REJOUE les écritures dans une transaction, puis
     #     l'ANNULE (rollback) — ce n'est pas un simple comptage, une contrainte

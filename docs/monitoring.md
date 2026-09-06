@@ -306,9 +306,9 @@ handler ajouté sans sa garde y casse.
 
 **Le scope se DIT, et il compte ce qu'il laisse dehors (#630, 29/08).** Un `data_write`
 refusé à 21:11:23 était dans `op=run` (les 17 appels du run) et absent de `op=calls
-org_id=226` interrogé trois fois avec des motifs que son texte contenait — parce qu'il
+org_id=<l'org du run>` interrogé trois fois avec des motifs que son texte contenait — parce qu'il
 avait été RÉSOLU sous l'org maison de l'appelant (axe `_org` absent, #631), donc stampé
-`org_id=2`. La vue était exacte dans son périmètre ; le lecteur ne le connaissait pas, et
+avec l'org maison. La vue était exacte dans son périmètre ; le lecteur ne le connaissait pas, et
 un « zéro » lu là était un plancher muet. `op=calls` scopé à une org (org ou plateforme
 avec `org_id`) rend désormais, à côté des lignes : `scope` (la règle), `hors_scope` (les
 appels des runs de l'org stampés sous une autre org, sous LES MÊMES filtres — même à 0)

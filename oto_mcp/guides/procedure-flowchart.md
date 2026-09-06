@@ -99,7 +99,8 @@ règle ci-dessous est appliquée.)*
 
 ## Worked example
 
-Ce dessin-là se rend aujourd'hui sur `/org/245/processes/seeft-outbound-engine`.
+Ce dessin-là se rend aujourd'hui sur la page d'un process réel, à un chemin de la forme
+`/org/<id>/processes/acme-outbound-engine`.
 **Recopie son alignement**, puis écris tes propres étapes.
 
 ```

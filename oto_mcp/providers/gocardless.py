@@ -10,7 +10,7 @@ from ._model import _c
 # keyed BYO (user OU org), résolu via resolve_api_key comme pennylane/attio.
 # self_serve : chacun connecte SON propre compte GoCardless (sandbox ou prod) —
 # PAS de clé plateforme partagée, donc rien de sensible à gater par grant. Reste
-# hors socle → opt-in, pas imposé. L'org MM
+# hors socle → opt-in, pas imposé. Une org cliente
 # y pose le token de son compte de service pour le POC avoirs (guide d'une org client).
 CONNECTOR = _c(
     "gocardless", ["gocardless"], availability="self_serve",

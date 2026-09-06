@@ -25,7 +25,7 @@ le `PROVIDERS` du frontend) plus `_QUOTA_DEFAULTS`.
 
 NB barreau « Phase 1 » : ce registre encode l'état ACTUEL (les dérivations sont
 byte-identiques aux anciennes listes). Les évolutions de taxonomie (ex. gocardless
-→ BYO self_serve keyed, mm → injection platform) sont des changements ultérieurs
+→ BYO self_serve keyed, un grant-only → injection platform) sont des changements ultérieurs
 explicites de ce registre, qui piloteront leurs migrations.
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ from ._model import (  # noqa: F401  — surface publique historique du module
 # Notes de composition (des connecteurs ABSENTS, et pourquoi) :
 # - `bridge` (ADR 0034) RETIRÉ le 2026-07-16 (ADR 0037 / oto-backend#108) :
 #   subsumé par le connecteur `http` générique — un bridge n'est qu'une API HTTP
-#   que le back-office re-expose, jointe via http_get/http_post. Le pilote MM a
+#   que le back-office re-expose, jointe via http_get/http_post. Le bridge pilote a
 #   migré bridge→http. Le concept « remote data-driven » (base_url sur un
 #   provider hors registre) subsiste dans `org_secret_meta`, sans entrée de
 #   catalogue ; l'identité client vit dans la CONFIG d'org, jamais en dur.
@@ -363,7 +363,7 @@ def require_credential(entity_type: str, name: str) -> None:
     user → doit accepter `byo_user` (clé API keyed OU secret de session :
     linkedin/crunchbase/google/slack…) ; group → org-partageable OU byo_user (une
     équipe délègue l'org, ADR 0012) ; org → doit être org-partageable (byo_org,
-    ex. http/mm org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
+    ex. http, ou un remote org-only). Utilisé par credentials_store (coffre unique tous secrets)."""
     # Délégation (`credential_of`) : le connecteur n'a pas de credential à lui, à
     # AUCUN niveau d'entité. Refus nommant le porteur — « whatsapp n'accepte pas de
     # clé » sans dire où la poser laisserait l'appelant chercher une carte qui

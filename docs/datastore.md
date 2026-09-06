@@ -1451,7 +1451,7 @@ group_by=[…])`, et le même `filters` côté REST.
 3. **APIs & Services → OAuth consent screen** :
    - User type : `External` (sauf Workspace)
    - App name : `Oto Datastore` (visible aux users sur le consent)
-   - Support email : alexis@otomata.tech
+   - Support email : <l'adresse de support du projet>
    - Authorized domains : `oto.ninja`
    - **Scopes** : `.../auth/spreadsheets`, `.../auth/drive.file`,
      `.../auth/gmail.modify`, `.../auth/tasks`
@@ -1621,7 +1621,7 @@ l'obtient, et l'agent a par ailleurs tout ce qu'il faut dans son bail.
 ⚠️ **Ce qui coûte n'est pas le refus, c'est ce qui le suit.** L'agent refusé réessaie
 **sans identifiant** — c'est la conduite qu'on lui écrit —, et une écriture sans
 identifiant **crée** au lieu de corriger. Le 29/08, deux entreprises inexistantes sont
-nées ainsi dans un tableau d'évaluation (`AA EDITIONS`, `EDITIONS DE L'AUBE` : absentes
+nées ainsi dans un tableau d'évaluation (deux raisons sociales absentes
 du lot, du fichier client **et** du registre national, avec une provenance attribuée à
 ce registre) ; la veille, cinq fiches d'essai étaient nées dans le fichier d'une
 cliente et dans un livrable déjà remis. **Fréquence faible — 4 refus sur 105 mesurés —

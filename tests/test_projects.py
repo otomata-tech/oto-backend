@@ -633,8 +633,8 @@ def test_runs_all_when_no_target(seams, monkeypatch):
 
 
 def test_handoff_md_pure():
-    md = P._handoff_md({"id": 7, "name": "Prospection MM", "brief_md": "le but du projet"})
-    assert "project=7" in md and "#7" in md and "Prospection MM" in md
+    md = P._handoff_md({"id": 7, "name": "Prospection Acme", "brief_md": "le but du projet"})
+    assert "project=7" in md and "#7" in md and "Prospection Acme" in md
 
 
 def test_handoff_md_excludes_brief_content():

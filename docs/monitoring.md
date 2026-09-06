@@ -239,7 +239,7 @@ un outil, verbe en `op` :
 | `connectors` / `funnel` | santé connecteurs / activation | `days` (+ `org_id` pour `connectors`) |
 | `gaps` / `tool_quality` | signaux d'usage agrégés | `days` |
 
-`sub` accepte un **email OU un sub** (on enquête sur « les appels de jb@… », pas sur un
+`sub` accepte un **email OU un sub** (on enquête sur « les appels de jane@acme.test », pas sur un
 identifiant opaque). Les signaux bruts et leur résolution restent sur `oto_admin_signal`.
 
 ⚠️ **Un paramètre que l'op ne lit pas est REFUSÉ** (`param_not_read_by_op`), jamais

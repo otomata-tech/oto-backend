@@ -259,7 +259,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# NB : plus AUCUNE dépendance vers du code client (ex-extra `mm`) — les
+# NB : plus AUCUNE dépendance vers du code client (l'extra dédié a été retiré) — les
 # connecteurs client-sensibles sont des bridges distants consommés par le
 # middleware générique tools/remote.py (ADR 0003, meta-repo otomata).
 dev = [

@@ -27,7 +27,7 @@ from .registry import CAPABILITIES
 
 def _resolve_sub(target: Optional[str]) -> Optional[str]:
     """Filtre appelant en email OU sub → sub (confort agentique : on investigue
-    « les appels de jb@… », pas d'un sub opaque). None passe tel quel."""
+    « les appels de jane@acme.test », pas d'un sub opaque). None passe tel quel."""
     if not target:
         return None
     from .orgs.members import _resolve_target

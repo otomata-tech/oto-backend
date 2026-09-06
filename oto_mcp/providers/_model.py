@@ -12,7 +12,7 @@ l'agrégateur, jamais à l'import).
 
 Chaque connecteur porte les 3 axes du modèle plateforme :
 - **A. Disponibilité** : `availability` (self_serve | platform_granted). platform_granted
-  = grant-only (la plateforme accorde explicitement, ex. `mm` réservé à un client).
+  = grant-only (la plateforme accorde explicitement, ex. un connecteur réservé à un client).
 - **B. Visibilité** : `default_active` (SOCLE curé, ADR 0050 — installé d'office
   dans la sélection d'un nouveau (sub, org) ; le reste du catalogue = library
   installable). Policy, tunable.

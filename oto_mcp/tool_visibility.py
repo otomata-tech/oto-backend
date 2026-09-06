@@ -21,7 +21,7 @@ from __future__ import annotations
 # oto@otomata.tech) — masqué ici pour ne pas encombrer la toolbox des orgs sans
 # adresse configurée. La vraie barrière reste le check de rôle, pas ce masquage.
 # `fr_egapro_declaration` : source de niche (index égalité F-H par SIREN, surtout
-# utile en qualif sociale type Mūcho) — masquée pour ne pas charger la toolbox `fr`
+# utile en qualif sociale) — masquée pour ne pas charger la toolbox `fr`
 # par défaut ; activable à la demande (oto_enable_tool fr_egapro_declaration).
 # `browser_eval` : exécute du JS ARBITRAIRE dans une session loguée (oto-private#79).
 # Borné à un connecteur écrit en dur (pennylaneged), ce pouvoir est contenu ; sur le

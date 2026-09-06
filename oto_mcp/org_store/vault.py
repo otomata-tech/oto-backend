@@ -34,8 +34,8 @@ def has_org_secret(org_id: int, provider: str) -> bool:
 def set_org_secret(org_id: int, provider: str, api_key: str, set_by: Optional[str] = None,
                    meta: Optional[dict] = None, account: str = "") -> None:
     """Pose/rote le secret partagé `provider` de l'org. `provider` validé comme
-    org-partageable (byo_org : exclut slack/linkedin, inclut mm org-only) via le
-    registre — plus restrictif que KEY_PROVIDERS puisque mm n'est pas keyed.
+    org-partageable (byo_org : exclut slack/linkedin, inclut les remotes org-only) via
+    le registre — plus restrictif que KEY_PROVIDERS puisqu'un remote n'est pas keyed.
     `meta` : satellites non-secrets (ex. `base_url` du bridge d'un connecteur
     remote, ADR 0003).
 

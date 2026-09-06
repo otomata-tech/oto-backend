@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS org_members (
 CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);
 CREATE UNIQUE INDEX IF NOT EXISTS org_members_one_active ON org_members(sub) WHERE is_active;
 
--- Les credentials d'org (Attio, Pennylane, MM token…) vivent dans le coffre
+-- Les credentials d'org (Attio, Pennylane, le token d'un bridge…) vivent dans le coffre
 -- chiffré `connector_credentials` (entity_type='org'), pas dans une table dédiée.
 
 

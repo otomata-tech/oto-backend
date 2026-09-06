@@ -46,7 +46,7 @@ embed la requête hors boucle → `search.search(query_embedding=…)` ajoute la
 (une page trouvée par les deux remonte ; passage lexical conservé). **Dégradation
 gracieuse** : sans `MISTRAL_API_KEY` ou sur échec → lexical seul, jamais un prérequis.
 pgvector 0.8.2 sur otomata-main (`CREATE EXTENSION vector` AVANT `_SCHEMA` car halfvec en
-dépend). Le **golden set JB** cale désormais la QUALITÉ (plus le *si*).
+dépend). Le **golden set** cale désormais la QUALITÉ (plus le *si*).
 
 ## Se repérer : chapô, ordre curé, épine, backlinks, propositions
 

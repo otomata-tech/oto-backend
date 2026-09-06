@@ -120,6 +120,19 @@ class CallContextMiddleware(Middleware):
         # ultérieure lève (les tokens déjà posés sont toujours nettoyés).
         undo: list = []
         try:
+            # LA FACE, avant tout le reste (oto#83) : cet appel est entré par un tool
+            # MCP, donc il est piloté par un modèle. C'est la seule information sur la
+            # nature de l'appelant que le serveur tient de lui-même — tout le reste
+            # (`_run_id`, `client_id`, user-agent) est DÉCLARÉ par celui qu'on juge.
+            # Elle sert au datastore à ne pas servir à un agent les colonnes que le
+            # propriétaire d'un tableau garde pour lui (`agent_access`).
+            #
+            # Ici plutôt que dans les deux adaptateurs : ce middleware voit TOUS les
+            # appels d'outils — capacités montées ET tools écrits à la main (`data_*`)
+            # — et il est monté sur chaque instance par `_build_mcp`, l'anonyme
+            # comprise. Deux poses valent deux occasions d'en oublier une.
+            undo.append((session_org.reset_call_face,
+                         session_org.set_call_face(session_org.FACE_MCP)))
             # Relevé de résolution : posé EN PREMIER (donc reset EN DERNIER, LIFO) pour
             # que les seams l'aient pendant tout le handler ET que le calllog le relise
             # après. Inerte si rien ne le remplit — un dict vide n'ajoute aucune ligne.

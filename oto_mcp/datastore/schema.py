@@ -41,6 +41,7 @@ from functools import lru_cache
 from datetime import datetime
 from typing import Any, Optional
 
+from . import acces_agent as aga
 from . import claimable
 from . import forcage as fcg
 
@@ -862,7 +863,8 @@ def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
                       avant: Optional[dict] = None, *,
                       pose_systeme: Optional[dict] = None,
-                      forcage: Optional["fcg.Forcage"] = None) -> tuple[list[str], dict]:
+                      forcage: Optional["fcg.Forcage"] = None,
+                      agent: bool = False) -> tuple[list[str], dict]:
     """Les refus « champ que l'appelant n'écrit pas » → `(messages, details)`.
 
     `payload` = ce que le geste POSE (après arbitrage des vides, #608) ; `avant` = la
@@ -898,6 +900,19 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
       vient d'aucune des deux : la valeur gravée de mémoire, `mistral-large-2407`
       sur une fiche et `…2511` sur la suivante.
 
+    - `agent_access: "read" | "none"` (oto#83) — la colonne appartient au PROPRIÉTAIRE
+      du tableau et le geste vient d'un AGENT (`agent=True`, décidé par la face, jamais
+      deviné ici) → refus. `"none"` refuse TOUTE mention : la colonne ne lui est pas
+      servie, il ne peut donc pas la tenir d'une lecture — s'il la nomme, il l'a
+      inventée ou héritée d'un état d'avant le réglage. `"read"` suit la règle de
+      `readonly` — une valeur IDENTIQUE n'est pas une écriture, et les couches
+      `comment`/`link` restent ouvertes, c'est là qu'un agent pose ce qu'il a constaté.
+      ⚠️ Contrairement à `readonly`, la CRÉATION est concernée : `readonly` protège une
+      valeur remise par le client, qu'une création n'écrase pas ; ici c'est la
+      DESTINATION qui n'est pas à l'agent, et elle ne l'est pas davantage sur une ligne
+      neuve. Aucun forçage : la sortie du propriétaire est son écran, où rien de tout
+      ceci ne s'applique (`agent=False`) — il n'y a donc rien à lever.
+
     `details.expected_column` = `<colonne>.comment`, pour la face REST (#545) — un
     front pointe la destination sans reparser une phrase. ⚠️ **Le refus NOMME
     désormais le geste** (#658, arbitré le 02/09/2026) : qui peut forcer et comment.
@@ -910,11 +925,24 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     résolution, sans schéma ; un champ réservé est une propriété du TABLEAU."""
     ro, so = readonly_fields(schema), system_origin_fields(schema)
     sv = system_value_fields(schema)
+    # oto#83 : vides hors face agent — le cran ne borne que ce que la face a déclaré
+    # être un appel de modèle. Deux ensembles disjoints : ce qui n'est pas servi du
+    # tout, et ce qui est servi en lecture seule.
+    masques = aga.masquees(schema) if agent else set()
+    lecture = (aga.fermees(schema) - masques) if agent else set()
     errors: list[str] = []
     details: dict = {}
-    if not ro and not so and not sv:
+    if not ro and not so and not sv and not masques and not lecture:
         return errors, details
     for cle, neuf in (payload or {}).items():
+        if cle in masques:
+            errors.append(aga.refus(schema, cle, aga.AUCUN))
+            continue
+        if cle in lecture \
+                and (not names_layers(neuf) or VALUE_LAYER in neuf) \
+                and not same_value(unwrap(neuf), unwrap((avant or {}).get(cle))):
+            errors.append(aga.refus(schema, cle, aga.LECTURE))
+            continue
         if cle in so and names_layers(neuf) and ORIGIN_LAYER in neuf \
                 and not same_value(neuf[ORIGIN_LAYER],
                                    _origine_attendue(avant, cle, neuf)):
@@ -1727,6 +1755,18 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
             f"`{cle}` est la clé métier : elle se protège par `key_required`, pas par "
             f"`readonly` — une autre valeur est une autre ligne, et la clé figure dans "
             f"chaque écriture pour désigner la sienne")
+    # oto#83, troisième fois la même raison : la clé désigne la ligne, et elle figure
+    # dans chaque écriture pour ça. La fermer à l'agent — ou pire, la lui cacher —
+    # rendrait le tableau inécrivable ET illisible pour lui, sans qu'aucun refus ne
+    # nomme la cause : il verrait des lignes sans identité et des écritures qui visent
+    # à côté. Le tableau qu'un agent ne doit pas toucher se ferme par le partage, pas
+    # colonne par colonne.
+    if cle and aga.acces_declare(schema, cle) not in (None, aga.ECRITURE):
+        errors.append(
+            f"`{cle}` est la clé métier : elle ne se ferme pas par `{aga.CLE}` — un "
+            f"agent la lit pour désigner la ligne qu'il écrit, et sans elle il "
+            f"écrirait à côté. Ferme les colonnes de SUIVI, pas celle qui identifie ; "
+            f"un tableau entier se ferme en ne le partageant pas")
     # #607, même raison d'un cran plus loin : sur la clé, une valeur POSÉE par la
     # plateforme ferait décider au serveur de l'identité des lignes — chaque
     # écriture viserait une ligne neuve, et le tableau se dédoublerait à chaque run.
@@ -1929,6 +1969,27 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
             f"couche ; un composite, lui, se pose par item, ce que la garde ne lit "
             f"pas. La couche `{f.get('key')}.origine` s'écrit à la main sur une "
             f"colonne `json` : c'est sa pose AUTOMATIQUE qui ne s'y déclare pas")
+    # oto#83 — quatrième cran de la famille : à QUI la colonne est servie.
+    # ⚠️ La valeur inconnue est REFUSÉE, et c'est le point du cran. Le vocabulaire des
+    # CLÉS reste ouvert (on signale, on n'empêche pas) ; celui d'une VALEUR que le
+    # validateur exécute ne peut pas l'être : `agent_access: "non"` retomberait en
+    # silence sur le défaut « write », et le propriétaire croirait sa colonne fermée
+    # alors qu'elle est grande ouverte. C'est mot pour mot la plaie de `read_only`
+    # écrit pour `readonly`, à ceci près qu'ici on peut la fermer.
+    aa = f.get(aga.CLE)
+    if aa is not None and aa not in aga.VALEURS:
+        errors.append(
+            f"{fpath}: {aga.CLE}: valeur inconnue {aa!r} — les seules sont "
+            + ", ".join(repr(v) for v in aga.VALEURS)
+            + f" ({aga.ECRITURE!r} = le défaut ; {aga.LECTURE!r} = un agent la voit "
+            f"mais n'en écrit pas la valeur ; {aga.AUCUN!r} = un agent ne la voit pas "
+            f"du tout). Une valeur que la plateforme ne sait pas lire laisserait la "
+            f"colonne ouverte sous un réglage qui promet le contraire")
+    if not top and aa is not None:
+        errors.append(
+            f"{fpath}: {aga.CLE} ne se pose qu'au premier niveau — sous un sous-record "
+            f"ni le masquage ni le refus ne le lisent, et une déclaration que rien ne "
+            f"lit n'est pas inerte, elle ment")
     if not top and (ro is True or so == SYSTEM_ORIGIN or sv is not None):
         errors.append(
             f"{fpath}: readonly / origine: \"{SYSTEM_ORIGIN}\" / system ne se posent "
@@ -2740,6 +2801,12 @@ def enforced_keys() -> list[str]:
         if reserved_refusals({"fields": [{"key": "x", "system": "run.id"}]},
                              {"x": "inventé"}, {"x": "en place"})[0]:
             vues.append("system")
+        # oto#83 : le cran ne mord que sur la face agent — la sonde le dit donc
+        # explicitement (`agent=True`), sinon elle mesurerait l'absence de contexte
+        # d'appel et annoncerait « pas appliqué » sur un déploiement qui l'applique.
+        if reserved_refusals({"fields": [{"key": "x", "agent_access": "none"}]},
+                             {"x": "v"}, agent=True)[0]:
+            vues.append("agent_access")
         # #614/#678 : le refus de la colonne non déclarée au premier niveau. Il ne se
         # prouve pas sur `validate_row` (le relevé vit hors d'elle, dans `_check_row`,
         # pour rester la source unique du « hors du référentiel ») — sa sonde
@@ -2791,7 +2858,11 @@ def _read_keys() -> frozenset:
 
     keys: set = set()
     ici = pathlib.Path(__file__).parent
-    for nom in ("schema.py", "core.py"):
+    # ⚠️ La liste est celle des FICHIERS, jamais celle des clés : un module qui se met
+    # à lire un attribut de colonne doit être ajouté ici, sinon le dérivé le déclare
+    # mort et l'avertissement accuse une clé parfaitement lue. `acces_agent.py`
+    # (oto#83) lit `agent_access` par sa constante, comme `flat_alias` avant lui.
+    for nom in ("schema.py", "core.py", "acces_agent.py"):
         try:
             arbre = ast.parse((ici / nom).read_text(encoding="utf-8"))
         # noqa: SILENT — clés de schéma illisibles ⇒ ensemble vide, la lecture continue

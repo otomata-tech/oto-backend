@@ -68,6 +68,9 @@ CLES: tuple[Cle, ...] = (
     # — crans de garde, lus par le validateur —
     Cle("readonly", ("validateur", "front"),
         "colonne du fichier source : une écriture ne la change pas", True),
+    Cle("agent_access", ("validateur", "front"),
+        "à qui la colonne est servie : \"write\" (défaut), \"read\" (un agent la voit, "
+        "n'écrit pas sa valeur), \"none\" (un agent ne la voit pas du tout)", True),
     Cle("system", ("validateur",), "estampille reposée par la plateforme à chaque écriture", True),
     Cle("origine", ("validateur",), "la couche d'origine, posée par la plateforme", True),
     Cle("max_length", ("validateur", "front"), "borne de longueur, publiée dans le contrat"),

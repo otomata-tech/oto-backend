@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import acces_agent as aga
 from . import schema as dsv2
 from .. import db
 from .errors import ColumnAbsent, RowValidationError
@@ -34,9 +35,17 @@ class SchemaOpsMixin:
     `_resolve`, `_schema_of` et `_ns_of` — le mixin ne les redéfinit pas."""
 
     def get_schema(self, namespace: str) -> Optional[dict]:
+        """Le schéma SERVI. oto#83 : amputé des colonnes `agent_access: "none"` quand
+        l'appel vient de la face agent — c'est le goulot de lecture du format
+        (`data_get_schema`, l'index de `data_app`, l'avertissement de colonnes de
+        `data_rows`, le lot d'import).
+
+        ⚠️ Le store, lui, continue de lire le schéma ENTIER par `_schema_of` : la
+        validation et les refus ont besoin de la colonne masquée, sans quoi une
+        écriture d'agent y passerait comme un champ hors schéma — l'inverse du but."""
         ns_id = self._resolve(namespace)
         ns = db.get_datastore_namespace_by_id(ns_id)
-        return (ns or {}).get("schema")
+        return aga.schema_servi((ns or {}).get("schema"))
 
     def _capturer_origine_des_colonnes_neuves(self, ns_id: int,
                                               avant: Optional[dict],
@@ -59,7 +68,8 @@ class SchemaOpsMixin:
         return db.datastore_capturer_origine(ns_id, sorted(neuves))
 
     def set_schema(self, namespace: str, schema: Optional[dict], *,
-                   retraits_annonces: Optional[list] = None) -> dict:
+                   retraits_annonces: Optional[list] = None,
+                   geste: str = "schema") -> dict:
         """Pose (ou retire si None) le schéma typé d'un namespace. Exige le droit
         d'écriture. SOFT pour les champs (schéma de rendu, pas de validation des
         rows) — SAUF `schema.key` (#109 ch.3) : la clé métier déclarée devient une
@@ -93,6 +103,13 @@ class SchemaOpsMixin:
         # validation passée : un refus n'a rien effacé, l'annoncer ferait chercher
         # un dégât imaginaire (même patron qu'`effacements` sur une ligne).
         ancien = self._schema_of(ns_id)
+        # oto#83 : un agent ne décide pas de ce qui lui est servi, et il ne repose pas
+        # un format dont il ne voit qu'une partie. Ici plutôt que dans les surfaces :
+        # `patch_schema` repasse par cette méthode, donc les deux gestes sont couverts
+        # par une seule garde — et elle tombe AVANT `set_datastore_schema`, rien n'est
+        # écrit quand elle refuse.
+        if (refus := aga.refus_de_schema(ancien, schema, geste=geste)):
+            raise ValueError(refus)
         efface = dsv2.declarations_effacees(ancien, schema, retraits_annonces)
         db.set_datastore_schema(ns_id, schema)
         # Après l'écriture du schéma : la capture n'a de sens que si la déclaration
@@ -120,7 +137,7 @@ class SchemaOpsMixin:
         # quand le schéma ne déclare rien : c'est une propriété du SERVEUR, pas du
         # schéma, et c'est justement quand on s'apprête à déclarer qu'on veut la
         # connaître.
-        out = {"namespace": namespace, "schema": schema,
+        out = {"namespace": namespace, "schema": aga.schema_servi(schema),
                "enforced": dsv2.enforced_keys()}
         # Une écriture sur des lignes existantes ne se fait pas en silence : celui
         # qui déclare doit savoir que sa pose a TOUCHÉ des données, et combien.
@@ -231,7 +248,7 @@ class SchemaOpsMixin:
         # Le patch NOMME ce qu'il retire (`removed`) : le relevé d'effacement n'a
         # donc rien à en redire. Il reste tendu pour tout le reste — c'est le seul
         # moyen de voir une fusion qui laisserait échapper quelque chose.
-        result = self.set_schema(namespace, out_schema,
+        result = self.set_schema(namespace, out_schema, geste="patch",
                                  retraits_annonces=[str(k) for k in (remove or [])])
         return {**result, "added": added, "updated": updated,
                 "removed": [str(k) for k in (remove or [])]}

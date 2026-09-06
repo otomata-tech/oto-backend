@@ -881,9 +881,86 @@ Ce qui le remplace, en trois pièces (`datastore/forcage.py`) :
   restera. Arbitré en connaissance de cause le 02/09/2026 — pas de colonne de plus sur la
   ligne.
 
+## `agent_access` — à qui une colonne est servie (oto#83, 06/09/2026)
+
+**Le quatrième cran de la même famille, et le premier qui soit CIBLÉ.** Les trois
+précédents bornent tout le monde ; celui-ci ferme une colonne **à l'agent seul** —
+l'écran de son propriétaire continue de la voir et de l'écrire, à l'identique.
+
+**Le fait qui l'a motivé.** Une colonne de suivi commercial d'un tableau client,
+déclarée modifiable, dont la description dit « Où en est VOTRE démarche auprès de cette
+entreprise. À vous de le renseigner ». Servie telle quelle à un agent, cette phrase
+s'adresse à LUI : un agent a posé un statut de clôture sur un prospect avant tout
+contact, sans aucune source. Le schéma savait dire qu'une colonne est verrouillée
+(`readonly`), jamais **pour qui** — entre « le client la modifie » et « personne ne la
+modifie », il n'y avait rien.
+
+Un attribut, au premier niveau, trois valeurs, la valeur inconnue REFUSÉE à la pose :
+
+| `agent_access` | schéma servi à l'agent | ligne servie/réservée | écriture d'agent |
+|---|---|---|---|
+| absent / `"write"` | la colonne | la colonne | acceptée — le défaut d'avant |
+| `"read"` | la colonne | la colonne | **refusée** sur la VALEUR si elle change ; `.comment`/`.link` ouverts ; identique = no-op |
+| `"none"` | rien | rien (ni couches, ni alias plats) | **refusée**, quelle que soit la forme |
+
+⚠️ **Trois valeurs et pas un booléen** parce que le diagnostic porte sur deux crans
+distincts — « pas éditable par l'agent » et « pas même montrée ». Un `hidden_from_agent`
+les aurait soudés : impossible ensuite de servir en lecture une colonne qu'un agent doit
+CONSULTER pour décider sans avoir le droit de la réécrire.
+
+⚠️ **La valeur inconnue est refusée à la pose**, contrairement au vocabulaire des CLÉS
+qui reste ouvert (on signale, on n'empêche pas). Un `agent_access: "non"` retomberait en
+silence sur le défaut et le propriétaire croirait sa colonne fermée : c'est mot pour mot
+la plaie de `read_only` écrit pour `readonly`, à ceci près qu'ici on peut la fermer.
+⚠️ **La clé métier ne se ferme pas** — elle figure dans chaque écriture pour désigner la
+ligne. Refusé à la pose, ET écarté à la lecture (`acces_agent._cles_par_acces`) pour les
+schémas antérieurs au cran, où l'attribut n'était qu'une clé transportée.
+
+**« Un agent » = la FACE, et rien d'autre.** Un appel entré par un tool MCP est piloté
+par un modèle ; les routes REST `/api/*` servent le dashboard, les fronts tiers et les
+scripts du client. C'est la seule chose que le serveur sache de l'appelant sans la tenir
+de lui. La face est posée par `CallContextMiddleware` (donc sur CHAQUE instance MCP,
+l'anonyme comprise), lue par `acces_agent.appel_d_agent()`, et **passée au store en
+paramètre** : le store ne devine toujours rien, on le lui DIT.
+
+⚠️ **Pourquoi PAS `_run_id`**, qui était le candidat naturel : il est déclaré par celui
+qu'on juge (le runner le pose en `setdefault`, un modèle qui envoie le sien gagne ; le
+chemin des Conversations ne peut rien injecter du tout), et **rien ne le pose sur la
+face REST** — un `or run` dans le prédicat serait une branche inerte. Un agent sans run
+ouvert est donc reconnu, et c'est justement le cas dangereux.
+
+**Où le masquage porte** — trois goulots, jamais une liste de surfaces :
+`core._row_to_dict` (toute ligne servie : `data_rows`, `data_claim_next`, l'écho de
+`data_write`, la file, `data_app`, `oto_node_rows`), `schema_ops.get_schema` +
+la sortie de `set_schema` (`data_get_schema`, `data_patch_schema`, l'index de
+`data_app`), et `core._entry` (le catalogue de `data_list_namespaces`). Le store, lui,
+continue de lire le schéma ENTIER par `_schema_of` : masquer à la validation ferait
+passer l'écriture de l'agent comme un champ hors schéma.
+
+**Le réglage ne se rouvre pas depuis la face agent** (`acces_agent.refus_de_schema`,
+câblé dans `set_schema`, donc aussi dans `patch_schema` qui y repasse) : un agent ne
+pose, ne change ni ne retire `agent_access` — jugé sur le DELTA ancien→nouveau, pour
+qu'un patch qui TRANSPORTE le réglage passe —, et il ne repose pas un schéma entier sur
+un tableau réglé (`set_schema` REMPLACE, et il n'en voit qu'une partie : le refus nomme
+`data_patch_schema`). Sans ce cran la capacité serait décorative — la manœuvre « lever,
+écrire, refermer » de #658/#668 n'aurait même pas eu besoin de refermer.
+
+⚠️ **Ce que le masquage N'EST PAS, et ce qu'il ne couvre pas.** Une colonne masquée
+n'est pas supprimée : la valeur reste, l'écran la lit et l'écrit, les exports du
+propriétaire la voient. Il porte sur ce qui est **servi**, pas sur ce qui est
+**interrogé** — un agent qui connaîtrait le nom peut encore filtrer, trier ou agréger
+dessus, et la recherche plein texte (`oto_search`, qui sert un extrait du JSONB brut
+sans passer par `_row_to_dict`) balaie toutes les valeurs. Non couvert non plus : la
+page web publique (`share_ui.render_data`, qui lit `db.datastore_list_rows` en direct —
+c'est la publication du client, pas une face agent), et **un agent qui atteint la face
+REST avec la clé de son propriétaire** : sur REST, la clé du client et l'écran du client
+sont le même porteur. Fermer ce dernier axe demande une identité d'agent — la brique
+existe à moitié (`token_kind ∈ {user, delegation}`, frappé à la réservation d'un job
+runner) mais elle est jetée à la vérification du jeton MCP.
+
 `null` lève un cran comme
 une clé de champ ordinaire, et **la levée ne touche aucune ligne** : une origine posée
-reste. `enforced` annonce `readonly` et `origine` par une sonde qui interroge la fonction
+reste. `enforced` annonce `readonly`, `origine` et `agent_access` par une sonde qui interroge la fonction
 qui décide (comme `key_required`, elles ne se prouvent pas sur une ROW seule). **Cinq
 chemins d'écriture, une garde** : création (ligne seule, lot, upload signé — le même
 `_write_rows_to_ns`), fusion sous verrou, patch par `id`, remplacement (où une colonne
@@ -1298,6 +1375,8 @@ dont découlent les deux défauts payés :
 | `{"champ": {"origine": X}}` sur un champ `origine: "system"` | **refusé** — la plateforme la pose (#586) |
 | `{"champ": X}` avec X **identique** à la valeur en place | **no-op : toutes les couches restent** (29/08/2026 — le round-trip relire → repousser porte la valeur nue, il ne doit rien détruire) |
 | `{"champ": Y}` sur un champ `readonly: true` | **refusé** si Y change la valeur ; identique = no-op ; `{"champ": {"comment": …}}` passe (#606) ; `readonly_override=true` force, pour cet appel, si l'appelant possède ou gouverne le tableau (#658) |
+| `{"champ": Y}` sur un champ `agent_access: "read"` | **refusé depuis la face MCP** si Y change la valeur (création comprise) ; identique = no-op ; `{"champ": {"comment": …}}` passe. Depuis la face REST : accepté, le cran est inerte (oto#83) |
+| `{"champ": Y}` sur un champ `agent_access: "none"` | **refusé depuis la face MCP**, quelle que soit la forme et même à l'identique — la colonne ne lui est pas servie, il ne peut pas la tenir d'une lecture. Depuis la face REST : accepté (oto#83) |
 | `{"champ": {"origine": X}}` sur un champ `origine: "system"`, X = ce que le système poserait | accepté, no-op (29/08/2026 — le geste dominant du terrain) |
 
 `comment` et `link` décrivent la valeur : quand elle CHANGE sans qu'ils soient

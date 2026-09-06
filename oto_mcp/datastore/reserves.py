@@ -33,9 +33,18 @@ déclarations, et sondée par `enforced_keys`) ; ce module en fait le geste : re
 levant, et poser. Il est appelé aux cinq chemins d'écriture du store — création (ligne
 seule, lot, upload signé), fusion sous verrou, patch par identifiant, remplacement.
 
-⚠️ **Le cran borne TOUT LE MONDE PAR DÉFAUT, faces humaine et REST comprises.** Le
-store ne sait pas distinguer un agent d'un humain (il connaît un sub et une org ; le run
-n'est pas obligatoire sur toute écriture), et une exemption par défaut serait un trou.
+⚠️ **Les TROIS PREMIERS crans bornent TOUT LE MONDE PAR DÉFAUT, faces humaine et REST
+comprises.** Le store ne sait pas distinguer un agent d'un humain (il connaît un sub et
+une org ; le run n'est pas obligatoire sur toute écriture), et une exemption par défaut
+serait un trou.
+
+⚠️ **Amendement du 06/09/2026 (oto#83) — un QUATRIÈME cran, celui-là ciblé.**
+`agent_access` ferme une colonne à l'AGENT SEUL : l'écran de son propriétaire continue
+de la voir et de l'écrire. La phrase ci-dessus reste vraie du store — il ne devine
+toujours rien : la face MCP le lui DIT (paramètre `agent`, posé par
+`acces_agent.appel_d_agent()`), et hors de cette déclaration le cran est inerte. C'est
+le seul cran de la famille qui ne se force pas : la sortie du propriétaire n'est pas un
+paramètre d'appel, c'est son écran, où le cran ne s'applique pas.
 
 ⚠️ **Amendement du 02/09/2026 (#658) — `readonly` seul.** La sortie du propriétaire
 était le schéma : `data_patch_schema(fields=[{key, readonly: false}])`, écrire,
@@ -183,7 +192,8 @@ def poser_valeurs_systeme(schema: Optional[dict], apres: dict,
 def refuser_champs_reserves(schema: Optional[dict], payload: Optional[dict], *,
                             avant: Optional[dict] = None,
                             pose_systeme: Optional[dict] = None,
-                            forcage: Optional[Forcage] = None) -> None:
+                            forcage: Optional[Forcage] = None,
+                            agent: bool = False) -> None:
     """Refuse ce que l'appelant n'écrit pas — en nommant le champ, la raison et où
     va la chose. `RowValidationError`, donc `row_invalid` côté REST (avec
     `details.expected_column`, #545) et INVALID_PARAMS côté MCP : le code ne
@@ -191,10 +201,16 @@ def refuser_champs_reserves(schema: Optional[dict], payload: Optional[dict], *,
 
     `forcage` (#658) = le forçage DEMANDÉ sur cet appel, déjà tranché par le store
     (aucune lecture d'ownership ici : ce chemin passe sous un verrou de ligne). Il ne
-    lève que le cran `readonly`, et le relevé qu'il remplit part au journal."""
+    lève que le cran `readonly`, et le relevé qu'il remplit part au journal.
+
+    `agent` (oto#83) = cet appel est-il piloté par un modèle. **Décidé par la FACE, en
+    amont** (`acces_agent.appel_d_agent()`), et passé jusqu'ici plutôt que relu : ce
+    module a écrit noir sur blanc que « le store ne sait pas distinguer un agent d'un
+    humain », et c'est resté vrai — ce qui a changé, c'est qu'on le lui DIT. `False`
+    par défaut, donc aucun appelant existant ne change de comportement."""
     errors, details = dsv2.reserved_refusals(schema, payload, avant,
                                              pose_systeme=pose_systeme,
-                                             forcage=forcage)
+                                             forcage=forcage, agent=agent)
     if errors:
         raise RowValidationError(errors, details=details)
 

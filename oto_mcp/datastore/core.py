@@ -34,6 +34,7 @@ from typing import Any, Optional
 
 from psycopg.errors import UniqueViolation
 
+from . import acces_agent as aga
 from . import ecartes as dsec
 from . import layers as dsl
 from . import schema as dsv2
@@ -503,8 +504,20 @@ class DatastorePg(SchemaOpsMixin):
 
         `layers` (oto#53) : la forme des cellules à couches — `flat` (défaut) les
         aplatit à côté du nom nu, `nested` les rend comme elles s'écrivent. Le défaut
-        vit dans `layers.DEFAUT`, pas ici."""
+        vit dans `layers.DEFAUT`, pas ici.
+
+        **Masquage agent (oto#83)** : les colonnes `agent_access: "none"` sont retirées
+        ICI, au seul endroit par lequel passe TOUTE ligne servie par le store — treize
+        sites d'appel, dix méthodes (`append_row`, `upsert_row`, `get_row`, `list_rows`,
+        `cursor_rows`, `page_rows`, `update_row`, `claim_next`, `claim_row`, `queue`).
+        Retirées **avant** la projection, pas après : leurs couches (`champ.origine`) et
+        leurs alias plats (`contact1_nom`) ne sont donc jamais fabriqués, plutôt que
+        fabriqués puis rattrapés par un filtre de noms qu'on oublierait d'étendre.
+        Inerte hors face agent — le tableau de bord de son propriétaire voit tout."""
         data = row.get("data") or {}
+        # Lu une fois par ligne. Le prédicat court-circuite sur la face REST, où les
+        # pages sont les plus grosses : rien n'est parcouru là où rien n'est masqué.
+        cachees = aga.masquees(schema) if aga.appel_d_agent() else frozenset()
         out = {
             "_id": row["row_id"],
             "_created_at": row["created_at"],
@@ -519,7 +532,7 @@ class DatastorePg(SchemaOpsMixin):
         # renseignés s'ajoutent à plat sous `champ.couche` — visibles sans être
         # imposés, et projetables par `fields` comme n'importe quelle colonne.
         for k, v in data.items():
-            if k in _META_COLS:
+            if k in _META_COLS or k in cachees:
                 continue
             # `layers="nested"` (oto#53) : la cellule revient comme elle s'écrit,
             # `{valeur, origine, comment, link}` — rien n'est aplati à côté.
@@ -541,6 +554,8 @@ class DatastorePg(SchemaOpsMixin):
         # Les couches suivent sans rien de plus : l'item est déjà servi, donc son
         # `email.origine` devient `contact1_email.origine`.
         for cle, gabarit in dsv2.flat_alias_of(schema).items():
+            if cle in cachees:
+                continue
             items = out.get(cle)
             if not isinstance(items, list):
                 continue
@@ -1034,7 +1049,12 @@ class DatastorePg(SchemaOpsMixin):
             "can_write": (permission == "write") if shared else True,
             "can_govern": can_govern,
             "is_personal": perso,
-            "schema": n.get("schema"),   # mode typé optionnel (ADR 0032 §6 / 0029, B6) ; None = table libre
+            # mode typé optionnel (ADR 0032 §6 / 0029, B6) ; None = table libre.
+            # oto#83 : c'est le SECOND chemin par lequel un schéma complet est servi
+            # (le premier est `get_schema`) — `data_list_namespaces` et
+            # `GET /api/datastore/namespaces` en dépendent, et un catalogue qui nomme
+            # une colonne masquée l'aurait servie par la porte de derrière.
+            "schema": aga.schema_servi(n.get("schema")),
         }
 
     def list_namespaces(self) -> list[dict]:
@@ -1217,7 +1237,8 @@ class DatastorePg(SchemaOpsMixin):
         sys_pose = self._pose_systeme(schema)
         # #658 : tranché AVANT la fusion — c'est elle qui ouvre le verrou de ligne.
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
-        refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
+        refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose,
+                                agent=aga.appel_d_agent())
         _relever_origine_module(self, ns_id, user_data, schema=schema,
                                 declare=origine_override)
         self._trace(trace, ns_id, ns)
@@ -1417,7 +1438,8 @@ class DatastorePg(SchemaOpsMixin):
             # (payload, ligne en place, résultat), sous le verrou, avant que quoi
             # que ce soit ne parte. Puis la plateforme pose l'origine qu'elle doit.
             refuser_champs_reserves(schema, pose, avant=current or {},
-                                    pose_systeme=sys_pose, forcage=forcage)
+                                    pose_systeme=sys_pose, forcage=forcage,
+                                    agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, pose, current or {}, schema=schema,
                                     declare=origine_override)
             poser_origine_systeme(schema, current, merged, set(pose))
@@ -1479,7 +1501,8 @@ class DatastorePg(SchemaOpsMixin):
             complet = {**{k: None for k in (prev_data or {}) if k not in user_data},
                        **user_data}
             refuser_champs_reserves(schema, complet, avant=prev_data,
-                                    pose_systeme=sys_pose)
+                                    pose_systeme=sys_pose,
+                                    agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, complet, prev_data, schema=schema,
                                     declare=origine_override)
             if prev_data is not None:
@@ -1499,7 +1522,12 @@ class DatastorePg(SchemaOpsMixin):
 
     def declared_key(self, namespace: str) -> Optional[str]:
         """Clé métier déclarée au schéma (`schema.key`) — sert la dédup au batch
-        write. None si aucune (table libre / schéma sans clé)."""
+        write. None si aucune (table libre / schéma sans clé).
+
+        Lit le schéma SERVI, et c'est sans conséquence (oto#83) : le masquage ne touche
+        jamais la clé métier — `acces_agent._cles_par_acces` l'écarte quoi qu'en dise la
+        déclaration, précisément pour qu'aucune décision interne ne dépende du point de
+        vue de l'appelant."""
         return self._declared_key_of(self.get_schema(namespace))
 
     def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None,
@@ -1612,7 +1640,8 @@ class DatastorePg(SchemaOpsMixin):
                 # chemin le plus volumineux, donc celui où un trou produirait le plus
                 # de lignes sans trace.
                 sys_pose = self._pose_systeme(schema)
-                refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose)
+                refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose,
+                                        agent=aga.appel_d_agent())
                 _relever_origine_module(self, ns_id, user_data, schema=schema,
                                         declare=origine_override)
                 poser_valeurs_systeme(schema, user_data, sys_pose)
@@ -1925,7 +1954,7 @@ class DatastorePg(SchemaOpsMixin):
         sys_pose = self._pose_systeme(schema)
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
         refuser_champs_reserves(schema, pose, avant=avant, pose_systeme=sys_pose,
-                                forcage=forcage)
+                                forcage=forcage, agent=aga.appel_d_agent())
         # ⚠️ CE chemin-ci a déjà été oublié une fois, six lignes plus haut : l'origine
         # n'avait été câblée que dans `_merge_into_row`, et le patch par `id` — le
         # geste le plus courant d'un agent — l'effaçait quand même. Le barreau 1 a

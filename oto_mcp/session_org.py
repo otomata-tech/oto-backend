@@ -126,6 +126,46 @@ def current_call_run() -> Optional[str]:
     return _CALL_RUN.get()
 
 
+# ── FACE par laquelle l'appel est entré (oto#83) ──────────────────────────────
+# Le backend a deux portes sur le MÊME service : les tools MCP, écrits POUR un
+# modèle (schémas et descriptions rédigés pour lui, `mcp=None # la face agent`
+# partout dans le registre datastore), et les routes REST `/api/*`, que servent le
+# dashboard, les fronts tiers et les scripts du client.
+#
+# C'est la SEULE information sur la nature de l'appelant que le serveur détient
+# lui-même : un identifiant de run est DÉCLARÉ par l'appelant (le runner le pose en
+# `setdefault`, le modèle peut l'écraser, et le chemin Conversations ne peut pas
+# l'injecter du tout), un `client_id` est celui du client OAuth, un user-agent
+# s'écrit. La porte empruntée, non.
+#
+# Posée par `CallContextMiddleware` (donc sur TOUTE instance MCP, authentifiée comme
+# anonyme : les middlewares sont ajoutés dans `_build_mcp`), remise à sa valeur
+# d'avant dans le `finally`. Jamais posée sur le chemin REST — une requête REST tourne
+# dans sa propre tâche, dont le contexte n'a jamais vu cette variable.
+FACE_MCP = "mcp"
+
+_CALL_FACE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_call_face", default=None)
+
+
+def set_call_face(face: str) -> contextvars.Token:
+    return _CALL_FACE.set(face)
+
+
+def reset_call_face(token: contextvars.Token) -> None:
+    _CALL_FACE.reset(token)
+
+
+def current_call_face() -> Optional[str]:
+    """`"mcp"` si l'appel courant est entré par un tool MCP, sinon `None`.
+
+    `None` couvre la face REST, le boot, les tâches de fond et les tests — tout ce
+    qui n'est pas un appel d'outil. Le défaut est donc « pas un agent », ce qui est
+    le bon côté de l'erreur : un masquage qui s'applique par accident retirerait une
+    colonne à l'écran de son propriétaire."""
+    return _CALL_FACE.get()
+
+
 # ── Org du RUN de l'appel (#639, 30/08/2026) ──────────────────────────────────
 # Sans `_org=`, un appel fait DANS un run se résout dans l'org du run (`runs.org_id`),
 # pas dans l'org maison du sub. Posée par `run_org.pin_for_call` (middleware) UNE fois

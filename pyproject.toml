@@ -17,7 +17,7 @@ dependencies = [
     # on lance la suite, on borne plus haut. Extra `apps` = prefab_ui (MCP Apps
     # SEP-1865) consommé par les tools *_app. Schéma plat des tools validé sur 3.4
     # (ADR 0009).
-    "fastmcp[apps]>=3.4.2,<3.5",
+    "fastmcp[apps]>=3.4.2,<4.1",
     # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
     # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →

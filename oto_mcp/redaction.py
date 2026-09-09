@@ -94,7 +94,7 @@ def rebuild_result(result, redacted):
     """Réémet un `ToolResult` avec `redacted` sur les DEUX canaux : texte JSON +
     `structured_content` (seulement si l'original en portait un dict — sinon la
     donnée vivait dans le canal texte, le structuré reste vide)."""
-    from fastmcp.tools.tool import ToolResult
+    from fastmcp.tools import ToolResult
     from mcp.types import TextContent
     sc = getattr(result, "structured_content", None)
     return ToolResult(
@@ -107,7 +107,7 @@ def rebuild_result(result, redacted):
 
 def withheld_result(name: str):
     """`ToolResult` d'erreur « sortie retenue » (fail-closed) pour l'outil `name`."""
-    from fastmcp.tools.tool import ToolResult
+    from fastmcp.tools import ToolResult
     from mcp.types import TextContent
     return ToolResult(
         content=[TextContent(
@@ -306,7 +306,7 @@ def render_empty(result, tool_name: str):
     Phrase SEULE : y rajouter la structure « pour information » rétablirait très
     exactement le déclencheur qu'on retire.
     """
-    from fastmcp.tools.tool import ToolResult
+    from fastmcp.tools import ToolResult
     from mcp.types import TextContent
     return ToolResult(
         content=[TextContent(type="text", text=empty_message(tool_name))],

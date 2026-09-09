@@ -9,7 +9,7 @@ dépendre ni du serveur réel ni de la DB.
 import asyncio
 
 import pytest
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 from oto_mcp.mcp_errors import McpError
 from mcp.types import TextContent
 from oto.tools.common import FieldFilter

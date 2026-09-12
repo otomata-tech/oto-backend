@@ -164,8 +164,9 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > marketplace `dashboard.oto.ninja/connectors?tab=marketplace&connector=<name>`, dérivé de
 > `providers.connector_for_namespace`), et une vue **tableau** pleine largeur avec recherche
 > globale + tri 3 états + filtres par colonne (JS inline, opère sur le DOM rendu — pagination
-> serveur inchangée). Le hero porte aussi un CTA **« Ajouter à mon Oto »** → deep-link
-> `dashboard.oto.ninja/import?slug=<slug>`.
+> serveur inchangée). Le CTA **« Ajouter à mon Oto »** du hero (deep-link
+> `/import?slug=<slug>` du dashboard) a été **retiré le 13/09/2026** : l'écran `/import`
+> l'avait été avant lui (oto#192) et le bouton retombait sur l'accueil.
 >
 > ⚠️ **`op=copy` rend une copie possédée par QUI la fait (ADR 0068, 04/09/2026).** Elle
 > était possédée par l'**org active** (ADR 0032 §7 B5a), y compris en dupliquant un
@@ -187,9 +188,10 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > tableau d'une autre org est re-provisionné à vide ; **jamais** de credentials).
 > **Idempotent** : colonne
 > `projects.copied_from` + `find_copied_project` → si l'org a déjà forké la source, on la
-> RÉCUPÈRE (pas de doublon) ; si la source appartient déjà à l'org active, on l'ouvre. Le
-> dashboard (`/import?slug=`, `ImportProjectView.vue`) gère le login puis redirige vers le
-> nouveau projet.
+> RÉCUPÈRE (pas de doublon) ; si la source appartient déjà à l'org active, on l'ouvre.
+> ⚠️ **Sans appelant connu depuis le 13/09/2026** : l'écran `/import` du dashboard
+> (oto#192) puis le CTA de la page de partage qui y menait ont été retirés ; ni
+> oto-dashboard ni oto-frontend n'appellent plus la route, qui reste servie.
 
 > **Endpoint MCP par projet — `<slug>.mcp.oto.cx` (ADR 0032, amende #44).** Un projet
 > se **publie** comme serveur MCP dédié sur son propre sous-domaine (le « preset » de
@@ -383,7 +385,7 @@ procédures/tableaux/docs, rendu server-side `share_ui`, + MCP au path `/mcp`) /
 warning ; annuaire oto.ninja/apps. (Le partage public **chiffré** `/p/p` a été retiré,
 supplanté par ce partage navigable live.) La page navigable (`share_ui`) est un **canal
 d'acquisition** : hero « brancher », connecteurs en pastilles (logo + tooltip + lien fiche),
-tableau riche (recherche/tri/filtres), et CTA **« Ajouter à mon Oto »** → capacité
-`me.import_project` (`POST /api/me/projects/import`) qui **forke un projet publié par slug**
-dans l'org active (structure only, jamais de credentials ; idempotent via `projects.copied_from`).
+tableau riche (recherche/tri/filtres). Son CTA « Ajouter à mon Oto » a été retiré le
+13/09/2026 (oto#192) ; la capacité `me.import_project` (`POST /api/me/projects/import`) qu'il
+servait reste, sans appelant connu.
 **Détail : `docs/projects.md`**.

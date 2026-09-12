@@ -4,8 +4,8 @@ humain ET par un agent via WebFetch, contrairement à l'ex-partage chiffré SPA 
 MCP (agir) reste au path `/mcp` ; ici on ne fait que CONSULTER.
 
 C'est aussi le **canal de démonstration / acquisition** : la page doit « claquer » (hero
-« brancher dans Claude », carte « Ajouter à mon Oto », connecteurs présentés avec logo +
-description au survol + lien, tableaux confortables à explorer).
+« brancher dans Claude », connecteurs présentés avec logo + description au survol + lien,
+tableaux confortables à explorer).
 
 Quatre pages, toutes gatées par l'appartenance au projet (fail-closed) :
 - `/`               index : brief + hero MCP + connecteurs + liens procédures / tableaux / docs
@@ -46,7 +46,7 @@ _MD = MarkdownIt("commonmark", {"html": False})
 # Plafond de lignes affichées par page de tableau (pagination par `?offset=`).
 _DATA_PAGE = 100
 
-# Deep-link « Ajouter à mon Oto » (le dashboard gère le login puis le fork/récupération).
+# Adresse du dashboard, pour le lien de chaque connecteur vers sa fiche marketplace.
 # Env-driven (cutover ADR 0040 : prod dashboard ≠ preprod ; ne pas figer sur .oto.ninja).
 _DASHBOARD = config.dashboard_url()
 
@@ -114,7 +114,7 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
   article pre code{{background:none;padding:0}}
   article blockquote{{margin:.8em 0;padding:.2em 16px;border-left:3px solid var(--hair);color:var(--mute)}}
 
-  /* ── Hero « brancher » (carte MCP URL + Ajouter à mon Oto) ── */
+  /* ── Hero « brancher » (carte MCP URL) ── */
   .hero{{background:linear-gradient(135deg,#fff 0%,var(--paper3) 100%);border:1px solid var(--hair);
     border-radius:16px;padding:24px 26px;margin:22px 0;box-shadow:var(--shadow-card)}}
   .hero h2{{font-family:'Bricolage Grotesque',sans-serif;font-size:17px;margin:0 0 4px;font-weight:700}}
@@ -131,8 +131,6 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
   .btn.ghost{{background:transparent;color:var(--ink);border-color:var(--hair)}}
   .btn.ghost:hover{{border-color:var(--primary);background:var(--paper3)}}
   .btn.copy{{background:#3a2c17;color:#f6ecc9;border-color:#3a2c17;padding:7px 11px}}
-  .cta-row{{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}}
-  .cta-row .hint{{color:var(--faint);font-size:12.5px}}
 
   /* ── Connecteurs (chips avec logo + tooltip + lien) ── */
   .conns{{display:flex;flex-wrap:wrap;gap:8px}}
@@ -238,17 +236,11 @@ def _nav_section(title: str, items: list[dict]) -> str:
     return f'<div class=card><h2>{html.escape(title)}</h2><div class=nav>{lis}</div></div>'
 
 
-def _hero_connect(connect_url: str, add_url: Optional[str]) -> str:
-    """Hero « brancher dans Claude/Mistral » : l'URL MCP publique + copie + CTA
-    « Ajouter à mon Oto » (deep-link dashboard — login géré côté dashboard)."""
+def _hero_connect(connect_url: str) -> str:
+    """Hero « brancher dans Claude/Mistral » : l'URL MCP publique + copie."""
     if not connect_url:
         return ""
     url = html.escape(connect_url)
-    add_btn = (
-        f'<a class="btn" href="{html.escape(add_url)}" target="_blank" rel="noopener">'
-        '<span>＋</span> Ajouter à mon Oto</a>' if add_url else "")
-    hint = ('<span class=hint>déjà client Oto ? récupère ce projet dans ton espace</span>'
-            if add_url else "")
     return (
         '<div class=hero>'
         '<h2>Brancher ce projet dans Claude ou Mistral</h2>'
@@ -259,7 +251,6 @@ def _hero_connect(connect_url: str, add_url: Optional[str]) -> str:
         '<button class="btn copy" onclick="navigator.clipboard.writeText('
         'document.getElementById(\'u\').textContent).then(()=>{this.textContent=\'copié ✓\'})">'
         'copier</button></div>'
-        f'<div class=cta-row>{add_btn}{hint}</div>'
         '</div>')
 
 
@@ -288,7 +279,7 @@ def _connectors_card(connectors: list[dict]) -> str:
 # ── Rendus de page ────────────────────────────────────────────────────────────
 def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: list[dict],
                  docs: list[dict], connect_url: str, connectors: Optional[list[dict]] = None,
-                 add_url: Optional[str] = None, loose_tools: Optional[list[str]] = None) -> str:
+                 loose_tools: Optional[list[str]] = None) -> str:
     brief_html = (f'<div class=card><article>{_MD.render(brief_md)}</article></div>'
                   if (brief_md or "").strip()
                   else '<p class="empty">Projet partagé, en lecture seule.</p>')
@@ -320,7 +311,7 @@ def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: li
     inner = (f'  <div class=eyebrow>Projet partagé · Oto</div>\n'
              f'  <h1>{html.escape(name or "Projet")}</h1>\n'
              f'  {brief_html}\n'
-             f'  {_hero_connect(connect_url, add_url)}\n'
+             f'  {_hero_connect(connect_url)}\n'
              f'  {conns}\n'
              f'  {sections}\n  {loose}')
     return _shell(title=name, inner=inner)
@@ -643,13 +634,10 @@ def build_page(project: dict, path: str, *, offset: int = 0,
                   "description": d.get("description")}
                  for d in db.list_docs_for_project(pid)] if show_docs else [])
         connectors, loose = _connectors_from_tools(list(project.get("mcp_tools") or []))
-        # « Ajouter à mon Oto » : deep-link dashboard (login + fork/récupération gérés là-bas).
-        slug = project.get("mcp_slug")
-        add_url = f"{_DASHBOARD}/import?slug={slug}" if slug else None
         return render_index(
             name=project.get("name") or "", brief_md=project.get("brief_md") or "",
             procedures=procedures, tables=tables, docs=docs, connect_url=connect_url,
-            connectors=connectors, add_url=add_url, loose_tools=loose), 200
+            connectors=connectors, loose_tools=loose), 200
 
     parts = p.strip("/").split("/")
     if len(parts) == 2 and parts[1].isdigit():

@@ -59,17 +59,15 @@ def test_connectors_from_tools_groups_and_derives():
     assert "connectors?tab=marketplace" in serper["href"]
 
 
-def test_add_to_oto_cta_when_slug_present(monkeypatch):
+def test_no_add_to_oto_cta_even_with_a_slug(monkeypatch):
+    """Le bouton « Ajouter à mon Oto » menait à l'écran `/import` du dashboard, retiré
+    (oto#192) : il retombait sur l'accueil. Retiré à son tour ; le hero reste."""
     _wire(monkeypatch, links=[])
     monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [])
     proj = {"id": 5, "name": "P", "brief_md": "", "mcp_access": "secret", "mcp_slug": "demo-x"}
-    html, _ = share_ui.build_page(proj, "/", connect_url="https://demo-x.share.oto.cx/mcp")
-    assert "Ajouter à mon Oto" in html
-    # ⚠️ L'adresse est DÉRIVÉE (`config.dashboard_url`) : la figer ici graverait le
-    # défaut du 13/08 — la prod servait un lien vers la preprod parce que trois
-    # variables coexistaient et que le défaut en dur visait `.ninja`.
-    from oto_mcp import share_ui as _su
-    assert f"{_su._DASHBOARD}/import?slug=demo-x" in html
+    html, status = share_ui.build_page(proj, "/", connect_url="https://demo-x.share.oto.cx/mcp")
+    assert status == 200 and "https://demo-x.share.oto.cx/mcp" in html
+    assert "Ajouter à mon Oto" not in html and "/import" not in html
 
 
 def test_index_hides_tables_and_pages_when_anonymous(monkeypatch):

@@ -64,7 +64,6 @@ DEFAULT_PATHS: dict[str, str] = {
     "billing": "/org/billing",
     "connectors": "/connectors",
     "connector_return": "/connectors?connector={connector}",
-    "import_project": "/import?slug={slug}",
     "marketplace": "/connectors?tab=marketplace",
 }
 

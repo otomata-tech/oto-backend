@@ -33,13 +33,12 @@ class _Db:
         cur = self.rows.get(row_id)
         if cur is None:
             return None
+        # Comme le vrai : la garde de bail est appelée SOUS le verrou, avant la fusion.
+        if kw.get("lease_guard") is not None:
+            kw["lease_guard"](cur)
         merged = apply(dict(cur["data"]))
         cur["data"] = merged
         return cur, merged
-
-    def datastore_update_row(self, ns_id, row_id, data, now, **kw):
-        self.rows[row_id]["data"] = data
-        return self.rows[row_id]
 
 
 @pytest.fixture()
@@ -52,8 +51,7 @@ def store(monkeypatch):
     monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
     monkeypatch.setattr(s, "_assert_writable", lambda *a, **k: None)
     monkeypatch.setattr(s, "_trace", lambda *a, **k: None)
-    for name in ("datastore_get_row", "datastore_merge_row_locked",
-                 "datastore_update_row"):
+    for name in ("datastore_get_row", "datastore_merge_row_locked"):
         monkeypatch.setattr(ds.db, name, getattr(db, name))
     db.rows["r1"] = {"row_id": "r1", "created_at": "t", "updated_at": "t", "data": {}}
     return s, db
@@ -118,12 +116,15 @@ def test_the_socle_import_then_the_agent(store):
 def test_the_write_protection_still_applies_to_a_layered_column(monkeypatch, store):
     """Les tests du verrou portent sur le bail, les miens sur les couches — le
     CROISEMENT n'était couvert par personne. Une colonne à couches ne doit pas
-    échapper à la protection d'écriture parce qu'elle passe par une autre fusion."""
-    from oto_mcp.datastore import core as ds
+    échapper à la protection d'écriture parce qu'elle passe par une autre fusion.
+
+    Depuis le 12/09/2026 le patch par `id` passe par le verrou de ligne : la garde est
+    `_lease_guard`, appelée sous le verrou — plus `_assert_writable` sur une lecture à
+    part."""
     s, db = store
     appels = []
-    monkeypatch.setattr(s, "_assert_writable",
-                        lambda ns_id, row_id: appels.append(row_id))
+    monkeypatch.setattr(s, "_lease_guard",
+                        lambda row_id: lambda locked: appels.append(row_id))
     s.update_row("t", "r1", {"contact1_nom": {"valeur": "x", "origine": "o"}}, origine_override=True)
     assert appels == ["r1"], "la garde de bail doit s'appliquer AUSSI sur une couche"
 

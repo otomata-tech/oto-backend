@@ -240,7 +240,7 @@ def _read_keys() -> frozenset:
                 "couches_exigees.py", "validation.py", "phrases_de_refus.py",
                 "effacements.py",
                 "outils.py", "controles.py", "registre.py", "lecture.py",
-                "ecriture.py", "lots.py", "file_de_travail.py",
+                "ecriture.py", "ecriture_par_id.py", "lots.py", "file_de_travail.py",
                 "vocabulaire.py", "non_applique.py"):
         try:
             arbre = ast.parse((ici / nom).read_text(encoding="utf-8"))

@@ -207,6 +207,36 @@ class RowLocked(ValueError):
         super().__init__(f"{row} : {motif}" if row else motif)
 
 
+class RevisionConflict(ValueError):
+    """Écriture refusée : la ligne a changé depuis la lecture dont l'appelant a CALCULÉ
+    ce qu'il écrit (précondition `expected_revision`, 12/09/2026).
+
+    Le verrou de ligne sérialise deux écritures ; il ne protège pas une lecture faite
+    par le client — un journal relu, complété puis renvoyé entier écraserait l'entrée
+    qu'un autre a posée entre-temps. La précondition dit « écris seulement si la ligne
+    est encore celle que j'ai lue » ; ce refus dit qu'elle ne l'est plus.
+
+    ⚠️ Levée SOUS le verrou, APRÈS le contrôle du bail et AVANT la fusion : rien n'a
+    bougé — ni la donnée, ni la révision, ni `updated_at`, ni le compteur de reprises.
+    Et le serveur ne relance rien : recalculer est le travail de celui qui a lu.
+
+    Dérive de `ValueError`, comme `RowLocked` : la face MCP la rend en
+    `INVALID_PARAMS`, la face REST en 409 `revision_conflict` — branche placée avant
+    le refus générique."""
+
+    def __init__(self, row_id: str, expected_revision: Any, current_revision: Any):
+        self.row_id = row_id
+        self.expected_revision = str(expected_revision)
+        # En CHAÎNE, comme `_revision` est servie : le client compare ce qu'il a lu.
+        self.current_revision = str(current_revision)
+        super().__init__(
+            f"revision_conflict : la ligne « {row_id} » a changé depuis ta lecture "
+            f"(révision lue {self.expected_revision}, révision actuelle "
+            f"{self.current_revision}) — rien n'est écrit. Relis la ligne, recalcule "
+            f"ce que tu écris à partir d'elle, puis réécris avec sa nouvelle "
+            f"`_revision`.")
+
+
 class RowClaimed(Exception):
     """Row nommée déjà sous bail ACTIF d'un autre worker (ADR 0046 D).
 

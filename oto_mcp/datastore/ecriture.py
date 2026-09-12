@@ -1,4 +1,7 @@
-"""ÉCRIRE une ligne : l'ajouter, la fusionner, la remplacer, la patcher, l'effacer.
+"""ÉCRIRE une ligne : l'ajouter, la fusionner, la remplacer, l'effacer.
+
+Le PATCH par `id` vit à côté depuis le 12/09/2026 (`ecriture_par_id.py`), sorti dans le
+lot qui l'a fait passer sous le verrou de ligne avec une précondition de révision.
 
 Extrait de `core.py` (déplacement pur, 07/09/2026) — un mixin que `DatastorePg`
 compose, sur le modèle de `SchemaOpsMixin`. Le LOT vit à côté (`lots.py`) : les deux
@@ -362,125 +365,6 @@ class EcritureMixin:
                                       origine_override=origine_override,
                                       donnees_d_origine=donnees_d_origine,
                                       force=force)
-
-    def update_row(self, datastore: str, row_id: str, patch: dict, *,
-                   trace: Optional[dict] = None,
-                   readonly_override: bool = False,
-                   origine_override: bool = False,
-                   donnees_d_origine: bool = False,
-                   force: Optional[frozenset] = None) -> dict:
-        """Patch partiel d'une row. `trace` (dict mutable, optionnel) = relevé pour
-        le journal — dont l'état AVANT, celui-là même sur lequel la transition de
-        cycle de vie est validée juste en dessous (cf. `_trace`).
-
-        `readonly_override` (#658) = forcer les colonnes verrouillées de CET appel,
-        sous palier — cf. `_forcage_readonly`."""
-        self._reject_misplaced_id(patch, row_id)
-        ns_id = self._resolve(datastore, write=True)
-        existing = db.datastore_get_row(ns_id, row_id)
-        if not existing:
-            raise RowNotFound(row_id)
-        data = dict(existing.get("data") or {})
-        ns = self._ns_of(ns_id)
-        schema = ns.get("schema")
-        # La ligne est déjà lue : ses colonnes sont « réelles » sans un aller-retour de
-        # plus. C'est la porte du round-trip #390 — relire une fiche et la repousser —
-        # donc celle où l'aller-retour DOIT se refermer.
-        patch = ranger_les_couches(schema, patch, colonnes_en_place=lambda: set(data))
-        # oto#140 : `null` efface ENCORE, mais il est en préavis. Dit à l'instant où
-        # l'ancien comportement joue — le seul moment actionnable, et le lecteur est
-        # celui qui peut agir. ⚠️ Refusé à la date, JAMAIS interprété en silence : un
-        # `null` traduit en `@empty` « pour rendre service » effacerait la valeur d'un
-        # agent qui voulait dire « cherché, rien trouvé » — le dégât même que ce lot
-        # existe pour empêcher, commis par la correction.
-        vises = fdn.nulls_nommes(patch)
-        if vises:
-            if fdn.refus_arme():
-                raise ValueError(fdn.refus(vises))
-            self.off_notices.add(fdn.avertissement(vises))
-        _refuse_dotted_names(patch)
-        _refuse_mixed_layers(schema, patch)
-        status_key = (dsv2.status_field(schema) or {}).get("key")
-        prev_status = data.get(status_key) if status_key else None
-        self._trace(trace, ns_id, ns, prev_status=prev_status)
-        # MÊME arbitrage que la fusion : le patch par `id` est le geste qui a vidé
-        # `moteur` en production le 13/08 — et il l'a fait en le NOMMANT (#407/#408/
-        # #409). Fait avant la boucle, sur l'état lu en base. Les deux chemins
-        # d'écriture ont déjà divergé une fois sur cette famille de règles (#322) :
-        # ils partagent donc la fonction, pas seulement l'intention.
-        # ⚠️ TROISIÈME branchement de ce chemin sur la même famille de règles, et le
-        # commentaire vingt lignes plus bas dit pourquoi : `update_row` a déjà été
-        # oublié DEUX fois — une fois pour la survie de l'origine, une fois pour son
-        # relevé — parce qu'il ne passe pas par `_merge_into_row`. Le geste le plus
-        # courant d'un agent est aussi celui qu'on oublie, précisément parce qu'il a
-        # son propre corps. `avant` = l'état lu : c'est lui qui dit si une origine est
-        # déjà posée, et une origine posée ne se réécrit jamais.
-        # MÊME garde que la fusion, sur le chemin du patch par `id` — celui que le
-        # fichier dénonce trois fois comme « le geste le plus courant d'un agent »,
-        # et qui a son propre corps.
-        vises = rq.effacements_sur_relique(patch, data)
-        if vises:
-            raise RowValidationError([rq.refus(vises)])
-        if donnees_d_origine:
-            poser_les_deux_versions(patch, avant=data, schema=schema)
-        pose, vidages, ecartes = arbitrer_les_vides(data, patch, row_id)
-        # #724 : le patch par `id` est le chemin des dix retraits perdus du 01/09 —
-        # un vide SEUL y était accepté sans effet, et le relevé qui nommait déjà la
-        # porte n'a pas été lu. Refusé AVANT tout relevé : rien n'a été touché, il
-        # n'y a donc rien à annoncer — le message, lui, écrit la porte en toutes
-        # lettres, au moment où l'appelant peut encore corriger.
-        refuser_geste_sans_effet(pose, ecartes)
-        avant = dict(data)
-        written = set()
-        for k, v in pose.items():
-            if k in _META_COLS:
-                continue
-            # MÊME fusion que le batch : l'origine survit ici aussi. Elle avait été
-            # câblée dans `_merge_into_row` seulement — donc un patch par `id`, le
-            # geste le plus courant d'un agent, l'effaçait quand même.
-            data[k] = _merge_column(data.get(k), v, dsv2.champ_declare(schema, k))
-            written.add(k)
-        # #586/#606 : MÊME garde que la fusion — le patch par `id` est le geste le
-        # plus courant d'un agent, et celui qui a écrasé les quatorze valeurs.
-        # `force` implique la demande : nommer une cible EST le geste.
-        forcage = self._forcage_readonly(
-            ns_id, schema, readonly_override or bool(force), force)
-        refuser_champs_reserves(schema, pose, avant=avant,
-                                forcage=forcage, agent=aga.appel_d_agent())
-        # ⚠️ CE chemin-ci a déjà été oublié une fois, six lignes plus haut : l'origine
-        # n'avait été câblée que dans `_merge_into_row`, et le patch par `id` — le
-        # geste le plus courant d'un agent — l'effaçait quand même. Le barreau 1 a
-        # refait la MÊME omission sur le relevé : quatre chemins branchés, celui-ci
-        # non. Un instrument qui ne voit pas le geste le plus courant sous-compte
-        # exactement la population qu'il existe pour trouver.
-        _relever_origine_module(self, ns_id, pose, avant, schema=schema,
-                                declare=origine_override)
-        # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
-        # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
-        # Seule la borne de longueur se limite aux clés du patch (#383).
-        self._check_row(schema, data, prev_status=prev_status, written=written)
-        self.off_erased.extend(vidages)
-        self.off_ignored.extend(ecartes)
-        try:
-            self._assert_writable(ns_id, row_id)
-            row = db.datastore_update_row(ns_id, row_id, data, _now_iso())
-        except UniqueViolation:
-            # Un AUTRE enregistrement porte déjà cette valeur de clé métier (index
-            # UNIQUE ds_bkey_<ns_id>). Contrairement au batch write (qui converge en
-            # merge sur la row de même clé), un update ciblé sur `row_id` ne peut pas
-            # basculer silencieusement sur une autre row → erreur actionnable
-            # (ValueError → INVALID_PARAMS), jamais un 500 opaque.
-            dk = (schema or {}).get("key")
-            dkv = dsv2.unwrap(data.get(dk)) if dk else None
-            if dk and dkv is not None:
-                raise ValueError(
-                    f"un autre enregistrement porte déjà {dk}={dkv} "
-                    "(clé métier unique) — impossible de dupliquer") from None
-            raise  # violation inexpliquée → erreur franche, pas de repli muet
-        # #658 : après l'UPDATE — un forçage n'est journalisé que s'il a ABOUTI.
-        self._relever_forcage(forcage, row_id)
-        self._terminal_write_notice(schema, ns_id, row_id, data)
-        return self._row_to_dict(row, schema)
 
     def delete_row(self, datastore: str, row_id: str, *,
                    trace: Optional[dict] = None) -> None:

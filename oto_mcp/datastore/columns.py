@@ -24,8 +24,10 @@ from .errors import RowValidationError
 
 # Les colonnes de la PLATEFORME : elles vivent dans la ligne sans être des
 # données de l'utilisateur — ni purgeables, ni écrasables par une écriture.
+# `_revision` (12/09/2026) : la révision servie de la ligne. Réservée comme les
+# autres — mesuré avant de la poser, aucune ligne en base ne porte de clé `_revision`.
 _META_COLS = ("_id", "_created_at", "_updated_at", "_claimed_by", "_claimed_until",
-              "_claimed_run", "_claims", "_abandon")
+              "_claimed_run", "_claims", "_abandon", "_revision")
 
 
 def _writes_layers(new: Any) -> bool:

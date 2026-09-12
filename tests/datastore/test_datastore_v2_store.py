@@ -35,11 +35,19 @@ def store(monkeypatch):
                             calls["insert"].append(data) or
                             {"row_id": rid, "created_at": "t", "updated_at": "t",
                              "data": data}))
-    monkeypatch.setattr(dsm.db, "datastore_update_row",
-                        lambda ns_id, rid, data, ts: (
-                            calls["update"].append((rid, data)) or
-                            {"row_id": rid, "created_at": "t", "updated_at": ts,
-                             "data": data}))
+    def fusion(ns_id, rid, apply_fn, updated_at, **k):
+        # Le patch par `id` écrit par la fusion sous verrou depuis le 12/09/2026 : elle lit
+        # la ligne que le test a posée (`datastore_get_row`, résolu à l'appel), et la
+        # fusion aboutie est relevée comme l'était l'UPDATE.
+        ligne = dsm.db.datastore_get_row(ns_id, rid)
+        if ligne is None:
+            return None
+        data = apply_fn(dict(ligne.get("data") or {}))
+        calls["update"].append((rid, data))
+        return ({"row_id": rid, "created_at": "t", "updated_at": updated_at,
+                 "data": data}, data)
+
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", fusion)
     monkeypatch.setattr(dsm.db, "datastore_release_claim",
                         lambda ns_id, rid, worker: (
                             calls["release"].append((rid, worker)) or True))

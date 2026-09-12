@@ -80,13 +80,16 @@ def test_linsert_persiste_malgre_lechec_du_stamp(recalcul_vecteur_en_echec):
 
 
 def test_lupdate_persiste_et_lecho_dit_vrai(recalcul_vecteur_en_echec):
+    """Le patch par `id` écrit par la fusion sous verrou depuis le 12/09/2026, qui
+    rafraîchit le rang DANS sa transaction (`rafraichir_rang`) : c'est elle que l'échec
+    du stamp ne doit pas emporter."""
     from oto_mcp.db.datastore import (datastore_get_row, datastore_insert_row,
-                                      datastore_update_row)
+                                      datastore_merge_row_locked)
 
     ns_id = recalcul_vecteur_en_echec
     datastore_insert_row(ns_id, "r2", {"etat": "avant"})
-    echo = datastore_update_row(ns_id, "r2", {"etat": "apres"},
-                                "2026-08-14T00:00:00Z")
+    echo, _ = datastore_merge_row_locked(ns_id, "r2", lambda cur: {**cur, "etat": "apres"},
+                                         "2026-08-14T00:00:00Z", rafraichir_rang=True)
     assert echo is not None and echo["data"] == {"etat": "apres"}
 
     relu = datastore_get_row(ns_id, "r2")

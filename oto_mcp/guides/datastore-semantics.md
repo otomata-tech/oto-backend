@@ -98,6 +98,16 @@ historique ni annulation : la valeur précédente disparaît quand la tienne arr
 Ne pas nommer un champ le laisse intact ; le nommer avec `null` l'efface — un `null`
 glissé dans un gabarit à moitié rempli détruit une valeur en place.
 
+**Deux écritures sur des colonnes différentes ne s'écrasent jamais**, même parties au
+même instant. **Seulement quand ce que tu écris a été CALCULÉ d'après une ligne lue**
+(une liste ou un texte que tu renvoies en entier, un statut choisi d'après le statut en
+place) : passe la `_revision` de cette lecture — `data_write(id=…, expected_revision=…)`,
+ou `PATCH …/rows/{row_id}?expected_revision=…` (en paramètre de requête, jamais dans le
+corps). Si la ligne a changé depuis — n'importe quelle colonne, ou sa réservation —,
+rien n'est écrit et l'appel est refusé avec `revision_conflict` et la révision actuelle
+(REST : `409`, `details.current_revision`) : relis, recalcule, réécris. Sinon, ne la
+passe pas.
+
 ## 4. ⚠️ `origine: "system"` est SUPPRIMÉ
 
 Ce cran armait une capture automatique : à la première écriture qui changeait une
@@ -345,7 +355,8 @@ l'autre, à l'identique.
   (`row_invalid`, `business_key_required`, `invalid_row_input`, `jeton_mal_place`,
   `invalid_filters`…), 403 `namespace_read_only` (tableau partagé en lecture seule),
   404 `namespace_not_found` (avec l'org où il vit, s'il existe dans une autre des
-  tiennes) ou `row_not_found`.
+  tiennes) ou `row_not_found` ; 409 `row_locked` (ligne réservée par un autre) ou
+  `revision_conflict` (la ligne a changé depuis la `_revision` passée).
 
 ## 8. Ce qu'une réponse ne contient pas
 

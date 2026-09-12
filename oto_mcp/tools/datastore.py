@@ -736,7 +736,8 @@ def register(mcp: FastMCP) -> None:
                    readonly_override: bool = False,
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
-                   force: list | None = None) -> dict:
+                   force: list | None = None,
+                   expected_revision: str | None = None) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -813,7 +814,14 @@ def register(mcp: FastMCP) -> None:
         a business `key` and your row carries a value that already exists: it then
         MERGES onto that row, exactly like a batch, and returns its `_id`. WITH `id`
         = PARTIAL update of that row (only provided fields change). Returns the row
-        (with `_id`/`_created_at`/`_updated_at`).
+        (with `_id`/`_created_at`/`_updated_at`/`_revision`).
+
+        `expected_revision` (with `id` only) — Only when what you write was COMPUTED
+        from a row you read (a list or text you re-send whole, a status chosen from the
+        current one): pass that read's `_revision`. If the row changed since — any
+        column, or its reservation — nothing is written and the call is refused with
+        `revision_conflict` and the current revision: read again, recompute, write
+        again. Omit it otherwise: writes to different columns never overwrite each other.
 
         On a row you CLAIMED, address it by the `_id` of the row data_claim_next
         returned.
@@ -883,6 +891,8 @@ def register(mcp: FastMCP) -> None:
             row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`
                 (the one data_write / data_claim_next returned for that row).
+            expected_revision: with `id` only — the `_revision` of that row as you read
+                it, when what you write was computed from that read (see above).
             force: force the NAMED columns on this call instead of everything it
                 carries — `["raison_sociale", "raison_sociale.origine"]`. Naming
                 them is enough; no need for `readonly_override` as well. ⚠️ It
@@ -942,6 +952,13 @@ def register(mcp: FastMCP) -> None:
             if key is not None and rows is None:
                 raise McpError(ErrorData(code=INVALID_PARAMS,
                                          message=jetons.refus_de_key_sans_lot(key)))
+            # MÊME axe que `key` juste au-dessus : une précondition sans ligne désignée
+            # ne compare rien. Offerte, elle sera réglée ; ignorée, l'écriture partirait
+            # sans la protection que l'appelant croit avoir demandée.
+            if expected_revision is not None and (id is None or rows is not None):
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "`expected_revision` ne vaut qu'avec `id=` — la ligne que tu as lue : "
+                    "sans elle il n'y a rien à comparer, et rien n'est écrit.")))
             if rows is not None:
                 if row is not None or id is not None:
                     raise McpError(ErrorData(code=INVALID_PARAMS,
@@ -974,7 +991,10 @@ def register(mcp: FastMCP) -> None:
                                           readonly_override=readonly_override,
                                           origine_override=origine_override,
                                           donnees_d_origine=donnees_d_origine,
-                                          force=cibles)
+                                          force=cibles,
+                                          # `RevisionConflict` est une `ValueError` :
+                                          # INVALID_PARAMS, le texte du refus REST.
+                                          expected_revision=expected_revision)
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
             # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que

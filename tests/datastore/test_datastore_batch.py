@@ -32,10 +32,6 @@ class FakeDB:
     def datastore_get_row(self, ns_id, row_id):
         return {"row_id": row_id, "data": dict(self.rows.get(row_id, {}))} if row_id in self.rows else None
 
-    def datastore_update_row(self, ns_id, row_id, data, updated_at):
-        self.rows[row_id] = dict(data)
-        return {"row_id": row_id, "data": dict(data), "created_at": "t", "updated_at": updated_at}
-
     def datastore_merge_row_locked(self, ns_id, row_id, apply_fn, updated_at, **k):
         # Sémantique du seam réel (verrou de ligne, #197) : get -> apply_fn -> update
         # atomiques ; ici séquentiel sur le store mémoire.
@@ -51,8 +47,7 @@ class FakeDB:
 def store(monkeypatch):
     fake = FakeDB()
     for name in ("datastore_insert_row", "datastore_find_row_id_by_key",
-                 "datastore_get_row", "datastore_update_row",
-                 "datastore_merge_row_locked"):
+                 "datastore_get_row", "datastore_merge_row_locked"):
         monkeypatch.setattr(D.db, name, getattr(fake, name))
     # v2 (ADR 0046) : le batch lit le schéma du datastore (validation/lifecycle
     # opt-in) — None = soft, comportement 0016 inchangé pour ces tests.

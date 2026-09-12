@@ -101,7 +101,9 @@ def test_le_preavis_est_pose_sur_les_chemins_d_ecriture():
     peut entrer. Le lot compte double : c'est lui qui porte les imports."""
     import inspect
 
-    from oto_mcp.datastore import ecriture, lots
+    from oto_mcp.datastore import ecriture, ecriture_par_id, lots
 
-    assert inspect.getsource(ecriture).count("fdn.nulls_nommes(") == 2
+    # La création dans `ecriture`, le patch par `id` dans son module depuis le 12/09/2026.
+    assert inspect.getsource(ecriture).count("fdn.nulls_nommes(") == 1
+    assert "fdn.nulls_nommes(" in inspect.getsource(ecriture_par_id)
     assert "fdn.nulls_nommes(" in inspect.getsource(lots)

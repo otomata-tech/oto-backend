@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS datastore_rows (
     -- quel que soit le filtre du client.
     claims INTEGER NOT NULL DEFAULT 0,
     abandon_reason TEXT,
+    -- RÉVISION de la ligne (12/09/2026), servie `_revision` : la précondition
+    -- `expected_revision` d'une écriture qui recalcule ce qu'elle a lu. Avancée par le
+    -- déclencheur `datastore_rows_20_revision` (le premier du dépôt, `db/revision.py`),
+    -- jamais par le code : une écriture de l'ancienne version, pendant la bascule
+    -- bleu/vert sur cette base partagée, doit la faire avancer aussi. Il est posé par
+    -- `_init.py`, pas ici. PostgreSQL exécute les déclencheurs BEFORE ROW d'une table
+    -- dans l'ordre alphabétique de leur nom : `_10_` passe avant `_20_`.
+    rev BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (ns_id, row_id)
 );
 

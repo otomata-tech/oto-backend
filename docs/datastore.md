@@ -2158,3 +2158,71 @@ sinon `bind_run`), best-effort, et rend `rows_released` avec **`0` explicite** �
 distingue « zéro ligne rendue » de « champ absent ». Détail et table des formes :
 `docs/runner-et-automatisations.md` § `complete`. Reste non couvert : l'agent
 conversationnel (hors runner) qui meurt — le bail seul.
+
+## Deux écritures sur une même ligne : le verrou, puis la révision (12/09/2026)
+
+**Le défaut, mesuré sur l'arbre servi (v1.274.0), base jetable.** Le patch par `id` —
+REST `PATCH …/rows/{row_id}`, `data_write(id=…)`, et `append_row` avec `_id` qui s'y
+promeut — lisait la ligne dans une connexion du pool, fusionnait en Python, puis
+réécrivait le JSON ENTIER dans une autre (`datastore_update_row`, retiré). Deux patchs
+partis ensemble sur deux colonnes DIFFÉRENTES en perdaient un dans **100 %** des cas
+(9 à 15 % avec un décalage de 0 à 50 ms) ; la voie par clé métier, verrouillée depuis
+#197, n'en perdait **aucun**.
+
+**(a) Le verrou, invisible pour les écrivains.** `update_row` vit dans
+`datastore/ecriture_par_id.py` et passe par `db.datastore_merge_row_locked` : tout son
+travail sur la ligne tourne sous `FOR UPDATE`, le bail est vérifié sous ce même verrou
+(`_lease_guard`), la fusion et l'UPDATE suivent. Le motif qui l'avait tenu hors du
+verrou — « remplacer n'est pas fusionner » — vaut pour `upsert_row`, pas pour un patch.
+Le jugement du forçage (`_forcage_readonly`, le palier) reste AVANT le verrou : il lirait
+une seconde connexion en tenant la ligne. `rafraichir_rang` garde le recalcul du vecteur
+que faisait l'ancien UPDATE ; la fusion par clé ne l'a jamais fait, divergence conservée.
+
+**(b) La révision, pour ce que le verrou ne ferme pas.** Un écrivain qui LIT, recalcule
+(une liste renvoyée entière, un statut choisi d'après le statut en place) puis écrit
+écrase ce qu'un autre a posé entre sa lecture et la sienne. Colonne
+`datastore_rows.rev BIGINT NOT NULL DEFAULT 0`, servie `_revision` (chaîne) sur toute
+ligne lue — lecture par id, listes et curseurs, `rows_by_ids`, réponse du PATCH, de la
+réservation et de la file ; `data_rows(fields=…)` ne la rend que NOMMÉE
+(`fields=["statut", "_revision"]`, sans avertissement), la projection par défaut restant
+`_id` + les colonnes demandées. `_revision` est
+une colonne de plateforme (`_META_COLS`) : relue puis republiée, elle ne s'écrit pas.
+
+- **Précondition** : REST `?expected_revision=` (en QUERY — le corps EST le patch, une
+  clé de plus y serait écrite comme une colonne ; un serveur qui ne connaît pas le
+  paramètre rend `400 unknown_fields`, rien n'est écrit) ; MCP
+  `data_write(id=…, expected_revision=…)`, refusée sans `id` ou avec `rows`.
+- **Ordre sous le verrou** : le bail (`409 row_locked`, inchangé), puis la révision
+  (`409 revision_conflict`, `details.current_revision` ; `INVALID_PARAMS` du même texte
+  côté MCP), puis la fusion et l'UPDATE. Un refus sort AVANT l'UPDATE : ni la donnée, ni
+  `rev`, ni `updated_at`, ni `claims` ne bougent. Aucune relance côté serveur.
+
+**Pourquoi un déclencheur, et pas `rev = rev + 1` dans le code.** Préproduction et
+production partagent la base, et la bascule bleu/vert sert deux versions pendant 120 s :
+une écriture de l'ANCIEN code, qui ignore `rev`, doit la faire avancer, sinon une
+précondition de la nouvelle passe par-dessus. Seul PostgreSQL voit toutes les écritures.
+C'est le **premier déclencheur du dépôt** (`db/revision.py`) : fonction
+`datastore_revision_avance()` (`NEW.rev := OLD.rev + 1`, reposée à chaque boot — `CREATE
+OR REPLACE FUNCTION` ne verrouille pas la table), déclencheur `datastore_rows_20_revision`
+`BEFORE UPDATE … WHEN (data | claimed_by | claimed_run | claimed_until IS DISTINCT)`,
+**créé seulement s'il manque**, par la connexion DDL au `lock_timeout` borné : `CREATE
+TRIGGER` prend `SHARE ROW EXCLUSIVE`, le reprendre à chaque boot de préprod bloquerait les
+écritures de la prod. Changer la condition = un nouveau nom et le retrait de l'ancien.
+
+- ⚠️ **Ordre des déclencheurs** : PostgreSQL exécute les `BEFORE ROW` d'une table dans
+  l'ordre ALPHABÉTIQUE de leur nom — d'où `_20_`, qui laisse passer avant lui un futur
+  `datastore_rows_10_bail`.
+- **Avance** : `data` (valeur, clé ajoutée ou retirée ; absent → `null` → `[]` sont trois
+  états), réserver, renouveler (`claimed_until`), libérer. **N'avance pas** : écriture sans
+  effet, JSON seulement réordonné, `updated_at`, `claims`/`abandon_reason`, `embed_dirty`,
+  `search_vec`.
+
+**Bancs** : `tests/datastore/test_ecritures_simultanees.py` (trois portes, départ
+simultané, course réservation/patch, recalcul sous précondition, refus sans effet, bail
+avant révision) et `tests/datastore/test_revision_de_ligne.py` (couverture, écriture de
+l'ancien code, échec fermé, lecture servie, garde AST « toute projection de ligne
+sélectionne `rev` »).
+
+**Hors lot** : l'identité du titulaire d'un bail sur REST. La face REST ne pose aucun run,
+le titulaire ne s'y reconnaît donc pas (`POST …/claim` puis `PATCH` par le même compte =
+`409 row_locked`) ; `claimed_by` n'est pas une identité (cf. `_lease_guard`).

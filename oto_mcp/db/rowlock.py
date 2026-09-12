@@ -39,7 +39,10 @@ from .rowabandon import abandonner_les_lignes_a_bout, plafond_de
 # qui l'oublierait lève au lieu de servir un `null` — « ce bail n'a pas de run » est
 # un fait, pas un défaut de SELECT. La garde mécanique est
 # `tests/datastore/test_claimed_run_projection.py::test_toute_projection_de_ligne_porte_claimed_run`.
-_RENDU = ("RETURNING row_id, created_at, updated_at, data, claimed_by, "
+#
+# `rev` (12/09/2026) : la révision de la ligne, servie `_revision` — une réservation,
+# un renouvellement ou une libération la font avancer (déclencheur, `db/revision.py`).
+_RENDU = ("RETURNING row_id, created_at, updated_at, data, rev, claimed_by, "
           "claimed_until, claimed_run, claims, abandon_reason, "
           "(claimed_until IS NOT NULL AND claimed_until > NOW())"
           "    AS claim_active")
@@ -273,7 +276,7 @@ def datastore_claimed_rows(ns_id: int) -> list[dict]:
     `claimed_until`), plus ancien bail d'abord."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until, "
+            "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
             "       claimed_run, claims, abandon_reason, "
             "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
             "           AS claim_active "

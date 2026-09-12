@@ -56,7 +56,7 @@ _SURFACE = """
     datastore_activity datastores_with_key
     datastore_offending_enum_values datastore_overlong_fields
     datastore_release_by_run datastore_release_claim datastore_row_activity
-    datastore_row_keys datastore_rows_by_ids datastore_update_row
+    datastore_row_keys datastore_rows_by_ids
     datastore_upsert_row date datetime dead_unipile_account_ids_for
     delete_api_token delete_datastore_by_id delete_doc
     delete_google_oauth delete_guide_db delete_project_file

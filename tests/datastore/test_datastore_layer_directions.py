@@ -38,10 +38,6 @@ class _Db:
         cur["data"] = merged
         return cur, merged
 
-    def datastore_update_row(self, ns_id, row_id, data, now, **kw):
-        self.rows[row_id]["data"] = data
-        return self.rows[row_id]
-
 
 @pytest.fixture()
 def store(monkeypatch):
@@ -53,8 +49,7 @@ def store(monkeypatch):
     monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
     monkeypatch.setattr(s, "_assert_writable", lambda *a, **k: None)
     monkeypatch.setattr(s, "_trace", lambda *a, **k: None)
-    for name in ("datastore_get_row", "datastore_merge_row_locked",
-                 "datastore_update_row"):
+    for name in ("datastore_get_row", "datastore_merge_row_locked"):
         monkeypatch.setattr(ds.db, name, getattr(db, name))
     db.rows["r1"] = {"row_id": "r1", "created_at": "t", "updated_at": "t", "data": {}}
     return s, db

@@ -27,16 +27,18 @@ class FileDeTravailMixin:
     def _assert_writable(self, ns_id: int, row_id: str) -> None:
         """La même protection, pour les chemins qui n'ont PAS de verrou de ligne.
 
-        Le remplacement, la mise à jour et la suppression n'ouvrent pas de
-        transaction `FOR UPDATE` (contrairement à la fusion) : la garde y est donc
-        posée AVANT l'écriture, sur une lecture séparée.
+        Le remplacement et la suppression n'ouvrent pas de transaction `FOR UPDATE`
+        (contrairement à la fusion) : la garde y est donc posée AVANT l'écriture, sur
+        une lecture séparée. La MISE À JOUR par `id` n'est plus de ce nombre depuis le
+        12/09/2026 : elle passe par le verrou de ligne et `_lease_guard`.
 
         ⚠️ **La fenêtre est assumée et bornée** : un claim qui s'intercalerait entre
         ce contrôle et l'écriture passerait. Elle est de l'ordre de la milliseconde,
         et infiniment plus étroite que ce qu'elle remplace — l'absence totale de
-        protection sur ces chemins. La refermer demanderait de router ces trois
+        protection sur ces chemins. La refermer demanderait de router ces deux
         gestes par le verrou de ligne, ce qui change leur sémantique (remplacer n'est
-        pas fusionner) : c'est un lot, pas une rustine.
+        pas fusionner) : c'est un lot, pas une rustine. Ce motif valait pour le
+        remplacement, pas pour le patch, qui est une fusion : lui y est passé.
 
         Aucun contrôle sur une ligne NEUVE : elle ne peut pas être réservée."""
         lease = db.datastore_active_lease(ns_id, row_id)

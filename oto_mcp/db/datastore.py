@@ -100,7 +100,7 @@ def datastore_insert_row(ns_id: int, row_id: str, data: dict,
             "VALUES (%s, %s, %s::jsonb, COALESCE(%s::timestamptz, NOW()), COALESCE(%s::timestamptz, NOW()), "
             # dirty ⟺ le namespace est opt-in sémantique (#67 V2.2) — sinon jamais embedé.
             "        (SELECT semantic_search FROM user_datastores WHERE id = %s)) "
-            "RETURNING row_id, created_at, updated_at, data",
+            "RETURNING row_id, created_at, updated_at, data, rev",
             (ns_id, row_id, json.dumps(data), created_at, updated_at, ns_id),
         ).fetchone()
         from .search import stamp_rank_vector
@@ -125,7 +125,7 @@ def datastore_upsert_row(ns_id: int, row_id: str, data: dict) -> tuple[dict, boo
             # que les réservations SANS écriture, et le motif d'abandon tombe avec lui —
             # une ligne réparée à la main revient dans la file.
             "  claims = 0, abandon_reason = NULL "
-            "RETURNING row_id, created_at, updated_at, data, (xmax = 0) AS inserted",
+            "RETURNING row_id, created_at, updated_at, data, rev, (xmax = 0) AS inserted",
             (ns_id, row_id, json.dumps(data), ns_id),
         ).fetchone()
         from .search import stamp_rank_vector
@@ -693,22 +693,28 @@ def datastore_rows_by_ids(ns_id: int, row_ids: list) -> dict:
     Sert à libeller des références (le journal d'activité cite des `row_id`, l'UI
     veut le champ `role="title"`). Les ids inconnus — ligne supprimée depuis —
     sont simplement absents du résultat, jamais une erreur. Lot borné.
+
+    Chaque contenu porte `_revision` (12/09/2026), la révision de la ligne en chaîne,
+    comme toute ligne servie : `_revision` est une colonne de plateforme
+    (`_META_COLS`), aucun champ utilisateur ne peut porter ce nom.
     """
     ids = [str(r) for r in (row_ids or []) if r][:_DS_MAX_ROWS_BY_IDS]
     if not ids:
         return {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, data FROM datastore_rows WHERE ns_id = %s AND row_id = ANY(%s)",
+            "SELECT row_id, data, rev FROM datastore_rows "
+            "WHERE ns_id = %s AND row_id = ANY(%s)",
             (ns_id, ids),
         ).fetchall()
-        return {r["row_id"]: (r["data"] or {}) for r in rows}
+        return {r["row_id"]: {**(r["data"] or {}), "_revision": str(r["rev"])}
+                for r in rows}
 
 
 def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until, "
+            "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
             "       claimed_run, claims, abandon_reason, "
             "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
             "           AS claim_active "
@@ -768,7 +774,7 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
         params.extend([limit, offset])
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until, "
+            "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
             "       claimed_run, claims, abandon_reason, "
             "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
             "           AS claim_active "
@@ -795,7 +801,7 @@ def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data, claimed_by, claimed_until, "
+            "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
             "       claimed_run, claims, abandon_reason, "
             "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
             "           AS claim_active "
@@ -867,25 +873,9 @@ def datastore_aggregate(ns_id: int, *, group_by: Optional[str] = None,
     return out
 
 
-def datastore_update_row(ns_id: int, row_id: str, data: dict, updated_at: str) -> Optional[dict]:
-    """Remplace `data` (le store a déjà fusionné le patch) + `updated_at`."""
-    with _connect() as conn:
-        row = conn.execute(
-            "UPDATE datastore_rows SET data = %s::jsonb, updated_at = %s::timestamptz, "
-            # cf. `datastore_upsert_row` : toute écriture de la ligne remet le
-            # compteur de reprises à zéro et la rouvre à la file (#433).
-            "       claims = 0, abandon_reason = NULL "
-            "WHERE ns_id = %s AND row_id = %s "
-            "RETURNING row_id, created_at, updated_at, data",
-            (json.dumps(data), updated_at, ns_id, row_id),
-        ).fetchone()
-        from .search import stamp_rank_vector
-        stamp_rank_vector(conn, "datastore_rows", "ns_id = %s AND row_id = %s", (ns_id, row_id))
-        return dict(row) if row else None
-
-
 def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: str,
-                               lease_guard=None):
+                               lease_guard=None, expected_revision: Optional[int] = None,
+                               rafraichir_rang: bool = False):
     """MERGE ATOMIQUE d'une row par son `row_id`, sous verrou de ligne (#197).
 
     Dans UNE transaction : verrouille la row (`SELECT … FOR UPDATE`), applique
@@ -898,20 +888,40 @@ def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: st
     n'existe plus (course de suppression). `apply_fn` peut lever (validation) →
     la transaction rollback, l'exception est propagée.
 
+    ⚠️ **Le patch par `id` y passe aussi depuis le 12/09/2026**, et c'est la seule
+    écriture de `data` par `row_id` qui reste : il lisait la ligne dans une connexion
+    et réécrivait le JSON entier dans une autre (feu `datastore_update_row`). Mesuré
+    sur l'arbre servi : deux patchs simultanés sur deux colonnes DIFFÉRENTES perdaient
+    l'un des deux dans 100 % des cas.
+
     `lease_guard` (#317) = contrôle du BAIL, appelé sous le verrou avec la ligne
     verrouillée (`claimed_by`/`claimed_until`/`claimed_run` inclus). Il lève pour
     refuser l'écriture — la transaction rollback, rien n'est écrit. Passé en
     paramètre plutôt que codé ici parce que « qui a le droit d'écrire » est une règle
     du STORE, pas du SQL : ce module ne connaît ni le run courant ni le worker.
+
+    `expected_revision` (12/09/2026) = la précondition d'un écrivain qui a CALCULÉ ce
+    qu'il écrit à partir d'une lecture. Comparée à `rev` sous le MÊME verrou, dans cet
+    ordre : le bail, puis la révision, puis `apply_fn` et l'UPDATE. Différente ⇒
+    `RevisionConflict` avant l'UPDATE — ni `data`, ni `rev`, ni `updated_at`, ni
+    `claims` ne bougent. Aucune relance ici : recalculer est le travail de qui a lu.
+    `rev` n'est jamais écrite par ce code : c'est le déclencheur qui l'avance
+    (`db/revision.py`).
+
+    `rafraichir_rang` = rafraîchir le vecteur de classement dans la transaction. Le
+    patch par `id` le faisait (feu `datastore_update_row`) ; la fusion par clé ne l'a
+    jamais fait. Divergence PRÉEXISTANTE, conservée telle quelle et nommée ici plutôt
+    que corrigée en passant : l'étendre au lot doublerait les UPDATE d'un import.
     """
     with _connect() as conn:
         with conn.transaction():
             # Le bail est lu DANS le même verrou que la donnée (#317) : le lire
             # avant, sur une autre connexion, laisserait la fenêtre où un claim
             # s'intercale entre le contrôle et l'écriture — le défaut exact que
-            # `FOR UPDATE` a été posé pour fermer sur `data` (#197).
+            # `FOR UPDATE` a été posé pour fermer sur `data` (#197). La révision, pour
+            # la même raison.
             locked = conn.execute(
-                "SELECT data, claimed_by, claimed_until, claimed_run "
+                "SELECT data, rev, claimed_by, claimed_until, claimed_run "
                 "FROM datastore_rows WHERE ns_id = %s AND row_id = %s FOR UPDATE",
                 (ns_id, row_id),
             ).fetchone()
@@ -919,6 +929,10 @@ def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: st
                 return None
             if lease_guard is not None:
                 lease_guard(locked)
+            if expected_revision is not None \
+                    and int(locked["rev"]) != int(expected_revision):
+                from ..datastore.errors import RevisionConflict
+                raise RevisionConflict(row_id, expected_revision, locked["rev"])
             current = locked["data"]
             if not isinstance(current, dict):
                 current = json.loads(current) if current else {}
@@ -929,9 +943,13 @@ def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: st
                 # compteur de reprises à zéro et la rouvre à la file (#433).
                 "       claims = 0, abandon_reason = NULL "
                 "WHERE ns_id = %s AND row_id = %s "
-                "RETURNING row_id, created_at, updated_at, data",
+                "RETURNING row_id, created_at, updated_at, data, rev",
                 (json.dumps(merged), updated_at, ns_id, row_id),
             ).fetchone()
+            if rafraichir_rang:
+                from .search import stamp_rank_vector
+                stamp_rank_vector(conn, "datastore_rows", "ns_id = %s AND row_id = %s",
+                                  (ns_id, row_id))
             return dict(row), merged
 
 

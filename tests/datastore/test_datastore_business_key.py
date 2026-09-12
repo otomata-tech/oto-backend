@@ -167,6 +167,13 @@ def test_append_row_lost_race_converges(monkeypatch):
 
 # ── update ciblé : collision clé-métier = erreur actionnable, pas 500 ──────────
 
+def _fusion_en_violation(ns_id, rid, apply_fn, updated_at, **k):
+    """La violation d'unicité part de l'UPDATE, donc de la fusion sous verrou où le patch
+    par `id` écrit depuis le 12/09/2026 : `apply_fn` a tourné, l'UPDATE lève."""
+    apply_fn(dict(dsm.db.datastore_get_row(ns_id, rid)["data"]))
+    raise UniqueViolation("duplicate key ds_bkey_7")
+
+
 def test_update_row_key_collision_raises_valueerror_not_500(monkeypatch):
     """Régression Sentry ds_bkey_139 : un `data_write` avec `id` (update ciblé) qui
     pousse la clé métier vers une valeur DÉJÀ tenue par une AUTRE row viole l'index
@@ -181,9 +188,7 @@ def test_update_row_key_collision_raises_valueerror_not_500(monkeypatch):
                                        "schema": {"key": "siren", "fields": []}})
     monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
-    monkeypatch.setattr(dsm.db, "datastore_update_row",
-                        lambda ns_id, rid, data, ts: (_ for _ in ()).throw(
-                            UniqueViolation("duplicate key ds_bkey_7")))
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", _fusion_en_violation)
 
     with pytest.raises(ValueError, match="siren=852238906"):
         st.update_row("t", "row-x", {"siren": "852238906"})
@@ -199,9 +204,7 @@ def test_update_row_unexplained_violation_reraises(monkeypatch):
                         lambda ns_id: {"datastore": "t", "schema": {"fields": []}})
     monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
-    monkeypatch.setattr(dsm.db, "datastore_update_row",
-                        lambda ns_id, rid, data, ts: (_ for _ in ()).throw(
-                            UniqueViolation("duplicate key ds_bkey_7")))
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", _fusion_en_violation)
 
     with pytest.raises(UniqueViolation):
         st.update_row("t", "row-x", {"x": 2})

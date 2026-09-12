@@ -45,8 +45,9 @@ from ...datastore.core import (
     RowValidationError,
     make_store,
 )
+from ...datastore.errors import RevisionConflict
 from .._authz import SUB_ONLY
-from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .common import EntreeDatastore, HORODATAGE, ns_not_found
 from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
@@ -212,6 +213,15 @@ class UpdateRowInput(EntreeDatastore):
     force: Optional[list[str] | str] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
+    # En QUERY (`?expected_revision=3`), jamais dans le corps : le corps EST le patch, une
+    # clé de plus y serait écrite comme une colonne. Un serveur qui ne la connaît pas
+    # rend `400 unknown_fields` — l'échec est fermé, rien n'est écrit sans la protection.
+    expected_revision: Optional[str] = Field(
+        default=None,
+        description=("The `_revision` of the row as you read it, when what you write was "
+                     "computed from that read. If the row changed since (any column, or "
+                     "its reservation), nothing is written: `409 revision_conflict`, "
+                     "`details.current_revision`. Omit it otherwise."))
 
     @field_validator("force", mode="after")
     @classmethod
@@ -254,6 +264,11 @@ class Row(BaseModel):
     updated_at: Optional[str] = Field(default=None, alias="_updated_at",
                                       serialization_alias="_updated_at",
                                       description=HORODATAGE)
+    revision: Optional[str] = Field(
+        default=None, alias="_revision", serialization_alias="_revision",
+        description=("The row's revision, as a string. It changes whenever the row's data "
+                     "or its reservation changes. Pass it back as `expected_revision` "
+                     "when what you write was computed from this read."))
     # Bail de la file de travail (ADR 0046 D) : ABSENTS quand la ligne n'est pas
     # réservée (les lectures ordinaires ne les sélectionnent pas) — pas nuls, absents.
     claimed_by: Optional[str] = Field(default=None, alias="_claimed_by",
@@ -587,13 +602,20 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
                                    readonly_override=inp.readonly_override,
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
-                                   force=fcg.chemins_forces(inp.force))
+                                   force=fcg.chemins_forces(inp.force),
+                                   expected_revision=inp.expected_revision)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except DatastoreReadOnly:
         raise AuthzDenied(403, "datastore_read_only")
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
+    except RevisionConflict as e:
+        # 409 comme `row_locked`, et AVANT le refus générique : `RevisionConflict` dérive
+        # de `ValueError`, en 400 elle enverrait corriger une requête juste. La révision
+        # en place part en `details` : le client relit sans reparser la phrase.
+        raise AuthzDenied(409, "revision_conflict", str(e),
+                          {"current_revision": e.current_revision})
     except ValueError as e:
         raise _write_refusal(e)
     nsctx = datastore_journal.from_trace(trace, ns)
@@ -721,7 +743,17 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,
         rest=RestBinding(verb="PATCH", path=_NS + "/rows/{row_id}", body_field="patch"),
+        errors=(
+            DeclaredError(409, "revision_conflict",
+                          "`?expected_revision=` ne vaut plus la révision en place : rien "
+                          "n'est écrit, `details.current_revision` porte la révision "
+                          "actuelle — relire, recalculer, réécrire"),
+        ),
         description=("Modifie une ligne (patch partiel ; le corps EST le patch). "
+                     "`?expected_revision=` (query, jamais le corps) = la `_revision` "
+                     "lue, quand ce qu'on écrit a été calculé d'après elle : si la ligne "
+                     "a changé depuis, rien n'est écrit (`409 revision_conflict`). "
+                     "Deux écritures sur des colonnes différentes ne s'écrasent jamais. "
                      "`readonly_override=true` remplace les colonnes verrouillées "
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
                      "et journalisé. " + dsv2.description_parametre_origine()

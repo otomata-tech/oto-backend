@@ -160,15 +160,19 @@ def test_tout_chemin_qui_ECRIT_en_base_refuse_les_cles_pointees():
     import ast
     import inspect
 
-    from oto_mcp.datastore import core, ecriture, lots
+    from oto_mcp.datastore import core, ecriture, ecriture_par_id, lots
 
-    PORTES = {"datastore_insert_row", "datastore_upsert_row", "datastore_update_row"}
+    # `datastore_merge_row_locked` : depuis le 12/09/2026 le patch par `id` écrit par la
+    # fusion sous verrou (`ecriture_par_id`), comme la fusion par clé — il n'a plus de
+    # porte à lui (`datastore_update_row` est retiré).
+    PORTES = {"datastore_insert_row", "datastore_upsert_row",
+              "datastore_merge_row_locked"}
     # ⚠️ Les modules qui EXÉCUTENT, jamais la porte d'entrée. Depuis la coupe du
     # 07/09/2026 le store est un noyau qui COMPOSE des greffons : les chemins
     # d'écriture vivent dans `ecriture` et `lots`, et sonder `core` seul ne voyait
     # plus rien — c'est la garde `len(vues) >= 4` ci-dessous qui l'a dit.
     methodes = []
-    for module in (core, ecriture, lots):
+    for module in (core, ecriture, ecriture_par_id, lots):
         arbre = ast.parse(inspect.getsource(module))
         for classe in [n for n in ast.walk(arbre) if isinstance(n, ast.ClassDef)]:
             methodes += [n for n in classe.body

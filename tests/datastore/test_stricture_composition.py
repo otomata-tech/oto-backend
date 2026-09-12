@@ -115,14 +115,18 @@ def banc(monkeypatch):
                             if rid in etat["lignes"] else None))
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, d, *a, **k: etat["creees"].append(d))
-    monkeypatch.setattr(dsm.db, "datastore_update_row",
-                        lambda ns_id, rid, d, u: etat["maj"].append(rid)
-                        or etat["lignes"].__setitem__(rid, dict(d))
-                        or {"row_id": rid, "created_at": "t", "updated_at": u,
-                            "data": dict(d)})
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
-    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked",
-                        _fake_merge_locked(etat["lignes"]))
+    fusion = _fake_merge_locked(etat["lignes"])
+
+    def fusion_relevee(ns_id, rid, apply_fn, updated_at, **k):
+        # Le patch par `id` écrit par la fusion sous verrou depuis le 12/09/2026 : une
+        # fusion ABOUTIE est une écriture, un refus levé dans `apply_fn` n'en est pas une.
+        sortie = fusion(ns_id, rid, apply_fn, updated_at, **k)
+        if sortie is not None:
+            etat["maj"].append(rid)
+        return sortie
+
+    monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", fusion_relevee)
     return st, etat
 
 

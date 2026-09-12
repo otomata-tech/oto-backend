@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import connector_instances
+from . import connector_instances, revision
 from ._conn import _connect
 from ._schema import _SCHEMA
 
@@ -598,6 +598,11 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # backfill n'est requis (0 est bien l'état d'une ligne jamais réservée).
     conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claims INTEGER NOT NULL DEFAULT 0")
     conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS abandon_reason TEXT")
+    # La RÉVISION de ligne (12/09/2026) : colonne `rev` + le premier déclencheur du
+    # dépôt, qui l'avance quelle que soit la version du code qui écrit (bleu/vert sur
+    # base partagée). Posé seulement s'il manque — cf. `db/revision.py`. Appelé par le
+    # MODULE, pas par nom importé : un banc de chute doit pouvoir le remplacer.
+    revision.poser_revision_de_ligne(conn)
     # ⚠️ REMONTÉE ICI le 2026-09-01 (#781) — elle vivait plus bas (ADR 0032 §6 /
     # 0029, B6 : mode typé optionnel d'un namespace). La conversion #317 juste
     # après LIT `d.schema` : sur une base qui existe déjà, la colonne n'arrive

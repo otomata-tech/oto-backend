@@ -347,8 +347,13 @@ from oto_mcp.db import _schema, schema
 # la reçoit par l'ALTER de `_init.py`), et la table `runner_platform_depots` — la
 # présence d'un worker de plateforme par famille de modèles. Additif : le code du
 # tag précédent ne lit ni n'écrit l'une ou l'autre. 152 291 → 153 174.
-EMPREINTE = "19c8ec744c7fe811f93fe113ba0fb9785128a1c57dc9577cf3e1420dc52d4545"
-LONGUEUR = 153174
+# 12/09/2026 — la RÉVISION de ligne : la colonne `datastore_rows.rev` et son commentaire
+# (pourquoi un déclencheur, ordre alphabétique des déclencheurs BEFORE ROW) dans le
+# CREATE TABLE. La base partagée la reçoit par `db/revision.py` (ALTER, fonction, et le
+# déclencheur posé seulement s'il manque). Additif : le code du tag précédent ne lit pas
+# `rev`, et ses écritures la font avancer. 153 174 → 153 796.
+EMPREINTE = "cbe344b8cea8525a50efd6abf0e84876a9a4b6e9deca3e7401660d5cb31b752c"
+LONGUEUR = 153796
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

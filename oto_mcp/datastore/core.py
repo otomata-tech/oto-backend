@@ -110,6 +110,7 @@ from .outils import (  # noqa: E402,F401
 )
 from .controles import ControlesMixin, _relever_origine_module  # noqa: E402,F401
 from .ecriture import EcritureMixin  # noqa: E402
+from .ecriture_par_id import EcritureParIdMixin  # noqa: E402
 from .file_de_travail import FileDeTravailMixin  # noqa: E402
 from .lecture import LectureMixin  # noqa: E402
 from .lots import LotsMixin  # noqa: E402
@@ -117,7 +118,7 @@ from .registre import RegistreMixin  # noqa: E402
 
 
 class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
-                  LotsMixin, FileDeTravailMixin, ControlesMixin):
+                  EcritureParIdMixin, LotsMixin, FileDeTravailMixin, ControlesMixin):
     """Store tabulaire adossé à PostgreSQL.
 
     State-less, instancié par requête. Normalement à partir du `sub` (l'acteur user) ;
@@ -309,6 +310,12 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
             "_created_at": row["created_at"],
             "_updated_at": row["updated_at"],
         }
+        # La RÉVISION (12/09/2026), en chaîne : ce que `expected_revision` recopie. Toute
+        # requête de `db/` qui projette une ligne sélectionne `rev` — un cliquet le tient
+        # (`tests/datastore/test_revision_de_ligne.py`). Servie si lue : une ligne sans
+        # `rev` est un faux de banc, pas un chemin servi.
+        if "rev" in row:
+            out["_revision"] = str(row["rev"])
         # Toute colonne a des sous-champs (#318) — c'est le contrat du datastore, pas
         # une forme que certaines valeurs adoptent. Une colonne « plate » est une
         # colonne dont les sous-champs sont VIDES, et on ne rend pas du vide.

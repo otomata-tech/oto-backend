@@ -28,6 +28,7 @@ privé d'autrui, là où la lecture du même nœud lui rendait 404.
 """
 from __future__ import annotations
 
+import logging
 from typing import Literal, Optional
 
 from pydantic import BaseModel
@@ -36,7 +37,10 @@ from starlette.concurrency import run_in_threadpool
 from ..db import node_tables as db_node_tables, nodes as db_nodes, node_view as db_node
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .node_keys import NoeudIncoherent, edit_surface_de, refus_guide
 from .registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 
 class NodeEditInput(BaseModel):
@@ -123,27 +127,53 @@ def _proprietaire(ctx: ResolvedCtx, fiche: dict) -> None:
         raise _introuvable()
 
 
-def _pas_une_copie(fiche: dict) -> None:
-    """Un nœud CONVERTI appartient à l'ancien monde : sa source y est la vérité, et
-    l'écrire des deux côtés ferait diverger les deux.
+def _s_ecrit_ici(fiche: dict) -> None:
+    """Ce nœud s'écrit-il ICI ? C'est la surface que sa fiche annonce qui en décide :
+    `node_keys.edit_surface_de`, le MÊME prédicat que lit `oto_node` (oto#198). Une
+    annonce et un refus écrits séparément finiraient par se contredire, et le client
+    croirait la fiche.
 
-    Se juge APRÈS la propriété : un tiers qui sonde un identifiant ne doit pas
-    apprendre qu'il désigne une copie — ce serait le même oracle par une autre porte.
+    - un nœud CONVERTI (`doc`, `project`, `procedure`, `datastore`) appartient à l'ancien
+      monde : sa source y est la vérité, l'écrire des deux côtés ferait diverger les
+      deux (`409 node_projete`) ;
+    - une couche de contexte (`guide`) s'écrit par `oto_guide`, et le refus nomme l'appel
+      exact (`409 node_guide`). ⚠️ Ce passage rendait 200 jusqu'au 13/09/2026 : il
+      contournait la borne de 65 536 octets que `oto_guide` pose sur un corps — le texte
+      injecté au handshake avait deux écrivains, dont un sans borne. Son usage réel n'a
+      pas été mesuré ;
+    - un stockage qui ne sait pas dire sa surface lève `noeud_incoherent`, plutôt que de
+      passer pour natif (un `legacy` vide passait l'ancien test de vérité).
+
+    Se juge APRÈS la propriété : un tiers qui sonde un identifiant ne doit pas apprendre
+    qu'il désigne une copie ou un guide — ce serait le même oracle par une autre porte.
     """
-    if (fiche.get("props") or {}).get("legacy"):
-        raise AuthzDenied(
-            409, "node_projete",
-            "Ce nœud est une copie de l'ancien monde : il s'édite sur sa surface "
-            "d'origine. Seuls les nœuds nés ici s'écrivent ici.")
+    props = fiche.get("props") or {}
+    try:
+        surface = edit_surface_de(props)
+    except NoeudIncoherent as cause:
+        logger.error("nœud %s incohérent : %s", fiche["public_id"], cause)
+        raise AuthzDenied(500, "noeud_incoherent",
+                          f"Le nœud {fiche['public_id']} ne peut pas dire où il "
+                          f"s'écrit : {cause}.") from None
+    if surface == "node":
+        return
+    if surface == "guide":
+        message, details = refus_guide(fiche["owner_type"], fiche["owner_id"], props)
+        raise AuthzDenied(409, "node_guide", message, details=details)
+    raise AuthzDenied(
+        409, "node_projete",
+        "Ce nœud est une copie de l'ancien monde : il s'édite sur sa surface "
+        "d'origine. Seuls les nœuds nés ici s'écrivent ici.")
 
 
 def _mien(ctx: ResolvedCtx, fiche: dict) -> None:
-    """Le palier complet pour ÉCRIRE ce nœud : en être propriétaire, et qu'il soit
-    né ici. Ce qu'on ne fait que TOUCHER (le parent d'une création, l'ancre de rang
-    d'un déplacement) n'en demande que la moitié — `_proprietaire` — parce que
-    « ne pas éditer une copie » parle de ce qu'on édite, pas de ce qu'on vise."""
+    """Le palier complet pour ÉCRIRE ce nœud : en être propriétaire, et qu'il s'écrive
+    ici (ni copie, ni couche de contexte). Ce qu'on ne fait que TOUCHER (le parent d'une
+    création, l'ancre de rang d'un déplacement) n'en demande que la moitié —
+    `_proprietaire` — parce que « s'écrire ici » parle de ce qu'on édite, pas de ce
+    qu'on vise."""
     _proprietaire(ctx, fiche)
-    _pas_une_copie(fiche)
+    _s_ecrit_ici(fiche)
 
 
 def _create(ctx: ResolvedCtx, inp: NodeEditInput) -> dict:
@@ -175,8 +205,9 @@ def _create(ctx: ResolvedCtx, inp: NodeEditInput) -> dict:
             raise AuthzDenied(400, "missing_parent_id",
                               "Une ligne se crée sous son tableau : `parent_id` requis.")
         # Une ligne EST le contenu de son tableau : l'y écrire, c'est écrire le
-        # tableau — d'où le palier complet, copie comprise, et non la seule propriété.
-        _pas_une_copie(parent_fiche)
+        # tableau — d'où le palier complet, copie et guide compris, et non la seule
+        # propriété.
+        _s_ecrit_ici(parent_fiche)
         row = db_node_tables.add_row(parent, inp.data or {})
         if row is None:
             raise AuthzDenied(400, "parent_pas_un_tableau",
@@ -221,12 +252,24 @@ def _update(ctx: ResolvedCtx, inp: NodeEditInput) -> dict:
                               "Aucune cellule fournie — `data` attendu pour une ligne.")
         return {"ok": True, "id": fiche["public_id"], "op": "update"}
 
+    # Un titre ABSENT ne change rien et n'est pas exigé ; un titre FOURNI vide ou blanc
+    # est refusé AVANT toute écriture (colonnes comprises), et stocké taillé comme à la
+    # création (oto#198). Sans ce refus, un `title` vide effaçait le nom du nœud et un
+    # blanc le remplaçait par des espaces : `update_page` pose tout ce qui n'est pas None.
+    titre = None
+    if inp.title is not None:
+        titre = inp.title.strip()
+        if not titre:
+            raise AuthzDenied(400, "missing_title",
+                              "`title` fourni vide : un nœud garde un titre. Omets "
+                              "`title` pour ne pas le changer.")
+
     fait = False
     if genre == "tableau" and inp.columns is not None:
         fait = db_node_tables.set_columns(fiche["id"], inp.columns)
     # Le titre et la description valent pour une page comme pour un tableau ; le
     # corps n'a de sens que pour une page, et `update_page` l'ignore s'il est absent.
-    fait = db_nodes.update_page(fiche["id"], title=inp.title,
+    fait = db_nodes.update_page(fiche["id"], title=titre,
                                 description=inp.description,
                                 body_md=inp.body_md) or fait
     if not fait:
@@ -312,8 +355,10 @@ CAPABILITIES += [
             "move or delete a node you OWN, and only file one under a parent you own: "
             "anything else answers the SAME 404 as reading it, unknown and forbidden "
             "being indistinguishable. Editing a node that is a COPY of the old world "
-            "is refused (409): it is edited on its own surface. PROVISIONAL surface, "
-            "like its read side."),
+            "is refused (409): it is edited on its own surface. So is a context layer "
+            "(a guide, 409), the refusal naming the `oto_guide` call that writes it. "
+            "On update, an empty or blank `title` is refused (400): omit `title` to "
+            "keep it. PROVISIONAL surface, like its read side."),
         mcp="oto_node_edit",
         rest=RestBinding("POST", "/api/me/nodes/edit", provisoire=True),
     ),

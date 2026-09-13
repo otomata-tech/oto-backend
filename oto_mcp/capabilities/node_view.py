@@ -53,7 +53,8 @@ from ..db import node_view as db_node
 from ..db import shell as db_shell
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, NotModified, ResolvedCtx, RestBinding
-from .node_keys import doc_id_de
+from .node_keys import (EditSurface, NoeudIncoherent, doc_id_de, edit_surface_de,
+                        exiger_poignee)
 from .node_procedure_ref import ProcedureRef, procedure_ref_of
 from .registry import CAPABILITIES
 
@@ -146,7 +147,9 @@ class NodeOut(BaseModel):
     `rev` est l'empreinte du corps servi : elle a changé une fois pour tous les nœuds
     à l'ajout de ces champs (un cache client se rafraîchit, puis retrouve ses 304).
     **Même effet à l'ajout de `pinned` et `datastore` (01/09/2026, alors `namespace`)** — une seule vague
-    d'invalidation, connue et bornée. C'est le prix d'une empreinte calculée sur le
+    d'invalidation, connue et bornée. **Et encore une fois à l'ajout d'`edit_surface`
+    (13/09/2026, oto#198)** : même geste que `doc_id` et `pinned`, une rotation unique
+    pour tous les nœuds. C'est le prix d'une empreinte calculée sur le
     contenu servi, et c'est le bon prix : une empreinte qui ignorerait les champs neufs
     laisserait un client sur une version qu'il croit à jour."""
     id: str
@@ -164,6 +167,14 @@ class NodeOut(BaseModel):
     # seule chose qui distingue les deux, et parce que le modèle a retiré le GENRE
     # `project` exprès : l'épingle est ce qui reste pour le dire.
     pinned: bool = False
+    # OÙ ce nœud s'écrit (oto#198). Dérivé du stockage par `node_keys.edit_surface_de`, la
+    # MÊME fonction que lit la garde d'écriture de `oto_node_edit`. REQUIS, sans défaut :
+    # un nœud qui ne sait pas dire sa surface ne se sert pas (500 `noeud_incoherent`), et
+    # l'absence de `doc_id` ne dit rien — une racine de projet ou un guide n'en ont pas.
+    edit_surface: EditSurface = Field(description=(
+        "La surface CANONIQUE qui écrit ce nœud : node | doc | project | procedure | "
+        "datastore | guide. Pas une permission : écrire reste jugé par la garde de "
+        "propriété. `guide` n'a aucune poignée sur cette fiche."))
     # Tableau : le NOM DU TABLEAU à repasser aux surfaces `data_*`.
     #
     # ⚠️ Il vaut aujourd'hui la même chose que `name`, et c'est une COÏNCIDENCE qu'on
@@ -213,6 +224,20 @@ def _introuvable() -> AuthzDenied:
     transforme le code d'état en oracle d'existence.
     """
     return AuthzDenied(404, "not_found", "Aucun nœud de ce nom, ou aucun droit de le voir.")
+
+
+def _incoherent(public_id: str, cause: NoeudIncoherent) -> AuthzDenied:
+    """Un nœud dont le stockage ne dit pas où il s'écrit (oto#198) : un refus NOMMÉ,
+    jamais une fiche à poignée nulle ni un repli sur `node`.
+
+    Journalisé, parce que c'est une donnée à expliquer et pas un geste de l'appelant — par
+    l'identifiant et la cause SEULS : les props brutes d'un nœud privé n'ont rien à faire
+    dans un journal. Ne se sert qu'APRÈS la garde de lecture : un tiers reçoit toujours
+    le 404 indistinct.
+    """
+    logger.error("nœud %s incohérent : %s", public_id, cause)
+    return AuthzDenied(500, "noeud_incoherent",
+                       f"Le nœud {public_id} ne peut pas dire où il s'écrit : {cause}.")
 
 
 def _lisible(ctx: ResolvedCtx, fiche: dict, partages: set) -> bool:
@@ -323,6 +348,13 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         raise _introuvable()
 
     props = fiche.get("props") or {}
+    # APRÈS la garde de lecture : un nœud incohérent reste un 404 pour qui ne le lit pas.
+    # Même dérivation que la garde d'écriture de `node_edit` — la fiche annonce ce que
+    # l'écriture accepte, pas une seconde lecture du stockage.
+    try:
+        surface = edit_surface_de(props)
+    except NoeudIncoherent as cause:
+        raise _incoherent(fiche["public_id"], cause) from None
     nature = _type_of(fiche["kind"], props)
     ref = procedure_ref_of(nature, fiche.get("owner_type"), props)
     chaine = db_node.ancestors_of(fiche["id"], max_depth=_PROFONDEUR_FIL)
@@ -335,6 +367,7 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         "doc_id": doc_id,
         "project_id": project_id,
         "pinned": bool(props.get("pinned")),
+        "edit_surface": surface,
         # Le point UNIQUE où l'adresse du tableau se résout : le jour où `title` cesse
         # d'être cette adresse, c'est cette ligne qui change, et les clients ne bougent pas.
         "datastore": (props.get("title") or None) if nature == "table" else None,
@@ -355,6 +388,12 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         corps["columns"] = props.get("child_schema")
     else:
         corps["body"] = [_bloc(b) for b in db_node.blocks_of(fiche["id"])]
+    # La surface annoncée doit arriver AVEC sa poignée : une fiche qui dirait `doc` sans
+    # `doc_id` ferait deviner le client — exactement ce que le champ retire.
+    try:
+        exiger_poignee(surface, corps)
+    except NoeudIncoherent as cause:
+        raise _incoherent(fiche["public_id"], cause) from None
     corps["rev"] = _rev({k: v for k, v in corps.items() if k != "rev"})
     return corps
 
@@ -389,7 +428,10 @@ CAPABILITIES += [
             "forbidden id answer the SAME 404 on purpose: a 403 would reveal that the "
             "node exists. Pass `rev` for a conditional read (304 / `{not_modified}`). "
             "`non_servi` lists what this version cannot answer yet — read it before "
-            "concluding that a node has no sharing or no dependants. PROVISIONAL "
+            "concluding that a node has no sharing or no dependants. `edit_surface` "
+            "names the canonical surface that writes this node (node | doc | project | "
+            "procedure | datastore | guide): it says WHERE to write, not WHETHER you "
+            "may, and only `node` is written through `oto_node_edit`. PROVISIONAL "
             "surface: shape contracted, not frozen."),
         mcp="oto_node",
         rest=RestBinding("GET", "/api/me/nodes/{node_id}", provisoire=True),

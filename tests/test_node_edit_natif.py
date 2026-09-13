@@ -13,7 +13,9 @@ Trois invariants que ces tests tiennent, chacun payé ailleurs :
 2. **Trois genres, jamais un genre pour un rôle** (ADR 0054-D5). Une page reste une
    page, même quand elle joue autre chose.
 3. **Un nœud COPIÉ de l'ancien monde ne s'écrit pas ici** — sa source y est la vérité,
-   et l'écrire des deux côtés ferait diverger les deux.
+   et l'écrire des deux côtés ferait diverger les deux. **Une couche de contexte non
+   plus** (oto#198) : elle s'écrit par `oto_guide`, et la garde lit la MÊME surface que
+   la fiche (`node_keys.edit_surface_de`).
 4. **On n'écrit que ce dont on est PROPRIÉTAIRE**, et ça se compare (2026-09-01). Le
    palier des guides résout une identité, il n'autorise pas : l'appeler et jeter sa
    réponse n'était pas une garde. Le refus est indistinct de l'introuvable.
@@ -292,3 +294,100 @@ def test_un_noeud_PERSONNEL_n_est_lisible_que_de_son_proprietaire(monkeypatch):
     # Et un nœud d'ORG reste, lui, visible de son org active — le contraste est le
     # sens même du défaut : c'est le choix du scope qui décide, pas le hasard.
     assert ownership.owner_in_scope("usr_admin", 7, ("org", "7")) is True
+
+
+# --- oto#198 : la garde d'écriture lit la MÊME surface que la fiche -----------
+
+def test_U6_la_surface_se_derive_en_UN_seul_point():
+    """La fiche annonce, la garde refuse. Si l'une relit le stockage à sa façon, la fiche
+    finit par dire `node` d'un nœud que l'écriture refuse — et le client croit la fiche.
+    `props.get("legacy")` était ce second lecteur : un `legacy` vide y passait pour natif."""
+    from oto_mcp.capabilities import node_view
+    assert "edit_surface_de(" in inspect.getsource(node_view._compose)
+    assert "edit_surface_de(" in inspect.getsource(node_edit._s_ecrit_ici)
+    src = inspect.getsource(node_edit)
+    assert 'get("legacy")' not in src and "get('legacy')" not in src, (
+        "la garde d'écriture relit `props.legacy` à côté de la dérivation partagée")
+
+
+_GUIDE = {"delivery": "on-demand", "slug": "prospection"}
+
+
+def test_U8_un_guide_POSSEDE_est_refuse_en_nommant_oto_guide():
+    """Il s'écrivait ici en 200, en contournant la borne de `oto_guide`. Le refus nomme la
+    destination : un « non » seul fait tourner un agent en rond."""
+    from oto_mcp.capabilities._types import AuthzDenied
+    with pytest.raises(AuthzDenied) as err:
+        node_edit._mien(_Ctx(), _fiche(props=dict(_GUIDE)))
+    assert (err.value.status, err.value.code) == (409, "node_guide")
+    assert "`oto_guide`" in err.value.message and "slug=prospection" in err.value.message
+    assert err.value.details == {"edit_surface": "guide", "scope": "user",
+                                 "slug": "prospection", "delivery": "on-demand"}
+
+
+def test_U8_le_guide_d_un_TIERS_rend_le_meme_404_que_l_inconnu():
+    """`node_guide` se juge APRÈS la propriété : avant, un 409 dirait à un tiers qu'un
+    guide existe sous cet identifiant — dérivé, donc devinable depuis un `sub`."""
+    from oto_mcp.capabilities._types import AuthzDenied
+    inconnu = node_edit._introuvable()
+    with pytest.raises(AuthzDenied) as err:
+        node_edit._mien(_Ctx(), _fiche(owner_id="usr_quelquun_dautre", props=dict(_GUIDE)))
+    assert (err.value.status, err.value.code, err.value.message) == \
+           (inconnu.status, inconnu.code, inconnu.message)
+    assert err.value.details is None
+
+
+def test_U8_le_readme_injecte_d_une_org_s_adresse_par_son_org_sans_slug(monkeypatch):
+    from oto_mcp.capabilities import guides
+    from oto_mcp.capabilities._types import AuthzDenied
+    monkeypatch.setattr(guides, "_owner_for_write", lambda ctx, scope, owner=None: owner)
+    with pytest.raises(AuthzDenied) as err:
+        node_edit._mien(_Ctx(), _fiche(owner_type="org", owner_id="42",
+                                       props={"delivery": "init", "slug": "readme"}))
+    assert (err.value.status, err.value.code) == (409, "node_guide")
+    assert "owner_id=42" in err.value.message and "sans slug" in err.value.message
+
+
+def test_un_noeud_INCOHERENT_leve_500_au_lieu_de_passer_pour_natif(caplog):
+    """`legacy` vide : l'ancien test de vérité le laissait écrire comme un nœud né ici."""
+    from oto_mcp.capabilities._types import AuthzDenied
+    with caplog.at_level("ERROR", logger=node_edit.__name__):
+        with pytest.raises(AuthzDenied) as err:
+            node_edit._mien(_Ctx(), _fiche(props={"legacy": ""}))
+    assert (err.value.status, err.value.code) == (500, "noeud_incoherent")
+    assert "nod_x" in err.value.message
+    assert any("nod_x" in r.getMessage() for r in caplog.records), "rien n'est journalisé"
+
+
+@pytest.fixture
+def ecriture(monkeypatch):
+    """Le nœud natif possédé, et ce qui parvient réellement à `update_page`."""
+    appels: list = []
+    monkeypatch.setattr(node_edit.db_node, "node_by_public_id",
+                        lambda pid: _fiche(public_id=pid, kind="page"))
+    monkeypatch.setattr(node_edit.db_nodes, "update_page",
+                        lambda nid, **kw: appels.append(kw) or True)
+    return appels
+
+
+@pytest.mark.parametrize("titre", ["", "   "])
+def test_U7_un_titre_VIDE_ou_BLANC_est_refuse_sans_rien_ecrire(ecriture, titre):
+    from oto_mcp.capabilities._types import AuthzDenied
+    with pytest.raises(AuthzDenied) as err:
+        node_edit._update(_Ctx(), node_edit.NodeEditInput(op="update", node_id="nod_x",
+                                                          title=titre))
+    assert (err.value.status, err.value.code) == (400, "missing_title")
+    assert ecriture == [], "le refus est tombé après l'écriture"
+
+
+def test_U7_un_titre_est_stocke_TAILLE(ecriture):
+    out = node_edit._update(_Ctx(), node_edit.NodeEditInput(op="update", node_id="nod_x",
+                                                            title="  Neuf  "))
+    assert out == {"ok": True, "id": "nod_x", "op": "update"}
+    assert [a["title"] for a in ecriture] == ["Neuf"]
+
+
+def test_U7_un_update_SANS_titre_n_exige_rien(ecriture):
+    node_edit._update(_Ctx(), node_edit.NodeEditInput(op="update", node_id="nod_x",
+                                                      body_md="corps"))
+    assert ecriture == [{"title": None, "description": None, "body_md": "corps"}]

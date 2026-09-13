@@ -438,6 +438,48 @@ Trois lectures précoces du modèle de nœuds (`capabilities/shell.py`, `node_vi
 `type` est une NATURE dérivée d'un rôle (`page` | `table` | `agent` | `execution`), jamais un
 `kind` de plus. 404 indistinct entre inexistant et interdit.
 
+**La fiche dit où un nœud s'écrit : `edit_surface` (13/09/2026, oto#198).** `GET
+/api/me/nodes/{id}` (et `oto_node`) sert toujours `edit_surface`, jamais `null`, dans un
+énuméré fermé. C'est la surface CANONIQUE d'écriture, pas une permission : `access` reste
+dans `non_servi`, et un non-propriétaire lit `node` puis reçoit 404 en écriture. L'absence de
+`doc_id` n'en dit rien : une racine de projet, une procédure, un tableau converti et une
+couche de contexte n'en ont pas non plus.
+
+| stockage du nœud | `edit_surface` | s'écrit par | poignée garantie non nulle |
+|---|---|---|---|
+| ni `props.legacy` ni `props.delivery` | `node` | `POST /api/me/nodes/edit` | `id` |
+| `legacy = doc` | `doc` | `POST /api/me/docs` | `doc_id` |
+| `legacy = prj` | `project` | `oto_project` | `project_id` |
+| `legacy = prc` | `procedure` | `oto_procedure` | `procedure` |
+| `legacy = tbl` | `datastore` | `/api/datastores/{datastore}` | `datastore` |
+| clé `delivery` présente, quelle que soit sa valeur | `guide` | `oto_guide`, `PUT /api/me/guides/{scope}/{slug}` | aucune sur la fiche |
+
+Dérivé en un seul point (`capabilities/node_keys.edit_surface_de`), que lit aussi la garde
+d'écriture : la fiche annonce exactement ce que `POST /api/me/nodes/edit` accepte. Un stockage
+incohérent — famille d'origine inconnue, `legacy` et `delivery` ensemble, poignée requise
+absente — rend `500 noeud_incoherent` après la garde de lecture, jamais une fiche à poignée
+nulle. Un tableau hérité au nom vide est **possible** dans le schéma et n'a pas été mesuré en
+production. L'ajout du champ fait tourner `rev` une fois pour tous les nœuds.
+
+**Écrire un nœud natif — `POST /api/me/nodes/edit`.** Créer une racine privée :
+`{"op":"create","kind":"page","scope":"user","title":"…"}` → `200
+{"ok":true,"id":"nod_…","op":"create"}`. Renommer : `{"op":"update","node_id":"nod_…","title":"…"}`,
+même identifiant. Un `title` absent d'un update n'est pas exigé ; fourni vide ou blanc, il rend
+`400 missing_title`, et il est stocké taillé, comme à la création. Refus :
+
+- `404 not_found` — inconnu ou non propriétaire, même corps qu'à la lecture ;
+- `409 node_projete` — nœud converti, jugé après la propriété ;
+- `409 node_guide` — couche de contexte, jugé après la propriété ; le message nomme `oto_guide`
+  et ses arguments, `details` porte `edit_surface`, `scope`, `slug`, `delivery` et, pour une org
+  ou une équipe, `owner_id` ;
+- `400 missing_title`, `missing_node_id`, `rien_a_ecrire`, `no_active_org`.
+
+⚠️ **Changement de comportement** : un guide possédé s'écrivait, se déplaçait et se supprimait
+ici en `200`, en contournant la borne de 65 536 octets de `oto_guide`. C'est désormais refusé ;
+l'usage réel de ce passage n'a pas été mesuré. Ces refus ne sont pas déclarés dans
+`/openapi.json` : le contrôle des refus déclarés (`tests/_refus_atteignables.py`) ne suit pas
+l'aiguillage `_OPS[inp.op]` de la capacité.
+
 **Un nœud `agent` porte la référence de sa procédure — depuis le 29/08 (#417).** Sur le
 `RailNode` du rail comme sur la fiche : `procedure: {id, slug, scope}` — `id` est
 l'identifiant STABLE que `GET /api/me/guides/{guide_id}` (et `oto_procedure`) accepte,

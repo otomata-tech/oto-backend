@@ -59,6 +59,18 @@ vit à côté de docs et part de vide »*.
 Rien ne traduit l'un vers l'autre. Un contenu créé dans l'ancien monde **n'apparaît
 pas** dans le nouveau, et c'est le comportement voulu, pas une régression.
 
+**Où s'écrit un nœud : la fiche le DIT (`edit_surface`, oto#198).** Les deux univers
+partagent la table `nodes`, et rien dans l'identifiant ne sépare un nœud né ici d'une copie.
+`doc_id` absent ne suffit pas : une racine de projet, une procédure, un tableau converti et une
+couche de contexte n'en ont pas non plus. La fiche sert donc `edit_surface`, dérivé du stockage
+en un seul point (`capabilities/node_keys.edit_surface_de`) : `props.legacy` présent → la
+surface de sa famille (`doc`, `project`, `procedure`, `datastore`) ; `props.delivery` présent →
+`guide` ; ni l'un ni l'autre → `node`. La garde d'écriture de `oto_node_edit` lit la même
+fonction : elle refuse une copie (`409 node_projete`) **et désormais une couche de contexte**
+(`409 node_guide`), qu'elle laissait écrire en contournant la borne de `oto_guide`. Une famille
+inconnue, les deux clés ensemble ou une poignée absente lèvent `noeud_incoherent` au lieu de
+retomber sur `node`. Contrat complet : `docs/rest-api.md` § Surface nœuds.
+
 **Corps actif et projections.** `nodes.props.body_md` porte le corps courant ; les
 surfaces page et guide le modifient, et l'ouverture `oto_node` lit ses blocs. Ces
 écritures maintiennent désormais les blocs **dans la même transaction**, ainsi que

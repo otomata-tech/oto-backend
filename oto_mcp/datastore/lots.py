@@ -17,7 +17,7 @@ from psycopg.errors import UniqueViolation
 from .. import db
 from . import acces_agent as aga
 from . import schema as dsv2
-from .columns import _META_COLS, sans_les_nulls_sans_effet
+from .columns import _META_COLS, refuser_cles_internes, sans_les_nulls_sans_effet
 from .controles import _relever_origine_module
 from .errors import BusinessKeyRequired, RowLocked, RowValidationError
 from .outils import _new_id, _refus_de_creation
@@ -113,6 +113,7 @@ class LotsMixin:
                         raise ValueError(fdn.refus(vises))
                     self.off_notices.add(fdn.avertissement(vises))
                 _refuse_dotted_names(user_data)
+                refuser_cles_internes(user_data)
                 # ⚠️ DÉBALLÉ : une clé métier ANNOTÉE désigne la même ligne qu'une clé nue.
                 # `{"code": {"valeur": "A", "comment": "fichier source"}}` et
                 # `{"code": "A"}` sont la MÊME identité — enrichir la provenance ne

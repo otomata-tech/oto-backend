@@ -36,6 +36,7 @@ from .columns import (
     _merge_column,
     _refuse_mixed_layers,
     arbitrer_les_vides,
+    refuser_cles_internes,
     refuser_geste_sans_effet,
     sans_les_nulls_sans_effet,
 )
@@ -114,6 +115,7 @@ class EcritureParIdMixin:
                     raise ValueError(fdn.refus(vises))
                 self.off_notices.add(fdn.avertissement(vises))
             _refuse_dotted_names(corps)
+            refuser_cles_internes(corps)
             _refuse_mixed_layers(schema, corps)
             prev_status = data.get(status_key) if status_key else None
             self._trace(trace, ns_id, ns, prev_status=prev_status)

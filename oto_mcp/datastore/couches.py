@@ -84,6 +84,21 @@ VIDE_DELIBERE = "@empty"
 #: Les deux, pour un test d'appartenance lisible.
 SENTINELLES = (GARDE, VIDE_DELIBERE)
 
+#: Le marqueur interne du vide ASSUMÉ (oto#204), rangé dans l'enveloppe de la cellule :
+#: `{"valeur": "", "oto.vide_assume": true}`. Il distingue « aucune source ne donne ce
+#: champ, et je l'écris » d'une chaîne vide ordinaire ou d'une cellule CSV vide : lui
+#: seul satisfait `required`. JAMAIS servi, JAMAIS écrit par un client.
+#:
+#: Le POINT est ce qui le rend impossible à confondre avec une clé d'utilisateur :
+#: `definition.py` refuse tout point dans un nom de colonne ou de sous-champ.
+#:
+#: ⚠️ **Livré en deux étapes, sur une base partagée entre préprod et prod.** Étape 1 :
+#: ce code LIT, VALIDE et SERT une cellule marquée, et n'en CRÉE aucune. L'émission (par
+#: la résolution de `@empty`) ne touche `main` qu'une fois l'étape 1 servie en prod —
+#: sinon une version qui ne connaît pas le marqueur le lirait.
+VIDE_ASSUME = "oto.vide_assume"
+CLES_INTERNES = (VIDE_ASSUME,)
+
 # ⚠️ **Ces deux mots se résolvent dans `columns._merge_column`, et NULLE PART ailleurs.**
 # Une surface d'écriture qui ne passerait pas par la fusion les stockerait tels quels —
 # et `@keep` finirait servi à une cliente comme sa propre donnée.
@@ -411,3 +426,21 @@ def _is_empty(v: Any) -> bool:
 #: — c'est exactement le défaut de #608, où le validateur et le merge lisaient la
 #: chaîne vide autrement l'un que l'autre.
 est_vide = _is_empty
+
+
+def vide_assume(cell: Any) -> bool:
+    """Cette cellule porte-t-elle le vide ASSUMÉ ? — le marqueur, sur une valeur vide."""
+    return (isinstance(cell, dict) and cell.get(VIDE_ASSUME) is True
+            and _is_empty(cell.get(VALUE_LAYER)))
+
+
+def sans_cles_internes(value: Any) -> Any:
+    """La valeur telle qu'un lecteur de la base BRUTE peut la montrer : sans clé
+    interne, à toute profondeur (une liste de fiches porte ses marqueurs un cran plus
+    bas). Les lecteurs servis passent par `served_value`, qui ne les expose jamais."""
+    if isinstance(value, dict):
+        return {k: sans_cles_internes(v) for k, v in value.items()
+                if k not in CLES_INTERNES}
+    if isinstance(value, list):
+        return [sans_cles_internes(v) for v in value]
+    return value

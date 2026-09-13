@@ -22,7 +22,8 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
-from .couches import _is_empty, LAYER_KEYS, layer_value, split_layer, unknown_layers, unwrap
+from .couches import (_is_empty, CLES_INTERNES, LAYER_KEYS, layer_value, split_layer,
+                      unknown_layers, unwrap, vide_assume)
 from .options_declarees import hors_des_options, montrable
 from .motifs import _pattern_re
 from .declaration import _fields, max_length_of, pattern_of, status_field, validation_active
@@ -205,7 +206,8 @@ def _row_errors(fields: list, data: dict, path: str,
         if not key:
             continue
         fpath = f"{path}.{key}" if path else key
-        inconnues = unknown_layers(data.get(key))
+        # Le marqueur du vide assumé (oto#204) est une clé INTERNE, pas un sous-champ.
+        inconnues = [k for k in unknown_layers(data.get(key)) if k not in CLES_INTERNES]
         if inconnues:
             errors.append(
                 f"{fpath}: sous-champ(s) inconnu(s) {', '.join(repr(k) for k in inconnues)}"
@@ -251,7 +253,9 @@ def _row_errors(fields: list, data: dict, path: str,
                 else str(unwrap(data.get(k))) == str(v)
                 for k, v in rw.items())
         if _is_empty(value):
-            if required:
+            # oto#204 : le vide ASSUMÉ (marqueur posé par la résolution de `@empty`)
+            # satisfait l'obligation ; une chaîne vide ordinaire, non.
+            if required and not (not layer and vide_assume(data.get(key))):
                 cause = (_cause_required_when(rw)
                          if not f.get("required") and rw else "")
                 # #545 : la colonne était déjà nommée ; ce qui manquait, c'est sa

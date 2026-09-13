@@ -26,6 +26,7 @@ from .columns import (
     _merge_column,
     _refuse_mixed_layers,
     arbitrer_les_vides,
+    refuser_cles_internes,
     refuser_geste_sans_effet,
     sans_les_nulls_sans_effet,
 )
@@ -112,6 +113,7 @@ class EcritureMixin:
                 raise ValueError(fdn.refus(vises))
             self.off_notices.add(fdn.avertissement(vises))
         _refuse_dotted_names(user_data)
+        refuser_cles_internes(user_data)
         _refuse_mixed_layers(schema, user_data)
         # #586 : la couche d'origine d'un champ système ne s'écrit pas, création
         # comprise — jugée sur le payload seul (le readonly, lui, se juge contre la
@@ -225,6 +227,7 @@ class EcritureMixin:
             colonnes_en_place=lambda: set(
                 (db.datastore_get_row(ns_id, row_id) or {}).get("data") or {}))
         _refuse_dotted_names(user_data)
+        refuser_cles_internes(user_data)
         _refuse_mixed_layers(schema, user_data)
         sk = (dsv2.status_field(schema) or {}).get("key")
 
@@ -319,6 +322,7 @@ class EcritureMixin:
         # ligne poserait une couche sur une valeur qui tombe dans le même geste.
         user_data = ranger_les_couches(schema, user_data)
         _refuse_dotted_names(user_data)
+        refuser_cles_internes(user_data)
         _refuse_mixed_layers(schema, user_data)
         valide = dsv2.validation_active(schema) or dsv2.lifecycle_of(schema)
         reserves = bool(dsv2.readonly_fields(schema)

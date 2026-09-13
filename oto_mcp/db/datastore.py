@@ -311,11 +311,15 @@ def datastore_rows_missing_required(ns_id: int, champs: list) -> list[dict]:
     out: list[dict] = []
     with _connect() as conn:
         for champ in champs or []:
+            # oto#204 : une cellule au vide ASSUMÉ satisfait `required` — elle n'est pas
+            # manquante, et la compter annoncerait des lignes bloquées qui ne le sont pas.
+            from ..datastore.couches import VIDE_ASSUME
             q = _sql.SQL(
                 "SELECT COUNT(*) AS rows FROM datastore_rows "
-                "WHERE ns_id = %s AND ({v} IS NULL OR {v} = '')"
+                "WHERE ns_id = %s AND ({v} IS NULL OR {v} = '') "
+                "AND (data -> %s ->> %s) IS DISTINCT FROM 'true'"
             ).format(v=field_value_sql(champ))
-            r = conn.execute(q, (ns_id,)).fetchone()
+            r = conn.execute(q, (ns_id, champ, VIDE_ASSUME)).fetchone()
             if r and (r["rows"] or 0) > 0:
                 out.append({"field": champ, "rows": int(r["rows"])})
     return sorted(out, key=lambda d: d["rows"], reverse=True)

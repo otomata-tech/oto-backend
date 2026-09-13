@@ -425,9 +425,17 @@ _DATA_SCRIPT = """<script>
 </script>"""
 
 
+def _lisible(v: object) -> object:
+    """La cellule BRUTE sans ses clés internes (oto#204) : cette page lit la base, pas la
+    ligne servie, donc le marqueur du vide assumé y fuirait sans ce retrait."""
+    from .datastore.couches import sans_cles_internes
+    return sans_cles_internes(v)
+
+
 def _cell(v: object) -> str:
     """Représentation TEXTE d'une valeur de cellule (dict/list → JSON compact court).
     Sert au `title` de survol (contenu complet) et à la recherche/tri côté DOM."""
+    v = _lisible(v)
     if v is None:
         return ""
     if isinstance(v, (dict, list)):
@@ -443,6 +451,7 @@ def _cell_td(v: object) -> str:
     """Une cellule `<td>` : contenu rendu (structuré pour le JSON), enveloppé dans un
     `.cell` à hauteur bornée. `title` = valeur texte complète (survol). Les valeurs
     dict/list obtiennent la classe `rich` (colonne un peu plus large)."""
+    v = _lisible(v)
     inner = _cell_html(v)
     rich = isinstance(v, (dict, list)) and v not in (None, "", [], {})
     full = _cell(v)
@@ -455,6 +464,7 @@ def _cell_td(v: object) -> str:
 def _cell_html(v: object) -> str:
     """Rendu HTML d'une valeur : scalaire/URL en texte, dict en clé/valeur, liste de
     scalaires en puces, liste d'objets en blocs empilés. Tout est échappé."""
+    v = _lisible(v)
     if v is None or v == "":
         return ""
     if isinstance(v, dict):

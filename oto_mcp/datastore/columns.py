@@ -150,6 +150,35 @@ def _refuse_mixed_layers(schema: Optional[dict], user_data: Optional[dict]) -> N
         raise RowValidationError(errors)
 
 
+def refuser_cles_internes(user_data: Optional[dict]) -> None:
+    """Un client n'ÉCRIT jamais une clé interne (oto#204), à aucune profondeur.
+
+    Le marqueur du vide assumé est posé par la plateforme. L'accepter d'un client — par
+    un lot, où il se stockerait comme une donnée `json` — serait une émission que la
+    livraison en deux étapes interdit, et une porte pour satisfaire `required` sans le
+    geste `@empty`. Refusé en le nommant, avec le geste à employer."""
+    errors: list = []
+
+    def _scan(val: Any, chemin: str) -> None:
+        if isinstance(val, dict):
+            for cle, sous in val.items():
+                if cle in dsl.CLES_INTERNES:
+                    errors.append(
+                        f"`{chemin}` porte `{cle}` : c'est une clé interne, posée par la "
+                        f"plateforme, jamais écrite. Pour un vide délibéré, écris "
+                        f"`{dsl.VIDE_DELIBERE}`.")
+                else:
+                    _scan(sous, f"{chemin}.{cle}")
+        elif isinstance(val, list):
+            for i, item in enumerate(val):
+                _scan(item, f"{chemin}[{i}]")
+
+    for col, val in (user_data or {}).items():
+        _scan(val, str(col))
+    if errors:
+        raise RowValidationError(errors)
+
+
 # ── ce qu'une écriture VIDE (#407/#408/#409), et ce qui n'est PAS un vide (#608) ─
 #
 # Le pendant de la règle du merge. « Une écriture ne touche que ce qu'elle nomme »
@@ -898,6 +927,9 @@ def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
         # boucle porte la règle : elle ne porte que l'ancienne, intacte.
         for couche in dsv2.VALUE_BOUND_LAYERS:
             out.pop(couche, None)
+        # Le vide assumé (oto#204) décrit la valeur vide : une vraie valeur le fait tomber.
+        for cle in dsl.CLES_INTERNES:
+            out.pop(cle, None)
     out.update(pose)
     out = {k: v for k, v in out.items() if v is not None}
     if not out:

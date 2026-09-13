@@ -2272,3 +2272,43 @@ vide pour `null` (`lib/csv.ts`), et l'import écrit `""` là où il n'y avait ri
 tour CSV, une colonne déclarée jamais écrite revient donc `""` — elle existe alors en base, et la
 révision tourne. Banc : `test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour`.
 
+## Le vide ASSUMÉ — étape 1 : lu, validé, servi, jamais émis (oto#204, 13/09/2026)
+
+**Le besoin.** Un sous-champ requis doit pouvoir porter « aucune source ne donne ce titre »
+sans que l'agent invente la valeur. Une chaîne vide ordinaire et une cellule CSV vide ne le
+disent pas : elles restent refusées (arbitrage du plan, option 2 ; aucune migration des
+anciennes chaînes vides).
+
+**La représentation.** Un marqueur interne rangé dans l'enveloppe de la cellule :
+`{"valeur": "", "oto.vide_assume": true}` (`couches.VIDE_ASSUME`). Le POINT rend la collision
+impossible : un nom de colonne ou de sous-champ ne peut pas en porter. Pas de colonne, pas de
+DDL.
+
+**Livrée en deux étapes, parce que préprod et prod partagent la base.** L'étape 1 lit, valide
+et sert une cellule marquée, et n'en crée AUCUNE. L'étape 2 — l'émission par la résolution de
+`@empty`, y compris à la création — ne touche `main` qu'une fois l'étape 1 servie en production :
+une version qui ignore le marqueur ne doit jamais en lire un.
+
+Ce que fait l'étape 1 :
+
+- **servi `""`, jamais le marqueur** : MCP (`data_rows`, `data_claim_next`), REST `flat` et
+  `nested` — donc l'export CSV du tableau de bord, bâti sur elles —, et la page publique d'un
+  tableau partagé, qui lit la base brute (`share_ui._lisible`) ;
+- **`required` satisfait** par le marqueur, en colonne comme en sous-champ de `list.of` ;
+  `datastore_rows_missing_required` ne compte pas une cellule marquée ; le marqueur n'est pas un
+  « sous-champ inconnu » ;
+- **fusion** : renvoyer le `""` servi garde le marqueur ; écrire une vraie valeur le fait tomber,
+  comme `comment` et `link` ;
+- **refusé à l'écriture** : un client qui écrit la clé, à n'importe quelle profondeur, est refusé
+  en nommant `@empty` (`columns.refuser_cles_internes`, sur tous les points d'entrée).
+
+⚠️ **Limite : une liste SANS `of.key` se remplace en bloc** (#120). La réémettre telle que servie
+fait du `""` d'un sous-champ marqué un vide ordinaire : l'écriture est REFUSÉE (« champ requis
+manquant »), sans perte. Sur une liste à clé, la fusion élément par élément garde le marqueur.
+Pour réécrire un vide assumé dans une liste sans clé, le geste est `@empty`.
+
+⚠️ Un `null` écrit sur une cellule marquée ne l'efface pas : sa valeur est vide, et un `null` sans
+valeur en place n'est pas écrit (oto#182).
+
+Bancs : `tests/datastore/test_vide_assume_lecture_204.py` et `…_204_live.py`.
+

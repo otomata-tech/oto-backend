@@ -57,7 +57,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import _instruction, _modele
+from . import _cle_exigee, _instruction, _modele
 from .. import access, db, runner_models
 from ..tool_visibility import BETA_OPTION
 
@@ -338,6 +338,10 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 403, "not_from_a_run",
                 "un déroulé ne lance pas de passage — un agent qui se relance "
                 "lui-même dépense en boucle.")
+        # ⚠️ Avant d'armer, et avant la réparation de l'instruction : un refus
+        # n'écrit rien. Armé sans la clé exigée, le passage passerait `running` au
+        # premier travail — arrêté aussitôt à la réservation — puis au suivant.
+        _cle_exigee.exiger_a_la_pose(ctx.org_id)
         # ⚠️ Une campagne déclarée avant que la plateforme compose — ou par une
         # surface qui a laissé le champ vide — n'a pas d'instruction. L'armer
         # telle quelle la rend MUETTE au premier passage : le worker refuse de
@@ -559,6 +563,9 @@ CAPABILITIES += [
             DeclaredError(400, "model_not_served",
                           "`launch` d'un passage dont aucun worker vivant ne sert "
                           "la famille du modèle"),
+            DeclaredError(400, "model_key_required",
+                          "`launch` d'un passage dans une org qui doit tourner sur SA "
+                          "clé de modèle et ne l'a pas déposée"),
             DeclaredError(404, "fleet_not_found",
                           "flotte inconnue dans l'org du porteur"),
         ),

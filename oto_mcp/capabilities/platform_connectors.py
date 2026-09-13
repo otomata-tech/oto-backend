@@ -507,6 +507,21 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
         raise AuthzDenied(400, "invalid_cardinality",
                           f"`value` doit valoir {cardinality.MONO!r} ou "
                           f"{cardinality.MULTI!r} (reçu {inp.value!r}).")
+    from ._cle_exigee import CLE_REGLAGE, FAUX, VRAI
+    if inp.key == CLE_REGLAGE:
+        # Même refus NOMMÉ que la cardinalité, pour la même raison, et plus grave
+        # ici : `True` ou `oui` se liraient FAUX à la réservation, et une org qu'on
+        # croit contrainte continuerait de tourner sur la clé de la plateforme.
+        if inp.value not in (VRAI, FAUX):
+            raise AuthzDenied(400, "invalid_setting",
+                              f"`{CLE_REGLAGE}` vaut {VRAI!r} ou {FAUX!r} "
+                              f"(reçu {inp.value!r}).")
+        from .. import providers as _p
+        if getattr(_p.REGISTRY.get(inp.connector), "kind", None) != "credential":
+            raise AuthzDenied(400, "invalid_setting",
+                              f"`{CLE_REGLAGE}` ne se pose que sur un fournisseur de "
+                              f"MODÈLE (connecteur de type credential) — "
+                              f"`{inp.connector}` n'en est pas un.")
     store.set_connector_setting(scope_type, scope_id, inp.connector, inp.key,
                                 str(inp.value), set_by=ctx.sub)
     return {"op": "set", "changed": True, "active": _actives()}

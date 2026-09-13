@@ -260,6 +260,17 @@ def refuser_pour_identite(job_id: int, worker_sub: str, raison: str) -> bool:
     s'exécuter. `expired` dit « personne n'est venu le prendre », ce qui serait
     faux ici et enverrait chercher au mauvais endroit.
     """
+    return arreter_definitivement(job_id, worker_sub, raison)
+
+
+def arreter_definitivement(job_id: int, worker_sub: str, raison: str) -> bool:
+    """Le geste commun à TOUT refus qui ne se répare pas en réessayant : `failed`,
+    avec sa raison écrite, scopé au claimant — jamais un retour en file.
+
+    Extrait de `refuser_pour_identite` le 12/09/2026, quand un second motif est
+    apparu : un travail dont l'org n'a pas déposé la clé de modèle qu'on exige
+    (`capabilities/_cle_exigee.py`). Deux fonctions portant le même UPDATE auraient
+    fini par diverger ; deux NOMS sur un seul geste disent chacun leur motif."""
     with _connect() as conn:
         cur = conn.execute(
             """

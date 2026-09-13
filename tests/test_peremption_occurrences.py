@@ -21,6 +21,18 @@ from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import ResolvedCtx
 
 
+@pytest.fixture(autouse=True)
+def _cle_de_modele_non_exigee(monkeypatch):
+    """Ce fichier ne parle pas de la garde de clé de modèle — elle a son propre banc
+    (`test_cle_de_modele_exigee.py`). Le réglage est lu ÉTEINT, comme sur toute
+    plateforme qui ne l'a pas allumé : sans cette doublure, la lecture irait
+    chercher la vraie base et chaque banc tomberait sur une raison qui n'est pas
+    la sienne."""
+    monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting",
+                        lambda *a, **k: None)
+
+
+
 def _declencheur(**kw):
     base = {"id": 5, "org_id": 2, "cron": "5 6 * * *", "tz": "Europe/Paris",
             "next_due": "2026-08-14 04:05:00", "procedure": "veille",

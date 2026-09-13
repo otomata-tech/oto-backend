@@ -79,3 +79,20 @@ def clear_connector_setting(scope_type: str, scope_id: str, connector: str,
             "AND connector = %s AND key = %s",
             (scope_type, str(scope_id), connector, key))
     return (cur.rowcount or 0) > 0
+
+
+def get_connector_setting(scope_type: str, scope_id: str, connector: str,
+                          key: str) -> Optional[str]:
+    """La valeur d'UNE surcharge, ou None si elle n'est pas posée.
+
+    Lecteur FROID (cf. l'en-tête) : son premier appelant est la garde de clé des
+    travaux hébergés (`capabilities/_cle_exigee.py`), qui ne le consulte qu'au moment
+    où un worker a effectivement RÉSERVÉ un travail — jamais sur un sondage à vide,
+    jamais par appel d'outil. Quelques lectures par minute, hors de toute boucle
+    d'appel."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM connector_settings WHERE scope_type = %s AND "
+            "scope_id = %s AND connector = %s AND key = %s",
+            (scope_type, str(scope_id), connector, key)).fetchone()
+    return row["value"] if row else None

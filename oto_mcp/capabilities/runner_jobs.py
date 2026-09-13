@@ -25,7 +25,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import _modele
+from . import _cle_exigee, _modele
 from .. import db, org_store, runner_consigne, runner_models
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -176,7 +176,9 @@ class Job(BaseModel):
     delegation_refusee: Optional[str] = Field(
         None, description=(
             "WHY this job cannot run: the account that scheduled it no longer "
-            "exists, or no longer holds a role in that organisation. The job is "
+            "exists, or no longer holds a role in that organisation — or the "
+            "organisation must run its agents on its OWN model key and has not "
+            "deposited it (or this worker names no key provider). The job is "
             "already marked failed with this reason — do NOT retry it, and do not "
             "silently drop it either: report the reason. An agent whose identity "
             "is no longer valid stops SAYING SO."))
@@ -457,7 +459,7 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
     avant le 09/09/2026 — la garde lisait une MARQUE posée sur un compte, et
     le compte marqué était un compte personnel.
     """
-    if not depot or not job.get("org_id") or job.get("delegation_refusee"):
+    if not job.get("org_id") or job.get("delegation_refusee"):
         return job
     if not worker:
         # Silencieux POUR L'APPELANT — il reçoit son travail, sans clé : un refus
@@ -471,13 +473,32 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
         # écrivaient ~17 000 lignes par jour tant que la marque n'était pas
         # posée. Un journal qu'on cesse de lire ne protège plus rien, et c'est
         # la sonde qui aurait fabriqué son propre signal.
-        if _depot_pose(job["org_id"], depot):
+        if depot and _depot_pose(job["org_id"], depot):
             logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
                            "ce n'est pas un worker de plateforme",
                            depot, appelant, job["org_id"], job.get("id"))
         return job
+    # ⚠️ LA GARDE D'ARGENT (`_cle_exigee`), et seulement pour un WORKER : c'est lui
+    # qui retombe sur la clé de SON environnement — la nôtre — quand le travail
+    # n'en porte pas. Un membre qui réserve tourne sur ce qu'il a, pas sur nous.
+    if not depot:
+        # Un worker qui ne nomme AUCUN dépôt ne consommera jamais la clé de l'org,
+        # quoi qu'elle ait déposé : il tournera sur la sienne. Si l'org en exige
+        # une, ce worker ne peut PAS la servir — déposée ou non n'y change rien.
+        exigees = [f for f in _cle_exigee.fournisseurs_de_modele()
+                   if _cle_exigee.cle_exigee(job["org_id"], f)]
+        if exigees:
+            return _refuser_sans_cle(job, appelant, _SANS_DEPOT)
+        return job
     cle = _cle_de_modele(job["org_id"], depot)
     if not cle:
+        # ⚠️ Lu APRÈS la lecture du coffre, et non sur la seule présence du dépôt :
+        # un coffre qui ne rend pas la clé (`_cle_de_modele` rend None et le
+        # journalise) laisserait sinon partir un travail « avec clé » qui tournerait
+        # sur la nôtre. La lecture effective est la seule vérité ici.
+        if _cle_exigee.cle_exigee(job["org_id"], depot):
+            return _refuser_sans_cle(job, appelant,
+                                     _cle_exigee.raison_du_refus([depot]))
         return job
     # Trace de REMISE : qui, quelle org, quel dépôt, quel travail — jamais la clé.
     # Sans elle, une remise anormale ne laisse aucune trace : le seul endroit où
@@ -485,6 +506,33 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
     logger.info("clé de modèle `%s` remise à %s pour l'org %s (travail %s)",
                 depot, appelant, job["org_id"], job.get("id"))
     return {**job, "model_key": cle}
+
+
+_SANS_DEPOT = (
+    "ce worker ne nomme aucun fournisseur de clé : il tournerait sur la clé de son "
+    "propre environnement, et cette organisation exige que ses agents tournent sur "
+    "la sienne. Travail non exécuté — il doit être servi par un worker qui nomme son "
+    "dépôt (OTO_RUNNER_PROVIDER / OTO_RUNNER_OPENAI_BASE côté oto-runner).")
+
+
+def _refuser_sans_cle(job: dict, appelant: str, raison: str) -> dict:
+    """Arrête le travail pour de bon, raison écrite, et le rend au worker marqué
+    comme tel.
+
+    ⚠️ `delegation_refusee` est le champ que le worker DÉPLOYÉ sait déjà lire :
+    il n'exécute pas, ne conclut pas (le travail est déjà `failed`), et journalise
+    la raison. Un champ neuf aurait demandé un runner neuf pour que la garde morde ;
+    celui-ci la fait mordre dès le déploiement du backend. Le jeton délégué émis
+    juste avant (`_delegue`) est RETIRÉ de la réponse : un travail qui ne tournera
+    pas n'a rien à faire d'un pouvoir d'agir, même borné au bail.
+
+    ⚠️ Pas de retour en file : réessayer rejouerait le même verdict, et un travail
+    refusé en boucle ne dit rien de plus la troisième fois que la première.
+    """
+    db.arreter_definitivement(job["id"], appelant, raison)
+    logger.warning("travail %s (org %s) ARRÊTÉ sans clé de modèle : %s",
+                   job.get("id"), job.get("org_id"), raison)
+    return {**job, "delegation_refusee": raison, "delegated_token": None}
 
 
 _SANS_PORTEUR = (

@@ -19,7 +19,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
-from . import _instruction, _modele
+from . import _cle_exigee, _instruction, _modele
 from .. import db, runner_models, runner_tick, tool_registry
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -233,6 +233,10 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un runner armé ne sert pas forcément CE modèle : son travail attendrait
         # un worker de la bonne famille, puis périmerait.
         _modele.exige_servi(etat, famille)
+        # Un runner armé ne suffit pas quand l'org doit tourner sur SA clé : sans
+        # elle, le travail serait arrêté à la réservation. Le dire ICI, au moment où
+        # l'on peut encore la déposer, plutôt qu'à la première occurrence.
+        _cle_exigee.exiger_a_la_pose(ctx.org_id)
         # ⚠️ UN SEUL agent programmé par objet (tranché le 03/09). L'agent est une
         # PROPRIÉTÉ de la procédure, pas une collection : deux agents sur le même
         # objet, c'est deux réponses à « est-ce que ça tourne ? », et l'écran
@@ -310,6 +314,7 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # déclencheur mort deviendrait impossible à ranger.
     if champs.get("enabled") is True:
         etat = _exige_un_runner(ctx.org_id)
+        _cle_exigee.exiger_a_la_pose(ctx.org_id)
         # ⚠️ **RALLUMER REPREND LE RYTHME, ça ne rembobine pas** (arbitré le
         # 02/09, #826). Une échéance figée pendant l'extinction est restée dans
         # le PASSÉ : sans ce recalcul, le tick voyait le déclencheur dû à la
@@ -385,6 +390,10 @@ CAPABILITIES += [
                           "`model` d'une famille qu'aucun worker vivant ne sert : "
                           "`create`, `update enabled=true` et le changement de "
                           "modèle d'un déclencheur allumé sont refusés"),
+            DeclaredError(400, "model_key_required",
+                          "l'org doit faire tourner ses agents sur SA clé de modèle "
+                          "et ne l'a pas déposée : `create` et `update enabled=true` "
+                          "sont refusés"),
             DeclaredError(404, "trigger_not_found",
                           "déclencheur inconnu dans l'org du porteur"),
         ),

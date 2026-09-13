@@ -546,6 +546,62 @@ mais tourne sur le modèle de son environnement. Et la SOURCE de la clé (l'org 
 plateforme), qui conditionne toute refacturation des jetons, n'est toujours tracée
 nulle part — un lot à part.
 
+### Un agent tourne sur la clé de SON org — ou ne tourne pas (12/09/2026)
+
+La remise de clé (#874, ci-dessus) avait un envers que rien ne gardait : **une org
+sans dépôt ne se voyait rien refuser**. Le travail partait sans clé, et le worker
+retombait sur celle de SON environnement — la nôtre (oto-runner, `agent_llm.complete` :
+`api_key or resolve_key()`). « Chaque client paie avec sa propre clé » était donc une
+politique que le système n'appliquait pas, et le défaut est **silencieux par
+construction** : les runs aboutissent, seule la facture change de destinataire.
+
+La garde (`capabilities/_cle_exigee.py`) est un **réglage**, et il est **éteint par
+défaut**. Il vit dans `connector_settings`, que `oto_admin_connector_setting` écrit déjà :
+
+```
+connector=anthropic  key=runner.org_key_required  value=true             plateforme
+connector=anthropic  key=runner.org_key_required  value=false  org_id=N  exemption
+```
+
+L'org l'emporte sur la plateforme. **Par connecteur**, parce que la clé exigée est celle
+du fournisseur que le worker sert. La console refuse toute autre valeur que
+`true`/`false` (`True` se lirait FAUX à la réservation) et tout connecteur qui n'est pas
+un fournisseur de modèle.
+
+```
+à la POSE     create, update enabled=true, launch   → 400 model_key_required, rien n'est écrit
+à la RÉSERVATION (worker de plateforme)              → travail `failed` pour de bon, raison écrite,
+                                                       rendu en `delegation_refusee`, jeton retiré
+```
+
+⚠️ **La réservation est la garantie, la pose un confort.** Une clé retirée après la pose,
+ou un agent posé avant l'allumage, n'échappe pas au second verrou.
+
+⚠️ **La lecture effective fait foi, pas la présence du dépôt** : un coffre qui ne rend pas
+la clé laisserait sinon filer un travail « avec clé » qui tournerait sur la nôtre.
+
+⚠️ **Un worker qui ne nomme AUCUN dépôt ne sert pas une org qui exige sa clé** — il
+tournerait sur la sienne quoi que l'org ait déposé, donc la présence du dépôt n'y change
+rien.
+
+⚠️ **Seul un worker de plateforme est arrêté.** C'est lui qui porte notre clé ; un membre
+qui réserve tourne sur ce qu'il a.
+
+⚠️ **`delegation_refusee` est réemployé à dessein** : c'est le champ que le worker DÉPLOYÉ
+sait déjà lire (il n'exécute pas, ne conclut pas, journalise). La garde mord donc dès le
+déploiement du backend, sans runner neuf. Contrepartie : la phrase que le runner ajoute à
+ce refus parle d'identité ; la raison qu'il affiche, elle, dit la clé.
+
+**L'ordre qui ne casse personne, avant d'allumer** : déposer notre clé dans nos propres
+orgs, relever les orgs clientes qui ont des agents vivants sans clé, puis poser
+`value=true` sur la plateforme.
+
+**Ce qui n'est pas ici** : les clés de la PLATEFORME consommées comme crédits. La remise
+lit l'org seule (`credentials_store.get_credential("org", …)`), alors que le coffre a un
+barreau tenant (`credentials_store.TENANT`) — une clé posée sur un tenant n'atteindrait
+aucun run. Ce lot-là demandera un repli org → tenant à la remise, et l'estampille de la
+clé qui a payé chaque travail.
+
 ### Une occurrence que personne ne prend PÉRIME, et ça se dit (#814, 02/09/2026)
 
 Le refus de poser un déclencheur sans agent ferme la porte d'entrée. **Il ne fait

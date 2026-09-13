@@ -258,4 +258,5 @@ def test_la_metadonnee_dun_host_libre_est_inchangee(registre_avec_client, monkey
     from oto_mcp.auth.facade import as_metadata
     md = as_metadata("https://mcp.oto.cx")
     assert md["issuer"] == "https://mcp.oto.cx/"
-    assert md["authorization_endpoint"] == "https://auth.oto.ninja/oidc/auth"
+    # oto#202 : NOTRE annuaire autorise par la façade ; celui d'un tenant (plus haut), non.
+    assert md["authorization_endpoint"] == "https://mcp.oto.cx/oauth/authorize"

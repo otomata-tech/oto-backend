@@ -194,6 +194,52 @@ tiers** garde son propre annuaire : la variable ne le touche pas.
 ⚠️ Le cookie de session Logto est **par domaine** : à la bascule, une session ouverte sur
 `auth.oto.ninja` ne vaut pas sur `auth.oto.cx` — une reconnexion, une fois.
 
+## Le consentement que réclame le jeton de rafraîchissement (`/oauth/authorize`, oto#202, 13/09/2026)
+
+**Le symptôme.** Le connecteur Oto de Codex Apps redemandait l'authentification toutes les heures.
+
+**La cause, mesurée.** Logto (oidc-provider, `check_scope`) retire `offline_access` d'une demande
+d'autorisation qui ne porte pas `prompt=consent`, et ne délivre alors **aucun jeton de
+rafraîchissement**. Le connecteur Codex Apps envoie `offline_access` sans `prompt` : il ne recevait
+qu'un jeton d'accès de 3 600 s et refaisait une autorisation complète à chaque expiration. Les
+clients qui envoient `prompt=consent` avec `offline_access` n'étaient pas touchés. Tant que la
+métadonnée publiait le point d'autorisation de Logto en direct, Oto ne voyait pas passer la demande
+et ne pouvait rien y faire.
+
+**Le correctif.** Pour NOTRE annuaire, `authorization_endpoint` annonce la façade
+(`https://<host>/oauth/authorize`, même hôte que l'`issuer` et que `/oauth/register`). La route
+(`auth/authorize_consent.py`) répond 302 vers `<LOGTO_PUBLIC_ENDPOINT ou LOGTO_ENDPOINT>/oidc/auth`,
+recopie la requête **à l'octet près**, et n'ajoute `consent` à `prompt` que lorsque `scope` contient
+`offline_access` sans consentement explicite. L'`issuer`, le jeton, les clés et l'enregistrement ne
+changent pas.
+
+- **Laissés tels quels** : `prompt=none` (jamais combiné à `consent`, combinaison que Logto refuse),
+  un `scope` ou un `prompt` répété, `request`/`request_uri`. Logto les traite comme avant.
+- **Aucun droit ajouté** : sans `offline_access` (Mistral n'envoie aucun scope), la requête arrive
+  inchangée. claude.ai envoie déjà `prompt=login consent` : rien ne change pour lui.
+- **Aucune redirection ouverte** : la destination est résolue côté serveur ; la requête n'est
+  recopiée qu'après le `?` ; un caractère de contrôle est refusé (400 `invalid_request`) ; la
+  réponse n'est pas mise en cache.
+- **Hôtes d'un tenant : inchangés.** Leur métadonnée annonce toujours le point d'autorisation de
+  leur annuaire, et la route répond 404 sur leur hôte. Délivrer des jetons de rafraîchissement à
+  leurs utilisateurs est la décision du partenaire (même principe que le TTL du 10/09,
+  `/data/infra/docs/logto-oto-dedicated.md`).
+- **Effet visible** (lu dans le code de Logto 1.38, non mesuré) : pour une application première
+  partie comme `Claude (oto MCP)`, `prompt=consent` n'affiche **aucun écran** — `koaAutoConsent`
+  accorde le consentement côté serveur. Avec une session Logto ouverte, l'autorisation enchaîne
+  quatre redirections sans page visible ; sans session, la page de connexion, comme avant. Si
+  l'application devenait « tierce partie », l'écran de consentement apparaîtrait à chaque
+  autorisation.
+- ⚠️ **Prise en compte côté client** : la métadonnée d'AS n'est pas servie avec un `max-age` (le PRM,
+  lui, porte `max-age=3600`), mais un client peut garder celle lue à l'installation. Un connecteur
+  existant peut continuer d'appeler Logto directement — sans casse, sans correction — tant qu'il
+  n'est pas reconnecté ou recréé ; l'aide OpenAI conseille de recréer l'app pour relire la
+  métadonnée.
+- ⚠️ **Après correctif** : Codex reçoit des jetons de rafraîchissement **tournants** (client public).
+  Deux renouvellements concurrents avec le même jeton déclenchent « refresh token already used » et
+  la révocation de toute la délégation : à surveiller.
+- Banc : `tests/auth/test_authorize_consent.py`.
+
 ## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 
 But : un `org_admin` peut rendre le MFA **obligatoire** pour tous les membres de

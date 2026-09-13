@@ -40,9 +40,11 @@ def test_oidc_metadata_issuer_matches_and_has_required_fields():
     assert meta["userinfo_endpoint"] == "https://auth.oto.ninja/oidc/me"
 
 
-def test_oauth_endpoints_point_to_logto():
+def test_le_jeton_reste_chez_logto_lautorisation_passe_par_la_facade():
     meta = as_metadata("https://mcp.oto.ninja")
-    assert meta["authorization_endpoint"] == "https://auth.oto.ninja/oidc/auth"
+    # oto#202 : l'autorisation de NOTRE annuaire transite par la façade, qui y pose le
+    # consentement ; la redirection vers Logto est tenue par test_authorize_consent.py.
+    assert meta["authorization_endpoint"] == "https://mcp.oto.ninja/oauth/authorize"
     assert meta["token_endpoint"] == "https://auth.oto.ninja/oidc/token"
     # le registration_endpoint reste sur NOTRE domaine (façade DCR)
     assert meta["registration_endpoint"] == "https://mcp.oto.ninja/oauth/register"
@@ -57,7 +59,7 @@ def test_endpoints_annonces_suivent_le_domaine_public(monkeypatch):
     (vécu le 10/09/2026). L'`issuer`, lui, reste NOUS — le PRM en dépend."""
     monkeypatch.setenv("LOGTO_PUBLIC_ENDPOINT", "https://auth.oto.cx")
     meta = as_metadata("https://mcp.oto.cx")
-    assert meta["authorization_endpoint"] == "https://auth.oto.cx/oidc/auth"
+    assert meta["authorization_endpoint"] == "https://mcp.oto.cx/oauth/authorize"  # 302 vers auth.oto.cx
     assert meta["token_endpoint"] == "https://auth.oto.cx/oidc/token"
     assert meta["jwks_uri"] == "https://auth.oto.cx/oidc/jwks"
     assert meta["issuer"] == str(AnyHttpUrl("https://mcp.oto.cx"))

@@ -7,8 +7,8 @@ pour l'onboarding tiers).
 
 On agit en **façade de l'authorization server** : le PRM pointe les clients vers
 NOUS (cf. `_build_auth` → authorization_servers = OTO), on sert une métadonnée AS
-augmentée (un `registration_endpoint` à nous, tous les autres endpoints = ceux de
-Logto), et un endpoint DCR qui renvoie un client Logto **pré-créé partagé**. Les
+augmentée (un `registration_endpoint` à nous et, pour NOTRE annuaire, l'autorisation —
+oto#202, `authorize_consent` ; tous les autres endpoints = ceux de Logto), et un endpoint DCR qui renvoie un client Logto **pré-créé partagé**. Les
 tokens restent émis et signés par Logto ; on ne fait que les vérifier.
 
 Le redirect URI de claude.ai est fixe et déjà enregistré sur l'app Logto pré-créée
@@ -36,6 +36,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ..json_body import InvalidJsonBody, read_json_body
+from .authorize_consent import redirection
 
 _log = logging.getLogger("oto_mcp.oauth_facade")
 
@@ -65,7 +66,12 @@ def _logto_public_oidc() -> str:
 
 def as_metadata(public_url: str, logto: str = "") -> dict:
     """Métadonnée RFC 8414 servie sur NOTRE domaine : issuer = nous, le
-    `registration_endpoint` est à nous, tous les endpoints OAuth sont ceux de Logto.
+    `registration_endpoint` est à nous, le jeton et les clés sont ceux de Logto.
+
+    L'autorisation de NOTRE annuaire transite par la façade (oto#202) : elle y pose le
+    consentement sans lequel Logto ne délivre aucun jeton de rafraîchissement. Celle
+    d'un TENANT (`logto` fourni) reste chez lui : délivrer des jetons de
+    rafraîchissement à ses utilisateurs est sa décision, pas la nôtre.
 
     ⚠️ RFC 8414 §3.3 : l'`issuer` retourné DOIT être IDENTIQUE à l'identifiant d'AS
     que le client a annoncé dans le PRM (`authorization_servers`) et dans lequel il
@@ -74,10 +80,13 @@ def as_metadata(public_url: str, logto: str = "") -> dict:
     (`https://x` → `https://x/`). On normalise l'issuer par le MÊME `AnyHttpUrl` →
     égalité byte-à-byte garantie. Sans ça, un client strict (Mistral) rejette le
     discovery pour issuer mismatch (claude.ai, lui, tolère le slash). Vécu 2026-06-25."""
+    annuaire_tiers = bool(logto)
     logto = logto or _logto_public_oidc()
+    autorisation = (f"{logto}/auth" if annuaire_tiers
+                    else f"{str(public_url).rstrip('/')}/oauth/authorize")
     return {
         "issuer": str(AnyHttpUrl(public_url)),
-        "authorization_endpoint": f"{logto}/auth",
+        "authorization_endpoint": autorisation,
         "token_endpoint": f"{logto}/token",
         "jwks_uri": f"{logto}/jwks",
         "registration_endpoint": f"{public_url}/oauth/register",
@@ -98,9 +107,10 @@ def as_oidc_metadata(public_url: str, logto: str = "") -> dict:
     (`subject_types_supported`, `id_token_signing_alg_values_supported` = ES384, ce
     que Logto self-hosted signe) + `userinfo_endpoint`. Même issuer (normalisé) →
     pas de mismatch."""
+    base = as_metadata(public_url, logto)  # l'argument BRUT : il dit si l'annuaire est tiers
     logto = logto or _logto_public_oidc()
     return {
-        **as_metadata(public_url, logto),
+        **base,
         "userinfo_endpoint": f"{logto}/me",
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["ES384"],
@@ -604,6 +614,17 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
             return JSONResponse(as_metadata(f"https://{host}", entry.issuer))
         return JSONResponse(as_metadata(public_url))
 
+    async def authorize(request: Request):
+        # oto#202 — la destination est NOTRE annuaire, résolu ici, jamais la requête :
+        # elle n'est recopiée qu'après le `?` (cf. authorize_consent). Un host de
+        # tenant annonce son propre point d'autorisation : cette route n'y existe pas.
+        if tenant_for_host(_host_of(request)) is not None:
+            return JSONResponse({"error": "not_found", "error_description":
+                                 "l'autorisation de cet hôte se fait chez son annuaire"},
+                                status_code=404)
+        return redirection(_logto_public_oidc(),
+                           request.scope.get("query_string", b"").decode("latin-1"))
+
     async def oidc_meta(request: Request) -> JSONResponse:
         host = _host_of(request)
         entry = tenant_for_host(host)
@@ -733,4 +754,6 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         Route("/.well-known/oauth-protected-resource", prm, methods=["GET", "OPTIONS"]),
         Route("/.well-known/oauth-protected-resource/mcp", prm, methods=["GET", "OPTIONS"]),
         Route("/oauth/register", dcr, methods=["POST", "OPTIONS"]),
+        # oto#202 : l'autorisation annoncée par la métadonnée de NOTRE annuaire passe par ici.
+        Route("/oauth/authorize", authorize, methods=["GET"]),
     ]

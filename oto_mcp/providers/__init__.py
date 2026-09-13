@@ -173,6 +173,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "firecrawl",
     "tavily",
     "apify",
+    # Voisin d'`apify` : même régime (passerelle payante, clé plateforme sur grant).
+    "monid",
     # --- signaux de recrutement + campagnes sortantes — câblés 2026-08-17 ----
     "theirstack",
     "origami",

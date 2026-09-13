@@ -49,6 +49,10 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.127.0 = monid : le client de la passerelle payante Monid (trouver un endpoint,
+    # lire son schéma et son prix, lancer un run jamais re-tenté, relire, lister, arrêter,
+    # le solde du portefeuille), que sert `tools/monid.py`. Aucun extra — `requests`, le
+    # socle, lui suffit : la liste d'extras ne bouge pas.
     # v1.124.0 = hellostock : le client de l'API d'administration de la marketplace
     # HelloStock (lectures paginées, statut d'une demande, statut et mots-clés d'une
     # offre, envoi d'une demande par courriel), que servent `tools/hellostock*.py`.
@@ -273,7 +277,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.126.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.127.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

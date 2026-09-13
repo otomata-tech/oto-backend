@@ -368,7 +368,8 @@ def _row_not_found_hint(store, datastore: str, row_id: object) -> str:
 def _project_row(row: dict, fields: list[str]) -> dict:
     """Projette une row sur `fields` (sous-ensemble de colonnes, feedback #191) en
     gardant TOUJOURS `_id` — sans lui l'agent ne pourrait plus adresser/mettre à jour
-    la ligne. Les champs demandés absents de la row sont simplement omis."""
+    la ligne. Une colonne DÉCLARÉE est toujours dans la row servie (à `null` sans valeur,
+    oto#182) et sort donc à `null` ; un nom non déclaré et absent est omis."""
     if TOUT in fields:
         # `["*"]` demande TOUT — pas une colonne nommée `*`. Le jeton est légitime sur
         # `oto_doc` et sur le feed depuis toujours ; le refuser ici rendait `_id` seul à
@@ -1112,6 +1113,11 @@ def register(mcp: FastMCP) -> None:
         loses the whole row. This is the only read that feeds a WRITE loop, so it is
         the one where the shape matters.
 
+        Every column DECLARED in the schema is on the row, `null` when no value is in
+        place — `null` means "nothing here yet": find it if your task needs it, never
+        make it up. Sending such a `null` back changes nothing (a `null` only erases a
+        value that is in place); still, write only the fields you established.
+
         `filters` is the LIST form — `[{field, op, value}]`, ANDed with `filter`.
         Use it when one column needs TWO bounds: `filter` accepts a single
         operator per column, so a range (`score >= 10 AND score <= 20`) can only
@@ -1235,6 +1241,9 @@ def register(mcp: FastMCP) -> None:
         row), drastically shrinking the payload. Bump `limit` when projecting — narrow
         rows let you pull far more per page.
 
+        Every column DECLARED in the schema is on each row, `null` when no value is in
+        place ("nothing here yet", not "no such column") — including in a projection.
+
         Args:
             datastore: target datastore, or `slot:<name>` = the table bound under
                 that slot name by the ACTIVE project (actionable error if unbound).
@@ -1268,7 +1277,8 @@ def register(mcp: FastMCP) -> None:
             limit: page size (default 100, list mode only).
             cursor: opaque `next_cursor` from a previous call = fetch the NEXT page.
             fields: list of column names to keep (projection) — the returned rows
-                carry only these plus `_id`. Omit = full rows.
+                carry only these plus `_id`; a declared one with no value comes back
+                `null`. Omit = full rows.
             count_only: return only `{total}` (filtered row count), no rows.
             order_by: sort column — a user field, or a system one (`_created_at`,
                 `_updated_at`, `_id`). Omit = creation order. Sorting in SQL is how
@@ -1347,8 +1357,9 @@ def register(mcp: FastMCP) -> None:
             # silencieux que le filter (#163) : on le signale sans bloquer.
             # ⚠️ Le SCHÉMA d'abord, l'échantillon seulement à défaut : une colonne
             # déclarée mais renseignée sur 12 lignes de 500 est absente d'une page
-            # où aucune des 12 ne figure (dans une row JSONB, une colonne vide
-            # n'existe pas). L'annoncer « inconnue — vérifie l'orthographe » ne
+            # où aucune des 12 ne figure (dans une row JSONB stockée, une colonne vide
+            # n'existe pas ; la row servie la complète à `null` depuis oto#182, mais
+            # seulement pour le DÉCLARÉ — le reste de ce raisonnement tient). L'annoncer « inconnue — vérifie l'orthographe » ne
             # rate pas seulement sa cible, ça DÉSIGNE UNE CAUSE FAUSSE : l'appelant
             # relit son appel, qui est juste, et conclut que le champ n'existe pas.
             if fields and page["rows"]:

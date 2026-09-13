@@ -70,16 +70,19 @@ def test_la_creation_ECARTE_et_le_dit(live):
 def test_le_RESTE_de_la_ligne_est_ecrit(live):
     """La raison d'être de l'asymétrie : refuser la ligne entière ferait perdre les
     quatre-vingts autres colonnes pour une valeur d'énumération."""
-    st, ns, _ = _table()
+    st, ns, ns_id = _table()
     st.append_row(ns, {"siren": "1", "autre": "gardé", "passe": "A"})
 
     ligne = st.list_rows(ns)[0]
     assert ligne["autre"] == "gardé"
-    # ⚠️ ABSENTE, pas nulle — la clé n'est pas dans la ligne servie. Un lecteur qui
-    # fait `row["passe"]` lève, celui qui fait `row.get("passe")` reçoit `None` : deux
-    # comportements pour la même donnée manquante, et c'est une raison de plus pour
-    # que le relevé arrive, puisque la ligne seule ne dit rien de ce qui s'est passé.
-    assert "passe" not in ligne, "la valeur fautive n'entre pas"
+    # La valeur fautive n'entre pas : rien n'est STOCKÉ pour `passe`. Depuis oto#182, la
+    # ligne servie porte pourtant la colonne déclarée, à `null` — la clé présente dit
+    # « aucune valeur en place », plus « cette colonne n'existe pas ». La ligne seule ne
+    # dit toujours pas ce qui s'est passé : c'est pourquoi le relevé doit arriver.
+    assert ligne["passe"] is None, "la valeur fautive a été servie"
+    from oto_mcp import db
+    assert "passe" not in db.datastore_get_row(ns_id, ligne["_id"])["data"], (
+        "la valeur fautive est entrée en base")
 
 
 def test_la_modification_REFUSE(live):

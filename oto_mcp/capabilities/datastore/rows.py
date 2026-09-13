@@ -700,7 +700,8 @@ CAPABILITIES += [
         rest=RestBinding(verb="GET", path=_NS + "/rows"),
         description=("Page de lignes d’un tableau (tri, recherche, filtres serveur). "
                      "Pagination par `offset` + `limit` avec `total` du jeu filtré, "
-                     "pas de curseur — la fin se calcule. Couches à plat par défaut, "
+                     "pas de curseur — la fin se calcule. Toute colonne déclarée est "
+                     "servie, `null` sans valeur. Couches à plat par défaut, "
                      "`layers=nested` pour la forme d’écriture ; guide "
                      "`datastore-semantics`."),
     ),

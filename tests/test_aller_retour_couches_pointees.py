@@ -317,8 +317,11 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
                                                   "comment": "vérifié"}})
     lu = st.list_rows(ns)[0]
     entetes = [k for k in lu if not k.startswith("_")]
+    # Comme l'export du tableau de bord (`lib/csv.ts`) : une valeur `null` part en cellule
+    # VIDE. Un CSV ne sait pas dire `null`.
     csv = (",".join(entetes) + "\n"
-           + ",".join(str(lu[k]) for k in entetes) + "\n").encode("utf-8")
+           + ",".join("" if lu[k] is None else str(lu[k]) for k in entetes)
+           + "\n").encode("utf-8")
     assert b"site_web.comment" in csv, "l'export porte bien la colonne pointée"
 
     res = ut.materialize("sub-points",
@@ -326,9 +329,18 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
                           "format": "csv", "key": "siren"}, csv, None)
 
     assert "entetes_traduits" not in res, "rien à traduire : c'était une annotation"
-    assert _sans_horodatage(st.list_rows(ns)[0]) == _sans_horodatage(lu), (
-        "la ligne est identique après le tour complet")
-    assert _colonnes(ns_id) == {"siren", "site_web"}
+    # ⚠️ LIMITE ACTÉE (oto#182, 13/09/2026) : la lecture sert à `null` une colonne déclarée
+    # jamais écrite, l'export en fait une cellule vide, et l'import écrit `""` là où il
+    # n'y avait rien (#608). Après un tour CSV, ces colonnes-là reviennent donc `""` — et
+    # la révision tourne, puisqu'une valeur a été écrite. Tout le reste est identique.
+    jamais_ecrites = {k for k in entetes if lu[k] is None}
+    relu, attendu = _sans_horodatage(st.list_rows(ns)[0]), _sans_horodatage(lu)
+    attendu.update({k: "" for k in jamais_ecrites})
+    if jamais_ecrites:
+        relu.pop("_revision"), attendu.pop("_revision")
+    assert relu == attendu, "la ligne est identique après le tour complet"
+    # Même limite : la colonne jamais écrite existe désormais en base, à `""`.
+    assert _colonnes(ns_id) == {"siren", "site_web"} | jamais_ecrites
 
 
 def test_un_CSV_a_en_tetes_ordinaires_est_traduit_ET_ANNONCE(table):

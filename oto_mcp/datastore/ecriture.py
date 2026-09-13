@@ -27,6 +27,7 @@ from .columns import (
     _refuse_mixed_layers,
     arbitrer_les_vides,
     refuser_geste_sans_effet,
+    sans_les_nulls_sans_effet,
 )
 from .controles import _relever_origine_module
 from .errors import DatastoreNotFound, RowNotFound, RowValidationError
@@ -94,6 +95,11 @@ class EcritureMixin:
             schema, user_data,
             colonnes_en_place=lambda: self._colonnes_de_la_ligne_visee(
                 ns_id, schema, user_data))
+        # oto#182 : un `null` qui n'efface rien (l'écho d'une ligne lue) ne s'écrit pas,
+        # et ne compte donc pas pour le préavis ci-dessous.
+        user_data = sans_les_nulls_sans_effet(
+            user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data),
+            schema)
         # oto#140 : `null` efface ENCORE, mais il est en préavis. Dit à l'instant où
         # l'ancien comportement joue — le seul moment actionnable, et le lecteur est
         # celui qui peut agir. ⚠️ Refusé à la date, JAMAIS interprété en silence : un

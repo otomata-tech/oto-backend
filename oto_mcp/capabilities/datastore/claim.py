@@ -86,7 +86,8 @@ class ClaimResult(BaseModel):
     # sans lui, il ne pouvait adresser que par nom. `null` seulement si le tableau
     # n'a pas été résolu (chemin d'erreur).
     ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
-    # La ligne réservée, colonnes libres du tableau + son bail (`_claimed_by`,
+    # La ligne réservée — toute colonne déclarée y figure, `null` sans valeur (oto#182) —,
+    # colonnes libres du tableau + son bail (`_claimed_by`,
     # `_claimed_until`, `_claimed_run`) + ce que la file sait d'elle (`_claims`, et
     # `_abandon` si le plafond de reprises l'en a sortie). `null` sur `claim_next`
     # quand il n'y a plus rien à réserver.
@@ -196,7 +197,8 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # `data_claim_next` tient déjà la face agent
         rest=RestBinding(verb="POST", path="/api/datastores/{datastore}/claim_next"),
-        description="Réserve atomiquement la prochaine ligne libre d'un tableau (file de travail).",
+        description=("Réserve atomiquement la prochaine ligne libre d'un tableau (file de travail). "
+                     "Toute colonne déclarée est servie, `null` sans valeur."),
     ),
     Capability(
         key="me.datastore.claim_row",

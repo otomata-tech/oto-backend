@@ -379,6 +379,13 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                 plat = {n: val for n, val in plat.items()
                         if n != prefixe and not n.startswith(prefixe + ".")}
             out.update(plat)
+        # oto#182 — toute colonne DÉCLARÉE est servie, à `null` quand aucune valeur n'est
+        # en place : une clé absente se lisait « cette colonne n'existe pas » et l'agent
+        # fabriquait la valeur. Rien n'est écrit ; une valeur présente (même `""`, `null`
+        # ou une couche seule) n'est pas touchée ; une colonne masquée reste absente.
+        for k in dsv2.cles_declarees(schema):
+            if k not in data and k not in out and k not in cachees and not k.startswith("_"):
+                out[k] = None
         # ⚠️ Un bail EXPIRÉ n'est pas une réservation — mesuré le 01/09/2026 sur un
         # fichier de production : **495 lignes sur 8 910 portaient `_claimed_by`, et
         # les 495 étaient expirées**, la plus ancienne depuis dix-huit jours, au nom

@@ -144,12 +144,29 @@ def top_level_keys(schema: Optional[dict]) -> set:
     existe-t-elle ? ».
 
     Le schéma est la seule source de vérité là-dessus, et c'est pour ça que ce
-    helper existe : dans une row JSONB, **une colonne vide n'existe pas** (il n'y a
-    pas de case vide, il n'y a pas de case). Une colonne déclarée mais renseignée
+    helper existe : dans une row JSONB STOCKÉE, **une colonne vide n'existe pas** (il
+    n'y a pas de case vide, il n'y a pas de case). La ligne SERVIE, elle, la complète
+    à `null` depuis oto#182 (`cles_declarees`). Une colonne déclarée mais renseignée
     sur 12 lignes de 500 est donc ABSENTE d'une page où aucune des 12 ne figure —
     et un contrôle qui échantillonne les lignes rendues la déclare inconnue.
     """
     return {str(f["key"]) for f in _fields(schema) if f.get("key")}
+
+
+def cles_declarees(schema: Optional[dict]) -> list[str]:
+    """Les colonnes DÉCLARÉES au premier niveau, dans l'ORDRE du schéma, sans doublon.
+
+    Sert la complétion de la ligne servie (oto#182) : toute colonne déclarée y figure,
+    à `null` quand aucune valeur n'est en place. L'ordre compte — `top_level_keys` rend
+    un ensemble, dont l'itération changerait d'un processus à l'autre et avec elle
+    l'ordre des clés servies.
+    """
+    vues: dict[str, None] = {}
+    for f in _fields(schema):
+        cle = f.get("key")
+        if isinstance(cle, str) and cle:
+            vues.setdefault(cle, None)
+    return list(vues)
 
 
 def top_level_options(schema: Optional[dict]) -> dict:

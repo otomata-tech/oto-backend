@@ -16,7 +16,7 @@ les deux découlent, non.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import couches as dsl
 from . import schema as dsv2
@@ -240,6 +240,58 @@ def _sans_la_valeur(neuf: Any) -> Any:
         return None
     reste = {k: v for k, v in neuf.items() if k != dsv2.VALUE_LAYER}
     return reste or None
+
+
+def _porte_un_null(neuf: Any) -> bool:
+    """L'écriture de CETTE colonne pose-t-elle `null` ? Même lecture que
+    `fin_du_null.nulls_nommes` : un scalaire `null`, ou une `valeur` nulle en couches."""
+    return neuf is None or (isinstance(neuf, dict) and dsv2.VALUE_LAYER in neuf
+                            and neuf[dsv2.VALUE_LAYER] is None)
+
+
+def sans_les_nulls_sans_effet(user_data: Optional[dict],
+                              en_place: Callable[[], Optional[dict]],
+                              schema: Optional[dict]) -> Optional[dict]:
+    """Retire d'une écriture les `null` qui n'effacent RIEN (oto#182).
+
+    La lecture sert à `null` toute colonne déclarée sans valeur en place. Un agent qui
+    relit une ligne puis la réémet renvoie donc ces `null` : écrits, ils ajoutaient une
+    clé, faisaient tourner la révision et déclenchaient le préavis de `null` (le refus à
+    partir du 01/12) — sur un geste qui ne change rien. Mesuré par la suite complète :
+    cinq bancs d'aller-retour rougissaient.
+
+    Un `null` sur une colonne SANS valeur en place (absente, ou déjà vide) n'est donc pas
+    écrit. Sur une valeur EN PLACE, il reste l'effacement nommé — préavis, puis refus —,
+    inchangé : ce filtre ne décide rien de ce qu'efface un `null`, il retire seulement
+    ceux qui n'ont rien à effacer.
+
+    ⚠️ **Colonnes DÉCLARÉES seulement.** La lecture ne sert à `null` que le déclaré : un
+    écho ne peut viser que lui. Une colonne HORS schéma écrite à `null` garde son
+    comportement — elle naît en base et le relevé la nomme, ou le tableau la refuse —,
+    sinon une faute de frappe écrite à `null` disparaîtrait sans refus ni relevé
+    (`test_hors_schema_tous_chemins.py`, rouge sur la première version de ce filtre).
+
+    `en_place` rend les données de la ligne visée (`{}` pour une création) et n'est
+    appelé QUE si l'écriture porte un `null` : le chemin nominal ne paie aucune lecture.
+    Une écriture en couches garde ce qui accompagne sa valeur nulle
+    (`{"valeur": null, "comment": …}` → `{"comment": …}`).
+    """
+    declarees = set(dsv2.cles_declarees(schema))
+    candidats = [cle for cle, neuf in (user_data or {}).items()
+                 if cle in declarees and cle not in _META_COLS and _porte_un_null(neuf)]
+    if not candidats:
+        return user_data
+    donnees = en_place() or {}
+    out = dict(user_data)
+    for cle in candidats:
+        if not dsv2._is_empty(dsv2.unwrap(donnees.get(cle))):
+            continue
+        reste = _sans_la_valeur(out[cle])
+        if reste is None:
+            del out[cle]
+        else:
+            out[cle] = reste
+    return out
 
 
 # ── ce qu'une écriture de LISTE fait tomber d'un cran plus bas (oto#120) ────────

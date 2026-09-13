@@ -37,6 +37,7 @@ from .columns import (
     _refuse_mixed_layers,
     arbitrer_les_vides,
     refuser_geste_sans_effet,
+    sans_les_nulls_sans_effet,
 )
 from .controles import _relever_origine_module
 from .donnees_d_origine import poser_les_deux_versions
@@ -102,6 +103,9 @@ class EcritureParIdMixin:
             # aller-retour de plus. C'est la porte du round-trip #390 — relire une
             # fiche et la repousser — donc celle où l'aller-retour DOIT se refermer.
             corps = ranger_les_couches(schema, patch, colonnes_en_place=lambda: set(data))
+            # oto#182 : un `null` qui n'efface rien ne s'écrit pas — jugé ICI sous le
+            # verrou, contre la ligne exacte, c'est la porte de la réémission.
+            corps = sans_les_nulls_sans_effet(corps, lambda: data, schema)
             # oto#140 : `null` efface ENCORE, mais il est en préavis. Refusé à la date,
             # JAMAIS interprété en silence (cf. `append_row`).
             vises = fdn.nulls_nommes(corps)

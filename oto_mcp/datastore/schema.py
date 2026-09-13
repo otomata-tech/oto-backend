@@ -89,7 +89,7 @@ from .motifs import (
 )
 from .declaration import (
     SCALAR_TYPES, COMPOSITE_TYPES, _fields, declares_field, _walk_fields, max_length_of,
-    pattern_of, top_level_bounds, top_level_keys, top_level_options, order_spec,
+    pattern_of, top_level_bounds, top_level_keys, cles_declarees, top_level_options, order_spec,
     champ_declare,
     status_field, DISPLAY_TITLE, title_field, validation_active,
     key_required_of, readonly_fields, system_origin_fields, top_level_patterns,

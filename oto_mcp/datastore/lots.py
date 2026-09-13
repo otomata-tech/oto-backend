@@ -17,7 +17,7 @@ from psycopg.errors import UniqueViolation
 from .. import db
 from . import acces_agent as aga
 from . import schema as dsv2
-from .columns import _META_COLS
+from .columns import _META_COLS, sans_les_nulls_sans_effet
 from .controles import _relever_origine_module
 from .errors import BusinessKeyRequired, RowLocked, RowValidationError
 from .outils import _new_id, _refus_de_creation
@@ -101,6 +101,10 @@ class LotsMixin:
                     schema, user_data,
                     colonnes_en_place=lambda: self._colonnes_de_la_ligne_visee(
                         ns_id, schema, user_data, key))
+                # oto#182 : un `null` qui n'efface rien ne s'écrit pas (cf. `append_row`).
+                user_data = sans_les_nulls_sans_effet(
+                    user_data, lambda: self._donnees_de_la_ligne_visee(
+                        ns_id, schema, user_data, key), schema)
                 # oto#140 : préavis de `null`, sur le chemin des imports aussi —
                 # union sur le lot, donc une phrase et non cinq cents.
                 vises = fdn.nulls_nommes(user_data)

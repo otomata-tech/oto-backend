@@ -39,18 +39,29 @@ class ControlesMixin:
         aller-retour SQL de plus. Deux clés sont interrogées, la clé explicite du lot
         puis la clé DÉCLARÉE, parce qu'un lot peut dédoubler sur une autre que celle
         qui porte l'index."""
+        return set(self._donnees_de_la_ligne_visee(ns_id, schema, user_data, key))
+
+    def _donnees_de_la_ligne_visee(self, ns_id: int, schema: Optional[dict],
+                                   user_data: dict,
+                                   key: Optional[str] = None) -> dict:
+        """Les DONNÉES de la ligne que cette écriture vise par sa clé métier, ou `{}`.
+
+        Sert les colonnes en place (ci-dessus) et le filtre des `null` sans effet
+        (oto#182), qui doit savoir si une colonne porte une valeur. Même recherche, clé
+        DÉBALLÉE comme dans les lots : une clé annotée désigne la même ligne qu'une clé
+        nue. Appelée paresseusement par ses deux lecteurs."""
         vues = []
         for k in (key, self._declared_key_of(schema)):
             if not k or k in vues:
                 continue
             vues.append(k)
-            v = user_data.get(k)
+            v = dsv2.unwrap(user_data.get(k))
             if v is None or str(v) == "":
                 continue
             rid = db.datastore_find_row_id_by_key(ns_id, k, v)
             if rid is not None:
-                return set((db.datastore_get_row(ns_id, rid) or {}).get("data") or {})
-        return set()
+                return (db.datastore_get_row(ns_id, rid) or {}).get("data") or {}
+        return {}
 
     # --- forçage d'une colonne verrouillée (#658) -----------------------------
 

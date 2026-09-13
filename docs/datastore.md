@@ -2226,3 +2226,49 @@ sélectionne `rev` »).
 **Hors lot** : l'identité du titulaire d'un bail sur REST. La face REST ne pose aucun run,
 le titulaire ne s'y reconnaît donc pas (`POST …/claim` puis `PATCH` par le même compte =
 `409 row_locked`) ; `claimed_by` n'est pas une identité (cf. `_lease_guard`).
+
+## Toute colonne déclarée est servie, à `null` sans valeur (oto#182, 13/09/2026)
+
+**Le constat.** Dans une ligne JSONB stockée, une colonne jamais écrite n'existe pas : elle était
+donc ABSENTE du document servi. Pour un agent, ce sont deux lignes différentes — clé absente, il
+fabrique une valeur (un domaine composé depuis la raison sociale) ; `null`, il la cherche.
+
+**Le contrat.** `data_rows`, `data_claim_next` et leurs faces REST (`GET …/rows`, `…/rows/{id}`,
+`POST …/claim_next`) servent chaque colonne DÉCLARÉE au premier niveau du schéma, à `null` quand
+aucune valeur n'est en place. La complétion vit dans `DatastorePg._row_to_dict`, le point par
+lequel passe toute ligne servie par le store — les réponses d'écriture et `claim_row`/`queue` la
+reçoivent aussi.
+
+- **Rien n'est écrit** : le stockage ne change pas, une valeur présente (`""`, `null`, une couche
+  seule) est servie telle quelle.
+- **Masquage agent** : une colonne `agent_access: "none"` reste absente.
+- **Ordre** : celui du schéma (`declaration.cles_declarees`).
+- **Pas en profondeur** : un sous-champ jamais écrit d'un élément de liste reste absent ; une
+  colonne `list`/`object` jamais écrite vaut `null`, pas `[]` ni `{}`.
+- **Projection** : `fields` garde une colonne déclarée demandée, donc à `null` ; un nom non
+  déclaré et absent reste omis.
+- **Hors lot** : `oto_node_rows` (sert `""`) et la page publique.
+
+⚠️ **`null` veut dire « aucune valeur en place », pas « jamais écrit ».** Un `null` écrit avant
+la fin du `null` et une case ne portant qu'une couche se lisent pareil.
+
+**Un `null` qui n'efface rien ne s'écrit pas** (`columns.sans_les_nulls_sans_effet`, validé par
+Alexis le 13/09). Sans ce filtre, relire une ligne complétée puis la réémettre — le geste d'un agent
+qui lit, modifie, réécrit — ajoutait une clé, faisait tourner la révision et déclenchait le préavis
+de `null` (le refus à partir du 01/12/2026) ; cinq bancs d'aller-retour rougissaient. Désormais, sur
+les trois chemins d'écriture (création et fusion, mise à jour par id, lots) :
+
+- un `null` sur une colonne DÉCLARÉE SANS valeur en place (absente, `null` stocké, `""`, couche
+  seule) n'est pas écrit et ne compte pas pour le préavis ; une colonne HORS schéma écrite à `null`
+  garde son comportement (elle naît, le relevé la nomme, ou le tableau la refuse) — un écho ne peut
+  viser que le déclaré, et filtrer l'inconnu ferait taire une faute de frappe ; en couches, ce qui l'accompagne reste
+  (`{"valeur": null, "comment": …}` → `{"comment": …}`) ;
+- un `null` sur une valeur EN PLACE reste l'effacement nommé, préavis puis refus, inchangé ;
+- la ligne en place n'est lue que si l'écriture porte un `null` (sous le verrou pour la mise à jour
+  par id ; par la clé métier, avant la fusion, pour la création et les lots).
+
+⚠️ **Limite actée : un CSV ne sait pas dire `null`.** L'export du tableau de bord écrit une cellule
+vide pour `null` (`lib/csv.ts`), et l'import écrit `""` là où il n'y avait rien (#608). Après un
+tour CSV, une colonne déclarée jamais écrite revient donc `""` — elle existe alors en base, et la
+révision tourne. Banc : `test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour`.
+

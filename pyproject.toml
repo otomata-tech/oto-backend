@@ -39,7 +39,7 @@ dependencies = [
     # jour où le fournisseur d'identité publie une clé EdDSA. Ce plancher ne touche
     # PAS `mcp` (non déclarée, tirée par fastmcp en `>=1.24,<2.0`) : aucun des
     # comportements de transport de mcp 1.30.0 n'arrive avec lui.
-    "fastmcp[apps]>=3.4.7,<3.5",
+    "fastmcp[apps]>=3.4.7,<4.1",
     # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
     # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →

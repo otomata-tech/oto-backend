@@ -89,7 +89,7 @@ _DECLARATIONS: tuple[str, ...] = (
     "folk",
     "aiark",
     "unipile",
-    # Les six CONNEXIONS du compte unipile ci-dessus (split 2026-08-28) : chacune
+    # Les CONNEXIONS du compte unipile ci-dessus (split 2026-08-28) : chacune
     # est un connecteur à part entière (activation, ACL, sélection, visibilité,
     # connexion hébergée en propre) qui DÉLÈGUE son credential à `unipile`. Elles
     # se déclarent juste après lui : l'ordre gouverne l'affichage, et une carte de
@@ -99,8 +99,6 @@ _DECLARATIONS: tuple[str, ...] = (
     "whatsapp",
     "telegram",
     "instagram",
-    "messenger",
-    "twitter",
     "topograph",
     "resend",
     "routine",

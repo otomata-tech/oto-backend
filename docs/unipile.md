@@ -21,8 +21,14 @@ n'appartient qu'à UN connecteur, et que chaque canal en devient un :
 | `whatsapp` | `whatsapp` | `WHATSAPP` | WhatsApp | `whatsapp` |
 | `telegram` | `telegram` | `TELEGRAM` | Telegram | `telegram` |
 | `instagram` | `instagram` | `INSTAGRAM` | Instagram | `instagram` |
-| `messenger` | `messenger` | `MESSENGER` | Messenger | `messenger` |
-| `twitter` | `twitter` | `TWITTER` | X (Twitter) | `twitter` |
+
+> **X et Messenger retirés (2026-09-15).** L'API Unipile v2 ne sert ni `TWITTER` ni
+> `MESSENGER` : ils sont absents de l'enum `providers` de createAuthLink v2 (la v1 les
+> accepte, mais c'est une autre instance Unipile, autre clé et autres comptes). Leurs
+> cartes écrivaient un pending puis échouaient au lien ; aucun siège n'a jamais existé
+> sur la clé plateforme. Connecteurs, outils (`twitter_chat`, `messenger_chat`), flux et
+> guides partent ; les lignes de base (activation, sélection) restent, inertes, comme au
+> retrait de `checkcrm`. Les sections plus bas qui les nomment sont l'histoire du split.
 
 **Pourquoi.** Un connecteur est l'unité de gouvernance : activation, ACL d'org,
 sélection de membre, visibilité des tools, carte. Avec sept namespaces sous un seul

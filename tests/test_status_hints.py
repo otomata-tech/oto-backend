@@ -92,7 +92,7 @@ def _st6(subscribed=True, linkedin=False, whatsapp=False):
 
 def test_chaque_canal_a_son_hook_et_le_compte_garde_le_sien():
     for canal in ("linkedin_unipile", "whatsapp", "telegram",
-                  "instagram", "messenger", "twitter"):
+                  "instagram"):
         assert status_hints.has_hook(canal), canal
     assert status_hints.has_hook("unipile")
 

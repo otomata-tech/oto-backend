@@ -223,8 +223,7 @@ def test_missing_required_arg_names_the_op_and_the_arg(client, tool, op, missing
 
 # --- canaux non-LinkedIn (même connecteur, même factory) -----------------------
 
-@pytest.mark.parametrize("channel", ["whatsapp", "telegram", "instagram",
-                                     "messenger", "twitter"])
+@pytest.mark.parametrize("channel", ["whatsapp", "telegram", "instagram"])
 @pytest.mark.parametrize("op,kwargs,method", [
     ("list", {}, "list_chats"),
     ("read", {"chat_id": "c1"}, "list_messages"),

@@ -410,14 +410,16 @@ def _sync_feed(client, store, sub: str, provider: str = "LINKEDIN") -> int:
 
 # Canaux Unipile : clé front → provider DB. Source unique de la liste de canaux
 # (consommée par status_for ; calquée côté front dans ConnectorHostedWidget).
+# X (TWITTER) et Messenger (MESSENGER) retirés le 2026-09-15 : l'API Unipile v2 ne
+# les sert pas (absents de createAuthLink), leur connexion ne pouvait pas aboutir.
 UNIPILE_CHANNELS = {
     "linkedin": "LINKEDIN", "whatsapp": "WHATSAPP", "telegram": "TELEGRAM",
-    "instagram": "INSTAGRAM", "messenger": "MESSENGER", "twitter": "TWITTER",
+    "instagram": "INSTAGRAM",
 }
 
 
 def _channels_from(accts_by_provider: dict) -> dict:
-    """Construit le dict des 6 canaux à partir des comptes indexés par provider DB."""
+    """Construit le dict des canaux à partir des comptes indexés par provider DB."""
     def _ch(provider: str) -> dict:
         a = accts_by_provider.get(provider)
         return {
@@ -870,7 +872,7 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     """Enregistre L'outil de messagerie Unipile d'un canal : `{c}_chat(op=…)`,
     résolu sur le compte <channel> de l'user (no-fallback). La messagerie Unipile
     (`/chats`) est channel-agnostic → un seul code pour tous les canaux. Appelé par
-    tools/{whatsapp,telegram,instagram,messenger,twitter}.py.
+    tools/{whatsapp,telegram,instagram}.py.
 
     Le canal reste dans le NOM (c'est ce qui le rend trouvable par l'agent) ; le
     verbe passe en `op` — même forme que `linkedin_unipile_chat`, qui est la même
@@ -961,7 +963,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             channel: canal à connecter — linkedin (défaut), whatsapp, telegram,
-                instagram, messenger, twitter.
+                instagram.
             force: connecter malgré un compte déjà lié à ce canal ailleurs (#172).
             premium: produit LinkedIn premium à activer — "recruiter" ou
                 "sales_navigator" (exclusifs, un seul par compte). À ne demander que
@@ -1692,8 +1694,7 @@ connector_flow.declare(
     params=(connector_flow.FlowParam(
         name="channel", label="Canal à connecter", default="linkedin",
         options=(("linkedin", "LinkedIn"), ("whatsapp", "WhatsApp"),
-                 ("telegram", "Telegram"), ("instagram", "Instagram"),
-                 ("messenger", "Messenger"), ("twitter", "X (Twitter)"))),),
+                 ("telegram", "Telegram"), ("instagram", "Instagram"))),),
 )
 
 # ⚠️ **Un flux par CANAL, sans paramètre de canal** (split du 2026-08-28). Avant, un

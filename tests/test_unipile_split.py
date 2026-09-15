@@ -28,8 +28,7 @@ from oto_mcp.connectors import flow as connector_flow
 from oto_mcp.tool_visibility import namespace_of
 from oto_mcp.tools import register_all
 
-CANAUX = ("linkedin_unipile", "whatsapp", "telegram",
-          "instagram", "messenger", "twitter")
+CANAUX = ("linkedin_unipile", "whatsapp", "telegram", "instagram")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -280,7 +279,7 @@ def test_laxe_account_survit_sur_les_six_canaux():
     les six canaux d'un coup."""
     from oto_mcp import call_axes
     for tool in ("whatsapp_chat", "telegram_chat", "instagram_chat",
-                 "messenger_chat", "twitter_chat", "linkedin_unipile_chat"):
+                 "linkedin_unipile_chat"):
         assert call_axes.accepts_account_axis(tool), tool
         assert call_axes._has_account_axis(tool), tool
 
@@ -429,3 +428,21 @@ def test_un_projet_relie_a_une_instance_resout_aussi(monkeypatch, canal):
     assert rc.secret == "SECRET"
     assert lus == ["unipile"], "le coffre doit être lu sous le COMPTE, pas sous le canal"
     assert gardes, "l'accès à l'instance bindée reste gardé pour l'APPELANT"
+
+
+# --- X et Messenger : retirés (2026-09-15) ------------------------------------
+
+def test_x_et_messenger_ne_sont_plus_des_connecteurs():
+    """L'API Unipile v2 ne sert ni TWITTER ni MESSENGER (absents de l'enum `providers`
+    de createAuthLink v2) : leurs cartes écrivaient un pending puis échouaient au lien.
+    Une carte qui ne peut pas se connecter ment — on les retire de partout où un canal
+    se liste, pas seulement du registre."""
+    from oto_mcp import unipile_connect
+    from oto_mcp.tools.unipile import UNIPILE_CHANNELS
+    for nom in ("twitter", "messenger"):
+        assert nom not in providers.REGISTRY, nom
+        assert providers.connector_for_hosted_channel(nom.upper()) is None, nom
+        assert nom not in UNIPILE_CHANNELS, nom
+        assert nom.upper() not in unipile_connect.CHANNELS, nom
+    options = dict(connector_flow.describe("unipile")["params"][0]["options"])
+    assert "twitter" not in options and "messenger" not in options

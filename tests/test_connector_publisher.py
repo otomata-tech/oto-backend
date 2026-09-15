@@ -126,8 +126,6 @@ def test_les_cas_connus_du_2026_09_02():
         "whatsapp": "Unipile",
         "telegram": "Unipile",
         "instagram": "Unipile",
-        "messenger": "Unipile",
-        "twitter": "Unipile",
         # Légitimement nôtres : on les a écrits ET c'est nous qui recevons l'appel.
         # Ils DÉCLARENT « Otomata » au lieu d'y retomber — la valeur est la même, la
         # différence est qu'elle est désormais un choix relisible.

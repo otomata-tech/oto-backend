@@ -162,6 +162,5 @@ def test_channel_reaches_the_client(monkeypatch):
     compte était routé comme du LinkedIn — WhatsApp rendait un 501 sur `op="list"`
     alors que son compte était connecté."""
     _wire_basic(monkeypatch)
-    for chan in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER",
-                 "TWITTER"):
+    for chan in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM"):
         assert unipile_tool.unipile_client(chan).provider == chan

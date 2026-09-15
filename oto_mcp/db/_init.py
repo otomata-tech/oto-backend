@@ -1353,8 +1353,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `split_fanout_pending`, qui explique aussi pourquoi la prod est marquée
     # sans réécriture).
     from ..connectors import activation as _conn_act_split
-    _CANAUX_UNIPILE = ("linkedin_unipile", "whatsapp", "telegram",
-                       "instagram", "messenger", "twitter")
+    # X et Messenger retirés le 2026-09-15 (absents de l'API Unipile v2). La prod porte
+    # déjà la sentinelle : raccourcir la liste ne rejoue rien, une base neuve ne
+    # reçoit simplement plus de lignes pour deux connecteurs qui n'existent pas.
+    _CANAUX_UNIPILE = ("linkedin_unipile", "whatsapp", "telegram", "instagram")
     if _conn_sel.split_fanout_pending(conn, _CANAUX_UNIPILE):
         _conn_act_split.fanout_availability(conn, "unipile", _CANAUX_UNIPILE)
         _conn_act_split.fanout_acl(conn, "unipile", _CANAUX_UNIPILE)

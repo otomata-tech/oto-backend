@@ -35,8 +35,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 (le compte unipile et ses six canaux) ont la couche **3**.
 
 > **⚠️ Un connecteur peut ne PAS porter sa propre clé** (`Connector.credential_of`,
-> split unipile du 2026-08-28). Les six canaux hébergés — `linkedin_unipile`,
-> `whatsapp`, `telegram`, `instagram`, `messenger`, `twitter` — ont leur **couche 1**
+> split unipile du 2026-08-28). Les canaux hébergés — `linkedin_unipile`,
+> `whatsapp`, `telegram`, `instagram` — ont leur **couche 1**
 > en propre (activation, ACL, sélection : c'est tout l'intérêt du split) mais
 > empruntent les **couches 2 et 3** au compte `unipile`. Deux questions cohabitent
 > donc, et tout site doit choisir laquelle il pose :

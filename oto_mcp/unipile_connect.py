@@ -23,7 +23,8 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-CHANNELS = ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM", "MESSENGER", "TWITTER")
+# Ni X (TWITTER) ni Messenger (MESSENGER) : l'API Unipile v2 ne les sert pas (2026-09-15).
+CHANNELS = ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM")
 # Produits LinkedIn premium activables à la connexion (`config.linkedin.products`,
 # oto-core ≥1.30). EXCLUSIFS : un compte n'en active qu'UN (Unipile renvoie 400 sinon).
 LINKEDIN_PREMIUM = ("recruiter", "sales_navigator")

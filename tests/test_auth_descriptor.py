@@ -54,7 +54,7 @@ def test_hosted_le_compte_et_ses_six_canaux():
     Depuis le split du 2026-08-28 : le compte `unipile` (code de production, flux
     multi-canal inchangé) ET ses six canaux, un flux hébergé par carte."""
     hosted = {c.name for c in _REGISTRY_LIST if c.auth_method == "hosted"}
-    assert hosted == {"unipile", "linkedin_unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"}, hosted
+    assert hosted == {"unipile", "linkedin_unipile", "whatsapp", "telegram", "instagram"}, hosted
 
 
 def test_multi_account_providers():

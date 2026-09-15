@@ -32,7 +32,7 @@ from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 
-Channel = Literal["linkedin", "whatsapp", "telegram", "instagram", "messenger", "twitter"]
+Channel = Literal["linkedin", "whatsapp", "telegram", "instagram"]
 
 
 def _provider_for(channel: str) -> str:

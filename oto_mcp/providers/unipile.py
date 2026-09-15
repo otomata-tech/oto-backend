@@ -26,9 +26,9 @@ from ._model import _c
 # `unipile_connect_start` (multi-canal : linkedin|whatsapp|… — il n'appartient à aucune
 # capacité, sa place cible est `oto_connector op=connect`, cf. oto-backend#279).
 CONNECTOR = _c(
-    # ⚠️ Un seul namespace depuis le split du 2026-08-28 : les six canaux
-    # (`linkedin_unipile`, `whatsapp`, `telegram`, `instagram`, `messenger`,
-    # `twitter`) sont devenus des connecteurs à part entière — chacun sa carte, son
+    # ⚠️ Un seul namespace depuis le split du 2026-08-28 : les canaux
+    # (`linkedin_unipile`, `whatsapp`, `telegram`, `instagram` — X et Messenger
+    # retirés le 2026-09-15, l'API Unipile v2 ne les sert pas) sont devenus des connecteurs à part entière — chacun sa carte, son
     # activation, son ACL, sa sélection — et un namespace n'appartient qu'à UN
     # connecteur. C'est la SEULE ligne de cette déclaration que le split touche :
     # tout le reste (clé, hosted-auth, flux multi-canal, label, modules) est le
@@ -47,10 +47,10 @@ CONNECTOR = _c(
     # Depuis le split du 2026-08-28, les six capacités promises ici SONT six autres
     # connecteurs, et celui-ci n'expose plus qu'un outil : `unipile_connect_start`.
     # L'aide continuait de promettre les six (corrigée le 2026-09-02).
-    help="raccorder ton compte LinkedIn, WhatsApp, Telegram, Instagram, Messenger "
-         "ou X — le préalable aux connecteurs de ces réseaux",
+    help="raccorder ton compte LinkedIn, WhatsApp, Telegram ou Instagram — le "
+         "préalable aux connecteurs de ces réseaux",
     href="https://www.unipile.com",
-    modules=("unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter"),
+    modules=("unipile", "whatsapp", "telegram", "instagram"),
 )
 
 CATEGORY = "Prospection"
@@ -58,8 +58,8 @@ PUBLISHER = "Unipile"
 LOGO_DOMAIN = "unipile.com"
 DESCRIPTION = (
     "L'abonnement Unipile qui ouvre la messagerie hébergée : chaque membre y "
-    "raccorde ensuite son propre compte LinkedIn, WhatsApp, Telegram, "
-    "Instagram, Messenger ou X — chacun avec sa propre fiche, son activation "
+    "raccorde ensuite son propre compte LinkedIn, WhatsApp, Telegram ou "
+    "Instagram — chacun avec sa propre fiche, son activation "
     "et ses droits. Cette fiche-ci gère la clé d'abonnement, pas une "
     "conversation."
 )

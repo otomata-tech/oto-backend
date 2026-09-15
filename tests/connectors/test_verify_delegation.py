@@ -1,6 +1,6 @@
 """Six trous d'oto#69 qui n'en étaient pas un : la délégation de credential.
 
-`linkedin_unipile`, `whatsapp`, `telegram`, `instagram`, `messenger`, `twitter`
+`linkedin_unipile`, `whatsapp`, `telegram`, `instagram`
 n'ont pas de credential à eux — ils empruntent celui d'`unipile`
 (`Connector.credential_of`, cf. `access/cascade.py::walk_cascade`, qui normalise
 DÉJÀ pour la résolution). `unipile` a une sonde `verify` depuis #133. Sans lecture
@@ -19,7 +19,7 @@ from oto_mcp import providers
 from oto_mcp.connectors import verify as connector_verify
 from oto_mcp.capabilities.connectors import verify as cv
 
-CANAUX = ("linkedin_unipile", "whatsapp", "telegram", "instagram", "messenger", "twitter")
+CANAUX = ("linkedin_unipile", "whatsapp", "telegram", "instagram")
 
 
 @pytest.fixture(autouse=True)

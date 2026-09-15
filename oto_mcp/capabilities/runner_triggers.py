@@ -21,7 +21,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel
 
 from . import _cle_exigee, _instruction, _modele
-from .. import (access, db, runner_hook, runner_models, runner_tick,
+from .. import (access, db, runner_hook, runner_models, runner_tick, tool_alias,
                 tool_registry, tool_visibility)
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -348,9 +348,26 @@ def _avec_hook(org_id: int, t: dict) -> dict:
             "last_delivery": str(compte["derniere"]) if compte["derniere"] else None}
 
 
+def _noms_canoniques(ctx: ResolvedCtx, inp: TriggerInput) -> TriggerInput:
+    """La déclaration aux noms d'outils CANONIQUES, avant tout le reste (`tool_alias`).
+
+    L'agent d'un tenant passe `tools` et écrit `input` avec les noms qu'il voit
+    (`acme_doc`) ; le worker est servi en canonique et confronte l'allowlist EXACTEMENT.
+    Stockée telle quelle, elle ne désignait plus rien et l'agent programmé tournait sans
+    outils. Une allowlist DÉDUITE de la procédure est déjà canonique : la procédure
+    s'écrit ainsi (`orgs.instructions`)."""
+    maj: dict[str, Any] = {}
+    if inp.tools is not None:
+        maj["tools"] = tool_alias.canonical_names(inp.tools, ctx.sub)
+    if inp.input:
+        maj["input"] = tool_alias.canonical_prose(inp.input, ctx.sub)
+    return inp.model_copy(update=maj) if maj else inp
+
+
 def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     if not ctx.org_id:
         raise AuthzDenied(400, "org_required", "les déclencheurs sont org-scopés")
+    inp = _noms_canoniques(ctx, inp)
 
     if inp.op == "create":
         webhook = (inp.kind or "schedule") == "webhook"

@@ -112,8 +112,12 @@ class _IatGatedVerifier(JWTVerifier):
         if not row or row.get("scopes") is not None:
             return None
         sub = row["sub"]
+        # `token_kind` (`user` / `delegation`) voyage avec le jeton : c'est ce qui dit, au
+        # bord du protocole, qu'un appel est un travail du runner et non une personne
+        # (`tool_alias.prefix_for` lui sert les noms canoniques de son allowlist).
         return AccessToken(token=token, client_id="oto_api_token", scopes=[],
-                           subject=sub, claims={"sub": sub})
+                           subject=sub, claims={"sub": sub,
+                                                "token_kind": row.get("token_kind")})
 
     def _route(self, token) -> tuple:
         """`(slug du tenant, verifier)` pour ce jeton — sélection par le claim `iss`,

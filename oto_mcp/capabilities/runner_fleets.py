@@ -59,7 +59,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from . import _cle_exigee, _descriptions_outils, _instruction, _lignes_reservables, _modele
-from .. import access, db, output_projection, runner_models
+from .. import access, db, output_projection, runner_models, tool_alias
 from ..tool_visibility import BETA_OPTION
 
 logger = logging.getLogger(__name__)
@@ -270,9 +270,30 @@ def _cartes(fleets: list[dict]) -> tuple[list[dict], Optional[dict]]:
         always=("id",), hint=_INDICE_CARTE)
 
 
+def _noms_canoniques(ctx: ResolvedCtx, inp: FleetInput) -> FleetInput:
+    """La déclaration aux noms d'outils CANONIQUES, avant tout le reste (`tool_alias`).
+
+    L'agent d'un tenant déclare ce qu'il voit — `acme_doc`. Le worker, lui, est servi
+    en canonique et confronte l'allowlist EXACTEMENT : stockée telle quelle, elle ne
+    désignait plus aucun outil, et le passage tournait sans. La consigne (`input`) et
+    les outils servis entiers (`descriptions_outils.entieres`) suivent la même règle —
+    ceux-ci doivent rester un sous-ensemble de `tools`, donc dans la même langue."""
+    maj: dict[str, Any] = {}
+    if inp.tools is not None:
+        maj["tools"] = tool_alias.canonical_names(inp.tools, ctx.sub)
+    if inp.input:
+        maj["input"] = tool_alias.canonical_prose(inp.input, ctx.sub)
+    reglage = inp.descriptions_outils
+    if isinstance(reglage, dict) and isinstance(reglage.get("entieres"), list):
+        maj["descriptions_outils"] = {
+            **reglage, "entieres": tool_alias.canonical_names(reglage["entieres"], ctx.sub)}
+    return inp.model_copy(update=maj) if maj else inp
+
+
 def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
     if not ctx.org_id:
         raise AuthzDenied(400, "org_required", "les flottes sont org-scopées")
+    inp = _noms_canoniques(ctx, inp)
     # ⚠️ Bêta = une GARDE, pas une visibilité. `session_visibility` masque
     # `oto_fleet` de la LISTE d'outils des comptes sans l'option ; mais la même
     # capacité est servie en REST (`/api/me/runner/fleets`) et joignable par

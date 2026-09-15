@@ -33,7 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
                 procedure_diagram, procedure_retrait, roles,
-                slots as slots_mod, tool_registry)
+                slots as slots_mod, tool_alias, tool_registry)
 from .._authz import (ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
                       ORG_MEMBER_OF, SUB_ONLY, capacite_autorise)
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -1093,6 +1093,11 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
     body_md = (body_md or "").strip()
     if not body_md:
         raise AuthzDenied(400, "body_md_required", "body_md vide (ou fournis `from_version`).")
+    # Les outils cités au CANONIQUE avant d'écrire : l'agent d'un tenant les voit sous
+    # le nom de son produit (`acme_doc`) et les recopie ainsi. Stockés tels quels, les
+    # `<tool:…>` ne résoudraient plus — et l'allowlist qu'un déclencheur en déduit
+    # serait vide pour le worker, servi en canonique.
+    body_md = tool_alias.canonical_prose(body_md, ctx.sub)
     # Le corps AVANT écriture — pour dire ce que cette version RETIRE (oto#61), et pour
     # rendre au corps le dessin que `op=get` lui a remplacé par un marqueur (face MCP).
     # ⚠️ Best-effort : un corps précédent illisible ne refuse rien. Lu AVANT la borne de

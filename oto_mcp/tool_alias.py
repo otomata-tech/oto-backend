@@ -132,10 +132,51 @@ def _tenant_entry(sub: Optional[str]):
         return None
 
 
-def prefix_for(sub: Optional[str]) -> str:
-    """Le préfixe d'outils du tenant de ce compte, ou `""`."""
+def _sert_un_worker() -> bool:
+    """La requête MCP en cours porte-t-elle un jeton de DÉLÉGATION — un travail du runner ?
+
+    Le renommage est un AFFICHAGE : il sert le produit d'une personne, dans son client.
+    Un travail du runner n'est personne. C'est notre worker, qui agit au nom du
+    demandeur (`runner_jobs._delegue`) avec un jeton `kind='delegation'`, et tout ce
+    qu'il confronte est écrit en canonique : l'allowlist du travail (`payload.tools`,
+    EXACTE et fail-closed côté worker), l'outil de lecture de la procédure
+    (`oto_procedure`), les `<tool:…>` dont l'allowlist d'un déclencheur se déduit. Lui
+    servir `acme_doc` vidait donc son allowlist : `tools/list` ne portait plus aucun
+    nom qu'elle cite, et l'agent tournait sans un seul outil — sans erreur, puisque le
+    worker filtre en silence.
+
+    Lu sur le jeton de la requête (claim `token_kind`, posé par
+    `server._verify_api_token`) : aucun accès DB, appelable depuis la boucle. Hors
+    requête MCP (REST, boot, tests) ⟹ False, le comportement d'avant.
+    """
+    try:
+        from fastmcp.server.dependencies import get_access_token  # type: ignore
+        token = get_access_token()
+    # noqa: SILENT — hors contexte de requête MCP : pas de jeton, donc pas de worker
+    except Exception:  # noqa: BLE001
+        return False
+    claims = getattr(token, "claims", None) or {}
+    return claims.get("token_kind") == "delegation"
+
+
+def declared_prefix_for(sub: Optional[str]) -> str:
+    """Le préfixe DÉCLARÉ par le tenant de ce compte, ou `""` — quel que soit le client
+    qui appelle. C'est celui des ÉCRITURES (`canonical_prose`, `canonical_names`) : un
+    texte qui cite `acme_doc` revient au canonique, qui que soit l'auteur."""
     entry = _tenant_entry(sub)
     return normalize_prefix(getattr(entry, "tool_prefix", "")) if entry else ""
+
+
+def prefix_for(sub: Optional[str]) -> str:
+    """Le préfixe d'outils SERVI à ce compte, ou `""`.
+
+    `""` aussi pour un travail du runner (`_sert_un_worker`), même sous un compte de
+    tenant : ses noms sont les canoniques. Le jeton n'est lu que si un préfixe est
+    déclaré — un compte de la plateforme ne paie rien de plus."""
+    prefix = declared_prefix_for(sub)
+    if prefix and _sert_un_worker():
+        return ""
+    return prefix
 
 
 def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
@@ -150,7 +191,9 @@ def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
     rien déclaré garde l'annonce d'avant, et ça se voit — pas de patron, pas de nom.
     """
     entry = _tenant_entry(sub)
-    if entry is None:
+    # Un travail du runner n'a pas de produit à afficher : il garde l'annonce d'avant,
+    # comme ses noms d'outils (`prefix_for`).
+    if entry is None or _sert_un_worker():
         return ("", "")
     return (normalize_prefix(getattr(entry, "tool_prefix", "")),
             str(getattr(entry, "name", "") or ""))
@@ -172,6 +215,68 @@ def canonical(name: str, prefix: str) -> str:
     if not prefix or not name or not name.startswith(prefix + "_"):
         return name
     return PRIMARY_PREFIX + name[len(prefix):]
+
+
+def canonical_names(names, sub: Optional[str]):
+    """Une liste de NOMS d'outils déclarée par un appelant (`tools` d'une flotte, d'un
+    déclencheur, d'un travail), ramenée au canonique AVANT d'être stockée.
+
+    Un agent dans le client du produit ne voit que `acme_*` : c'est ce qu'il recopie
+    dans `tools=[…]`. Stockée telle quelle, l'allowlist ne désignait plus rien pour le
+    worker, servi en canonique (`prefix_for`) — l'agent déclaré ne recevait aucun
+    outil. Le préfixe est celui du tenant DÉCLARANT ; tout autre nom passe inchangé (un
+    connecteur ne peut pas porter ce namespace, cf. `normalize_prefix`). Ce qui n'est
+    pas une liste passe aussi : la valider reste le travail de l'appelant.
+    """
+    prefix = declared_prefix_for(sub)
+    if not prefix or not isinstance(names, list):
+        return names
+    return [canonical(n, prefix) if isinstance(n, str) else n for n in names]
+
+
+def canonical_prose(text: str, sub: Optional[str]) -> str:
+    """Les noms d'outils cités dans un texte ÉCRIT, ramenés au canonique — l'inverse de
+    `rewrite_prose`, pour ce qu'on STOCKE (procédure, guide, consigne d'un agent).
+
+    Ce qui se lit est traduit au nom du produit ; ce qui s'écrit doit donc revenir.
+    Sans ça, un agent qui lit un guide servi en `acme_doc` et le réenregistre écrit
+    `acme_doc` en base — et tout ce qui lit la base en canonique décroche : l'allowlist
+    DÉDUITE d'une procédure (`<tool:acme_doc>` ne résout rien), le worker qui l'exécute,
+    les puces d'outils du dashboard, et le retour arrière (préfixe retiré, le texte cite
+    un outil qui n'existe pas).
+
+    ⚠️ Plus étroit que l'aller, et c'est voulu : `oto_<x>` est un espace de noms RÉSERVÉ,
+    `acme_<x>` non — un tableau `acme_leads`, un slug, un mot du client peuvent s'écrire
+    ainsi. Seul un token dont le canonique EST un outil du registre boot, ou en préfixe un
+    (`acme_use_*`, `acme_admin`), est ramené — exactement les tokens que l'aller traduit
+    (`test_tout_token_oto_de_la_prose_servie_est_bien_un_outil`), donc relire puis
+    réenregistrer rend le texte d'origine. Registre non réchauffé ⟹ rien n'est touché.
+
+    Fail-open : une écriture ne devient jamais une erreur de traduction.
+    """
+    prefix = declared_prefix_for(sub)
+    if not prefix or not text or (prefix + "_") not in text:
+        return text
+    try:
+        from . import tool_registry
+        noms = tool_registry.boot_tool_names()
+        if not noms:
+            logger.warning("registre d'outils non réchauffé : noms `%s_…` écrits tels "
+                           "quels", prefix)
+            return text
+        connus = set(noms)
+
+        def _canonique(m):
+            nom = f"{PRIMARY_PREFIX}_{m.group(1)}"
+            if nom in connus or any(n.startswith(nom) for n in noms):
+                return nom
+            return m.group(0)
+
+        return re.sub(r"\b" + re.escape(prefix) + r"_([a-z][a-z0-9_]*)\b", _canonique, text)
+    except Exception:  # noqa: BLE001 — une écriture ne casse pas sur un nom d'outil
+        logger.warning("canonicalisation des noms d'outils échouée (fail-open)",
+                       exc_info=True)
+        return text
 
 
 def public_namespace(namespace: str, prefix: str) -> str:

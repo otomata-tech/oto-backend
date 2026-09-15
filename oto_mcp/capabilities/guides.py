@@ -285,7 +285,9 @@ def _get(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
 
 
 def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
-    body = inp.body_md or ""
+    # Le symétrique de `_get` : le corps est LU aux noms du produit, il s'ÉCRIT au
+    # canonique. Sans ça, relire un guide puis le réenregistrer stockait `acme_doc`.
+    body = tool_alias.canonical_prose(inp.body_md or "", ctx.sub)
     poids = len(body.encode())
     if poids > _MAX_BODY_BYTES:
         # La borne était publiée depuis le 29/08 (`maxLength` ci-dessus) ; il manquait la

@@ -26,7 +26,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import _cle_exigee, _lignes_reservables, _modele, _ordre_de_service
-from .. import db, runner_consigne, runner_models
+from .. import db, runner_consigne, runner_models, tool_alias
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -798,6 +798,10 @@ def _charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
         return None
     charge = {k: v for k, v in (inp.payload or {}).items()
               if k not in ("model", "model_family")}
+    # L'allowlist au canonique : c'est elle que le worker confronte, EXACTEMENT, au
+    # `tools/list` qu'on lui sert en canonique (`tool_alias.prefix_for`).
+    if "tools" in charge:
+        charge["tools"] = tool_alias.canonical_names(charge["tools"], ctx.sub)
     if inp.kind == "continue":
         charge.update(db.modele_du_run(inp.run_id, ctx.org_id))
     else:

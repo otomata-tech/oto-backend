@@ -26,7 +26,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import (deprecations, guide_store, org_store, procedure_diagram, roles)
+from ... import (deprecations, guide_store, org_store, procedure_diagram, roles,
+                 tool_alias)
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, capacite_autorise
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
@@ -325,13 +326,15 @@ def _set(ctx: ResolvedCtx, inp: InstrSetInput) -> dict:
             400, "reserved_slug",
             f"`{org_store.BASE_SLUG}` est le readme d'équipe, pas une procédure — "
             "écris-le via la surface guide (`oto_guide` scope='group', delivery='init').")
+    # Outils cités au canonique, comme au grain org (`orgs.instructions`).
+    body_md = tool_alias.canonical_prose(inp.body_md, ctx.sub)
     version = org_store.set_instruction(
-        "group", inp.group_id, slug, inp.body_md, title=inp.title,
+        "group", inp.group_id, slug, body_md, title=inp.title,
         description=inp.description, set_by=ctx.sub)
     # Une procédure d'équipe est une procédure : même exigence de schéma qu'au grain org
     # (front tiers, issue #108), même régime — un warning, jamais un refus.
     return {"group_id": inp.group_id, "slug": slug, "version": version, "set": True,
-            **procedure_diagram.diagram_check(inp.body_md)}
+            **procedure_diagram.diagram_check(body_md)}
 
 
 def _delete(ctx: ResolvedCtx, inp: InstrSlugInput) -> dict:

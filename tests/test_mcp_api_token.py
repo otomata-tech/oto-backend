@@ -41,6 +41,16 @@ def test_jeton_non_porte_resout_son_sub(monkeypatch):
     assert tok.subject == "u-42"
 
 
+@pytest.mark.parametrize("kind", ["user", "delegation"])
+def test_le_genre_du_jeton_voyage_avec_lui(kind, monkeypatch):
+    """`token_kind` est ce qui dit, au bord du protocole, qu'un appel est un travail du
+    runner : sans lui, le renommage par tenant servait `acme_*` au worker, dont
+    l'allowlist est canonique — et l'agent tournait sans outils."""
+    tok = _verify("oto_abc", {"sub": "acme:u-1", "scopes": None, "token_kind": kind},
+                  monkeypatch)
+    assert tok.claims["token_kind"] == kind
+
+
 def test_jeton_porte_refuse(monkeypatch):
     assert _verify("oto_abc", {"sub": "u-42", "scopes": {"namespaces": ["crm"]}},
                    monkeypatch) is None

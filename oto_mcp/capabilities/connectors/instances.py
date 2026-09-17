@@ -67,17 +67,37 @@ logger = logging.getLogger(__name__)
 # Rang de proximité (§C) : la cascade relue comme niveaux, portée par le tri.
 _LEVEL_RANK = {"member": 0, "group": 1, "org": 2, "tenant": 3, "platform": 4}
 
+# Description partagée de l'échelle à cinq crans (oto-backend#775) : `tenant` est
+# le compte de plus haut niveau isolé CHEZ LE FOURNISSEUR — donc AU-DESSUS de
+# l'organisation qui lit, pas en dessous. Ne concerne que ceux qui accèdent à oto
+# via un partenaire qui le sert sous sa marque (« hébergeur » côté doc publique,
+# même notion) : ce partenaire peut poser des clés partagées pour toutes les
+# organisations qu'il héberge. Rien à renommer (cf. rectificatif du 06/09/2026 sur
+# l'issue) — seule la définition manquait.
+_DOC_LEVEL = (
+    "Rang de proximité dans la cascade de résolution : `member` (la clé de "
+    "l'appelant lui-même) < `group` (son équipe) < `org` (son organisation) < "
+    "`tenant` < `platform` (clé oto par défaut). `tenant` désigne le compte de "
+    "PLUS HAUT NIVEAU, isolé chez le fournisseur — au-dessus de l'organisation "
+    "qui lit, pas en dessous : ne concerne que les comptes qui accèdent à oto "
+    "via un partenaire qui le sert sous sa propre marque (appelé « hébergeur » "
+    "dans la doc publique, même notion), et qui peut poser des clés partagées "
+    "pour toutes les organisations qu'il héberge."
+)
+
 
 class ListInstancesInput(BaseModel):
     connector: Optional[str] = None      # filtre par type de connecteur
-    level: Optional[Literal["member", "group", "org", "tenant", "platform"]] = None
+    level: Optional[Literal["member", "group", "org", "tenant", "platform"]] = (
+        Field(default=None, description=_DOC_LEVEL))
 
 
 class InstanceOwner(BaseModel):
     """Propriétaire d'une instance. `type='user'` porte un sub, `group`/`org` un
     entier, `platform` **aucun id** (une clé plateforme est identifiée par son
     label, ADR 0044 §F) — d'où trois champs optionnels plutôt qu'un couple figé."""
-    type: Literal["user", "group", "org", "tenant", "platform"]
+    type: Literal["user", "group", "org", "tenant", "platform"] = Field(
+        description=_DOC_LEVEL)
     # sub (user) ou id de groupe/org — ENTIER quand il vient du contexte, CHAÎNE
     # quand il est reconstruit depuis une ligne partagée (`entity_id`). Absent en
     # platform.
@@ -117,7 +137,8 @@ class ConnectorInstance(BaseModel):
     # Rang de PROXIMITÉ dans la cascade, qui porte le tri (membre < groupe < org <
     # plateforme). Ce n'est PAS le gagnant : la liste ne dit jamais qui résout —
     # une seule vérité pour ça, `status_for`.
-    level: Literal["member", "group", "org", "tenant", "platform"]
+    level: Literal["member", "group", "org", "tenant", "platform"] = Field(
+        description=_DOC_LEVEL)
     owner: InstanceOwner
     # DÉRIVÉ, jamais stocké : `meta.label` > « Connecteur · compte » > « Connecteur ·
     # label de clé » > label du connecteur. Deux instances peuvent donc porter le

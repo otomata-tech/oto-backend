@@ -18,7 +18,7 @@ from fastmcp import Context, FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, db, org_store, session_org
+from .. import access, db, org_store, session_org, tenant_vault
 from ..auth.hooks import current_user_sub_from_token
 from .. import config
 
@@ -54,7 +54,11 @@ def register(mcp: FastMCP) -> None:
         confirmer le contexte. C'est ce couple **compte × org active × groupe actif**
         qui détermine quelles clés API sont résolues et à quelles données tu accèdes.
 
-        Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
+        Renvoie : `account` (sub, email, name, rôle plateforme), `tenant` (le slug du
+        partenaire dont dépend ton compte, s'il en a un — `None` pour un compte oto
+        ordinaire ; le tenant est AU-DESSUS de ton org, pas en dessous : c'est le
+        compte de plus haut niveau chez le fournisseur, appelé « hébergeur » dans la
+        doc publique), `org` (org active —
         id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
         `connectors` (résumé des connecteurs
         configurés — dont `platform_quotas`, le quota du jour `{used, limit,
@@ -69,6 +73,15 @@ def register(mcp: FastMCP) -> None:
         l'agent ne mute jamais le défaut.
         """
         sub = _require_sub()
+
+        # Slug du tenant (partenaire) dont dépend ce compte, `None` pour un compte
+        # oto ordinaire — même résolution que la clé de coffre `tenant_key`
+        # (`instances_tenant.py`), fail-open comme le reste de cette réponse.
+        tenant = None
+        try:
+            tenant = tenant_vault.rung_tenant(sub)
+        except Exception as e:
+            logger.warning("whoami: tenant lookup failed: %s", e)
 
         user = {}
         try:
@@ -182,6 +195,7 @@ def register(mcp: FastMCP) -> None:
                 "name": user.get("name"),
                 "role": role,
             },
+            "tenant": tenant,
             "org": org_block,
             "group": group_block,
             "project": project_block,

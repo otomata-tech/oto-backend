@@ -12,13 +12,14 @@ import time
 from typing import Literal, Optional
 
 from ...mcp_errors import McpError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ... import access, credentials_store, providers, status_hints
 from ...connectors import health as connector_health
 from ...connectors import verify as connector_verify
 from .._authz import ORG_ADMIN, ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
+from .instances import _DOC_LEVEL
 
 
 class VerifyInput(BaseModel):
@@ -39,7 +40,8 @@ class VerifyResult(BaseModel):
     # cran : `ok:true` seul ne distingue pas « ma clé perso marche » de « ma clé
     # perso a échoué, c'est celle de l'org qui répond ». `platform` = grant
     # plateforme, qui n'a aucune ligne de coffre.
-    level: Literal["member", "group", "org", "tenant", "platform"]
+    level: Literal["member", "group", "org", "tenant", "platform"] = Field(
+        description=_DOC_LEVEL)
     # `<level>:<entity_id>:<provider>` — ex. `org:2:salesforce`. Au palier
     # plateforme l'`entity_id` est le LABEL de la clé (ADR 0044 §F : plus de
     # surrogate id), pas un entier : `platform:serper-shared:serper`.

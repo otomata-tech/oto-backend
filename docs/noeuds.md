@@ -4,7 +4,8 @@ type: explanation
 description: >-
   Le modèle de contenu unique (page, tableau, ligne) et sa surface propre, qui vit
   À CÔTÉ de l'ancienne sans la traduire. Ce que porte `props` et ce que porte `data`,
-  pourquoi la recopie au démarrage est arrêtée depuis le 2026-09-01, ce qu'il reste
+  pourquoi la recopie au démarrage est arrêtée depuis le 2026-09-01, le proxy qui sert
+  les projets et leurs pages au rail et à la fiche, ce qu'il reste
   du résidu qu'elle a laissé, et ce qui n'est pas encore porté (file de travail,
   filtre et tri sur un tableau natif). À lire avant de toucher `db/nodes.py`,
   `db/node_tables.py` ou une capacité `node_*`.
@@ -56,8 +57,26 @@ vit à côté de docs et part de vide »*.
 - Le **nouveau** — `oto_node`, `oto_node_rows`, `oto_node_edit` — naît vide et ne se
   remplit que par ses propres verbes.
 
-Rien ne traduit l'un vers l'autre. Un contenu créé dans l'ancien monde **n'apparaît
-pas** dans le nouveau, et c'est le comportement voulu, pas une régression.
+Rien ne **recopie** l'un vers l'autre. Mais depuis le 2026-09-17, les deux LECTURES du
+rail et de la fiche (`/api/me/shell`, `/api/me/nodes/{id}`) servent aussi les **projets
+et leurs pages lus dans leurs tables**, à chaque appel (`db/project_nodes.py`). Sans ce
+proxy, un front branché sur ces deux surfaces ne voyait aucun projet d'une org, alors
+que le dashboard et le MCP continuent d'écrire dans `projects` et `docs`.
+
+- **Identifiant réversible** : `nod_prj_<id>` / `nod_doc_<id>`. La fiche retrouve sa
+  source sans recalculer d'empreinte sur toute la base ; l'accès se juge sur le projet
+  (`ownership.can_access`, la règle de `oto_doc`), et un refus rend le 404 indistinct.
+- **Écriture** : la fiche annonce `edit_surface: doc` (ou `project`) avec sa poignée ;
+  le client écrit par `POST /api/me/docs`. `oto_node_edit` ne connaît pas ces nœuds.
+- ⚠️ **Le rail ne range plus les anciennes copies** (`props.legacy` = `prj` ou `doc`) :
+  là où le résidu reste, il afficherait un contenu figé à côté de la vraie page. La fiche
+  ouvre encore une copie par son identifiant (contrat R5 ci-dessus) ; le résidu se retire
+  par `oto-mcp maintenance residu-projete`.
+- ⚠️ **Les identifiants de blocs d'une page lue ainsi sont dérivés** du rang et de la
+  source : clés de rendu, pas ancres. Ils changent quand le texte au-dessus change.
+- Pas encore couverts : un projet partagé EN DIRECT n'entre pas dans la section
+  « Partagé » (il s'ouvre par son identifiant) ; tableaux et procédures ne passent pas
+  par ce proxy.
 
 **Où s'écrit un nœud : la fiche le DIT (`edit_surface`, oto#198).** Les deux univers
 partagent la table `nodes`, et rien dans l'identifiant ne sépare un nœud né ici d'une copie.

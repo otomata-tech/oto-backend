@@ -46,6 +46,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import access, group_store, org_store, run_status
 from ..connectors import selection as connector_selection
+from ..db import project_nodes
 from ..db import shell as db_shell
 from ._authz import ORG_MEMBER
 from ._types import Capability, NotModified, ResolvedCtx, RestBinding
@@ -377,7 +378,11 @@ def _compose(ctx: ResolvedCtx) -> dict:
     proprios = ([("org", str(org_id))] if org_id is not None else [])
     proprios += [("group", str(g["group_id"])) for g in equipes]
     proprios += [("user", sub)]
-    lignes = db_shell.nodes_for_owners(proprios)
+    # Les projets et leurs pages sont LUS dans leurs tables (`db/project_nodes`), pas dans
+    # leurs anciennes copies : une copie restée en base porterait un contenu figé.
+    lignes = [l for l in db_shell.nodes_for_owners(proprios)
+              if not project_nodes.est_une_copie(l)]
+    lignes += project_nodes.lignes_pour_proprietaires(proprios)
 
     par_proprio: dict = {}
     for l in lignes:
@@ -408,7 +413,8 @@ def _compose(ctx: ResolvedCtx) -> dict:
     par_id, sans_noeud = db_shell.resolve_grant_nodes(grants)
     deja_rangés = {l["public_id"] for l in lignes}
     candidats = [pid for pid in par_id if pid not in deja_rangés]
-    partages = db_shell.nodes_by_public_id(candidats)
+    partages = [l for l in db_shell.nodes_by_public_id(candidats)
+                if not project_nodes.est_une_copie(l)]
     if partages:
         auteurs = db_shell.names_of(
             (par_id[l["public_id"]] or {}).get("granted_by") for l in partages)

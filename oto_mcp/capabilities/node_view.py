@@ -50,6 +50,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import ownership
 from ..db import blocks as db_blocks
 from ..db import node_view as db_node
+from ..db import project_nodes
 from ..db import shell as db_shell
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, NotModified, ResolvedCtx, RestBinding
@@ -296,13 +297,18 @@ def _bloc(b: dict) -> dict:
     ).model_dump(exclude_none=True)
 
 
-def _fil(fiche: dict, chaine: list[dict]) -> list[TrailCrumb]:
-    """Le chemin racine→nœud, avec la fratrie de chaque maillon."""
+def _fil(fiche: dict, chaine: list[dict], freres: Optional[dict] = None) -> list[TrailCrumb]:
+    """Le chemin racine→nœud, avec la fratrie de chaque maillon.
+
+    `freres` est fourni par une source qui les a déjà lus (un projet ou une page lus
+    dans leurs tables, `db/project_nodes`) ; absent, on les lit dans `nodes`.
+    """
     if not chaine:
         return []
-    freres = db_node.siblings_of([c["parent_id"] for c in chaine],
-                                 owner=(fiche["owner_type"], str(fiche["owner_id"])),
-                                 cap=_FRERES_MAX)
+    if freres is None:
+        freres = db_node.siblings_of([c["parent_id"] for c in chaine],
+                                     owner=(fiche["owner_type"], str(fiche["owner_id"])),
+                                     cap=_FRERES_MAX)
     # Le `scope` d'une référence est le PROPRIÉTAIRE du nœud, et le fil ne remonte que
     # des ancêtres — la fratrie est d'ailleurs bornée à ce même propriétaire par la
     # requête. Celui de la fiche vaut donc pour tous les maillons ; le relire par nœud
@@ -330,22 +336,42 @@ def _rev(corps: dict) -> str:
     ).hexdigest()[:32]
 
 
+def _bloc_du_corps(node_id: str, rang: int, bloc: dict) -> dict:
+    """Un bloc découpé À LA LECTURE (projet ou page lus dans leurs tables).
+
+    ⚠️ Son identifiant est DÉRIVÉ du rang et de la source, faute de stockage : il tient
+    tant que rien ne change au-dessus de lui, pas au-delà. Il sert de clé de rendu, il ne
+    s'ancre pas — l'écriture de ces pages repart du markdown entier (`POST /api/me/docs`).
+    """
+    empreinte = hashlib.sha256(
+        f"{node_id}:{rang}:{bloc['md']}".encode()).hexdigest()[:24]
+    props = {k: bloc[k] for k in ("role", "items", "md", "lang") if k in bloc}
+    return {"public_id": f"blk_{empreinte}", "type": bloc["type"], "props": props}
+
+
 def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
     """Tout le travail SYNCHRONE. Appelé hors boucle (cf. `_node`)."""
-    fiche = db_node.node_by_public_id(node_id)
+    # Un projet ou une page LUS dans leurs tables (`db/project_nodes`) : l'accès est celui
+    # du PROJET, par la règle même de la surface qui les écrit (`POST /api/me/docs`).
+    lu = project_nodes.lire(node_id) if project_nodes.cle_de(node_id) else None
+    fiche = lu["fiche"] if lu else db_node.node_by_public_id(node_id)
     if not fiche:
         raise _introuvable()
 
-    partages: set = set()
-    if not ownership.owner_in_scope(ctx.sub, ctx.org_id,
-                                    (fiche["owner_type"], str(fiche["owner_id"]))):
-        # Le second chemin ne se paie QUE s'il sert : la voie du propriétaire couvre la
-        # quasi-totalité des ouvertures, et lire tous les grants d'une personne pour
-        # confirmer ce qu'on sait déjà serait une requête par ouverture de page.
-        par_id, _ = db_shell.resolve_grant_nodes(db_shell.direct_grants(ctx.sub))
-        partages = set(par_id)
-    if not _lisible(ctx, fiche, partages):
-        raise _introuvable()
+    if lu is not None:
+        if not ownership.can_access(ctx.sub, "project", str(lu["project_id"])):
+            raise _introuvable()
+    else:
+        partages: set = set()
+        if not ownership.owner_in_scope(ctx.sub, ctx.org_id,
+                                        (fiche["owner_type"], str(fiche["owner_id"]))):
+            # Le second chemin ne se paie QUE s'il sert : la voie du propriétaire couvre
+            # la quasi-totalité des ouvertures, et lire tous les grants d'une personne
+            # pour confirmer ce qu'on sait déjà serait une requête par ouverture de page.
+            par_id, _ = db_shell.resolve_grant_nodes(db_shell.direct_grants(ctx.sub))
+            partages = set(par_id)
+        if not _lisible(ctx, fiche, partages):
+            raise _introuvable()
 
     props = fiche.get("props") or {}
     # APRÈS la garde de lecture : un nœud incohérent reste un 404 pour qui ne le lit pas.
@@ -357,7 +383,7 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         raise _incoherent(fiche["public_id"], cause) from None
     nature = _type_of(fiche["kind"], props)
     ref = procedure_ref_of(nature, fiche.get("owner_type"), props)
-    chaine = db_node.ancestors_of(fiche["id"], max_depth=_PROFONDEUR_FIL)
+    chaine = lu["chaine"] if lu else db_node.ancestors_of(fiche["id"], max_depth=_PROFONDEUR_FIL)
     doc_id, project_id = _source(props, chaine)
     corps: dict = {
         "id": fiche["public_id"],
@@ -371,7 +397,7 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         # Le point UNIQUE où l'adresse du tableau se résout : le jour où `title` cesse
         # d'être cette adresse, c'est cette ligne qui change, et les clients ne bougent pas.
         "datastore": (props.get("title") or None) if nature == "table" else None,
-        "trail": [c.model_dump() for c in _fil(fiche, chaine)],
+        "trail": [c.model_dump() for c in _fil(fiche, chaine, lu["freres"] if lu else None)],
         "modified": NodeModified(
             at=str(fiche["updated_at"]) if fiche.get("updated_at") else None,
             by=_nom_de(props.get("created_by"))).model_dump(),
@@ -387,7 +413,9 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         # dirait « aucune colonne », ce qui est faux.
         corps["columns"] = props.get("child_schema")
     else:
-        corps["body"] = [_bloc(b) for b in db_node.blocks_of(fiche["id"])]
+        corps["body"] = ([_bloc(_bloc_du_corps(fiche["public_id"], i, b))
+                          for i, b in enumerate(db_blocks.parse_blocks(lu["corps_md"]))]
+                         if lu else [_bloc(b) for b in db_node.blocks_of(fiche["id"])])
     # La surface annoncée doit arriver AVEC sa poignée : une fiche qui dirait `doc` sans
     # `doc_id` ferait deviner le client — exactement ce que le champ retire.
     try:
@@ -431,7 +459,10 @@ CAPABILITIES += [
             "concluding that a node has no sharing or no dependants. `edit_surface` "
             "names the canonical surface that writes this node (node | doc | project | "
             "procedure | datastore | guide): it says WHERE to write, not WHETHER you "
-            "may, and only `node` is written through `oto_node_edit`. PROVISIONAL "
+            "may, and only `node` is written through `oto_node_edit`. Projects and their pages "
+            "are read live from their own store (ids `nod_prj_<id>` / `nod_doc_<id>`): "
+            "write them through `POST /api/me/docs`, and do not anchor on their block ids, "
+            "which are derived from position and source. PROVISIONAL "
             "surface: shape contracted, not frozen."),
         mcp="oto_node",
         rest=RestBinding("GET", "/api/me/nodes/{node_id}", provisoire=True),

@@ -100,6 +100,7 @@ def seams(monkeypatch):
     monkeypatch.setattr(S.group_store, "list_groups_for_user",
                         lambda sub, oid: [{"group_id": 9, "name": "Finance"}])
     monkeypatch.setattr(S.db_shell, "nodes_for_owners", lambda o: etat["lignes"])
+    monkeypatch.setattr(S.project_nodes, "lignes_pour_proprietaires", lambda o: [])
     monkeypatch.setattr(S.db_shell, "direct_grants", lambda sub: etat["grants"])
     monkeypatch.setattr(S.db_shell, "nodes_by_public_id", lambda ids: etat["partages"])
     monkeypatch.setattr(S.db_shell, "names_of", lambda subs: {"u1": "Alexis", "u2": "Théo"})

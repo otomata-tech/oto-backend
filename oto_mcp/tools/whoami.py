@@ -19,6 +19,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, org_store, session_org
+from ..db import tenants as db_tenants
 from ..auth.hooks import current_user_sub_from_token
 from .. import config
 
@@ -55,7 +56,11 @@ def register(mcp: FastMCP) -> None:
         qui détermine quelles clés API sont résolues et à quelles données tu accèdes.
 
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
-        id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
+        id, name, rôle ; tu es TOUJOURS dans une org), `tenant` (`null` hors org active,
+        sinon `{slug, is_ours}` — **le tenant est le compte de plus haut niveau isolé
+        chez oto : le partenaire qui héberge cette org sous sa marque, AU-DESSUS de
+        l'org qui lit, jamais confondu avec elle ; `is_ours=true` = notre propre
+        tenant, aucun partenaire entre l'org et oto**), `group` (groupe actif éventuel),
         `connectors` (résumé des connecteurs
         configurés — dont `platform_quotas`, le quota du jour `{used, limit,
         remaining}` des connecteurs plateforme au quota plafonné : regarde-le avant
@@ -102,6 +107,22 @@ def register(mcp: FastMCP) -> None:
                 }
         except Exception as e:
             logger.warning("whoami: org lookup failed: %s", e)
+
+        # Le TENANT de l'org active (oto-backend#775) : « oto » (nous), ou le slug
+        # du partenaire qui héberge cette org sous sa marque. C'est la seule
+        # réponse à « duquel de vos partenaires relevez-vous ? » — aucune autre
+        # surface servie ne la donnait, alors que `level: "tenant"` (ex.
+        # connecteurs) suppose qu'on sache déjà lequel.
+        tenant_block = None
+        if active_org is not None:
+            try:
+                slug = db_tenants.org_tenant_slug(active_org)
+                tenant_block = {
+                    "slug": slug,
+                    "is_ours": slug == db_tenants.tenancy.PRIMARY_SLUG,
+                }
+            except Exception as e:
+                logger.warning("whoami: tenant lookup failed: %s", e)
 
         # Groupe actif (sous-palier ADR 0012) — invariant : appartient à l'org active.
         group_block = None
@@ -183,6 +204,7 @@ def register(mcp: FastMCP) -> None:
                 "role": role,
             },
             "org": org_block,
+            "tenant": tenant_block,
             "group": group_block,
             "project": project_block,
             "connectors": {

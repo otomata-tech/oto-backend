@@ -25,7 +25,7 @@ avalé en silence, il est maintenant nommé. Cf. `datastore/rows.py`.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -108,7 +108,12 @@ class DatastoreEntry(BaseModel):
     url: Optional[str] = Field(default=None, description=URL_TABLEAU)
     # `True` = reçu par partage, `False` = possédé par l'org/l'équipe active.
     shared: bool
-    owner_type: Optional[str] = None
+    owner_type: Optional[Literal["user", "org", "group"]] = Field(
+        default=None, description=(
+            "Qui possède ce tableau (ADR 0068). `user` : vous, privé par défaut — "
+            "personne d'autre, pas même les admins de votre org, ne le voit. "
+            "`group` : votre équipe. `org` : votre organisation entière. "
+            "`null` : reçu par partage (`shared=true`), pas possédé."))
     owner_id: Optional[str] = None
     # `read` | `write`. ⚠️ RABATTU sur la portée d'un jeton porté : un front qui peint
     # ses boutons dessus ne doit pas proposer une écriture que le serveur refusera.
@@ -146,7 +151,10 @@ class CreatedDatastore(BaseModel):
     # QUI possède le tableau — donc qui le verra. La création rendait moins que la
     # liste sur la seule information qui décide de ça (otomata-tech/oto#45) : le
     # serveur le savait, la réponse ne le disait pas.
-    owner_type: str = "user"
+    owner_type: Literal["user", "org", "group"] = Field(
+        default="user", description=(
+            "Qui possède ce tableau (ADR 0068). `user` : vous, privé par défaut. "
+            "`group` : votre équipe. `org` : votre organisation entière."))
     owner_id: str = ""
     is_personal: bool = True
     # Posé QUAND le contexte d'org était là et que le tableau naît personnel quand

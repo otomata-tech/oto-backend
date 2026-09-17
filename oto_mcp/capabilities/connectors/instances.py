@@ -77,7 +77,14 @@ class InstanceOwner(BaseModel):
     """Propriétaire d'une instance. `type='user'` porte un sub, `group`/`org` un
     entier, `platform` **aucun id** (une clé plateforme est identifiée par son
     label, ADR 0044 §F) — d'où trois champs optionnels plutôt qu'un couple figé."""
-    type: Literal["user", "group", "org", "tenant", "platform"]
+    type: Literal["user", "group", "org", "tenant", "platform"] = Field(
+        description=(
+            "`user` : un membre. `group` : une équipe. `org` : l'organisation. "
+            "`tenant` : le PARTENAIRE qui héberge cette org sous sa marque — le "
+            "compte de plus haut niveau isolé chez oto, AU-DESSUS de l'org qui "
+            "lit, jamais confondu avec elle (oto-backend#775 ; `oto_whoami` dit "
+            "de quel tenant relève l'org active). `platform` : oto lui-même, sans "
+            "id — une clé plateforme est identifiée par son label (ADR 0044 §F)."))
     # sub (user) ou id de groupe/org — ENTIER quand il vient du contexte, CHAÎNE
     # quand il est reconstruit depuis une ligne partagée (`entity_id`). Absent en
     # platform.
@@ -117,7 +124,14 @@ class ConnectorInstance(BaseModel):
     # Rang de PROXIMITÉ dans la cascade, qui porte le tri (membre < groupe < org <
     # plateforme). Ce n'est PAS le gagnant : la liste ne dit jamais qui résout —
     # une seule vérité pour ça, `status_for`.
-    level: Literal["member", "group", "org", "tenant", "platform"]
+    level: Literal["member", "group", "org", "tenant", "platform"] = Field(
+        description=(
+            "Proximité dans la cascade de résolution, du plus proche au plus "
+            "loin : `member` (vous), `group` (votre équipe), `org` (votre "
+            "organisation), `tenant` (le partenaire qui héberge votre org sous "
+            "sa marque — cf. `InstanceOwner.type` pour ce que ce mot désigne), "
+            "`platform` (oto). Ce n'est PAS le niveau gagnant — `status_for` "
+            "est la seule vérité sur qui résout."))
     owner: InstanceOwner
     # DÉRIVÉ, jamais stocké : `meta.label` > « Connecteur · compte » > « Connecteur ·
     # label de clé » > label du connecteur. Deux instances peuvent donc porter le

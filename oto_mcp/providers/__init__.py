@@ -111,6 +111,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "inqom",
     # --- gocardless : keyed BYO self-serve -----------------------------------
     "gocardless",
+    # --- yousign : keyed BYO self-serve, écrit réellement (envoie des invitations)
+    "yousign",
     # `planity` reste ICI, à la place qu'il occupait quand il était fédéré : cet
     # ordre ne gouverne que l'AFFICHAGE, et le déplacer réordonnerait le catalogue
     # sans rien réparer. Sa place se juge au voisinage montré, pas au `kind`.

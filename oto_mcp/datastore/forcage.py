@@ -166,12 +166,24 @@ class Forcage:
 
 
 def arbitrer(forcage: Optional[Forcage], colonne: str,
-             avant: Any, apres: Any) -> Optional[str]:
+             avant: Any, apres: Any, *, colonne_formule: bool = False) -> Optional[str]:
     """Cette écriture sur colonne verrouillée passe-t-elle ? — `None` = elle passe (et
     elle est relevée), sinon le refus, qui NOMME le geste.
 
     Trois sorties, et les trois disent où va la chose ET qui peut forcer. Un refus
-    exact mais sans issue fait deviner exactement comme un refus muet (#668)."""
+    exact mais sans issue fait deviner exactement comme un refus muet (#668).
+
+    `colonne_formule=True` (oto-backend#1008) court-circuite les trois sorties
+    ci-dessous : une colonne CALCULÉE n'est pas « du fichier source » (le forçage
+    n'y a jamais eu de sens — même écrite de force, elle serait écrasée au
+    prochain recalcul, à la prochaine écriture d'une colonne d'entrée)."""
+    if colonne_formule:
+        return (
+            f"`{colonne}` est une colonne CALCULÉE (formule) — jamais écrite "
+            f"directement, elle se recalcule automatiquement quand les colonnes "
+            f"dont elle dépend changent. `{PARAMETRE}` n'y change rien : forcer "
+            f"une valeur ici n'a pas de sens, elle serait remplacée au prochain "
+            f"recalcul. Écris plutôt les colonnes d'ENTRÉE de la formule.")
     ou_va = (f"Ce que dit une autre source va dans `{colonne}.comment` "
              f"({{\"{colonne}\": {{\"comment\": …}}}})")
     if forcage is not None and forcage.actif_sur(colonne):

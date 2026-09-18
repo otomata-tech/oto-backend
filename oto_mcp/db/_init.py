@@ -559,6 +559,17 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if _index_absent(conn, "idx_datastore_rows_embed_dirty"):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_datastore_rows_embed_dirty "
                      "ON datastore_rows(ns_id, row_id) WHERE embed_dirty")
+    # Outbox du backfill de formule (oto-backend#1008 v2) — MÊME patron que
+    # `embed_dirty` juste au-dessus : poser/modifier une formule (`set_schema`)
+    # ne recalcule plus les lignes existantes SYNCHRONE (mesuré : 1min34-1min47
+    # sur 8910 lignes, au-delà du délai client MCP) — il marque `formula_dirty`
+    # (un seul UPDATE de masse, rapide) et rend. `formula_backfill_worker.py`
+    # draine en tranches, hors du chemin d'appel.
+    if _colonne_absente(conn, "datastore_rows", "formula_dirty"):
+        conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS formula_dirty BOOLEAN NOT NULL DEFAULT FALSE")
+    if _index_absent(conn, "idx_datastore_rows_formula_dirty"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_datastore_rows_formula_dirty "
+                     "ON datastore_rows(ns_id, row_id) WHERE formula_dirty")
     # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
     # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
     # lignes ont doc_id). Idempotent.

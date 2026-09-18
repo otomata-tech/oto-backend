@@ -423,7 +423,13 @@ def _provenance_ifs(args: tuple[Noeud, ...], row: dict) -> Optional[tuple[Any, s
         if bool(_evaluer(cond, row)):
             valeur_noeud = args[k + 1]
             valeur = _evaluer(valeur_noeud, row)
-            prov = serialiser(cond)
+            # `TRUE()` de tête est la branche PAR DÉFAUT d'un IFS (le cliquet
+            # `_valider_ifs_couvrant` l'exige en dernière position) — sa
+            # sérialisation littérale ne dit rien à qui relit la fiche.
+            if isinstance(cond, Appel) and cond.fonction == "TRUE" and not cond.args:
+                prov = "cas par défaut"
+            else:
+                prov = serialiser(cond)
             if isinstance(valeur_noeud, Appel) and valeur_noeud.fonction == "SWITCH":
                 expr_val = _evaluer(valeur_noeud.args[0], row)
                 prov += f" → {expr_val!r} → {valeur!r}"
@@ -480,6 +486,14 @@ def _formulas_by_key(schema: Optional[dict]) -> dict[str, str]:
     return {f["key"]: f["formula"] for f in (schema or {}).get("fields") or []
             if isinstance(f, dict) and f.get("type") == "formula"
             and isinstance(f.get("key"), str) and isinstance(f.get("formula"), str)}
+
+
+def colonnes_formule(schema: Optional[dict]) -> set[str]:
+    """Les clés des colonnes `type: "formula"` déclarées — pour qu'un appelant
+    distingue un `readonly` classique (valeur remise par un tiers) d'une colonne
+    CALCULÉE (jamais écrite, `readonly_override` n'a aucun sens dessus : la valeur
+    serait recalculée au prochain passage)."""
+    return set(_formulas_by_key(schema))
 
 
 def formules_neuves_ou_modifiees(avant: Optional[dict], apres: Optional[dict]) -> bool:

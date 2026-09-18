@@ -872,6 +872,68 @@ def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
         return [dict(r) for r in rows]
 
 
+def datastore_mark_formula_dirty(ns_id: int) -> int:
+    """Marque TOUTES les rows d'un namespace `formula_dirty` (oto-backend#1008 v2) —
+    déclenché quand `set_schema` pose ou modifie une formule. Un seul `UPDATE` de
+    masse (rapide, aucun verrou par ligne) plutôt que le recalcul synchrone : le
+    worker (`formula_backfill_worker.py`) drainera hors du chemin d'appel. Renvoie
+    le nombre de rows marquées."""
+    with _connect() as conn:
+        return conn.execute(
+            "UPDATE datastore_rows SET formula_dirty = TRUE WHERE ns_id = %s",
+            (ns_id,)).rowcount or 0
+
+
+def datastore_formula_dirty_count(ns_id: int) -> int:
+    """Combien de rows restent à recalculer — le statut consultable (oto-backend#1008
+    v2) : lu via l'index partiel `idx_datastore_rows_formula_dirty`, un `COUNT`
+    borné aux seules rows dirty, jamais un balayage de la table entière."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT count(*) AS n FROM datastore_rows WHERE ns_id = %s AND formula_dirty",
+            (ns_id,)).fetchone()
+        return int(row["n"] or 0)
+
+
+def datastore_namespaces_avec_formule_dirty(limit: int = 20) -> list[int]:
+    """Les `ns_id` distincts qui ont au moins une row `formula_dirty` — l'outbox
+    lue par le worker, un tour à la fois (patron `rank_backfill_worker.py`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ns_id FROM datastore_rows WHERE formula_dirty LIMIT %s",
+            (limit,)).fetchall()
+        return [int(r["ns_id"]) for r in rows]
+
+
+def datastore_list_formula_dirty(ns_id: int, limit: int) -> list[dict]:
+    """Une tranche de rows `formula_dirty` d'UN namespace — pagée par `row_id`
+    (déterministe, mais PAS un curseur keyset entre tours : chaque tour repart du
+    début, puisque les rows traitées sortent du lot en clairant leur drapeau)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT row_id, data FROM datastore_rows "
+            "WHERE ns_id = %s AND formula_dirty ORDER BY row_id ASC LIMIT %s",
+            (ns_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def datastore_clear_formula_dirty(ns_id: int, row_id: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE datastore_rows SET formula_dirty = FALSE "
+            "WHERE ns_id = %s AND row_id = %s", (ns_id, row_id))
+
+
+def datastore_clear_formula_dirty_ns(ns_id: int) -> None:
+    """Namespace sans schéma (retiré entre le marquage et le tour du worker) ou
+    sans plus aucune colonne formule : rien à calculer, on baisse le drapeau sans
+    y toucher ligne par ligne."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE datastore_rows SET formula_dirty = FALSE WHERE ns_id = %s",
+            (ns_id,))
+
+
 def datastore_order_health(ns_id: int, *, order_by: str, order_type: str,
                            order_options: Optional[list] = None,
                            q: Optional[str] = None,

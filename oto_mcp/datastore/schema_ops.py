@@ -29,7 +29,6 @@ from . import schema as dsv2
 from .. import db
 from .errors import ColumnAbsent, RowValidationError, SchemaDefinitionError
 from .columns import _META_COLS
-from .outils import _now_iso
 
 
 class SchemaOpsMixin:
@@ -72,44 +71,25 @@ class SchemaOpsMixin:
     def _recalculer_formules_neuves_ou_modifiees(self, ns_id: int,
                                                  avant: Optional[dict],
                                                  apres: Optional[dict]) -> int:
-        """Backfill des colonnes `type: "formula"` (oto-backend#1008) : si `apres`
-        pose une formule ABSENTE de `avant`, ou en modifie le texte, TOUTES les
-        lignes existantes du tableau sont recalculées — sinon une ligne écrite avant
-        la déclaration resterait sans valeur calculée, sans que rien ne le dise.
+        """Déclenche le backfill des colonnes `type: "formula"` (oto-backend#1008) :
+        si `apres` pose une formule ABSENTE de `avant`, ou en modifie le texte,
+        TOUTES les lignes existantes du tableau doivent être recalculées — sinon une
+        ligne écrite avant la déclaration resterait sans valeur calculée, sans que
+        rien ne le dise.
 
-        Page par curseur `row_id` (`datastore_list_rows_after`, keyset — jamais
-        `OFFSET`, qui dérive sous écriture concurrente pendant un backfill), et
-        chaque ligne passe par `datastore_merge_row_locked` : verrou PAR LIGNE,
-        jamais un verrou de table — même discipline que le remplissage en fond de
-        `rank_backfill_worker.py`, mais borné en un seul passage synchrone ici (une
-        pose de schéma est un geste rare et volontaire, pas un flux continu).
-
-        `_appliquer_formules` (ControlesMixin) mute `merged` EN PLACE et préserve
-        toute autre couche déjà posée sur la clé — `origine` comprise, jamais
-        touchée par ce mécanisme, cf. `formule.compute_row_formulas`."""
+        **ASYNCHRONE depuis la v2** (mesuré sur un tableau de 8910 lignes : le
+        recalcul synchrone prenait 1min34-1min47, au-delà du délai du client MCP,
+        qui basculait l'appel en arrière-plan de son côté — pas un contrat qu'on
+        veut). Cette méthode ne fait plus qu'un `UPDATE` de masse (rapide, aucun
+        verrou par ligne) qui marque `formula_dirty` sur toutes les rows du
+        namespace — `formula_backfill_worker.py` (composé au lifespan, même
+        discipline que `rank_backfill_worker.py` : verrou PAR LIGNE, jamais de
+        verrou de table) draine hors du chemin d'appel. Renvoie le nombre de rows
+        marquées (pas encore recalculées — `datastore_formula_dirty_count` donne
+        le nombre RESTANT à tout instant)."""
         if not dsformule.formules_neuves_ou_modifiees(avant, apres):
             return 0
-        touchees = 0
-        after_row_id: Optional[str] = None
-        while True:
-            page = db.datastore_list_rows_after(ns_id, after_row_id=after_row_id,
-                                                limit=500)
-            if not page:
-                break
-            for r in page:
-                row_id = r["row_id"]
-
-                def _apply(current: dict, _apres=apres) -> dict:
-                    self._appliquer_formules(_apres, current)
-                    return current
-
-                if db.datastore_merge_row_locked(ns_id, row_id, _apply,
-                                                 _now_iso()) is not None:
-                    touchees += 1
-            after_row_id = page[-1]["row_id"]
-            if len(page) < 500:
-                break
-        return touchees
+        return db.datastore_mark_formula_dirty(ns_id)
 
     def set_schema(self, datastore: str, schema: Optional[dict], *,
                    retraits_annonces: Optional[list] = None,
@@ -173,7 +153,7 @@ class SchemaOpsMixin:
             ns_id, ancien, schema)
         # Même moment, même raison : une formule neuve ou modifiée (oto-backend#1008)
         # ne vaut que si le schéma qui la porte est bien écrit.
-        formules_recalculees = self._recalculer_formules_neuves_ou_modifiees(
+        formules_marquees = self._recalculer_formules_neuves_ou_modifiees(
             ns_id, ancien, schema)
         # La pose de l'index est BORNÉE (incident du 2026-09-01 : elle a tenu la boucle
         # 12 min 48 s derrière une lecture ouverte). Quand la borne coupe, le schéma est
@@ -214,8 +194,14 @@ class SchemaOpsMixin:
         # qui déclare doit savoir que sa pose a TOUCHÉ des données, et combien.
         if origines_posees:
             out["origines_capturees"] = origines_posees
-        if formules_recalculees:
-            out["formules_recalculees"] = formules_recalculees
+        if formules_marquees:
+            # ⚠️ Marquées, pas encore recalculées (oto-backend#1008 v2, backfill
+            # asynchrone) : `formula_backfill_worker.py` drainera en fond. La clé
+            # dit le geste en cours, jamais un fait accompli — `formules_a_recalculer`
+            # (relue via `get_schema`, `datastore_formula_dirty_count`) nomme ce qui
+            # reste, consultable à tout instant par un nouvel appel.
+            out["formules_marquees_pour_recalcul"] = formules_marquees
+            out["formules_recalcul_en_cours"] = True
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe, index_non_retire,

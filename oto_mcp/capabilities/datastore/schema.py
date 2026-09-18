@@ -37,6 +37,8 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from ... import access
+from ... import db
+from ...datastore import formule as dsformule
 from ...datastore import identite
 from ...datastore import schema as dsv2
 from ...datastore.core import DatastoreNotFound, DatastoreReadOnly, make_store
@@ -75,6 +77,11 @@ class SchemaOut(BaseModel):
     # #416 : ce que le schéma SERVI contient et qu'oto ne lit pas. Absent (None) dans
     # le cas normal — un champ toujours présent finirait ignoré comme un ornement.
     warning: Optional[str] = None
+    # oto-backend#1008 v2 : le statut CONSULTABLE du backfill de formule, posé par
+    # `set_schema` puis drainé en fond (`formula_backfill_worker.py`). Absent quand
+    # le tableau n'a jamais eu de formule à recalculer — un champ à `0` en
+    # permanence serait aussi peu lu qu'un `warning` toujours présent.
+    formules_a_recalculer: Optional[int] = None
 
 
 def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
@@ -97,6 +104,18 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # canonique ET son numéro — quelle que soit la forme de l'adresse reçue.
     out = {**identite.de_releve(store.dernier_tableau, datastore), "schema": schema,
            "enforced": dsv2.enforced_keys()}
+    # oto-backend#1008 v2 : combien de rows restent `formula_dirty` — lu via l'index
+    # partiel, jamais un balayage, et SEULEMENT si le schéma déclare au moins une
+    # colonne formule (la lecture la plus fréquente n'en a aucune : sans cette
+    # garde, chaque `get_schema` paierait une requête pour rien). `None` (absent
+    # du fil) plutôt que `0` quand rien ne reste à recalculer : distinguer « rien à
+    # recalculer » de « jamais eu de formule » évite de faire chercher un backfill
+    # qui n'existe pas.
+    if dsformule.colonnes_formule(schema):
+        if ns_id := (store.dernier_tableau or {}).get("ns_id"):
+            restantes = db.datastore_formula_dirty_count(ns_id)
+            if restantes:
+                out["formules_a_recalculer"] = restantes
     # #416 : le garde des clés non lues existait, mais UNIQUEMENT à la pose — et un
     # schéma déjà pollué ne se repose jamais. Mesuré en production le 28/08 : trois
     # tableaux (9 454 lignes) portent un attribut `enum` résiduel à côté de l'`options`

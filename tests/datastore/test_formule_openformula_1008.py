@@ -51,10 +51,12 @@ def test_bareme_sentinelle_inconnu_nest_pas_effectif_connu():
 
 
 def test_bareme_defaut_true_rang_5():
+    """La branche par défaut d'un IFS (`TRUE()`) doit se lire, pas se recopier :
+    « TRUE() » n'est pas une provenance lisible pour qui relit une fiche."""
     v, p = F.evaluer_avec_provenance(
         F.parse(BAREME), {"code": "ZZZZ", "effectif": "", "rattache": "non"})
     assert v == "5"
-    assert p == "TRUE()"
+    assert p == "cas par défaut"
 
 
 # ── SWITCH, provenance, et le bug préfixe 2 vs 3 chiffres (celui d'Audiens) ──
@@ -223,6 +225,24 @@ def test_appliquer_formules_ne_touche_jamais_la_couche_origine():
     assert merged["zone"]["valeur"] == "Alice"
 
 
+def test_ecrire_une_colonne_formule_nomme_le_calcul_pas_le_fichier_source():
+    """Bug remonté en test réel (audiens, 18/09) : le refus générique `readonly`
+    disait « colonne du fichier source » et proposait `readonly_override`, faux
+    sur les deux points pour une colonne CALCULÉE — un override n'a aucun sens
+    puisque la valeur serait recalculée au prochain passage."""
+    schema = _schema_zones()
+    avant = {"code": "AA001", "zone": {"valeur": "Alice"}}
+    msgs, details = dsv2.reserved_refusals(
+        schema, {"zone": "Bob"}, avant)
+    assert msgs
+    assert "CALCULÉE" in msgs[0] or "calculée" in msgs[0].lower()
+    assert "fichier source" not in msgs[0]
+    # Le message peut NOMMER `readonly_override` pour dire qu'il ne sert à
+    # rien ici — ce qu'il ne doit plus faire, c'est le PROPOSER comme solution.
+    assert "readonly_override=true" not in msgs[0]
+    assert details.get("expected_column") == "zone.comment"
+
+
 def test_appliquer_formules_noop_sans_colonne_formule():
     store = _Store()
     schema_sans_formule = {"fields": [{"key": "code", "type": "text"}]}
@@ -284,7 +304,17 @@ def _poser_origine_brute(ns_id: int, row_id: str, champ: str, valeur: str) -> No
             (champ, champ, f'{{"valeur": "{valeur}"}}', ns_id, row_id))
 
 
-def test_poser_une_formule_recalcule_les_lignes_existantes(live):
+def _drainer_backfill() -> dict:
+    """Un tour SYNC du worker de fond (`formula_backfill_worker._backfill_round`),
+    appelé directement — pas de boucle asyncio à faire tourner dans un test."""
+    from oto_mcp.formula_backfill_worker import _backfill_round
+    return _backfill_round()
+
+
+def test_poser_une_formule_marque_puis_le_backfill_recalcule(live):
+    """Depuis oto-backend#1008 v2 (backfill asynchrone, mesuré au-delà du délai
+    client MCP sur un tableau de 8910 lignes) : `set_schema` ne recalcule plus
+    SYNCHRONE — il marque `formula_dirty`, et rend. Le worker de fond draine."""
     ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
     ns_id = db.create_datastore("user", "sub-test-1008", ns)
@@ -295,7 +325,15 @@ def test_poser_une_formule_recalcule_les_lignes_existantes(live):
 
     pose = st.set_schema(ns, _schema_zones())
 
-    assert pose.get("formules_recalculees") == 2
+    assert pose.get("formules_marquees_pour_recalcul") == 2
+    assert pose.get("formules_recalcul_en_cours") is True
+    # Marqué, PAS encore recalculé — la propriété centrale de l'asynchrone.
+    assert db.datastore_formula_dirty_count(ns_id) == 2
+    assert "zone" not in _donnees_1008(ns_id, r1["_id"])
+
+    _drainer_backfill()
+
+    assert db.datastore_formula_dirty_count(ns_id) == 0
     d1 = _donnees_1008(ns_id, r1["_id"])
     d2 = _donnees_1008(ns_id, r2["_id"])
     assert d1["zone"]["valeur"] == "Alice"
@@ -314,6 +352,7 @@ def test_backfill_ne_touche_jamais_la_couche_origine(live):
     _poser_origine_brute(ns_id, row["_id"], "zone", "VALEUR HISTORIQUE DE LA CLIENTE")
 
     st.set_schema(ns, _schema_zones())
+    _drainer_backfill()
 
     d = _donnees_1008(ns_id, row["_id"])
     assert d["zone"]["origine"] == {"valeur": "VALEUR HISTORIQUE DE LA CLIENTE"}
@@ -327,6 +366,7 @@ def test_modifier_le_texte_de_la_formule_recalcule_a_nouveau(live):
     st = _store_1008()
     st.set_schema(ns, _schema_zones())
     row = st.append_row(ns, {"code": "AA001"})
+    _drainer_backfill()
     assert _donnees_1008(ns_id, row["_id"])["zone"]["valeur"] == "Alice"
 
     autre = {"fields": [
@@ -335,7 +375,8 @@ def test_modifier_le_texte_de_la_formule_recalcule_a_nouveau(live):
          "formula": 'IFS(TRUE(); "toujours-pareil")'}]}
     pose = st.set_schema(ns, autre)
 
-    assert pose.get("formules_recalculees") == 1
+    assert pose.get("formules_marquees_pour_recalcul") == 1
+    _drainer_backfill()
     assert _donnees_1008(ns_id, row["_id"])["zone"]["valeur"] == "toujours-pareil"
 
 
@@ -349,4 +390,32 @@ def test_reposer_la_meme_formule_ne_recalcule_rien(live):
 
     pose = st.set_schema(ns, _schema_zones())
 
-    assert "formules_recalculees" not in pose
+    assert "formules_marquees_pour_recalcul" not in pose
+
+
+def test_get_schema_dit_le_statut_du_backfill_en_cours(live):
+    """Le statut CONSULTABLE demandé par le client (18/09) : `get_schema` doit
+    dire combien de rows restent `formula_dirty`, à tout instant — pas seulement
+    dans la réponse immédiate de `set_schema`."""
+    from oto_mcp.capabilities.datastore import schema as CAP
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    ns = "t-" + uuid.uuid4().hex[:6]
+    from oto_mcp import db
+    db.create_datastore("user", "sub-test-1008", ns)
+    st = _store_1008()
+    st.set_schema(ns, {"fields": [{"key": "code", "type": "text"}]})
+    st.append_row(ns, {"code": "AA001"})
+    st.append_row(ns, {"code": "AA002"})
+    st.set_schema(ns, _schema_zones())
+
+    ctx = ResolvedCtx(sub="sub-test-1008")
+    out = CAP._get_schema(ctx, CAP.GetSchemaInput(datastore=ns))
+    assert out.get("formules_a_recalculer") == 2
+
+    _drainer_backfill()
+
+    out = CAP._get_schema(ctx, CAP.GetSchemaInput(datastore=ns))
+    # Rien à recalculer : la clé n'apparaît PAS (un `0` permanent serait aussi
+    # peu lu qu'un `warning` toujours présent — même choix que `warning`).
+    assert "formules_a_recalculer" not in out

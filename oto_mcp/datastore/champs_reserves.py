@@ -46,6 +46,7 @@ from .couches import (
     VALUE_LAYER,
 )
 from .declaration import readonly_fields
+from .formule import colonnes_formule
 
 #: Le paramètre par lequel un appelant DÉCLARE qu'il pose l'origine en connaissance de
 #: cause. Nommé par cohérence stricte avec `readonly_override` (#658) : même famille de
@@ -399,6 +400,7 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     ⚠️ Ici et pas dans le registre des jetons (#602) : celui-ci juge AVANT la
     résolution, sans schéma ; un champ réservé est une propriété du TABLEAU."""
     ro = readonly_fields(schema)
+    cf = colonnes_formule(schema)
     # oto#83 : vides hors face agent — le cran ne borne que ce que la face a déclaré
     # être un appel de modèle. Deux ensembles disjoints : ce qui n'est pas servi du
     # tout, et ce qui est servi en lecture seule.
@@ -434,7 +436,8 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
             # ouvert. Le forçage ne touche PAS l'autre cran de la famille :
             # `origine` est posée par la plateforme, pas par le client, et il n'y a
             # rien à y corriger de la main du propriétaire.
-            refus = fcg.arbitrer(forcage, cle, unwrap(avant.get(cle)), unwrap(neuf))
+            refus = fcg.arbitrer(forcage, cle, unwrap(avant.get(cle)), unwrap(neuf),
+                                  colonne_formule=cle in cf)
             if refus is not None:
                 errors.append(refus)
                 details["expected_column"] = f"{cle}.comment"

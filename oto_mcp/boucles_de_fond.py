@@ -89,6 +89,11 @@ def _classement() -> Fonction:
     return rank_backfill_worker.run_rank_backfill_loop
 
 
+def _formule_backfill() -> Fonction:
+    from . import formula_backfill_worker
+    return formula_backfill_worker.run_formula_backfill_loop
+
+
 def _runner_tick_arme() -> bool:
     from . import runner_tick
     return runner_tick.enabled()
@@ -138,6 +143,12 @@ BOUCLES: tuple[Boucle, ...] = (
     # par nécessité (la variante au boot tenait `datastore_rows` 7,55 s sous verrou).
     Boucle(nom="rank_backfill", tiers=False,
            armee=_interrupteur("OTO_RANK_BACKFILL_ENABLED"), fonction=_classement),
+    # Colonnes formule (oto-backend#1008 v2) : draine l'outbox `formula_dirty`, posée
+    # par `set_schema` au lieu d'un recalcul synchrone (mesuré au-delà du délai
+    # client MCP sur un tableau de 8910 lignes). Aucun effet chez un tiers.
+    Boucle(nom="formula_backfill", tiers=False,
+           armee=_interrupteur("OTO_FORMULA_BACKFILL_ENABLED"),
+           fonction=_formule_backfill),
     # Horloge des déclencheurs du runner (R3) : ENFILE un job, n'exécute rien, c'est
     # oto-runner qui agit. Deux ticks sur la même base, un seul gagne chaque échéance
     # (CAS sur `next_due`) : aucun doublon possible, d'où `tiers=False`.

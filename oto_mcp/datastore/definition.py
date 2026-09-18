@@ -480,7 +480,7 @@ def _validate_formulas_def(fields: list) -> list[str]:
                 f"non vide)")
             continue
         try:
-            _formule.valider(texte, colonnes, formules - {key})
+            _formule.valider(texte, colonnes, formules - {key}, champs_def=top_level)
         except _formule.FormulaError as e:
             errors.append(f"{fpath}: formule refusée — {e}")
     return errors

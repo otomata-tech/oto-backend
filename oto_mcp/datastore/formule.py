@@ -19,6 +19,16 @@ sait référencer autre chose qu'un champ nu de l'environnement d'évaluation. U
 formule ne peut pas non plus référencer une autre colonne qui est ELLE-MÊME une
 formule (pas de chaînage) — vérifié à la pose, pas ici.
 
+**Plage sur une colonne `list, of: {fields: [...]}`** (oto-backend#1008 v2) :
+`contacts[].telephone` lit la valeur du sous-champ `telephone` de CHAQUE élément de
+la colonne-liste `contacts` de la ligne — une PLAGE de valeurs, jamais un élément
+isolé (pas d'index). Notation `champ[].sous_champ` reprise TELLE QUELLE du reste du
+repo (`hors_schema.py`/`vocabulaire.py`/`effacements.py`/`validation.py` la
+portent déjà pour la même notion) plutôt qu'un point nu — un point nu désignerait
+une COUCHE (`champ.origine`/`champ.comment`), notion sans rapport. Une plage ne se
+consomme QU'À L'INTÉRIEUR de `COUNTA(...)` — l'utiliser ailleurs (comparaison,
+argument d'une autre fonction) est refusé à la pose, jamais silencieusement coercé.
+
 La PROVENANCE (`<champ>.comment`) est dérivée automatiquement de l'AST : la branche
 `IFS` gagnante est re-sérialisée vers sa forme OpenFormula canonique, jamais un label
 écrit à la main.
@@ -46,6 +56,15 @@ class Champ:
 
 
 @dataclass(frozen=True)
+class Plage:
+    """`colonne[].sous_champ` — les valeurs de `sous_champ` sur chaque élément de
+    la colonne-liste `colonne` de la ligne. Ne se consomme qu'en argument de
+    `COUNTA` (vérifié à la pose, cf. `_verifier_usage_plages`)."""
+    colonne: str
+    sous_champ: str
+
+
+@dataclass(frozen=True)
 class Comparaison:
     op: str  # "=" "<>" "<" ">" "<=" ">="
     gauche: "Noeud"
@@ -58,7 +77,7 @@ class Appel:
     args: tuple["Noeud", ...] = _dc_field(default_factory=tuple)
 
 
-Noeud = Union[Litteral, Champ, Comparaison, Appel]
+Noeud = Union[Litteral, Champ, Plage, Comparaison, Appel]
 
 
 # ── Fonctions autorisées ─────────────────────────────────────────────────────
@@ -67,7 +86,7 @@ Noeud = Union[Litteral, Champ, Comparaison, Appel]
 #: (None = variadique).
 FONCTIONS_AUTORISEES: dict[str, Optional[int]] = {
     "IFS": None, "IF": 3, "SWITCH": None, "AND": None, "OR": None, "NOT": 1,
-    "LEFT": 2, "MID": 3, "LEN": 1, "TRUE": 0, "FALSE": 0,
+    "LEFT": 2, "MID": 3, "LEN": 1, "TRUE": 0, "FALSE": 0, "COUNTA": 1,
 }
 
 _COMPARATEURS = ("<=", ">=", "<>", "=", "<", ">")
@@ -77,7 +96,7 @@ _COMPARATEURS = ("<=", ">=", "<>", "=", "<", ">")
 
 @dataclass(frozen=True)
 class _Token:
-    type: str  # "IDENT" "STR" "OP" "LPAREN" "RPAREN" "SEP" "EOF"
+    type: str  # "IDENT" "STR" "OP" "LPAREN" "RPAREN" "SEP" "LBRACKET" "RBRACKET" "DOT" "EOF"
     valeur: str
 
 
@@ -108,6 +127,12 @@ def _tokenize(texte: str) -> list[_Token]:
             out.append(_Token("RPAREN", c)); i += 1; continue
         if c == ";":
             out.append(_Token("SEP", c)); i += 1; continue
+        if c == "[":
+            out.append(_Token("LBRACKET", c)); i += 1; continue
+        if c == "]":
+            out.append(_Token("RBRACKET", c)); i += 1; continue
+        if c == ".":
+            out.append(_Token("DOT", c)); i += 1; continue
         if c.isdigit():
             j = i
             while j < n and texte[j].isdigit():
@@ -131,8 +156,8 @@ def _tokenize(texte: str) -> list[_Token]:
             continue
         raise FormulaError(
             f"caractère inattendu {c!r} à la position {i} — une formule ne porte que "
-            "des noms de fonction/colonne, des chaînes entre guillemets, `( ) ;` et "
-            "les comparateurs = <> < > <= >=.")
+            "des noms de fonction/colonne, des chaînes entre guillemets, `( ) ; [ ] .` "
+            "et les comparateurs = <> < > <= >=.")
     out.append(_Token("EOF", ""))
     return out
 
@@ -142,9 +167,10 @@ def _tokenize(texte: str) -> list[_Token]:
 # Grammaire (précédence croissante) :
 #   expr        := comparaison
 #   comparaison := primaire (COMPARATEUR primaire)?
-#   primaire    := STR | appel | champ
+#   primaire    := STR | NUM | appel | plage | champ
 #   appel       := IDENT "(" (expr (";" expr)*)? ")"
-#   champ       := IDENT                    # si pas suivi de "(" et pas un nom de fonction
+#   plage       := IDENT "[" "]" "." IDENT    # colonne[].sous_champ
+#   champ       := IDENT                      # si pas suivi de "(" ni de "["
 
 class _Parseur:
     def __init__(self, tokens: list[_Token]):
@@ -216,6 +242,13 @@ class _Parseur:
                     raise FormulaError(
                         f"`{nom_maj}` attend {arite} argument(s), reçu {len(args)}.")
                 return Appel(fonction=nom_maj, args=tuple(args))
+            if suivant is not None and suivant.type == "LBRACKET":
+                self._avancer()  # IDENT (la colonne-liste)
+                self._avancer()  # LBRACKET
+                self._attendre("RBRACKET")
+                self._attendre("DOT")
+                sous = self._attendre("IDENT")
+                return Plage(colonne=nom, sous_champ=sous.valeur)
             self._avancer()
             return Champ(nom=nom)
         raise FormulaError(
@@ -241,12 +274,31 @@ def parse(texte: str) -> Noeud:
 def _champs_references(noeud: Noeud, out: set) -> None:
     if isinstance(noeud, Champ):
         out.add(noeud.nom)
+    elif isinstance(noeud, Plage):
+        # La colonne-LISTE porteuse est une référence comme une autre (« colonne
+        # inconnue », déclenchement du recalcul à l'écriture — cf. docstring de
+        # `champs_references`) ; le sous-champ, lui, n'est PAS un nom de colonne
+        # de la ligne, il n'est jamais ajouté ici.
+        out.add(noeud.colonne)
     elif isinstance(noeud, Comparaison):
         _champs_references(noeud.gauche, out)
         _champs_references(noeud.droite, out)
     elif isinstance(noeud, Appel):
         for a in noeud.args:
             _champs_references(a, out)
+
+
+def _plages(noeud: Noeud, out: list) -> None:
+    """Toutes les `Plage` de l'AST, DANS L'ORDRE — sert la validation à la pose
+    (colonne list valide, sous-champ déclaré, usage restreint à `COUNTA`)."""
+    if isinstance(noeud, Plage):
+        out.append(noeud)
+    elif isinstance(noeud, Comparaison):
+        _plages(noeud.gauche, out)
+        _plages(noeud.droite, out)
+    elif isinstance(noeud, Appel):
+        for a in noeud.args:
+            _plages(a, out)
 
 
 def champs_references(noeud: Noeud) -> set:
@@ -259,15 +311,81 @@ def champs_references(noeud: Noeud) -> set:
     return out
 
 
-def valider(texte: str, colonnes_declarees: set, colonnes_formule: set) -> Noeud:
+def _verifier_usage_plages(noeud: Noeud, dans_counta_arg0: bool = False) -> None:
+    """Une `Plage` (`col[].sous_champ`) ne se consomme QU'en argument de `COUNTA` —
+    ailleurs (comparaison directe, argument d'une autre fonction), sa valeur serait
+    une LISTE Python et non un scalaire : un comportement silencieusement faux
+    (ex. une comparaison `=` toujours fausse) plutôt qu'un refus nommé. Vérifié ici,
+    à la pose — pas laissé à l'évaluateur, qui ne verrait le problème qu'à la
+    première ligne évaluée."""
+    if isinstance(noeud, Plage):
+        if not dans_counta_arg0:
+            raise FormulaError(
+                f"`{noeud.colonne}[].{noeud.sous_champ}` (une plage) ne peut être "
+                "utilisée qu'en argument de COUNTA(...) — ailleurs, ce n'est pas "
+                "une valeur scalaire.")
+        return
+    if isinstance(noeud, Appel):
+        if noeud.fonction == "COUNTA" and not isinstance(noeud.args[0], Plage):
+            raise FormulaError(
+                "COUNTA(...) n'attend qu'une plage (`colonne[].sous_champ`) — "
+                f"reçu {serialiser(noeud.args[0])!r}.")
+        for k, a in enumerate(noeud.args):
+            est_counta_arg0 = noeud.fonction == "COUNTA" and k == 0
+            _verifier_usage_plages(a, dans_counta_arg0=est_counta_arg0)
+        return
+    if isinstance(noeud, Comparaison):
+        _verifier_usage_plages(noeud.gauche)
+        _verifier_usage_plages(noeud.droite)
+
+
+def _valider_plages(plages: list, champs_def: list) -> None:
+    """Une `Plage` doit référencer une colonne DÉCLARÉE `type: "list"` dont les
+    éléments sont des objets (`of: {"fields": [...]}`), et un sous-champ DÉCLARÉ
+    dans `of.fields` — trois refus distincts, chacun nommé."""
+    par_cle = {f["key"]: f for f in champs_def
+               if isinstance(f, dict) and isinstance(f.get("key"), str)}
+    for p in plages:
+        f = par_cle.get(p.colonne)
+        if f is None:
+            raise FormulaError(
+                f"`{p.colonne}[]` référence une colonne inconnue — une plage ne "
+                "lit qu'une colonne DÉCLARÉE du même tableau.")
+        if f.get("type") != "list":
+            raise FormulaError(
+                f"`{p.colonne}[]` : `{p.colonne}` n'est pas de type `list` "
+                f"(type déclaré : {f.get('type')!r}) — une plage ne s'écrit que "
+                "sur une colonne-liste.")
+        of = f.get("of")
+        sous_champs = (of.get("fields") if isinstance(of, dict) else None) or []
+        cles_sous_champs = {sf["key"] for sf in sous_champs
+                             if isinstance(sf, dict) and isinstance(sf.get("key"), str)}
+        if not cles_sous_champs:
+            raise FormulaError(
+                f"`{p.colonne}[].{p.sous_champ}` : `{p.colonne}` n'est pas une "
+                "liste D'OBJETS (`of: {fields: [...]}`) — une plage lit un "
+                "sous-champ, il en faut un à déclarer.")
+        if p.sous_champ not in cles_sous_champs:
+            raise FormulaError(
+                f"`{p.colonne}[].{p.sous_champ}` : `{p.sous_champ}` n'est pas un "
+                f"sous-champ déclaré de `{p.colonne}` — sous-champs connus : "
+                f"{', '.join(sorted(cles_sous_champs))}.")
+
+
+def valider(texte: str, colonnes_declarees: set, colonnes_formule: set,
+            champs_def: Optional[list] = None) -> Noeud:
     """Parse ET valide une formule contre le schéma qui la porte. Lève
     `FormulaError` nommant précisément le problème — fonction inconnue (déjà géré
-    par `parse`), colonne inconnue, ou chaînage (référence à une AUTRE colonne
-    formule, interdit v1).
+    par `parse`), colonne inconnue, chaînage (référence à une AUTRE colonne
+    formule, interdit v1), ou plage invalide (colonne pas de type `list`,
+    sous-champ non déclaré, usage hors `COUNTA`).
 
     `colonnes_declarees` = l'ensemble des clés de colonne du schéma (formule
     comprise). `colonnes_formule` = le sous-ensemble qui est LUI-MÊME une formule
-    (pour détecter le chaînage)."""
+    (pour détecter le chaînage). `champs_def` = la liste des field-def COMPLÈTES
+    du schéma (pas seulement leurs clés) — nécessaire pour valider une `Plage`
+    contre la forme déclarée de la colonne-liste ; omis (`None`), aucune plage
+    n'est vérifiée en profondeur (mais son usage hors COUNTA l'est toujours)."""
     noeud = parse(texte)
     refs = champs_references(noeud)
     inconnues = refs - colonnes_declarees
@@ -282,6 +400,11 @@ def valider(texte: str, colonnes_declarees: set, colonnes_formule: set) -> Noeud
             f"chaînage refusé : {', '.join(sorted(chainees))} — une formule ne peut "
             "pas référencer une autre colonne CALCULÉE (v1 : fonction pure sur des "
             "colonnes d'entrée uniquement).")
+    _verifier_usage_plages(noeud)
+    plages: list = []
+    _plages(noeud, plages)
+    if plages and champs_def is not None:
+        _valider_plages(plages, champs_def)
     _valider_ifs_couvrant(noeud)
     return noeud
 
@@ -315,11 +438,36 @@ def _valeur_champ(row: dict, nom: str) -> str:
     return str(v)
 
 
+def _valeurs_plage(noeud: "Plage", row: dict) -> list:
+    """Les valeurs du sous-champ `noeud.sous_champ` sur chaque élément de la
+    colonne-liste `noeud.colonne` de `row` — une LISTE Python, jamais un scalaire.
+    Défensif : une colonne absente/pas une liste rend une plage vide plutôt que de
+    lever (la validation à la pose a déjà refusé ce cas ; ici on ne casse jamais
+    une écriture pour une formule posée avant un durcissement de la validation)."""
+    valeur = row.get(noeud.colonne)
+    if not isinstance(valeur, list):
+        return []
+    out = []
+    for element in valeur:
+        if isinstance(element, dict):
+            out.append(_valeur_champ(element, noeud.sous_champ))
+        else:
+            out.append("")
+    return out
+
+
 def _evaluer(noeud: Noeud, row: dict) -> Any:
     if isinstance(noeud, Litteral):
         return noeud.valeur
     if isinstance(noeud, Champ):
         return _valeur_champ(row, noeud.nom)
+    if isinstance(noeud, Plage):
+        # Ne devrait être atteint qu'en argument direct de COUNTA (vérifié à la
+        # pose) — `_appeler("COUNTA", …)` évalue la plage lui-même sans repasser
+        # ici ; ce chemin ne sert que si une formule antérieure au durcissement
+        # de la validation l'a laissée passer ailleurs (défensif, jamais une
+        # liste rendue comme valeur de colonne).
+        return _valeurs_plage(noeud, row)
     if isinstance(noeud, Comparaison):
         g, d = _evaluer(noeud.gauche, row), _evaluer(noeud.droite, row)
         if noeud.op == "=":
@@ -365,6 +513,11 @@ def _appeler(appel: Appel, row: dict) -> Any:
         return texte[start:start + max(longueur, 0)]
     if fn == "LEN":
         return len(str(_evaluer(args[0], row)))
+    if fn == "COUNTA":
+        # `args[0]` est TOUJOURS une `Plage` ici — `valider()` refuse à la pose
+        # tout autre argument (cf. `_verifier_usage_plages`).
+        valeurs = _valeurs_plage(args[0], row)
+        return sum(1 for v in valeurs if v != "")
     if fn == "IF":
         cond, alors, sinon = args
         return _evaluer(alors, row) if bool(_evaluer(cond, row)) else _evaluer(sinon, row)
@@ -404,11 +557,32 @@ def serialiser(noeud: Noeud) -> str:
         return f'"{noeud.valeur}"'
     if isinstance(noeud, Champ):
         return noeud.nom
+    if isinstance(noeud, Plage):
+        return f"{noeud.colonne}[].{noeud.sous_champ}"
     if isinstance(noeud, Comparaison):
         return f"{serialiser(noeud.gauche)}{noeud.op}{serialiser(noeud.droite)}"
     if isinstance(noeud, Appel):
         return f"{noeud.fonction}({';'.join(serialiser(a) for a in noeud.args)})"
     raise FormulaError(f"nœud AST inconnu {noeud!r}")  # pragma: no cover
+
+
+def _compte_counta(noeud: Noeud, row: dict) -> Optional[int]:
+    """Le premier `COUNTA(plage)` trouvé dans `noeud` (parcours en profondeur),
+    déjà évalué contre `row` — `None` si la condition n'en contient aucun. Sert
+    la provenance : « combien de valeurs ont été trouvées » pour une branche
+    gagnante qui teste une plage."""
+    if isinstance(noeud, Appel):
+        if noeud.fonction == "COUNTA":
+            return len([v for v in _valeurs_plage(noeud.args[0], row) if v != ""])
+        for a in noeud.args:
+            trouve = _compte_counta(a, row)
+            if trouve is not None:
+                return trouve
+        return None
+    if isinstance(noeud, Comparaison):
+        trouve = _compte_counta(noeud.gauche, row)
+        return trouve if trouve is not None else _compte_counta(noeud.droite, row)
+    return None
 
 
 def _provenance_ifs(args: tuple[Noeud, ...], row: dict) -> Optional[tuple[Any, str]]:
@@ -427,6 +601,9 @@ def _provenance_ifs(args: tuple[Noeud, ...], row: dict) -> Optional[tuple[Any, s
             if isinstance(valeur_noeud, Appel) and valeur_noeud.fonction == "SWITCH":
                 expr_val = _evaluer(valeur_noeud.args[0], row)
                 prov += f" → {expr_val!r} → {valeur!r}"
+            compte = _compte_counta(cond, row)
+            if compte is not None:
+                prov += f" — {compte} valeur(s) trouvée(s)"
             return valeur, prov
     return None
 

@@ -129,6 +129,95 @@ def test_valider_chainage_refuse():
                   {"autre_calc"}, {"autre_calc"})
 
 
+# ── plage sur colonne-liste : contacts[].telephone + COUNTA (oto-backend#1008 v2)
+
+CHAMPS_HAS_TEL = [
+    {"key": "entreprise_telephone", "type": "text"},
+    {"key": "contacts", "type": "list", "of": {"fields": [
+        {"key": "telephone", "type": "text"}, {"key": "nom", "type": "text"}]}},
+]
+
+# Encadrée par IFS (pas un simple OR) : c'est la forme réelle — c'est aussi elle
+# qui produit une provenance (`evaluer_avec_provenance` n'en dérive une que pour
+# un IFS de tête, cf. sa docstring).
+HAS_TEL = """IFS(
+  entreprise_telephone<>""; TRUE();
+  COUNTA(contacts[].telephone)>0; TRUE();
+  TRUE(); FALSE())"""
+
+
+def test_plage_parse_et_champs_references():
+    noeud = F.parse(HAS_TEL)
+    # `contacts` (la colonne-liste) est référencée comme une colonne normale —
+    # le sous-champ `telephone`, lui, n'est PAS un nom de colonne de la ligne.
+    assert F.champs_references(noeud) == {"entreprise_telephone", "contacts"}
+
+
+def test_counta_compte_les_telephones_non_vides_sur_plusieurs_contacts():
+    row = {"entreprise_telephone": "", "contacts": [
+        {"telephone": "0600000000", "nom": "A"},
+        {"telephone": "", "nom": "B"},
+        {"telephone": "0700000000", "nom": "C"},
+    ]}
+    v, p = F.evaluer_avec_provenance(F.parse(HAS_TEL), row)
+    assert v is True
+    assert "2 valeur(s) trouvée(s)" in p
+
+
+def test_counta_zero_sur_contacts_vide_ou_sans_telephone():
+    for contacts in ([], [{"nom": "A"}], [{"telephone": "", "nom": "A"}]):
+        row = {"entreprise_telephone": "", "contacts": contacts}
+        v, _ = F.evaluer_avec_provenance(F.parse(HAS_TEL), row)
+        assert v is False, contacts
+
+
+def test_colonne_plate_gagne_sans_regarder_les_contacts():
+    row = {"entreprise_telephone": "0600000000", "contacts": []}
+    v, p = F.evaluer_avec_provenance(F.parse(HAS_TEL), row)
+    assert v is True
+    assert "valeur(s) trouvée(s)" not in p  # la branche gagnante ne teste pas COUNTA
+
+
+def test_recalcul_declenche_par_une_ecriture_qui_ne_touche_que_contacts():
+    """`_appliquer_formules` recalcule TOUJOURS toutes les formules sur `merged`
+    (cf. `controles.py::_check_row`) — donc un geste qui n'écrit QUE `contacts`
+    recalcule déjà `has_telephone` correctement, sans câblage supplémentaire."""
+    schema = {"fields": CHAMPS_HAS_TEL + [
+        {"key": "has_telephone", "type": "formula", "formula": HAS_TEL}]}
+    merged = {"entreprise_telephone": "", "contacts": [{"telephone": "0600000000"}]}
+    mixin = ControlesMixin()
+    mixin._appliquer_formules(schema, merged)
+    assert merged["has_telephone"][dsv2.VALUE_LAYER] is True
+
+
+def test_valider_plage_ok_contre_le_schema():
+    F.valider(HAS_TEL, {"entreprise_telephone", "contacts"}, set(),
+              champs_def=CHAMPS_HAS_TEL)
+
+
+def test_valider_plage_colonne_pas_liste_refusee():
+    with pytest.raises(F.FormulaError, match="n'est pas de type `list`"):
+        F.valider('COUNTA(entreprise_telephone[].x)>0',
+                  {"entreprise_telephone"}, set(), champs_def=CHAMPS_HAS_TEL)
+
+
+def test_valider_plage_sous_champ_inconnu_refuse():
+    with pytest.raises(F.FormulaError, match="sous-champ déclaré"):
+        F.valider('COUNTA(contacts[].fax)>0', {"contacts"}, set(),
+                  champs_def=CHAMPS_HAS_TEL)
+
+
+def test_plage_hors_counta_refusee():
+    with pytest.raises(F.FormulaError, match="COUNTA"):
+        F.valider('contacts[].telephone<>""', {"contacts"}, set(),
+                  champs_def=CHAMPS_HAS_TEL)
+
+
+def test_counta_sur_autre_chose_qu_une_plage_refuse():
+    with pytest.raises(F.FormulaError, match="COUNTA"):
+        F.valider('COUNTA(entreprise_telephone)>0', {"entreprise_telephone"}, set())
+
+
 def test_valider_formule_saine_rend_last_node():
     noeud = F.valider('IFS(code="x";"1";TRUE();"2")', {"code"}, set())
     assert isinstance(noeud, F.Appel) and noeud.fonction == "IFS"

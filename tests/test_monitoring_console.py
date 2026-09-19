@@ -70,6 +70,7 @@ def test_rest_paths_are_unchanged_for_the_dashboard():
         "/api/admin/monitoring/transport",
         "/api/admin/monitoring/summary",
         "/api/admin/monitoring/rest",
+        "/api/admin/monitoring/rest-calls",
         "/api/admin/monitoring/connectors",
         "/api/admin/monitoring/funnel",
         "/api/admin/monitoring/calls",
@@ -161,6 +162,32 @@ def test_les_champs_lus_collent_au_dispatch():
     connus = set(monitoring.MonitoringInput.model_fields) - {"op"}
     for op, champs in monitoring._CHAMPS_LUS.items():
         assert champs <= connus, f"{op} déclare un champ absent de l'Input : {champs - connus}"
+
+
+def test_rest_calls_sert_view_as_sub_quand_pose(monkeypatch):
+    """oto-backend#962 : la lentille plateforme ligne-par-ligne existe et sert bien
+    `view_as_sub` — ni `op=calls` (MCP only) ni `op=rest` (agrégats) ne peuvent le
+    montrer."""
+    seen = {}
+    monkeypatch.setattr(monitoring.db, "list_rest_calls",
+                        lambda **kw: seen.update(kw) or [
+                            {"id": 1, "route": "GET /api/orgs/1", "view_as_sub": "sub-jane"},
+                            {"id": 2, "route": "GET /api/me", "view_as_sub": None},
+                        ])
+    out = monitoring._monitoring(CTX, monitoring.MonitoringInput(
+        op="rest_calls", org_id=7, route="/api/orgs"))
+    assert seen["org_id"] == 7
+    assert seen["route"] == "/api/orgs"
+    assert seen["limit"] == 200
+    assert out["calls"][0]["view_as_sub"] == "sub-jane"
+    assert out["calls"][1]["view_as_sub"] is None    # jamais devinée, jamais omise
+
+
+def test_rest_calls_refuse_les_champs_dune_autre_op():
+    with pytest.raises(AuthzDenied) as e:
+        monitoring._monitoring(CTX, monitoring.MonitoringInput(
+            op="rest_calls", run_id="r1"))
+    assert e.value.code == "param_not_read_by_op"
 
 
 def test_la_console_dit_que_les_gestes_du_dashboard_ne_sont_pas_dans_calls():

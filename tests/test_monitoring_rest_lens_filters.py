@@ -125,3 +125,62 @@ def test_le_scope_par_org_dit_ce_qu_il_laisse_dehors(monkeypatch):
 
     out, _ = _run(monkeypatch, since_days=7, sub="sub-jane")
     assert "org_id_caveat" not in out          # rien à nuancer sans scope d'org
+
+
+class _CurLigne:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _ConnLigne:
+    """Comme `_Conn`, mais pour `list_rest_calls` : une seule requête, ligne par
+    ligne — capture le SQL/params et rend des lignes fixtures."""
+
+    def __init__(self, sink, rows):
+        self.sink = sink
+        self.rows = rows
+
+    def execute(self, sql, params):
+        self.sink.append((sql, params))
+        return _CurLigne(self.rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_list_rest_calls_sert_view_as_sub_sans_le_deviner(monkeypatch):
+    """oto-backend#962 — le pendant `list_tool_calls` pour REST : sert `view_as_sub`
+    ligne par ligne, seule lentille qui le peut (`rest_call_stats` n'agrège que)."""
+    vues: list = []
+    rows = [{"id": 1, "sub": "op-sub", "email": "op@example.com",
+             "route": "GET /api/orgs/1", "called_at": "2026-09-18T10:00:00",
+             "duration_ms": 42, "ok": True, "error": None, "org_id": 1,
+             "view_as_sub": "sub-cible"},
+            {"id": 2, "sub": "op-sub", "email": "op@example.com",
+             "route": "GET /api/me", "called_at": "2026-09-18T09:00:00",
+             "duration_ms": 12, "ok": True, "error": None, "org_id": None,
+             "view_as_sub": None}]
+    monkeypatch.setattr(usage, "_connect", lambda: _ConnLigne(vues, rows))
+    out = usage.list_rest_calls(org_id=1, route="/api/orgs")
+    assert len(vues) == 1                      # une seule requête, pas deux
+    sql, params = vues[0]
+    assert "l.view_as_sub" in sql
+    assert "l.org_id = %s" in sql and "l.tool LIKE %s" in sql
+    assert 1 in params and "/api/orgs%" in params
+    assert out[0]["view_as_sub"] == "sub-cible"
+    assert out[1]["view_as_sub"] is None       # absent au journal = None, jamais deviné
+
+
+def test_list_rest_calls_plafonne_limit_et_days(monkeypatch):
+    vues: list = []
+    monkeypatch.setattr(usage, "_connect", lambda: _ConnLigne(vues, []))
+    usage.list_rest_calls(limit=99999, days=9999)
+    sql, params = vues[0]
+    assert params[-1] == 1000                  # limit plafonné, même borne que list_tool_calls
+    assert params[0] == 365                    # days plafonné, même borne que rest_call_stats

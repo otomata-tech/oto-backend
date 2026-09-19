@@ -609,14 +609,19 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # manifeste « referenced_tools » sans se faire passer l'instance.
     from . import tool_registry
     tool_registry.bind(instance)
-    register_all(instance)
+    # oto-backend#534 : `_build_mcp` tourne deux fois par boot (instance anonyme +
+    # authentifiée) — le label porte `transport` pour distinguer les deux dans le
+    # journal, jamais mesuré séparément jusqu'ici (ADR 0065, « mesurer d'abord »).
+    with _timed(f"register_all[{transport}]"):
+        register_all(instance)
 
     # Couche capacité (ADR 0009) : monte un tool par capacité déclarée
     # (no-op tant que le registre est vide — canari). Après register_all pour
     # que le test d'unicité voie les deux mondes (legacy + capacités).
     from .capabilities import _mcp_adapter
     from .capabilities import registry as _cap_registry
-    _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
+    with _timed(f"capability_adapter[{transport}]"):
+        _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
 
     # Après le DERNIER montage : le schéma de sortie que FastMCP DÉDUIT d'un `-> dict`
     # (« un objet, tout est permis ») est effacé de chaque outil — un canal structuré
@@ -625,6 +630,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # que décroître. Cf. `middleware/un_seul_canal.py`.
     from .middleware.un_seul_canal import UnSeulCanalMiddleware, retirer_les_schemas_vides
     retirer_les_schemas_vides(instance)
+
+    # oto-backend#534 : chronomètre TOUTE la chaîne de middlewares ci-dessous, sans
+    # toucher un seul de ses appels ni leur ordre (contrat figé, cf. les commentaires
+    # ORDRE qui suivent) — début ici, fin juste avant `return instance`.
+    _debut_middlewares = time.monotonic()
 
     # ⚠️ ORDRE : fastmcp exécute les middlewares dans l'ordre d'ajout — le PREMIER
     # ajouté est le plus EXTERNE (vérifié empiriquement, `_run_middleware` wrap en
@@ -826,6 +836,9 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # sont des erreurs JSON-RPC en HTTP 200 → invisibles à l'intégration Starlette.
     from .sentry_setup import SentryToolErrorMiddleware
     instance.add_middleware(SentryToolErrorMiddleware())
+
+    logger.info("boot: middleware_chain[%s] %.0f ms", transport,
+                (time.monotonic() - _debut_middlewares) * 1000)
 
     return instance
 

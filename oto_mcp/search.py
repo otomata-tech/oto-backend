@@ -78,8 +78,17 @@ def search(sub: str, org_id: int, q: str, *,
 
     if scope == "project" and project_id is not None:
         pids = [int(project_id)]
+        granted_pids: set[int] = set()
     else:
-        pids = ownership.accessible_project_ids(sub, org_id, want="read")
+        by_prov = ownership.accessible_project_ids_by_provenance(sub, org_id, want="read")
+        pids = by_prov["all"]
+        granted_pids = set(by_prov["granted"])
+    # Même provenance, pour les tableaux/lignes (scopés par NAMESPACE, pas par
+    # projet) — calculée UNE fois, réutilisée par `_match_tableaux`/`_match_rows`/
+    # `_match_rows_semantic` (qui appellent `_accessible_namespaces` elles-mêmes,
+    # cache non nécessaire ici, l'appel est déjà borné aux namespaces du contexte)
+    # et par le tour de tag des hits plus bas.
+    ns_ids_partages = _granted_namespace_ids(sub, org_id) if "tableau" in wanted or "ligne" in wanted else set()
 
     ranked: list[tuple[float, dict]] = []
 
@@ -198,6 +207,17 @@ def search(sub: str, org_id: int, q: str, *,
     for h in hits:
         if h.get("project_id") in names:
             h["project_name"] = names[h["project_id"]]
+        # oto-backend, feedback #1005/#1006 : dit si CE hit vient d'un partage
+        # cross-org plutôt que d'une ressource propre du contexte — jamais deviné,
+        # jamais omis, pour qu'un agent ne restitue pas un résultat partagé comme
+        # s'il appartenait au client audité. `ns_ids_partages` (tableau/ligne) est
+        # peuplé plus bas, avant ce tour — voir `_accessible_namespaces`.
+        if h.get("project_id") is not None:
+            h["cross_org_share"] = h["project_id"] in granted_pids
+        elif h.get("kind") == "tableau":
+            h["cross_org_share"] = h["ref"] in ns_ids_partages
+        elif h.get("kind") == "ligne":
+            h["cross_org_share"] = h["ref"].get("ns_id") in ns_ids_partages
 
     # Télémétrie (lot 3 Ship 1 §5) : le calllog ne trace que le MCP — log applicatif
     # anonymisé (hash de q, jamais la saisie) pour rendre les conditions V2 décidables.
@@ -250,6 +270,18 @@ def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
     rows += [r for r in db.list_datastores_granted_to(sub, [org_id], gids)
              if r["id"] not in seen]
     return rows
+
+
+def _granted_namespace_ids(sub: str, org_id: int) -> set[int]:
+    """Ids de namespace visibles UNIQUEMENT via un partage cross-org (grant
+    org/groupe) — jamais un namespace possédé par le contexte, même s'il est
+    AUSSI partagé explicitement. Même distinction que
+    `ownership.accessible_project_ids_by_provenance`, pour les tableaux/lignes."""
+    principals = ownership.active_org_principals(sub, org_id)
+    gids = [int(p[1]) for p in principals if p[0] == "group"]
+    owned = {r["id"] for r in db.list_datastores_for_owners(principals)}
+    return {r["id"] for r in db.list_datastores_granted_to(sub, [org_id], gids)
+            if r["id"] not in owned}
 
 
 def _match_tableaux(q: str, sub: str, org_id: int) -> list[dict]:

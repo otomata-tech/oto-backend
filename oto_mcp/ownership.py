@@ -98,11 +98,25 @@ def accessible_project_ids(sub: str, org_id: Optional[int],
     aux principals du contexte. Sert la recherche et l'îlot « Dernières
     modifications » (`want='read'`) ; `want='write'` n'ajoute que les grants write. **Jamais `can_access`**
     (cross-org par construction) — cf. invariants du plan lot 3."""
+    return accessible_project_ids_by_provenance(sub, org_id, want=want)["all"]
+
+
+def accessible_project_ids_by_provenance(sub: str, org_id: Optional[int],
+                                         want: str = "read") -> dict[str, list[int]]:
+    """Même ensemble qu'`accessible_project_ids`, mais qui dit la PROVENANCE de
+    chaque id (oto-backend, feedback #1005/#1006 : un résultat de recherche
+    partagé cross-org peut être pris à tort pour une ressource propre de l'org
+    auditée). `own` = possédé par le contexte de l'org active (org + pôles + mes
+    projets perso de cette org) ; `granted` = visible UNIQUEMENT via un partage
+    cross-org (`db.list_projects_granted_to`) — jamais les deux à la fois, un id
+    possédé par le contexte n'entre pas dans `granted` même s'il est AUSSI
+    partagé explicitement. `all` = l'union, dans le même ordre qu'avant (owned
+    puis membre puis grants) — c'est elle que sert `accessible_project_ids`."""
     owners = project_scope_owners(sub, org_id)
     if not owners:
-        return []
-    ids = [int(r["id"]) for r in db.list_projects_for_owners(owners)]
-    seen = set(ids)
+        return {"all": [], "own": [], "granted": []}
+    own = [int(r["id"]) for r in db.list_projects_for_owners(owners)]
+    seen = set(own)
     # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de CETTE org (`context_org`),
     # possédés → read+write. En PARITÉ STRICTE avec `oto_project op=list` (même seam
     # `db.list_member_projects`) — sinon « cherchable ⇔ lisible » ment (tripwire
@@ -110,17 +124,18 @@ def accessible_project_ids(sub: str, org_id: Optional[int],
     for r in db.list_member_projects(sub, int(org_id)):  # type: ignore[arg-type]
         rid = int(r["id"])
         if rid not in seen:
-            ids.append(rid)
+            own.append(rid)
             seen.add(rid)
+    granted: list[int] = []
     for r in db.list_projects_granted_to(active_org_principals(sub, org_id)):
         rid = int(r["id"])
         if rid in seen:
             continue
         if want == "write" and r.get("permission") != "write":
             continue
-        ids.append(rid)
+        granted.append(rid)
         seen.add(rid)
-    return ids
+    return {"all": own + granted, "own": own, "granted": granted}
 
 
 def visible_in_org(sub: str, org_id: Optional[int],

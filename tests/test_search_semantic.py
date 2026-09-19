@@ -7,7 +7,8 @@ from oto_mcp import search as S, embed_worker as W, embeddings as E
 
 
 def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
-    monkeypatch.setattr(S.ownership, "accessible_project_ids", lambda *a, **k: [1])
+    monkeypatch.setattr(S.ownership, "accessible_project_ids_by_provenance",
+                        lambda *a, **k: {"all": [1], "own": [1], "granted": []})
     monkeypatch.setattr(S.db, "search_docs_fts",
                         lambda q, pids, limit: [dict(r) for r in lexical])
     monkeypatch.setattr(S.db, "search_docs_semantic",

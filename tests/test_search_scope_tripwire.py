@@ -48,6 +48,18 @@ def test_accessible_ids_read_and_write(calls):
     assert ids_w == [11, 12, 15, 21]
 
 
+def test_provenance_distingue_possede_de_partage(calls):
+    """oto-backend, feedback #1005/#1006 : `own` = owned+membre (JAMAIS des grants,
+    même si un id owned est AUSSI accordé explicitement — ici 11/12/15) ;
+    `granted` = UNIQUEMENT ce qui n'entre que par un grant (20/21) ; `all` =
+    la même union, dans le même ordre, que l'ancienne fonction."""
+    by_prov = ownership.accessible_project_ids_by_provenance("u1", 7, want="read")
+    assert by_prov["own"] == [11, 12, 15]
+    assert by_prov["granted"] == [20, 21]
+    assert by_prov["all"] == [11, 12, 15, 20, 21]
+    assert by_prov["all"] == ownership.accessible_project_ids("u1", 7, want="read")
+
+
 def test_scope_parity_with_op_list(calls):
     """PARITÉ : les owners du contexte, les projets MEMBRE et les principals de grants
     utilisés par la recherche sont EXACTEMENT ceux d'`oto_project op=list` (le drift de
@@ -92,8 +104,9 @@ def test_each_source_gets_its_predicate(monkeypatch):
             return ret if ret is not None else []
         return f
 
-    monkeypatch.setattr(ownership, "accessible_project_ids",
-                        lambda sub, org, want="read": rec.setdefault("want", want) and [11, 12])
+    monkeypatch.setattr(ownership, "accessible_project_ids_by_provenance",
+                        lambda sub, org, want="read": rec.setdefault("want", want) and
+                        {"all": [11, 12], "own": [11, 12], "granted": []})
     monkeypatch.setattr(S.db, "search_docs_fts",
                         lambda q, pids, limit: rec.setdefault("docs_pids", pids) and [])
     monkeypatch.setattr(S.db, "search_project_briefs",
@@ -138,7 +151,7 @@ def test_each_source_gets_its_predicate(monkeypatch):
 
 def test_project_scope_restricts_to_one_project(monkeypatch):
     rec = {}
-    monkeypatch.setattr(ownership, "accessible_project_ids",
+    monkeypatch.setattr(ownership, "accessible_project_ids_by_provenance",
                         lambda *a, **k: pytest.fail("scope=project ne doit PAS élargir"))
     monkeypatch.setattr(S.db, "search_docs_fts",
                         lambda q, pids, limit: rec.setdefault("pids", pids) and [])

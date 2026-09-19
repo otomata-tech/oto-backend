@@ -29,7 +29,9 @@ def _stub_empty(monkeypatch, **over):
             monkeypatch.setattr(S.db, n, lambda q, org, sub, limit, _r=rows: list(_r))
         else:
             monkeypatch.setattr(S.db, n, lambda q, pids, limit, _r=rows: list(_r))
-    monkeypatch.setattr(S.ownership, "accessible_project_ids", lambda *a, **k: [1])
+    monkeypatch.setattr(S.ownership, "accessible_project_ids_by_provenance",
+                        lambda *a, **k: over.get(
+                            "by_provenance", {"all": [1], "own": [1], "granted": []}))
     monkeypatch.setattr(S.ownership, "active_org_principals", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         lambda owners: over.get("tableaux", []))
@@ -64,6 +66,43 @@ def test_headline_without_highlight_dropped(monkeypatch):
         {"id": 10, "project_id": 1, "title": "Décideur", "headline": "texte sans marque"}])
     out = S.search("u1", 7, "decideur")
     assert out["hits"][0]["passage"] is None
+
+
+def test_hit_dun_projet_possede_nest_pas_marque_cross_org(monkeypatch):
+    """oto-backend, feedback #1005/#1006 : un résultat venant d'un projet POSSÉDÉ
+    par le contexte (org/pôles/perso de cette org) ne doit jamais porter
+    `cross_org_share=True`, même si ce même projet est PAR AILLEURS partagé —
+    la provenance dit d'où vient CE hit, pas tout ce qui est vrai du projet."""
+    _stub_empty(monkeypatch, search_docs_fts=[
+        {"id": 10, "project_id": 1, "title": "Page A", "headline": "<b>x</b>"}],
+        by_provenance={"all": [1], "own": [1], "granted": []})
+    out = S.search("u1", 7, "xx")
+    assert out["hits"][0]["cross_org_share"] is False
+
+
+def test_hit_dun_projet_partage_est_marque_cross_org(monkeypatch):
+    """Le même hit, mais quand le projet 1 n'est visible QUE via un grant
+    (`granted`) — un agent qui restitue ce résultat ne doit pas le présenter
+    comme appartenant à l'org auditée sans le dire."""
+    _stub_empty(monkeypatch, search_docs_fts=[
+        {"id": 10, "project_id": 1, "title": "Page A", "headline": "<b>x</b>"}],
+        by_provenance={"all": [1], "own": [], "granted": [1]})
+    out = S.search("u1", 7, "xx")
+    assert out["hits"][0]["cross_org_share"] is True
+
+
+def test_hit_tableau_partage_est_marque_cross_org(monkeypatch):
+    """Même distinction pour un `tableau` (scopé par NAMESPACE, pas par projet) :
+    un namespace visible UNIQUEMENT via un grant org/groupe est marqué, un
+    namespace possédé ne l'est jamais."""
+    monkeypatch.setattr(S, "_match_tableaux", lambda q, sub, org: [
+        {"kind": "tableau", "ref": 101, "title": "prospects", "matched_by": "lexical"},
+        {"kind": "tableau", "ref": 102, "title": "leads", "matched_by": "lexical"}])
+    _stub_empty(monkeypatch, tableaux=[])
+    monkeypatch.setattr(S, "_granted_namespace_ids", lambda sub, org: {102})
+    out = S.search("u1", 7, "xx", kinds=["tableau"])
+    par_ref = {h["ref"]: h["cross_org_share"] for h in out["hits"]}
+    assert par_ref == {101: False, 102: True}
 
 
 def test_zero_hits_carries_hint(monkeypatch):

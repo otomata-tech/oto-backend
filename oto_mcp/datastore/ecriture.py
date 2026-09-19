@@ -199,7 +199,23 @@ class EcritureMixin:
             existing_id = (db.datastore_find_row_id_by_key(ns_id, key, kv)
                            if key and kv is not None else None)
             if existing_id is None:
-                raise  # violation inexpliquée → erreur franche, pas de repli muet
+                if key and kv is not None:
+                    # oto-backend#994 : une clé DÉCLARÉE portait cette valeur (l'index
+                    # vient de le prouver) mais la recherche EXACTE ne la retrouve pas
+                    # — cas mesuré : une clé posée à `@empty`/`@clear` n'est pas
+                    # indexée comme la donnée réelle (la cellule stockée porte le
+                    # marqueur de vide assumé, pas le mot réservé littéral), donc deux
+                    # lignes vidées sur la même colonne se heurtent à la contrainte
+                    # SANS jamais se retrouver l'une l'autre. Refus NOMMÉ, jamais
+                    # l'exception driver brute (500 vécu, signal oto-backend#994).
+                    raise ValueError(
+                        f"écriture refusée par la contrainte de clé métier unique "
+                        f"({key}={kv!r}) — une autre ligne porte déjà cette valeur, "
+                        "mais la recherche exacte ne l'a pas retrouvée (cas connu : "
+                        "une clé posée à `@empty`/`@clear` n'est pas indexée comme "
+                        "la donnée réelle). Contournement : omets la colonne clé sur "
+                        "cette ligne, ou donne-lui une valeur distincte.") from None
+                raise  # violation inexpliquée, sans clé déclarée → erreur franche
             # `donnees_d_origine` voyage ici : le geste d'origine n'a pas été touché
             # ci-dessus, la fusion pose donc elle-même les deux versions (cf. `lots.py`).
             return self._row_to_dict(

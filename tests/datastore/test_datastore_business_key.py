@@ -110,6 +110,23 @@ def test_lost_race_converges_to_update(race):
     assert state["rows"]["winner"] == {"member_id": "A", "x": 1, "y": 2}  # merge
 
 
+def test_key_at_empty_sentinel_conflict_raises_valueerror_not_500(race, monkeypatch):
+    """oto-backend#994 (signal feedback) : une clé posée à `@empty` (« vide assumé »)
+    n'est jamais retrouvée par la recherche EXACTE — la cellule stockée porte le
+    marqueur de vide assumé, pas le mot réservé littéral. Deux lignes vidées sur la
+    même colonne se heurtent donc à l'index UNIQUE sans jamais se retrouver l'une
+    l'autre : le lookup de convergence échoue systématiquement, exactement comme un
+    vrai conflit inexpliqué. Avant #994, ce cas relevait `raise` nu → `UniqueViolation`
+    brute → 500 côté REST. Attendu désormais : un refus NOMMÉ qui dit pourquoi."""
+    st, _ = race
+    monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
+                        lambda ns_id, key, kv: None)  # jamais retrouvée : le symptôme
+    with pytest.raises(ValueError) as exc_info:
+        st._write_rows_to_ns(7, [{"member_id": "@empty"}], key="member_id")
+    assert not isinstance(exc_info.value, UniqueViolation)
+    assert "member_id" in str(exc_info.value) and "@empty" in str(exc_info.value)
+
+
 def test_unexplained_violation_raises(race, monkeypatch):
     # La violation ne s'explique pas par la clé déclarée (row sans cette clé) →
     # erreur FRANCHE, jamais un repli muet.
@@ -139,6 +156,27 @@ def test_append_row_existing_key_merges_not_500(monkeypatch):
     out = st.append_row("t", {"member_id": "A", "y": 2})
     assert out["_id"] == "r1"
     assert rows["r1"] == {"member_id": "A", "x": 1, "y": 2}  # merge, pas d'écrasement
+
+
+def test_append_row_key_at_empty_sentinel_conflict_raises_valueerror(monkeypatch):
+    """oto-backend#994, même symptôme côté écriture UNITAIRE (`append_row`) : une
+    clé `@empty` viole l'index mais n'est jamais retrouvée par la recherche exacte —
+    refus NOMMÉ attendu, jamais l'exception driver brute."""
+    st = DatastorePg("u", acting_org=35)
+    monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
+    monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
+                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
+    monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
+                        lambda ns_id, key, kv: None)  # jamais retrouvée : le symptôme
+    monkeypatch.setattr(dsm.db, "datastore_insert_row",
+                        lambda ns_id, rid, data: (_ for _ in ()).throw(
+                            UniqueViolation("duplicate key ds_bkey_7")))
+
+    with pytest.raises(ValueError) as exc_info:
+        st.append_row("t", {"member_id": "@empty"})
+    assert not isinstance(exc_info.value, UniqueViolation)
+    assert "member_id" in str(exc_info.value) and "@empty" in str(exc_info.value)
 
 
 def test_append_row_lost_race_converges(monkeypatch):

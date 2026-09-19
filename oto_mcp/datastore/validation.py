@@ -434,7 +434,7 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     # 08/09/2026 — même raison, même place : un `type` déclaré s'arme lui-même. Le
     # contrôle existait sous `validation_active` et n'y voyait rien passer (0 violation
     # sur 88 tableaux) pendant que 248 tableaux sans validation en portaient 118.
-    errors.extend(types_trahis(schema, merged))
+    errors.extend(types_trahis(schema, merged, written=written, gelees=gelees))
     # 09/09/2026 — le cran suivant de la même famille : une colonne SECONDAIRE qui
     # déclare ses états les fait respecter, elle aussi. Seule la file était vérifiée ;
     # 131 colonnes du parc déclaraient une liste que personne n'appliquait. Mesuré

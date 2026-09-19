@@ -69,13 +69,23 @@ def _juge(valeur: Any, ftype: str) -> bool:
     return bool(_type_error(valeur, ftype, "x", None, None, None))
 
 
-def types_trahis(schema: Optional[dict], merged: dict) -> list[str]:
+def types_trahis(schema: Optional[dict], merged: dict, *,
+                 written: Optional[set] = None,
+                 gelees: Optional[list] = None) -> list[str]:
     """Les colonnes dont la valeur ne tient pas le type que leur schéma déclare.
 
     Rend des phrases prêtes à servir : la faute, puis le geste. La valeur est DÉBALLÉE
     avant jugement (`unwrap`) — une cellule vaut `{"valeur": …, "comment": …}` en base,
     et juger la structure au lieu de son contenu est le défaut qui a arrêté une
     campagne entière le 29/08 sur la colonne d'état.
+
+    `written` restreint le REFUS aux colonnes que CE geste écrit — même partage
+    `posé / gelé` que `etats_trahis`, pour la même raison (07-08/09/2026, signal
+    oto-backend#923) : une valeur déjà en base, hors type AVANT ce geste, ne doit
+    pas geler un patch qui ne la touche pas — elle serait sinon refusée pour un
+    défaut qu'elle n'a pas causé, avec un message qui prétend à tort qu'elle
+    l'a envoyée. `written=None` (insert/remplacement, toute la row est écrite)
+    garde l'ancien comportement : tout est jugé.
     """
     if not isinstance(merged, dict):
         return []
@@ -92,8 +102,10 @@ def types_trahis(schema: Optional[dict], merged: dict) -> list[str]:
         if not _juge(valeur, ftype):
             continue
         quoi = _OU_METTRE_QUOI.get(ftype, "")
-        out.append(
-            f"`{cle}` est déclarée `{ftype}` et reçoit {valeur!r} — refusé"
-            + (f". Pour écrire : {quoi}" if quoi else "")
-        )
+        refus = (f"`{cle}` est déclarée `{ftype}` et reçoit {valeur!r} — refusé"
+                 + (f". Pour écrire : {quoi}" if quoi else ""))
+        if written is None or cle in written:
+            out.append(refus)
+        elif gelees is not None:
+            gelees.append({"champ": str(cle), "refus": refus})
     return out

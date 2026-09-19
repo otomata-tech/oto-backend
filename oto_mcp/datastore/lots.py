@@ -186,7 +186,22 @@ class LotsMixin:
                     existing_id = (db.datastore_find_row_id_by_key(ns_id, dk, dkv)
                                    if dk and dkv is not None else None)
                     if existing_id is None:
-                        raise  # violation inexpliquée → erreur franche, pas de repli muet
+                        if dk and dkv is not None:
+                            # oto-backend#994 : même cause que ecriture.py — une clé
+                            # posée à `@empty`/`@clear` n'est pas indexée comme la
+                            # donnée réelle, donc la recherche exacte ne retrouve
+                            # jamais la ligne en conflit que l'index vient pourtant de
+                            # prouver. Refus NOMMÉ, jamais l'exception driver brute
+                            # (500 vécu en lot, #994).
+                            raise ValueError(
+                                f"écriture refusée par la contrainte de clé métier "
+                                f"unique ({dk}={dkv!r}) — une autre ligne porte déjà "
+                                "cette valeur, mais la recherche exacte ne l'a pas "
+                                "retrouvée (cas connu : une clé posée à `@empty`/"
+                                "`@clear` n'est pas indexée comme la donnée réelle). "
+                                "Contournement : omets la colonne clé sur cette "
+                                "ligne, ou donne-lui une valeur distincte.") from None
+                        raise  # violation inexpliquée, sans clé déclarée → erreur franche
                     # ⚠️ `donnees_d_origine` voyage ICI aussi (oto#72) : ce chemin est
                     # la COURSE PERDUE sous l'index de clé métier, qui converge en
                     # update — « même merge que le chemin nominal », disait le

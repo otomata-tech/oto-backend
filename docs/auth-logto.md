@@ -81,13 +81,27 @@ supplée : métadonnée AS augmentée (`registration_endpoint` à nous) + à cha
 `POST /oauth/register` elle **enregistre dynamiquement le `redirect_uri` du client
 dans l'app Logto partagée** (Management API via M2M dédié `OTO_MCP_LOGTO_M2M_*`)
 puis renvoie le `client_id` partagé (`OTO_MCP_CLAUDE_APP_ID`). → les clients MCP
-qui exigent DCR (Claude, **ChatGPT**, **Mistral**) s'installent **sans coller de
+qui exigent DCR (Claude, **ChatGPT**, **Mistral**, **Hermes**) s'installent **sans coller de
 client_id ni intervention manuelle**, même quand le redirect varie par connecteur
 (ChatGPT : `chatgpt.com/connector/oauth/<id>`). Garde-fou `_redirect_ok` : n'autorise
 QUE des hosts connus (claude.ai/.com, chatgpt.com préfixe `/connector/oauth/`,
 callback.mistral.ai, localhost) — pas un registrar ouvert. **Nouveau client qui
 échoue** : son redirect est loggé (`DCR refusé — redirect_uris=…` en journalctl) →
 ajouter son host à `_redirect_ok`. Fail-open : Management API en panne → `client_id`
+renvoyé quand même (Claude, redirect pré-enregistré, jamais cassé).
+
+⚠️ **Hermes (Nous Research) est le seul cas à sous-domaine JOKER**
+(`*.agents.nousresearch.com`) : le profil LOCAL de sa CLI reste en loopback
+(aucun cas particulier requis), mais **Hermes Cloud** — leur produit hébergé,
+un agent par instance sur `<id>.agents.nousresearch.com` — ne peut pas ouvrir
+de listener loopback pour un navigateur ailleurs : son dashboard pose son
+propre callback par instance (`/api/mcp/oauth/callback/<nom du serveur MCP>`,
+vérifié dans les sources du paquet `hermes-agent`, pas deviné). Élargir ce
+host, c'est élargir à un registraire de sous-domaines que Nous Research
+contrôle et ne fait pas revoir par nous, à la différence de
+chatgpt.com/callback.mistral.ai (un host fixe, opéré par son fournisseur) —
+décision produit assumée, pas juste une entrée d'allowlist de plus
+(oto-backend, 20/09/2026).
 renvoyé quand même (Claude, redirect pré-enregistré, jamais cassé).
 
 ### Sur le host d'un TENANT : enregistrer chez lui, ou dire qu'on ne l'a pas fait

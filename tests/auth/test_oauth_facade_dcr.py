@@ -22,6 +22,9 @@ from oto_mcp.auth.facade import RedirectRegistrationFailed, _redirect_ok, make_r
     "https://chatgpt.com/connector/oauth/abc123",              # forme par connecteur
     "https://claude.ai/api/mcp/auth_callback",
     "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback",
+    # Hermes (Nous Research) : Hermes Cloud, un sous-domaine par instance.
+    "https://volcanic-existentialism-0230.agents.nousresearch.com/api/mcp/oauth/callback/tulina",
+    "https://agents.nousresearch.com/api/mcp/oauth/callback/tulina",
 ])
 def test_rappels_connus_acceptes(uri):
     assert _redirect_ok(uri) is True
@@ -36,6 +39,11 @@ def test_rappels_connus_acceptes(uri):
     "https://chatgpt.com/connector_platform_oauth_redirectX",
     # et le schéma reste https
     "http://chatgpt.com/connector_platform_oauth_redirect",
+    # Hermes : un host VOISIN n'est pas un sous-domaine (ni un suffixe brut),
+    # et le chemin sans le segment (nom du serveur MCP) reste refusé.
+    "https://evil-agents.nousresearch.com/api/mcp/oauth/callback/tulina",
+    "https://agents.nousresearch.com.attaquant.test/api/mcp/oauth/callback/tulina",
+    "https://volcanic-existentialism-0230.agents.nousresearch.com/api/mcp/oauth/callback",
 ])
 def test_rappels_voisins_refuses(uri):
     assert _redirect_ok(uri) is False

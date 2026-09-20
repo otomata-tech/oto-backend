@@ -234,6 +234,25 @@ def _redirect_ok(uri: str) -> bool:
     if p.scheme == "https" and host == "callback.mistral.ai" \
             and _prefixe_borne(p.path, "/v1/integrations_auth"):
         return True
+    # Hermes (Nous Research), **Hermes Cloud** : leur produit hébergé
+    # (compte Nous Research, agents distants — par opposition au profil
+    # LOCAL de la CLI, qui reste en loopback via `tools/mcp_oauth.py` et n'a
+    # besoin d'aucun cas particulier). Ce dashboard ne peut pas ouvrir de
+    # listener loopback pour un navigateur ailleurs : il pose son PROPRE
+    # callback, un par instance, construit par
+    # `hermes_cli/web_server.py::_mcp_oauth_callback_url` — un sous-domaine par
+    # gateway (`<id>.agents.nousresearch.com`) + `/api/mcp/oauth/callback/<nom
+    # du serveur MCP>` (segment unique, borné). Vérifié contre le paquet
+    # `hermes-agent` (source lu, pas deviné) et reproduit ici le 20/09.
+    # ⚠️ SOUS-DOMAINE JOKER, à la différence de chatgpt.com/callback.mistral.ai
+    # (un host FIXE, un fournisseur qui l'opère lui-même) : `agents.nousresearch.com`
+    # attribue un sous-domaine par gateway déployé, sans revue de notre côté —
+    # élargir ici élargit à un registraire que Nous Research contrôle, pas nous.
+    # Décision produit délibérée, pas seulement un allowlist technique de plus.
+    if p.scheme == "https" and (host == "agents.nousresearch.com"
+                                or host.endswith(".agents.nousresearch.com")) \
+            and _prefixe_borne(p.path, "/api/mcp/oauth/callback"):
+        return True
     if p.scheme == "http" and host in _ALLOWED_LOCAL_HOSTS:
         return True
     return False

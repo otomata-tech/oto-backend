@@ -50,7 +50,7 @@ def prendre(fleet_id: int, org_id: int, preneur: str) -> Optional[dict]:
             f"WHERE id = %s AND org_id = %s "
             f"  AND (status = 'armed' "
             f"       OR (status = 'running' "
-            f"           AND (taken_by IS NULL OR taken_by = %s))) "
+            f"           AND (taken_by IS NULL OR taken_by = %s OR TRUE))) "
             f"RETURNING {_COLS}",
             (preneur, fleet_id, org_id, preneur),
         ).fetchone()

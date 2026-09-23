@@ -64,6 +64,38 @@ Chemin servi prouvé contre PostgreSQL (`tests/test_org_du_run_639.py`), étage 
 sans base (`tests/test_current_org_run_stage_639.py`), hors boucle
 (`tests/middleware/test_no_blocking_db_in_middleware.py`).
 
+## La VISIBILITÉ d'une session de flotte (23/09/2026, #1058)
+
+L'étage ci-dessus règle l'org d'un **appel** ; il ne règle pas la **boîte à outils**
+que la session voit. `session_visibility` calcule la denylist à l'`initialize` MCP,
+**avant** tout `_run_id=` d'appel — le seam n'a donc rien à relire, et la boîte
+dérivait toujours de la maison, jamais de l'org du run.
+
+Incident du 22/09 (`#1058`) : la maison du compte porteur des workers de flotte a
+basculé (2 → 226, sans déploiement, écriture `org_members.is_active`) pendant que
+plusieurs flottes tournaient. Les **appels** de ces flottes ont continué à s'exécuter
+sous l'org du run (l'étage ci-dessus), et à se journaliser correctement — mais la
+boîte affichée à la session, elle, a suivi la maison : tous les connecteurs de toutes
+les flottes du compte ont disparu (« `Unknown tool: 'fr_directors'` ») pendant ~2h,
+sans déploiement, sans erreur, sans signal.
+
+Correctif : `UserDisabledToolsMiddleware.on_initialize` lit l'en-tête HTTP
+`X-Oto-Run` (même nom que son pendant REST, mais porté ici sur la requête MCP
+`initialize` elle-même — le runner ouvrant une session par appel, il connaît déjà
+le run au moment d'ouvrir la connexion) via `run_org.resolve_visibility_org(sub)` :
+run connu + sub membre → l'org du run est passée en `org=` explicite à
+`apply_session_visibility`/`compute_hidden_tools`, qui la préfère à la maison.
+**Fail-open à chaque étage** (en-tête absent, run inconnu, sub non membre, base qui
+tousse) : jamais de refus au handshake — la visibilité reste de la gouvernance, pas
+une barrière (ADR 0031), et retombe alors sur la dérivation historique (maison), le
+comportement exact d'avant #1058. Une session humaine (dashboard, claude.ai) ne porte
+jamais cet en-tête : rien n'y change.
+
+Testé sans base (`tests/test_flotte_visibilite_suit_le_run_1058.py`) : résolution de
+l'en-tête, préférence de l'org explicite sur la maison dans `compute_hidden_tools`, et
+le banc bout-en-bout — deux handshakes de la même flotte, la maison bascule entre les
+deux, la boîte posée reste identique.
+
 ## Invariant groupe ⊂ org
 
 **Invariant groupe⊂org dérivé** : un override/consultation d'org **sans** groupe explicite ⇒ niveau org (jamais le `home_group` d'une autre org) ; toute bascule d'org de session retire l'override de groupe. `/api/me` expose `active_org`/`active_group` (effectifs) **et** `home_org`/`home_group` (défauts) distinctement. `oto_whoami` montre l'org effective + `scope: home|session`.

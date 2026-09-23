@@ -5,6 +5,7 @@ import logging
 
 from fastmcp.server.middleware import Middleware
 
+from .. import run_org
 from ..auth.hooks import current_user_sub_from_token
 from ..session_visibility import apply_session_visibility
 
@@ -25,6 +26,10 @@ class UserDisabledToolsMiddleware(Middleware):
     Pas de sub identifiable (stdio local, discovery non-authentifié) → on ne filtre
     rien : la machine du dev a accès complet, le masquage par défaut ne concerne que
     la surface multi-user authentifiée.
+
+    Une session ouverte avec l'en-tête `X-Oto-Run` (le runner de flotte, un run par
+    session, cf. `run_org`) voit la boîte de l'ORG DU RUN, pas la maison mutable du
+    compte porteur (#1058) — sans cet en-tête, comportement inchangé.
     """
 
     async def on_initialize(self, context, call_next):
@@ -40,5 +45,7 @@ class UserDisabledToolsMiddleware(Middleware):
         if ctx is None:
             logger.warning("fastmcp_context is None at on_initialize for sub=%s", sub)
             return result
-        await apply_session_visibility(ctx, sub)
+        org = await run_org.resolve_visibility_org(sub)
+        kwargs = {} if org is None else {"org": org}
+        await apply_session_visibility(ctx, sub, **kwargs)
         return result

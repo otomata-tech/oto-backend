@@ -30,6 +30,7 @@ import logging
 from typing import Optional
 
 from .mcp_errors import McpError
+from fastmcp.server.dependencies import get_http_headers
 from mcp.types import ErrorData, INVALID_PARAMS
 from starlette.concurrency import run_in_threadpool
 
@@ -110,3 +111,50 @@ async def pin_for_call() -> list:
     if org is None:
         return []
     return [(session_org.reset_call_run_org, session_org.set_call_run_org(org))]
+
+
+# ── Org du run pour la VISIBILITÉ d'une session (#1058, 23/09/2026) ────────────
+# À l'`initialize`, aucun jeton d'appel n'existe encore (`_run_id=` n'arrive qu'avec
+# le premier `call_tool`) : la visibilité (`session_visibility`) dérivait donc
+# TOUJOURS de la maison, jamais de l'org du run. Mesuré le 22/09 : une bascule de la
+# maison du compte porteur des workers de flotte (2 → 226, sans déploiement) a masqué
+# tous les connecteurs de TOUTES les flottes de ce compte pendant ~2h, alors même que
+# les APPELS de ces flottes continuaient de s'exécuter (et de se journaliser) sous
+# l'org de la flotte — seule la boîte affichée suivait la maison.
+#
+# Le runner ouvrant une session PAR APPEL (cf. `pin_for_call`), il connaît déjà le
+# run au moment d'ouvrir la connexion : il doit porter `X-Oto-Run` sur la requête HTTP
+# d'`initialize`, comme la face REST le porte déjà sur chacune des siennes. Sans cet
+# en-tête (session humaine, dashboard, claude.ai) : comportement inchangé, dérive de
+# la maison — ce chemin ne concerne QUE les sessions qui déclarent un run.
+def _resoudre_pour_visibilite(sub: str, run_id: str) -> Optional[int]:
+    """Sync (threadpool) : même source de vérité que `_resoudre`, mais **fail-open** —
+    jamais de refus au handshake. La visibilité est de la gouvernance, pas une
+    barrière (ADR 0031) ; la vraie garde d'appartenance reste `pin_for_call`, jouée à
+    CHAQUE appel. Un run inconnu, ou un sub qui n'en est pas membre, ne change rien :
+    la visibilité retombe sur la dérivation historique (maison)."""
+    from . import roles
+    org = org_of_run(run_id)
+    if org is None:
+        return None
+    if not roles.is_org_member(sub, org):
+        return None
+    return org
+
+
+async def resolve_visibility_org(sub: str) -> Optional[int]:
+    """Org à passer à `session_visibility.apply_session_visibility(..., org=…)` pour
+    une session ouverte avec `X-Oto-Run` — ou `None` (dérive de la maison, comme
+    avant). Lue au HANDSHAKE, donc avant tout `_run_id=` d'appel : l'en-tête HTTP est
+    la seule voie possible à ce stade (`get_http_headers`, même patron que
+    `handshake_log`)."""
+    headers = get_http_headers(include={"x-oto-run"})
+    run_id = (headers.get("x-oto-run") or "").strip()
+    if not run_id:
+        return None
+    try:
+        return await run_in_threadpool(_resoudre_pour_visibilite, sub, run_id)
+    except Exception as e:  # noqa: BLE001 — fail-open : un hoquet ne casse pas le handshake
+        logger.warning("org de run illisible pour la visibilité (sub=%s run=%s): %s",
+                       sub, run_id, e)
+        return None

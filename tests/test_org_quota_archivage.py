@@ -49,7 +49,9 @@ AUTRE = "sub-test-2"
 # d'en gagner une. `tenant_admins` : depuis le 2026-09-25 le plafond ne s'applique pas à
 # l'admin de son tenant, et `org_quota` le LIT à chaque création (`db.is_tenant_admin`).
 _TABLES = ("tenants", "tenant_admins", "users", "orgs", "org_members", "org_groups",
-           "org_group_members", "option_comps", "org_subscriptions", "sub_aliases")
+           "org_group_members", "option_comps", "org_subscriptions", "sub_aliases",
+           # Le journal des membres (oto#145) : chaque ajout/retrait l'écrit.
+           "org_member_events")
 
 
 def _real_ddl(table: str) -> str:

@@ -62,7 +62,7 @@ def test_creates_fresh_when_no_reclaim(monkeypatch):
     monkeypatch.setattr(org_store, "create_org",
                         lambda name, created_by=None: rec["create"].append((name, created_by)) or 42)
     monkeypatch.setattr(org_store, "add_org_member",
-                        lambda oid, sub, org_role="org_member": rec["member"].append((oid, sub, org_role)))
+                        lambda oid, sub, org_role="org_member", *, actor: rec["member"].append((oid, sub, org_role)))
     assert org_store._reclaim_or_create_personal("u1", "a@x.co", "Alice") == 42
     assert rec["create"] == [("Alice", "u1")] and rec["member"] == [(42, "u1", "org_admin")]
 
@@ -90,7 +90,7 @@ def test_create_releases_archived_personal_slot(monkeypatch):
     conn = _RecConn()
     monkeypatch.setattr(org_store, "_connect", lambda: conn)
     monkeypatch.setattr(org_store, "create_org", lambda name, created_by=None: 42)
-    monkeypatch.setattr(org_store, "add_org_member", lambda oid, sub, org_role="org_member": None)
+    monkeypatch.setattr(org_store, "add_org_member", lambda oid, sub, org_role="org_member", *, actor: None)
     monkeypatch.setattr(org_store, "seed_for_org", lambda *a, **k: None, raising=False)
     org_store._reclaim_or_create_personal("u1", "a@x.co", "Alice")
     updates = [s for s in conn.sql if s[0].startswith("UPDATE orgs SET personal_of")]

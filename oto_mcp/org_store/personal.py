@@ -76,7 +76,7 @@ def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[s
             _log.info("ensure_personal_org: org #%s réclamée comme perso de %s", oid, sub)
             return oid
     oid = orgs.create_org(_personal_label(email, name), created_by=sub)
-    members.add_org_member(oid, sub, org_role="org_admin")
+    members.add_org_member(oid, sub, org_role="org_admin", actor=None)  # le système
     with _connect() as conn:
         conn.execute("UPDATE orgs SET personal_of = %s WHERE id = %s", (sub, oid))
     _log.info("ensure_personal_org: org perso #%s créée pour %s", oid, sub)

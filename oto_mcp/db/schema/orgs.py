@@ -146,3 +146,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS org_group_members_one_active
 --  depuis la fusion du chantier procédures — cadrage 10/07, Lot B/C. Les tables
 --  jumelles org_group_instructions/+revisions sont DROPpées en Lot C.)
 """
+
+# journal des entrées et sorties de membres (otomata-tech/oto#145)
+MEMBER_EVENTS = """
+-- Le JOURNAL des entrées et sorties d'une org : une ligne par geste qui ajoute,
+-- retire ou change le rôle d'un membre, écrite dans la transaction du geste
+-- (`org_store.members`). `actor_sub` NULL = le système (espace personnel créé
+-- d'office, invitation honorée au signup). Lu par les seuls admins de l'org
+-- (`org.member.events`) ; la personne retirée n'en lit rien. Pas de clé étrangère
+-- vers `users` : un compte fusionné ou supprimé ne doit pas effacer l'historique.
+CREATE TABLE IF NOT EXISTS org_member_events (
+    id BIGSERIAL PRIMARY KEY,
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('added', 'removed', 'role_changed')),
+    old_role TEXT,
+    new_role TEXT,
+    actor_sub TEXT,
+    at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_org_member_events_org ON org_member_events(org_id, id DESC);
+"""

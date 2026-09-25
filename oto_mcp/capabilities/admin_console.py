@@ -22,7 +22,8 @@ from .. import credentials_store, db
 from . import platform_invites, unipile_seats, users_admin
 from .orgs import (admin as orgs_admin, members as orgs_members,
                    reads as orgs_reads)
-from ._authz import ADMIN_BY_OP, ORG_ADMIN_OF, ORG_MEMBER_OF, PLATFORM_ADMIN, SUPER_ADMIN
+from ._authz import (ADMIN_BY_OP, ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, ORG_MEMBER_OF,
+                     PLATFORM_ADMIN, SUPER_ADMIN)
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from ._execution import execute
 from .registry import CAPABILITIES, by_key
@@ -55,12 +56,14 @@ def _org(ctx: ResolvedCtx, inp: OrgAdminInput) -> dict:
     return orgs_reads._org_detail(ctx, orgs_reads.OrgIdInput(org_id=oid))  # get
 
 
-# ── oto_admin_org_member : add / remove / set_role / list ────────────────────
+# ── oto_admin_org_member : add / remove / set_role / list / events ───────────
 class OrgMemberAdminInput(BaseModel):
-    op: Literal["add", "remove", "set_role", "list", "connectors"]
+    op: Literal["add", "remove", "set_role", "list", "connectors", "events"]
     org_id: int
     target: Optional[str] = None      # add/remove/set_role/connectors : email ou sub
     role: Optional[str] = None        # add/set_role
+    limit: Optional[int] = None       # events
+    before_id: Optional[int] = None   # events : curseur
 
 
 def _org_member(ctx: ResolvedCtx, inp: OrgMemberAdminInput) -> dict:
@@ -69,6 +72,9 @@ def _org_member(ctx: ResolvedCtx, inp: OrgMemberAdminInput) -> dict:
         # déjà un opérateur — même exposition que `org.admin.get`.
         return {"org_id": inp.org_id,
                 "members": orgs_reads._members(inp.org_id, exposer_operateur=True)}
+    if inp.op == "events":
+        return orgs_members._member_events(ctx, orgs_members.MemberEventsInput(
+            org_id=inp.org_id, limit=inp.limit, before_id=inp.before_id))
     target = _need(inp.target, "missing_target", "`target` (email ou sub) requis.")
     if inp.op == "connectors":
         # Projection admin des credentials d'un MEMBRE (scope member, ADR 0033) :
@@ -334,12 +340,15 @@ CAPABILITIES += [
                            "remove": ORG_ADMIN_OF("org_id"),
                            "set_role": ORG_ADMIN_OF("org_id"),
                            "connectors": ORG_ADMIN_OF("org_id"),
+                           "events": ORG_ADMIN_OF_OR_OPERATOR("org_id"),
                            "list": PLATFORM_ADMIN}),
         description=("Manage an org's members (org_admin of `org_id`; list = platform admin). "
                      "op=add (`target` email|sub, `role` org_member|org_admin) / remove (`target`) / "
                      "set_role (`target`, `role`) / list / connectors (`target` — the member's "
                      "configured connectors: connector/account/secret_kind/set_at/public meta, "
-                     "NEVER any secret — diagnose a failing byo_user key). Anti-lockout on the last org_admin."),
+                     "NEVER any secret — diagnose a failing byo_user key) / events (membership log: "
+                     "who joined, left or changed role, when, by whom; newest first, `limit`, "
+                     "`before_id` = previous page's `next_before_id`). Anti-lockout on the last org_admin."),
         mcp="oto_admin_org_member",
     ),
     Capability(

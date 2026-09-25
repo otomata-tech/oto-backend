@@ -106,6 +106,14 @@ call-sites (`org_store/invitations.py`, `api/public.py`, `api/routes.py`,
 `capabilities/orgs/invites.py`). `create_invitation` perd un élément de tuple
 (`(id, token, code)` → `(id, token)`) et `peek_invitation` perd son paramètre `code`
 — les deux sont donc aussi mis à jour dans `FROZEN_SIGNATURES`.
+
+⚠️ **Mise à jour du 25/09/2026 (otomata-tech/oto#145)** — le journal des entrées et
+sorties de membres. `add_org_member` et `remove_org_member` gagnent un paramètre NOMMÉ
+`actor` (sub de qui agit, None = le système), à valeur par défaut : la surface
+s'ÉLARGIT, aucun appelant existant ne casse — mais tout appel de PRODUCTION le passe
+explicitement (garde `tests/test_journal_membres_145.py`). `_accept_invitation_row`
+le reçoit sans défaut : ses deux seuls appelants distinguent le clic (la personne) de
+la réconciliation au signup (le système).
 """
 from __future__ import annotations
 
@@ -176,7 +184,7 @@ FROZEN = (
 # nom -> str(inspect.signature(...)) relevé sur le même commit.
 FROZEN_SIGNATURES = {
     'LibrarySlugTaken': '?',
-    '_accept_invitation_row': "(inv: 'dict', sub: 'str') -> 'dict'",
+    '_accept_invitation_row': "(inv: 'dict', sub: 'str', *, actor: 'Optional[str]') -> 'dict'",
     '_connect': "() -> 'Iterator[psycopg.Connection]'",
     '_email_connectors_in_order': "(settings: 'dict') -> 'list[str]'",
     # #681 : la clé est la paire propriétaire, plus l'org — cf. l'en-tête.
@@ -193,7 +201,7 @@ FROZEN_SIGNATURES = {
     '_snippet': "(body: 'str', query: 'str', width: 'int' = 200) -> 'str'",
     '_sync_mfa_mirror': "(org_id: 'int') -> 'None'",
     'accept_invitation': "(token: 'str', sub: 'str') -> 'Optional[dict]'",
-    'add_org_member': "(org_id: 'int', sub: 'str', org_role: 'str' = 'org_member') -> 'None'",
+    'add_org_member': "(org_id: 'int', sub: 'str', org_role: 'str' = 'org_member', *, actor: 'Optional[str]' = None) -> 'None'",
     'archive_org': "(org_id: 'int') -> 'bool'",
     'backfill_org_front': "() -> 'dict'",
     'backfill_personal_orgs': "() -> 'dict'",
@@ -244,7 +252,7 @@ FROZEN_SIGNATURES = {
     'preview_invitation': "(token: 'str') -> 'Optional[dict]'",
     'publish_guide': "(*, slug: 'str', title: 'str' = '', description: 'str' = '', body_md: 'str', author_kind: 'str', author_org_id: 'Optional[int]' = None, author_display: 'str' = '', category: 'str' = '', tags: 'Optional[list]' = None, visibility: 'str' = 'public', source_org_id: 'Optional[int]' = None, source_slug: 'Optional[str]' = None, forked_from: 'Optional[int]' = None, published_by: 'Optional[str]' = None, slots: 'Optional[list]' = None) -> 'dict'",
     'reconcile_signup_with_invitation': "(sub: 'str', email: 'str') -> 'Optional[dict]'",
-    'remove_org_member': "(org_id: 'int', sub: 'str') -> 'bool'",
+    'remove_org_member': "(org_id: 'int', sub: 'str', *, actor: 'Optional[str]' = None) -> 'bool'",
     'resolve_org_for_user': "(sub: 'str', org: 'str') -> 'int'",
     'resolve_sender': "(org_id: 'int', from_email: 'Optional[str]' = None) -> 'Optional[tuple[dict, str]]'",
     'revoke_group_invitation': "(group_id: 'int', inv_id: 'int') -> 'bool'",

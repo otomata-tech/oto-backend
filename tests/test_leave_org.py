@@ -26,8 +26,9 @@ def _patch(monkeypatch, *, org=True, personal=False, role="org_member",
         + [{"org_role": "org_member"}],
     )
     calls = {}
-    def _remove(oid, sub):
+    def _remove(oid, sub, *, actor):
         calls["removed"] = (oid, sub)
+        calls["actor"] = actor
         return removed
     monkeypatch.setattr(om.org_store, "remove_org_member", _remove)
     return calls
@@ -38,6 +39,8 @@ def test_leave_ok(monkeypatch):
     out = om._leave_org(_ctx("u1"), om.LeaveOrgInput(org_id=7))
     assert out == {"ok": True, "org_id": 7, "left": True}
     assert calls["removed"] == (7, "u1")
+    # Le journal (oto#145) nomme la personne comme actrice de son propre départ.
+    assert calls["actor"] == "u1"
 
 
 def test_leave_admin_not_last_ok(monkeypatch):

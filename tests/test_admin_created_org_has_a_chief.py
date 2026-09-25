@@ -39,7 +39,7 @@ def _patch(monkeypatch, *, known_emails=None):
     monkeypatch.setattr(oa.org_store, "create_org",
                         lambda name, created_by, **kw: created.append((name, created_by)) or NEW_ORG)
     monkeypatch.setattr(oa.org_store, "add_org_member",
-                        lambda oid, sub, role: members.append((oid, sub, role)))
+                        lambda oid, sub, role, *, actor: members.append((oid, sub, role)))
     # ⚠️ La résolution lit TOUS les porteurs d'une adresse depuis le 05/09 : une
     # adresse peut en avoir plusieurs, et en choisir un en silence était le défaut.
     monkeypatch.setattr("oto_mcp.capabilities.orgs.members.db.get_users_by_email",

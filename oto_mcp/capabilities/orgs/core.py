@@ -148,7 +148,7 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     org_id = org_store.create_org(name, created_by=ctx.sub,
                                   front_base_url=front_base_url,
                                   front_brand=front_brand)
-    org_store.add_org_member(org_id, ctx.sub, "org_admin")
+    org_store.add_org_member(org_id, ctx.sub, "org_admin", actor=ctx.sub)
     # Nouvelle org = ton org maison (défaut) — effective immédiatement, y compris dans
     # cette conversation (le seam `current_org` retombe sur la maison sans jeton ; plus
     # de bracelet de session, ADR 0038 B3).

@@ -42,7 +42,7 @@ class _MemberConn:
     def execute(self, sql, params=None):
         s = " ".join(sql.split())
         self.calls.append((s, params))
-        if "SELECT 1 FROM org_members WHERE org_id" in s:
+        if "SELECT org_role FROM org_members WHERE org_id" in s:
             row = self._existing
         elif "m.is_active" in s:
             row = self._active
@@ -106,9 +106,12 @@ def test_real_home_unchanged_on_second_real_org(monkeypatch):
 
 
 def test_readd_only_touches_role(monkeypatch):
-    calls = _run_add(monkeypatch, existing=(1,))
+    calls = _run_add(monkeypatch, existing={"org_role": "org_admin"})
     assert _inserted_active(calls) == "NO_INSERT"
     assert _role_updated(calls)
+    # …et le journal (oto#145) nomme le changement, dans la même connexion.
+    assert any(s.startswith("INSERT INTO org_member_events") and p[2] == "role_changed"
+               for s, p in calls)
 
 
 def test_personal_bootstrap_activates_when_no_membership(monkeypatch):
@@ -144,7 +147,7 @@ def test_first_member_bootstrap_does_not_clear_personal_of(monkeypatch):
 
 
 def test_readd_does_not_clear_personal_of(monkeypatch):
-    calls = _run_add(monkeypatch, existing=(1,))
+    calls = _run_add(monkeypatch, existing={"org_role": "org_member"})
     assert not _personal_of_cleared(calls)
 
 

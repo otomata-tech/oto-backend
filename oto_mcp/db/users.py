@@ -361,6 +361,10 @@ _SUB_COLUMNS = [
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
     ("user_disabled_tools", "sub"), ("user_enabled_tools", "sub"),
     ("org_members", "sub"), ("org_group_members", "sub"),
+    # Le journal des entrées/sorties d'org (oto#145) suit la personne et celui qui a
+    # agi : sans index unique, un UPDATE nu suffit ; laissé en place, l'historique
+    # désignerait un compte disparu.
+    ("org_member_events", "sub"), ("org_member_events", "actor_sub"),
     ("user_api_tokens", "sub"), ("unipile_accounts", "sub"), ("unipile_pending", "sub"),
     # Qui a RÉVOQUÉ un jeton (#523) : la trace suit le compte qui a coupé.
     ("user_api_tokens", "revoked_by"),

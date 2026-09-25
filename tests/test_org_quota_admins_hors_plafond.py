@@ -37,7 +37,7 @@ def banc(monkeypatch):
     monkeypatch.setattr(orgs.tenancy, "current", lambda: _Registre())
     monkeypatch.setattr(orgs.config, "front_for", lambda sub: (None, None))
     monkeypatch.setattr(orgs.org_store, "create_org", lambda name, **kw: 42)
-    monkeypatch.setattr(orgs.org_store, "add_org_member", lambda *a: None)
+    monkeypatch.setattr(orgs.org_store, "add_org_member", lambda *a, **k: None)
     monkeypatch.setattr(orgs.org_store, "set_active_org", lambda *a: None)
     return roles
 

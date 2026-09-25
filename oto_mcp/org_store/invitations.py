@@ -325,11 +325,11 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
         return None
     inv = get_invitation_by_token(token)
     if inv:
-        return _accept_invitation_row(inv, sub)
+        return _accept_invitation_row(inv, sub, actor=sub)
     return _idempotent_accept("token_hash = %s", _hash_token(token), sub)
 
 
-def _accept_invitation_row(inv: dict, sub: str) -> dict:
+def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict:
     """Cœur de l'acceptation d'une invitation à partir d'une ligne déjà résolue (par
     token OU email lors d'une réconciliation de signup). Selon le scope :
     - **org** (org_id présent) → ajoute le membre d'org ; la MAISON n'est posée que
@@ -371,7 +371,7 @@ def _accept_invitation_row(inv: dict, sub: str) -> dict:
     org_role = inv.get("org_role")
     if org_id is not None:
         org_role = roles.max_org_role(members.get_org_role(org_id, sub), org_role)
-        members.add_org_member(org_id, sub, org_role)
+        members.add_org_member(org_id, sub, org_role, actor=actor)
     group_id = inv.get("group_id")
     group_role = inv.get("group_role")
     if group_id is not None:
@@ -417,4 +417,5 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
         ).fetchone()
     if not row:
         return None
-    return _accept_invitation_row(dict(row), sub)
+    # Aucun clic : c'est le système qui honore l'invitation au signup.
+    return _accept_invitation_row(dict(row), sub, actor=None)

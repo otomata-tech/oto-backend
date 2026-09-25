@@ -11,13 +11,14 @@ Contrat MCP : `org_id` (entier) remplace l'ancien `org` (id-ou-nom).
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 from ... import db, org_store
-from .._authz import ORG_ADMIN_OF, SUB_ONLY
-from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .._authz import ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, SUB_ONLY
+from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding,
+                      cap_limit)
 from ..registry import CAPABILITIES
 
 _ID = {"id": "org_id"}  # placeholder de route {id} → champ Input org_id
@@ -131,7 +132,8 @@ class LeaveOrgInput(BaseModel):
     org_id: int
 
 
-def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool) -> dict:
+def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool,
+                       actor: str) -> dict:
     """Écrit le rôle d'un membre — le geste métier commun aux DEUX capacités d'écriture.
 
     `org_store.add_org_member` est un **upsert** : « ajouter » et « changer le rôle »
@@ -150,7 +152,7 @@ def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool
     # Anti-lockout : ne pas rétrograder le dernier org_admin, par quelque route que ce soit.
     if current == "org_admin" and role != "org_admin" and _count_org_admins(org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin", "Impossible de rétrograder le dernier org_admin.")
-    org_store.add_org_member(org_id, sub, role)
+    org_store.add_org_member(org_id, sub, role, actor=actor)
     return {"ok": True, "org_id": org_id, "sub": sub, "role": role}
 
 
@@ -158,13 +160,15 @@ def _add_member(ctx: ResolvedCtx, inp: AddMemberInput) -> dict:
     _require_org_exists(inp.org_id)
     role = _check_role(inp.role)
     target_sub = _resolve_target(inp.target)
-    return _write_member_role(inp.org_id, target_sub, role, require_member=False)
+    return _write_member_role(inp.org_id, target_sub, role, require_member=False,
+                              actor=ctx.sub)
 
 
 def _set_member_role(ctx: ResolvedCtx, inp: SetMemberRoleInput) -> dict:
     _require_org_exists(inp.org_id)
     role = _check_role(inp.role)
-    return _write_member_role(inp.org_id, inp.sub, role, require_member=True)
+    return _write_member_role(inp.org_id, inp.sub, role, require_member=True,
+                              actor=ctx.sub)
 
 
 def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
@@ -172,7 +176,7 @@ def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
     # Anti-lockout : ne pas retirer le dernier org_admin.
     if org_store.get_org_role(inp.org_id, target_sub) == "org_admin" and _count_org_admins(inp.org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin", "Impossible de retirer le dernier org_admin.")
-    if not org_store.remove_org_member(inp.org_id, target_sub):
+    if not org_store.remove_org_member(inp.org_id, target_sub, actor=ctx.sub):
         raise AuthzDenied(404, "not_a_member", "Cible non-membre de l'org.")
     return {"ok": True, "org_id": inp.org_id, "sub": target_sub, "removed": True}
 
@@ -192,7 +196,7 @@ def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
     if role == "org_admin" and _count_org_admins(inp.org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin",
                           "Tu es le dernier admin — nomme un autre admin avant de quitter l'org.")
-    if not org_store.remove_org_member(inp.org_id, ctx.sub):
+    if not org_store.remove_org_member(inp.org_id, ctx.sub, actor=ctx.sub):
         raise AuthzDenied(404, "not_a_member", "Tu n'es pas membre de cette org.")
     return {"ok": True, "org_id": inp.org_id, "left": True}
 
@@ -203,6 +207,67 @@ class LeftOrg(BaseModel):
     ok: bool
     org_id: int
     left: bool
+
+
+# ── le journal des entrées et sorties (otomata-tech/oto#145) ─────────────────
+#
+# Lecture réservée aux admins de l'org et à l'opérateur plateforme
+# (`ORG_ADMIN_OF_OR_OPERATOR`). Un ex-membre n'a plus de rôle dans l'org : il est refusé comme
+# n'importe quel tiers, et rien ici ne lui est adressé — ni notification, ni lecture.
+
+EVENTS_MAX = 200
+EVENTS_DEFAUT = 50
+
+
+class MemberEventsInput(BaseModel):
+    org_id: int
+    limit: Optional[int] = None       # défaut 50, écrêté à 200
+    before_id: Optional[int] = None   # curseur : `next_before_id` de la page précédente
+
+
+class MemberEvent(BaseModel):
+    """Un geste sur l'appartenance. `old_role` vaut null pour `added`, `new_role` pour
+    `removed`. `actor_sub` null = le système (espace personnel créé d'office, invitation
+    honorée à l'inscription) ; égal à `sub` sur un `removed` = la personne est partie
+    d'elle-même. `email`/`name`/`actor_email` viennent du compte, null s'il n'existe
+    plus."""
+    id: int
+    sub: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    action: Literal["added", "removed", "role_changed"]
+    old_role: Optional[str] = None
+    new_role: Optional[str] = None
+    actor_sub: Optional[str] = None
+    actor_email: Optional[str] = None
+    # UTC, forme du store (« AAAA-MM-JJ HH:MM:SS »), comme les autres lentilles d'org.
+    at: str
+
+
+class MemberEvents(BaseModel):
+    """Le journal, le plus récent d'abord. `next_before_id` null = dernière page ;
+    sinon, le renvoyer tel quel en `before_id`. Commence au déploiement du journal : un
+    membre arrivé avant n'a pas de ligne `added`."""
+    org_id: int
+    events: list[MemberEvent]
+    next_before_id: Optional[int] = None
+
+
+def _member_events(ctx: ResolvedCtx, inp: MemberEventsInput) -> dict:
+    _require_org_exists(inp.org_id)
+    limit = cap_limit(inp.limit, EVENTS_MAX, default=EVENTS_DEFAUT)
+    rows = org_store.list_member_events(inp.org_id, limit=limit, before_id=inp.before_id)
+    return {
+        "org_id": inp.org_id,
+        # Projection EXPLICITE : la réponse reste étroite si la requête s'élargit.
+        "events": [{"id": r["id"], "sub": r["sub"], "email": r["email"],
+                    "name": r["name"], "action": r["action"],
+                    "old_role": r["old_role"], "new_role": r["new_role"],
+                    "actor_sub": r["actor_sub"], "actor_email": r["actor_email"],
+                    "at": r["at"]}
+                   for r in rows],
+        "next_before_id": rows[-1]["id"] if len(rows) == limit else None,
+    }
 
 
 CAPABILITIES += [
@@ -243,5 +308,15 @@ CAPABILITIES += [
         description="Leave an org you belong to (self-removal). Refused for your personal org or if you are its last admin.",
         # Self-service dashboard (REST-only) : quitter depuis « paramètres » de l'org.
         rest=RestBinding("DELETE", "/api/me/orgs/{id}/membership", {"id": "org_id"}),
+    ),
+    Capability(
+        key="org.member.events", handler=_member_events, Input=MemberEventsInput,
+        authz=ORG_ADMIN_OF_OR_OPERATOR("org_id"), Output=MemberEvents,
+        errors=(DeclaredError(404, "unknown_org", "l'org n'existe pas"),),
+        description=("Membership log of an org you administer: who joined, left or "
+                     "changed role, when, and who did it. Newest first, paginated "
+                     "(`limit`, `before_id`)."),
+        # MCP fusionné dans oto_admin_org_member(op=events).
+        rest=RestBinding("GET", "/api/orgs/{id}/members/events", _ID),
     ),
 ]

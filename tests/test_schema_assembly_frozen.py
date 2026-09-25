@@ -541,8 +541,13 @@ from oto_mcp.db import _schema, schema
 # `schema/runs.py` ; base existante par la révision Alembic `0021_limites_du_run` ou le
 # démarrage (`ADD COLUMN IF NOT EXISTS`). Rien ne se réécrit sur la base PARTAGÉE,
 # l'ancien code les ignore. 179 367 → 179 669 (+302, commentaires compris).
-EMPREINTE = "f4bf829d4ddfe5c02a0e2ce736c859580984af5d5c0cba75bc54ce86dee8c480"
-LONGUEUR = 179669
+# 2026-09-25 (otomata-tech/oto#145) : le journal des entrées et sorties de membres,
+# table NEUVE `org_member_events` + son index (`orgs.MEMBER_EVENTS`, en queue
+# d'assemblage — sa FK vise `orgs`, créée en tête). Additif : l'ancien code l'ignore ;
+# base existante aussi par la révision Alembic `0022_journal_membres_org`.
+# 179 669 → 180 592 (+923, commentaires compris).
+EMPREINTE = "545b35551811145173718b7c5fad55fe3331b58bd84e161a85eb47c97c46adad"
+LONGUEUR = 180592
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

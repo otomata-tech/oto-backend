@@ -65,7 +65,7 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     # tenant tiers depuis un compte oto doit produire une org de ce tenant
     # (`front_of`, cf. create_org).
     org_id = org_store.create_org(name, created_by=ctx.sub, front_of=admin_sub)
-    org_store.add_org_member(org_id, admin_sub, "org_admin")
+    org_store.add_org_member(org_id, admin_sub, "org_admin", actor=ctx.sub)
     # superset REST({id}) + MCP({org_id,name}) ; `admin_sub` rend la custody explicite
     # dans la réponse plutôt qu'implicite dans le code.
     return {"id": org_id, "org_id": org_id, "name": name, "admin_sub": admin_sub}

@@ -667,6 +667,15 @@ les mêmes colonnes s'il ne les trouve pas (même régime que 0006). Le code du 
 jouer **avant la fusion**. L'ancien code les ignore. Le retour arrière retire les
 colonnes et les limites déclarées.
 
+`0022_journal_membres_org` (25/09/2026, otomata-tech/oto#145, après `0021_limites_du_run`)
+crée la table NEUVE `org_member_events` — le journal des entrées, sorties et changements
+de rôle d'un membre d'org — et son index (fragment `db/schema/orgs.py::MEMBER_EVENTS`,
+exécuté tel quel, clé étrangère vers `orgs` bornée par `lock_timeout`). **Aucun
+`ALTER`**, aucune reprise : le journal commence au déploiement. Le démarrage crée la
+même table s'il ne la trouve pas ; l'ancien code ne la lit ni ne l'écrit. Le code du lot
+l'ÉCRIT dans la transaction de chaque ajout, retrait ou changement de rôle : la jouer
+**avant la fusion**, comme 0020. Le retour arrière retire la table et son historique.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose

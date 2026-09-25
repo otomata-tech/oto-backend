@@ -72,6 +72,8 @@ DELETE /api/admin/orgs/{id}/members/{sub} -> _handler
 OPTIONS /api/admin/orgs/{id}/members/{sub} -> options_handler
 DELETE /api/me/orgs/{id}/membership -> _handler
 OPTIONS /api/me/orgs/{id}/membership -> options_handler
+GET,HEAD /api/orgs/{id}/members/events -> _handler
+OPTIONS /api/orgs/{id}/members/events -> options_handler
 PUT /api/orgs/{id}/secrets/{provider} -> _handler
 OPTIONS /api/orgs/{id}/secrets/{provider} -> options_handler
 PUT /api/admin/orgs/{id}/secrets/{provider} -> _handler

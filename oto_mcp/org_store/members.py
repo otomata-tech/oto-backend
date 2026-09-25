@@ -46,8 +46,34 @@ def _sync_mfa_mirror(org_id: int) -> None:
     mfa_mirror.on_membership_changed(org_id)
 
 
-def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
+# Le JOURNAL des entrées et sorties (`org_member_events`, otomata-tech/oto#145) :
+# chaque geste qui ajoute, retire ou change le rôle d'un membre y écrit sa ligne DANS
+# SA transaction — un geste sans ligne, ou une ligne sans geste, ne peut pas exister.
+# Lu par les admins de l'org et l'opérateur plateforme (capacité `org.member.events`) ;
+# la personne retirée n'est pas notifiée et ne lit rien de l'org quittée.
+
+
+def _journaliser(conn, org_id: int, sub: str, action: str, old_role: Optional[str],
+                 new_role: Optional[str], actor: Optional[str]) -> None:
+    """`actor` = le sub de celui qui agit ; None = le système (création d'espace
+    personnel, réconciliation d'invitation au signup)."""
+    conn.execute(
+        """
+        INSERT INTO org_member_events (org_id, sub, action, old_role, new_role, actor_sub)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (org_id, sub, action, old_role, new_role, actor),
+    )
+
+
+def add_org_member(org_id: int, sub: str, org_role: str = "org_member", *,
+                   actor: Optional[str] = None) -> None:
     """Ajoute (ou met à jour le rôle d') un membre, et choisit l'org maison.
+
+    Journalise `added` (nouvelle adhésion) ou `role_changed` (rôle réellement changé ;
+    un re-ajout au même rôle n'écrit rien), avec `actor` (sub de qui agit, None = le
+    système). Tout appel de production NOMME son acteur, `actor=None` compris
+    (garde `tests/test_journal_membres_145.py`) : le défaut ne sert qu'aux bancs.
 
     Auto-activation de l'org rejointe (`org_members.is_active`, = l'org maison lue
     par `get_active_org`) : une org **réelle** l'emporte TOUJOURS sur l'org perso
@@ -78,7 +104,7 @@ def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (sub,))
             existing = conn.execute(
-                "SELECT 1 FROM org_members WHERE org_id = %s AND sub = %s",
+                "SELECT org_role FROM org_members WHERE org_id = %s AND sub = %s",
                 (org_id, sub),
             ).fetchone()
             if existing:
@@ -86,6 +112,9 @@ def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
                     "UPDATE org_members SET org_role = %s WHERE org_id = %s AND sub = %s",
                     (org_role, org_id, sub),
                 )
+                if existing["org_role"] != org_role:
+                    _journaliser(conn, org_id, sub, "role_changed",
+                                 existing["org_role"], org_role, actor)
             else:
                 active = conn.execute(
                     """
@@ -129,19 +158,25 @@ def add_org_member(org_id: int, sub: str, org_role: str = "org_member") -> None:
                     """,
                     (org_id, sub, org_role, make_active),
                 )
+                _journaliser(conn, org_id, sub, "added", None, org_role, actor)
     _sync_mfa_mirror(org_id)   # pousse le nouveau membre dans l'org Logto miroir si MFA
 
 
-def remove_org_member(org_id: int, sub: str) -> bool:
+def remove_org_member(org_id: int, sub: str, *, actor: Optional[str] = None) -> bool:
     """Retire un membre. Si on retire son org active et qu'il en reste, promeut
-    la plus ancienne restante (mirroir delete_google_oauth)."""
+    la plus ancienne restante (mirroir delete_google_oauth).
+
+    Journalise `removed` (ancien rôle, `actor` = qui agit, lui-même s'il part) dans la
+    transaction du retrait. Aucune notification à la personne retirée."""
     with _connect() as conn:
         with conn.transaction():
-            cur = conn.execute(
-                "DELETE FROM org_members WHERE org_id = %s AND sub = %s", (org_id, sub)
-            )
-            removed = (cur.rowcount or 0) > 0
+            gone = conn.execute(
+                "DELETE FROM org_members WHERE org_id = %s AND sub = %s RETURNING org_role",
+                (org_id, sub),
+            ).fetchone()
+            removed = gone is not None
             if removed:
+                _journaliser(conn, org_id, sub, "removed", gone["org_role"], None, actor)
                 # Retirer de l'org = sortir de tous ses groupes (ADR 0012 :
                 # l'appartenance groupe est subordonnée à l'appartenance org).
                 conn.execute(
@@ -243,6 +278,29 @@ def list_org_members(org_id: int) -> list[dict]:
             "SELECT sub, org_role, is_active, joined_at FROM org_members "
             "WHERE org_id = %s ORDER BY joined_at",
             (org_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_member_events(org_id: int, *, limit: int,
+                       before_id: Optional[int] = None) -> list[dict]:
+    """Le journal des entrées/sorties de l'org, le plus récent d'abord, par pages de
+    `limit` lignes, antérieures à `before_id` (curseur = l'`id` de la dernière ligne
+    lue). L'email et le nom du membre et de l'acteur viennent de `users` — `None` si le
+    compte n'y est plus."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.id, e.sub, u.email, u.name, e.action, e.old_role, e.new_role,
+                   e.actor_sub, a.email AS actor_email, e.at
+              FROM org_member_events e
+              LEFT JOIN users u ON u.sub = e.sub
+              LEFT JOIN users a ON a.sub = e.actor_sub
+             WHERE e.org_id = %s AND (%s::bigint IS NULL OR e.id < %s::bigint)
+             ORDER BY e.id DESC
+             LIMIT %s
+            """,
+            (org_id, before_id, before_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 

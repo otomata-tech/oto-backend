@@ -437,6 +437,25 @@ def ORG_ADMIN_OF(field: str):
     return rule
 
 
+def ORG_ADMIN_OF_OR_OPERATOR(field: str):
+    """`ORG_ADMIN_OF`, OU l'opérateur plateforme (`admin` | `super_admin`) — pour une
+    LECTURE de supervision d'une org (le journal de ses membres, oto#145). L'`admin`
+    opérationnel n'a pas l'escalade vers les orgs tierces (`roles.is_platform_admin`
+    = super_admin seul) : cette règle lui ouvre la lecture, jamais l'écriture — elle
+    ne se pose que sur une capacité qui ne modifie rien.
+
+    Plancher plateforme `None` : l'org_admin passe sans rôle plateforme."""
+    base = ORG_ADMIN_OF(field)
+
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        org_id = _field_int(inp, field, "missing_org", field)
+        if access.is_platform_operator(sub):
+            return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
+        return base(raw, inp)
+    return rule
+
+
 def ORG_ADMIN_OF_LIVE(field: str):
     """`ORG_ADMIN_OF`, PLUS le refus d'une org **ARCHIVÉE** — la mutation d'un espace
     que toutes les lectures déclarent hors d'atteinte (signal d'usage #467, 15/08).

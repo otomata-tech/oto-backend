@@ -351,9 +351,14 @@ def rename_selection(conn, old: str, new: str) -> int:
 # Sentinelle du fan-out de split, même ledger et même forme que `_BACKFILL_MARK`
 # (jamais un sub réel — les subs Logto sont alphanumériques).
 _SPLIT_MARK = "#unipile-split-fanout"
+# Le split google (2026-09-26) : le compte + ses six services. Même ledger, sa propre
+# sentinelle — deux déménagements, deux marqueurs.
+GOOGLE_SPLIT_MARK = "#google-split-fanout"
+GOOGLE_SERVICES = ("gmail", "drive", "sheets", "calendar", "tasks", "chat")
 
 
-def split_fanout_pending(conn, targets: tuple[str, ...]) -> bool:
+def split_fanout_pending(conn, targets: tuple[str, ...],
+                         mark: str = _SPLIT_MARK) -> bool:
     """Le fan-out du split doit-il encore tourner sur CETTE base ? (one-shot)
 
     **Pourquoi ce garde-fou existe.** Le fan-out a été écrit « idempotent, donc
@@ -376,9 +381,11 @@ def split_fanout_pending(conn, targets: tuple[str, ...]) -> bool:
     ont retiré. D'où la sonde : une base qui porte DÉJÀ une sélection sur l'un des
     canaux a reçu le déménagement, on marque sans réécrire. Une base neuve, ou
     restaurée d'avant le split, n'en porte aucune et le reçoit normalement."""
+    # `mark` : UNE sentinelle par split (unipile 2026-08-28, google 2026-09-26) —
+    # la seconde ne doit ni lire ni poser la première.
     done = conn.execute(
         "SELECT 1 FROM connector_selection_seeded WHERE sub = %s AND org_id = 0",
-        (_SPLIT_MARK,),
+        (mark,),
     ).fetchone()
     if done:
         return False
@@ -387,17 +394,17 @@ def split_fanout_pending(conn, targets: tuple[str, ...]) -> bool:
         (list(targets),),
     ).fetchone()
     if deja:
-        mark_split_fanout(conn)
+        mark_split_fanout(conn, mark)
         return False
     return True
 
 
-def mark_split_fanout(conn) -> None:
+def mark_split_fanout(conn, mark: str = _SPLIT_MARK) -> None:
     """Pose la sentinelle du fan-out de split — à appeler APRÈS la passe."""
     conn.execute(
         "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, 0) "
         "ON CONFLICT DO NOTHING",
-        (_SPLIT_MARK,),
+        (mark,),
     )
 
 

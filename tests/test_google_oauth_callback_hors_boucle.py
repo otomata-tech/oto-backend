@@ -62,7 +62,7 @@ def wired(monkeypatch):
     # Trois valeurs depuis oto-backend#877 : le state porte aussi le front de
     # retour. Ici vide — ce banc mesure la boucle, pas le routage du retour.
     monkeypatch.setattr(datastore_routes.google_oauth, "verify_state",
-                        lambda state: ("sub-1", 42, ""))
+                        lambda state: ("sub-1", 42, "", "google"))
     return datastore_routes
 
 

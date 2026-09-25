@@ -58,7 +58,7 @@ def _need(value, name: str, op: str):
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account)
+        creds = google_oauth.credentials_for(sub, account=account, service="tasks")
     except RuntimeError as e:
         raise _bad(str(e))
     from oto.tools.google.tasks.lib.tasks_client import TasksClient

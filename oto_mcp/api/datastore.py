@@ -69,7 +69,7 @@ def make_routes(
     # --- Google OAuth ----------------------------------------------------
 
     def _retour(etat: str, *, app: str = "",
-                org: int | None = None) -> str:
+                org: int | None = None, connector: str = "google") -> str:
         """Où renvoyer le navigateur après le consentement Google.
 
         Convention unique de retour OAuth (oto-backend#670) : le suffixe vient du
@@ -98,7 +98,9 @@ def make_routes(
         # sur un 404, panne silencieuse puisque l'autorisation, elle, avait bien eu
         # lieu — exactement le mode d'échec déjà vu sur le patron d'un front tiers
         # (cf. le commentaire de `RETURN_APPS`).
-        return oauth_flow.connector_return_url(app, "google", etat, org=org)
+        # `connector` : la carte qui a demandé le consentement — le compte, ou l'un
+        # de ses six services (split du 2026-09-26) ; portée par le state signé.
+        return oauth_flow.connector_return_url(app, connector, etat, org=org)
 
     async def google_oauth_callback(request: Request) -> Response:
         # Pas d'auth Logto — Google redirige depuis le navigateur user.
@@ -112,7 +114,7 @@ def make_routes(
         if not parsed:
             logger.warning("google oauth callback: state illisible/expiré")
             return RedirectResponse(url=_retour("error"), status_code=302)
-        sub, org_id, return_app = parsed
+        sub, org_id, return_app, connector = parsed
 
         def _finish() -> None:
             # `sub` (qualifié, porté par le state) choisit l'app qui a demandé le
@@ -128,15 +130,15 @@ def make_routes(
             logger.warning("google oauth callback: échange sans réponse au-delà "
                            "de %ss (sub=%s org=%s)", _OAUTH_EXCHANGE_TIMEOUT_S,
                            sub, org_id)
-            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id, connector=connector), status_code=302)
         except Exception:
             logger.exception("google oauth callback en échec (sub=%s org=%s)",
                              sub, org_id)
-            return RedirectResponse(url=_retour("error", app=return_app, org=org_id), status_code=302)
+            return RedirectResponse(url=_retour("error", app=return_app, org=org_id, connector=connector), status_code=302)
         # Retour vers la page connecteurs (où vit la config Google, ADR 0024 B2).
         # `datastore` n'est plus Google Sheets (ADR 0016, PG natif) → ex-signal
         # `?datastore=connected` retiré.
-        return RedirectResponse(url=_retour("connected", app=return_app, org=org_id), status_code=302)
+        return RedirectResponse(url=_retour("connected", app=return_app, org=org_id, connector=connector), status_code=302)
 
 
 

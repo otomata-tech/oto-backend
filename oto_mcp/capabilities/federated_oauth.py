@@ -78,6 +78,9 @@ class GoogleAccount(BaseModel):
     is_default: bool = False
     scopes: list[str] = []
     granted_at: Optional[str] = None
+    # Les services que CE compte a autorisés (split du 2026-09-26) — dérivés des
+    # scopes, pour qu'un front n'ait pas à connaître les URLs de scope de Google.
+    services: list[str] = []
 
 
 class GoogleStatus(BaseModel):
@@ -129,6 +132,7 @@ def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
                 "is_default": a.get("is_default", False),
                 "scopes": a["scopes"].split() if a.get("scopes") else [],
                 "granted_at": a.get("granted_at"),
+                "services": google_oauth.services_granted(a.get("scopes")),
             }
             for a in accounts
         ],

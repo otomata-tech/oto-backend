@@ -78,7 +78,7 @@ _DEFAULT_EXPORT_BY_SOURCE = {
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account)
+        creds = google_oauth.credentials_for(sub, account=account, service="drive")
     except RuntimeError as e:
         raise _bad(str(e))
     from oto.tools.google.drive.lib.drive_client import DriveClient

@@ -47,6 +47,14 @@ _DETTE_DECLARATION: dict[str, str] = {
     # déclaré, un `pending_action` serait aujourd'hui inatteignable. Levée par le barreau
     # « connector_token + 4e boucle de status_for ».
     "google": "status_for maison ; status_for() aveugle aux auth_method=oauth",
+    # Les six services Google (split 2026-09-26) : même lecture de lien déclarée
+    # (`connector_link`), même absence de hook `status_hints` que le compte.
+    "gmail": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "drive": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "sheets": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "calendar": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "tasks": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "chat": "lien par connector_link ; pas de hook status_hints (comme google)",
     # Les 4 connecteurs à session navigateur passent par browser_session : leur état
     # vit dans le coffre (session_set_at), pas dans un hook déclaré.
     "brevoauto": "état porté par browser_session, pas par status_hints",

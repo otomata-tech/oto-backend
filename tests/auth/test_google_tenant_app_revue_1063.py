@@ -229,7 +229,7 @@ def test_un_jeton_d_avant_sans_app_de_tenant_sert_comme_avant(cablage, monkeypat
 
 def test_la_pose_d_un_jeton_note_son_client_emetteur(registre, monkeypatch):
     vu = {}
-    monkeypatch.setattr(google_oauth, "_fetch_email", lambda at: "a@b.com")
+    monkeypatch.setattr(google_oauth, "_fetch_email", lambda at, scopes=(): "a@b.com")
     monkeypatch.setattr(google_oauth.db, "set_google_oauth",
                         lambda *a, **k: vu.update(k))
     google_oauth.persist_token("tulina:abc", 7, {"refresh_token": "RT",
@@ -278,11 +278,22 @@ def test_un_host_reclame_mais_tenu_par_un_autre_ne_recoit_jamais_le_rappel(
 
 # ─── 5. scopes ────────────────────────────────────────────────────────────────
 
-def test_l_app_d_un_tenant_ne_ramene_pas_les_scopes_accordes_ailleurs(
+def test_l_app_d_un_tenant_demande_l_identite_seule_et_le_coffre_filtre(
         registre, monkeypatch):
+    """Révisé au split du 2026-09-26. La garde « pas d'`include_granted_scopes` sous
+    l'app d'un tenant » tenait tant qu'un consentement demandait tout d'un coup ;
+    depuis que chaque service demande SES scopes sur le même compte, l'autorisation
+    incrémentale est ce qui fait tenir le split — sous tout client. Ce qui reste
+    garanti, et se vérifie ailleurs : le COMPTE ne demande que l'identité sous l'app
+    d'un tenant (`scopes_for`), et un scope étranger n'entre jamais au coffre
+    (`persist_token` filtre sur `KNOWN_SCOPES`, `test_google_split.py`)."""
     _coffre(monkeypatch, {("google", "tenant:tulina"): APP_TULINA})
-    assert "include_granted_scopes" not in _params(google_oauth.build_auth_url("tulina:abc"))
-    assert _params(google_oauth.build_auth_url("nu-sub"))["include_granted_scopes"] == "true"
+    tenant = _params(google_oauth.build_auth_url("tulina:abc"))
+    assert set(tenant["scope"].split()) == set(google_oauth.IDENTITY_SCOPES)
+    assert tenant["include_granted_scopes"] == "true"
+    notre = _params(google_oauth.build_auth_url("nu-sub"))
+    assert set(google_oauth.SCOPES) <= set(notre["scope"].split())
+    assert notre["include_granted_scopes"] == "true"
 
 
 # ─── 6. le secret ne sort pas par le repr ─────────────────────────────────────

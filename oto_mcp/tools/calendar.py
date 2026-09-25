@@ -45,7 +45,7 @@ def _client_for_user(account: Optional[str] = None):
     """
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account)
+        creds = google_oauth.credentials_for(sub, account=account, service="calendar")
     except RuntimeError as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     from oto.tools.google.calendar.lib.calendar_client import CalendarClient

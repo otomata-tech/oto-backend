@@ -48,7 +48,7 @@ _READ_DEFAULT_RANGE = "A:ZZ"
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account)
+        creds = google_oauth.credentials_for(sub, account=account, service="sheets")
     except RuntimeError as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     from oto.tools.google.sheets.lib.sheets_client import SheetsClient

@@ -113,11 +113,16 @@ def select_identity(sub: str, connector: str, identity_id: str, scope: str = "me
 
 # --- Google : N credentials du coffre (account=email) -----------------------
 
-def _google_list(sub: str) -> list[dict]:
+def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
+    """Les comptes Google du membre — TOUS pour le compte, ceux qui ont AUTORISÉ
+    `service` pour la carte d'un service (split du 2026-09-26) : `oto_identity(
+    connector='drive')` ne doit pas proposer un compte que `drive_file` refusera."""
     from ..auth import google as google_oauth
     return [{"id": a["google_email"], "label": a["google_email"], "status": "ok",
              "is_default": a["is_default"], "channel": None}
-            for a in google_oauth.list_accounts(sub) if a.get("google_email")]
+            for a in google_oauth.list_accounts(sub)
+            if a.get("google_email")
+            and (service is None or service in google_oauth.services_granted(a.get("scopes")))]
 
 
 def _google_select(sub: str, identity_id: str) -> dict:
@@ -614,5 +619,23 @@ def _register_hosted_channels() -> None:
             _unipile_select(sub, iid, _ch))
 
 
+def _register_google_services() -> None:
+    """Un backend d'identités par SERVICE Google (split du 2026-09-26) : même corps
+    que le compte, filtré sur le scope autorisé. Enregistré AVANT le backend keyed
+    générique — qui, sinon, prendrait ces connecteurs multi-compte pour des clés du
+    coffre à leur nom (aucune ligne n'y vit : liste toujours vide, sans un mot).
+    Population dérivée du registre (`credential_of == "google"`), jamais écrite."""
+    from .. import providers
+    for con in providers._REGISTRY_LIST:
+        if con.credential_of != "google":
+            continue
+        # `_s` capturé par valeur : sans le défaut d'argument, les six backends
+        # fermeraient sur la même variable de boucle (donc sur le dernier service).
+        _LISTERS[con.name] = (
+            lambda sub, scope="member", _s=con.name: _google_list(sub, service=_s))
+        _SELECTORS[con.name] = _google_select
+
+
+_register_google_services()
 _register_keyed_multi_account()
 _register_hosted_channels()

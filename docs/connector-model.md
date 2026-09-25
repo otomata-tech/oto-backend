@@ -51,6 +51,13 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > porteur. Ne normaliser que la comparaison fait reconnaître le pin puis le perdre
 > à la lecture (`require_credential` refuse le nom d'un délégant).
 >
+> **Second porteur depuis le 2026-09-26 : `google`.** Les six services — `gmail`, `drive`,
+> `sheets`, `calendar`, `tasks`, `chat` — sont des connecteurs à part entière
+> (`credential_of="google"`) : couche 1 en propre, ET leur propre **consentement**
+> (`auth/google.SERVICE_SCOPES`, autorisation incrémentale sur le même compte). Ce que
+> le split apporte ici que unipile n'avait pas : un scope Google n'est demandé que par
+> la carte qui en a besoin — un tenant ne fait vérifier que ce qu'il offre.
+>
 > La normalisation vit dans **`walk_cascade`** — le seam que traversent la résolution,
 > le miroir de mode et le statut. La refaire ailleurs, c'est rouvrir la divergence du
 > 2026-07-07. Détail : `docs/unipile.md` §Le split.

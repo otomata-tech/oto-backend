@@ -81,7 +81,7 @@ def _callback():
 
 def test_le_state_porte_le_front_demandeur():
     etat = google_oauth.make_state("sub-1", 42, "acme")
-    assert google_oauth.verify_state(etat) == ("sub-1", 42, "acme")
+    assert google_oauth.verify_state(etat) == ("sub-1", 42, "acme", "google")
 
 
 def test_un_front_inconnu_est_reduit_a_rien():
@@ -89,7 +89,7 @@ def test_un_front_inconnu_est_reduit_a_rien():
     liste fermée : signer une base arbitraire, ce serait signer une redirection
     ouverte."""
     etat = google_oauth.make_state("sub-1", 42, "https://attaquant.invalid")
-    assert google_oauth.verify_state(etat) == ("sub-1", 42, "")
+    assert google_oauth.verify_state(etat) == ("sub-1", 42, "", "google")
 
 
 def test_un_state_emis_avant_ce_lot_reste_valide():
@@ -105,7 +105,7 @@ def test_un_state_emis_avant_ce_lot_reste_valide():
                         separators=(",", ":")).encode()
     sig = hmac.new(google_oauth._state_secret(), charge, hashlib.sha256).digest()
     b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
-    assert google_oauth.verify_state(f"{b64(charge)}.{b64(sig)}") == ("sub-1", 42, "")
+    assert google_oauth.verify_state(f"{b64(charge)}.{b64(sig)}") == ("sub-1", 42, "", "google")
 
 
 def test_le_flux_transmet_la_cle_cachee_du_front(monkeypatch):

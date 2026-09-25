@@ -78,7 +78,7 @@ async def _call(fn, *args):
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account)
+        creds = google_oauth.credentials_for(sub, account=account, service="chat")
     except RuntimeError as e:
         raise _bad(str(e))
     from oto.tools.google.chat.lib.chat_client import ChatClient

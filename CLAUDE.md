@@ -125,6 +125,10 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   Unipile pour LinkedIn, le générique `browser` traite un site comme un compte du coffre (`docs/browser-automation.md`).
 - **Messagerie** : `unipile` = le **compte**, plus six **connexions** au nom du réseau, noms de tools inchangés ·
   ⚠️ `namespace_of` résout au **plus long préfixe déclaré**, pas au 1er token (`docs/unipile.md`).
+- **Google** : `google` = le **compte** (coffre, rappel, app du tenant), plus six **services** (`gmail`, `drive`,
+  `sheets`, `calendar`, `tasks`, `chat`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
+  en autorisation incrémentale (`auth/google.SERVICE_SCOPES`) · ⚠️ un outil de service refuse un compte qui n'a pas
+  autorisé CE service en nommant sa carte, jamais un 403 Google muet (`connectors/docs/google.md`, `docs/connector-model.md`).
 - **Email per-org** : `scaleway` (TEM) et `resend` en BYO-org, `email_send` route `sender → connecteur → transport` ·
   ⚠️ le front qui héberge une org est **dérivé de l'org cible** (`docs/email.md`) ·
   ⚠️ avec la clé de l'org, notre pied de page reste **tant que l'org n'a pas déclaré son désabonnement** sur le connecteur ; sur la clé commune, toujours (`docs/email.md`, 12/09).

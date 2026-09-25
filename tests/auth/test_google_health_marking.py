@@ -121,7 +121,7 @@ def test_les_six_outils_google_rendent_le_refus_pas_une_erreur_interne(
     mod = importlib.import_module(f"oto_mcp.tools.{module}")
     monkeypatch.setattr(mod.access, "current_user_sub_or_raise", lambda: "sub-1")
 
-    def _mort(sub, account=None):
+    def _mort(sub, account=None, service=None):
         raise google_oauth.GoogleReauthRequired("jeton de a@b.com mort — reconnecte-le")
     monkeypatch.setattr(mod.google_oauth, "credentials_for", _mort)
 

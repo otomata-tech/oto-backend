@@ -1503,6 +1503,26 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         # passe interrompue ne laisse pas une sentinelle qui prétend qu'ils ont eu
         # lieu.
         _conn_sel.mark_split_fanout(conn)
+    # --- SPLIT `google` → le compte + ses six SERVICES (2026-09-26) -------------
+    # Même déménagement que unipile, même raison : `google` portait six namespaces
+    # (gmail, drive, sheets, calendar, tasks, chat) ; chacun est désormais un
+    # connecteur — activation, sélection, visibilité PROPRES, et SON consentement —
+    # donc INCONNU des tables de gouvernance, qui penchent du mauvais côté pour un
+    # nom absent (OFF, masqué). Sous sa propre sentinelle : un déménagement est vrai
+    # une fois. Le coffre ne bouge PAS (`connector='google'`, une ligne par adresse) :
+    # les services l'empruntent (`credential_of`), ils ne le migrent pas.
+    if _conn_sel.split_fanout_pending(conn, _conn_sel.GOOGLE_SERVICES,
+                                      mark=_conn_sel.GOOGLE_SPLIT_MARK):
+        _conn_act_split.fanout_availability(conn, "google", _conn_sel.GOOGLE_SERVICES)
+        _conn_sel.fanout_selection(conn, "google", _conn_sel.GOOGLE_SERVICES)
+        conn.execute(
+            "UPDATE orgs SET default_connectors = ("
+            "  SELECT ARRAY(SELECT DISTINCT unnest(default_connectors || %s::text[]))"
+            ") WHERE default_connectors @> ARRAY['google']::text[] "
+            "   AND NOT default_connectors @> %s::text[]",
+            (list(_conn_sel.GOOGLE_SERVICES), list(_conn_sel.GOOGLE_SERVICES)),
+        )
+        _conn_sel.mark_split_fanout(conn, _conn_sel.GOOGLE_SPLIT_MARK)
     # === Le nœud gagne sa DONNÉE et son BAIL (2026-09-01, ADR 0054/0063) ========
     #
     # **Pourquoi une colonne et pas une clé de `props`.** Jusqu'ici, un nœud-ligne

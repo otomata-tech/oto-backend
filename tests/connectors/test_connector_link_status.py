@@ -55,7 +55,10 @@ def test_le_perimetre_est_celui_quon_croit():
     # `instagram_meta` est arrivé le même jour, premier connecteur OAuth écrit APRÈS
     # la fermeture du trou : il déclare sa lecture d'état dès sa première ligne,
     # ce que ce fichier existait pour obtenir.
-    assert _federated() == {"google", "instagram_meta"}
+    # Split google (2026-09-26) : chaque service lit SON lien — les comptes qui
+    # l'ont autorisé, pas tous ceux du porteur.
+    assert _federated() == {"google", "instagram_meta",
+                            "gmail", "drive", "sheets", "calendar", "tasks", "chat"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------

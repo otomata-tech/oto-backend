@@ -45,6 +45,8 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
     """
     assert set(connector_flow.entries()) == {
         "zoho", "zohodesk", "zohoanalytics", "salesforce", "google",
+        # Split google (2026-09-26) : un flux par service, ses scopes seulement.
+        "gmail", "drive", "sheets", "calendar", "tasks", "chat",
         # `instagram_meta` (2026-09-09) : flux Instagram Login hébergé par oto,
         # déclaré dans `auth/instagram_meta.py` — importé au boot par `api.routes`,
         # qui monte sa route de retour. C'est bien le chemin du boot, pas un import

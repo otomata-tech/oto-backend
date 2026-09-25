@@ -133,6 +133,15 @@ _DECLARATIONS: tuple[str, ...] = (
     "pennylaneged",
     "browser",
     "google",
+    # --- les six SERVICES Google, sur le compte `google` (split 2026-09-26) ------
+    # Chacun sa carte, son activation, sa sélection, SON consentement (ses scopes
+    # seulement) ; le compte, lui, porte le coffre — `providers/google.service`.
+    "gmail",
+    "drive",
+    "sheets",
+    "calendar",
+    "tasks",
+    "chat",
     # --- open-data / sans credential ----------------------------------------
     # Sources publiques sans rapport → connecteurs distincts (ex-`fr_open` qui les
     # fusionnait : un sac « open data » incohérent, activer l'un activait l'autre).

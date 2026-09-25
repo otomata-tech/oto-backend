@@ -16,12 +16,17 @@ from ._conn import _connect
 
 _COLS = ("id, org_id, sub, label, procedure, project_id, tools, input, max_steps, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
-         "cron, tz, enabled, next_due, last_enqueued_at, created_at")
+         "cron, tz, enabled, next_due, last_enqueued_at, created_at, hook_auth, "
+         "(hook_signing_secret_enc IS NOT NULL) AS signing_secret_set, "
+         "max_per_day, hook_slug")
 
 #: ⚠️ `hook_secret_hash` n'est PAS dans `_COLS`, et c'est la garde : un haché servi
 #: à une lecture partirait dans la réponse de `op=list`, donc dans un transcript
 #: d'agent. La route le lit par une requête dédiée (`trigger_par_secret`), et le
 #: secret en clair n'existe qu'une fois, au retour de `poser_secret_de_hook`.
+#: ⚠️ Même garde pour `hook_signing_secret_enc` (le secret de signature fourni par
+#: la SOURCE, chiffré) : `_COLS` n'en sert que l'EXISTENCE (`signing_secret_set`),
+#: jamais le chiffré. Seule `trigger_signe` le lit, pour la route.
 
 
 def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
@@ -36,7 +41,8 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
                    payload_mode: str = "ignore",
                    payload_fields: Optional[dict] = None,
                    max_per_hour: Optional[int] = None,
-                   fraicheur_s: Optional[int] = None) -> dict:
+                   fraicheur_s: Optional[int] = None,
+                   max_per_day: Optional[int] = None) -> dict:
     """Pose un déclencheur — programmé (`cron` + `next_due`) ou par webhook.
 
     ⚠️ `cron` et `next_due` sont devenus FACULTATIFS en signature, et c'est la
@@ -49,16 +55,17 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
             INSERT INTO runner_triggers
                    (org_id, sub, label, procedure, project_id, tools, input,
                     max_steps, max_tokens, max_run_seconds, model, kind, payload_mode,
-                    payload_fields, max_per_hour, fraicheur_s, cron, tz, next_due)
+                    payload_fields, max_per_hour, fraicheur_s, cron, tz, next_due,
+                    max_per_day)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s,
-                    %s::jsonb, %s, %s, %s, %s, %s)
+                    %s::jsonb, %s, %s, %s, %s, %s, %s)
             RETURNING {_COLS}
             """,
             (org_id, sub, label, procedure, project_id,
              json.dumps(list(tools), ensure_ascii=False), input, max_steps,
              max_tokens, max_run_seconds, model, kind, payload_mode,
              json.dumps(payload_fields, ensure_ascii=False) if payload_fields else None,
-             max_per_hour, fraicheur_s, cron, tz, next_due),
+             max_per_hour, fraicheur_s, cron, tz, next_due, max_per_day),
         ).fetchone()
     return dict(row)
 
@@ -136,7 +143,11 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
                  # de coup d'envoi en cours de route — ce serait un autre agent, et
                  # la bascule laisserait derrière elle soit un cron orphelin, soit
                  # un secret qui ouvre une porte que plus personne ne regarde.
-                 "payload_mode", "payload_fields", "max_per_hour", "fraicheur_s"}
+                 "payload_mode", "payload_fields", "max_per_hour", "fraicheur_s",
+                 # Le PLAFOND journalier (NULL = aucun). L'adresse privée
+                 # (`hook_slug`) n'y est PAS : elle se pose par son verbe,
+                 # `poser_adresse_de_hook`, jamais par une retouche générique.
+                 "max_per_day"}
     inconnu = set(champs) - autorises
     if inconnu:
         raise ValueError(f"colonnes hors contrat : {sorted(inconnu)}")
@@ -210,10 +221,94 @@ def trigger_par_secret(trigger_id: int, secret_hash: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_COLS} FROM runner_triggers "
-            f"WHERE id = %s AND kind = 'webhook' AND hook_secret_hash = %s",
+            f"WHERE id = %s AND kind = 'webhook' AND hook_secret_hash = %s "
+            # ⚠️ Un agent passé en mode SIGNATURE n'ouvre plus au porteur, même
+            # avec le bon : c'est ce que « désactiver le porteur » veut dire. La
+            # garde est dans le WHERE, comme le haché — même refus, même durée.
+            f"AND hook_auth = 'bearer'",
             (trigger_id, secret_hash),
         ).fetchone()
     return dict(row) if row else None
+
+
+def trigger_signe(trigger_id: int) -> Optional[dict]:
+    """Le déclencheur webhook en mode SIGNATURE d'un id, avec son secret CHIFFRÉ —
+    pour la route, et pour elle seule.
+
+    ⚠️ Trouvé par son SEUL id, et c'est la différence de nature avec le porteur :
+    une signature se vérifie AVEC le secret, donc il faut lire la ligne avant de
+    pouvoir juger. Rien ne sort d'ici vers l'appelant : la route rend le même 404
+    pour « inconnu », « pas en mode signature » et « signature fausse », et le
+    chiffré ne quitte jamais le process.
+
+    `enabled` n'est pas filtré, pour la même raison que `trigger_par_secret` : une
+    source qui a prouvé qui elle est a droit au 409 « en pause ».
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_COLS}, hook_signing_secret_enc FROM runner_triggers "
+            f"WHERE id = %s AND kind = 'webhook' AND hook_auth = 'standard_webhooks'",
+            (trigger_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def trigger_id_par_adresse(slug: str) -> Optional[int]:
+    """L'id du webhook dont l'adresse PRIVÉE est `slug`, ou None.
+
+    Une adresse privée est 128 bits aléatoires : elle ne se devine pas, donc la
+    trouver ne dit rien qu'un appelant ne savait déjà. Elle n'est PAS un
+    credential — la preuve (porteur ou signature) reste exigée derrière."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM runner_triggers WHERE hook_slug = %s AND kind = 'webhook'",
+            (slug,),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def poser_adresse_de_hook(trigger_id: int, org_id: int, slug: Optional[str]) -> bool:
+    """Pose (ou remplace) l'adresse privée d'un webhook ; `None` la retire, et
+    l'adresse numérique redevient la seule. Le choix de la valeur n'est pas ici
+    (`runner_hook.nouvelle_adresse`)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE runner_triggers SET hook_slug = %s "
+            "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
+            (slug, trigger_id, org_id))
+        return bool(cur.rowcount)
+
+
+def poser_auth_de_hook(trigger_id: int, org_id: int, hook_auth: str,
+                       secret_enc: Optional[str] = None,
+                       effacer_le_secret: bool = False) -> bool:
+    """Pose le MODE d'authentification d'un webhook, et/ou son secret de signature.
+
+    `secret_enc` = le secret de signature DÉJÀ chiffré (`runner_hook.
+    chiffrer_secret_de_signature`) — le clair ne passe jamais par ici.
+    `effacer_le_secret` : le retour au porteur EFFACE le secret de signature. Le
+    garder dormant ferait un credential stocké que plus rien n'utilise, et qu'un
+    retour au mode signature réactiverait sans que personne ne l'ait recollé.
+    """
+    with _connect() as conn:
+        if effacer_le_secret:
+            cur = conn.execute(
+                "UPDATE runner_triggers SET hook_auth = %s, "
+                "hook_signing_secret_enc = NULL "
+                "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
+                (hook_auth, trigger_id, org_id))
+        elif secret_enc is not None:
+            cur = conn.execute(
+                "UPDATE runner_triggers SET hook_auth = %s, "
+                "hook_signing_secret_enc = %s "
+                "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
+                (hook_auth, secret_enc, trigger_id, org_id))
+        else:
+            cur = conn.execute(
+                "UPDATE runner_triggers SET hook_auth = %s "
+                "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
+                (hook_auth, trigger_id, org_id))
+        return bool(cur.rowcount)
 
 
 def poser_secret_de_hook(trigger_id: int, org_id: int, secret_hash: str) -> bool:

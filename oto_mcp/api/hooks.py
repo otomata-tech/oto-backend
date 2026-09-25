@@ -23,6 +23,7 @@ Chaque refus prévu a son code, et il est définitif du point de vue de l'envoye
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 
@@ -64,15 +65,24 @@ async def fire(request: Request) -> JSONResponse:
 
     Réponses :
       202 le travail est enfilé (`delayed_seconds` s'il a été lissé)
-      400 le corps n'est pas du JSON
-      404 identifiant inconnu, OU secret faux — délibérément indistinguables
+      202 `duplicate: true` — cette livraison (même `webhook-id` signé) a déjà
+          été acceptée : aucun second travail
+      400 le corps n'est pas du JSON — ou (`hook_stale_timestamp`) une signature
+          VALIDE dont l'horodatage sort de la fenêtre de 5 min
+      404 identifiant inconnu, OU secret faux, OU signature fausse, OU preuve
+          de l'autre mode — délibérément indistinguables
       409 l'agent est en pause
       413 le corps dépasse le plafond
-      429 la file dépasse déjà sa fraîcheur (avec `Retry-After`)
+      429 la file dépasse déjà sa fraîcheur, OU (`hook_daily_cap`) le plafond
+          journalier déclaré par le propriétaire est atteint (avec `Retry-After`)
+      L'adresse est l'id numérique OU l'adresse privée `h_…` ; un agent qui a une
+      adresse privée n'ouvre plus par son id (même 404 que tout le reste).
     """
-    try:
-        trigger_id = int(request.path_params["trigger_id"])
-    except (KeyError, TypeError, ValueError):
+    # Le segment est un id numérique OU une adresse privée (`h_…`, 128 bits).
+    # Résolue hors boucle : une adresse privée se lit en base.
+    trigger_id, par_adresse_privee = await run_in_threadpool(
+        runner_hook.resoudre_adresse, str(request.path_params.get("trigger_id", "")))
+    if trigger_id is None:
         return _refus(404, "hook_not_found", runner_hook.HOOK_INCONNU)
     secret = runner_hook.secret_du_porteur(request.headers.get("authorization"))
 
@@ -103,10 +113,17 @@ async def fire(request: Request) -> JSONResponse:
                           "The body is not JSON. Send a JSON object, or nothing "
                           "at all if the agent does not need one.")
 
+    # La preuve SIGNÉE (Standard Webhooks), jugée sur les octets REÇUS (`brut`),
+    # jamais sur le JSON re-sérialisé : un espace ou un ordre de clés différent
+    # suffirait à refuser une livraison légitime.
+    signature = runner_hook.signature_des_entetes(request.headers, brut)
+
     try:
         rendu = await run_in_threadpool(
-            runner_hook.declencher, trigger_id, secret, corps,
-            (request.headers.get("user-agent") or "")[:200])
+            functools.partial(
+                runner_hook.declencher, trigger_id, secret, corps,
+                (request.headers.get("user-agent") or "")[:200],
+                signature=signature, par_adresse_privee=par_adresse_privee))
     except runner_hook.HookRefus as refus:
         entetes = ({"Retry-After": str(refus.retry_after)}
                    if refus.retry_after else None)

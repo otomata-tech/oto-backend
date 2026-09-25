@@ -665,3 +665,186 @@ def test_un_declencheur_DEJA_POSE_survit_a_la_migration_et_tique_encore(pg_dsn):
                 os.environ[cle] = valeur
         root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
         root.close()
+
+
+# ── l'authentification PAR SIGNATURE, en base (25/09/2026) ─────────────────────
+
+def _signe(db, procedure, org=ORG):
+    """Un webhook passé en mode signature, par le même geste que l'écran."""
+    from oto_mcp import runner_hook
+    t, porteur = _webhook(db, procedure=procedure, org=org)
+    secret = "whsec_" + __import__("base64").b64encode(b"cle " + procedure.encode()).decode()
+    db.poser_auth_de_hook(t["id"], org, "standard_webhooks",
+                          secret_enc=runner_hook.chiffrer_secret_de_signature(t["id"], secret))
+    db.poser_secret_de_hook(t["id"], org, None)
+    return t, porteur, secret
+
+
+def test_un_agent_NAIT_au_porteur_et_le_lit(live):
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="auth-defaut")
+    lu = db.get_trigger(t["id"], ORG)
+    assert lu["hook_auth"] == "bearer" and lu["signing_secret_set"] is False
+    assert "hook_signing_secret_enc" not in lu, "le chiffré ne se sert JAMAIS"
+
+
+def test_le_mode_signature_ETEINT_le_porteur_EN_SQL(live):
+    """⚠️ LE banc de sécurité du lot : le bon porteur, sur un agent passé en
+    signature, ne trouve plus rien — la garde est dans le WHERE."""
+    from oto_mcp import db, runner_hook
+    t, porteur = _webhook(db, procedure="auth-eteint")
+    db.poser_auth_de_hook(t["id"], ORG, "standard_webhooks", secret_enc="x")
+    assert db.trigger_par_secret(t["id"], runner_hook.hacher(porteur)) is None
+
+
+def test_trigger_signe_ne_trouve_QUE_le_mode_signature(live):
+    from oto_mcp import db
+    au_porteur, _ = _webhook(db, procedure="auth-porteur")
+    t, _, _ = _signe(db, "auth-signe")
+    assert db.trigger_signe(au_porteur["id"]) is None
+    trouve = db.trigger_signe(t["id"])
+    assert trouve and trouve["hook_signing_secret_enc"]
+    assert trouve["signing_secret_set"] is True
+
+
+def test_revenir_au_porteur_EFFACE_le_chiffre(live):
+    from oto_mcp import db
+    t, _, _ = _signe(db, "auth-retour")
+    db.poser_auth_de_hook(t["id"], ORG, "bearer", effacer_le_secret=True)
+    lu = db.get_trigger(t["id"], ORG)
+    assert lu["hook_auth"] == "bearer" and lu["signing_secret_set"] is False
+    assert db.trigger_signe(t["id"]) is None
+
+
+def test_bout_en_bout_une_livraison_SIGNEE_enfile_puis_sa_RETENTATIVE_non(live):
+    """La route telle qu'elle tourne : vraie base, vrai chiffrement, vrai index."""
+    import base64, hashlib, hmac, time
+    from oto_mcp import db, runner_hook
+    t, _, secret = _signe(db, "auth-bout-en-bout")
+    corps = b'{"event_type": "note.generated", "note_id": "not_1"}'
+    ts = str(int(time.time()))
+    cle = base64.b64decode(secret[len("whsec_"):])
+    sig = "v1," + base64.b64encode(hmac.new(cle, f"evt_1.{ts}.".encode() + corps,
+                                           hashlib.sha256).digest()).decode()
+    recue = runner_hook.SignatureRecue("evt_1", ts, sig, corps)
+    premier = runner_hook.declencher(t["id"], None, {"note_id": "not_1"}, "Granola",
+                                     signature=recue)
+    assert premier["job_id"] and not premier.get("duplicate")
+    second = runner_hook.declencher(t["id"], None, {"note_id": "not_1"}, "Granola",
+                                    signature=recue)
+    assert second["duplicate"] is True and second["job_id"] == premier["job_id"]
+    livrees = db.livraisons(t["id"], ORG)
+    assert len(livrees) == 1, "une retentative ne laisse ni travail ni livraison"
+
+
+def test_l_index_refuse_DEUX_livraisons_acceptees_du_meme_identifiant(live):
+    """Le filet sous la lecture : si deux écritures passaient quand même, la base
+    en refuse la seconde."""
+    import psycopg
+    from oto_mcp import db
+    t, _, _ = _signe(db, "auth-index")
+    with db._connect() as conn:
+        db.enregistrer(conn, t["id"], ORG, db.QUEUED, external_id="evt_x")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        with db._connect() as conn:
+            db.enregistrer(conn, t["id"], ORG, db.QUEUED, external_id="evt_x")
+
+
+def test_un_REFUS_ne_bloque_pas_la_retentative(live):
+    """Un 409 (en pause) n'a produit aucun travail : la même livraison, rejouée
+    une fois l'agent rallumé, doit passer."""
+    from oto_mcp import db
+    t, _, _ = _signe(db, "auth-refus")
+    with db._connect() as conn:
+        db.enregistrer(conn, t["id"], ORG, db.REFUSE_PAUSED, external_id="evt_y")
+        assert db.livraison_acceptee(conn, t["id"], "evt_y") is None
+        db.enregistrer(conn, t["id"], ORG, db.QUEUED, external_id="evt_y")
+        assert db.livraison_acceptee(conn, t["id"], "evt_y")
+
+
+def test_les_livraisons_AU_PORTEUR_n_ont_pas_d_identifiant_et_ne_se_genent_pas(live):
+    """Sans identifiant, l'index partiel ne s'applique pas : deux livraisons au
+    porteur restent deux livraisons, comme avant ce lot."""
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="auth-sans-id")
+    with db._connect() as conn:
+        db.enregistrer(conn, t["id"], ORG, db.QUEUED)
+        db.enregistrer(conn, t["id"], ORG, db.QUEUED)
+    assert len(db.livraisons(t["id"], ORG)) == 2
+
+
+# ── le plafond journalier et l'adresse privée, en base (25/09/2026) ────────────
+
+def test_un_agent_NAIT_sans_plafond_ni_adresse_privee(live):
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="opt-defaut")
+    lu = db.get_trigger(t["id"], ORG)
+    assert lu["max_per_day"] is None and lu["hook_slug"] is None
+
+
+def test_le_plafond_s_ecrit_a_la_creation_et_se_RETIRE(live):
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="opt-plafond", max_per_day=5)
+    assert db.get_trigger(t["id"], ORG)["max_per_day"] == 5
+    db.update_trigger(t["id"], ORG, {"max_per_day": None})
+    assert db.get_trigger(t["id"], ORG)["max_per_day"] is None
+
+
+def test_la_fenetre_ne_compte_que_les_ACCEPTEES_des_24_dernieres_heures(live):
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="opt-fenetre")
+    with db._connect() as conn:
+        for outcome in (db.QUEUED, db.DELAYED, db.REFUSE_PAUSED, db.REFUSE_DAILY_CAP):
+            db.enregistrer(conn, t["id"], ORG, outcome)
+        # Une acceptée d'il y a 25 h : hors fenêtre.
+        conn.execute("INSERT INTO runner_hook_deliveries (trigger_id, org_id, outcome, "
+                     "received_at) VALUES (%s, %s, 'queued', NOW() - INTERVAL '25 hours')",
+                     (t["id"], ORG))
+    with db._connect() as conn:
+        n, sortie = db.acceptees_sur_24h(conn, t["id"])
+    assert n == 2
+    assert 86_000 < sortie <= 86_400, "la plus ancienne sort dans ~24 h"
+
+
+def test_une_fenetre_vide_rend_zero_et_zero(live):
+    from oto_mcp import db
+    t, _ = _webhook(db, procedure="opt-vide")
+    with db._connect() as conn:
+        assert db.acceptees_sur_24h(conn, t["id"]) == (0, 0)
+
+
+def test_bout_en_bout_le_plafond_REFUSE_la_livraison_de_trop(live):
+    from oto_mcp import db, runner_hook
+    t, porteur = _webhook(db, procedure="opt-bout-en-bout", max_per_day=2)
+    for _ in range(2):
+        assert runner_hook.declencher(t["id"], porteur, {}, "src")["job_id"]
+    with pytest.raises(runner_hook.HookRefus) as e:
+        runner_hook.declencher(t["id"], porteur, {}, "src")
+    assert (e.value.statut, e.value.code) == (429, "hook_daily_cap")
+    issues = [l["outcome"] for l in db.livraisons(t["id"], ORG)]
+    assert issues.count("queued") == 2 and issues.count("refused_daily_cap") == 1
+
+
+def test_l_adresse_privee_se_resout_et_ferme_l_id(live):
+    from oto_mcp import db, runner_hook
+    t, porteur = _webhook(db, procedure="opt-adresse")
+    adresse = runner_hook.nouvelle_adresse()
+    db.poser_adresse_de_hook(t["id"], ORG, adresse)
+    assert runner_hook.resoudre_adresse(adresse) == (t["id"], True)
+    with pytest.raises(runner_hook.HookRefus):
+        runner_hook.declencher(t["id"], porteur, {}, "src")
+    assert runner_hook.declencher(t["id"], porteur, {}, "src",
+                                  par_adresse_privee=True)["job_id"]
+    db.poser_adresse_de_hook(t["id"], ORG, None)
+    assert runner_hook.resoudre_adresse(adresse) == (None, True)
+    assert runner_hook.declencher(t["id"], porteur, {}, "src")["job_id"]
+
+
+def test_deux_agents_ne_partagent_JAMAIS_une_adresse(live):
+    import psycopg
+    from oto_mcp import db
+    a, _ = _webhook(db, procedure="opt-unique-a")
+    b, _ = _webhook(db, procedure="opt-unique-b")
+    db.poser_adresse_de_hook(a["id"], ORG, "h_meme")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        db.poser_adresse_de_hook(b["id"], ORG, "h_meme")

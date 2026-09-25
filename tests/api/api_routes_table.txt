@@ -678,6 +678,8 @@ POST /api/me/runner/jobs -> _handler
 OPTIONS /api/me/runner/jobs -> options_handler
 POST /api/me/runner/triggers -> _handler
 OPTIONS /api/me/runner/triggers -> options_handler
+PUT /api/me/runner/triggers/{trigger_id}/hook-auth -> _handler
+OPTIONS /api/me/runner/triggers/{trigger_id}/hook-auth -> options_handler
 POST /api/me/runner/fleets -> _handler
 OPTIONS /api/me/runner/fleets -> options_handler
 POST /api/admin/runner/workers -> _handler

@@ -17,11 +17,12 @@ Une ligne par appel, accepté ou non. Trois lecteurs, un seul écrivain (la rout
 (`runner_jobs.payload`), déjà domicile de ce qu'un travail emporte. Le garder deux
 fois doublerait le volume ET la surface de fuite d'une donnée tierce.
 
-⚠️ **Aucune déduplication** dans ce lot (décidé le 12/09/2026) : pas de clé de
-livraison, pas de contrainte d'unicité. Ce qui la remplace est l'ACQUITTEMENT
-RAPIDE — un envoyeur retente surtout sur un délai d'attente, et une réponse en
-quelques millisecondes ne lui en laisse pas. Ce qui reste possible est dit sans
-détour : une coupure réseau après notre écriture fait un second déroulé.
+⚠️ **Déduplication : seulement quand la source SIGNE** (Standard Webhooks). Sa
+livraison porte un identifiant signé (`webhook-id`), gardé en `external_id`, et une
+retentative du même identifiant déjà ACCEPTÉ ne refait pas de déroulé
+(`livraison_acceptee`). Une source au porteur n'envoie pas d'identifiant : pour
+elle, ce qui tient lieu de déduplication reste l'ACQUITTEMENT RAPIDE (décidé le
+12/09/2026) — une coupure réseau après notre écriture y fait un second déroulé.
 """
 from __future__ import annotations
 
@@ -40,6 +41,14 @@ from ._conn import _connect
 QUEUED, DELAYED = "queued", "delayed"
 REFUSE_PAUSED, REFUSE_TOO_LARGE, REFUSE_RATE = (
     "refused_paused", "refused_too_large", "refused_rate")
+#: Une signature VALIDE dont l'horodatage sort de la fenêtre : un rejeu, ou une
+#: horloge dérivée chez la source. Journalisé parce que la source a prouvé qui
+#: elle est — contrairement à une signature fausse, qui ne s'écrit pas.
+REFUSE_STALE = "refused_stale"
+#: Le PLAFOND journalier déclaré sur l'agent (`max_per_day`) est atteint : la
+#: livraison est REFUSÉE (429), pas retardée. C'est la borne de dépense d'un
+#: credential fuité, là où le lissage ne fait que repousser.
+REFUSE_DAILY_CAP = "refused_daily_cap"
 
 #: Ce qu'on rend du corps reçu quand on RELIT une livraison — borné parce qu'une
 #: page de livraisons en sert jusqu'à 200, et qu'un corps entier × 200 n'est plus
@@ -243,7 +252,7 @@ def liberer_les_creneaux(trigger_id: int) -> int:
 
 def enregistrer(conn, trigger_id: int, org_id: int, outcome: str,
                 job_id: Optional[int] = None, source: Optional[str] = None,
-                due_at: Any = None) -> int:
+                due_at: Any = None, external_id: Optional[str] = None) -> int:
     """Écrit la livraison. Rend son id.
 
     Prend aussi la connexion de l'appelant : la livraison et le travail qu'elle
@@ -254,13 +263,62 @@ def enregistrer(conn, trigger_id: int, org_id: int, outcome: str,
     row = conn.execute(
         """
         INSERT INTO runner_hook_deliveries (trigger_id, org_id, outcome, job_id,
-                                            source, due_at)
-             VALUES (%s, %s, %s, %s, %s, %s::timestamptz)
+                                            source, due_at, external_id)
+             VALUES (%s, %s, %s, %s, %s, %s::timestamptz, %s)
           RETURNING id
         """,
-        (trigger_id, org_id, outcome, job_id, (source or None), due_at),
+        (trigger_id, org_id, outcome, job_id, (source or None), due_at,
+         (external_id or None)),
     ).fetchone()
     return int(row["id"])
+
+
+def acceptees_sur_24h(conn, trigger_id: int) -> tuple[int, int]:
+    """Combien de livraisons ACCEPTÉES sur les 24 dernières heures, et dans combien
+    de secondes la plus ancienne d'entre elles sort de la fenêtre (`0` si aucune).
+
+    Fenêtre GLISSANTE, pas un jour calendaire : un plafond remis à zéro à minuit
+    laisserait passer deux plafonds en une heure, de part et d'autre de minuit.
+    Seules les acceptées comptent — un refus n'a coûté aucun déroulé.
+
+    ⚠️ Prend la connexion de l'appelant, APRÈS `verrouiller_le_declencheur` : deux
+    livraisons simultanées au bord du plafond se sérialisent, et une seule passe.
+    Borné par l'index `(trigger_id, received_at DESC)`.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*)::int AS n,
+               COALESCE(CEIL(EXTRACT(EPOCH FROM (MIN(received_at)
+                        + INTERVAL '24 hours' - NOW()))), 0)::int AS sortie_s
+          FROM runner_hook_deliveries
+         WHERE trigger_id = %s AND outcome IN ('queued', 'delayed')
+           AND received_at > NOW() - INTERVAL '24 hours'
+        """,
+        (trigger_id,),
+    ).fetchone()
+    return int(row["n"] or 0), max(0, int(row["sortie_s"] or 0))
+
+
+def livraison_acceptee(conn, trigger_id: int, external_id: str) -> Optional[dict]:
+    """La livraison déjà ACCEPTÉE (`queued`/`delayed`) de cet identifiant, ou None.
+
+    ⚠️ Seules les livraisons acceptées comptent : une livraison REFUSÉE (en pause,
+    périmée, hors débit) n'a produit aucun travail, et sa retentative doit pouvoir
+    passer. L'index unique partiel sur ces deux états tient la même règle en base.
+
+    ⚠️ Prend la connexion de l'appelant, APRÈS `verrouiller_le_declencheur` : deux
+    retentatives simultanées se sérialisent sur le verrou, et la seconde lit la
+    première.
+    """
+    return conn.execute(
+        """
+        SELECT id, job_id FROM runner_hook_deliveries
+         WHERE trigger_id = %s AND external_id = %s
+           AND outcome IN ('queued', 'delayed')
+         LIMIT 1
+        """,
+        (trigger_id, external_id),
+    ).fetchone()
 
 
 def livraisons(trigger_id: int, org_id: int, limit: int = 50,

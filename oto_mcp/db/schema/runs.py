@@ -337,7 +337,24 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     next_due TIMESTAMPTZ,
     last_enqueued_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- 25/09/2026 : COMMENT une source prouve qui elle est. `bearer` (défaut) =
+    -- l'en-tête `Authorization: Bearer otoh_…` que nous générons ;
+    -- `standard_webhooks` = la source SIGNE avec son propre secret (Granola,
+    -- Svix…), et le porteur est alors REFUSÉ pour cet agent.
+    hook_auth TEXT NOT NULL DEFAULT 'bearer',
+    -- Le secret de signature fourni par la source, CHIFFRÉ (`crypto.encrypt`, AAD
+    -- liée à la ligne). Jamais servi par une lecture : seule son existence l'est.
+    hook_signing_secret_enc TEXT,
+    -- Le PLAFOND de livraisons ACCEPTÉES sur 24 h glissantes, déclaré par
+    -- l'utilisateur. NULL = aucun (le lissage `max_per_hour` retarde, il ne
+    -- refuse jamais) : au-delà du plafond, 429.
+    max_per_day INT,
+    -- L'adresse PRIVÉE (`h_` + 128 bits aléatoires), optionnelle. Posée, elle
+    -- REMPLACE l'adresse numérique `/api/hooks/{id}`, qui cesse d'ouvrir. Pas un
+    -- credential : la preuve reste exigée derrière. ⚠️ Son index unique n'est
+    -- pas ici (colonne née d'un ALTER du boot, #450) : `db/_init.py`.
+    hook_slug TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
     ON runner_triggers(next_due) WHERE enabled;
@@ -447,7 +464,12 @@ CREATE TABLE IF NOT EXISTS runner_hook_deliveries (
     -- Ce que la source a dit d'elle-même (User-Agent, tronqué). Pas une garde :
     -- de quoi reconnaître l'appelant sur l'écran quand deux sources partagent
     -- un déclencheur.
-    source TEXT
+    source TEXT,
+    -- 25/09/2026 : l'identifiant de livraison que la source SIGNE (`webhook-id`,
+    -- Standard Webhooks). NULL pour une source au porteur. C'est la clé de
+    -- déduplication : une retentative d'une livraison déjà acceptée ne refait
+    -- pas de déroulé.
+    external_id TEXT
 );
 -- L'index de l'ÉCRAN : les livraisons récentes d'un déclencheur, comptées sur 24 h.
 CREATE INDEX IF NOT EXISTS idx_hook_deliveries_fenetre
@@ -457,6 +479,9 @@ CREATE INDEX IF NOT EXISTS idx_hook_deliveries_fenetre
 -- `LIMIT debit` la borne quelle que soit la longueur de la file.
 CREATE INDEX IF NOT EXISTS idx_hook_deliveries_creneaux
     ON runner_hook_deliveries(trigger_id, due_at DESC) WHERE due_at IS NOT NULL;
+-- ⚠️ L'index de DÉDUPLICATION (`idx_hook_deliveries_externe`) n'est PAS ici : sa
+-- colonne `external_id` naît d'un ALTER du boot sur une base existante, et ce DDL
+-- tourne AVANT lui (#450). Il est posé dans `db/_init.py`, juste après l'ALTER.
 
 
 -- 12/09/2026 : la présence d'un worker de plateforme PAR FAMILLE de modèle — le

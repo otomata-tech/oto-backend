@@ -62,6 +62,9 @@ def _org_servie(monkeypatch):
                                       "derniere": None})
     monkeypatch.setattr(RT.db, "file_du_declencheur",
                         lambda t, o: {"pending": 0, "held": 0})
+    # Un webhook NAÎT avec une adresse privée (25/09/2026) : son écriture est
+    # doublée ici, `test_webhook_plafond_adresse.py` en tient la règle.
+    monkeypatch.setattr(RT.db, "poser_adresse_de_hook", lambda t, o, slug: True)
 
 
 # ── 1. le SECRET ──────────────────────────────────────────────────────────────

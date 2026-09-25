@@ -1406,6 +1406,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # le câblage catalogue/chargement suit en B2/B3.
     from ..connectors import activation as _conn_act
     _conn_act.init_schema(conn)
+    # Le cran TENANT (2026-09-26) entre dans le domaine de `scope_type` : reposé
+    # seulement s'il a changé (`_poser_domaine`), sans parcours de table au rejeu.
+    _poser_domaine(conn, "connector_availability", "connector_availability_scope_type_check",
+                   "scope_type", ("platform", "org", "tenant", "group"))
     _conn_act.seed_initial(conn)
     # Chantier ACL B2 : les 4 tables legacy ne sont plus lues par aucun code — DROP.
     # (La table qui les avait remplacées, `connector_acl`, n'est plus lue non plus

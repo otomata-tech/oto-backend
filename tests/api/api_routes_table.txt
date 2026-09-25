@@ -200,6 +200,12 @@ PUT /api/admin/tenants/{slug}/apps/{connector} -> _handler
 OPTIONS /api/admin/tenants/{slug}/apps/{connector} -> options_handler
 DELETE /api/admin/tenants/{slug}/apps/{connector} -> _handler
 OPTIONS /api/admin/tenants/{slug}/apps/{connector} -> options_handler
+GET,HEAD /api/admin/tenants/{slug}/connectors/activation -> _handler
+OPTIONS /api/admin/tenants/{slug}/connectors/activation -> options_handler
+PUT /api/admin/tenants/{slug}/connectors/activation/{name} -> _handler
+OPTIONS /api/admin/tenants/{slug}/connectors/activation/{name} -> options_handler
+DELETE /api/admin/tenants/{slug}/connectors/activation/{name} -> _handler
+OPTIONS /api/admin/tenants/{slug}/connectors/activation/{name} -> options_handler
 GET,HEAD /api/admin/access-shadow -> _handler
 OPTIONS /api/admin/access-shadow -> options_handler
 GET,HEAD /api/admin/unipile/seats -> _handler

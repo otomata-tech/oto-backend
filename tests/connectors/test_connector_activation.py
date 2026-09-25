@@ -39,3 +39,17 @@ def test_registry_importable_for_seed():
 
     assert len(providers.REGISTRY) >= 1
     assert "serper" in providers.REGISTRY
+
+
+# --- le cran TENANT : un plafond (2026-09-26) ------------------------------------
+
+def test_le_tenant_coupe_sous_le_master_et_au_dessus_de_lorg():
+    # Coupé par le tenant : ni le master ON ni un override d'org ON ne rouvrent.
+    assert _resolve({"a": True}, {}, {"a": False}) == set()
+    assert _resolve({"a": True}, {"a": True}, {"a": False}) == set()
+    # Une ligne tenant à True n'expose rien que la plateforme ne donne pas.
+    assert _resolve({"a": False}, {}, {"a": True}) == set()
+    assert _resolve({}, {}, {"a": True}) == set()
+    # Sans ligne tenant sur `a`, rien ne change pour lui.
+    assert _resolve({"a": True, "b": True}, {"b": False}, {"c": False}) == {"a"}
+    assert _resolve({"a": True}, {}, None) == {"a"}

@@ -110,7 +110,11 @@ class OrgActivationRow(BaseModel):
     # « pas exposé », seul le second est une décision.
     master_enabled: Optional[bool] = None
     org_enabled: Optional[bool] = None      # None = pas d'override, l'org suit le master
-    effective: bool                         # override > master > OFF
+    # Le PLAFOND du tenant qui héberge l'org (2026-09-26) : `false` = coupé par
+    # l'hébergeur pour toutes ses orgs, et l'org ne peut pas le rouvrir ; `None` =
+    # pas de ligne (ou org du tenant primaire).
+    tenant_enabled: Optional[bool] = None
+    effective: bool                         # (override > master > OFF) sous le plafond tenant
     recommended: bool                       # baseline d'org (ADR 0019), pas l'activation
     paid_option: Optional[str] = None       # add-on payant requis (couche 3), None = aucun
     # `false` par défaut ET quand aucune option n'est requise — ne se lit donc
@@ -161,10 +165,13 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         elif r["org_id"] == inp.org_id:
             override[r["connector"]] = bool(r["enabled"])
     recommended = set(org_store.get_org_default_connectors(inp.org_id) or [])
+    slug = connector_activation.tenant_of_org(inp.org_id)
+    tenant_map = connector_activation.list_tenant_activations(slug) if slug else {}
     out = []
     for name, c in providers.REGISTRY.items():
         master = glob.get(name)          # None = jamais posé = OFF
         org_ov = override.get(name)      # None = pas d'override
+        tenant_ov = tenant_map.get(name)  # None = pas de ligne tenant
         # Invariant : ne lister que ce que la plateforme rend DISPONIBLE à cette org —
         # cohérent avec la surface USER (_visible_catalog). On filtre sur le CAP
         # plateforme (master), pas sur `effective` (sinon un connecteur que l'org a
@@ -173,11 +180,14 @@ def _org_list(ctx: ResolvedCtx, inp: OrgActivationListInput) -> dict:
         if not master and org_ov is None:
             continue
         effective = org_ov if org_ov is not None else bool(master)
+        if tenant_ov is False:
+            effective = False           # plafond de l'hébergeur : rien en dessous ne rouvre
         option = access.paid_option_for(name)          # add-on payant (couche 3) ou None
         out.append({
             "connector": name, "label": c.label, "help": c.help,
             "namespaces": list(c.namespaces),
-            "master_enabled": master, "org_enabled": org_ov, "effective": effective,
+            "master_enabled": master, "org_enabled": org_ov, "tenant_enabled": tenant_ov,
+            "effective": effective,
             "recommended": name in recommended,
             "paid_option": option,
             "subscribed": _org_subscribed(inp.org_id, option) if option else False,
@@ -216,11 +226,23 @@ def _signal_kit(org_id: int, name: str) -> dict:
     return {"in_kit": True, "kit_note": _KIT_OUVERT if ouvert else _KIT_COUPE}
 
 
+def _require_tenant_exposed(org_id: int, name: str) -> None:
+    """Le tenant qui héberge l'org ne doit pas l'avoir coupé : son plafond ne se
+    relâche pas plus qu'un plafond plateforme (2026-09-26)."""
+    slug = connector_activation.tenant_of_org(org_id)
+    if slug and connector_activation.list_tenant_activations(slug).get(name) is False:
+        raise AuthzDenied(409, "tenant_disabled",
+                          f"Connecteur `{name}` coupé par l'hébergeur de ton organisation — "
+                          "une org ne le rouvre pas ; un admin du tenant le fait depuis son "
+                          "tableau de bord.")
+
+
 def _org_set(ctx: ResolvedCtx, inp: OrgActivationSetInput) -> dict:
     if inp.name not in providers.REGISTRY:
         raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
     if inp.enabled:
         _require_master_exposed(inp.name)
+        _require_tenant_exposed(inp.org_id, inp.name)
     connector_activation.set_activation(inp.name, inp.enabled, org_id=inp.org_id, set_by=ctx.sub)
     return {"org_id": inp.org_id, "connector": inp.name, "enabled": inp.enabled,
             **_signal_kit(inp.org_id, inp.name)}

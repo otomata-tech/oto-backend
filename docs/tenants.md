@@ -336,6 +336,27 @@ pas. Deux faces pour la poser, même ligne au coffre :
   `DELETE /api/admin/editor-apps/google/tenant:<slug>`) ramène le tenant sur la nôtre — et
   rend ses comptes connectés sous la sienne à reconnecter (même refus nommé).
 
+## Le plafond d'activation du tenant (2026-09-26)
+
+Un tenant n'offre pas tout le catalogue — un service Google que son projet Google Cloud ne
+déclare pas, un connecteur qu'il ne supporte pas. Le cran **`tenant`** de
+`connector_availability` (`scope_id` = le slug) est un **plafond** entre la plateforme et
+l'org : `enabled=false` coupe pour TOUTES ses orgs, et rien en dessous — override d'org,
+équipe — ne rouvre (`cran_qui_coupe` rend `tenant`, le refus d'appel nomme l'hébergeur) ;
+`enabled=true` ne fait que retirer la coupure, un tenant n'expose jamais ce que le master
+plateforme ne donne pas. Résolution : `(override d'org > master > OFF)` **sous** le plafond
+tenant, puis la coupure d'équipe (`connectors/activation._resolve`).
+
+- Face du tenant (`tenant_connectors`) : `GET /api/admin/tenants/{slug}/connectors/activation`
+  (master, ligne tenant, résultante) ; `PUT …/{name} {"enabled"}` ; `DELETE …/{name}`.
+  Plancher `TENANT_ADMIN_OF(slug)` comme ses clés et ses apps. Primaire refusé.
+- Le cockpit d'org (`connectors.activation.org_list`) porte `tenant_enabled` et refuse la
+  pose ON sous un plafond fermé (`409 tenant_disabled`).
+- Le tenant de l'org se lit par `db.org_tenant_slug` (union des trois axes) : une org du
+  tenant primaire n'a pas de cran tenant.
+- Un split de connecteur (`fanout_availability`) recopie les lignes de la source à TOUS les
+  scopes, tenant compris : une coupure posée sur `google` suit ses services.
+
 ## Le rôle « admin de tenant » et l'arête tenant→org (L-clés PR 2 — 2026-08-29)
 
 **Le rôle.** La sortie nommée du régime transitoire (0052 §Amendement 27/08 : l'opérateur du

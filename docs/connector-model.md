@@ -51,6 +51,10 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > porteur. Ne normaliser que la comparaison fait reconnaître le pin puis le perdre
 > à la lecture (`require_credential` refuse le nom d'un délégant).
 >
+> **Couche 1, cran TENANT (2026-09-26)** : entre le master plateforme et l'override d'org,
+> un tenant coupe un connecteur pour toutes ses orgs — un plafond, jamais une exposition
+> (`docs/tenants.md` §Le plafond d'activation du tenant).
+>
 > La normalisation vit dans **`walk_cascade`** — le seam que traversent la résolution,
 > le miroir de mode et le statut. La refaire ailleurs, c'est rouvrir la divergence du
 > 2026-07-07. Détail : `docs/unipile.md` §Le split.

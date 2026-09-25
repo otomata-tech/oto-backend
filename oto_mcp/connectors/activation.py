@@ -36,8 +36,8 @@ from typing import Optional
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS connector_availability (
-    scope_type TEXT NOT NULL CHECK (scope_type IN ('platform','org','group')),
-    scope_id   TEXT NOT NULL DEFAULT '',   -- '' pour platform ; org.id / group.id en texte sinon
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('platform','org','tenant','group')),
+    scope_id   TEXT NOT NULL DEFAULT '',   -- '' pour platform ; org.id / group.id en texte ; slug pour tenant
     connector  TEXT NOT NULL,              -- nom de connecteur (registre providers/)
     enabled    BOOLEAN NOT NULL,
     set_by     TEXT,
@@ -138,11 +138,23 @@ def fanout_availability(conn, source: str, targets: tuple[str, ...]) -> int:
 
 # --- résolution (pure) ------------------------------------------------------
 
-def _resolve(global_map: dict[str, bool], override_map: dict[str, bool]) -> set[str]:
-    """Applique `override d'org > master plateforme > OFF`. Renvoie les connecteurs
-    exposés. Pur (pas de DB) → testable hors connexion."""
+def _resolve(global_map: dict[str, bool], override_map: dict[str, bool],
+             tenant_map: "dict[str, bool] | None" = None) -> set[str]:
+    """Applique `override d'org > master plateforme > OFF`, sous le PLAFOND du tenant.
+    Renvoie les connecteurs exposés. Pur (pas de DB) → testable hors connexion.
+
+    Le cran TENANT (2026-09-26) : un partenaire qui sert oto sous sa marque coupe, pour
+    TOUTES ses orgs d'un coup, un connecteur que son offre ne comprend pas — sans
+    poser un override sur chacune, et sans qu'un admin d'org puisse le rouvrir. C'est
+    un plafond, comme la plateforme : il ne fait que RETRANCHER (`enabled=false`),
+    une ligne à `true` n'expose rien que la plateforme n'expose déjà. Motif concret :
+    un service Google que le projet Google Cloud du tenant ne déclare pas — le
+    consentement échouerait chez Google, la carte ne doit pas exister chez lui."""
     names = set(global_map) | set(override_map)
-    return {n for n in names if override_map.get(n, global_map.get(n, False))}
+    exposed = {n for n in names if override_map.get(n, global_map.get(n, False))}
+    if not tenant_map:
+        return exposed
+    return {n for n in exposed if tenant_map.get(n, True)}
 
 
 def effective_for_group(exposed: set[str], group_cut: set[str]) -> set[str]:
@@ -154,6 +166,17 @@ def effective_for_group(exposed: set[str], group_cut: set[str]) -> set[str]:
 
 
 # --- lectures (self-managing) -----------------------------------------------
+
+def tenant_of_org(org_id: Optional[int]) -> Optional[str]:
+    """Le slug du tenant qui HÉBERGE cette org, ou `None` (tenant primaire, ou pas
+    d'org) — le seul cas où le cran tenant n'existe pas. Lu par `db.org_tenant_slug`
+    (l'union des trois axes, `docs/tenants.md`), jamais deviné."""
+    if org_id is None:
+        return None
+    from .. import db, tenancy
+    slug = db.org_tenant_slug(int(org_id))
+    return None if not slug or slug == tenancy.PRIMARY_SLUG else slug
+
 
 def is_exposed(connector: str, org_id: Optional[int] = None) -> bool:
     """exposé = override d'org si défini, sinon master plateforme, sinon OFF."""
@@ -171,7 +194,18 @@ def cran_qui_coupe(connector: str, org_id: Optional[int] = None,
     peut rouvrir — ce que le refus d'appel (`activation_gate`) dit à l'agent."""
     from .. import db
 
+    slug = tenant_of_org(org_id)
     with db._connect() as conn:
+        # Le plafond du TENANT d'abord : coupé là, personne dans l'org ne rouvre —
+        # ni un override d'org ON, ni une équipe. Nommer ce cran, c'est dire que le
+        # geste est chez l'hébergeur.
+        if slug is not None and conn.execute(
+                "SELECT 1 FROM connector_availability "
+                "WHERE scope_type = 'tenant' AND scope_id = %s AND connector = %s "
+                "AND enabled = FALSE",
+                (slug, connector),
+        ).fetchone() is not None:
+            return "tenant"
         org_row = None
         if org_id is not None:
             org_row = conn.execute(
@@ -205,18 +239,21 @@ def exposed_connectors(org_id: Optional[int] = None) -> set[str]:
     scan). Pour filtrer le catalogue / le chargement en une requête."""
     from .. import db
 
+    slug = tenant_of_org(org_id)
     with db._connect() as conn:
         rows = conn.execute(
             "SELECT scope_type, connector, enabled FROM connector_availability "
-            "WHERE scope_type = 'platform' OR (scope_type = 'org' AND scope_id = %s)",
-            (str(org_id) if org_id is not None else "",),
+            "WHERE scope_type = 'platform' OR (scope_type = 'org' AND scope_id = %s)"
+            "   OR (scope_type = 'tenant' AND scope_id = %s)",
+            (str(org_id) if org_id is not None else "", slug or ""),
         ).fetchall()
     global_map: dict[str, bool] = {}
     override_map: dict[str, bool] = {}
+    tenant_map: dict[str, bool] = {}
     for r in rows:
-        target = override_map if r["scope_type"] == "org" else global_map
+        target = {"org": override_map, "tenant": tenant_map}.get(r["scope_type"], global_map)
         target[r["connector"]] = bool(r["enabled"])
-    return _resolve(global_map, override_map)
+    return _resolve(global_map, override_map, tenant_map)
 
 
 def list_activations() -> list[dict]:
@@ -264,6 +301,49 @@ def clear_activation(connector: str, org_id: int) -> None:
             "DELETE FROM connector_availability "
             "WHERE scope_type = 'org' AND scope_id = %s AND connector = %s",
             (str(org_id), connector),
+        )
+
+
+# --- tier TENANT (plafond, 2026-09-26) ---------------------------------------
+
+def list_tenant_activations(slug: str) -> dict[str, bool]:
+    """Les coupures (et lignes) posées par ce tenant : `{connector: enabled}`."""
+    from .. import db
+
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, enabled FROM connector_availability "
+            "WHERE scope_type = 'tenant' AND scope_id = %s ORDER BY connector",
+            (slug,),
+        ).fetchall()
+    return {r["connector"]: bool(r["enabled"]) for r in rows}
+
+
+def set_tenant_activation(slug: str, connector: str, enabled: bool,
+                          set_by: Optional[str] = None) -> None:
+    """Pose/maj la ligne tenant. `enabled=false` coupe pour toutes les orgs du tenant ;
+    `true` ne fait que retirer la coupure (le plafond plateforme reste le sien)."""
+    from .. import db
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by) "
+            "VALUES ('tenant', %s, %s, %s, %s) "
+            "ON CONFLICT (scope_type, scope_id, connector) "
+            "DO UPDATE SET enabled = EXCLUDED.enabled, set_by = EXCLUDED.set_by, set_at = NOW()",
+            (slug, connector, enabled, set_by),
+        )
+
+
+def clear_tenant_activation(slug: str, connector: str) -> None:
+    """Retire la ligne tenant → le connecteur suit à nouveau la plateforme."""
+    from .. import db
+
+    with db._connect() as conn:
+        conn.execute(
+            "DELETE FROM connector_availability "
+            "WHERE scope_type = 'tenant' AND scope_id = %s AND connector = %s",
+            (slug, connector),
         )
 
 

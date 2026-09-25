@@ -51,6 +51,10 @@ def _refus(connector: str) -> Optional[ErrorData]:
         pourquoi = f"désactivé pour {ou} par un réglage de l'organisation"
         geste = (f"un admin de l'org l'active : oto_connector_activation(op='set', "
                  f"scope='org', org_id={org}, name='{connector}', enabled=true).")
+    elif cran == "tenant":
+        pourquoi = "coupé par l'hébergeur de ton organisation, pour toute son offre"
+        geste = ("seul un admin de cet hébergeur (le tenant) le rouvre, depuis son "
+                 "tableau de bord ; aucune organisation ni équipe ne le peut.")
     elif cran == "group":
         pourquoi = f"coupé par ton équipe {group}"
         geste = (f"un chef de l'équipe retire la coupure : oto_connector_activation("

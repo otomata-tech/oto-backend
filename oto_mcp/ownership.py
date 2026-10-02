@@ -66,6 +66,15 @@ def accessor_scope(sub: str) -> AccessorScope:
         org_ids = [borne] if roles.is_org_member(sub, borne) else []
         group_ids = [int(g["group_id"])
                      for g in group_store.list_groups_for_user(sub, borne)]
+    # Jeton de délégation : les partages reçus ne comptent que dans l'org du travail
+    # (`verrou_org.py`) — ni les autres orgs du porteur, ni leurs équipes.
+    from . import verrou_org
+    v = verrou_org.courant()
+    ecart = v is not None and any(o != v.org_id for o in org_ids)
+    if (verrou := verrou_org.borne(sub, route="accessor_scope", ecart=ecart)) is not None:
+        org_ids = [o for o in org_ids if o == verrou.org_id]
+        group_ids = [g for g in group_ids
+                     if (group_store.get_group(g) or {}).get("org_id") == verrou.org_id]
     return AccessorScope(sub=sub, org_ids=org_ids, group_ids=group_ids)
 
 

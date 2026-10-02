@@ -908,9 +908,14 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     # tâche de fond à faire vivre. Un jeton mort est inutilisable, et
     # l'accumulation est mécanique — un par travail exécuté.
     db.purger_delegations_expirees(porteur)
+    # Le jeton porte son TRAVAIL et l'org de ce travail : le porteur peut appartenir à
+    # plusieurs orgs, son travail n'en a qu'une, et toute résolution hors d'elle est
+    # refusée (`verrou_org.py`). Un travail sans org est borné à la portée personnelle.
     job["delegated_token"] = db.create_api_token(
         porteur, label=f"runner job {job['id']}",
-        ttl_seconds=bail_s + _MARGE_JETON_S, kind="delegation")
+        ttl_seconds=bail_s + _MARGE_JETON_S, kind="delegation",
+        job_id=job.get("id"), verrou_org=True,
+        verrou_org_id=int(org_id) if org_id is not None else None)
     return job
 
 

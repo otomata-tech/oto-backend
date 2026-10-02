@@ -53,12 +53,18 @@ def purger_delegations_expirees(sub: str) -> int:
 def create_api_token(sub: str, label: str = "cli", ttl_days: Optional[int] = None,
                      scopes: Optional[dict] = None,
                      ttl_seconds: Optional[int] = None,
-                     kind: str = "user") -> str:
+                     kind: str = "user", *, job_id: Optional[int] = None,
+                     verrou_org: bool = False,
+                     verrou_org_id: Optional[int] = None) -> str:
     """Génère un token, persiste son hash, renvoie le plaintext une seule fois.
 
     `ttl_days` : si fourni (>0), le token expire après ce délai et est rejeté
     par `verify_api_token`. None = non-expirant (défaut — token CLI long-lived
     stocké en SOPS). La révocation explicite est `revoke_api_token`.
+
+    `job_id` / `verrou_org` / `verrou_org_id` : un jeton de DÉLÉGATION porte son
+    travail et l'org de ce travail — toute résolution du porteur hors de cette org est
+    refusée (`verrou_org.py`). `verrou_org_id=None` avec le verrou = aucune org.
 
     `scopes` (cf. `token_scopes.py`) : None = jeton NON PORTÉ, il est le sub.
     Non None = deny-by-default, seul ce que la portée nomme passe — la forme d'un
@@ -84,9 +90,12 @@ def create_api_token(sub: str, label: str = "cli", ttl_days: Optional[int] = Non
     with _connect() as conn:
         conn.execute(
             f"INSERT INTO user_api_tokens (sub, label, token_hash, expires_at, "
-            f"scopes, kind) VALUES (%s, %s, %s, {expires}, %s, %s)",
+            f"scopes, kind, job_id, verrou_org, verrou_org_id) "
+            f"VALUES (%s, %s, %s, {expires}, %s, %s, %s, %s, %s)",
             (sub, label, _hash_token(token),
-             json.dumps(scopes) if scopes is not None else None, kind),
+             json.dumps(scopes) if scopes is not None else None, kind,
+             job_id, True if verrou_org else None,
+             verrou_org_id if verrou_org else None),
         )
     return token
 
@@ -114,7 +123,7 @@ def verify_api_token(token: str) -> Optional[dict]:
             "UPDATE user_api_tokens SET last_used_at = NOW() "
             "WHERE token_hash = %s AND revoked_at IS NULL "
             "AND (expires_at IS NULL OR expires_at > NOW()) "
-            "RETURNING id, sub, scopes, kind",
+            "RETURNING id, sub, scopes, kind, job_id, verrou_org, verrou_org_id",
             (h,),
         ).fetchone()
         if not row:
@@ -124,7 +133,10 @@ def verify_api_token(token: str) -> Optional[dict]:
         # jusqu'ici indistinguables — et un jeton de délégation ressemblait à une
         # session humaine.
         return {"sub": row["sub"], "scopes": _as_scopes(row.get("scopes")),
-                "token_id": row["id"], "token_kind": row.get("kind")}
+                "token_id": row["id"], "token_kind": row.get("kind"),
+                # Le verrou d'org d'un jeton de délégation (`verrou_org.py`).
+                "job_id": row.get("job_id"), "verrou_org": bool(row.get("verrou_org")),
+                "verrou_org_id": row.get("verrou_org_id")}
 
 
 def _as_scopes(raw: object) -> Optional[dict]:

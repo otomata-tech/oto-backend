@@ -121,7 +121,12 @@ class _IatGatedVerifier(JWTVerifier):
         return AccessToken(token=token, client_id="oto_api_token", scopes=[],
                            subject=sub, claims={"sub": sub,
                                                 "token_id": row.get("token_id"),
-                                                "token_kind": row.get("token_kind")})
+                                                "token_kind": row.get("token_kind"),
+                                                # Verrou d'org d'un jeton de délégation,
+                                                # posé par `middleware/verrou_org.py`.
+                                                "job_id": row.get("job_id"),
+                                                "verrou_org": row.get("verrou_org"),
+                                                "verrou_org_id": row.get("verrou_org_id")})
 
     def _route(self, token) -> tuple:
         """`(slug du tenant, verifier)` pour ce jeton — sélection par le claim `iss`,
@@ -716,6 +721,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # doit pas non plus RECEVOIR les instructions d'org du handshake.
     from .middleware.account_suspended import AccountSuspendedMiddleware
     instance.add_middleware(AccountSuspendedMiddleware())
+
+    # 0 bis bis. Le VERROU D'ORG d'un jeton de délégation, posé pour TOUTE la requête
+    # avant le contexte d'appel, qui résout l'org et ses jetons (`verrou_org.py`).
+    from .middleware.verrou_org import VerrouOrgMiddleware
+    instance.add_middleware(VerrouOrgMiddleware())
 
     # 0 quater. Rappel du CONTEXTE D'ORG en tête de la réponse (oto-backend#1041) :
     # tant que l'appelant n'a pas lu `oto_context` depuis la dernière modification du

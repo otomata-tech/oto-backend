@@ -10,7 +10,10 @@ scopes JSONB,
 kind TEXT NOT NULL DEFAULT 'user',
 revoked_at TIMESTAMPTZ,
 revoked_by TEXT,
-revoked_reason TEXT
+revoked_reason TEXT,
+job_id BIGINT,
+verrou_org BOOLEAN,
+verrou_org_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 CREATE TABLE IF NOT EXISTS upload_tokens_used (

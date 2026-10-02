@@ -256,6 +256,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
              "qui ouvre la machine.",
              ("oto_mcp/egress.py:138",)),
+    Variable("OTO_VERROU_ORG_DELEGATION", Classe.REGLAGE, None,
+             "Verrou d'org des jetons de délégation (`verrou_org.py`) : `enforce` "
+             "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
+             "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
+             "inconnue vaut `enforce`.",
+             ("oto_mcp/verrou_org.py:92",)),
     Variable("OTO_ORIGINE_REFUS_LE", Classe.REGLAGE, None,
              "Déplace la date par défaut (`datastore/schema.py:ORIGINE_REFUS_LE`, "
              "2026-10-01) à partir de laquelle poser la couche `origine` sans la "

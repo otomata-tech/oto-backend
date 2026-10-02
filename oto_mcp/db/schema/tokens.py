@@ -46,7 +46,16 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
     -- révision Alembic `0007_jetons_revocation_tracee`, jamais le démarrage.
     revoked_at TIMESTAMPTZ,
     revoked_by TEXT,
-    revoked_reason TEXT
+    revoked_reason TEXT,
+    -- Jeton de DÉLÉGATION seulement : le travail pour lequel il a été émis, et l'org
+    -- de ce travail. `verrou_org` vrai = toute résolution du porteur hors de
+    -- `verrou_org_id` est refusée (`oto_mcp/verrou_org.py`) ; `verrou_org_id` NULL
+    -- avec le verrou = aucune org (portée personnelle seule). NULL partout = jeton
+    -- non verrouillé (humain, API, délégation émise avant le verrou). Base
+    -- existante : révision Alembic `0032_verrou_org_delegation`, jamais le démarrage.
+    job_id BIGINT,
+    verrou_org BOOLEAN,
+    verrou_org_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_user_api_tokens_sub ON user_api_tokens(sub);
 

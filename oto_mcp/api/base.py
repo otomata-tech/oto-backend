@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from .. import config, db
 from ..auth import platform_worker, service_identity, token_scopes
+from .. import verrou_org
 from ..tenant_migration import alias_drain_armed
 from .. import account_suspension
 
@@ -200,6 +201,9 @@ async def _authenticate(
     # survit jamais d'une requête à l'autre par oubli.
     platform_worker.set_current(None)
     service_identity.set_current(None)
+    # Le verrou d'org d'un jeton de délégation (`verrou_org.py`) : posé à None
+    # d'abord, comme les deux variables ci-dessus — il ne survit à aucune requête.
+    verrou_org.poser(None)
     if token.startswith(db.WORKER_SECRET_PREFIX):
         token_scopes.set_current(None)
         if not allow_api_token:
@@ -289,7 +293,14 @@ async def _authenticate(
         # même le premier geste de diagnostic après une mise en pause.
         if (pause := await run_in_threadpool(account_suspension.refus, row["sub"])):
             return None, _json_error(request, 403, account_suspension.CODE, pause[0])
+        verrou_org.poser(verrou := verrou_org.depuis_ligne(row))
         servi = _maybe_view_as(row["sub"], apply_view_as)
+        # Le verrou ne vise que le porteur : « voir en tant que » un autre compte
+        # l'éteindrait. Sous un jeton verrouillé, la consultation est refusée.
+        if verrou is not None and servi != row["sub"] and verrou_org.courant():
+            return None, _json_error(
+                request, 403, verrou_org.CODE,
+                "A hosted agent's token cannot view as another account.")
         _publier_principal(request, row["sub"],
                            token_id=row.get("token_id"),
                            token_kind=row.get("token_kind"))

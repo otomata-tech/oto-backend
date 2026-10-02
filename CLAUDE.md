@@ -206,7 +206,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `connector-vault.md` — registre, coffre, instances, **garde d'egress** (`OTO_EGRESS_ALLOW`)
 - `roles-and-resolution.md` — paliers, cascade de clé
 - `groups-and-roles.md` — hiérarchie de droits
-- `org-context.md` — session / maison / consultation
+- `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail
 - `ownership.md` — `can_access`/`can_govern`, partages
 - `tool-visibility.md` — denylist, `PROTECTED_TOOLS`
 - `auth-logto.md` — Logto, DCR, jetons `oto_`

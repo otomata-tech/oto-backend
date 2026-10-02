@@ -178,6 +178,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "salesforce",
     "pipedrive",
     "sellsy",
+    # Voisin de `sellsy` par le métier : le CRM des ESN et sociétés de conseil.
+    "boondmanager",
     # --- ATS / talent sourcing (RH) — câblés 2026-06-20 ----------------------
     "greenhouse",
     "lever",

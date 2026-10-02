@@ -125,6 +125,7 @@ _DECLARATIONS: tuple[str, ...] = (
     # métier que l'exploitant configure une fois (coordonnées d'application au
     # palier plateforme) avant que quiconque puisse s'y connecter.
     "instagram_meta",
+    "meta_ads",
     "cognism",
     "lighton",
     # --- sharepoint : app Entra de l'org (byo_org, client credentials), fichiers M365

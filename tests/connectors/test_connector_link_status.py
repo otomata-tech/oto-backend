@@ -33,6 +33,7 @@ from oto_mcp.connectors import link as connector_link
 # L'import est CE qui déclare : ce module s'enregistre au niveau module.
 from oto_mcp.auth import google as google_oauth  # noqa: F401,E402
 from oto_mcp.auth import instagram_meta as instagram_meta_oauth  # noqa: F401,E402
+from oto_mcp.auth import meta_ads as meta_ads_oauth  # noqa: F401,E402
 
 
 def _federated() -> set[str]:
@@ -57,7 +58,8 @@ def test_le_perimetre_est_celui_quon_croit():
     # ce que ce fichier existait pour obtenir.
     # Split google (2026-09-26) : chaque service lit SON lien — les comptes qui
     # l'ont autorisé, pas tous ceux du porteur.
-    assert _federated() == {"google", "instagram_meta",
+    # `meta_ads` (2026-10-02) : même patron qu'`instagram_meta`.
+    assert _federated() == {"google", "instagram_meta", "meta_ads",
                             "gmail", "drive", "sheets", "calendar", "tasks", "chat"}
 
 

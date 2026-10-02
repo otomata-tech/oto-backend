@@ -54,6 +54,7 @@ OPTIONS /api/fr/accords/{id_or_numero} -> options_handler
 GET,HEAD /api/zoho/oauth/callback -> callback
 GET,HEAD /api/salesforce/oauth/callback -> callback
 GET,HEAD /api/instagram_meta/oauth/callback -> callback
+GET,HEAD /api/meta_ads/oauth/callback -> callback
 POST /api/me/orgs -> _handler
 OPTIONS /api/me/orgs -> options_handler
 PUT /api/me/active-org -> _handler

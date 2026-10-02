@@ -104,18 +104,27 @@ SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
     # Google Chat (RESTRICTED) — lire les espaces + lire/poster des messages.
     "chat": ("https://www.googleapis.com/auth/chat.spaces.readonly",
              "https://www.googleapis.com/auth/chat.messages"),
+    # BigQuery (SENSIBLE). PAS `bigquery.readonly` : `jobs.query`, `getQueryResults`
+    # et `jobs.insert` (le dry run) ne l'acceptent pas (document de découverte v2,
+    # rév. 20260811). Le scope permettrait d'écrire : la lecture seule est tenue par
+    # les tools (dry run → `statementType` SELECT exigé, `tools/bigquery.py`).
+    "bigquery": ("https://www.googleapis.com/auth/bigquery",),
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"gmail": "Gmail", "drive": "Google Drive", "sheets": "Google Sheets",
                   "calendar": "Google Calendar", "tasks": "Google Tasks",
-                  "chat": "Google Chat"}
+                  "chat": "Google Chat", "bigquery": "Google BigQuery"}
 
-# TOUS les scopes de service — ce que le COMPTE (`google`) demande sous notre app :
-# l'état d'avant le split, pour un tableau de bord à carte Google unique.
-SCOPES = [scope for svc in SERVICES for scope in SERVICE_SCOPES[svc]]
+# Ce que le COMPTE (`google`) demande sous notre app : les six services d'avant le
+# split, pour un tableau de bord à carte Google unique. FIGÉ à ces six — un service
+# ajouté depuis (bigquery, 2026-10-02) ne s'autorise QUE depuis sa carte, il ne
+# s'ajoute pas en silence au consentement du compte.
+_CARRIER_SERVICES = ("sheets", "drive", "gmail", "tasks", "calendar", "chat")
+SCOPES = [scope for svc in _CARRIER_SERVICES for scope in SERVICE_SCOPES[svc]]
 # Ce qu'une ligne du coffre peut porter : rien d'autre n'y entre (`persist_token`),
 # même si le client d'un partenaire a d'autres scopes accordés ailleurs.
-KNOWN_SCOPES = frozenset(IDENTITY_SCOPES) | frozenset(SCOPES)
+KNOWN_SCOPES = (frozenset(IDENTITY_SCOPES)
+                | frozenset(sc for svc in SERVICES for sc in SERVICE_SCOPES[svc]))
 
 
 def services_granted(scopes) -> list[str]:
@@ -129,8 +138,8 @@ def scopes_for(connector: str, app: "OAuthApp") -> list[str]:
     """Les scopes que CE consentement demande — l'identité, puis :
 
     - un service : les siens, et rien d'autre ;
-    - le compte (`google`) : sous NOTRE app, les six services (l'état d'avant le
-      split, pour un tableau de bord à carte unique) ; sous l'app d'un TENANT,
+    - le compte (`google`) : sous NOTRE app, les six services d'avant le split
+      (`_CARRIER_SERVICES`, pour un tableau de bord à carte unique) ; sous l'app d'un TENANT,
       rien de plus que l'identité — un partenaire ne demande jamais un scope que
       son projet Google ne déclare pas, ses services les ajoutent un à un.
 

@@ -56,7 +56,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > (`docs/tenants.md` §Le plafond d'activation du tenant).
 >
 > **Second porteur depuis le 2026-09-26 : `google`.** Les six services — `gmail`, `drive`,
-> `sheets`, `calendar`, `tasks`, `chat` — sont des connecteurs à part entière
+> `sheets`, `calendar`, `tasks`, `chat`, puis `bigquery` (2026-10-02, hors fan-out du
+> split : connecteur neuf, rien à déménager) — sont des connecteurs à part entière
 > (`credential_of="google"`) : couche 1 en propre, ET leur propre **consentement**
 > (`auth/google.SERVICE_SCOPES`, autorisation incrémentale sur le même compte). Ce que
 > le split apporte ici que unipile n'avait pas : un scope Google n'est demandé que par

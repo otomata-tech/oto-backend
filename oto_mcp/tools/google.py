@@ -1,5 +1,5 @@
-"""Le compte Google — le porteur que les six services (gmail, drive, sheets,
-calendar, tasks, chat) empruntent depuis le split du 2026-09-26.
+"""Le compte Google — le porteur que les services (gmail, drive, sheets, calendar,
+tasks, chat depuis le split du 2026-09-26 ; bigquery depuis le 2026-10-02) empruntent.
 
 Un seul outil, en lecture : `google_accounts` — les comptes connectés et, pour
 chacun, les services qu'il a AUTORISÉS. C'est la question qui n'existait pas avant le

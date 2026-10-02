@@ -145,6 +145,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "calendar",
     "tasks",
     "chat",
+    # septième service (2026-10-02) — même forme, consentement `bigquery` seul.
+    "bigquery",
     # --- open-data / sans credential ----------------------------------------
     # Sources publiques sans rapport → connecteurs distincts (ex-`fr_open` qui les
     # fusionnait : un sac « open data » incohérent, activer l'un activait l'autre).

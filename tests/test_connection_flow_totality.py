@@ -55,6 +55,7 @@ _DETTE_DECLARATION: dict[str, str] = {
     "calendar": "lien par connector_link ; pas de hook status_hints (comme google)",
     "tasks": "lien par connector_link ; pas de hook status_hints (comme google)",
     "chat": "lien par connector_link ; pas de hook status_hints (comme google)",
+    "bigquery": "lien par connector_link ; pas de hook status_hints (comme google)",
     # Les 4 connecteurs à session navigateur passent par browser_session : leur état
     # vit dans le coffre (session_set_at), pas dans un hook déclaré.
     "brevoauto": "état porté par browser_session, pas par status_hints",

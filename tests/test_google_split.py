@@ -34,7 +34,11 @@ from oto_mcp.connectors import flow as connector_flow  # noqa: E402
 from oto_mcp.connectors import identities  # noqa: E402
 from oto_mcp.connectors import link as connector_link  # noqa: E402
 
-SERVICES = ("gmail", "drive", "sheets", "calendar", "tasks", "chat")
+# Les six du split (2026-09-26) — ceux que le fan-out du boot a déménagés.
+SPLIT = ("gmail", "drive", "sheets", "calendar", "tasks", "chat")
+# Les services ajoutés DEPUIS : connecteurs neufs, jamais déménagés.
+POST_SPLIT = ("bigquery",)
+SERVICES = SPLIT + POST_SPLIT
 EMAIL = "https://www.googleapis.com/auth/userinfo.email"
 
 
@@ -73,13 +77,16 @@ def test_un_service_emprunte_le_compte_et_garde_sa_couche_1(svc):
 
 def test_la_population_derivee_est_bien_celle_des_six_services():
     """RATCHET : ce que le registre DÉRIVE (`credential_of == "google"`) est exactement
-    la liste que ce banc et le fan-out du boot attendent — un septième service entre
-    ici et dans `selection.GOOGLE_SERVICES` en même temps, ou pas du tout."""
+    la liste que ce banc attend. `selection.GOOGLE_SERVICES` reste les six du split :
+    c'est la cible d'un DÉMÉNAGEMENT one-shot (sentinelle), pas la liste vivante — un
+    service ajouté depuis (bigquery, 2026-10-02) n'a rien à déménager, et l'y mettre
+    le pré-sélectionnerait chez tout porteur de `google` sur une base neuve. Il entre
+    ici, dans `POST_SPLIT`."""
     from oto_mcp.connectors import selection
     derives = tuple(sorted(n for n, c in providers.REGISTRY.items()
                            if c.credential_of == "google"))
     assert derives == tuple(sorted(SERVICES))
-    assert tuple(sorted(selection.GOOGLE_SERVICES)) == derives
+    assert tuple(sorted(selection.GOOGLE_SERVICES)) == tuple(sorted(SPLIT))
     assert tuple(sorted(G.SERVICES)) == derives
 
 
@@ -105,6 +112,18 @@ def test_le_compte_demande_tout_sous_notre_app_et_lidentite_seule_sous_celle_dun
     assert G.scopes_for("google", _app("tenant:tulina")) == list(G.IDENTITY_SCOPES)
 
 
+def test_un_service_post_split_ne_rejoint_pas_le_consentement_du_compte():
+    """bigquery (2026-10-02) ne s'autorise QUE depuis sa carte : le consentement du
+    compte sous notre app reste celui d'avant — un scope de plus n'y entre pas en
+    silence. Mais le coffre le connaît (`KNOWN_SCOPES`), sinon `persist_token` le
+    jetterait et la carte ne passerait jamais au vert."""
+    bq = "https://www.googleapis.com/auth/bigquery"
+    assert bq not in G.scopes_for("google", _app("env"))
+    assert G.scopes_for("bigquery", _app("tenant:tulina")) == list(G.IDENTITY_SCOPES) + [bq]
+    assert bq in G.KNOWN_SCOPES
+    assert G.services_granted(f"{bq} {EMAIL}") == ["bigquery"]
+
+
 def test_un_connecteur_inconnu_nobtient_aucun_scope():
     with pytest.raises(RuntimeError):
         G.scopes_for("hunter", _app("env"))
@@ -114,7 +133,8 @@ def test_services_granted_lit_les_scopes_dun_compte():
     assert G.services_granted("https://www.googleapis.com/auth/drive " + EMAIL) == ["drive"]
     # Chat a DEUX scopes : un seul ne suffit pas.
     assert G.services_granted("https://www.googleapis.com/auth/chat.messages") == []
-    assert G.services_granted(" ".join(G.SCOPES)) == list(G.SERVICES)
+    # Le consentement du COMPTE (`SCOPES`) couvre les six du split, pas les suivants.
+    assert G.services_granted(" ".join(G.SCOPES)) == [s for s in G.SERVICES if s in SPLIT]
     assert G.services_granted(None) == []
 
 

@@ -39,7 +39,7 @@ CONNECTOR = _c(
     # coffre porte une ligne par adresse. Déclaré ici, pas dans une liste transverse.
     cardinality="multi", account_axis_static=True,
     label="Compte Google",
-    help="le compte Google que Gmail, Drive, Sheets, Calendar, Tasks et Chat "
+    help="le compte Google que Gmail, Drive, Sheets, Calendar, Tasks, Chat et BigQuery "
          "empruntent — chaque service se connecte depuis sa propre carte",
     modules=("google",),
 )
@@ -49,10 +49,10 @@ PUBLISHER = "Google"
 LOGO_DOMAIN = "google.com"
 
 DESCRIPTION = (
-    "Ton compte Google, par OAuth : le porteur que les six services empruntent. "
+    "Ton compte Google, par OAuth : le porteur que les services Google empruntent. "
     "Chaque adresse Google connectée devient un compte distinct dans le coffre — "
     "plusieurs consentements, plusieurs comptes — et chaque service (Gmail, Drive, "
-    "Sheets, Calendar, Tasks, Chat) s'autorise depuis sa carte, avec ses seuls scopes."
+    "Sheets, Calendar, Tasks, Chat, BigQuery) s'autorise depuis sa carte, avec ses seuls scopes."
 )
 
 

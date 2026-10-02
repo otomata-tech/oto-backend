@@ -164,9 +164,11 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
     aurait reconduit la liste sous un autre nom."""
     # Split google (2026-09-26) : les six services déclarent la cardinalité du compte
     # qu'ils empruntent — même raison de fournisseur, portée par `google.service`.
+    # bigquery (2026-10-02) : septième service, même forme.
     assert sorted(c.name for c in providers._REGISTRY_LIST
                   if c.cardinality == "multi") == [
-        "browser", "calendar", "chat", "drive", "gmail", "google", "sheets", "tasks"]
+        "bigquery", "browser", "calendar", "chat", "drive", "gmail", "google", "sheets",
+        "tasks"]
     for nom in ("zoho", "folk"):
         con = providers.REGISTRY[nom]
         assert con.cardinality == "" and con.auth_multi_account is True, nom
@@ -205,7 +207,7 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     handshake, donc curé), la cardinalité parle du COFFRE. Quatre connecteurs annoncent
     statiquement ; 74 sont multi-compte."""
     statiques = sorted(c.name for c in providers._REGISTRY_LIST if c.account_axis_static)
-    assert statiques == ["browser", "calendar", "chat", "drive", "folk", "gmail", "google",
-                         "sheets", "tasks", "zoho"]
+    assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "folk", "gmail",
+                         "google", "sheets", "tasks", "zoho"]
     multi = [c.name for c in providers._REGISTRY_LIST if c.auth_multi_account]
     assert set(statiques) < set(multi) and len(multi) > len(statiques)

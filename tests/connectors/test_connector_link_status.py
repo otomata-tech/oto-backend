@@ -58,7 +58,8 @@ def test_le_perimetre_est_celui_quon_croit():
     # Split google (2026-09-26) : chaque service lit SON lien — les comptes qui
     # l'ont autorisé, pas tous ceux du porteur.
     assert _federated() == {"google", "instagram_meta",
-                            "gmail", "drive", "sheets", "calendar", "tasks", "chat"}
+                            "gmail", "drive", "sheets", "calendar", "tasks", "chat",
+                            "bigquery"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------

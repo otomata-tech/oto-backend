@@ -135,8 +135,8 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   Unipile pour LinkedIn, le générique `browser` traite un site comme un compte du coffre (`docs/browser-automation.md`).
 - **Messagerie** : `unipile` = le **compte**, plus six **connexions** au nom du réseau, noms de tools inchangés ·
   ⚠️ `namespace_of` résout au **plus long préfixe déclaré**, pas au 1er token (`docs/unipile.md`).
-- **Google** : `google` = le **compte** (coffre, rappel, app du tenant), plus six **services** (`gmail`, `drive`,
-  `sheets`, `calendar`, `tasks`, `chat`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
+- **Google** : `google` = le **compte** (coffre, rappel, app du tenant), plus des **services** (`gmail`, `drive`,
+  `sheets`, `calendar`, `tasks`, `chat`, `bigquery`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
   en autorisation incrémentale (`auth/google.SERVICE_SCOPES`) · ⚠️ un outil de service refuse un compte qui n'a pas
   autorisé CE service en nommant sa carte, jamais un 403 Google muet (`connectors/docs/google.md`, `docs/connector-model.md`).
   · ⚠️ un compte peut être **partagé** par l'org ou l'équipe (consentement d'admin, `scope=org|group`) : résolution membre → équipe active → org, jamais le compte personnel d'un autre.

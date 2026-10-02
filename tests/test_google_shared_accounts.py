@@ -301,7 +301,9 @@ def test_le_statut_montre_les_comptes_partages(monkeypatch):
     assert out["accounts"] == []
     assert [(a["email"], a["scope"]) for a in out["shared"]] == [
         ("group@x.test", "group"), ("org@x.test", "org")]
-    assert out["shared"][0]["services"] == list(G.SERVICES)
+    # `ALL` = le consentement du COMPTE : les six du split, pas bigquery (2026-10-02),
+    # qui ne s'autorise que depuis sa carte.
+    assert out["shared"][0]["services"] == [s for s in G.SERVICES if s != "bigquery"]
     # Qui l'a connecté : lu dans le statut, validé par le modèle servi.
     assert [a["connected_by"] for a in out["shared"]] == ["admin-group", "admin-org"]
     assert fo.GoogleStatus(**out).shared[1].connected_by == "admin-org"

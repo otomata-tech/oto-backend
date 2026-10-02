@@ -77,6 +77,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "sirene",
     "droit",
     "attio",
+    # Neighbour of `attio` (CRM) — wired 2026-10-02.
+    "affinity",
     "lemlist",
     "kaspr",
     "pennylane",

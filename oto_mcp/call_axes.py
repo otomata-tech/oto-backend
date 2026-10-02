@@ -130,6 +130,10 @@ async def resolve_org_guarded(org: object) -> int:
     threadpool (chemin inbound chaud, mono-loop)."""
     org_id = require_axis_int(org, "_org")
     sub = require_axis_sub("_org")
+    # Un jeton de délégation n'agit que dans l'org de son travail (`verrou_org.py`) :
+    # une autre org est refusée ici, nommément, avant la garde d'appartenance.
+    from . import session_org
+    session_org._hors_verrou(org_id, "_org")
     from . import org_store
     try:
         return await run_in_threadpool(org_store.resolve_org_for_user, sub, str(org_id))

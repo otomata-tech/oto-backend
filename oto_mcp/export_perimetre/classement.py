@@ -159,6 +159,8 @@ CLASSEMENT: dict[str, Table] = {
         "une entrée publiée part avec l'org qui l'a écrite ; celles de la plateforme restent"),
     "functions": possedee(ParEntite()),
     "function_versions": indirecte(Via("functions", ("function_id",))),
+    "recipes": possedee(ParEntite()),
+    "recipe_versions": indirecte(Via("recipes", ("recipe_id",))),
     "resource_grants": indirecte(
         Ou((Via("user_datastores", ("resource_id",), fk=False, texte=True,
                 quand=("resource_type", TYPE_RESSOURCE_DATASTORE)),

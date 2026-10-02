@@ -90,7 +90,13 @@ def is_platform_admin(sub: str) -> bool:
 
 def effective_org_role(sub: str, org_id: int) -> Optional[str]:
     """Rôle EFFECTIF du sub dans l'org (escalade platform_admin incluse), ou None
-    s'il n'a aucun droit dessus. `org_admin` > `org_member`."""
+    s'il n'a aucun droit dessus. `org_admin` > `org_member`.
+
+    ⚠️ Sous un jeton de DÉLÉGATION, le porteur n'a aucun rôle hors de l'org de son
+    travail — avant l'escalade plateforme (`verrou_org.py`)."""
+    from . import verrou_org
+    if verrou_org.hors(sub, org_id, route="org_role"):
+        return None
     if is_platform_admin(sub):
         return ORG_ADMIN
     real = org_store.get_org_role(org_id, sub)  # 'org_admin' | 'org_member' | None
@@ -118,6 +124,13 @@ def is_org_member(sub: str, org_id: int) -> bool:
 
 # --- palier groupe (chef d'équipe / département) ----------------------------
 
+def _equipe_hors_verrou(sub: str, g: Optional[dict]) -> bool:
+    """L'équipe est-elle hors de l'org du travail du porteur (`verrou_org.py`) ? Le rôle
+    d'équipe direct ne passe pas par `effective_org_role` : il se garde ici."""
+    from . import verrou_org
+    return g is not None and verrou_org.hors(sub, g.get("org_id"), route="group")
+
+
 def can_admin_group(sub: str, group_id: int) -> bool:
     """Peut ADMINISTRER le groupe (membres, secrets, guide) ?
 
@@ -126,6 +139,8 @@ def can_admin_group(sub: str, group_id: int) -> bool:
     pas besoin d'être membre du groupe pour le gérer (il gère son org entière)."""
     g = group_store.get_group(group_id)
     if g is None:
+        return False
+    if _equipe_hors_verrou(sub, g):
         return False
     if is_org_admin(sub, g["org_id"]):
         return True
@@ -140,6 +155,8 @@ def can_read_group(sub: str, group_id: int) -> bool:
     de groupe sont scopées au groupe, comme les org_secrets le sont à l'org)."""
     if can_admin_group(sub, group_id):
         return True
+    if _equipe_hors_verrou(sub, group_store.get_group(group_id)):
+        return False
     return group_store.get_group_role(group_id, sub) is not None
 
 
@@ -148,5 +165,7 @@ def effective_group_role(sub: str, group_id: int) -> Optional[str]:
     `/api/me` et l'UI (afficher les contrôles chef)."""
     if can_admin_group(sub, group_id):
         return GROUP_ADMIN
+    if _equipe_hors_verrou(sub, group_store.get_group(group_id)):
+        return None
     role = group_store.get_group_role(group_id, sub)
     return role if role is not None else None

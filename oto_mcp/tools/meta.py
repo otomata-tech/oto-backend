@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 from fastmcp import Context, FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
                 outils_retires, redaction, run_org, session_org, tool_alias)
@@ -68,7 +70,7 @@ def _require_sub() -> str:
     return sub
 
 
-async def _resolve_tool(ctx: Context, name: str):
+async def resoudre_outil(fastmcp, name: str):
     """Objet Tool FastMCP par nom (ou None), **y compris masqué/désactivé** — on
     énumère le catalogue BRUT du `Provider` parent (« including disabled ones »,
     docstring fastmcp). ⚠️ `list_tools(run_middleware=False)` ne suffit PAS : il
@@ -78,7 +80,7 @@ async def _resolve_tool(ctx: Context, name: str):
     `oto_tool_schema` répondait « Unknown tool » (#186, régression du passage à la
     visibilité native fastmcp)."""
     from fastmcp.server.providers.base import Provider
-    tools = await Provider.list_tools(ctx.fastmcp)
+    tools = await Provider.list_tools(fastmcp)
     for t in tools:
         if t.name == name:
             return t
@@ -145,6 +147,154 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
         await asyncio.to_thread(db.insert_tool_call, row)
     except Exception:
         logger.warning("traçage oto_call → %s échoué (non bloquant)", name, exc_info=True)
+
+
+async def _resolve_tool(ctx: Context, name: str):
+    return await resoudre_outil(ctx.fastmcp, name)
+
+
+@dataclass
+class IssueCible:
+    """Ce qu'a rendu un outil exécuté par `executer_cible`.
+
+    `ok` : le résultat SERVI (rédaction appliquée), tel que l'appel direct l'aurait
+    rendu. Sinon `message` est le texte SCRUBBÉ (`error_taxonomy`), `code` sa classe
+    (`quota_exhausted`, `upstream_timeout`…) et `retryable` ce qu'elle en dit — de quoi
+    décider sans relire le texte."""
+    ok: bool
+    result: object = None
+    message: Optional[str] = None
+    code: Optional[str] = None
+    retryable: bool = False
+    # La politique de rédaction de l'org a RETENU le résultat entier : `result` est le
+    # message de retenue, pas une donnée. Une recette refuse la page plutôt que d'écrire.
+    retenu: bool = False
+
+
+async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
+                         args: dict) -> IssueCible:
+    """Exécute l'outil `name` (CANONIQUE, déjà jugé dispatchable) comme `oto_call` :
+    mêmes gardes, même journal, même rédaction. Partagé par `oto_call` et les recettes
+    (`recipes/moteur.py`), qui appellent des outils depuis le serveur, hors protocole.
+
+    Lève `McpError` sur un outil inconnu, des arguments invalides ou un refus de garde
+    (activation, appartenance d'un axe) : ce sont des fautes de l'APPELANT. L'échec de
+    la CIBLE, lui, est un résultat : `IssueCible(ok=False, …)`.
+
+    `tool` est l'objet déjà résolu (`resoudre_outil`) : l'appelant dit lui-même
+    « inconnu » avec ses mots."""
+    call_axes.reject_legacy_axis_names(args, getattr(tool, "parameters", None))
+    undo: list = []
+    try:
+        # Hors boucle : la liste des axes lit la base (`docs/event-loop-perf.md`).
+        for axis in await run_in_threadpool(call_axes.axes_for_call, name):
+            if axis.param in args:
+                undo.extend(await axis.pin_for(args.pop(axis.param), name))
+        # L'org du RUN (#639), après les axes — même règle que le middleware :
+        # sans `_org=`, la cible se résout dans l'org du run, appartenance gardée.
+        undo.extend(await run_org.pin_for_call())
+        # L'activation du connecteur de la CIBLE, contre l'org et l'équipe que les
+        # axes viennent de poser — même garde, même place, que le middleware de
+        # contexte pour un appel direct (#1064). Ici plutôt qu'à la visibilité :
+        # celle-ci est un filtre d'affichage, que `oto_call` traverse par construction.
+        await activation_gate.require_active(name)
+    except BaseException:
+        for _reset, _tok in reversed(undo):
+            _reset(_tok)
+        raise
+    # Un jeton passé pour un tool qui ne le supporte PAS (ex. `_instance` sur data_*,
+    # `_org` sur un tool non org-scopable) = contexte sans effet → écarté des args,
+    # pour ne pas casser sa validation. Sûr parce que les jetons sont préfixés `_` :
+    # un argument MÉTIER homonyme (aiark `account` = le filtre société) ne porte pas
+    # le préfixe et n'est donc jamais touché (issue #250).
+    call_axes.strip_unconsumed_axes(args)
+    # Relevé PROPRE à la cible. Sans lui, ce que la cible consigne (`key_mode` au
+    # résolveur, `quantity` au point où N est connu) tombait dans le relevé de la
+    # requête ENVELOPPE, donc sur la ligne `tool='oto_call'` — que la lentille de
+    # facturation, qui filtre par nom d'outil, ne lit jamais. Holder MUTABLE posé
+    # avant `tool.run` : un handler sync tourne en threadpool sur une copie du
+    # contexte, et c'est la mutation de CE dict qui remonte.
+    outer_trace = session_org.current_call_trace()
+    target_trace: dict = {}
+    trace_tok = session_org.set_call_trace(target_trace)
+    started = time.monotonic()
+    ok, err = True, None
+    try:
+        # `Tool.run` : injection de `ctx`, validation du schéma, exécution — mais
+        # HORS chaîne de middleware (donc hors rédaction) : on la ré-applique plus
+        # bas. C'est ce qui permet d'atteindre un outil masqué (la denylist de
+        # visibilité ne bloque que le chemin protocole `tools/call`).
+        result = await tool.run(args)
+    except ValidationError as e:
+        ok, err = False, "invalid_arguments"
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=f"Arguments invalides pour `{demande}` — voir `input_schema`.",
+            data={"input_schema": getattr(tool, "parameters", None),
+                  "errors": e.errors()}))
+    # noqa: SILENT — l'échec de l'outil appelé est rendu dans ok/err au demandeur
+    except Exception as e:  # noqa: BLE001 — l'erreur de la cible EST un résultat
+        # Deux publics, deux messages. Le JOURNAL garde le brut, tronqué — même
+        # convention que `calllog.py` (`str(e)[:MAX_ERROR_CHARS]`) pour un appel
+        # normal : c'est la trace d'exploitation, elle sert à déboguer. L'AGENT,
+        # lui, ne doit voir que le message SCRUBBÉ : hors chaîne de middleware
+        # (cf. plus haut), `ErrorEnvelopeMiddleware` ne nettoie pas ce chemin, donc
+        # on rejoue sa classification ici — sinon une exception brute (chemin
+        # interne, fragment d'URL amont, id technique) remontait telle quelle à
+        # l'agent, alors que le même outil appelé normalement voit son message
+        # scrubbé (oto-backend#566).
+        ok, err = False, str(e)[:calllog.MAX_ERROR_CHARS]
+        info = error_taxonomy.classify(e)
+        message = info.message
+        # Même suivi de santé que l'enveloppe (`ErrorEnvelopeMiddleware`), que ce
+        # chemin hors chaîne ne traverse pas : la clé servie à la CIBLE est marquée.
+        if info.code == "quota_exhausted":
+            await connector_health.suivre_appel(target_trace, message)
+        return IssueCible(ok=False, message=message, code=info.code,
+                          retryable=bool(getattr(info, "retryable", False)))
+    finally:
+        # Org et run de la CIBLE, lus AVANT de défaire les axes : après le reset,
+        # `current_org` rend l'org maison de l'appelant, pas celle où la cible a
+        # résolu ses credentials — la ligne partait sous la mauvaise org.
+        target_org: object = _UNSET
+        try:
+            target_org = await run_in_threadpool(access.current_org, sub)
+        # noqa: SILENT — best-effort : `_trace_target_call` retombe sur sa propre lecture
+        except Exception:
+            pass
+        target_run = session_org.current_call_run()
+        session_org.reset_call_trace(trace_tok)
+        # L'écho rendu à l'agent (`resolved_account`/`resolved_connector`, lus par
+        # `CallContextMiddleware` dans le relevé ENVELOPPE) doit survivre ; seules
+        # les clés qui facturent restent sur la ligne de la cible.
+        # `credential_row` reste aussi à la cible : remontée dans le relevé
+        # enveloppe, elle ferait EFFACER par l'enveloppe (qui voit `oto_call`
+        # réussir) la marque « crédits épuisés » que la cible vient de poser.
+        if outer_trace is not None:
+            outer_trace.update({k: v for k, v in target_trace.items()
+                                if k not in _BILLING_TRACE_KEYS
+                                and k != "credential_row"})
+        for _reset, _tok in reversed(undo):
+            _reset(_tok)
+        await _trace_target_call(sub, name, args, ok, err,
+                                 int((time.monotonic() - started) * 1000),
+                                 trace=target_trace, org_id=target_org,
+                                 run_id=target_run)
+
+    # Succès de la cible : une marque « crédits épuisés » de SA clé est levée.
+    await connector_health.suivre_appel(target_trace, None)
+
+    # Rédaction ré-appliquée (ADR 0036 §2) via la logique PARTAGÉE fail-closed —
+    # sinon un connecteur à PII surfacé par oto_call fuiterait (le middleware a vu
+    # le service « oto », pas le namespace cible).
+    service = namespace_of(name)
+    payload = redaction.extract_payload(result)
+    try:
+        red = await run_in_threadpool(redaction.redact_payload, service, payload)
+    except redaction.RedactionWithheld:
+        return IssueCible(ok=True, result=redaction.withheld_result(name), retenu=True)
+    return IssueCible(ok=True, result=(result if red is redaction.PASSTHROUGH
+                                       else redaction.rebuild_result(result, red)))
 
 
 def register(mcp: FastMCP) -> None:
@@ -247,12 +397,6 @@ def register(mcp: FastMCP) -> None:
                 message=f"`{demande}` est un outil méta/spine — appelle-le directement, "
                         "pas via oto_call."))
 
-        tool = await _resolve_tool(ctx, name)
-        if tool is None:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Unknown tool `{demande}`. Use oto_list_my_tools to see available names."))
-
         args = arguments if isinstance(arguments, dict) else {}
         # Axes-contexte d'appel (ADR 0038). oto_call s'exécute HORS middleware → les
         # axes des tools plats (org/group/project/instance/account/run_id) ne sont pas
@@ -277,117 +421,17 @@ def register(mcp: FastMCP) -> None:
         # gagne — c'est la forme documentée, elle ne doit pas se faire écraser.
         if _run_id is not None:
             args.setdefault("_run_id", _run_id)
-        call_axes.reject_legacy_axis_names(args, getattr(tool, "parameters", None))
-        undo: list = []
-        try:
-            for axis in call_axes.axes_for_call(name):
-                if axis.param in args:
-                    undo.extend(await axis.pin_for(args.pop(axis.param), name))
-            # L'org du RUN (#639), après les axes — même règle que le middleware :
-            # sans `_org=`, la cible se résout dans l'org du run, appartenance gardée.
-            undo.extend(await run_org.pin_for_call())
-            # L'activation du connecteur de la CIBLE, contre l'org et l'équipe que les
-            # axes viennent de poser — même garde, même place, que le middleware de
-            # contexte pour un appel direct (#1064). Ici plutôt qu'à la visibilité :
-            # celle-ci est un filtre d'affichage, que `oto_call` traverse par construction.
-            await activation_gate.require_active(name)
-        except BaseException:
-            for _reset, _tok in reversed(undo):
-                _reset(_tok)
-            raise
-        # Un jeton passé pour un tool qui ne le supporte PAS (ex. `_instance` sur data_*,
-        # `_org` sur un tool non org-scopable) = contexte sans effet → écarté des args,
-        # pour ne pas casser sa validation. Sûr parce que les jetons sont préfixés `_` :
-        # un argument MÉTIER homonyme (aiark `account` = le filtre société) ne porte pas
-        # le préfixe et n'est donc jamais touché (issue #250).
-        call_axes.strip_unconsumed_axes(args)
-        # Relevé PROPRE à la cible. Sans lui, ce que la cible consigne (`key_mode` au
-        # résolveur, `quantity` au point où N est connu) tombait dans le relevé de la
-        # requête ENVELOPPE, donc sur la ligne `tool='oto_call'` — que la lentille de
-        # facturation, qui filtre par nom d'outil, ne lit jamais. Holder MUTABLE posé
-        # avant `tool.run` : un handler sync tourne en threadpool sur une copie du
-        # contexte, et c'est la mutation de CE dict qui remonte.
-        outer_trace = session_org.current_call_trace()
-        target_trace: dict = {}
-        trace_tok = session_org.set_call_trace(target_trace)
-        started = time.monotonic()
-        ok, err = True, None
-        try:
-            # `Tool.run` : injection de `ctx`, validation du schéma, exécution — mais
-            # HORS chaîne de middleware (donc hors rédaction) : on la ré-applique plus
-            # bas. C'est ce qui permet d'atteindre un outil masqué (la denylist de
-            # visibilité ne bloque que le chemin protocole `tools/call`).
-            result = await tool.run(args)
-        except ValidationError as e:
-            ok, err = False, "invalid_arguments"
+        tool = await _resolve_tool(ctx, name)
+        if tool is None:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message=f"Arguments invalides pour `{demande}` — voir `input_schema`.",
-                data={"input_schema": getattr(tool, "parameters", None),
-                      "errors": e.errors()}))
-        # noqa: SILENT — l'échec de l'outil appelé est rendu dans ok/err au demandeur
-        except Exception as e:  # noqa: BLE001 — l'erreur de la cible EST un résultat
-            # Deux publics, deux messages. Le JOURNAL garde le brut, tronqué — même
-            # convention que `calllog.py` (`str(e)[:MAX_ERROR_CHARS]`) pour un appel
-            # normal : c'est la trace d'exploitation, elle sert à déboguer. L'AGENT,
-            # lui, ne doit voir que le message SCRUBBÉ : hors chaîne de middleware
-            # (cf. plus haut), `ErrorEnvelopeMiddleware` ne nettoie pas ce chemin, donc
-            # on rejoue sa classification ici — sinon une exception brute (chemin
-            # interne, fragment d'URL amont, id technique) remontait telle quelle à
-            # l'agent, alors que le même outil appelé normalement voit son message
-            # scrubbé (oto-backend#566).
-            ok, err = False, str(e)[:calllog.MAX_ERROR_CHARS]
-            info = error_taxonomy.classify(e)
-            message = info.message
-            # Même suivi de santé que l'enveloppe (`ErrorEnvelopeMiddleware`), que ce
-            # chemin hors chaîne ne traverse pas : la clé servie à la CIBLE est marquée.
-            if info.code == "quota_exhausted":
-                await connector_health.suivre_appel(target_trace, message)
+                message=f"Unknown tool `{demande}`. Use oto_list_my_tools to see available names."))
+        issue = await executer_cible(tool, sub, name, demande, args)
+        if not issue.ok:
             # `tool` reprend le nom DEMANDÉ : l'agent le relit pour réessayer, et un
             # nom qu'il n'a jamais tapé le ferait douter de sa propre requête.
-            return {"tool": demande, "ok": False, "error": message}
-        finally:
-            # Org et run de la CIBLE, lus AVANT de défaire les axes : après le reset,
-            # `current_org` rend l'org maison de l'appelant, pas celle où la cible a
-            # résolu ses credentials — la ligne partait sous la mauvaise org.
-            target_org: object = _UNSET
-            try:
-                target_org = access.current_org(sub)
-            # noqa: SILENT — best-effort : `_trace_target_call` retombe sur sa propre lecture
-            except Exception:
-                pass
-            target_run = session_org.current_call_run()
-            session_org.reset_call_trace(trace_tok)
-            # L'écho rendu à l'agent (`resolved_account`/`resolved_connector`, lus par
-            # `CallContextMiddleware` dans le relevé ENVELOPPE) doit survivre ; seules
-            # les clés qui facturent restent sur la ligne de la cible.
-            # `credential_row` reste aussi à la cible : remontée dans le relevé
-            # enveloppe, elle ferait EFFACER par l'enveloppe (qui voit `oto_call`
-            # réussir) la marque « crédits épuisés » que la cible vient de poser.
-            if outer_trace is not None:
-                outer_trace.update({k: v for k, v in target_trace.items()
-                                    if k not in _BILLING_TRACE_KEYS
-                                    and k != "credential_row"})
-            for _reset, _tok in reversed(undo):
-                _reset(_tok)
-            await _trace_target_call(sub, name, args, ok, err,
-                                     int((time.monotonic() - started) * 1000),
-                                     trace=target_trace, org_id=target_org,
-                                     run_id=target_run)
-
-        # Succès de la cible : une marque « crédits épuisés » de SA clé est levée.
-        await connector_health.suivre_appel(target_trace, None)
-
-        # Rédaction ré-appliquée (ADR 0036 §2) via la logique PARTAGÉE fail-closed —
-        # sinon un connecteur à PII surfacé par oto_call fuiterait (le middleware a vu
-        # le service « oto », pas le namespace cible).
-        service = namespace_of(name)
-        payload = redaction.extract_payload(result)
-        try:
-            red = redaction.redact_payload(service, payload)
-        except redaction.RedactionWithheld:
-            return redaction.withheld_result(name)
-        return result if red is redaction.PASSTHROUGH else redaction.rebuild_result(result, red)
+            return {"tool": demande, "ok": False, "error": issue.message}
+        return issue.result
 
     # --- admin : grants de namespace sensible -------------------------------
 

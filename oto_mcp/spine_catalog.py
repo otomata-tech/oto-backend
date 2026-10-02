@@ -154,6 +154,12 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
         "plateforme après ses tests",
     ),
     SpineFamily(
+        "oto_recipe",
+        ("oto_recipe",),
+        "recipes: move a connector tool's results into a table on the server, with no "
+        "model reading or retyping the rows — written once, versioned, run on demand",
+    ),
+    SpineFamily(
         "oto_upload_url / oto_import",
         ("oto_upload_url", "oto_import"),
         "bring a big file into oto without passing it through the conversation: push "

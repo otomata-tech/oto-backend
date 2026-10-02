@@ -89,6 +89,8 @@ PAR_LOTS: dict[str, tuple[str, ...]] = {
     "projects": ("owner_id", "created_by"),
     "functions": ("owner_id", "created_by"),
     "function_versions": ("proposed_by", "decided_by"),
+    "recipes": ("owner_id", "created_by"),
+    "recipe_versions": ("proposed_by", "decided_by"),
     "runner_jobs": ("sub",),
     "transcription_jobs": ("sub",),
     "runner_triggers": ("sub",),

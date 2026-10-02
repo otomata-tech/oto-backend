@@ -58,8 +58,23 @@ _CALL_ORG: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
     "oto_call_org", default=None)
 
 
+def _hors_verrou(org_id: object, route: str) -> None:
+    """Toute org qu'un jeton d'appel pose (`_org`, `_project`, `_group`, `_instance`,
+    l'org d'un run) passe ici : hors de l'org du travail d'un jeton de délégation, la
+    pose est REFUSÉE, nommément (`verrou_org.py`) — jamais résolue ailleurs à sa place."""
+    from . import verrou_org
+    v = verrou_org.courant()
+    if v is not None and verrou_org.hors(v.sub, org_id, route=route):
+        from mcp.types import ErrorData, INVALID_PARAMS
+        from .mcp_errors import McpError
+        raise McpError(ErrorData(code=INVALID_PARAMS,
+                                 message=str(verrou_org.HorsVerrou(org_id, v)),
+                                 data={"code": verrou_org.CODE, "retryable": False}))
+
+
 def set_call_org(org_id: int) -> contextvars.Token:
     """Épingle l'org de l'appel courant (renvoie le token à reset en fin d'appel)."""
+    _hors_verrou(org_id, "call_org")
     return _CALL_ORG.set(org_id)
 
 
@@ -198,6 +213,7 @@ _CALL_RUN_ORG: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
 
 
 def set_call_run_org(org_id: int) -> contextvars.Token:
+    _hors_verrou(org_id, "run_org")
     return _CALL_RUN_ORG.set(org_id)
 
 

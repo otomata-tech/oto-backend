@@ -82,18 +82,21 @@ def test_replay_loop_semantics_consume_and_pin_the_account():
 
 
 def test_oto_call_source_uses_axes_for_call():
-    """TRIPWIRE (AST) — la boucle de rejeu d'`oto_call` appelle `axes_for_call`,
-    jamais `axes_for` nu : revenir en arrière ferait avaler `_account=` par
+    """TRIPWIRE (AST) — la boucle de rejeu des axes appelle `axes_for_call`, jamais
+    `axes_for` nu : revenir en arrière ferait avaler `_account=` par
     `strip_unconsumed_axes` (review #399 F1). Dérivé des sources, comme les
-    tripwires de `test_call_axes_business_param_collision`."""
+    tripwires de `test_call_axes_business_param_collision`.
+
+    La boucle vit dans `executer_cible`, le corps d'`oto_call` partagé avec les
+    recettes ; elle y est lancée hors boucle d'événements, donc `axes_for_call` est
+    ATTEINT (passé à `run_in_threadpool`) plutôt qu'appelé directement."""
     tree = ast.parse(META_PY.read_text(encoding="utf-8"))
     fn = next(node for node in ast.walk(tree)
               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-              and node.name == "oto_call")
-    called = {node.func.attr for node in ast.walk(fn)
-              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-              and isinstance(node.func.value, ast.Name)
-              and node.func.value.id == "call_axes"}
+              and node.name == "executer_cible")
+    called = {node.attr for node in ast.walk(fn)
+              if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+              and node.value.id == "call_axes"}
     assert "axes_for_call" in called
     assert "axes_for" not in called
 

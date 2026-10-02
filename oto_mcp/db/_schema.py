@@ -71,6 +71,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.orgs.MEMBER_EVENTS,       # journal des entrées et sorties de membres (oto#145)
     schema.connectors.APOLLO_PHONE_REVEALS,  # téléphones révélés par Apollo, reçus par oto
     schema.orgs.INVITATIONS_RESSOURCE,  # partage en attente d'un objet vers une adresse sans compte
+    schema.recipes.RECIPES,          # recettes : connecteur → tableau sans modèle
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

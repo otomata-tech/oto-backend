@@ -104,6 +104,12 @@ def current_org(sub: str | None) -> Optional[int]:
         # PROPRIÉTAIRE du projet est le contexte de résolution (credentials/redaction).
         from .. import subdomain_project
         return subdomain_project.current_anon_org()
+    # Jeton de DÉLÉGATION (`verrou_org.py`) : l'org de son travail, avant tout le
+    # reste — ni un jeton d'appel, ni l'org d'un run, ni la maison du porteur. Pour le
+    # porteur seul : l'org d'un TIERS se résout par son chemin ordinaire.
+    from .. import verrou_org
+    if (verrou := verrou_org.borne(sub, route="current_org", ecart=True)) is not None:
+        return verrou.org_id
     # Endpoint scopé par sous-domaine (« 1 oto par org ») : épingle l'org de la
     # connexion AVANT tout. Garde d'appartenance ici (sub connu) → un non-membre
     # est ignoré (repli maison, zéro fuite). Précédence ⇒ hard-lock : `oto_use_org`

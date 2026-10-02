@@ -206,7 +206,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `connector-vault.md` — registre, coffre, instances, **garde d'egress** (`OTO_EGRESS_ALLOW`)
 - `roles-and-resolution.md` — paliers, cascade de clé
 - `groups-and-roles.md` — hiérarchie de droits
-- `org-context.md` — session / maison / consultation
+- `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail
 - `ownership.md` — `can_access`/`can_govern`, partages
 - `tool-visibility.md` — denylist, `PROTECTED_TOOLS`
 - `auth-logto.md` — Logto, DCR, jetons `oto_`
@@ -225,6 +225,8 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   univers côte à côte, l'arrêt de la recopie
 - `fonctions.md` — `oto_function` : code pur versionné, publié sous la garde de ses tests,
   exécuté dans un bac à sable Pyodide/Deno sans réseau (ADR 0073)
+- `recettes.md` — `oto_recipe` : un outil de connecteur vers un tableau sans modèle —
+  recette versionnée, pages appelées par le corps d'`oto_call`, reçu en comptes, refusée en agent hébergé
 - `datastore.md` — spine PG `data_*`, OAuth Google
 - `donnees-par-reference.md` — rien de personnel ni d'URL extérieure en argument :
   le receveur Apollo, les `*_push_rows`

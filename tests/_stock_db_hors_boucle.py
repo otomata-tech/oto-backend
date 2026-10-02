@@ -121,7 +121,7 @@ STOCK: dict[str, str] = {
     "oto_mcp.tools.meta::_trace_target_call":
         "access.current_org",
     "oto_mcp.tools.meta::register.<locals>.oto_call":
-        "_tool_prefix, access.current_org, call_axes.axes_for_call, current_user_sub_from_token, redaction.redact_payload",
+        "_tool_prefix, current_user_sub_from_token",
     "oto_mcp.tools.meta::register.<locals>.oto_tool_schema":
         "[dormant] _require_sub, _tool_prefix",
     "oto_mcp.tools.pennylaneged::_call_raw":

@@ -402,6 +402,9 @@ _SUB_COLUMNS = [
     # ENTIER — bruyamment, sans rien perdre. Cas jugé improbable (une fonction se crée
     # d'abord au palier org) ; il se résout en renommant l'une des deux avant de rejouer.
     ("functions", "owner_id"),
+    # Les recettes personnelles suivent la personne, comme ses fonctions — même
+    # risque d'unicité (owner_type, owner_id, slug), même issue bruyante.
+    ("recipes", "owner_id"),
     # L'identité qu'un travail programmé PORTE — celle au nom de laquelle l'agent
     # agira (chantier agents autonomes, 02/09). Elle se repointe pour la même
     # raison que le reste : un travail `pending` doit s'exécuter au nom de la
@@ -445,6 +448,9 @@ _SUB_COLUMNS = [
     # Qui a créé une fonction, proposé ou jugé une de ses versions (ADR 0073).
     ("functions", "created_by"), ("function_versions", "proposed_by"),
     ("function_versions", "decided_by"),
+    # Qui a créé une recette, proposé ou jugé une de ses versions.
+    ("recipes", "created_by"), ("recipe_versions", "proposed_by"),
+    ("recipe_versions", "decided_by"),
     ("orgs", "created_by"),
     ("org_invitations", "invited_by"), ("org_invitations", "accepted_sub"),
     # Qui a REFUSÉ l'invitation (#654) : même nature qu'`accepted_sub`, donc même

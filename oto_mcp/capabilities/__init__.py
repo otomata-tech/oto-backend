@@ -122,6 +122,9 @@ from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_gra
 # famille (activation/access/connector/instance/identity/account_access) ; les modules
 # ci-dessus gardent leurs faces REST. À importer APRÈS eux.
 import oto_mcp.capabilities.connectors.console  # noqa: F401 — connectors.console.{activation,access,connector,instance,identity,account_access}
+# Partage d'une procédure par lien (/p/<token>) et ses lecteurs — AVANT la console
+# procédures, qui en reprend les handlers en op=share_*.
+from . import partages_procedure  # noqa: F401 — org.instruction.share.{get,write,readers} + me.process_share.{read,copy}
 # Console procédures (ADR 0047 B2) — oto_procedure (guide membre + bibliothèque publique).
 from . import procedure_console  # noqa: F401 — org.procedure.console
 # Console org/équipe (ADR 0047 B3) — oto_org, oto_org_settings, oto_group, oto_scheduled_emails.

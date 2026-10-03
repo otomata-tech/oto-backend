@@ -322,6 +322,12 @@ _PK_SUB_TABLES = (
     # compte, sans erreur, sans trace. Un opt-out qui ne survit pas à une
     # migration de compte est exactement le tort que ce lot existe pour fermer.
     ("signal_digest_optouts", "sub", ()),
+    # Le refus du résumé des LECTEURS d'une procédure partagée — même forme et même
+    # raison que les deux refus au-dessus : il suit la personne.
+    ("process_readers_digest_optouts", "sub", ()),
+    # Le LECTEUR d'une procédure partagée par lien : PK `(share_id, reader_sub)`. Les
+    # deux comptes de la personne ont lu le même lien ⟹ on garde la ligne du canonique.
+    ("process_share_readers", "reader_sub", ("share_id",)),
 )
 
 # Colonnes de sub sous un INDEX UNIQUE qui n'est PAS la clé primaire — partiel ou
@@ -424,6 +430,9 @@ _SUB_COLUMNS = [
     # (`token_hash`), sans FK ni unicité sur `sub` : UPDATE nu. Non repointée, une
     # commande en attente appartiendrait à un compte disparu pendant ses trente jours.
     ("apollo_phone_reveals", "sub"),
+    # Qui a publié le lien d'une procédure : le résumé quotidien des lecteurs lui est
+    # adressé. Hors PK, sans unicité : UPDATE nu.
+    ("process_shares", "created_by"),
     # l'HISTORIQUE de la personne (dossier du 23/08 — ces lignes survivaient au merge
     # rattachées à un identifiant mort, donc invisibles au compte fusionné : déroulés
     # et activité perdus de vue, déclencheurs orphelins) :

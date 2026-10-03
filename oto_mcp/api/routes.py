@@ -229,6 +229,10 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/me/instructions/{slug}"): None,
     ("GET", "/api/me/instructions/{slug}/versions"): None,
     ("GET", "/api/me/instructions/{slug}/usage"): None,
+    # Le lien web d'une procédure et ses lecteurs (`partages_procedure`) : lectures de
+    # O ; la garde org_admin de la capacité s'applique à la cible, comme ailleurs.
+    ("GET", "/api/me/instructions/{slug}/share"): None,
+    ("GET", "/api/me/instructions/{slug}/share/readers"): None,
     # Boîte à outils effective dans O (statuts, jamais un secret).
     ("GET", "/api/me/tools"): None,
     ("GET", "/api/me/tools/registry"): None,
@@ -825,6 +829,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # Désinscription du DIGEST de signaux (oto#150) — même régime, route et
         # jeton (`typ`) distincts : jamais interchangeable avec la ligne au-dessus.
         Route("/o/d/{token}", public.digest_unsubscribe, methods=["GET"]),
+        # Vitrine d'une procédure partagée par lien (/p/<token> côté front) : sans auth,
+        # le jeton est le secret ; jamais le corps (capabilities/partages_procedure.py).
+        Route("/api/public/process-shares/{token}", public.process_share_preview, methods=["GET"]),
+        Route("/api/public/process-shares/{token}", options_handler, methods=["OPTIONS"]),
+        # Désinscription du résumé des LECTEURS — même régime que la ligne au-dessus,
+        # route, jeton (`typ`) et table distincts.
+        Route("/o/r/{token}", public.readers_digest_unsubscribe, methods=["GET"]),
         Route("/api/orgs/{id}/logo", bind(media.org_logo_save, verifier=verifier), methods=["POST"]),
         Route("/api/orgs/{id}/logo", options_handler, methods=["OPTIONS"]),
         # /api/me/instructions* — migré en capacités (ADR 0009, capabilities/orgs/instructions.py),

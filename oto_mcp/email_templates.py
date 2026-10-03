@@ -303,6 +303,67 @@ def send_signal_digest_email(to: str, *, items: list, brand: str = "oto",
         desinscription=desinscription))
 
 
+def send_process_readers_digest_email(to: str, *, processes: list, brand: str = "oto",
+                                     locale: str | None = None,
+                                     unsubscribe_url: str | None = None) -> bool:
+    """UN email par propriétaire et par jour : qui a lu ses procédures partagées par
+    lien depuis le dernier résumé (`digest_lecteurs.py`). Best-effort.
+
+    `processes` = `[{title, url, readers: [{name, company, copied}]}]` — une entrée par
+    procédure, `url` = son onglet Readers (None ⟹ pas de bouton). On n'écrit ni
+    l'adresse email du lecteur ni rien de ce qu'il a fait d'autre : le nom, l'entreprise
+    déduite de son domaine, et s'il a copié la procédure. Le reste vit dans l'onglet.
+
+    `unsubscribe_url` = le lien SIGNÉ (`outreach_optout.lien_lecteurs`), troisième
+    canal de désinscription, qui ne coupe ni les relances ni le digest de signaux."""
+    processes = [p for p in processes if p.get("readers")]
+    if not processes:
+        return False
+    m = _charte.marque(brand)
+    en = locale == "en"
+    n = sum(len(p["readers"]) for p in processes)
+    if len(processes) == 1:
+        titre = str(processes[0].get("title") or "")
+        subject = (f"{n} new reader{'s' if n > 1 else ''} on \u201c{titre}\u201d" if en
+                   else f"{n} nouveau{'x' if n > 1 else ''} lecteur{'s' if n > 1 else ''} "
+                        f"sur « {titre} »")
+    else:
+        subject = (f"{n} new readers on your shared processes" if en
+                   else f"{n} nouveaux lecteurs sur vos procédures partagées")
+    blocs = []
+    for p in processes:
+        lignes = []
+        for r in p["readers"]:
+            nom = _email._esc(str(r.get("name") or ("Someone" if en else "Quelqu'un")))
+            societe = _email._esc(str(r.get("company") or ""))
+            cote = f", {societe}" if societe else ""
+            copie = (" · copied it" if en else " · l'a copiée") if r.get("copied") else ""
+            lignes.append(f'<li style="margin:0 0 6px"><strong>{nom}</strong>{cote}{copie}</li>')
+        blocs.append(
+            f'<div style="padding:14px 0;border-top:1px solid {m.filet}">'
+            f'<p style="{_charte.PARA}"><strong>{_email._esc(str(p.get("title") or ""))}</strong></p>'
+            f'<ul style="margin:0 0 12px;padding-left:18px">{"".join(lignes)}</ul>'
+            + _charte.bouton(m, p.get("url"), "See all readers" if en else "Voir tous les lecteurs")
+            + '</div>')
+    if en:
+        intro = (f"{n} {'people' if n > 1 else 'person'} read a process you shared "
+                 "by link since the last summary.")
+        pied = ("you get this because \u201csee who reads it\u201d is on for these "
+                "processes. turn it off in Share, or unsubscribe below.")
+    else:
+        intro = (f"{n} personne{'s' if n > 1 else ''} {'ont' if n > 1 else 'a'} lu une "
+                 "procédure que vous avez partagée par lien depuis le dernier résumé.")
+        pied = ("vous recevez ce mail parce que « voir qui lit » est activé sur ces "
+                "procédures. coupez-le dans Partager, ou désinscrivez-vous ci-dessous.")
+    contenu = f'<p style="{_charte.PARA}">{_email._esc(intro)}</p>' + "".join(blocs)
+    desinscription = (
+        (unsubscribe_url, "stop these summaries" if en else "ne plus recevoir ces résumés")
+        if unsubscribe_url else None)
+    return _email._send(to, subject, _charte.page(
+        m, contenu, preheader=intro, mention=pied, locale=locale,
+        desinscription=desinscription))
+
+
 _MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
          "septembre", "octobre", "novembre", "décembre")
 

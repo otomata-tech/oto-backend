@@ -21,7 +21,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from . import guide_library
+from . import guide_library, partages_procedure
 from .orgs import instructions as orgs_instructions
 from ._authz import (BY_OP, GROUP_ADMIN_OPT, GROUP_MEMBER_OPT, LIBRARY_PUBLISHER,
                      ORG_ADMIN_OPT, ORG_MEMBER, ORG_MEMBER_OPT, SUB_ONLY)
@@ -100,6 +100,10 @@ _SUPPRIMER = BY_OP({None: SUB_ONLY, "user": SUB_ONLY, "org": ORG_ADMIN_OPT("org"
                     "group": GROUP_ADMIN_OPT("group")}, fields=("scope",))
 
 
+# Le lien web d'UNE procédure d'org (`share_*`) : la garde d'écriture de la procédure.
+_ADMIN_ORG = ORG_ADMIN_OPT("org")
+
+
 def _need(val, code: str, msg: str):
     if val is None or (isinstance(val, str) and not val.strip()):
         raise AuthzDenied(400, code, msg)
@@ -108,7 +112,9 @@ def _need(val, code: str, msg: str):
 
 class ProcedureInput(BaseModel):
     op: Literal["get", "list", "create", "set", "describe", "rename", "delete",
-                "library_list", "library_get", "publish", "fork", "unpublish"]
+                "library_list", "library_get", "publish", "fork", "unpublish",
+                "share_get", "share_publish", "share_unpublish", "share_set",
+                "share_readers"]
     slug: Optional[str] = None
     guide_id: Optional[int] = None         # get : lecture par ID STABLE (ADR 0032)
     doctrine_id: Optional[int] = None      # ALIAS déprécié du précédent (retrait 29/10/2026, #519)
@@ -136,6 +142,10 @@ class ProcedureInput(BaseModel):
     id: Optional[int] = None               # unpublish : id d'entrée bibliothèque
     author_kind: Optional[str] = None      # library_list : otomata | org
     limit: int = 100                       # library_list
+    # share_* : le lien web d'UNE procédure d'org (`capabilities/partages_procedure.py`).
+    show_readers: Optional[bool] = None    # share_publish / share_set
+    preview_shape: Optional[dict] = None   # share_publish / share_set : forme du graphe
+    shape_version: Optional[int] = None    # share_publish / share_set
 
 
 def _ECRIT_SCOPE(inp) -> str:
@@ -209,12 +219,28 @@ def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
                              "bibliothèque publique) ou 'unlisted' (accessible par son "
                              "adresse, sans login, non listé). Le défaut était "
                              "'public' — le plus ouvert des deux.")))
+    if inp.op.startswith("share_"):
+        return _dispatch_share(ctx, inp)
     if inp.op == "fork":
         return lib._fork(ctx, lib.ForkInput(
             slug=_need(inp.slug, "missing_slug", "`slug` (public) requis pour fork."),
             new_slug=inp.new_slug))
     return lib._unpublish(ctx, lib.UnpublishInput(
         id=_need(inp.id, "missing_id", "`id` (entrée bibliothèque) requis pour unpublish.")))
+
+
+def _dispatch_share(ctx: ResolvedCtx, inp: ProcedureInput):
+    """Le lien web d'une procédure d'ORG — les handlers de la face REST, tels quels.
+    `share_publish` y est refusé à un agent (`_publication.refuser_si_agent`)."""
+    ps = partages_procedure
+    slug = _need(inp.slug, "missing_slug", f"`slug` requis pour {inp.op}.")
+    if inp.op == "share_get":
+        return ps._share_get(ctx, ps.ShareSlugInput(slug=slug, org=inp.org))
+    if inp.op == "share_readers":
+        return ps._share_readers(ctx, ps.ShareSlugInput(slug=slug, org=inp.org))
+    return ps._share_write(ctx, ps.ShareWriteInput(
+        slug=slug, op=inp.op.removeprefix("share_"), show_readers=inp.show_readers,
+        preview_shape=inp.preview_shape, shape_version=inp.shape_version, org=inp.org))
 
 
 async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
@@ -246,6 +272,10 @@ CAPABILITIES += [
             # elle tourne AVANT le handler, donc avant la garde d'agent — un compte
             # qui ne publiera nulle part n'est pas renvoyé vers le dashboard.
             "publish": LIBRARY_PUBLISHER, "fork": ORG_MEMBER, "unpublish": SUB_ONLY,
+            # Le lien web d'une procédure d'org : la garde de son écriture.
+            "share_get": _ADMIN_ORG, "share_publish": _ADMIN_ORG,
+            "share_unpublish": _ADMIN_ORG, "share_set": _ADMIN_ORG,
+            "share_readers": _ADMIN_ORG,
         }),
         description=(
             "Your org's procedures (named guides / skills) + the public library. The base "
@@ -303,7 +333,10 @@ CAPABILITIES += [
             "op=library_list (browse/search, filter category/author_kind) / library_get (full "
             "body by public slug) / publish (share one of your org's skills; visibility="
             "public|unlisted) / fork (copy a public entry into your org, optional `new_slug`) "
-            "/ unpublish (`id`). An ARCHIVED procedure is left out of op=list; op=get "
+            "/ unpublish (`id`). WEB LINK of one org procedure (org_admin): "
+            "op=share_get / share_readers (who read it) / share_unpublish / share_set "
+            "(`show_readers`); share_publish is done by a person in the app, never by "
+            "an agent. An ARCHIVED procedure is left out of op=list; op=get "
             "still reads it by slug, with `archived_at` set. set/create answer "
             "`body_sha256`, the SHA-256 of the body as STORED (trimmed, tool names "
             "canonical): compare it with your hash of the trimmed body you sent — a "

@@ -71,6 +71,9 @@ _KNOWN: dict[str, str] = {
     # ligne au-dessus (navigateur, sans auth, jeton signé = l'autorisation), route et
     # `typ` de jeton distincts, table distincte (`signal_digest_optouts`).
     "/o/d/{token}": NATURE,
+    # Désinscription du résumé des LECTEURS d'une procédure partagée — même régime que
+    # les deux lignes au-dessus, route, `typ` de jeton et table distincts.
+    "/o/r/{token}": NATURE,
     # --- APIs consommées par un PROGRAMME externe (oto-core / oto-cli), chemins
     # gelés par contrat : `SireneStock` HTTP client, repli CLI des accords quand le
     # transport MCP est indisponible. Un tool MCP existe en parallèle, mais c'est un
@@ -166,6 +169,9 @@ _KNOWN: dict[str, str] = {
     # JSON : ce n'est même pas la forme d'une capacité.
     "/api/public/docs/{token}": NATURE,
     "/p/d/{token}": NATURE,
+    # Vitrine d'une procédure partagée par lien : surface ANONYME (le jeton est le
+    # secret), l'adaptateur des capacités authentifie toujours.
+    "/api/public/process-shares/{token}": NATURE,
     # Réception d'un upload signé (#105) : PAS de JWT, le jeton scellé de l'URL fait
     # foi (sub/org/cible, TTL, usage unique). Appelée par un `curl` d'agent (PUT) ou
     # le formulaire humain (POST/GET) — un tiers, hors session dashboard.

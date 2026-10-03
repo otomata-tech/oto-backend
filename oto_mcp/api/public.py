@@ -23,6 +23,8 @@ nettoyage du dépôt. Les guides se lisent authentifié (`/api/me/guide-library`
 - `GET /p/d/{token}`                       → le même, server-rendered (lisible par un agent sans JS)
 - `GET /o/u/{token}`                       → désinscription d'une relance (le jeton EST le secret)
 - `GET /o/d/{token}`                       → désinscription du DIGEST de signaux (oto#150), même régime, table distincte
+- `GET /api/public/process-shares/{token}` → VITRINE d'une procédure partagée par lien (jamais le corps)
+- `GET /o/r/{token}`                       → désinscription du résumé des LECTEURS d'une procédure partagée
 
 `/api/connectors` est la seule MIXTE : anonyme pour la vitrine, authentifiée pour
 le dashboard qui y scope son catalogue sur l'org active — d'où son `verifier`.
@@ -327,4 +329,59 @@ def digest_unsubscribe(request: Request) -> Response:
     # DÉCLARÉE du compte, et le refus se pose même si le compte est introuvable.
     locale = (db.get_user(sub) or {}).get("locale")
     return HTMLResponse(outreach_optout.page_confirmation(locale, kind="digest"),
+                        headers={"Cache-Control": "no-store"})
+
+
+# Le seau anti-martelage de la vitrine d'un partage de procédure. Il réutilise celui des
+# projets publiés sans login (`subdomain_project`, mêmes réglages `OTO_ANON_RATE_*`) sous
+# une clé à lui : l'id de projet 0 n'existe pas (BIGSERIAL), donc `(ip, 0)` ne se
+# confond avec le seau d'aucun projet.
+_SEAU_VITRINE = 0
+
+
+@en_thread
+def process_share_preview(request: Request) -> JSONResponse:
+    """La VITRINE d'une procédure partagée par lien — `GET /api/public/process-shares/
+    {token}`, sans auth (le jeton est le secret ; masqué au journal par son nom).
+
+    ⚠️ Jamais le corps, ni aucun texte d'étape : titre, description, auteur,
+    connecteurs, et la FORME du graphe validée à l'écriture par un schéma fermé
+    (`capabilities/partages_procedure.vitrine`, seul constructeur de cette réponse,
+    partagé avec la lecture connectée). Le retrait des vitrines anonymes de la
+    bibliothèque (oto#84) est précisément ce qui l'exige.
+
+    Compte une vue par jour et par partage — un nombre, aucune IP gardée."""
+    import time
+
+    from .. import subdomain_project
+    from ..capabilities import partages_procedure as partages
+    from ..capabilities._types import AuthzDenied
+    from ..db import partages_procedure as db_partages
+    ip = subdomain_project._client_ip(request.scope, dict(request.scope.get("headers") or []))
+    if not subdomain_project._check_bucket((ip, _SEAU_VITRINE), time.monotonic()):
+        return _json_error(request, 429, "rate_limited", "Trop de requêtes, réessayez.")
+    try:
+        share, instr = partages._procedure_partagee(request.path_params.get("token", ""))
+    except AuthzDenied:
+        return _json_error(request, 404, "not_found")
+    db_partages.compter_vue(share["id"])
+    return _json(request, partages.vitrine(share, instr), extra_headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff"})
+
+
+@en_thread
+def readers_digest_unsubscribe(request: Request) -> Response:
+    """Désinscription du RÉSUMÉ DES LECTEURS d'une procédure partagée — route
+    `/o/r/<token>`, **sans auth**. Même régime que `digest_unsubscribe` (GET qui écrit,
+    server-rendered, idempotent, strictement soustractif) ; jeton (`typ`) et table
+    distincts : il ne désinscrit ni des relances ni du digest de signaux."""
+    from .. import outreach_optout
+    from ..db import partages_procedure as db_partages
+    sub = outreach_optout.verify_lecteurs(request.path_params.get("token", ""))
+    if not sub:
+        return HTMLResponse(outreach_optout.page_refus(), status_code=400)
+    db_partages.refuser_resume(sub, source="link")
+    locale = (db.get_user(sub) or {}).get("locale")
+    return HTMLResponse(outreach_optout.page_confirmation(locale, kind="lecteurs"),
                         headers={"Cache-Control": "no-store"})

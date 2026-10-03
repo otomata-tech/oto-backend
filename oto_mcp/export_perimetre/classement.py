@@ -234,6 +234,12 @@ CLASSEMENT: dict[str, Table] = {
     "origine_ecritures": possedee(_ORG_OU_COMPTE),
     "portee_elargissements": possedee(Ou((ParOrg(), ParSubSansOrg("acteur_sub")))),
     "signal_digest_optouts": possedee(ParSub()),
+    # Partage d'une procédure par lien : le lien est à l'org de la procédure, ses
+    # lecteurs suivent leur lien, le refus du résumé est à la personne.
+    "process_shares": possedee(ParOrg()),
+    "process_share_readers": indirecte(Via("process_shares", ("share_id",)),
+                                       "un lecteur part avec le lien qu'il a lu"),
+    "process_readers_digest_optouts": possedee(ParSub()),
     "scheduled_emails": possedee(Ou((ParOrg(), ParSubSansOrg("created_by")))),
     # ── commerce, légal, relances : les nôtres ─────────────────────────────────
     "org_subscriptions": exclue(ParOrg(), _COMMERCE),

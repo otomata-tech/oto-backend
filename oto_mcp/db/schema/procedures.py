@@ -104,3 +104,66 @@ CREATE INDEX IF NOT EXISTS idx_doctrine_library_visibility ON doctrine_library(v
 CREATE INDEX IF NOT EXISTS idx_doctrine_library_author ON doctrine_library(author_kind, author_org_id);
 CREATE INDEX IF NOT EXISTS idx_doctrine_library_category ON doctrine_library(category);
 """
+
+
+# Partage d'UNE procédure par lien (`/p/<token>`) — « See who's reading ».
+#
+# Une procédure d'org se publie par un jeton aléatoire : sans compte on lit sa
+# VITRINE (titre, description, connecteurs, forme du graphe — jamais le corps,
+# cf. le retrait des vitrines anonymes de oto#84), connecté on lit le corps et
+# on est noté LECTEUR. Le corps servi est toujours la version COURANTE de la
+# procédure : le partage pointe la procédure vivante, il ne la recopie pas.
+#
+# ⚠️ `instruction_id` est un lien LOGIQUE, sans clé étrangère : la colonne
+# `org_instructions.id` naît dans `_init` (ALTER), APRÈS cet assemblage — une FK
+# échouerait sur une base vierge. Une procédure supprimée laisse un partage
+# orphelin, que toutes les lectures traitent comme introuvable (404).
+#
+# `preview_shape` = la FORME du graphe (déclencheur, puis par étape son genre et
+# ses connecteurs), calculée par le front du propriétaire, validée à l'écriture
+# par un schéma FERMÉ : énumérations et slugs seulement, aucun texte libre ne
+# peut y entrer. `shape_version` = la version de procédure dont elle vient ; la
+# vitrine ne la sert que si elle égale la version courante.
+PROCESS_SHARES = """
+CREATE TABLE IF NOT EXISTS process_shares (
+    id BIGSERIAL PRIMARY KEY,
+    instruction_id BIGINT NOT NULL,
+    org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    show_readers BOOLEAN NOT NULL DEFAULT TRUE,
+    preview_shape JSONB,
+    shape_version INTEGER,
+    preview_views JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_process_shares_actif
+    ON process_shares(instruction_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_process_shares_instruction
+    ON process_shares(instruction_id);
+CREATE INDEX IF NOT EXISTS idx_process_shares_created_by
+    ON process_shares(created_by);
+
+CREATE TABLE IF NOT EXISTS process_share_readers (
+    share_id BIGINT NOT NULL REFERENCES process_shares(id) ON DELETE CASCADE,
+    reader_sub TEXT NOT NULL,
+    first_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reads INTEGER NOT NULL DEFAULT 1,
+    recorded BOOLEAN NOT NULL,
+    copied_at TIMESTAMPTZ,
+    copied_instruction_id BIGINT,
+    digested_at TIMESTAMPTZ,
+    PRIMARY KEY (share_id, reader_sub)
+);
+CREATE INDEX IF NOT EXISTS idx_process_share_readers_sub
+    ON process_share_readers(reader_sub);
+
+CREATE TABLE IF NOT EXISTS process_readers_digest_optouts (
+    sub TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'link',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""

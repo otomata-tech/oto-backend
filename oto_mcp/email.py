@@ -191,6 +191,7 @@ from .email_templates import (  # noqa: E402,F401 — réexport intentionnel
     send_resource_shared_email,
     send_resource_transferred_email,
     send_signal_digest_email,
+    send_process_readers_digest_email,
 )
 
 

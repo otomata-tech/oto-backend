@@ -47,6 +47,7 @@ from . import config
 
 _TYP = "optout"                  # relance de plateforme (oto_admin_outreach) — inchangé
 _TYP_DIGEST = "digest_optout"    # digest de signaux (send_signal_digest_email, oto#150)
+_TYP_LECTEURS = "readers_digest_optout"  # résumé des lecteurs d'une procédure partagée
 
 
 class OptOutSecretManquant(RuntimeError):
@@ -119,6 +120,12 @@ def verify_digest(token: str) -> Optional[str]:
     return _verify(token, _TYP_DIGEST)
 
 
+def verify_lecteurs(token: str) -> Optional[str]:
+    """Comme `verify`, pour la désinscription du RÉSUMÉ DES LECTEURS d'une procédure
+    partagée — troisième canal, troisième `typ` : jamais interchangeable."""
+    return _verify(token, _TYP_LECTEURS)
+
+
 def lien(sub: str) -> str:
     """L'adresse complète servie dans le pied du mail de RELANCE.
 
@@ -138,6 +145,12 @@ def lien_digest(sub: str) -> str:
     même forme que `lien()`, route et `typ` distincts (cf. l'en-tête du module) :
     ce lien ne désinscrit jamais des relances, quoi qu'il arrive."""
     return f"{config.public_base_url()}/o/d/{_sign(sub, _TYP_DIGEST)}"
+
+
+def lien_lecteurs(sub: str) -> str:
+    """L'adresse servie dans le pied du RÉSUMÉ DES LECTEURS (`digest_lecteurs.py`) —
+    même forme que `lien_digest()`, route `/o/r/` et `typ` à lui."""
+    return f"{config.public_base_url()}/o/r/{_sign(sub, _TYP_LECTEURS)}"
 
 
 # La page rendue au destinataire. Server-rendered, sans JS, sans marque tierce : elle
@@ -175,6 +188,16 @@ _TEXTES = {
                "You will not receive the summary of replies to your reported "
                "signals any more. Emails tied to your account (invitations, "
                "shares) still come through: those are not this summary."),
+    },
+    "lecteurs": {
+        "fr": ("C'est noté",
+               "Vous ne recevrez plus le résumé des personnes qui lisent vos "
+               "procédures partagées. La liste reste visible dans l'onglet Readers "
+               "de chaque procédure."),
+        "en": ("Done",
+               "You will not receive the summary of who reads your shared "
+               "processes any more. The list stays visible in each process's "
+               "Readers tab."),
     },
 }
 _REFUS = ("Lien invalide",

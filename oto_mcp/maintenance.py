@@ -29,6 +29,10 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           avant de redémarrer le service
     oto-mcp maintenance apollo-phones retire les reveals de téléphone Apollo reçus
                                           au-delà de trente jours
+    oto-mcp maintenance digest-lecteurs  résumé quotidien des lecteurs d'une procédure
+                                          partagée par lien, à son propriétaire —
+                                          À BLANC tant que OTO_DIGEST_LECTEURS
+                                          n'est pas posé
     oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
@@ -508,6 +512,15 @@ def apollo_phones(*, dry_run: bool = False) -> dict:
     return {"purged": apollo_reveals.purger()}
 
 
+def digest_lecteurs(*, dry_run: bool = False) -> dict:
+    """Résumé quotidien des lecteurs d'une procédure partagée, un mail par propriétaire.
+
+    Dans `_ALL` ET fermé par `OTO_DIGEST_LECTEURS` : le passage quotidien dit ce qu'il
+    enverrait dès le tag, l'envoi attend une décision (cf. `digest_lecteurs.py`)."""
+    from . import digest_lecteurs as dl
+    return dl.balayer(dry_run=dry_run)
+
+
 _TRAVAUX: dict[str, Callable[..., dict]] = {
     "retention": retention,
     "revisions": revisions,
@@ -523,6 +536,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "unipile-fin-de-droit": unipile_fin_de_droit,
     "oauth-relay-callbacks": oauth_relay_callbacks,
     "apollo-phones": apollo_phones,
+    "digest-lecteurs": digest_lecteurs,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -540,7 +554,7 @@ _ACTES = ("journal-tokens", "residu-projete", "oauth-relay-callbacks")
 # Elle lit `org_entitlements`, qu'oto-commerce tient seul (#1097) : aucun travail d'ici
 # ne le réaligne avant elle.
 _ALL = ("retention", "revisions", "blocks", "key-indexes", "alertes-credential",
-        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones")
+        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "digest-lecteurs")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

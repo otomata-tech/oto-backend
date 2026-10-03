@@ -26,6 +26,9 @@ OPTIONS /api/upload/{token} -> options_handler
 GET,HEAD /p/d/{token} -> public_doc_view
 GET,HEAD /o/u/{token} -> outreach_unsubscribe
 GET,HEAD /o/d/{token} -> digest_unsubscribe
+GET,HEAD /api/public/process-shares/{token} -> process_share_preview
+OPTIONS /api/public/process-shares/{token} -> options_handler
+GET,HEAD /o/r/{token} -> readers_digest_unsubscribe
 POST /api/orgs/{id}/logo -> org_logo_save
 OPTIONS /api/orgs/{id}/logo -> options_handler
 GET,HEAD /api/me/projects/{id}/export -> me_project_export
@@ -518,6 +521,16 @@ GET,HEAD /api/me/connector-instances -> _handler
 OPTIONS /api/me/connector-instances -> options_handler
 POST /api/me/connector-instances/suspend -> _handler
 OPTIONS /api/me/connector-instances/suspend -> options_handler
+GET,HEAD /api/me/instructions/{slug}/share -> _handler
+OPTIONS /api/me/instructions/{slug}/share -> options_handler
+POST /api/me/instructions/{slug}/share -> _handler
+OPTIONS /api/me/instructions/{slug}/share -> options_handler
+GET,HEAD /api/me/instructions/{slug}/share/readers -> _handler
+OPTIONS /api/me/instructions/{slug}/share/readers -> options_handler
+GET,HEAD /api/me/process-shares/{token} -> _handler
+OPTIONS /api/me/process-shares/{token} -> options_handler
+POST /api/me/process-shares/{token}/copy -> _handler
+OPTIONS /api/me/process-shares/{token}/copy -> options_handler
 GET,HEAD /api/orgs/{id}/audit-log/export -> _handler
 OPTIONS /api/orgs/{id}/audit-log/export -> options_handler
 GET,HEAD /api/orgs/{id}/monitoring/summary -> _handler

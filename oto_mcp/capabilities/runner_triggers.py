@@ -31,8 +31,9 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import _abonnement, _cle_exigee, _instruction, _limites_du_run, _modele
-from .. import (db, roles, runner_hook, runner_models, runner_tick,
+from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
+               _modele)
+from .. import (db, ownership, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry)
 from ..tools import catalogue as tool_catalogue
 from ._authz import ORG_MEMBER
@@ -68,7 +69,11 @@ class TriggerInput(BaseModel):
                 # l'identité au nom de laquelle il agit, et l'abonnement qui le
                 # paie. Verbe séparé d'`update` : le propriétaire n'est pas de la
                 # configuration, et seul un admin peut le changer (25/09/2026).
-                "take_over"]
+                "take_over",
+                # PARTAGER un agent avec des membres de son org (`_acces_agent`) :
+                # le lister, l'accorder, le retirer. Réservé au propriétaire et aux
+                # admins ; `shares` se lit par quiconque voit l'agent.
+                "shares", "share", "unshare"]
     trigger_id: Optional[int] = None
     # create / update —
     procedure: Optional[str] = None
@@ -147,6 +152,19 @@ class TriggerInput(BaseModel):
             "replace a leaked address, `op=rotate_address`. Like `rotate_secret` "
             "and `rotate_address`, this changes the agent's door: only its owner "
             "or an org admin may (`trigger_owner_or_admin_required`)."))
+    # share / unshare — UN bénéficiaire, membre de l'org de l'agent.
+    share_with_sub: Optional[str] = Field(default=None, description=(
+        "op=share/unshare: the org member to share with, by account id."))
+    share_with_email: Optional[str] = Field(default=None, description=(
+        "op=share/unshare: the org member to share with, by email. Must be a "
+        "member of THIS org (`share_not_org_member` otherwise): an agent is never "
+        "shared outside its org."))
+    everyone: Optional[bool] = Field(default=None, description=(
+        "op=share/unshare: true = every member of the org, instead of one person."))
+    role: Optional[Literal["viewer", "editor"]] = Field(default=None, description=(
+        "op=share: `editor` (default) may change, enable, disable the agent and "
+        "clear its queue; `viewer` only reads it. Neither may delete it, share it "
+        "or change its webhook door — owner and org admins only."))
     #: `deliveries` : combien de livraisons rendre.
     limit: Optional[int] = None
     with_input: Optional[bool] = Field(
@@ -261,6 +279,12 @@ class Trigger(BaseModel):
     #: Servis sur un webhook ; `0` est un vrai zéro.
     queue_pending: Optional[int] = None
     queue_held: Optional[int] = None
+    #: Ce que l'APPELANT peut faire de cet agent (`_acces_agent`) : `owner`, `admin`,
+    #: `editor` ou `viewer`. `can_edit` / `can_share` en sont la projection, pour
+    #: qu'un écran grise ses boutons sans re-déduire la règle.
+    my_access: Optional[str] = None
+    can_edit: Optional[bool] = None
+    can_share: Optional[bool] = None
 
 
 class RunnerArme(BaseModel):
@@ -346,6 +370,15 @@ class Delivery(BaseModel):
     job_attempt_errors: Optional[list[dict]] = None
 
 
+class AgentShare(BaseModel):
+    """Un partage d'agent. `principal_type=everyone` = toute l'org de l'agent."""
+    principal_type: Literal["user", "everyone", "group"]
+    sub: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    granted_at: Optional[str] = None
+
+
 class TriggerOut(BaseModel):
     trigger: Optional[Trigger] = None
     triggers: Optional[list[Trigger]] = None
@@ -363,6 +396,8 @@ class TriggerOut(BaseModel):
     #: de travaux en attente sont passés au nouveau propriétaire.
     previous_owner: Optional[str] = None
     jobs_moved: Optional[int] = None
+    #: `shares` / `share` / `unshare` : avec qui l'agent est partagé.
+    shares: Optional[list[AgentShare]] = None
 
 
 def _avec_pertes(org_id: int, t: dict) -> dict:
@@ -658,7 +693,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 409, "already_scheduled",
                 f"`{inp.procedure}` a {quoi} (#{deja[0]['id']}). Modifie-la plutôt "
                 "que d'en créer une seconde — un objet ne porte qu'une "
-                "automatisation de chaque genre.")
+                "automatisation de chaque genre. Si tu ne la vois pas, elle n'est "
+                "pas partagée avec toi : demande l'accès à son propriétaire ou à un "
+                "admin de l'org.")
         secret = hache = None
         if webhook:
             secret, hache = runner_hook.nouveau_secret()
@@ -706,8 +743,13 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Filtrer côté client devient faux dès qu'il y a plus d'une page.
         lus = (db.triggers_for_procedure(ctx.org_id, inp.procedure) if inp.procedure
                else db.list_triggers(ctx.org_id))
-        return {"triggers": [_avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t))
-                             for t in lus],
+        # ⚠️ Un agent ne se LISTE qu'à qui le voit : son propriétaire, un admin de
+        # l'org, et ceux avec qui il est partagé (`_acces_agent`).
+        niveaux = _acces_agent.niveaux(ctx.sub, ctx.org_id, lus)
+        return {"triggers": [_acces_agent.avec_acces(
+                                 _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
+                                 niveaux[int(t["id"])])
+                             for t in lus if niveaux[int(t["id"])]],
                 "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
 
     if inp.trigger_id is None:
@@ -715,9 +757,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
 
     if inp.op == "get":
         t = db.get_trigger(inp.trigger_id, ctx.org_id)
-        if not t:
-            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
-        return {"trigger": _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
+        n = _acces_agent.exiger(ctx, t, _acces_agent.ECRIRE + ("viewer",))
+        return {"trigger": _acces_agent.avec_acces(
+                    _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)), n),
                 "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
 
     if inp.op == "rotate_address":
@@ -764,6 +806,11 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     if inp.op == "deliveries":
         # Org-scopé par la requête : un déclencheur d'une autre org rend une liste
         # vide, jamais les livraisons d'autrui.
+        # Les CORPS reçus sont des données de tiers : servis à qui peut modifier
+        # l'agent, pas à qui le lit seulement.
+        _acces_agent.exiger(ctx, db.get_trigger(inp.trigger_id, ctx.org_id),
+                            _acces_agent.ECRIRE if inp.with_input
+                            else _acces_agent.ECRIRE + ("viewer",))
         return {"deliveries": db.livraisons(inp.trigger_id, ctx.org_id,
                                             limit=inp.limit or 50,
                                             en_attente=bool(inp.waiting_only),
@@ -775,9 +822,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # l'agent qui s'emballe, puis on décide de jeter ce qu'il a accumulé.
         # Les travaux RETENUS par la pause sont donc périmés eux aussi
         # (`perimer_travaux_du_declencheur` couvre `pending` ET `held`).
-        t = db.get_trigger(inp.trigger_id, ctx.org_id)
-        if not t:
-            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        _acces_agent.exiger(ctx, db.get_trigger(inp.trigger_id, ctx.org_id),
+                            _acces_agent.ECRIRE)
         vides = db.perimer_travaux_du_declencheur(
             inp.trigger_id, ctx.org_id,
             raison="file vidée à la demande : ces occurrences n'ont jamais été "
@@ -822,7 +868,14 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         return {"trigger": _avec_hook(ctx.org_id, nouveau),
                 "previous_owner": ancien, "jobs_moved": deplaces}
 
+    if inp.op in ("shares", "share", "unshare"):
+        return _partager(ctx, inp)
+
     if inp.op == "delete":
+        # Supprimer est un geste de PROPRIÉTAIRE : un éditeur le modifie, il ne le
+        # fait pas disparaître.
+        _acces_agent.exiger(ctx, db.get_trigger(inp.trigger_id, ctx.org_id),
+                            _acces_agent.GOUVERNER)
         if not db.delete_trigger(inp.trigger_id, ctx.org_id):
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
         return {"ok": True}
@@ -857,6 +910,13 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     def _actuel() -> Optional[dict]:
         if "t" not in lu:
             lu["t"] = db.get_trigger(inp.trigger_id, ctx.org_id)
+            # ⚠️ Le droit de MODIFIER (`_acces_agent`) se juge à la PREMIÈRE lecture :
+            # aucune validation qui suit ne doit décrire à un membre l'agent qu'il ne
+            # voit pas (son genre, son modèle) par la forme de son refus. Un agent
+            # inconnu reste rendu `None` — chaque site dit son propre 404.
+            if lu["t"] and not lu.get("juge"):
+                _acces_agent.exiger(ctx, lu["t"], _acces_agent.ECRIRE)
+                lu["juge"] = True
         return lu["t"]
 
     def _est_webhook() -> bool:
@@ -984,6 +1044,12 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             famille if inp.model is not None
             else runner_models.famille(actuel.get("model")), champs)
 
+    # ⚠️ Aucune retouche ne s'écrit sans avoir LU le déclencheur : c'est lui qui dit
+    # à qui l'agent appartient et avec qui il est partagé (`_actuel` juge le droit de
+    # modifier à sa première lecture). La retouche ordinaire, qui ne lisait rien, le
+    # lit donc ici, juste avant d'écrire.
+    if not _actuel():
+        raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
     if inp.model is not None and _abonnement.est_abonnement(famille) and _actuel():
         _juger(_actuel())
     eteindre = set(champs) <= {"enabled"} and champs.get("enabled") is False
@@ -991,6 +1057,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                           hors_abonnement_d_autrui=None if eteindre else ctx.sub)
     if not t:
         lu.pop("t", None)   # relu APRÈS l'écriture refusée : l'état qui l'a refusée
+        lu.pop("juge", None)
         if _actuel():
             _juger(_actuel())
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -1004,6 +1071,30 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                                  runner_hook.nouvelle_adresse())
         t = db.get_trigger(inp.trigger_id, ctx.org_id) or t
     return {"trigger": _avec_hook(ctx.org_id, t)}
+
+
+def _partager(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
+    """`shares` / `share` / `unshare` — voir `_acces_agent`."""
+    t = db.get_trigger(inp.trigger_id, ctx.org_id)
+    if inp.op == "shares":
+        _acces_agent.exiger(ctx, t, _acces_agent.ECRIRE + ("viewer",))
+        return {"shares": _acces_agent.lister(ctx.org_id, inp.trigger_id)}
+    _acces_agent.exiger(ctx, t, _acces_agent.GOUVERNER)
+    ptype, pid = _acces_agent.principal(
+        ctx, everyone=bool(inp.everyone), sub=inp.share_with_sub,
+        email=inp.share_with_email, strict=inp.op == "share")
+    rid = str(inp.trigger_id)
+    if inp.op == "share":
+        if ptype == "user" and pid == t["sub"]:
+            raise AuthzDenied(400, "share_with_owner",
+                              "c'est le propriétaire de l'agent : il a déjà tous les droits.")
+        ownership.grant(_acces_agent.KIND, rid, ptype, pid,
+                        role=inp.role or "editor", granted_by=ctx.sub)
+    else:
+        ownership.revoke(_acces_agent.KIND, rid, ptype, pid)
+    logger.info("agent %s (org %s) : %s %s:%s par %s", inp.trigger_id, ctx.org_id,
+                inp.op, ptype, pid, ctx.sub)
+    return {"ok": True, "shares": _acces_agent.lister(ctx.org_id, inp.trigger_id)}
 
 
 # ── L'AUTHENTIFICATION d'un webhook — REST seulement ──────────────────────────
@@ -1051,6 +1142,9 @@ def _exiger_la_porte(ctx: ResolvedCtx, agent: dict) -> None:
     avoir besoin du propriétaire pour refermer une porte qui fuit."""
     if agent.get("sub") == ctx.sub or roles.is_org_admin(ctx.sub, ctx.org_id):
         return
+    if _acces_agent.niveau(ctx.sub, ctx.org_id, agent) is None:
+        # Ne pas voir un agent, c'est ne pas savoir qu'il existe (`_acces_agent`).
+        raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
     raise AuthzDenied(
         403, "trigger_owner_or_admin_required",
         "changer la porte de ce webhook (porteur, adresse, mode ou secret de "
@@ -1127,8 +1221,8 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
                        "signature effacé, porteur neuf émis", inp.trigger_id,
                        ctx.org_id, ctx.sub)
     t = db.get_trigger(inp.trigger_id, ctx.org_id) or actuel
-    return {"trigger": _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
-            "hook_secret": porteur}
+    return _avec_mon_acces(ctx, {"trigger": _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
+                                 "hook_secret": porteur})
 
 
 async def _hook_auth(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
@@ -1148,11 +1242,25 @@ async def _ajouter_tool_warnings(ctx: ResolvedCtx, rep: dict) -> dict:
     return rep
 
 
+def _avec_mon_acces(ctx: ResolvedCtx, rep: dict) -> dict:
+    """Pose `my_access`/`can_edit`/`can_share` sur LE déclencheur d'une réponse qui ne
+    l'a pas déjà (create, update, rotations, reprise…) — une règle, un endroit."""
+    t = rep.get("trigger")
+    if t and "my_access" not in t:
+        rep["trigger"] = _acces_agent.avec_acces(
+            t, _acces_agent.niveau(ctx.sub, ctx.org_id, t))
+    return rep
+
+
+def _triggers_et_acces(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
+    return _avec_mon_acces(ctx, _triggers_sync(ctx, inp))
+
+
 async def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # `async` seulement pour les avertissements d'outils ; le SQL — une dizaine de lectures et
     # d'écritures, dont la résolution des noms — est ICI hors de la
     # boucle (le serveur est mono-loop : `docs/event-loop-perf.md`).
-    rep = await run_in_threadpool(_triggers_sync, ctx, inp)
+    rep = await run_in_threadpool(_triggers_et_acces, ctx, inp)
     return await _ajouter_tool_warnings(ctx, rep)
 
 
@@ -1204,6 +1312,19 @@ CAPABILITIES += [
             DeclaredError(403, "trigger_owner_or_admin_required",
                           "`rotate_secret`, `rotate_address` ou `private_address=true` "
                           "sur le webhook d'un autre, sans être admin de l'org"),
+            DeclaredError(403, "trigger_edit_forbidden",
+                          "l'agent est visible mais pas à toi de le modifier (partagé en "
+                          "lecture), ou de le supprimer/partager (propriétaire et admins)"),
+            DeclaredError(404, "share_not_org_member",
+                          "`share` vers quelqu'un qui n'est pas membre de l'org de l'agent"),
+            DeclaredError(400, "share_target_required",
+                          "`share`/`unshare` sans bénéficiaire, ou avec les deux formes"),
+            DeclaredError(400, "share_target_ambiguous",
+                          "`everyone` avec une personne nommée"),
+            DeclaredError(400, "share_with_owner",
+                          "`share` vers le propriétaire de l'agent"),
+            DeclaredError(400, "ambiguous_email",
+                          "l'adresse désigne plusieurs comptes de l'org"),
         ),
         rest=RestBinding(verb="POST", path="/api/me/runner/triggers"),
         description=(
@@ -1224,7 +1345,16 @@ CAPABILITIES += [
             "you mean) / list / get / update (editing cron or tz revalidates and "
             "recomputes the next due) / delete / take_over (org admin only: you "
             "become the agent's owner — it then acts as YOU and, on a personal "
-            "model subscription, runs on yours; its queued jobs move with it). The tick only ENQUEUES a job at "
+            "model subscription, runs on yours; its queued jobs move with it). "
+            "ACCESS: an agent belongs to its owner and runs AS them. list/get only "
+            "return agents you own, that are shared with you, or all of them for an "
+            "org admin; each carries `my_access` (owner/admin/editor/viewer), "
+            "`can_edit`, `can_share`. op=share (owner or org admin; `share_with_email` "
+            "or `share_with_sub` of a member of THIS org, or `everyone=true`; `role` "
+            "editor|viewer) / unshare / shares. An editor may update, enable, disable "
+            "and clear the queue — the agent still runs as its owner. Delete, share "
+            "and the webhook door stay with the owner and org admins. "
+            "The tick only ENQUEUES a job at "
             "each due time; execution belongs to the worker. Floor between two "
             "occurrences: 5 minutes — a run is not a ping. `create` (and "
             "`update enabled=true`) is REFUSED when no worker polls this org's "

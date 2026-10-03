@@ -30,6 +30,17 @@ from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import ResolvedCtx
 
 
+
+@pytest.fixture(autouse=True)
+def _l_appelant_possede_l_agent(monkeypatch):
+    """Ce fichier ne parle pas du PARTAGE d'agents — il a son banc
+    (`test_partage_agents.py`). L'appelant y est lu propriétaire de tout agent
+    qu'on lui présente ; sans cette doublure, la lecture de rôle irait chercher la
+    vraie base."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org_id, agents: {int(t["id"]): "owner" for t in agents})
+
 def _ctx(sub="alexis", org_id=77):
     return ResolvedCtx(sub=sub, org_id=org_id)
 

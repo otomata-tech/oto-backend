@@ -169,6 +169,11 @@ _GESTES = {
 def test_un_COLLEGUE_ne_change_pas_la_porte_de_l_agent_d_un_autre(geste, agent,
                                                                    monkeypatch):
     _admin(monkeypatch, admins=set())
+    # Un collègue à qui l'agent est PARTAGÉ en écriture : il le modifie, il ne
+    # change pas sa porte. (Sans partage il ne le verrait pas — 404, banc du partage.)
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org, agents: {int(t["id"]): "editor" for t in agents})
     with pytest.raises(AuthzDenied) as e:
         _GESTES[geste]("un_collegue")
     assert (e.value.status, e.value.code) == (403, "trigger_owner_or_admin_required")

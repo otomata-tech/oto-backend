@@ -88,6 +88,49 @@ def get_trigger(trigger_id: int, org_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def trigger_sans_org(trigger_id: int) -> Optional[dict]:
+    """Le déclencheur d'un id, SANS borne d'org — pour `ownership` seul, qui résout
+    le propriétaire d'une ressource par son id. Tout geste d'une capacité passe par
+    `get_trigger`, borné à l'org de l'appel."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, org_id, sub FROM runner_triggers WHERE id = %s", (trigger_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def partages_d_agents(ids: list[int],
+                      principaux: list[tuple[str, str]]) -> dict[int, str]:
+    """Le meilleur partage VIVANT (`write` > `read`) que l'un des `principaux` tient
+    sur chacun des agents `ids` — UNE requête pour toute une liste, là où
+    `ownership.can_access` en ferait plusieurs par agent. Un agent absent du
+    résultat n'est partagé avec aucun d'eux."""
+    if not ids or not principaux:
+        return {}
+    from ._partage_vivant import PARTAGE_VIVANT
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT resource_id, max(permission) AS permission FROM resource_grants "
+            "WHERE resource_type = 'runner_trigger' AND resource_id = ANY(%s) "
+            "  AND (principal_type, principal_id) IN (SELECT * FROM unnest(%s::text[], %s::text[])) "
+            f"  AND {PARTAGE_VIVANT} GROUP BY resource_id",
+            ([str(i) for i in ids], [p[0] for p in principaux],
+             [str(p[1]) for p in principaux]),
+        ).fetchall()
+    # `max` sur du texte : 'write' > 'read', l'ordre voulu.
+    return {int(r["resource_id"]): r["permission"] for r in rows}
+
+
+def retirer_partages_d_agent(trigger_id: int) -> int:
+    """Retire tous les partages d'un agent SUPPRIMÉ : une ligne de `resource_grants`
+    ne survit pas à sa ressource (pas de clé étrangère pour le faire à sa place)."""
+    with _connect() as conn:
+        return conn.execute(
+            "DELETE FROM resource_grants WHERE resource_type = 'runner_trigger' "
+            "AND resource_id = %s", (str(trigger_id),),
+        ).rowcount or 0
+
+
 def reprendre_trigger(trigger_id: int, org_id: int,
                       nouveau_sub: str) -> Optional[tuple[dict, Optional[str], int]]:
     """Un ADMIN d'org devient le propriétaire d'un déclencheur : `(déclencheur,
@@ -345,6 +388,7 @@ def delete_trigger(trigger_id: int, org_id: int) -> bool:
         )
         supprime = bool(cur.rowcount)
     if supprime:
+        retirer_partages_d_agent(trigger_id)
         perimer_travaux_du_declencheur(
             trigger_id, org_id,
             raison="déclencheur supprimé : ses occurrences en attente ne seront "

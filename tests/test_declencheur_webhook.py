@@ -29,6 +29,17 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 ORG = 77
 
 
+
+@pytest.fixture(autouse=True)
+def _l_appelant_possede_l_agent(monkeypatch):
+    """Ce fichier ne parle pas du PARTAGE d'agents — il a son banc
+    (`test_partage_agents.py`). L'appelant y est lu propriétaire de tout agent
+    qu'on lui présente ; sans cette doublure, la lecture de rôle irait chercher la
+    vraie base."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org_id, agents: {int(t["id"]): "owner" for t in agents})
+
 def _ctx(sub="alexis", org_id=ORG):
     return ResolvedCtx(sub=sub, org_id=org_id)
 
@@ -586,13 +597,18 @@ def test_les_reglages_de_webhook_sur_un_PROGRAMME_sont_refuses_a_la_retouche(ret
     assert e.value.code == "not_a_webhook"
 
 
-def test_une_retouche_ordinaire_ne_LIT_pas_le_declencheur(monkeypatch):
-    """Le contrat que `test_runner_trigger_sans_worker.py` tient : renommer ne
-    lit rien — et la garde du genre ne doit pas l'avoir cassé."""
+def test_une_retouche_ordinaire_lit_le_declencheur_UNE_fois(monkeypatch):
+    """Renommer lit le déclencheur une fois, et une seule : c'est lui qui dit à qui
+    l'agent appartient et avec qui il est partagé (`_acces_agent`). Avant le partage
+    d'agents, la retouche ordinaire ne lisait rien — contrat levé le 02/10/2026.
+    La garde du genre ne doit pas ajouter une seconde lecture."""
+    lus = []
     monkeypatch.setattr(RT.db, "get_trigger",
-                        lambda i, o: (_ for _ in ()).throw(AssertionError("lu")))
+                        lambda i, o: lus.append(i) or {"id": i, "org_id": o,
+                                                       "sub": "alexis"})
     monkeypatch.setattr(RT.db, "update_trigger", lambda i, o, c, **k: {"id": i, **c})
     _appel(op="update", trigger_id=5, label="renommé")
+    assert lus == [5]
 
 
 # ── 5c. VIDER la file : un geste explicite, à tout moment ─────────────────────
@@ -720,6 +736,8 @@ def test_la_sortie_typee_GARDE_l_etat_du_travail_et_la_file():
 
 def test_les_livraisons_se_lisent_org_scopees(monkeypatch):
     vu = {}
+    # Lire les livraisons exige de VOIR l'agent (`_acces_agent`) : il est lu d'abord.
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "org_id": o})
     monkeypatch.setattr(RT.db, "livraisons",
                         lambda t, o, limit=50, en_attente=False, avec_corps=False:
                         vu.update(t=t, o=o, n=limit, attente=en_attente) or [])
@@ -733,6 +751,8 @@ def test_waiting_only_ne_demande_QUE_la_file(monkeypatch):
     dans les déroulés, et un journal complet sous « vider la file » se lisait
     comme la file."""
     vu = {}
+    # Lire les livraisons exige de VOIR l'agent (`_acces_agent`) : il est lu d'abord.
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "org_id": o})
     monkeypatch.setattr(RT.db, "livraisons",
                         lambda t, o, limit=50, en_attente=False, avec_corps=False:
                         vu.update(attente=en_attente) or [])

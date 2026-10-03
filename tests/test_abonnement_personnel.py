@@ -296,6 +296,11 @@ class TestCablage:
             "kind": "schedule", "model": "claude-sonnet-5", "procedure": "p"})
         monkeypatch.setattr(RT.db, "update_trigger",
                             lambda *a, **k: pytest.fail("retouche écrite"))
+        # Même PARTAGÉ en écriture avec lui : le forfait d'un autre ne se prête pas
+        # par le partage d'un agent.
+        from oto_mcp.capabilities import _acces_agent
+        monkeypatch.setattr(_acces_agent, "niveaux",
+                            lambda sub, org, agents: {3: "editor"})
         with pytest.raises(Exception) as e:
             asyncio.run(RT._triggers(self._ctx(sub="un-collegue"), RT.TriggerInput(
                 op="update", trigger_id=3, model="sub:sonnet")))

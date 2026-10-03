@@ -32,6 +32,17 @@ from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
 
+
+@pytest.fixture(autouse=True)
+def _l_appelant_possede_l_agent(monkeypatch):
+    """Ce fichier ne parle pas du PARTAGE d'agents — il a son banc
+    (`test_partage_agents.py`). L'appelant y est lu propriétaire de tout agent
+    qu'on lui présente ; sans cette doublure, la lecture de rôle irait chercher la
+    vraie base."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org_id, agents: {int(t["id"]): "owner" for t in agents})
+
 @pytest.fixture(autouse=True)
 def _cle_de_modele_non_exigee(monkeypatch):
     """Ce fichier ne parle pas de la garde de clé de modèle — elle a son propre banc
@@ -123,6 +134,8 @@ def test_eteindre_reste_ouvert_sans_runner(monkeypatch):
     """LA garantie du lot : un déclencheur mort doit pouvoir être rangé. Le
     refuser enfermerait l'utilisateur avec l'objet qui lui ment."""
     _arme(monkeypatch, armed=False, workers=0, last_seen=None)
+    # Modifier ou supprimer exige de VOIR l'agent (`_acces_agent`) : il est lu.
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "org_id": o})
     vu = {}
     monkeypatch.setattr(RT.db, "update_trigger",
                         lambda i, o, champs, **k: vu.update(champs) or {"id": i})
@@ -132,6 +145,8 @@ def test_eteindre_reste_ouvert_sans_runner(monkeypatch):
 
 def test_corriger_et_supprimer_restent_ouverts_sans_runner(monkeypatch):
     _arme(monkeypatch, armed=False, workers=0, last_seen=None)
+    # Modifier ou supprimer exige de VOIR l'agent (`_acces_agent`) : il est lu.
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "org_id": o})
     monkeypatch.setattr(RT.db, "update_trigger", lambda i, o, c, **k: {"id": i, **c})
     _appel(_ctx(), op="update", trigger_id=6, label="mort, à ranger")
     monkeypatch.setattr(RT.db, "delete_trigger", lambda i, o: True)

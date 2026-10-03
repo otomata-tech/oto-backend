@@ -112,7 +112,10 @@ def direct_grants(sub: str) -> list[dict]:
         rows = conn.execute(
             "SELECT resource_type, resource_id, granted_by, granted_at, role "
             "FROM resource_grants "
-            f"WHERE principal_type = 'user' AND principal_id = %s AND {PARTAGE_VIVANT}",
+            # Un partage d'AGENT (`runner_trigger`) n'est pas un contenu du rail : il
+            # se lit sur l'écran des agents, et gonflerait ici `grants_sans_noeud`.
+            f"WHERE principal_type = 'user' AND principal_id = %s AND {PARTAGE_VIVANT} "
+            "AND resource_type <> 'runner_trigger'",
             (sub,)).fetchall()
     return [dict(r) for r in rows]
 

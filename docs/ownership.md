@@ -405,3 +405,13 @@ résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et pl
 > d'abord, déplacer le défaut ensuite — dans cet ordre chaque pas se vérifie seul.
 > ⚠️ Le défaut des surfaces d'ADMIN (`org.instruction.*`, gardées `ORG_ADMIN_OPT`)
 > restera l'org quoi qu'il arrive : leur objet EST d'écrire la procédure de l'org.
+
+## Partager un agent hébergé dans son org (kind `runner_trigger`, 02/10/2026)
+
+> Un agent (`runner_triggers`) appartient à la PERSONNE sous qui il tourne
+> (`owner_getter` = `("user", trigger.sub)`, `reparent` = `db.reprendre_trigger`, vers
+> une personne seulement). Ses partages sont des lignes ordinaires de
+> `resource_grants` (`viewer`/`editor`), mais ils se posent par `oto_trigger
+> op=share|unshare|shares`, jamais par `oto_resource` : un agent ne se partage qu'à
+> l'intérieur de son org. La règle et ses raisons : `docs/runner-et-automatisations.md`
+> § « Un agent est à son propriétaire ».

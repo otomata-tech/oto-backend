@@ -167,7 +167,9 @@ CLASSEMENT: dict[str, Table] = {
             Via("org_instructions", ("resource_id",), fk=False, texte=True,
                 quand=("resource_type", TYPE_RESSOURCE_PROCEDURE)),
             Via("docs", ("resource_id",), fk=False, texte=True,
-                quand=("resource_type", "doc")))),
+                quand=("resource_type", "doc")),
+            Via("runner_triggers", ("resource_id",), fk=False, texte=True,
+                quand=("resource_type", "runner_trigger")))),
         "un partage part avec sa RESSOURCE, si son principal est du périmètre",
         destinataire=ParEntite("principal_type", "principal_id")),
     # ── connecteurs et coffre ──────────────────────────────────────────────────

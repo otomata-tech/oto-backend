@@ -25,8 +25,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import (_abonnement, _cle_exigee, _limites_du_run, _lignes_reservables,
-               _modele, _ordre_de_service)
+from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
+               _lignes_reservables, _modele, _ordre_de_service)
 from .. import db, runner_consigne, runner_models, tool_alias
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -1129,6 +1129,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         # autres surfaces paginées du dépôt, et la seule qui ne coûte pas une
         # requête de plus par page.
         suite = _curseur(jobs[-1]["id"]) if jobs and len(jobs) >= inp.limit else None
+        if not ctx.platform_worker:
+            jobs = _acces_agent.masquer_charges(ctx, jobs)
         return {"jobs": jobs,
                 "total": db.count_jobs(ctx.org_id, status=inp.status,
                                        source=inp.source, fleet_id=inp.fleet_id,
@@ -1181,6 +1183,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
     job = db.get_job(inp.job_id, ctx.org_id)
     if not job:
         raise AuthzDenied(404, "job_not_found", "job inconnu")
+    if not ctx.platform_worker:
+        job = _acces_agent.masquer_charges(ctx, [job])[0]
     return {"job": job}
 
 

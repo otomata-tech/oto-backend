@@ -31,6 +31,17 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 ORG = 42
 
 
+
+@pytest.fixture(autouse=True)
+def _l_appelant_possede_l_agent(monkeypatch):
+    """Ce fichier ne parle pas du PARTAGE d'agents — il a son banc
+    (`test_partage_agents.py`). L'appelant y est lu propriétaire de tout agent
+    qu'on lui présente ; sans cette doublure, la lecture de rôle irait chercher la
+    vraie base."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org_id, agents: {int(t["id"]): "owner" for t in agents})
+
 def _reglages(monkeypatch, poses=None):
     """`poses` : {(portee, fournisseur): 'true'|'false'} — portee = 'org' | 'platform'."""
     poses = poses or {}
@@ -195,7 +206,7 @@ def test_rallumer_sans_la_cle_exigee_est_refuse(monkeypatch):
                         lambda org: {"armed": True, "workers": 1, "last_seen": None,
                                      "families": ["anthropic"]})
     monkeypatch.setattr(RT.db, "get_trigger",
-                        lambda tid, org: {"model": "claude-opus-5"})
+                        lambda tid, org: {"id": tid, "model": "claude-opus-5"})
     monkeypatch.setattr(RT.db, "update_trigger",
                         lambda *a, **k: pytest.fail("un refus n'écrit rien"))
     with pytest.raises(AuthzDenied) as e:

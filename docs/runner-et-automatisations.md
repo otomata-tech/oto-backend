@@ -1096,9 +1096,10 @@ donc son mode, `runner_triggers.hook_auth` :
   (capacité `runner.trigger.hook_auth`, `mcp=None`) — la règle du dépôt, un secret
   brut ne passe jamais en argument d'outil. `oto_trigger` en sert l'état, et refuse
   `rotate_secret` sur un agent en signature (`signature_mode`). Autorisation :
-  **membre de l'org**, comme `rotate_secret` — choisir la porte d'un agent n'engage
-  pas le forfait de son propriétaire, donc la garde de propriété des agents
-  d'abonnement ne s'y applique pas (choix délibéré).
+  **le propriétaire de l'agent ou un admin de l'org** (`_exiger_la_porte`, revue de
+  #1083), comme `rotate_secret` et `rotate_address` : qui tient la porte déclenche
+  l'agent, et l'agent tourne sous son propriétaire. Un éditeur à qui l'agent est
+  partagé ne la change pas non plus (voir « Un agent est à son propriétaire »).
 - **Vérifiée sur les OCTETS reçus**, avant le parse JSON : un JSON re-sérialisé
   diffère au premier espace, et la signature serait refusée à tort. Plusieurs `v1,`
   séparées par des espaces (rotation côté source) : une seule suffit. Comparaison
@@ -1415,6 +1416,55 @@ admin ; `on=false` la rend à la boucle).
 ⚠️ **Ordre de déploiement** : le backend d'abord, puis le runner. Le runner n'envoie
 `engine` que pour un worker de ferme. Face à un backend qui ne le déclare pas, ce worker
 seul répondrait `unknown_fields`, et la boucle ne serait pas touchée.
+
+### Un agent est à son propriétaire, qui le partage dans son org (02/10/2026)
+
+**Avant** : `runner.triggers` était `ORG_MEMBER` sans autre garde — tout membre
+modifiait, allumait ou SUPPRIMAIT l'agent de n'importe qui, et l'agent tournait ensuite
+sous son propriétaire (`job.sub = trigger.sub`, jeton `_delegue` à son nom), donc avec
+ses connexions. Seuls les agents d'abonnement et la porte du webhook étaient gardés.
+
+**Maintenant** (`capabilities/_acces_agent.py`) : un agent est VU par son propriétaire,
+les admins de l'org, et ceux avec qui il est partagé ; les autres membres ne le voient
+pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
+
+| niveau | `get`/`list`/`shares` | corps de livraison (`with_input`) | `update`, allumer/éteindre, `clear_queue` | `delete`, `share`/`unshare`, porte du webhook |
+|---|---|---|---|---|
+| `owner`, `admin` | ✓ | ✓ | ✓ | ✓ |
+| `editor` | ✓ | ✓ | ✓ | — |
+| `viewer` | ✓ | — | — | — |
+
+- Chaque déclencheur servi porte `my_access`, `can_edit`, `can_share` : le front grise
+  sur eux, il ne re-déduit pas la règle. Refus : `trigger_edit_forbidden` (403).
+- Les partages vivent dans `resource_grants`, kind **`runner_trigger`** (enregistré
+  dans `ownership` par `_acces_agent`). Verbes : `op=shares|share|unshare` sur
+  `oto_trigger` — pas `oto_resource`, qui partage hors de l'org et à une adresse sans
+  compte. **Un agent ne se partage qu'à l'intérieur de son org** (`share_not_org_member`) :
+  une personne de l'org (`share_with_sub`/`share_with_email`), ou l'org entière
+  (`everyone=true`, stocké `principal_type='org'`, servi `everyone`).
+- ⚠️ **Le partage ne change pas l'identité d'exécution.** Un éditeur modifie un agent
+  qui tourne toujours sous son propriétaire : partager en écriture, c'est confier son
+  identité — l'écran de partage le dit. Le changer serait une autre décision (un agent
+  qui tourne sous celui qui l'a allumé en dernier).
+- ⚠️ **Un agent d'abonnement reste modifiable par son seul propriétaire**, partage ou
+  non : `_abonnement.peut_agir_pour` n'a pas bougé — prêter son forfait est une autre
+  décision que confier un agent.
+- **Lancer à la main** (`runner.jobs op=enqueue`) n'est pas gardé par le partage : le
+  travail porte l'identité de QUI l'enfile (`ctx.sub`), jamais celle du propriétaire.
+- **Retirer un partage ne renouvelle pas le secret du webhook** : un éditeur ne l'a
+  jamais vu (rendu une fois, à qui le pose — propriétaire ou admin, seuls à pouvoir le
+  renouveler).
+- **Les agents d'avant restent ouverts** : la révision `0032_agents_partages_a_l_org`
+  pose un partage `editor` à l'org sur chaque agent existant ; son propriétaire le
+  retire depuis l'écran. Un agent créé ensuite naît privé. ⚠️ **La révision se joue
+  AVANT le déploiement du code** (`oto-mcp migrer upgrade head`) : sans elle, chaque
+  agent existant devient privé d'un coup.
+- **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
+  (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
+  enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le
+  reconnaître (`_acces_agent._CHARGE_LISIBLE` : agent, procédure, libellé, modèle) —
+  ni consigne, ni outils, ni corps de webhook. Le fil d'un run reste au propriétaire
+  et aux admins (`run_thread`), un éditeur ne le lit pas.
 
 ### Un agent peut tourner sur l'ABONNEMENT de son demandeur (21/09/2026)
 

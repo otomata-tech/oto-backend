@@ -29,6 +29,8 @@ from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
 from ..datastore.outils import _current_run, adresse_servie
 from ..datastore import schema as dsv2
+from ..datastore.errors import RevisionConflict
+from ..datastore.precondition import revision_attendue
 from ..datastore.core import (
     indice_de_liberation,
     InvalidCursor,
@@ -234,6 +236,67 @@ def _row_locked_message(e: RowLocked) -> str:
     l'indice d'omission de `_run_id` quand il est prouvé (#547)."""
     hint = _omitted_run_hint(e)
     return f"{e} {hint}" if hint else str(e)
+
+
+# Borne d'un lot de suppressions (#1268) : chaque ligne est une transaction, le lot
+# reste un appel court.
+MAX_DELETE_IDS = 500
+
+
+def _delete_rows(store, datastore: str, id, expected_revision, ids) -> dict:
+    """Face MCP du lot de suppressions (#1268) : `ids` = des `_id`, ou des
+    `{id, expected_revision}`.
+
+    ⚠️ **Tout le lot est VÉRIFIÉ avant la première suppression** : un élément illisible
+    au 30e rang ne doit pas laisser 29 lignes déjà parties. Les refus PAR LIGNE (bail,
+    révision), eux, ne coupent pas le lot : ils sont rendus avec leur ligne."""
+    def refus(message: str):
+        return McpError(ErrorData(code=INVALID_PARAMS, message=message))
+    if id is not None or expected_revision is not None:
+        raise refus("`ids` replaces `id` and `expected_revision`: put each row's "
+                    "revision in its item, `{\"id\": …, \"expected_revision\": …}`")
+    if not isinstance(ids, list) or not ids:
+        raise refus("`ids` = a non-empty list of `_id` (or `{id, expected_revision}`)")
+    if len(ids) > MAX_DELETE_IDS:
+        raise refus(f"`ids`: {len(ids)} items, at most {MAX_DELETE_IDS} per call")
+    datastore, _ = _adresse(datastore)
+    items, vus = [], set()
+    for rang, item in enumerate(ids):
+        if isinstance(item, dict):
+            row_id, attendue = item.get("id"), item.get("expected_revision")
+            inconnues = set(item) - {"id", "expected_revision"}
+            if inconnues:
+                raise refus(f"`ids[{rang}]`: unknown keys {sorted(inconnues)} — "
+                            "an item is `{id, expected_revision}`. Nothing deleted.")
+        else:
+            row_id, attendue = item, None
+        if not isinstance(row_id, str) or not row_id.strip():
+            raise refus(f"`ids[{rang}]`: an `_id` string is required, got {item!r}. "
+                        "Nothing deleted.")
+        if row_id in vus:
+            raise refus(f"`ids[{rang}]`: `{row_id}` appears twice. Nothing deleted.")
+        vus.add(row_id)
+        try:
+            jetons.verifier_champs(id=row_id)
+            items.append((row_id, revision_attendue(attendue)))
+        except ValueError as e:                  # JetonMalPlace, révision illisible
+            raise refus(f"`ids[{rang}]`: {e}")
+    try:
+        bilan = store.delete_rows(datastore, items)
+    except DatastoreNotFound as e:
+        raise refus(_inconnu(datastore, e))
+    except DatastoreReadOnly:
+        raise refus(f"datastore `{datastore}` partagé en lecture seule")
+    refused = []
+    for row_id, e in bilan["refused"]:
+        entree = {"id": row_id,
+                  "error": _row_locked_message(e) if isinstance(e, RowLocked) else str(e)}
+        if isinstance(e, RevisionConflict):
+            entree["current_revision"] = e.current_revision
+        refused.append(entree)
+    return {"ok": not refused, "count": len(bilan["deleted"]),
+            "deleted": bilan["deleted"], "not_found": bilan["not_found"],
+            "refused": refused}
 
 
 def _adresse_de_couche_valide(champ: str, present: set, declared: set) -> bool:
@@ -1769,17 +1832,31 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
 
     @mcp.tool()
-    def data_delete_row(datastore: Adresse, id: str,
-                        expected_revision: Optional[str] = None) -> dict:
-        """Delete a row by `_id`. `datastore` accepts `slot:<name>` (active project).
+    def data_delete_row(datastore: Adresse, id: str | None = None,
+                        expected_revision: Optional[str] = None,
+                        ids: list | None = None) -> dict:
+        """Delete a row by `_id` — or a BATCH of rows with `ids`, in one call.
+        `datastore` accepts `slot:<name>` (active project).
 
         `expected_revision` = the `_revision` of the row as you read it, when it is
         that read that made you decide to delete. If the row changed since (any
         column, or its reservation), nothing is deleted and the call is refused.
         Omit it when you delete a row you did not have to read first.
+
+        BATCH (`ids`, up to 500): each item is an `_id`, or
+        `{"id": …, "expected_revision": …}` to guard that row. Each row is deleted
+        on its own: one refused row (changed since read, reserved by another work)
+        does not stop the others. Returns `deleted`, `not_found` and `refused`
+        (`id`, `error`, `current_revision` on a conflict). A malformed item refuses
+        the whole call before anything is deleted.
         """
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
+        if ids is not None:
+            return _delete_rows(store, datastore, id, expected_revision, ids)
+        if id is None:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message="`id` (one row) or `ids` (a batch) required"))
         datastore, id = _adresse(datastore, id)
         try:
             store.delete_row(datastore, id, expected_revision=expected_revision)

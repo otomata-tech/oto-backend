@@ -148,6 +148,12 @@ libération sur un état périmé retire le bail que quelqu'un d'autre a repris 
 refus, même conduite : relis, décide de nouveau, rejoue. Supprimer une ligne réservée par
 un autre travail est refusé (`row_locked`), comme l'écrire.
 
+**Plusieurs lignes à supprimer = UN appel** : `data_delete_row(ids=["r1", {"id": "r2",
+"expected_revision": "3"}, …])` (500 au plus). Chaque ligne garde sa précondition ; une
+ligne refusée n'arrête pas les autres et revient dans `refused` avec sa raison (et
+`current_revision` sur un conflit) ; une ligne déjà absente revient dans `not_found`.
+Un élément mal formé refuse tout l'appel, avant la moindre suppression.
+
 ## 4. ⚠️ `origine: "system"` est SUPPRIMÉ
 
 Ce cran armait une capture automatique : à la première écriture qui changeait une

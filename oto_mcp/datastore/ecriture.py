@@ -528,3 +528,25 @@ class EcritureMixin:
             ns = self._ns_of(ns_id)                  # lu seulement si on relève
             sk = (dsv2.status_field(ns.get("schema")) or {}).get("key")
             self._trace(trace, ns_id, ns, prev_status=supprimee.get(sk) if sk else None)
+
+    def delete_rows(self, datastore: str, items: list) -> dict:
+        """Supprime un LOT de rows (#1268) — `items` = `[(row_id, revision_attendue)]`,
+        révisions déjà lues par `revision_attendue`.
+
+        Le tableau est résolu UNE fois ; chaque ligne garde SA transaction, son verrou,
+        son bail et sa révision (`datastore_delete_row`) — un lot n'est que N gestes
+        unitaires sans N allers-retours. Un refus sur une ligne n'arrête pas le lot :
+        il est rendu avec sa ligne. ⚠️ Une ligne absente n'est pas un refus : rejouer
+        un lot déjà passé rend `not_found`, pas une erreur."""
+        ns_id = self._resolve(datastore, write=True)
+        deleted, not_found, refused = [], [], []
+        for row_id, attendue in items:
+            try:
+                supprimee = db.datastore_delete_row(
+                    ns_id, row_id, lease_guard=self._lease_guard(row_id),
+                    expected_revision=attendue)
+            except ValueError as e:              # RowLocked, RevisionConflict
+                refused.append((row_id, e))
+                continue
+            (not_found if supprimee is None else deleted).append(row_id)
+        return {"deleted": deleted, "not_found": not_found, "refused": refused}

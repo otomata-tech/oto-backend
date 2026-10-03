@@ -146,6 +146,10 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
 - **Relance des comptes jamais actifs** : **REST seule** (`oto_admin_outreach`) · ⚠️ comptée par **boîte mail**, jamais
   par compte ni par org — un humain s'inscrit deux fois, et l'index unique `(campagne, sub)` ne voit pas ce doublon-là ;
   tenant partenaire écarté **par la requête** ; la langue se choisit, ne se devine pas (`docs/relance-comptes.md`).
+- **Activation d'un tenant** : `oto-mcp maintenance activation`, déclarée par `OTO_ACTIVATION`, fermée par
+  `OTO_ACTIVATION_ENVOI` · trois étapes lues dans le journal (`connect`, `first-process`, `recurring`), une fois chacune,
+  48 h entre deux · ⚠️ c'est le tenant qui écrit à SES comptes, la relance reste intacte · ⚠️ pas d'envoi sans essai
+  reçu pour l'empreinte de CHAQUE étape ; refus partagé avec la relance (`docs/activation.md`).
 - **Facturation & avantages offerts** : ⚠️⚠️ **la facturation est tenue par oto-commerce depuis la coupure du cœur
   (#1097)** — le cœur ne pose AUCUN droit (`org_entitlements` : oto-commerce seul, par l'API de service), les gestes
   de vente et d'offre (souscrire, confirmer, moyen de paiement, résilier/reprendre, plan offert, contrat, option du catalogue) refusent en
@@ -238,6 +242,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `browser-automation.md` — Browserbase, cookie-bound
 - `email.md` — envoi per-org, quiet hours
 - `relance-comptes.md` — relancer qui n'a jamais rien fait : le comptage, l'exclusion partenaire, l'absence de signal de langue
+- `activation.md` — les emails d'activation qu'un TENANT déclare pour ses comptes : étapes, réglage, verrous
 - `mcp-apps.md` — `prefab_ui`, convention `*_app`
 - `mcp-spec-watch.md` — les SEP, pas les specs
 - `runner-et-automatisations.md` — l'état ici, la boucle ailleurs

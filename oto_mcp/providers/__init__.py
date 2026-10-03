@@ -218,6 +218,8 @@ _DECLARATIONS: tuple[str, ...] = (
     # Voisin de `posthog` par le métier (mesure d'audience) : les deux cartes se
     # lisent ensemble.
     "google_analytics",
+    # Same family (product analytics) as `posthog`, read only — wired 2026-10-02.
+    "amplitude",
     "snitcher",
     "waalaxy",
     "airtable",

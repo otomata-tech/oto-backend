@@ -53,19 +53,27 @@ def _no_crlf(s: str | None) -> str | None:
 
 
 def _send(to: str, subject: str, html: str, reply_to: str | None = None,
-          from_email: str | None = None) -> bool:
+          from_email: str | None = None, cc: list[str] | None = None,
+          mailer_url: str | None = None, bearer: str | None = None) -> bool:
     """Envoi via mailer.oto.zone (Scaleway TEM). `from_email` = adresse expéditrice
     (défaut marque `_mail_from()`) — le service refuse (403) un domaine hors allowlist
     `MAILER_FROM_DOMAINS`. Best-effort (False si pas de bearer ou échec) — mais
     `OTO_MAILER_URL`/`OTO_MAIL_FROM` sont REQUISES dès qu'un envoi est tenté (#968) :
-    sans elles, un envoi partirait en silence sous NOTRE relais et NOTRE adresse."""
-    bearer = os.environ.get("OTO_MAILER_SEND_BEARER")
+    sans elles, un envoi partirait en silence sous NOTRE relais et NOTRE adresse.
+
+    `cc` = copies VISIBLES (le service lit `cc`). `mailer_url`/`bearer` = un relais
+    déclaré par l'appelant (l'email d'activation d'un tenant part par SON instance du
+    mailer, dont le domaine expéditeur est vérifié chez elle) — les deux ensemble, sinon
+    le relais de l'instance."""
+    if mailer_url and not bearer:
+        return False
+    bearer = bearer or os.environ.get("OTO_MAILER_SEND_BEARER")
     if not bearer:
         return False
     # Résolues AVANT le bloc best-effort : une variable manquante est une erreur de
     # CONFIGURATION, pas un aléa réseau — elle ne doit pas se perdre dans le même
     # `except` qu'un timeout httpx (#968).
-    url = _mailer_url()
+    url = mailer_url or _mailer_url()
     depuis = from_email or _mail_from()
     try:
         import httpx
@@ -78,6 +86,8 @@ def _send(to: str, subject: str, html: str, reply_to: str | None = None,
             # Le service lit `replyTo` (camelCase) et IGNORE en silence toute autre
             # clé : `reply_to` y a fait perdre l'adresse de réponse sans erreur (oto#148).
             payload["replyTo"] = _no_crlf(reply_to)
+        if cc:
+            payload["cc"] = [_no_crlf(a) for a in cc]
         r = httpx.post(
             url,
             headers={"Authorization": f"Bearer {bearer}"},

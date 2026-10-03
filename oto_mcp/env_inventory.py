@@ -463,6 +463,22 @@ _REGLAGES: tuple[Variable, ...] = (
              "qui pose seul les droits depuis la coupure du cœur (#1097) : une "
              "ligne qu'il n'a pas posée ferait supprimer le compte d'un client qui "
              "paie.", ("oto_mcp/unipile_fin_de_droit.py:64",)),
+    Variable("OTO_ACTIVATION", Classe.REGLAGE, "",
+             "L'email d'activation par tenant, en JSON : `{slug: {sender, reply_to, cc, "
+             "app_url, mcp_url, help_url?, exclude_domains, delay_hours, window_days, "
+             "max_per_run, mailer_url?}}`. Absente : le travail `activation-connect` "
+             "ne lit rien. Le détail est dans `activation.py`.",
+             ("oto_mcp/activation.py:92",)),
+    Variable("OTO_ACTIVATION_ENVOI", Classe.REGLAGE, "",
+             "Ouvre l'envoi réel du travail `activation-connect`. Absente : le passage "
+             "dit qui recevrait l'email, n'envoie ni n'écrit rien. Même ouverte, rien ne "
+             "part sans un essai reçu pour le contenu servi.",
+             ("oto_mcp/activation.py:57",)),
+    Variable("OTO_ACTIVATION_MAILER_BEARER", Classe.REGLAGE, "",
+             "Jeton du relais d'envoi qu'un tenant déclare (`mailer_url` dans "
+             "`OTO_ACTIVATION`). Absent alors qu'un relais est déclaré : l'envoi est "
+             "refusé, jamais reporté sur le relais de l'instance.",
+             ("oto_mcp/activation.py:176",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

@@ -81,6 +81,11 @@ _LECTEURS_ADMIS = {
     #    d'un envoi), jamais à accorder quoi que ce soit. Aucune identité, aucun
     #    credential, aucune visibilité n'en dépend — ce que ce garde-fou protège.
     "db/outreach.py",
+    # L'audience des emails d'activation d'un tenant (2026-10-03). Même nature que la
+    # relance : le grep attrape le join sur le tenant du SUB (`tenants.id`), jamais
+    # `orgs.tenant_id`. Le rattachement n'y sert qu'à CHOISIR à qui un tenant écrit
+    # (ses propres comptes) — aucune identité, aucun credential, aucune visibilité.
+    "db/activation.py",
     # Le CONTRÔLE DE CONFORMITÉ du rattachement (2026-09-03) vit dans `db/tenants.py`,
     # déjà admis ci-dessus — rien à ajouter pour lui.
 }

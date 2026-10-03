@@ -298,7 +298,10 @@ def outreach_unsubscribe(request: Request) -> Response:
     # La langue de la page de confirmation suit la préférence DÉCLARÉE du compte,
     # comme le mail qui a porté le lien. Compte inconnu (supprimé entre-temps) ⇒ FR :
     # le refus est enregistré quand même, il ne dépend pas de l'existence d'une fiche.
-    locale = (db.get_user(sub) or {}).get("locale")
+    # Un mail servi dans une langue FIXÉE (l'activation, en anglais) le dit dans son
+    # lien (`?lang=en`) : la page parle alors la langue du mail qu'on vient de lire.
+    lang = request.query_params.get("lang")
+    locale = lang if lang in ("fr", "en") else (db.get_user(sub) or {}).get("locale")
     return HTMLResponse(outreach_optout.page_confirmation(locale),
                         headers={"Cache-Control": "no-store"})
 

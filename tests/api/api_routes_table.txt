@@ -170,6 +170,8 @@ POST /api/admin/option-comps -> _handler
 OPTIONS /api/admin/option-comps -> options_handler
 POST /api/admin/users/{sub}/suspension -> _handler
 OPTIONS /api/admin/users/{sub}/suspension -> options_handler
+POST /api/admin/orgs/{id}/suspension -> _handler
+OPTIONS /api/admin/orgs/{id}/suspension -> options_handler
 POST /api/admin/outreach -> _handler
 OPTIONS /api/admin/outreach -> options_handler
 POST /api/admin/instances/{instance_id:int}/health -> _handler
@@ -286,6 +288,8 @@ POST /api/admin/usage/signals/{signal_id}/org -> _handler
 OPTIONS /api/admin/usage/signals/{signal_id}/org -> options_handler
 POST /api/admin/usage/notify-reporters -> _handler
 OPTIONS /api/admin/usage/notify-reporters -> options_handler
+GET,HEAD /api/admin/usage/first-calls -> _handler
+OPTIONS /api/admin/usage/first-calls -> options_handler
 GET,HEAD /api/admin/monitoring/summary -> _handler
 OPTIONS /api/admin/monitoring/summary -> options_handler
 GET,HEAD /api/admin/monitoring/rest -> _handler

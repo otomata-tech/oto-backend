@@ -2315,3 +2315,20 @@ def datastore_activity(ns_id: int, namespace: Optional[str] = None,
             tuple(params),
         ).fetchall()
         return [_ds_activity_entry(dict(r)) for r in rows]
+
+
+def premiers_appels(org_ids: list[int]) -> dict[int, Optional[str]]:
+    """Le PREMIER appel journalisé de chaque org (`tool_calls`, MCP et REST) — `None`
+    pour une org sans aucun appel. Une sonde d'index par org (`idx_tool_calls_org`),
+    jamais un balayage. ⚠️ Le journal ne garde que ~90 jours : passé ce délai, c'est
+    le plus vieux appel CONSERVÉ — l'appelant qui veut une date stable la fige."""
+    if not org_ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT o.id AS org_id, "
+            "  (SELECT created_at FROM tool_calls tc WHERE tc.org_id = o.id "
+            "   ORDER BY tc.created_at ASC LIMIT 1) AS premier "
+            "FROM unnest(%s::bigint[]) AS o(id)",
+            ([int(i) for i in org_ids],)).fetchall()
+    return {int(r["org_id"]): r["premier"] for r in rows}

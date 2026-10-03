@@ -20,6 +20,7 @@ import oto_mcp.capabilities.orgs.invites  # noqa: F401 — org.invite.{create,li
 from . import platform_invites  # noqa: F401 — platform.invite.{create,list,revoke}
 from . import users_admin  # noqa: F401 — platform.user.{list,get,set_role}, platform.{key,org}.{grant,revoke}_key, platform.option.set
 from . import account_suspension  # noqa: F401 — admin.account (pause d'un compte : neutraliser sans rien détruire)
+from . import org_suspension  # noqa: F401 — admin.org_suspension (suspendre une org : essai fini, impayé)
 from . import outreach  # noqa: F401 — admin.outreach (relance des comptes jamais actifs)
 from . import instance_health  # noqa: F401 — admin.instance_health (session d'un tiers vivante ?, #863)
 from . import vault_health  # noqa: F401 — admin.vault_health (scan credentials indéchiffrables, #72)

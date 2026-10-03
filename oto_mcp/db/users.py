@@ -506,6 +506,9 @@ _SUB_COLUMNS = [
     # désignant un identifiant disparu, donc la signature ne deviendrait pas
     # historique, elle deviendrait illisible. L'étape 3 tourne AVANT ce DELETE.
     ("users", "suspended_by"),
+    # Qui a suspendu une ORG (`org_suspension`) — même nature : une signature
+    # d'auteur, repointée vers le compte qui survit à la fusion.
+    ("orgs", "suspended_by"),
     # Dossier du 29/09 (#439) — neuf colonnes à sub que la garde d'inventaire ne VOYAIT
     # pas : sa famille de noms (`created_by`, `set_by`…) ignorait `updated_by`,
     # `edited_by`, `disabled_by` et tout `*_sub` qui n'était pas dans sa liste. Elle

@@ -91,6 +91,50 @@ def org_front(org_id: Optional[int]) -> tuple[Optional[str], Optional[str]]:
     return (row["front_base_url"], row["front_brand"]) if row else (None, None)
 
 
+def get_org_suspension(org_id: int) -> Optional[dict]:
+    """L'état de suspension d'une org : `None` si elle est active (le cas de toutes).
+    Lecture sur clé primaire — la SOURCE UNIQUE du prédicat (`org_suspension`)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, suspended_at, suspended_by, suspended_reason FROM orgs "
+            "WHERE id = %s AND suspended_at IS NOT NULL", (org_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def suspended_org_ids() -> list[int]:
+    """Toutes les orgs suspendues — la liste que `org_suspension` garde en mémoire.
+    Petite par nature (index partiel `idx_orgs_suspended_by`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM orgs WHERE suspended_at IS NOT NULL").fetchall()
+    return [int(r["id"]) for r in rows]
+
+
+def suspend_org(org_id: int, *, by: str, reason: str) -> Optional[dict]:
+    """Suspend une org. Rend l'état posé, `None` si l'org n'existe pas. Ne réécrit
+    pas une suspension en cours (même règle que `suspend_account`)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE orgs SET suspended_at = COALESCE(suspended_at, NOW()), "
+            "  suspended_by = COALESCE(suspended_by, %s), "
+            "  suspended_reason = COALESCE(suspended_reason, %s) "
+            "WHERE id = %s "
+            "RETURNING id, suspended_at, suspended_by, suspended_reason",
+            (by, reason, org_id)).fetchone()
+    return dict(row) if row else None
+
+
+def resume_org(org_id: int) -> bool:
+    """Lève la suspension. True si une suspension a bien été levée."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE orgs SET suspended_at = NULL, suspended_by = NULL, "
+            "  suspended_reason = NULL "
+            "WHERE id = %s AND suspended_at IS NOT NULL RETURNING id",
+            (org_id,)).fetchone()
+    return bool(row)
+
+
 def get_org(org_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(

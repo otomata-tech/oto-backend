@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from . import db, runner_models
+from . import db, org_suspension, runner_models
 from .capabilities import _abonnement, _instruction, _limites_du_run
 
 log = logging.getLogger(__name__)
@@ -76,6 +76,15 @@ def _tick() -> int:
         # a déjà consommé cette échéance, on passe sans enfiler.
         if not db.consume_due(t["id"], t["next_due"], prochaine):
             continue
+        # Org SUSPENDUE : l'échéance est consommée (elle ne s'accumule pas), rien
+        # n'est enfilé. Un travail enfilé ne serait de toute façon jamais réservé
+        # (`claim_next_job`), et sa péremption au tour suivant se raconterait
+        # « aucun agent ne dessert cette organisation » — faux.
+        try:
+            if org_suspension.etat(t["org_id"]):
+                continue
+        except Exception as e:  # noqa: BLE001 — la réservation garde de toute façon
+            log.warning("déclencheur %s : état de suspension illisible (%s)", t["id"], e)
         payload = {
             "procedure": t["procedure"],
             "project_id": t["project_id"],

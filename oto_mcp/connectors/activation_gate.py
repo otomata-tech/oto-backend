@@ -18,6 +18,10 @@ ne le laisse pas passer. Sans sub (stdio local), rien n'est gardé : la surface
 multi-utilisateur seule est visée.
 Les outils plateforme (`oto_*`, `data_*`, `run_*`…) n'ont pas de connecteur au
 registre : jamais gardés, sans lecture de base.
+
+**L'org SUSPENDUE** (`org_suspension`) passe par ici aussi, et AVANT l'activation :
+c'est le même seam (l'org sous laquelle l'appel résout, `_org` et run compris), pour
+les deux chemins. Refus nommé `org_suspended`.
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ from typing import Optional
 from mcp.types import INVALID_PARAMS, ErrorData
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, call_axes, providers
+from .. import access, call_axes, org_suspension, providers
 from ..mcp_errors import McpError
 from ..tool_visibility import namespace_of
 from . import activation
@@ -42,6 +46,10 @@ def _refus(connector: str) -> Optional[ErrorData]:
     if not sub:
         return None
     org = access.current_org(sub)
+    if (texte := org_suspension.refus(org)):
+        return ErrorData(code=INVALID_PARAMS, message=f"Refus `{org_suspension.CODE}` : {texte}",
+                         data={"code": org_suspension.CODE, "retryable": False,
+                               "org_id": org, "connector": connector})
     group = access.current_group(sub)
     cran = activation.cran_qui_coupe(connector, org, group)
     if cran is None:

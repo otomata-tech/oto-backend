@@ -255,6 +255,8 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
                 # « pas mcp » serait la seule façon de reconnaître REST — donc un
                 # adaptateur muet passerait pour la face humaine.
                 ctx_ = dataclasses.replace(ctx_, channel="rest")
+                from .. import org_suspension
+                org_suspension.garde_capacite(cap.key, ctx_)
                 return ctx_, inp
 
             ctx, result = await execute(cap.handler, _amont)

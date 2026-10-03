@@ -80,6 +80,7 @@ def test_read_ops_cover_dashboard_reads():
 # Une op neuve non classée rougit — on décide, on ne découvre pas en production.
 ECRITURES = {
     "admin.account": {"suspend", "resume"},
+    "admin.org_suspension": {"suspend", "resume"},
     "admin.outreach": {"test", "send", "optout_clear"},
     "me.doc": {"create", "bulk_create", "update", "patch", "delete", "move", "revert",
                "set_public"},

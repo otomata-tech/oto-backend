@@ -109,6 +109,8 @@ def _make_tool(cap: Capability):
             # ne peut pas le savoir. `replace` plutôt qu'une mutation — un ctx est un
             # fait, pas un accumulateur.
             ctx = dataclasses.replace(ctx, channel="mcp")
+            from .. import org_suspension
+            org_suspension.garde_capacite(cap.key, ctx)
             if ctx.org_id is not None and raw.sub:
                 # Org résolue AVANT le handler (même garde que l'écho plus bas — une cap
                 # non org-scopée, ou sans sub, n'a pas à toucher le seam) : sert de

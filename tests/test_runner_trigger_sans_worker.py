@@ -187,13 +187,15 @@ def base_bootee(pg_dsn):
     la réservation LIT le journal : un `start` dont le run est clos se sert sans
     run, et la clôture est le fait `run_finish` de `tool_calls`. `option_comps`
     (fragment `billing`) est là parce que la réservation LIT le routage d'une org
-    vers la ferme (option `claude_farm`, 29/09/2026). Aucune FK hors
+    vers la ferme (option `claude_farm`, 29/09/2026). `orgs` (fragment `orgs`) est là
+    parce que la réservation écarte une org SUSPENDUE (`org_suspension`). Aucune FK hors
     de ces fragments — le boot complet demanderait `pgvector`, qui
     n'apprendrait rien de plus ici et que `test_schema_assembly_frozen` + le rejeu
     de boot couvrent déjà."""
     psycopg = pytest.importorskip("psycopg")
     from oto_mcp.db import _conn as dbconn
     from oto_mcp.db.schema import billing as fragment_billing
+    from oto_mcp.db.schema import orgs as fragment_orgs
     from oto_mcp.db.schema import runs as fragment_runs
     from oto_mcp.db.schema import usage as fragment_usage
 
@@ -207,6 +209,7 @@ def base_bootee(pg_dsn):
     dbconn._pool = None
     try:
         with dbconn._connect() as c:
+            c.execute(fragment_orgs.ORGS)
             c.execute(fragment_usage.USAGE)
             c.execute(fragment_billing.OPTION_COMPS)
             c.execute(fragment_runs.RUNS)

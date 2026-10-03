@@ -45,6 +45,9 @@ REFUSE_PAUSED, REFUSE_TOO_LARGE, REFUSE_RATE = (
 #: horloge dérivée chez la source. Journalisé parce que la source a prouvé qui
 #: elle est — contrairement à une signature fausse, qui ne s'écrit pas.
 REFUSE_STALE = "refused_stale"
+#: L'org de l'agent est SUSPENDUE (`org_suspension`) : rien ne part tant qu'elle ne
+#: l'est plus. Journalisé, comme un agent en pause : le propriétaire voit pourquoi.
+REFUSE_SUSPENDED = "refused_suspended"
 #: Le PLAFOND journalier déclaré sur l'agent (`max_per_day`) est atteint : la
 #: livraison est REFUSÉE (429), pas retardée. C'est la borne de dépense d'un
 #: credential fuité, là où le lissage ne fait que repousser.

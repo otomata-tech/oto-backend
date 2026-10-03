@@ -660,6 +660,10 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                 {frag['jointure_pret']}
                  WHERE (%s::bigint IS NULL OR org_id = %s) AND due_at <= NOW()
                    AND (%s::bigint[] IS NULL OR org_id = ANY(%s::bigint[]))
+                   -- Org SUSPENDUE (`org_suspension`) : ses travaux restent en file,
+                   -- intacts, et ne sont pas réservés. Ils repartent à la levée.
+                   AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
+                                    AND o_susp.suspended_at IS NOT NULL)
                    -- ⚠️ La forme `status IN (...) AND (status = 'pending' OR ...)`
                    -- n'est pas cosmétique : le `OR` nu d'avant (17/09/2026, cf.
                    -- oto-backend#deadlock) empêchait le planificateur de se limiter
@@ -1030,6 +1034,8 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
                  WHERE rj.id = %s AND rj.status = 'pending' AND rj.due_at <= NOW()
                    AND rj.attempts < rj.max_attempts
                    AND (perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
+                   AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
+                                    AND o_susp.suspended_at IS NOT NULL)
                  FOR UPDATE OF rj
             )
             UPDATE runner_jobs j

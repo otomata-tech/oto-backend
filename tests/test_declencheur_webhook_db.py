@@ -848,3 +848,26 @@ def test_deux_agents_ne_partagent_JAMAIS_une_adresse(live):
     db.poser_adresse_de_hook(a["id"], ORG, "h_meme")
     with pytest.raises(psycopg.errors.UniqueViolation):
         db.poser_adresse_de_hook(b["id"], ORG, "h_meme")
+
+
+def test_une_org_SUSPENDUE_refuse_la_livraison_et_le_journal_le_dit(live):
+    """`org_suspension` : rien n'est enfilé, l'appelant reçoit un refus nommé, et le
+    propriétaire voit pourquoi sur la page de l'agent. Levée : ça repart."""
+    from oto_mcp import db, org_store, org_suspension, runner_hook
+    susp = 8199
+    with db._connect() as conn:
+        conn.execute("INSERT INTO orgs (id, name) VALUES (%s, 'susp') "
+                     "ON CONFLICT (id) DO NOTHING", (susp,))
+    t, secret = _webhook(db, procedure="org-suspendue", org=susp)
+    org_store.suspend_org(susp, by="svc", reason="trial_ended")
+    try:
+        with pytest.raises(runner_hook.HookRefus) as e:
+            runner_hook.declencher(t["id"], secret, None)
+        assert e.value.code == "org_suspended"
+        [lue] = db.livraisons(t["id"], susp)
+        assert (lue["outcome"], lue["job_id"]) == (db.REFUSE_SUSPENDED, None)
+    finally:
+        org_store.resume_org(susp)
+        org_suspension.invalider()     # ce que fait la capacité d'admin
+    runner_hook.declencher(t["id"], secret, None)
+    assert db.livraisons(t["id"], susp)[0]["outcome"] in (db.QUEUED, db.DELAYED)

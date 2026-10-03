@@ -213,6 +213,8 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `tenants.md` — l'identité au-dessus des orgs
 - `comptes-en-pause.md` — neutraliser un compte sans le détruire : un seul état, aucune
   résurrection automatique
+- `orgs-suspendues.md` — arrêter un ESPACE sans rien détruire : cinq portes gardées
+  (capacités, outils, réservation, webhook, cron), ce qui reste ouvert et pourquoi
 - `rest-api.md` — endpoints, OpenAPI, jetons, CORS
 - `version-servie.md` — dater un changement : les 3 surfaces, les 3 coordonnées qui mentent
 - `verrou-dependances.md` — `uv.lock` versionné, installation par le verrou (CI, déploiement), le job hebdomadaire

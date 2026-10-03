@@ -141,7 +141,6 @@ minari_list
 n8n_list_executions
 n8n_list_tags
 n8n_list_workflows
-notion_query_database
 origami_campaigns
 origami_rows
 origami_sequences

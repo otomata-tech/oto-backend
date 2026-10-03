@@ -180,6 +180,22 @@ def get_active_group(sub: str) -> Optional[int]:
         return int(row["group_id"]) if row else None
 
 
+def default_group_in_org(sub: str, org_id: int) -> Optional[int]:
+    """Équipe par défaut du sub dans `org_id` : l'active si elle ⊂ org, sinon
+    celle qu'il a rejointe en premier ; None s'il n'est dans aucune équipe de
+    l'org. Un membre d'équipe n'est jamais « sans équipe » (lu par
+    `access.current_group`, aucune écriture)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT m.group_id FROM org_group_members m "
+            "JOIN org_groups g ON g.id = m.group_id "
+            "WHERE m.sub = %s AND g.org_id = %s "
+            "ORDER BY m.is_active DESC, m.joined_at, m.group_id LIMIT 1",
+            (sub, org_id),
+        ).fetchone()
+        return int(row["group_id"]) if row else None
+
+
 def list_groups_for_user(sub: str, org_id: Optional[int] = None) -> list[dict]:
     """Groupes auxquels le sub appartient (option : filtrés sur une org)."""
     q = (

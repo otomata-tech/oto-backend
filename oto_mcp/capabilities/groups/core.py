@@ -374,7 +374,9 @@ def _clear_group(ctx: ResolvedCtx, inp: NoInput) -> dict:
                            "que dans ton org maison) — le défaut durable se change dans "
                            "le dashboard.")}
     group_store.clear_active_group(ctx.sub)
-    return {"active_group": None}
+    # Un membre d'équipe n'est jamais « sans équipe » (access.current_group) :
+    # rendre l'équipe EFFECTIVE, pas un None qui mentirait.
+    return {"active_group": access.current_group(ctx.sub)}
 
 
 def _set_home_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:

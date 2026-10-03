@@ -251,6 +251,11 @@ _REGLAGES: tuple[Variable, ...] = (
              "fonction — `oto_function` op=run/test/publish rend 503 "
              "`sandbox_unavailable`, le reste répond.",
              ("oto_mcp/functions/executor.py:60",)),
+    Variable("OTO_EQUIPE_PAR_DEFAUT_TENANTS", Classe.REGLAGE, "",
+             "Slugs de tenants (virgules) dont les membres d'équipe ne sont jamais "
+             "« sans équipe » : faute d'équipe désignée, l'équipe du sub dans l'org "
+             "résolue. Absente = aucun tenant, le niveau org de toujours.",
+             ("oto_mcp/access/scope.py:156",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "

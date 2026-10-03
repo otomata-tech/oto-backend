@@ -105,4 +105,4 @@ sans base (`tests/test_current_org_run_stage_639.py`), hors boucle
 
 ## Invariant groupe ⊂ org
 
-**Invariant groupe⊂org dérivé** : un override/consultation d'org **sans** groupe explicite ⇒ niveau org (jamais le `home_group` d'une autre org) ; toute bascule d'org de session retire l'override de groupe. `/api/me` expose `active_org`/`active_group` (effectifs) **et** `home_org`/`home_group` (défauts) distinctement. `oto_whoami` montre l'org effective + `scope: home|session`.
+**Invariant groupe⊂org dérivé** : un override/consultation d'org **sans** groupe explicite ⇒ niveau org (jamais le `home_group` d'une autre org) — sauf tenant opt-in (`OTO_EQUIPE_PAR_DEFAUT_TENANTS`) : l'équipe du sub **dans cette org** (`docs/groups-and-roles.md`) ; toute bascule d'org de session retire l'override de groupe. `/api/me` expose `active_org`/`active_group` (effectifs) **et** `home_org`/`home_group` (défauts) distinctement. `oto_whoami` montre l'org effective + `scope: home|session`.

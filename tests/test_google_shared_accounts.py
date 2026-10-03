@@ -338,3 +338,118 @@ def test_le_compte_google_accepte_le_palier_org_et_ses_services_non():
     providers.require_credential("group", "google")
     with pytest.raises(ValueError):
         providers.require_credential("org", "drive")       # délégué : pas de clé à lui
+
+
+# ─── 5. les outils nomment les comptes partagés ───────────────────────────────
+#
+# Un compte partagé se résout par son adresse (`_resolve_row`) — mais les listes que
+# l'agent lit pour choisir l'adresse (`gmail_list_accounts`, `google_accounts`, le
+# message « aucun compte ») ne montraient que les comptes du membre. Un agent ne
+# pouvait donc pas découvrir la boîte qu'il avait le droit d'employer.
+
+def _deux_niveaux(monkeypatch, membre=(), partages=()):
+    monkeypatch.setattr(G.db, "list_google_accounts", lambda sub, org: [
+        {"google_email": e, "is_default": i == 0, "scopes": ALL, "granted_at": None}
+        for i, e in enumerate(membre)])
+    gmail_seul = " ".join([*G.IDENTITY_SCOPES, G.SERVICE_SCOPES["gmail"][0]])
+    drive_seul = " ".join([*G.IDENTITY_SCOPES, G.SERVICE_SCOPES["drive"][0]])
+    monkeypatch.setattr(G.db, "list_shared_google_accounts", lambda scope, target: [
+        {"google_email": e, "is_default": i == 0, "granted_at": None, "scope": scope,
+         "scopes": drive_seul if e.startswith("drive") else gmail_seul}
+        for i, (s, e) in enumerate(p for p in partages if p[0] == scope)])
+
+
+def test_les_comptes_atteignables_suivent_lordre_de_resolution(monkeypatch):
+    _deux_niveaux(monkeypatch, membre=["moi@x.test"],
+                  partages=[("group", "team@x.test"), ("org", "boss@x.test"),
+                            ("org", "moi@x.test")])
+    out = G.reachable_accounts("u")
+    assert [(a["google_email"], a["shared"]) for a in out] == [
+        ("moi@x.test", None), ("team@x.test", "group"), ("boss@x.test", "org")]
+    # Le défaut reste celui du membre : un partagé ne l'est jamais à sa place.
+    assert [a["google_email"] for a in out if a["is_default"]] == ["moi@x.test"]
+
+
+def test_sans_compte_a_lui_le_defaut_est_le_partage_le_plus_proche(monkeypatch):
+    _deux_niveaux(monkeypatch, partages=[("org", "hello@x.test"), ("org", "sales@x.test")])
+    out = G.reachable_accounts("u")
+    assert [(a["google_email"], a["is_default"]) for a in out] == [
+        ("hello@x.test", True), ("sales@x.test", False)]
+
+
+def test_gmail_ne_liste_pas_un_compte_partage_pour_drive_seulement(monkeypatch):
+    _deux_niveaux(monkeypatch, partages=[("org", "drive@x.test"), ("org", "boite@x.test")])
+    assert [a["google_email"] for a in G.reachable_accounts("u", service="gmail")] == [
+        "boite@x.test"]
+    assert len(G.reachable_accounts("u")) == 2
+
+
+def test_aucun_compte_nomme_aussi_les_comptes_partages(monkeypatch):
+    _deux_niveaux(monkeypatch, membre=["moi@x.test"], partages=[("org", "boss@x.test")])
+    msg = G._no_account_message("u", ORG, "inconnu@x.test")
+    assert "moi@x.test" in msg and "boss@x.test" in msg
+
+
+# ─── 6. retirer une copie ne tue pas l'autre ──────────────────────────────────
+#
+# Google traite un `/revoke` comme la fin de l'accès de l'app au compte entier. Une
+# adresse connectée pour soi ET partagée à l'org, c'est deux lignes et UN accès chez
+# Google : révoquer en retirant l'une coupait l'autre.
+
+def _revocations(monkeypatch):
+    vus = []
+
+    class _R:
+        status_code = 200
+    import requests
+    monkeypatch.setattr(requests, "post", lambda url, **k: vus.append(url) or _R())
+    return vus
+
+
+def _detenteurs(monkeypatch, *lignes):
+    monkeypatch.setattr(G.db, "google_grant_holders", lambda email: [
+        {"entity_type": et, "entity_id": eid, "client_id": cid} for et, eid, cid in lignes])
+
+
+def test_retirer_la_copie_partagee_garde_lacces_du_titulaire(monkeypatch):
+    revoques = _revocations(monkeypatch)
+    _admins(monkeypatch, org=True)
+    monkeypatch.setattr(G.db, "list_shared_google_accounts",
+                        lambda scope, target: [{"google_email": "moi@x.test"}])
+    monkeypatch.setattr(G.db, "get_shared_google_oauth",
+                        lambda *a, **k: {**_row("moi@x.test"), "client_id": "cid-env"})
+    monkeypatch.setattr(G.db, "delete_shared_google_oauth", lambda *a, **k: None)
+    _detenteurs(monkeypatch, ("org", str(ORG), "cid-env"), ("member", f"{ORG}:u", "cid-env"))
+    G.revoke("u", account="moi@x.test", scope="org")
+    assert revoques == []
+    # Seule copie : là, on révoque chez Google, comme avant.
+    _detenteurs(monkeypatch, ("org", str(ORG), "cid-env"))
+    G.revoke("u", account="moi@x.test", scope="org")
+    assert revoques == ["https://oauth2.googleapis.com/revoke"]
+
+
+def test_retirer_sa_copie_garde_la_boite_partagee(monkeypatch):
+    revoques = _revocations(monkeypatch)
+    monkeypatch.setattr(G.db, "get_google_oauth",
+                        lambda sub, org, account=None: {**_row("moi@x.test"), "client_id": "cid-env"})
+    monkeypatch.setattr(G.db, "delete_google_oauth", lambda *a, **k: None)
+    _detenteurs(monkeypatch, ("member", f"{ORG}:u", "cid-env"), ("org", str(ORG), "cid-env"))
+    G.revoke("u", account="moi@x.test")
+    assert revoques == []
+
+
+def test_un_autre_client_oauth_nest_pas_le_meme_acces(monkeypatch):
+    """Le même compte connecté sous l'app d'un tenant et sous la nôtre : deux accès
+    distincts chez Google — révoquer l'un ne touche pas l'autre, donc on révoque."""
+    _detenteurs(monkeypatch, ("member", f"{ORG}:u", "cid-env"), ("org", str(ORG), "cid-tenant"))
+    assert G._grant_held_elsewhere("moi@x.test", "cid-env", ("member", f"{ORG}:u")) is False
+    # Émetteur inconnu sur une ligne d'avant qu'on le note : dans le doute, on garde.
+    _detenteurs(monkeypatch, ("member", f"{ORG}:u", "cid-env"), ("org", str(ORG), None))
+    assert G._grant_held_elsewhere("moi@x.test", "cid-env", ("member", f"{ORG}:u")) is True
+
+
+def test_un_coffre_illisible_ne_fait_pas_revoquer(monkeypatch):
+    def boum(email):
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(G.db, "google_grant_holders", boum)
+    assert G._grant_held_elsewhere("moi@x.test", "cid-env", ("org", str(ORG))) is True

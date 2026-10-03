@@ -629,6 +629,16 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
     # noqa: SILENT — message d'aide : liste de comptes connectés absente plutôt que fausse
     except Exception:      # jamais transformer une erreur d'entrée en panne
         connectes = []
+    # Les comptes PARTAGÉS joignables se nomment aussi en `account` : un message qui les
+    # tait renvoie l'appelant chercher une boîte qu'il pourrait déjà atteindre. À part du
+    # bloc ci-dessus : un partage illisible ne doit pas effacer les comptes du membre.
+    try:
+        for scope, target in _shared_targets(sub, org_id):
+            connectes += [a["google_email"] for a in db.list_shared_google_accounts(scope, target)
+                          if a.get("google_email") and a["google_email"] not in connectes]
+    # noqa: SILENT — message d'aide : sans les partagés plutôt qu'en panne
+    except Exception:
+        pass
     dash = _reconnecter(sub)
     if not account:
         return (f"Aucun compte Google connecté. Connecte-en un sur {dash}."
@@ -729,6 +739,37 @@ def list_shared_accounts(sub: str) -> list[dict]:
     out: list[dict] = []
     for scope, target in _shared_targets(sub, org_id):
         out.extend(db.list_shared_google_accounts(scope, target))
+    return out
+
+
+def reachable_accounts(sub: str, service: Optional[str] = None) -> list[dict]:
+    """Tout ce qu'un appel peut nommer en `account` : les comptes du membre, puis les
+    comptes PARTAGÉS joignables, du porteur le plus proche au plus large — l'ordre de
+    `_resolve_row`. Une adresse présente à deux niveaux n'apparaît qu'une fois, au
+    niveau qui la résout.
+
+    `shared` vaut `None` sur un compte du membre, `"group"`/`"org"` sur un partagé.
+    `is_default` dit ce qu'un appel SANS `account` résout : le défaut du membre s'il a un
+    compte, sinon le défaut du porteur partagé le plus proche.
+
+    `service` (ex. `"gmail"`) écarte les comptes PARTAGÉS qui n'ont pas autorisé ce
+    service : une boîte partagée pour Drive seulement n'est pas une boîte Gmail. Les
+    comptes du membre restent tous listés, comme avant les comptes partagés."""
+    own = list_accounts(sub)
+    shared = list_shared_accounts(sub)
+    out = [{**a, "shared": None} for a in own]
+    vus = {a.get("google_email") for a in own}
+    # Sans compte à lui, l'appel sans `account` résout le défaut du porteur le plus
+    # proche : la tête de `shared` (chaque porteur est trié défaut d'abord).
+    defaut = shared[0].get("google_email") if (not own and shared) else None
+    for a in shared:
+        email = a.get("google_email")
+        if not email or email in vus:
+            continue
+        vus.add(email)
+        if service and service not in services_granted(a.get("scopes")):
+            continue
+        out.append({**a, "shared": a.get("scope") or "org", "is_default": email == defaut})
     return out
 
 
@@ -959,6 +1000,35 @@ for _svc in SERVICES:
     )
 
 
+def _grant_held_elsewhere(email: Optional[str], client_id: Optional[str],
+                          entity: tuple) -> bool:
+    """Une AUTRE ligne du coffre porte-t-elle ce compte Google, émise par le même client ?
+
+    Google traite un `/revoke` comme la fin de l'accès de l'APP au compte tout entier, pas
+    d'un seul jeton : tous les jetons que ce client a émis pour cette adresse tombent avec.
+    Or une même adresse vit souvent à deux endroits — la boîte d'un membre connectée pour
+    lui ET partagée à son org, ou connectée dans deux orgs. Révoquer en retirant l'une
+    tuait l'autre en silence, découvert au premier `invalid_grant`.
+
+    Dans le doute (coffre illisible, émetteur inconnu sur une des lignes), on répond OUI :
+    la ligne est supprimée quoi qu'il arrive, et un jeton qu'on ne détient plus ne sert à
+    personne — alors qu'une révocation de trop casse une connexion vivante."""
+    if not email:
+        return False
+    try:
+        holders = db.google_grant_holders(email)
+    # noqa: SILENT — dans le doute on ne révoque pas chez Google (la ligne part quand même)
+    except Exception:
+        return True
+    et, eid = entity[0], str(entity[1])
+    for h in holders:
+        if (h["entity_type"], str(h["entity_id"])) == (et, eid):
+            continue
+        if client_id is None or h.get("client_id") is None or h["client_id"] == client_id:
+            return True
+    return False
+
+
 def _revoke_shared(sub: str, account: Optional[str], scope: str) -> None:
     """Retire un compte PARTAGÉ (ou tous ceux du scope) — geste d'admin."""
     import requests
@@ -975,7 +1045,12 @@ def _revoke_shared(sub: str, account: Optional[str], scope: str) -> None:
         # noqa: SILENT — dette déclarée : credential indéchiffrable ⇒ on supprime quand même (#424)
         except Exception:
             row = None
-        if row and row.get("refresh_token"):
+        if row and row.get("refresh_token") and _grant_held_elsewhere(
+                row.get("google_email"), row.get("client_id"), (scope, target)):
+            logger.info("compte Google partagé retiré sans révocation Google : %s=%s compte=%s "
+                        "— une autre ligne porte le même accès", scope, target,
+                        r.get("google_email"))
+        elif row and row.get("refresh_token"):
             try:
                 requests.post("https://oauth2.googleapis.com/revoke",
                               data={"token": row["refresh_token"]}, timeout=10)
@@ -1012,7 +1087,12 @@ def revoke(sub: str, account: Optional[str] = None, scope: str = "member") -> No
         # noqa: SILENT — dette déclarée : credential indéchiffrable ⇒ on supprime quand même (#424)
         except Exception:
             row = None
-        if row and row.get("refresh_token"):
+        if row and row.get("refresh_token") and _grant_held_elsewhere(
+                email, row.get("client_id"),
+                (credentials_store.MEMBER, credentials_store.member_id(org_id, sub))):
+            logger.info("compte Google retiré sans révocation Google : compte=%s — une autre "
+                        "ligne porte le même accès", email)
+        elif row and row.get("refresh_token"):
             try:
                 requests.post(
                     "https://oauth2.googleapis.com/revoke",

@@ -314,3 +314,19 @@ def delete_shared_google_oauth(scope: str, target_id: int, account: Optional[str
                     "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
                     "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
                     (et, eid, GOOGLE, oldest))
+
+
+def google_grant_holders(google_email: str) -> list[dict]:
+    """Toutes les lignes du coffre qui portent CE compte Google, quelle que soit l'entité
+    (membre de n'importe quelle org, équipe, org) : `entity_type`, `entity_id` et le
+    client OAuth émetteur (`client_id`, `None` sur une ligne d'avant qu'on le note).
+
+    Sert à une seule question : retirer une de ces lignes peut-il se faire en révoquant
+    chez Google ? Lecture du meta seulement — rien n'est déchiffré."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, meta->>'client_id' AS client_id "
+            "FROM connector_credentials WHERE connector=%s AND account=%s",
+            (GOOGLE, google_email)).fetchall()
+    return [{"entity_type": r["entity_type"], "entity_id": r["entity_id"],
+             "client_id": r["client_id"]} for r in rows]

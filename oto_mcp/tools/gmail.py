@@ -154,17 +154,21 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def gmail_list_accounts() -> dict:
-        """List the Google accounts the user has connected.
+        """List the Gmail accounts this call can use: the user's own, then the
+        mailboxes an admin shared with their team or the whole organization.
 
-        Returns {accounts: [{email, is_default}]}. Use an `email` value as the
-        `account` argument of the other gmail_* tools to act on a specific
-        account; omit `account` to use the default.
+        Returns {accounts: [{email, is_default, shared}]}. `shared` is null for
+        the user's own account, "group" or "org" for a shared mailbox. Use an
+        `email` value as the `account` argument of the other gmail_* tools to
+        act on a specific mailbox — shared ones included; omit `account` to use
+        the default (`is_default`).
         """
         sub = access.current_user_sub_or_raise()
-        accounts = google_oauth.list_accounts(sub)
+        accounts = google_oauth.reachable_accounts(sub, service="gmail")
         return {
             "accounts": [
-                {"email": a.get("google_email"), "is_default": a.get("is_default", False)}
+                {"email": a.get("google_email"), "is_default": a.get("is_default", False),
+                 "shared": a.get("shared")}
                 for a in accounts
             ]
         }

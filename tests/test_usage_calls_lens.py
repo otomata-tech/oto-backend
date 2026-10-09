@@ -424,6 +424,7 @@ def test_sans_borne_basse_la_fenetre_maximale_s_applique(live):
     fin = datetime.fromisoformat(p["until_effectif"].replace("Z", "+00:00"))
     assert fin - debut == timedelta(days=db.RELEVE_FENETRE_MAX_JOURS)
 
+    _consolider_le_journal()
     agrege = db.billable_usage_by_tool_for_org(org)
     assert [(r["tool"], r["calls"]) for r in agrege["tools"]] == [("linkedin_aiark_search", 1)]
 
@@ -448,6 +449,7 @@ def test_le_releve_agrege_somme_ce_que_la_lentille_detaille(journal):
     from oto_mcp import db
 
     fenetre = {"since": journal["since"], "until": journal["until"]}
+    _consolider_le_journal()
     r = db.billable_usage_by_tool_for_org(journal["org"], **fenetre)
     assert (r["since_effectif"], r["until_effectif"]) == (journal["since"], journal["until"])
     assert r["tools"] == [
@@ -527,3 +529,11 @@ def test_le_store_nomme_les_runs_qui_ne_sont_pas_ceux_de_l_org(live):
                                        **fenetre)
     assert p["total"] == 1
     assert p["unknown_run_ids"] == [faute, ailleurs]
+
+
+def _consolider_le_journal():
+    """Les relevés lisent les totaux par jour (#1147) : comme en production après le
+    rattrapage, chaque jour clos du journal du banc est (re)consolidé avant la lecture."""
+    from oto_mcp.db import journal_jour
+    for jour in journal_jour.jours_a_consolider(refaire=True):
+        journal_jour.consolider_jour(jour)

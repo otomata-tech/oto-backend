@@ -381,15 +381,17 @@ def test_un_retour_douteux_ne_redirige_nulle_part(client, params):
 
 
 def test_le_journal_dacces_ne_garde_pas_le_code(caplog):
+    # Le filtre COMMUN du journal d'accès (posé par `server.main`), pas un filtre du relais.
+    from oto_mcp.journal_secrets import MasqueCheminAcces
+
     lg = logging.getLogger("test.acces")
-    lg.addFilter(relay.FiltreJournalAcces())
+    lg.filters.clear()
+    lg.addFilter(MasqueCheminAcces())
     with caplog.at_level("INFO", logger="test.acces"):
         lg.info('%s - "%s %s HTTP/%s" %d', "1.2.3.4:5", "GET",
                 "/oauth/callback?code=SECRET&state=SCEAU&iss=https%3A%2F%2Fa", "1.1", 302)
-        lg.info('%s - "%s %s HTTP/%s" %d', "1.2.3.4:5", "GET", "/api/x?code=garde", "1.1", 200)
-    lignes = [r.getMessage() for r in caplog.records]
-    assert "SECRET" not in lignes[0] and "SCEAU" not in lignes[0] and "iss=" in lignes[0]
-    assert "code=garde" in lignes[1]
+    ligne = caplog.records[-1].getMessage()
+    assert "SECRET" not in ligne and "SCEAU" not in ligne and "iss=" in ligne
 
 
 # ── l'échange de jeton ────────────────────────────────────────────────────────

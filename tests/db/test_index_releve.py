@@ -99,7 +99,8 @@ def test_la_revision_0049_pose_les_index_d_ouvertures():
     spec.loader.exec_module(rev)
     assert rev.revision == REVISION_OUVERTURES and len(rev.revision) <= 32
     assert all(i.revision == REVISION_OUVERTURES for i in OUVERTURES)
-    assert "rejouer la révision 0049" in OUVERTURES[0].procedure
+    # Le geste manuel nomme la commande versionnée qui pose les index de 0049.
+    assert f"index-concurrents {REVISION_OUVERTURES}" in OUVERTURES[0].procedure
 
 
 def test_les_index_d_ouvertures_servent_les_trois_pages(live):

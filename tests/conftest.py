@@ -38,6 +38,7 @@ import pytest
 
 from _oto_core_pin import (MARQUEUR, categorie_non_concluante, ecart,
                            lignes_de_banniere, skips_autorises)
+import _etat_global
 import _groupes_xdist
 import _jeton_de_suite as jeton
 from _pg_hygiene import Guard, docker_available, run_args, sweep_orphans
@@ -82,6 +83,30 @@ _SOCKET_CONNECT_ORIGINAL = socket.socket.connect
 socket.socket.connect = _connexion_gardee
 
 
+# ── L'état GLOBAL du processus, rendu tel qu'il était après chaque test (#1111) ──────
+# Un réglage de la stdlib (`csv.field_size_limit`, récursion, délai des sockets,
+# `logging.disable`, répertoire courant, umask, locale, `decimal`, fuseau, `sys.path`) vaut
+# pour tout le worker : changé sans être rendu, il change le résultat des tests joués APRÈS
+# — et de ceux-là seulement, selon la part et l'ordre. Le 09/10/2026, une limite CSV
+# relevée par un script d'archive a désarmé la garde de `csv_tolerant` dans une seule part
+# (détail : `tests/_etat_global.py`). ⚠️ Le nom commence par `_0` exprès : pytest range
+# les fixtures autouse d'un même fichier par ORDRE ALPHABÉTIQUE (`dir()`), pas par ordre de
+# définition. Première installée, elle est démontée la dernière — après les remises de
+# `monkeypatch` (chdir, syspath_prepend…), qu'elle ne doit pas prendre pour des fuites.
+# Un écart est une erreur qui nomme le test ; l'état est remis.
+@pytest.fixture(autouse=True)
+def _0_etat_global_rendu(request: pytest.FixtureRequest) -> Iterator[None]:
+    avant, decimal_avant = _etat_global.releve(), _etat_global.contexte_decimal()
+    yield
+    ecarts = _etat_global.ecarts_et_remise(avant, decimal_avant)
+    if ecarts:
+        pytest.fail(
+            f"{request.node.nodeid} a changé l'état GLOBAL du processus sans le rendre — "
+            f"les tests joués après lui dans ce worker le subiraient (#1111). Rendre "
+            f"l'état (try/finally, `monkeypatch`) dans le test ou dans le code appelé :\n  "
+            + "\n  ".join(ecarts), pytrace=False)
+
+
 # ── L'adresse publique de l'instance, gréée pour toute la suite ──────────────
 # Le code refuse de fabriquer une adresse qu'il n'a pas : `config.public_base_url()`
 # lève au lieu de retomber sur un domaine (redirection OAuth, rappel de paiement, jeton
@@ -108,6 +133,31 @@ def _adresse_publique_de_l_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_MCP_PUBLIC_URL", _ADRESSE_DE_GREEMENT)
 
 
+# ── La MÊME base d'environnement, posée aussi pour la SESSION (#1111) ──────────────────
+# Les deux fixtures ci-dessus et ci-dessous sont de portée FONCTION : pytest les installe
+# APRÈS toute fixture de portée module. Un module qui monte son application dans une
+# fixture `scope="module"` (`tests/api/test_runner_fleets_rest.py` : base, client, flotte)
+# lisait donc la variable avant qu'elle soit posée — et ne passait que parce qu'un AUTRE
+# fichier l'écrivait par `os.environ.setdefault` à son IMPORT, donc dès la collecte, pour
+# tout le processus. Sur un runner unique, chaque worker collectait toute la suite : le
+# voisin était toujours là. Dans une part qui ne contient pas ce voisin, 17 erreurs
+# `Missing env var 'OTO_MCP_PUBLIC_URL'`. Une fixture de SESSION s'installe avant toutes
+# les autres ; les fixtures de fonction gardent leur rôle : remettre la base à chaque
+# test, quoi qu'un test précédent ait fait.
+_BASE_D_ENVIRONNEMENT = {
+    "OTO_MCP_PUBLIC_URL": _ADRESSE_DE_GREEMENT,
+    "OTO_PROJECT_DOMAIN": "oto.cx",
+}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _base_d_environnement_de_la_session() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as mp:
+        for nom, valeur in _BASE_D_ENVIRONNEMENT.items():
+            mp.setenv(nom, valeur)
+        yield
+
+
 # ── Le domaine des endpoints de projet, gréé lui aussi (`config.project_domain()`,
 # devenue `require_env` le 15/09/2026) ──────────────────────────────────────────────
 #
@@ -120,7 +170,7 @@ def _adresse_publique_de_l_instance(monkeypatch: pytest.MonkeyPatch) -> None:
 # déclaration continue de le poser lui-même via `monkeypatch`.
 @pytest.fixture(autouse=True)
 def _domaine_des_projets(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OTO_PROJECT_DOMAIN", "oto.cx")
+    monkeypatch.setenv("OTO_PROJECT_DOMAIN", _BASE_D_ENVIRONNEMENT["OTO_PROJECT_DOMAIN"])
 
 
 # ── L'adresse du tableau de bord (`config.dashboard_url()`, devenue `require_env`-
@@ -163,6 +213,19 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
         return
     monkeypatch.setattr(org_store, "suspended_org_ids", lambda: [])
     monkeypatch.setattr(org_store, "get_org_suspension", lambda org_id: None)
+
+
+@pytest.fixture(autouse=True)
+def _aucun_pret_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucune instance n'est prêtée. Le palier équipe lit les instances
+    prêtées à l'équipe (`group_store.lent_instances` → `list_shared_with`) à chaque
+    lecture de clé d'équipe ; un banc qui double le coffre d'équipe sans base n'a rien
+    à y lire. Un banc sur base réelle lit la vraie colonne ; un banc qui teste le prêt
+    double lui-même `list_shared_with`."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp import credentials_store
+    monkeypatch.setattr(credentials_store, "list_shared_with", lambda scopes: [])
 
 
 @pytest.fixture

@@ -109,6 +109,33 @@ class _Coffre:
 
     def __init__(self):
         self.lignes: dict[tuple, dict] = {}
+        self.prets: dict[tuple, list] = {}     # (entité, compte) → share_side (ADR 0044)
+
+    def poser_chez(self, membre, account, secret, meta=None, prete_a=()):
+        """Une ligne d'un AUTRE membre (`org:sub`), prêtée à `prete_a` (subs)."""
+        self.lignes[("member", membre, account)] = {
+            "secret": secret, "meta": {"scopes": SCOPE_FICHIERS, **(meta or {})},
+            "set_by": membre.partition(":")[2], "set_at": "2026-10-05T00:00:00Z"}
+        self.prets[(membre, account)] = [f"user:{s}" for s in prete_a]
+
+    def list_shared_with(self, scopes):
+        return [{"entity_type": et, "entity_id": eid, "connector": PORTEUR, "account": a,
+                 "meta": dict(l["meta"]), "secret_kind": "oauth", "set_by": l["set_by"],
+                 "set_at": l["set_at"]}
+                for (et, eid, a), l in sorted(self.lignes.items())
+                if set(self.prets.get((eid, a), ())) & set(scopes)]
+
+    def get_instance_sharing(self, entity_type, entity_id, connector, account=""):
+        assert connector == PORTEUR
+        return [], list(self.prets.get((entity_id, account), []))
+
+    def set_instance_sharing(self, entity_type, entity_id, connector, account="", *,
+                             share_down=None, share_side=None):
+        assert connector == PORTEUR
+        if (entity_type, entity_id, account) not in self.lignes:
+            return False
+        self.prets[(entity_id, account)] = list(share_side or [])
+        return True
 
     def poser(self, account, secret, meta=None):
         self.lignes[("member", MEMBRE, account)] = {
@@ -171,6 +198,9 @@ def env(monkeypatch):
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)
     monkeypatch.setattr(credentials_store, "list_accounts", coffre.list_accounts)
     monkeypatch.setattr(credentials_store, "update_meta", coffre.update_meta)
+    monkeypatch.setattr(credentials_store, "list_shared_with", coffre.list_shared_with)
+    monkeypatch.setattr(credentials_store, "get_instance_sharing", coffre.get_instance_sharing)
+    monkeypatch.setattr(credentials_store, "set_instance_sharing", coffre.set_instance_sharing)
     monkeypatch.setattr(db, "member_instance_suspended", lambda *a, **k: False)
     monkeypatch.setattr(db, "insert_tool_call", lambda *a, **k: None)
     # La mesure à côté de la résolution (L7) lit la base : hors sujet ici.
@@ -861,3 +891,116 @@ def test_la_fiche_dit_la_regle_des_comptes_par_connexion():
         sections = providers.REGISTRY[carte].doc_sections
         multi = next(s for s in sections if "multiple" in s.title)
         assert "_account" in multi.body_md and "principal" not in multi.body_md
+
+
+
+# ── Le compte PRÊTÉ par une collègue (`oto_instance op=lend`, ADR 0044) ─────────────
+#
+# Mesuré en prod : le prêt était enregistré (share_side du porteur `microsoft`), mais
+# rien côté emprunteuse ne le voyait — ni ses identités, ni `microsoft_accounts`, ni la
+# résolution d'un outil sans `_instance=` explicite.
+
+PRETEUSE = "preteuse"
+EMPRUNTEUSE = "emprunteuse"
+CHEZ_PRETEUSE = f"{ORG}:{PRETEUSE}"
+
+
+@pytest.fixture
+def pret(env, monkeypatch):
+    from oto_mcp import access, account_suspension, db
+
+    for indice in ("_revoked_hint", "_reachable_hint"):
+        monkeypatch.setattr(access, indice, lambda *a, **k: "")
+    monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
+    monkeypatch.setattr(db, "emails_by_subs",
+                        lambda subs: {PRETEUSE: "preteuse@contoso.example"})
+    # Entra rend au renouvellement ce que le compte a consenti : le courrier seulement.
+    env.coeur.auth.refresh.side_effect = (
+        lambda cid, cs, rt, **kw: _grant("AT:" + rt, rt, scope=SCOPE_COURRIER))
+    return env
+
+
+def test_un_pret_deja_enregistre_sert_l_emprunteuse_sur_outlook(pret):
+    """La forme exacte du prêt en base (share_side `user:<sub>` sur la ligne du porteur,
+    posé avant ce correctif) : visible et utilisable sans le refaire."""
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    # Le service que le compte n'a pas autorisé reste refusé en nommant la carte.
+    with pytest.raises(McpError):
+        pret.auth.access_token_for(EMPRUNTEUSE, "sharepoint")
+    # Personne d'autre : le prêt est nominatif.
+    with pytest.raises(McpError):
+        pret.auth.access_token_for("quelqu-un-d-autre", "outlook")
+
+
+def test_le_compte_prete_apparait_marque_et_relie_la_carte(pret, monkeypatch):
+    from fastmcp import FastMCP
+
+    from oto_mcp import access, connectors
+    from oto_mcp.connectors import identities
+    from oto_mcp.tools import microsoft as outils
+
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER, "is_default": True},
+                           prete_a=[EMPRUNTEUSE])
+    (ident,) = identities.list_identities(EMPRUNTEUSE, "outlook")
+    assert ident["id"] == "jane@contoso.example"
+    assert ident["granted"] is True and ident["is_default"] is False
+    assert ident["owner"] == {"sub": PRETEUSE, "email": "preteuse@contoso.example",
+                              "org": ORG}
+    assert connectors.link.state("outlook", EMPRUNTEUSE).linked is True
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: EMPRUNTEUSE)
+    m = FastMCP("t")
+    outils.register(m)
+    (compte,) = asyncio.run(m.get_tool("microsoft_accounts")).fn()["accounts"]
+    assert compte["account"] == "jane@contoso.example" and compte["lent_by"] == PRETEUSE
+    assert compte["is_default"] is False and compte["services"] == ["outlook"]
+
+
+def test_ses_propres_comptes_d_abord_le_pret_par_son_nom(pret):
+    pret.coffre.lignes[("member", f"{ORG}:{EMPRUNTEUSE}", "moi@fabrikam.example")] = {
+        "secret": "RT-MOI", "meta": {"scopes": SCOPE_COURRIER}, "set_by": EMPRUNTEUSE,
+        "set_at": "2026-10-05T00:00:00Z"}
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-MOI"
+    assert pret.sous_compte("jane@contoso.example")(
+        pret.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+
+
+def test_deux_comptes_pretes_sans_nom_refus_qui_les_nomme(pret):
+    for compte in ("jane@contoso.example", "john@fabrikam.example"):
+        pret.coffre.poser_chez(CHEZ_PRETEUSE, compte, f"RT-{compte}",
+                               {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    with pytest.raises(McpError) as e:
+        pret.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    assert "jane@contoso.example" in str(e.value) and "john@fabrikam.example" in str(e.value)
+    pret.coeur.auth.refresh.assert_not_called()
+
+
+def test_un_pret_repris_ne_sert_plus(pret):
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    pret.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = []
+    with pytest.raises(McpError):
+        pret.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    assert pret.auth.accounts_for(EMPRUNTEUSE) == []
+
+
+def test_bout_en_bout_preter_outlook_puis_l_emprunteuse_l_emploie(pret, monkeypatch):
+    """`oto_instance op=lend connector=outlook to=<sub>` SANS `account` (le geste mesuré
+    en prod) prête le compte du porteur ; l'outil Outlook de l'emprunteuse le trouve."""
+    import types as _t
+
+    from oto_mcp import db
+    from oto_mcp.capabilities.connectors import sharing
+
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER})
+    monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
+    out = sharing._lend_instance(_t.SimpleNamespace(sub=PRETEUSE),
+                                 sharing.LendInstanceInput(connector="outlook", to=EMPRUNTEUSE))
+    assert (out["connector"], out["account"], out["lent_to"]) == (
+        "microsoft", "jane@contoso.example", [EMPRUNTEUSE])
+    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-JANE"

@@ -19,7 +19,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from .. import deprecations
-from . import journal_calls
+from . import journal_calls, journal_jour
 from ._conn import _connect
 from .index_releve import PREDICAT_OUVERTURE
 from .lecture_bornee import lecture_d_agregat
@@ -1564,25 +1564,39 @@ def billable_usage_by_tool_for_org(
       relevé plusieurs fois compte une fois ici ; 0 pour un outil sans job.
 
     Rend `{since_effectif, until_effectif, tools: [{tool, key_mode, calls, quantity,
-    jobs}]}`, trié par outil puis mode de clé."""
-    with _agregat("relevé par outil d'une org") as conn:
+    jobs}]}`, trié par outil puis mode de clé.
+
+    **Lu sur les totaux par jour** (oto-backend#1147) : les jours entiers de la fenêtre
+    que le registre porte, plus le journal direct pour le reste (les bouts de jour aux
+    bornes, la veille avant la maintenance, le jour courant) — `journal_jour.source`.
+    Les jobs distincts se comptent sur l'UNION des clés des jours et du direct. Même
+    réponse qu'au journal seul (`tests/db/test_journal_jour_lecteurs.py`) ; un jour
+    clos manquant au registre lève `journal_jour.AgregatIncomplet`."""
+    objet = "relevé par outil d'une org"
+    with _agregat(objet) as conn:
         since, until = _fenetre_du_releve(conn, since, until)
-        clauses, params = _audit_window_clauses(org_id, since, until)
-        clauses.append("l.ok = TRUE")
-        if tools:
-            clauses.append("l.tool = ANY(%s)")
-            params.append(list(tools))
+        fenetre = {"depuis": since, "jusqu_a": until, "haute_incluse": True}
+        src, params = journal_jour.source(
+            conn, objet, kinds=("mcp",), mesures=("appels", "quantite"),
+            filtres={"org_id": int(org_id), "ok": True,
+                     "tools": list(tools) if tools else None}, **fenetre)
+        jobs, pj = journal_jour.source_jobs(
+            conn, objet, filtres={"org_id": int(org_id),
+                                  "tools": list(tools) if tools else None}, **fenetre)
         rows = conn.execute(
             f"""
-            SELECT l.tool, l.key_mode, count(*) AS calls,
-                   sum(COALESCE(l.quantity, 1)) AS quantity,
-                   count(DISTINCT {_BILLABLE_JOB_ID_SQL}) AS jobs
-              FROM tool_calls l
-             WHERE {' AND '.join(clauses)}
-             GROUP BY l.tool, l.key_mode
-             ORDER BY l.tool, l.key_mode NULLS LAST
+            WITH s AS ({src}),
+                 j AS ({jobs}),
+                 g AS (SELECT tool, key_mode, sum(appels)::bigint AS calls,
+                              sum(quantite)::bigint AS quantity
+                         FROM s GROUP BY tool, key_mode),
+                 nj AS (SELECT tool, key_mode, count(*) AS jobs FROM j GROUP BY tool, key_mode)
+            SELECT g.tool, g.key_mode, g.calls, g.quantity, COALESCE(nj.jobs, 0) AS jobs
+              FROM g LEFT JOIN nj ON nj.tool = g.tool
+                                 AND nj.key_mode IS NOT DISTINCT FROM g.key_mode
+             ORDER BY g.tool, g.key_mode NULLS LAST
             """,
-            tuple(params),
+            {**params, **pj},
         ).fetchall()
     return {"since_effectif": since, "until_effectif": until,
             "tools": [{"tool": r["tool"], "key_mode": r["key_mode"],
@@ -1725,80 +1739,86 @@ def tool_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
     moyennes justes sur un échantillon partiel, et un `total_chars` qui sous-déclare
     la période. On ne réécrit pas un journal ; on l'étiquette."""
     since_days = max(1, min(int(since_days), 365))
-
-    def _where(prefix: str = "") -> tuple[str, list]:
-        clauses = [f"{prefix}kind = 'mcp'",
-                   f"{prefix}created_at >= NOW() - make_interval(days => %s)"]
-        params: list = [since_days]
-        if org_id is not None:
-            clauses.append(f"{prefix}org_id = %s"); params.append(org_id)
-        if sub is not None:
-            clauses.append(f"{prefix}sub = %s"); params.append(sub)
-        return " AND ".join(clauses), params
-
-    w, wp = _where("l.")
-    # UNE passe sur le journal (oto-backend#1145) : la fenêtre est lue une fois, dans
-    # un CTE MATÉRIALISÉ réduit aux colonnes des agrégats, et les cinq ventilations se
-    # calculent sur lui. Avant, cinq requêtes relisaient chacune la même fenêtre dans
-    # le tas — `args` compris, la colonne la plus lourde — et une fenêtre de 365 jours
-    # a tenu une connexion jusqu'à 134 s en production.
-    with _agregat("agrégats d'appels") as conn:
+    # **Lu sur les totaux par jour** (oto-backend#1147) : la fenêtre glissante se lit sur
+    # les jours consolidés qu'elle couvre en entier, et au journal direct pour le reste
+    # (le bout du premier jour, la veille avant la maintenance, le jour courant) —
+    # `journal_jour.source`, qui lève `AgregatIncomplet` plutôt que de lire au journal
+    # un jour clos que le registre n'a pas. Chaque ventilation se recalcule sur ces
+    # lignes : les sommes s'additionnent, `sub` est une dimension (comptes distincts
+    # exacts), et les p95 se recalculent sur les VALEURS gardées (`durees`, `tailles`) —
+    # la même réponse qu'au journal seul (`tests/db/test_journal_jour_lecteurs.py`).
+    objet = "agrégats d'appels"
+    with _agregat(objet) as conn:
+        src, params = journal_jour.source(
+            conn, objet, kinds=("mcp",),
+            mesures=("appels", "duree_n", "duree_somme", "durees", "taille_n",
+                     "taille_somme", "tailles"),
+            filtres={"org_id": org_id, "sub": sub}, jours=since_days)
         agregats = conn.execute(
             f"""
-            WITH f AS MATERIALIZED (
-                SELECT l.tool, l.ok, l.sub, l.duration_ms, l.result_size,
-                       l.args->'{journal_calls.ARGS_CLIENT_KEY}'->>'name' AS client_name,
-                       l.created_at::date AS jour
-                  FROM tool_calls l WHERE {w}
-            )
+            WITH f AS MATERIALIZED ({src}),
+                 pd AS (SELECT f.tool, percentile_cont(0.95) WITHIN GROUP (ORDER BY v) AS p
+                          FROM f, unnest(f.durees) AS u(v) GROUP BY f.tool),
+                 pt AS (SELECT f.tool, percentile_cont(0.95) WITHIN GROUP (ORDER BY v) AS p
+                          FROM f, unnest(f.tailles) AS u(v) GROUP BY f.tool)
             SELECT
               (SELECT json_build_object(
-                          'total', COUNT(*),
-                          'errors', COUNT(*) FILTER (WHERE NOT ok),
+                          'total', COALESCE(SUM(appels), 0)::bigint,
+                          'errors', COALESCE(SUM(appels) FILTER (WHERE NOT ok), 0)::bigint,
                           'users', COUNT(DISTINCT sub),
-                          'served_chars', COALESCE(SUM(result_size), 0),
-                          'sized_calls', COUNT(result_size),
-                          'emitter_named', COUNT(client_name))
+                          'served_chars', COALESCE(SUM(taille_somme), 0)::bigint,
+                          'sized_calls', COALESCE(SUM(taille_n), 0)::bigint,
+                          'emitter_named', COALESCE(SUM(appels) FILTER (
+                                               WHERE client_name IS NOT NULL), 0)::bigint)
                  FROM f) AS totals,
               (SELECT COALESCE(json_agg(t ORDER BY t.calls DESC), '[]'::json) FROM (
-                  SELECT tool AS tool_name,
-                         COUNT(*) AS calls,
-                         COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                         ROUND(AVG(duration_ms))::int AS avg_ms,
-                         ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms,
+                  SELECT g.tool AS tool_name,
+                         g.calls,
+                         g.errors,
+                         ROUND(g.duree_somme::numeric / NULLIF(g.duree_n, 0))::int AS avg_ms,
+                         ROUND(pd.p)::int AS p95_ms,
                          -- #340 : ce que l'outil coûte à la FENÊTRE de l'agent, en
                          -- caractères de texte servis — la durée ne l'a jamais dit.
                          -- `total_chars` est le chiffre qui CLASSE : un outil appelé 500
                          -- fois à 2 000 caractères pèse plus qu'un appelé deux fois à
                          -- 200 000.
-                         COALESCE(SUM(result_size), 0) AS total_chars,
-                         ROUND(AVG(result_size))::int AS avg_chars,
-                         ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY result_size))::int AS p95_chars,
+                         g.taille_somme AS total_chars,
+                         ROUND(g.taille_somme::numeric / NULLIF(g.taille_n, 0))::int AS avg_chars,
+                         ROUND(pt.p)::int AS p95_chars,
                          -- ⚠️ L'étiquette, sans laquelle les trois précédents se lisent
                          -- faux : ils ne portent QUE sur les appels mesurés — ni les
                          -- échecs, ni les lignes antérieures à la colonne. Sur un outil
                          -- où `sized` est loin sous `calls`, la moyenne est exacte et ne
                          -- dit rien de la période.
-                         COUNT(result_size) AS sized
-                    FROM f GROUP BY tool ORDER BY calls DESC LIMIT 100) t) AS by_tool,
+                         g.taille_n AS sized
+                    FROM (SELECT tool, SUM(appels)::bigint AS calls,
+                                 COALESCE(SUM(appels) FILTER (WHERE NOT ok), 0)::bigint AS errors,
+                                 SUM(duree_n)::bigint AS duree_n,
+                                 SUM(duree_somme)::bigint AS duree_somme,
+                                 SUM(taille_n)::bigint AS taille_n,
+                                 SUM(taille_somme)::bigint AS taille_somme
+                            FROM f GROUP BY tool) g
+                    LEFT JOIN pd ON pd.tool = g.tool
+                    LEFT JOIN pt ON pt.tool = g.tool
+                   ORDER BY g.calls DESC LIMIT 100) t) AS by_tool,
               (SELECT COALESCE(json_agg(t ORDER BY t.calls DESC), '[]'::json) FROM (
                   SELECT f.sub, u.email, u.name,
-                         COUNT(*) AS calls,
-                         COUNT(*) FILTER (WHERE NOT f.ok) AS errors
+                         SUM(f.appels)::bigint AS calls,
+                         COALESCE(SUM(f.appels) FILTER (WHERE NOT f.ok), 0)::bigint AS errors
                     FROM f LEFT JOIN users u ON u.sub = f.sub
                    GROUP BY f.sub, u.email, u.name ORDER BY calls DESC LIMIT 100) t) AS by_user,
               -- oto#187 — les ÉMETTEURS déclarés de la fenêtre (logiciel client), du
               -- plus actif au moins actif ; `NULL` = ligne sans émetteur (antérieure).
               (SELECT COALESCE(json_agg(t ORDER BY t.calls DESC), '[]'::json) FROM (
-                  SELECT client_name, COUNT(*) AS calls
+                  SELECT client_name, SUM(appels)::bigint AS calls
                     FROM f GROUP BY 1 ORDER BY calls DESC LIMIT 50) t) AS by_emitter,
               (SELECT COALESCE(json_agg(t ORDER BY t.day), '[]'::json) FROM (
                   SELECT to_char(jour, 'YYYY-MM-DD') AS day,
-                         COUNT(*) AS calls,
-                         COUNT(*) FILTER (WHERE NOT ok) AS errors
+                         SUM(appels)::bigint AS calls,
+                         COALESCE(SUM(appels) FILTER (WHERE NOT ok), 0)::bigint AS errors
                     FROM f GROUP BY jour) t) AS by_day
             """,
-            tuple(wp),
+            params,
         ).fetchone()
     totals = agregats["totals"]
     by_tool, by_user = agregats["by_tool"], agregats["by_user"]
@@ -2061,23 +2081,26 @@ def connector_failure_stats(since_days: int = 7, *, org_id: Optional[int] = None
     `org_id` = les échecs subis SOUS cette org (lentille org_admin : « quel connecteur
     bloque MES membres »). Sans lui : plateforme-wide."""
     since_days = max(1, min(int(since_days), 365))
-    org_clause = " AND l.org_id = %s" if org_id is not None else ""
-    params: list[Any] = [since_days] + ([int(org_id)] if org_id is not None else [])
-    with _agregat("échecs de connecteurs") as conn:
+    # Lu sur les totaux par jour (oto-backend#1147), `kind='connector'` : `sub` y est une
+    # dimension, le nombre de comptes touchés reste un DISTINCT exact.
+    objet = "échecs de connecteurs"
+    with _agregat(objet) as conn:
+        src, params = journal_jour.source(
+            conn, objet, kinds=("connector",), mesures=("appels", "dernier_at"),
+            filtres={"org_id": int(org_id) if org_id is not None else None},
+            jours=since_days)
         by_provider = conn.execute(
             f"""
-            SELECT l.tool AS provider,
-                   COUNT(*) AS failures,
-                   COUNT(DISTINCT l.sub) AS users_affected,
-                   MAX(l.created_at) AS last_at
-            FROM tool_calls l
-            WHERE l.kind = 'connector'
-              AND l.created_at >= NOW() - make_interval(days => %s){org_clause}
-            GROUP BY l.tool
+            SELECT f.tool AS provider,
+                   SUM(f.appels)::bigint AS failures,
+                   COUNT(DISTINCT f.sub) AS users_affected,
+                   MAX(f.dernier_at) AS last_at
+            FROM ({src}) f
+            GROUP BY f.tool
             ORDER BY failures DESC
             LIMIT 100
             """,
-            tuple(params),
+            params,
         ).fetchall()
     return {
         "since_days": since_days,
@@ -2226,18 +2249,25 @@ def org_usage_by_person(org_id: int, since, until) -> list[dict]:
     ceux passés sur une clé de plateforme (`key_mode = 'platform'`) — la lecture du
     service commerce (`service.org.usage`). Un échec n'a rien consommé ; une personne
     sans appel n'y figure pas."""
+    objet = "consommation par personne d'une org"
     with _connect() as conn:
+        # Lu sur les totaux par jour (oto-backend#1147) — consommation FACTURÉE : même
+        # réponse qu'au journal seul, bornes `[since, until)` comprises
+        # (`tests/db/test_journal_jour_lecteurs.py`).
+        src, params = journal_jour.source(
+            conn, objet, kinds=("mcp",), mesures=("appels",),
+            filtres={"org_id": int(org_id), "ok": True, "sub_non_nul": True},
+            depuis=since, jusqu_a=until, haute_incluse=False)
         return [dict(r) for r in conn.execute(
-            """
-            SELECT c.sub, COUNT(*) AS calls,
-                   COUNT(*) FILTER (WHERE c.key_mode = 'platform') AS platform_calls
-            FROM tool_calls c
-            WHERE c.org_id = %s AND c.kind = 'mcp' AND c.ok AND c.sub IS NOT NULL
-              AND c.created_at >= %s AND c.created_at < %s
+            f"""
+            SELECT c.sub, SUM(c.appels)::bigint AS calls,
+                   COALESCE(SUM(c.appels) FILTER (WHERE c.key_mode = 'platform'), 0)::bigint
+                       AS platform_calls
+            FROM ({src}) c
             GROUP BY c.sub
             ORDER BY calls DESC, c.sub
             """,
-            (int(org_id), since, until),
+            params,
         ).fetchall()]
 
 
@@ -2258,36 +2288,40 @@ def org_adoption(org_id: int, active_window_days: int = 30) -> dict:
     (`truncated` le dit) ; les compteurs, eux, couvrent toute la population.
     """
     days = max(1, min(int(active_window_days), 365))
-    with _agregat("adoption d'une org") as conn:
+    # Lu sur les totaux par jour (oto-backend#1147) : deux sources sous l'org — la
+    # fenêtre (appels, échecs, échecs de connecteur) et tout l'historique consolidé plus
+    # le direct (le dernier appel, hors fenêtre).
+    objet = "adoption d'une org"
+    with _agregat(objet) as conn:
+        fen, pf = journal_jour.source(
+            conn, objet, prefixe="fen", kinds=("mcp", "connector"), mesures=("appels",),
+            filtres={"org_id": int(org_id)}, jours=days)
+        tout, pt = journal_jour.source(
+            conn, objet, prefixe="tout", kinds=("mcp",), mesures=("dernier_at",),
+            filtres={"org_id": int(org_id)})
         rows = [dict(r) for r in conn.execute(
-            """
+            f"""
+            WITH fen AS ({fen}),
+                 a AS (SELECT sub,
+                              SUM(appels) FILTER (WHERE kind = 'mcp') AS n_calls,
+                              SUM(appels) FILTER (WHERE kind = 'mcp' AND NOT ok) AS n_errors,
+                              SUM(appels) FILTER (WHERE kind = 'connector') AS n_failures
+                         FROM fen GROUP BY sub),
+                 d AS (SELECT sub, MAX(dernier_at) AS last_call_at
+                         FROM ({tout}) t GROUP BY sub)
             SELECT m.sub, u.email, u.name, m.org_role,
-                   COALESCE(a.n_calls, 0)    AS calls,
-                   COALESCE(a.n_errors, 0)   AS errors,
-                   a.last_call_at,
-                   COALESCE(f.n_failures, 0) AS connector_failures
+                   COALESCE(a.n_calls, 0)::bigint    AS calls,
+                   COALESCE(a.n_errors, 0)::bigint   AS errors,
+                   d.last_call_at,
+                   COALESCE(a.n_failures, 0)::bigint AS connector_failures
             FROM org_members m
             LEFT JOIN users u ON u.sub = m.sub
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) FILTER (
-                           WHERE c.created_at >= NOW() - make_interval(days => %s)) AS n_calls,
-                       COUNT(*) FILTER (
-                           WHERE c.created_at >= NOW() - make_interval(days => %s)
-                             AND NOT c.ok) AS n_errors,
-                       MAX(c.created_at) AS last_call_at
-                FROM tool_calls c
-                WHERE c.kind = 'mcp' AND c.sub = m.sub AND c.org_id = m.org_id
-            ) a ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS n_failures
-                FROM tool_calls c
-                WHERE c.kind = 'connector' AND c.sub = m.sub AND c.org_id = m.org_id
-                  AND c.created_at >= NOW() - make_interval(days => %s)
-            ) f ON TRUE
-            WHERE m.org_id = %s
+            LEFT JOIN a ON a.sub = m.sub
+            LEFT JOIN d ON d.sub = m.sub
+            WHERE m.org_id = %(org_id)s
             ORDER BY calls DESC, u.email
             """,
-            (days, days, days, int(org_id)),
+            {**pf, **pt, "org_id": int(org_id)},
         ).fetchall()]
     active = sum(1 for r in rows if int(r["calls"] or 0) > 0)
     return {

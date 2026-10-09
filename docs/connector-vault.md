@@ -462,6 +462,16 @@ une fois pour toutes dans `access.cascade.walk_cascade` ; la dérivation l'**inv
 | plateforme | les bénéficiaires | `auth_modes ∋ platform` : sinon **personne** |
 | *tous* | + `share_side` (prêts nominatifs, ADR 0044) — une **extension**, jamais une allowlist ; peut viser hors de l'org | — |
 
+**Prêter une instance à une ÉQUIPE** (`oto_instance op=lend to_group=<id>`, `group:<id>` dans
+`share_side`) : le prêt se lit comme une clé de l'équipe. `group_store.lent_instances` le
+verse au palier équipe — `has/get_group_secret`, `list_group_accounts` (sélection du
+compte, `_account`), `group_secret_map` (état servi) —, donc ses membres le résolvent
+**par nom de compte, sans épinglage**, là où un prêt à une personne s'épingle
+(`_instance=`). Il reste au prêteur : même org que l'équipe seulement (un prêt à une
+équipe ne traverse pas d'org), ignoré dès que le prêteur quitte l'org, se met en pause ou
+suspend l'instance ; un nom de compte que l'équipe détient déjà masque le prêt ; l'équipe
+ne le renomme pas et n'en fait pas son défaut (`connectors.identities._refuse_lent`).
+
 Le palier plateforme est le seul dont l'audience n'est pas structurelle. Trois issues,
 dans l'ordre où la résolution les prend : la **chaîne accorde** (0053, L5) ⟹ les
 bénéficiaires des arêtes vivantes ; la **chaîne refuse** (des arêtes existent, toutes

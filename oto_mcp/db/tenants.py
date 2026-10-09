@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from .. import tenancy
 from ._conn import _connect
+from . import journal_jour
 from .lecture_bornee import lecture_d_agregat
 
 # Bornes des listes servies par la fiche d'un tenant : une fiche rend son INDEX,
@@ -280,8 +281,10 @@ _SUB_TENANT_SQL = """
 _TENANT_PREF_SQL = "SELECT id, slug || ':' AS p FROM tenants WHERE slug <> %(primary)s"
 
 
-def _tenant_counts_sql(where_tenant: str = "") -> str:
-    """Les compteurs d'un tenant, une passe. `where_tenant` borne à un tenant."""
+def _tenant_counts_sql(appels_sql: str, where_tenant: str = "") -> str:
+    """Les compteurs d'un tenant, une passe. `appels_sql` : la source des appels de la
+    fenêtre (`journal_jour.source`, totaux par jour + journal direct, #1147).
+    `where_tenant` borne à un tenant."""
     return f"""
     WITH pref AS ({_TENANT_PREF_SQL}),
          sub_tenant AS ({_SUB_TENANT_SQL}),
@@ -299,12 +302,10 @@ def _tenant_counts_sql(where_tenant: str = "") -> str:
              -- kind='mcp' : le trafic d'OUTILS, iso avec le reste du monitoring
              -- (`rest`/`protocol`/`connector` mesurent autre chose).
              SELECT st.tenant_id,
-                    COUNT(*) AS appels,
+                    SUM(c.appels)::bigint AS appels,
                     COUNT(DISTINCT c.sub) AS comptes_actifs,
-                    MAX(c.created_at) AS last_seen_at
-               FROM tool_calls c JOIN sub_tenant st ON st.sub = c.sub
-              WHERE c.kind = 'mcp'
-                AND c.created_at >= NOW() - make_interval(days => %(days)s)
+                    MAX(c.dernier_at) AS last_seen_at
+               FROM ({appels_sql}) c JOIN sub_tenant st ON st.sub = c.sub
               GROUP BY st.tenant_id
          ),
          drift AS (
@@ -471,9 +472,13 @@ def list_tenants_overview(*, days: int = 30) -> list[dict]:
     Une ligne par tenant DÉCLARÉ, y compris ceux à zéro compte : un tenant provisionné
     dont personne ne s'est encore connecté est ce qu'on veut le plus voir.
     """
-    with lecture_d_agregat("vue des tenants") as conn:
-        rows = conn.execute(_tenant_counts_sql(),
-                            {"primary": tenancy.primary_slug(), "days": int(days)}).fetchall()
+    objet = "vue des tenants"
+    with lecture_d_agregat(objet) as conn:
+        appels, params = journal_jour.source(
+            conn, objet, kinds=("mcp",), mesures=("appels", "dernier_at"),
+            jours=int(days))
+        rows = conn.execute(_tenant_counts_sql(appels),
+                            {**params, "primary": tenancy.primary_slug()}).fetchall()
     return [_shape_tenant(r) for r in rows]
 
 
@@ -558,17 +563,19 @@ def _overview_par_comptes(slug: str, *, days: int = 30, primaire: bool) -> dict 
         params["subs"] = [c["sub"] for c in comptes]
         # Tiers : les appels de SES subs. Primaire : la fenêtre, groupée par sub — les
         # subs d'un autre tenant ne trouvent pas de compte au rapprochement ci-dessous.
-        par_sub_sql = "" if primaire else "sub = ANY(%(subs)s) AND "
+        # Lu sur les totaux par jour (#1147) : la fenêtre glissante, jours consolidés et
+        # journal direct pour le reste ; `sub` est une dimension.
         par_sub: dict = {}
         if params["subs"]:
+            appels, pa = journal_jour.source(
+                conn, objet, kinds=("mcp",), mesures=("appels", "dernier_at"),
+                filtres={"subs": None if primaire else params["subs"]}, jours=int(days))
             par_sub = {r["sub"]: r for r in conn.execute(
                 f"""
-                SELECT sub, COUNT(*) AS appels, MAX(created_at) AS last_seen_at
-                  FROM tool_calls
-                 WHERE {par_sub_sql}kind = 'mcp'
-                   AND created_at >= NOW() - make_interval(days => %(days)s)
+                SELECT sub, SUM(appels)::bigint AS appels, MAX(dernier_at) AS last_seen_at
+                  FROM ({appels}) c
                  GROUP BY sub
-                """, params).fetchall()}
+                """, pa).fetchall()}
         for c in comptes:
             a = par_sub.get(c["sub"])
             c["appels"] = int(a["appels"]) if a else 0

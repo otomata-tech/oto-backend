@@ -154,6 +154,29 @@ def test_parse_import_turns_bad_csv_into_a_400():
     assert (ei.value.status, ei.value.code) == (400, "bad_csv")
 
 
+def test_the_cell_limit_holds_even_when_the_global_csv_limit_was_raised():
+    """`csv.field_size_limit` est GLOBAL au processus : un code qui la relève (un script
+    d'archive, le 09/10/2026, #1111) ne doit pas désarmer ce refus."""
+    import csv
+    avant = csv.field_size_limit(10_000_000)
+    try:
+        for lire in (lambda t: ct.read_rows(t, ","), ct.detect_separator):
+            with pytest.raises(ct.CsvError) as ei:
+                lire(_enorme_cellule())
+            assert ei.value.code == "bad_csv"
+        with pytest.raises(ut.UploadError) as ei:
+            ut.parse_import(_enorme_cellule().encode(), "csv", SCHEMA)
+        assert (ei.value.status, ei.value.code) == (400, "bad_csv")
+    finally:
+        csv.field_size_limit(avant)
+
+
+def test_a_cell_at_the_limit_is_read():
+    texte = "email,note\nx@y," + "z" * ct.TAILLE_MAX_CELLULE + "\n"
+    _, rows = ct.read_rows(texte, ",")
+    assert len(rows[0]["note"]) == ct.TAILLE_MAX_CELLULE
+
+
 def test_duplicate_headers_refused_by_name():
     """DictReader garde la dernière : une colonne disparaîtrait sans un mot."""
     with pytest.raises(ct.CsvError) as ei:

@@ -76,6 +76,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.usage.SIGNAL_OCCURRENCES,  # occurrences rattachées à un signal d'usage en attente
     schema.jev.JEV_JOBS,             # `jev_rows` en tâche de fond : la file des travaux
     schema.orgs.ORG_SERVICE_ACCOUNTS,  # le compte de service d'une org, porteur de ses clés
+    schema.usage.JOURNAL_JOUR,       # totaux du journal par jour UTC (#1147)
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

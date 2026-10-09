@@ -51,6 +51,10 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.169.0 = luma : client Luma (lu.ma, contribution Tulina, connectors#125) ; une
+    # redirection est refusée, la clé ne part pas vers un autre hôte. Aucun extra.
+    # v1.168.1 = silae : en-tête `dossiers` posé sur tous les appels (vide hors dossier),
+    # exigé par la passerelle de l API (403 sinon). Aucun extra.
     # v1.168.0 = silae : routes, corps et périodes conformes à l API (OpenAPI Partenaires
     # 2026-09-28) ; lecture des bulletins détaillés, organismes, éditions et DSN ; jeton en
     # mémoire. Aucun extra.
@@ -384,7 +388,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.168.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.169.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

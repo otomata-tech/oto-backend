@@ -60,6 +60,7 @@ import os
 import re
 import secrets as _secrets
 from typing import Iterable, Optional
+from urllib.parse import unquote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +281,46 @@ def requete_secrete(chemin: str) -> bool:
     return (chemin.rstrip("/") or "/") in routes_a_requete_secrete()
 
 
+# Les CLÉS de query dont la valeur ne s'écrit jamais au journal — d'accès (requêtes
+# ENTRANTES, `uvicorn.access`) comme des clients HTTP (requêtes SORTANTES, `httpx`…) —
+# sur TOUTE route : le retour d'un fournisseur OAuth (`code`, `state`, `session_state`)
+# arrive en query sur la route de chaque connecteur et sur celle du relais ; une API
+# tierce prend sa clé en query (`?key=`, `?api_key=`). Une clé est secrète
+# par son NOM, jamais par la route qui la reçoit — une route future est couverte
+# d'office. `error`/`error_description` restent lisibles : c'est le diagnostic.
+CLES_DE_REQUETE_SECRETES = frozenset({
+    "code", "state", "session_state", "id_token", "access_token", "refresh_token",
+    "client_secret", "token", "key", "apikey", "api_key", "access_key",
+})
+# … et toute clé dont le nom CONTIENT l'un de ces fragments (`api_token`, `password`,
+# `app_secret`…).
+_FRAGMENTS_DE_CLE_SECRETE = ("secret", "token", "password")
+MASQUE_DE_REQUETE = "***"
+
+
+def cle_de_requete_secrete(cle: str) -> bool:
+    """La valeur de la clé de query `cle` (brute, encodée ou non) est-elle un secret ?"""
+    nom = unquote_plus(cle).strip().lower()
+    return nom in CLES_DE_REQUETE_SECRETES or any(f in nom for f in _FRAGMENTS_DE_CLE_SECRETE)
+
+
+def requete_pour_journal_acces(requete: str) -> str:
+    """La query brute, chaque valeur d'une clé secrète remplacée par `***` ; l'ordre,
+    les clés et les autres valeurs sont recopiés tels quels."""
+    morceaux = requete.split("&")
+    for i, morceau in enumerate(morceaux):
+        cle, egal, _ = morceau.partition("=")
+        if egal and cle_de_requete_secrete(cle):
+            morceaux[i] = f"{cle}={MASQUE_DE_REQUETE}"
+    return "&".join(morceaux)
+
+
 def chemin_pour_journal_acces(cible: str) -> str:
     """La cible d'une requête (`chemin?requête`) telle que le journal d'accès l'écrit :
     chaque segment lié à un paramètre de route secret devient son masque, la query
-    d'une route qui reçoit un secret en query devient `[redacted]`, tout le reste est
-    recopié tel quel.
+    d'une route qui reçoit un secret en query devient `[redacted]`, la valeur de toute
+    clé de query secrète (`cle_de_requete_secrete`) devient `***` sur toute autre
+    route, tout le reste est recopié tel quel.
 
     Pas la réduction de `route_and_secrets` : le journal d'accès sert à lire UNE
     requête (quel tableau, quel numéro), pas à agréger — les identifiants y restent
@@ -294,6 +330,8 @@ def chemin_pour_journal_acces(cible: str) -> str:
     chemin, sep, requete = cible.partition("?")
     if sep and requete_secrete(chemin):
         requete = "[redacted]"
+    elif sep:
+        requete = requete_pour_journal_acces(requete)
     segments = chemin.split("/")
     secrets_a = _secret_indices(segments)
     if not secrets_a:
@@ -309,7 +347,9 @@ class MasqueCheminAcces(logging.Filter):
     `chemin_pour_journal_acces`. Sans lui, `/api/receivers/apollo/phones/<jeton>`,
     `/api/upload/<jeton>`, `/api/invitations/<jeton>`… s'écrivaient EN CLAIR dans
     journald (le journal d'accès d'uvicorn ne connaît pas la table des routes) —
-    la même fuite que #558, sur le canal que #558 n'avait pas vu.
+    la même fuite que #558, sur le canal que #558 n'avait pas vu. Et la query de
+    chaque retour OAuth (`/api/<fournisseur>/oauth/callback?code=…&state=…`,
+    `/oauth/callback` du relais) écrivait le code d'autorisation en clair.
 
     Une ligne qui n'a pas la forme d'uvicorn (`client, méthode, cible, version,
     statut`) passe inchangée : un filtre de journal ne lève jamais."""
@@ -321,6 +361,81 @@ class MasqueCheminAcces(logging.Filter):
             if masque != args[2]:
                 record.args = args[:2] + (masque,) + args[3:]
         return True
+
+
+# --------------------------------------------------------------------------- #
+# Les requêtes SORTANTES : la même règle de clés, sur les clients HTTP
+# --------------------------------------------------------------------------- #
+
+# Une query dans un texte libre : de `?` jusqu'au premier blanc, guillemet ou chevron.
+_REQUETE_DANS_UN_TEXTE = re.compile(r"\?([^\s\"'<>]+)")
+
+
+def masquer_requetes(texte: str) -> str:
+    """Chaque query de `texte` (une URL complète, une ligne de journal) passée par
+    `requete_pour_journal_acces` — la même règle que le journal d'accès."""
+    return _REQUETE_DANS_UN_TEXTE.sub(
+        lambda m: "?" + requete_pour_journal_acces(m.group(1)), texte)
+
+
+def _argument_masque(arg):
+    """`arg` tel que le journal l'écrit, sa query masquée ; inchangé (même objet) s'il
+    n'y a rien à masquer — un `%d` reçoit toujours son entier."""
+    if arg is None or isinstance(arg, (int, float, bytes)):
+        return arg
+    texte = arg if isinstance(arg, str) else str(arg)     # `httpx.URL`…
+    if "?" not in texte:
+        return arg
+    masque = masquer_requetes(texte)
+    return arg if masque == texte else masque
+
+
+class MasqueRequeteSortante(logging.Filter):
+    """Filtre des clients HTTP : la ligne `HTTP Request: POST https://…?key=… "HTTP/1.1
+    200 OK"` d'httpx (INFO) écrivait la clé d'API d'un connecteur EN CLAIR dans
+    journald. Masquer plutôt que remonter ces loggers en WARNING : la trace des appels
+    sortants reste, sans leurs secrets. Chaque argument (et le message sans argument,
+    forme d'httpcore) passe par `masquer_requetes` ; un filtre de journal ne lève jamais."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and args:
+            masques = tuple(_argument_masque(a) for a in args)
+            if any(m is not a for m, a in zip(masques, args)):
+                record.args = masques
+        elif not args and isinstance(record.msg, str) and "?" in record.msg:
+            record.msg = masquer_requetes(record.msg)
+        return True
+
+
+JOURNAL_ACCES = "uvicorn.access"
+# Les loggers qui écrivent l'URL d'une requête SORTANTE. Un filtre ne vaut que pour le
+# logger NOMMÉ (pas ses enfants) : chaque logger d'httpcore est donc nommé. httpx écrit
+# en INFO (servi en prod) ; urllib3 et httpcore en DEBUG seulement — couverts pareil,
+# pour le jour où le niveau descend.
+JOURNAUX_SORTANTS = ("httpx", "httpcore", "httpcore.connection", "httpcore.http11",
+                     "httpcore.http2", "httpcore.proxy", "httpcore.socks",
+                     "urllib3.connectionpool")
+
+
+def _poser(nom: str, classe: type) -> None:
+    journal = logging.getLogger(nom)
+    if not any(isinstance(f, classe) for f in journal.filters):
+        journal.addFilter(classe())
+
+
+def installer_masques_du_journal() -> None:
+    """Pose `MasqueCheminAcces` sur `uvicorn.access` et `MasqueRequeteSortante` sur
+    chaque logger de `JOURNAUX_SORTANTS` — une fois, même rappelé.
+
+    Appelé par `server.main` AVANT `uvicorn.run` : la configuration de journal
+    qu'uvicorn applique au démarrage (`dictConfig`, `disable_existing_loggers=False`)
+    remplace les handlers des loggers, pas leurs filtres — les filtres tiennent donc
+    quel que soit le lanceur, pourvu que le process passe par `server.main` (l'unité
+    systemd lance `oto-mcp` → `cli.main` → `server.main`)."""
+    _poser(JOURNAL_ACCES, MasqueCheminAcces)
+    for nom in JOURNAUX_SORTANTS:
+        _poser(nom, MasqueRequeteSortante)
 
 
 # --------------------------------------------------------------------------- #

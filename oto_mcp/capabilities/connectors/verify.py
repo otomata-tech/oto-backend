@@ -107,6 +107,11 @@ class VerifyResult(BaseModel):
     #
     # ⚠️ Absent = this connector does not expose it, NEVER "the identity has not changed".
     identity: Optional[dict] = None
+    # Per API family (HubSpot today, `coverage:"auth+scopes"`): `granted` | `missing` |
+    # `unknown`, plus the scope names to add. A missing family does NOT turn `ok`
+    # false — the key works for the rest (oto#69: a partial scope is not the
+    # connection's verdict); it is what an agent reads before a call that would 403.
+    scopes: Optional[dict] = None
 
 
 class MemberProviderStatus(BaseModel):
@@ -311,7 +316,7 @@ CAP_DOC = (
     "`auth` = the key authenticates, and NOTHING about credit or quota — an `ok:true` "
     "there does not mean the account can still work. `auth+quota` = it also checked "
     "there is something left to spend. `null` = this connector declares no probe at "
-    "all, which is not the same as 'nothing to check'. A preflight built on `ok` alone "
+    "all, which is not the same as 'nothing to check'. `auth+scopes` = it also read, per API family, which scopes the token holds (`scopes`; a missing family keeps `ok:true`). A preflight built on `ok` alone "
     "reports green on an exhausted account and the work fails mid-flight, after side "
     "effects."    "⚠️ `verdict` says WHY when it fails — `unauthorized` (replace the key or widen "
     "its scope; adding another one changes nothing), `no_quota` (the key is fine, the "

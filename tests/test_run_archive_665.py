@@ -119,13 +119,16 @@ def _script():
     return mod
 
 
-def test_linscription_au_registre_garde_la_premiere_date(conn):
+def test_une_inscription_ne_se_reecrit_jamais(conn):
+    """#1197 : la réécrire avec le compte d'une reprise effaçait la trace des lignes déjà
+    supprimées. La seconde inscription lève, la première reste entière."""
     arch = _script()
     arch._record_archive(conn, "2026-06", "journal/tool_calls/2026-06.csv.gz", 10)
     premiere = conn.execute("SELECT archived_at FROM journal_archives").fetchone()["archived_at"]
-    arch._record_archive(conn, "2026-06", "journal/tool_calls/2026-06.csv.gz", 3)
+    with pytest.raises(arch.ArchiveIncoherente, match="déjà inscrit"):
+        arch._record_archive(conn, "2026-06", "journal/tool_calls/2026-06.csv.gz", 3)
     row = conn.execute("SELECT archived_at, lignes FROM journal_archives").fetchone()
-    assert row["archived_at"] == premiere and row["lignes"] == 3
+    assert row["archived_at"] == premiere and row["lignes"] == 10
 
 
 class _ConnVerrou:
@@ -152,6 +155,8 @@ def test_main_inscrit_avant_de_supprimer_et_rien_sans_inscription(monkeypatch, i
     monkeypatch.setattr(arch.psycopg, "connect", lambda *a, **k: _ConnVerrou())
     monkeypatch.setattr(arch, "_s3_client", lambda: object())
     monkeypatch.setattr(arch, "_months_to_archive", lambda c, r: [("2026-06", 5)])
+    monkeypatch.setattr(arch, "_inscription", lambda c, m: None)
+    monkeypatch.setattr(arch, "_objet_present", lambda s, b, k: None)
     monkeypatch.setattr(arch, "_export_month", lambda c, s, b, m: f"k/{m}")
     monkeypatch.setattr(arch, "_verify_archive", lambda s, b, k, n: journal.append("relu"))
 
@@ -161,7 +166,7 @@ def test_main_inscrit_avant_de_supprimer_et_rien_sans_inscription(monkeypatch, i
         journal.append("inscrit")
 
     monkeypatch.setattr(arch, "_record_archive", _record)
-    monkeypatch.setattr(arch, "_delete_month", lambda c, m: journal.append("supprimé") or 5)
+    monkeypatch.setattr(arch, "_delete_month", lambda c, m, p: journal.append("supprimé") or 5)
     monkeypatch.setattr("sys.argv", ["archive_tool_calls.py"])
     if inscription_ok:
         assert arch.main() == 0

@@ -1032,15 +1032,17 @@ def main():
     transport = os.environ.get("MCP_TRANSPORT", "streamable_http")
 
     # Relais d'autorisation : un host déclaré sans secret de sceau est une configuration
-    # INCOMPLÈTE — refuser de démarrer en la nommant, avant d'avoir rien écrit. Et le code
-    # d'autorisation qui passe par son retour ne s'écrit pas en clair au journal d'accès.
+    # INCOMPLÈTE — refuser de démarrer en la nommant, avant d'avoir rien écrit.
     from .auth import relay as oauth_relay
     oauth_relay.verifier_configuration()
-    logging.getLogger("uvicorn.access").addFilter(oauth_relay.FiltreJournalAcces())
-    # Même règle pour les jetons portés DANS le chemin (`{token}`, `{code}` des routes
-    # servies) : leur masque, jamais leur valeur, dans le journal d'accès.
+    # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
+    # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
+    # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur
+    # toute route ; les clients HTTP (httpx, httpcore, urllib3) non plus pour les
+    # requêtes SORTANTES. Posé AVANT `uvicorn.run`, dont la configuration de journal
+    # garde les filtres.
     from . import journal_secrets
-    logging.getLogger("uvicorn.access").addFilter(journal_secrets.MasqueCheminAcces())
+    journal_secrets.installer_masques_du_journal()
 
     # Droits déclarés (ADR 0070 §7, #1066) : l'instance déclare la valeur de chaque droit
     # du catalogue pour qui n'en a aucun posé. Une clé sans défaut déclaré refuse le

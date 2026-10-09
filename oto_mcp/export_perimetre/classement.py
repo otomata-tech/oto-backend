@@ -250,6 +250,15 @@ CLASSEMENT: dict[str, Table] = {
                            "voyage à part, par tranches (`JOURNAL`)"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
+    # Les totaux par jour (#1147) sont DÉRIVÉS du journal : la cible les recalcule du
+    # sien (`scripts/rattraper_journal_jour.py`) une fois le journal versé — ses lecteurs
+    # refusent d'ici là une fenêtre qui couvre un journal non consolidé.
+    "journal_jours_consolides": instance("registre des jours du journal consolidés, "
+                                         "dérivé du journal de l'instance"),
+    "journal_totaux_jour": instance("totaux par jour du journal, dérivés du journal de "
+                                    "l'instance, qui les recalcule"),
+    "journal_jobs_jour": instance("jobs distincts par jour du journal, dérivés du "
+                                  "journal de l'instance, qui les recalcule"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),
     "usage_signals": possedee(_ORG_OU_COMPTE),
     "usage_signal_occurrences": indirecte(Via("usage_signals", ("signal_id",)),

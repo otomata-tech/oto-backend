@@ -268,3 +268,64 @@ CREATE TABLE IF NOT EXISTS usage_signal_occurrences (
 CREATE INDEX IF NOT EXISTS idx_usage_signal_occurrences_signal
     ON usage_signal_occurrences(signal_id, created_at DESC);
 """
+
+# Totaux du journal PAR JOUR UTC (oto-backend#1147) — fragment séparé : la révision
+# Alembic `0050_journal_totaux_jour` l'exécute tel quel (une seule écriture du DDL).
+JOURNAL_JOUR = """
+-- Les totaux du journal d'appels par JOUR UTC (oto-backend#1147). Les écrans de
+-- consommation et de monitoring lisent ces totaux, plus le journal brut : relire
+-- `tool_calls` (12 M lignes, `args` compris) à chaque vue d'une fenêtre de 30 ou 90
+-- jours a contribué à saturer la base partagée le 04/10/2026 (#1145).
+-- Trois tables, alimentées ENSEMBLE par `db/journal_jour.consolider_jour`, une
+-- transaction par jour (maintenance quotidienne pour J-1, rattrapage à la main pour
+-- l'historique) ; lues par `db/journal_jour.source`, qui joint les jours consolidés et
+-- le journal direct pour le reste de la fenêtre. Tables neuves, nées entières.
+--
+-- Le REGISTRE : un jour y figure = ses totaux sont COMPLETS. C'est lui, et non la
+-- présence de lignes de totaux, qui dit qu'un jour est consolidé — un jour sans aucun
+-- appel est consolidé et n'a aucune ligne de totaux.
+CREATE TABLE IF NOT EXISTS journal_jours_consolides (
+    jour DATE PRIMARY KEY,
+    lignes BIGINT NOT NULL,                    -- lignes du journal agrégées ce jour-là
+    consolide_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Les TOTAUX, une ligne par combinaison des dimensions que lisent les écrans. Les
+-- natures agrégées sont `mcp` et `connector` (`journal_jour.KINDS`) : REST, protocole
+-- et transport restent au journal. `durees` et `tailles` portent les VALEURS non
+-- nulles (4 octets par valeur) : un p95 se recalcule exactement sur leur union
+-- (`percentile_cont`), là où un histogramme à seaux l'aurait approché.
+CREATE TABLE IF NOT EXISTS journal_totaux_jour (
+    jour DATE NOT NULL REFERENCES journal_jours_consolides(jour) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    org_id BIGINT,
+    sub TEXT,
+    tool TEXT NOT NULL,
+    ok BOOLEAN NOT NULL,
+    key_mode TEXT,
+    client_name TEXT,
+    appels INTEGER NOT NULL,
+    quantite BIGINT NOT NULL,                  -- somme de COALESCE(quantity, 1)
+    duree_n INTEGER NOT NULL,
+    duree_somme BIGINT NOT NULL,
+    durees INTEGER[] NOT NULL,
+    taille_n INTEGER NOT NULL,
+    taille_somme BIGINT NOT NULL,
+    tailles INTEGER[] NOT NULL,
+    dernier_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_totaux_jour_jour ON journal_totaux_jour (jour);
+CREATE INDEX IF NOT EXISTS idx_journal_totaux_jour_org ON journal_totaux_jour (org_id, jour);
+CREATE INDEX IF NOT EXISTS idx_journal_totaux_jour_sub ON journal_totaux_jour (sub, jour);
+-- Les CLÉS DISTINCTES qu'un total ne peut pas porter : un nombre de jobs distincts ne
+-- s'additionne pas d'un jour à l'autre (un job relevé lundi et mardi compte une fois).
+-- Les jobs fournisseur relevés par les appels facturables (`kind='mcp'`, `ok`, sous une
+-- org), un par jour : le relevé compte les distincts sur l'union des jours.
+CREATE TABLE IF NOT EXISTS journal_jobs_jour (
+    jour DATE NOT NULL REFERENCES journal_jours_consolides(jour) ON DELETE CASCADE,
+    org_id BIGINT NOT NULL,
+    tool TEXT NOT NULL,
+    key_mode TEXT,
+    job_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_jobs_jour_org ON journal_jobs_jour (org_id, jour);
+"""

@@ -1,12 +1,15 @@
 [Unit]
-Description=Archivage mensuel du journal d'appels oto
+Description=Archivage du journal d'appels oto (passage quotidien)
 
 [Timer]
-# Le 3 du mois : le mois sortant est clos depuis deux jours, et le créneau est calme.
+# CHAQUE JOUR (#1197) : un passage sans mois éligible ne fait rien (une lecture indexée),
+# et un passage interrompu — délai de 3 h du service, crash, reboot — reprend le
+# lendemain au lieu d'attendre un mois avec une suppression à moitié faite. Un mois
+# devient éligible le jour où il sort entièrement de la rétention (fin du mois + 90 j).
 # Décalé de l'hygiène disque (04:17) pour ne pas se disputer le disque — l'export y
 # écrit un temporaire de plusieurs centaines de Mo.
-OnCalendar=*-*-03 04:45:00
-# Une box éteinte au créneau ne saute pas le mois.
+OnCalendar=*-*-* 04:45:00
+# Une box éteinte au créneau ne saute pas le passage.
 Persistent=true
 RandomizedDelaySec=15m
 

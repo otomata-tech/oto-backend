@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -290,20 +289,6 @@ def _cors() -> dict:
     return {"Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "content-type"}
-
-
-class FiltreJournalAcces(logging.Filter):
-    """Retire la valeur de `code` et de `state` des lignes du journal d'accès qui visent le
-    retour du relais : le code d'autorisation brut n'a rien à faire dans journald."""
-
-    _MOTIF = re.compile(r"(^|[?&])(code|state)=[^&\s]*")
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) \
-                and args[2].startswith(CALLBACK_PATH):
-            record.args = args[:2] + (self._MOTIF.sub(r"\1\2=…", args[2]),) + args[3:]
-        return True
 
 
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:

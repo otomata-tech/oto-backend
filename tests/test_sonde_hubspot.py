@@ -1,10 +1,10 @@
-"""La sonde de connexion HubSpot — otomata-tech/oto#69. Couvre `auth` SEUL.
+"""La sonde de connexion HubSpot — otomata-tech/oto#69. Couvre `auth+scopes`.
 
-`GET /account-info/v3/details` : identifie le compte (`portalId`), ne révèle
-aucun scope. HubSpot accorde ses scopes OBJET PAR OBJET (contacts, tickets…) —
-un manque local n'est pas un état « connecteur mort » et ne se mesure pas ici
-(troisième règle d'oto#69), il est déjà traduit à l'appel réel par
-`_scope_refusal`.
+`GET /account-info/v3/details` identifie le compte (`portalId`) : c'est le VERDICT,
+un refus y lève. Puis les scopes, objet par objet — une MESURE rendue à côté du
+verdict, jamais le verdict : un jeton sans le scope tickets marche pour le reste
+(troisième règle d'oto#69), donc `ok` reste vrai et le manque se lit dans `scopes`.
+Le détail des scopes est couvert par `test_hubspot_scopes_pipelines.py`.
 """
 from __future__ import annotations
 
@@ -22,10 +22,33 @@ def _fields(secret: str) -> dict:
     return credentials_store.unpack_secret("hubspot", secret)
 
 
+class _Rep:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+        self.content = b"x"
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+class _Session:
+    """Introspection du jeton : rend tous les scopes."""
+    def __init__(self):
+        self.appels = []
+
+    def request(self, method, url, **kw):
+        self.appels.append((method, url))
+        return _Rep(200, {"scopes": ["crm.objects.contacts.read"]})
+
+
 class _FauxClient:
+    BASE_URL = "https://api.hubapi.com"
+
     def __init__(self, reponse=None, boom=None):
         self._reponse, self._boom = reponse, boom
         self.appels = []
+        self.session = _Session()
 
     def _request(self, method, path, **kw):
         self.appels.append((method, path))
@@ -40,17 +63,20 @@ def _brancher(monkeypatch, client):
     return client
 
 
-def test_un_compte_identifie_passe(monkeypatch):
+def test_un_compte_identifie_passe_et_mesure_ses_scopes(monkeypatch):
     cli = _brancher(monkeypatch, _FauxClient(
         {"portalId": 123456, "accountType": "STANDARD", "timeZone": "Europe/Paris"}))
-    H._verify(_fields("k"))
-    assert cli.appels == [("GET", "/account-info/v3/details")], "un seul appel, en lecture"
+    rendu = H._verify(_fields("k"))
+    assert cli.appels == [("GET", "/account-info/v3/details")], "le verdict : un seul appel"
+    assert rendu["scopes"]["method"] == "token_info"
+    assert [m for m, _ in cli.session.appels] == ["POST"], "les scopes : une lecture"
 
 
 def test_une_cle_refusee_leve(monkeypatch):
-    _brancher(monkeypatch, _FauxClient(boom=RuntimeError("HTTP 401: invalid token")))
+    cli = _brancher(monkeypatch, _FauxClient(boom=RuntimeError("HTTP 401: invalid token")))
     with pytest.raises(RuntimeError, match="401"):
         H._verify(_fields("k"))
+    assert cli.session.appels == [], "une clé refusée ne mesure aucun scope"
 
 
 def test_une_reponse_200_SANS_identite_est_un_echec(monkeypatch):
@@ -59,10 +85,17 @@ def test_une_reponse_200_SANS_identite_est_un_echec(monkeypatch):
         H._verify(_fields("k"))
 
 
-def test_la_sonde_est_enregistree_avec_la_couverture_auth():
+def test_la_sonde_est_enregistree_avec_la_couverture_auth_scopes():
     from fastmcp import FastMCP
 
     H.register(FastMCP("t"))
     assert cv.supports("hubspot")
     assert cv.probe_for("hubspot") is H._verify
-    assert cv.couverture("hubspot") == cv.AUTH
+    assert cv.couverture("hubspot") == cv.AUTH_SCOPES
+
+
+def test_la_mesure_des_scopes_passe_le_filtre_des_mesures():
+    """`executer` ne garde que les clés connues : sans `scopes` dans la liste, la
+    mesure mourait en silence entre la sonde et la réponse."""
+    assert cv._mesures({"scopes": {"families": {}}, "bruit": 1}) == {
+        "scopes": {"families": {}}}

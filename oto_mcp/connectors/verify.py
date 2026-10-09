@@ -45,7 +45,11 @@ Probe = Callable[[dict, dict], Union[None, dict, Awaitable[Union[None, dict]]]]
 #: authentication return `None`, as before. Requiring a return from all of them would
 #: have forced inventing an empty shape for the dozen-odd that have nothing to say —
 #: and an empty shape ends up being read as a measurement of zero.
-_CLES_DE_MESURE = ("quota", "identity")
+#:
+#: `scopes` — per API family, what the token is allowed to read (HubSpot grants its
+#: scopes object by object). It is a MEASUREMENT, never the verdict: a token missing
+#: the tickets scope still authenticates, and `ok` stays true (oto#69, third rule).
+_CLES_DE_MESURE = ("quota", "identity", "scopes")
 
 
 def _mesures(rendu) -> dict:
@@ -133,7 +137,8 @@ CONDUITE = {
 
 AUTH = "auth"                 # the key authenticates. Says NOTHING about the balance.
 AUTH_QUOTA = "auth+quota"     # the key authenticates AND there is enough left to work with.
-COUVERTURES = (AUTH, AUTH_QUOTA)
+AUTH_SCOPES = "auth+scopes"   # the key authenticates, AND which API families it may read.
+COUVERTURES = (AUTH, AUTH_QUOTA, AUTH_SCOPES)
 
 _REGISTRY: dict[str, Probe] = {}
 _COUVERTURE: dict[str, str] = {}

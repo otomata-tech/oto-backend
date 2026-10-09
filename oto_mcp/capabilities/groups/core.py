@@ -231,6 +231,10 @@ class GroupSecretEntry(BaseModel):
     provider: str
     set_by: Optional[str] = None
     set_at: Optional[str] = None
+    # A MEMBER instance lent to the team (ADR 0044): its account and its lender. It
+    # serves the team like a team secret, but stays the lender's.
+    account: Optional[str] = None
+    lent_by: Optional[str] = None
     base_url: Optional[str] = None
 
 

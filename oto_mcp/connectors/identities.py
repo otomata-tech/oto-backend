@@ -124,11 +124,12 @@ def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
              "is_default": a["is_default"], "channel": None}
             for a in google_oauth.list_accounts(sub) if ok(a)]
     # Accounts SHARED by the team or org (2026-09-27): reachable via
-    # `_account=`, labeled as such — never the member's default (it stays their own).
+    # `_account=`, marked `shared` with their tier in `shared_scope` (the label stays
+    # the address: the screen says "shared" itself) — never the member's default.
     vus = {i["id"] for i in mine}
-    partages = [{"id": a["google_email"],
-                 "label": f"{a['google_email']} (shared: {'team' if a.get('scope') == 'group' else 'org'})",
-                 "status": "ok", "is_default": False, "channel": None, "shared": a.get("scope")}
+    partages = [{"id": a["google_email"], "label": a["google_email"],
+                 "status": "ok", "is_default": False, "channel": None, "shared": True,
+                 "shared_scope": "team" if a.get("scope") == "group" else "org"}
                 for a in google_oauth.list_shared_accounts(sub)
                 if ok(a) and a["google_email"] not in vus]
     return mine + partages
@@ -522,18 +523,41 @@ def _keyed_list(sub: str, connector: str, scope: str = "member") -> list[dict]:
     ent = keyed_entity(sub, scope)
     if ent is None:
         return []
+    from .. import group_store
+    rows = (group_store.list_group_accounts(int(ent[1]), connector) if ent[0] == "group"
+            else credentials_store.list_accounts(ent[0], ent[1], connector))
     out = []
-    for row in credentials_store.list_accounts(ent[0], ent[1], connector):
+    for row in rows:
         acct = row["account"]
         meta = row.get("meta") or {}
-        out.append({
+        entry = {
             "id": acct,
             "label": meta.get("label") or acct or "(default)",
             "status": "ok",
             "is_default": bool(meta.get("is_default")),
             "channel": None,
-        })
+        }
+        if meta.get("lent_by"):
+            # A member's instance lent to the team: same shape as a granted account.
+            entry.update(granted=True, owner={"sub": meta["lent_by"]})
+        out.append(entry)
     return out
+
+
+def _refuse_lent(sub: str, connector: str, identity_id: str, scope: str, action: str) -> None:
+    """An account LENT to the team stays its lender's: the team neither renames it nor
+    makes it its default (the default lives on the team's own vault rows)."""
+    if scope != "group":
+        return
+    from .. import group_store
+    ent = keyed_entity(sub, scope)
+    if ent is None:
+        return
+    for i in group_store.lent_instances(int(ent[1]), connector):
+        if i["account"] == identity_id:
+            raise ValueError(
+                f"`{identity_id}` is a member's instance lent to the team: the team "
+                f"cannot {action} it. Only its lender manages it.")
 
 
 def _keyed_select(sub: str, connector: str, identity_id: str, scope: str = "member") -> dict:
@@ -541,6 +565,7 @@ def _keyed_select(sub: str, connector: str, identity_id: str, scope: str = "memb
     ent = keyed_entity(sub, scope)
     if ent is None:
         raise ValueError("No context org/team — unable to choose an account.")
+    _refuse_lent(sub, connector, identity_id, scope, "set as default")
     accounts = [r["account"] for r in credentials_store.list_accounts(ent[0], ent[1], connector)]
     if identity_id not in accounts:
         raise ValueError(f"Unknown account `{identity_id}` for {connector}.")
@@ -564,6 +589,7 @@ def rename_identity(sub: str, connector: str, identity_id: str, new_name: str,
     new_name = (new_name or "").strip()
     if not new_name:
         raise ValueError("The new name is empty.")
+    _refuse_lent(sub, connector, identity_id, scope, "rename")
     ent = keyed_entity(sub, scope)
     if ent is None:
         raise ValueError("No context org/team — unable to rename an account.")
@@ -649,12 +675,26 @@ def _microsoft_list(sub: str, service: str) -> list[dict]:
     """The member's Microsoft accounts that AUTHORIZED `service` — same shape as the
     generic keyed backend, filtered like a Google service: `oto_identity(
     connector='sharepoint')` must not offer an account that `sharepoint_file` will refuse."""
+    from .. import db
     from ..auth import microsoft as ms_auth
-    return [{"id": c["account"],
-             "label": (c.get("meta") or {}).get("label") or c["account"],
-             "status": "ok", "is_default": bool((c.get("meta") or {}).get("is_default")),
-             "channel": None}
-            for c in ms_auth.accounts_for(sub, service)]
+    comptes = ms_auth.accounts_for(sub, service)
+    # An account LENT by a peer (`oto_instance op=lend`) is operable through `_account=`
+    # and marked `granted` + `owner`, like a granted Unipile account: not the borrower's
+    # to revoke nor to make their default.
+    preteurs = sorted({c["lent_by"] for c in comptes if c.get("lent_by")})
+    emails = db.emails_by_subs(preteurs) if preteurs else {}
+    out = []
+    for c in comptes:
+        meta = c.get("meta") or {}
+        ident = {"id": c["account"], "label": meta.get("label") or c["account"],
+                 "status": "ok", "is_default": bool(meta.get("is_default")),
+                 "channel": None}
+        if c.get("lent_by"):
+            ident.update(granted=True, is_default=False,
+                         owner={"sub": c["lent_by"], "email": emails.get(c["lent_by"]),
+                                "org": c.get("lender_org")})
+        out.append(ident)
+    return out
 
 
 def _register_microsoft_services() -> None:

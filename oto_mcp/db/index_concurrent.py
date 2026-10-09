@@ -35,6 +35,7 @@ coupe CES attentes aussi : à 2 s, une construction a échoué en production
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -90,14 +91,27 @@ class IndexConcurrent:
         )
 
     @property
+    def ddl_retrait(self) -> str:
+        """Le retrait d'un index INVALIDE avant de le reconstruire — un geste manuel."""
+        return f"DROP INDEX CONCURRENTLY IF EXISTS {self.nom}"
+
+    @property
     def procedure(self) -> str:
-        rejouer = f" et rejouer la révision {self.revision}" if self.revision else ""
+        if self.revision:
+            # La commande joue le `CREATE` exact tiré du code : rien à retaper.
+            return (
+                "À la main, hors fenêtre de démarrage ou de migration "
+                "(docs/migrations-versionnees.md §5.1) : "
+                f"oto-mcp maintenance index-concurrents {self.revision}, puis "
+                "oto-mcp migrer upgrade head. Un index INVALIDE se retire d'abord, à la "
+                f"main : {self.ddl_retrait}; (CONCURRENTLY, hors transaction)."
+            )
         return (
             "À la main, hors fenêtre de démarrage ou de migration "
             "(docs/migrations-versionnees.md §5.1) : SET statement_timeout = 0; "
             "SET lock_timeout = '5min'; "
-            f"DROP INDEX CONCURRENTLY IF EXISTS {self.nom}; {self.ddl_concurrent}; "
-            f"puis vérifier `indisvalid`{rejouer}."
+            f"{self.ddl_retrait}; {self.ddl_concurrent}; "
+            "puis vérifier `indisvalid`."
         )
 
 
@@ -185,6 +199,81 @@ def retirer_par_revision(op, index: IndexConcurrent) -> None:
     with op.get_context().autocommit_block():
         op.execute(ATTENTE_MAX)
         try:
-            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {index.nom}")
+            op.execute(index.ddl_retrait)
         finally:
             op.execute(ATTENTE_RENDUE)
+
+
+# ── Le geste manuel, versionné (`oto-mcp maintenance index-concurrents <révision>`) ──
+
+
+def declares() -> tuple[IndexConcurrent, ...]:
+    """Tous les index de ce régime, là où ils sont déclarés — le registre unique que lit
+    le geste manuel. Un index déclaré ailleurs et absent d'ici, la commande ne saurait
+    pas le poser : un banc compare cette liste aux déclarations du code.
+
+    Import tardif : les modules déclarants importent celui-ci."""
+    from . import index_releve, search
+    return (index_releve.RELEVE, *index_releve.OUVERTURES, *search.INDEX_VALEURS)
+
+
+class RevisionSansIndex(ValueError):
+    """La révision demandée ne pose aucun index de ce régime (inconnue, ou d'une autre
+    nature) : rien à construire, et le dire plutôt que sortir vert sans rien faire."""
+
+    def __init__(self, demandee: str, connues: list[str]) -> None:
+        self.demandee = demandee
+        super().__init__(
+            f"aucun index CONCURRENTLY n'est posé par la révision {demandee!r}. "
+            "Révisions qui en posent : " + (", ".join(connues) or "aucune") + ".")
+
+
+def index_de_revision(demandee: str) -> tuple[IndexConcurrent, ...]:
+    """Les index d'une révision, dans leur ordre de déclaration. `demandee` est
+    l'identifiant complet ou son numéro (`0049`)."""
+    tous = declares()
+    connues = sorted({i.revision for i in tous if i.revision})
+    retenue = [r for r in connues if r == demandee or r.split("_", 1)[0] == demandee]
+    if len(retenue) != 1:
+        raise RevisionSansIndex(demandee, connues)
+    return tuple(i for i in tous if i.revision == retenue[0])
+
+
+def poser_a_la_main(conn, demandee: str,
+                    dire: Callable[[str], None] = logger.info) -> list[str]:
+    """Le geste manuel du §5.1 : construire, un par un, les index d'une révision que sa
+    migration refuse de construire (`ConstructionManuelleRequise`), sur une connexion en
+    AUTOCOMMIT (CONCURRENTLY est refusé dans une transaction).
+
+    Sans plafond de taille — c'est tout l'objet du geste — mais jamais sans contrôle :
+    - déjà valide → rien ;
+    - INVALIDE → `IndexInvalide`, avec le `DROP` à jouer, qui NE se joue PAS ici
+      (décision d'Alexis, 09/10/2026 : un index cassé reste un geste humain) ; les
+      suivants ne sont pas construits ;
+    - absent → `ddl_concurrent`, puis `indisvalid` exigé.
+
+    Rend une ligne par index. Révision inconnue : `RevisionSansIndex`."""
+    index = index_de_revision(demandee)
+    scalaire = scalaire_de(conn)
+    # La construction lit deux fois toute la table ; la connexion est dédiée et fermée
+    # après, donc ces réglages de session ne fuient vers personne.
+    conn.execute("SET statement_timeout = 0")
+    conn.execute(ATTENTE_MAX)
+    faits: list[str] = []
+    for i in index:
+        valide = scalaire(i.sql_validite)
+        if valide is True:
+            faits.append(f"{i.nom} : déjà posé, valide")
+            dire(faits[-1])
+            continue
+        if valide is False:
+            raise IndexInvalide(i)
+        dire(f"{i.nom} : construction CONCURRENTLY sur {i.table}…")
+        debut = time.monotonic()
+        conn.execute(i.ddl_concurrent)
+        duree = time.monotonic() - debut
+        if scalaire(i.sql_validite) is not True:
+            raise IndexInvalide(i)
+        faits.append(f"{i.nom} : construit et valide en {duree:.1f} s")
+        dire(faits[-1])
+    return faits

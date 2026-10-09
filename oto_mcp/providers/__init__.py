@@ -253,6 +253,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.
     "typeform",
+    # --- event management — wired 2026-10-09 ---------------------------------
+    # Events on Luma (lu.ma): guest lists, invites, blasts, calendar audience.
+    "luma",
     # --- electronic signature — wired 2026-09-16 -----------------------------
     "signwell",
     # --- phone prospecting — wired 2026-08-31 --------------------------------

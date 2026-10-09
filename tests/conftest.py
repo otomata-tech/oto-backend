@@ -41,7 +41,7 @@ from _oto_core_pin import (MARQUEUR, categorie_non_concluante, ecart,
 import _etat_global
 import _groupes_xdist
 import _jeton_de_suite as jeton
-from _pg_hygiene import Guard, docker_available, run_args, sweep_orphans
+from _pg_hygiene import IMAGE, Guard, docker_available, run_args, sweep_orphans
 
 
 # --------------------------------------------------------------------------- #
@@ -562,7 +562,15 @@ def pg_box() -> Iterator[PgBox]:
     if not docker_available():
         pytest.skip("aucun PostgreSQL joignable (ni OTO_TEST_PG_DSN, ni docker)")
     name = f"oto-test-pg-{uuid.uuid4().hex[:8]}"
-    subprocess.run(run_args(name), capture_output=True, check=True)
+    lance = subprocess.run(run_args(name), capture_output=True, text=True)
+    if lance.returncode != 0:
+        # Le stderr de docker, ou rien ne se lit : le 09/10/2026, sept parts de la CI
+        # sont sorties rouges sur « exit status 125 » (le démon refuse AVANT le
+        # conteneur : image non tirée, limite Docker Hub, option refusée) sans une
+        # ligne de cause, parce que `check=True` jetait le stderr capturé.
+        raise RuntimeError(
+            f"docker run {IMAGE} a échoué (code {lance.returncode}) : "
+            f"{lance.stderr.strip() or '(stderr vide)'}")
     guard = Guard(name)
     guard.install()
     try:

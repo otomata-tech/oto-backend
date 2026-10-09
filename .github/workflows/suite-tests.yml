@@ -40,6 +40,14 @@ on:
         type: string
         required: false
         default: ""
+    # Facultatifs : sans eux, l'image PostgreSQL des tests se tire ANONYMEMENT, sous la
+    # limite Docker Hub par adresse IP — partagée entre tous les runners GitHub. Les
+    # appelants passent `secrets: inherit`.
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -119,6 +127,39 @@ jobs:
           SORTIE="$RUNNER_TEMP/suite-part-$PART"
           echo "SORTIE=$SORTIE" >> "$GITHUB_ENV"
           python scripts/repartir_suite.py part --cible "$CIBLE" --parts "$NOMBRE" --part "$PART" --sortie "$SORTIE" >> "$GITHUB_ENV"
+      # ─────────────────────────────────────────────────────────────────────────
+      # L'IMAGE POSTGRESQL DES TESTS SE TIRE ICI, UNE FOIS, ET LE DIT.
+      #
+      # Avant, chaque worker de chaque part laissait `docker run` tirer l'image à la
+      # première base jetable : sept parts × quatre workers, tous anonymes, depuis les
+      # adresses IP partagées des runners GitHub. Le 09/10/2026 (run 37990063487, deux
+      # fois), les sept parts sont sorties rouges sur `docker run … exit status 125` —
+      # le démon refuse AVANT le conteneur —, 346 à 664 erreurs par part, sans une ligne
+      # de cause : la fixture jetait le stderr. La limite Docker Hub par IP est la cause
+      # la plus probable ; ce pas la rend LISIBLE (le stderr de `docker pull` est dans ce
+      # journal) et la contourne : un tirage par part, authentifié si le dépôt porte
+      # `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (un jeton en lecture seule suffit).
+      # Le nom de l'image a UNE source, `tests/_pg_hygiene.IMAGE` : on la lit, on ne la
+      # recopie pas.
+      - name: Tirer l'image PostgreSQL des tests, une fois
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(python3 -c 'import sys; sys.path.insert(0, "tests"); from _pg_hygiene import IMAGE; print(IMAGE)')
+          if [ -n "${DOCKERHUB_TOKEN:-}" ] && [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+            printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+          else
+            echo "::notice title=Docker Hub anonyme::ni DOCKERHUB_USERNAME ni DOCKERHUB_TOKEN en secrets : tirage anonyme, soumis à la limite par IP des runners."
+          fi
+          for essai in 1 2 3; do
+            docker pull "$IMAGE" && exit 0
+            echo "tirage $essai/3 refusé, nouvel essai dans 30 s"
+            sleep 30
+          done
+          echo "::error title=Image PostgreSQL des tests non tirée::$IMAGE — la cause est dans le stderr ci-dessus. « toomanyrequests » = limite Docker Hub : poser DOCKERHUB_USERNAME et DOCKERHUB_TOKEN en secrets du dépôt."
+          exit 1
       - name: Tests
         # `--dist loadgroup` (#963) : un module à fixture `scope="module"` (une base Postgres
         # jetable) reste sur UN worker — `load` le scindait test par test et le second test ne

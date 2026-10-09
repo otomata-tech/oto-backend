@@ -12,11 +12,15 @@ organization key covers all the organization's calendars, and every
 calendar-scoped call then needs `calendar_id` (sent as `x-luma-calendar-id`).
 Every tool takes it, and ignores it when absent.
 
-**What reaches people outside the organization** is dry-run by default:
-inviting people (`luma_guest_admin op="invite"`), emailing guests
-(`luma_blasts op="send"`) and cancelling an event (`luma_event_admin
-op="cancel"`). Other writes that may email a guest (`add`, `set_status`) say
-so in their docstring and expose `send_email`.
+**What reaches people outside the organization, or hands them access or
+money, is dry-run by default**: inviting people (`luma_guest_admin
+op="invite"`), emailing guests (`luma_blasts op="send"`), cancelling an event
+(`luma_event_admin op="cancel"`), making someone a calendar admin
+(`luma_calendar op="add_admins"`), sending the calendar's notifications to a
+URL (`luma_webhooks op="create"`) and changing a member's status, which
+captures or cancels a payment (`luma_memberships op="set_status"`). Other
+writes that may email a guest (`add`, `set_status`) say so in their docstring
+and expose `send_email`.
 """
 from __future__ import annotations
 
@@ -119,8 +123,39 @@ GUEST_ROW_OMITTED = (
     "registration_answers", "phone_number")
 CONTACT_ROW_OMITTED = ("avatar_url",)
 TIER_ROW_OMITTED = ("registration_questions", "access_info")
-#: The signing secret never comes back in a listing: `op="get"` or `full=True`.
-WEBHOOK_ROW_OMITTED = ("secret",)
+#: A webhook's signing secret NEVER comes back — not in a list, not from
+#: `get`, `create` or `update` (all three return the webhook object, secret
+#: included): an agent has no use for it, and whatever it reads can end up in a
+#: transcript. Whoever verifies the signatures reads it in Luma's dashboard.
+WEBHOOK_SECRET = "secret"
+WEBHOOK_SECRET_HOW = ("the signing secret is never returned — read it in Luma's "
+                      "dashboard (calendar → Settings → Developer → Webhooks)")
+
+
+def _strip(node: Any, drop: set, removed: set) -> Any:
+    """`node` without the `drop` keys, at any depth; the removed ones go to
+    `removed`. Non-destructive: the upstream payload is left as is."""
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if k in drop:
+                removed.add(k)
+            else:
+                out[k] = _strip(v, drop, removed)
+        return out
+    if isinstance(node, list):
+        return [_strip(v, drop, removed) for v in node]
+    return node
+
+
+def without_secret(payload: Any) -> Any:
+    """A webhook object (or list of them) without its signing secret, and an
+    `omitted` block that says so when one was there."""
+    removed: set = set()
+    out = _strip(payload, {WEBHOOK_SECRET}, removed)
+    if removed and isinstance(out, dict):
+        out = dict(out, omitted={"keys": sorted(removed), "how": WEBHOOK_SECRET_HOW})
+    return out
 
 
 def _slim(payload: Any, omitted: tuple, full: bool) -> Any:
@@ -133,21 +168,8 @@ def _slim(payload: Any, omitted: tuple, full: bool) -> Any:
             payload.get("entries"), list):
         return payload
     drop, removed = set(omitted), set()
-
-    def strip(node: Any) -> Any:
-        if isinstance(node, dict):
-            out = {}
-            for k, v in node.items():
-                if k in drop:
-                    removed.add(k)
-                else:
-                    out[k] = strip(v)
-            return out
-        if isinstance(node, list):
-            return [strip(v) for v in node]
-        return node
-
-    out = dict(payload, entries=[strip(row) for row in payload["entries"]])
+    out = dict(payload, entries=[_strip(row, drop, removed)
+                                 for row in payload["entries"]])
     if removed:
         out["omitted"] = {"keys": sorted(removed),
                           "how": "full=true returns every field"}

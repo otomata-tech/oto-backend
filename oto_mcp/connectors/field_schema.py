@@ -126,6 +126,25 @@ CONNECTOR_FIELD_SCHEMA: dict[str, list[dict]] = {
         {"name": "emails", "label": "emails", "type": "list", "sensitive": True},
         {"name": "employeeFullName", "label": "employee (accounting entry)", "type": "string", "sensitive": True},
     ],
+    # Luma (events). The guests and the calendar's contacts: who registered, how
+    # to reach them, what they answered. ⚠️ Names are the REAL leaf keys of the
+    # Luma API (a guest is `user_email`/`user_name`…, a contact `email`/`name`…):
+    # the filter matches a key exactly. `name` is deliberately NOT offered: it is
+    # also the key of an event, a ticket type, a tag and a tier, and a rule on it
+    # would mask them all. No server floor (`field_filter_defaults`): none of these
+    # is sensitive by nature — the org decides.
+    "luma": [
+        {"name": "user_email", "label": "guest email", "type": "string", "sensitive": True},
+        {"name": "user_name", "label": "guest name", "type": "string", "sensitive": True},
+        {"name": "user_first_name", "label": "guest first name", "type": "string", "sensitive": True},
+        {"name": "user_last_name", "label": "guest last name", "type": "string", "sensitive": True},
+        {"name": "phone_number", "label": "guest phone", "type": "string", "sensitive": True},
+        {"name": "registration_answers", "label": "registration answers", "type": "list", "sensitive": True},
+        {"name": "email", "label": "contact / host email", "type": "string", "sensitive": True},
+        {"name": "first_name", "label": "contact first name", "type": "string", "sensitive": True},
+        {"name": "last_name", "label": "contact last name", "type": "string", "sensitive": True},
+        {"name": "avatar_url", "label": "photo", "type": "string", "sensitive": True},
+    ],
     "linkedin_unipile": _CANDIDATE_FIELDS,
     "ashby": _CANDIDATE_FIELDS,
     "greenhouse": _CANDIDATE_FIELDS,

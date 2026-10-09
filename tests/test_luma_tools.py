@@ -10,8 +10,13 @@ Ce que ce fichier verrouille — les tripwires génériques couvrent déjà regi
   et le dry-run ne touche à rien d'autre que la demande de jeton d'annulation ;
 - l'annulation d'un événement payant exige `should_refund` explicite ;
 - la vue resserrée des listes : clés nommées retirées à toute profondeur,
-  enveloppe intacte, bloc `omitted` qui NOMME ce qui manque, `full=True` brut —
-  et le secret de signature d'un webhook absent d'une liste ;
+  enveloppe intacte, bloc `omitted` qui NOMME ce qui manque, `full=True` brut ;
+- le secret de signature d'un webhook ne sort JAMAIS : ni d'une liste, ni de
+  `get`, `create` ou `update` (qui rendent tous trois l'objet webhook) ;
+- six gestes en dry-run par défaut : invitations, blast, annulation, ajout
+  d'admins, création de webhook, statut d'un membre (qui prélève ou résilie) ;
+- les champs personnels des invités et contacts déclarés au schéma de sortie,
+  sous leurs VRAIS noms de clé, sans `name` (homonyme d'un événement, d'un tag) ;
 - la traduction des refus amont et la sonde.
 """
 import asyncio
@@ -147,12 +152,27 @@ def test_rien_retire_pas_de_bloc_omitted(client):
     assert "omitted" not in _tool("luma_events")()
 
 
-def test_le_secret_d_un_webhook_ne_sort_pas_d_une_liste(client):
-    client.list_webhooks.return_value = {"entries": [
-        {"id": "wh-1", "url": "https://x.test", "secret": "whsec"}],
-        "has_more": False}
-    out = _tool("luma_webhooks")()
-    assert "whsec" not in str(out) and out["omitted"]["keys"] == ["secret"]
+_WEBHOOK = {"id": "wh-1", "url": "https://x.test", "status": "active",
+            "secret": "whsec"}
+
+
+@pytest.mark.parametrize("op,method,kw", [
+    ("list", "list_webhooks", {}),
+    ("get", "get_webhook", {"webhook_id": "wh-1"}),
+    ("create", "create_webhook", {"url": "https://x.test", "event_types": ["*"],
+                                  "dry_run": False}),
+    ("update", "update_webhook", {"webhook_id": "wh-1", "status": "paused"}),
+])
+def test_le_secret_d_un_webhook_ne_sort_jamais(client, op, method, kw):
+    reply = ({"entries": [dict(_WEBHOOK)], "has_more": False} if op == "list"
+             else dict(_WEBHOOK))
+    getattr(client, method).return_value = reply
+    out = _tool("luma_webhooks")(op=op, **kw)
+    assert "whsec" not in str(out)
+    assert out["omitted"]["keys"] == ["secret"] and "dashboard" in out["omitted"]["how"]
+    assert "url" in str(out)                                      # le reste est servi
+    assert "full" not in asyncio.run(_mcp().get_tool("luma_webhooks")).parameters[
+        "properties"]                                             # aucun moyen de le lever
 
 
 # --- ce qui sort de l'organisation : dry-run ---------------------------------
@@ -203,6 +223,50 @@ def test_annulation_gratuite_passe_sans_should_refund(client):
     client.cancel_event.assert_called_once_with("evt-1", "tok", should_refund=None)
 
 
+@pytest.mark.parametrize("tool,kw,method", [
+    ("luma_calendar", {"op": "add_admins", "emails": ["a@example.test"]},
+     "add_calendar_admins"),
+    ("luma_webhooks", {"op": "create", "url": "https://x.test",
+                       "event_types": ["guest.registered"]}, "create_webhook"),
+    ("luma_memberships", {"op": "set_status", "user_id": "usr-1",
+                          "status": "approved"}, "update_member_status"),
+])
+def test_acces_webhook_et_paiement_en_dry_run_par_defaut(client, tool, kw, method):
+    out = _tool(tool)(**kw)
+    assert out["dry_run"] is True and out["warning"]
+    getattr(client, method).assert_not_called()
+    _tool(tool)(dry_run=False, **kw)
+    getattr(client, method).assert_called_once()
+
+
+def test_le_dry_run_d_un_membre_dit_le_prelevement(client):
+    out = _tool("luma_memberships")(op="set_status", user_id="usr-1",
+                                    status="approved")
+    assert "payment" in out["warning"]
+
+
+# --- schéma de sortie (rédaction) ---------------------------------------------
+
+def test_champs_personnels_declares_sous_leurs_vrais_noms():
+    from oto_mcp.connectors.field_schema import schema_for
+    noms = {f["name"] for f in schema_for("luma")}
+    assert {"user_email", "user_name", "phone_number", "registration_answers",
+            "email", "first_name", "last_name"} <= noms
+    assert "name" not in noms                     # homonyme : événement, tag, palier
+    assert all(f["sensitive"] for f in schema_for("luma"))
+
+
+def test_les_champs_declares_existent_dans_les_reponses_luma():
+    """Un nom inventé ne masque rien : chaque champ déclaré est une clé que
+    l'API Luma rend vraiment (invité, contact ou hôte)."""
+    from oto_mcp.connectors.field_schema import schema_for
+    from oto_mcp.tools import luma_socle as S
+    connus = {"user_email", "user_name", "user_first_name", "user_last_name",
+              "email", "first_name", "last_name"} | set(S.GUEST_ROW_OMITTED) | set(
+                  S.CONTACT_ROW_OMITTED)
+    assert {f["name"] for f in schema_for("luma")} <= connus
+
+
 # --- écritures directes -------------------------------------------------------
 
 def test_changement_de_statut_transmet_send_email(client):
@@ -227,7 +291,8 @@ def test_ajout_refuse_le_statut_declined(client):
      "status"),
     ("luma_tickets", {"op": "create_coupon", "code": "X"}, "discount"),
     ("luma_calendar", {"op": "update", "fields": {"name": "N"}}, "calendar_id"),
-    ("luma_webhooks", {"op": "create", "url": "https://x.test"}, "event_types"),
+    ("luma_webhooks", {"op": "create", "url": "https://x.test", "dry_run": False},
+     "event_types"),
 ])
 def test_arguments_requis(client, tool, kw, needle):
     with pytest.raises(McpError, match=needle):

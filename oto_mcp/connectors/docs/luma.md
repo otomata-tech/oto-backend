@@ -19,7 +19,9 @@ create a key in Luma, on the calendar or on the organization (Settings → Devel
 
 ## note — what reaches people outside your organization
 
-three gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")`, `luma_blasts(op="send")` and `luma_event_admin(op="cancel")`.
+six gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")`, `luma_blasts(op="send")`, `luma_event_admin(op="cancel")`, `luma_calendar(op="add_admins")`, `luma_webhooks(op="create")` and `luma_memberships(op="set_status")`.
+- ⚠️ **a calendar admin manages every event, guest list and setting** of the calendar
+- ⚠️ **a webhook sends the calendar's notifications to a URL**, guest names, emails and registrations included; its signing secret is **never** returned by oto — read it in Luma's dashboard
 - ⚠️ **cancelling an event is irreversible**: every guest is notified, the event is **deleted**, and if guests paid you must say `should_refund` explicitly
 - ⚠️ **a sent blast cannot be recalled**; deleting it only removes the post from the event page
 - ⚠️ **changing a guest's status emails them** unless `send_email=false`; `should_refund` refunds a paid guest moved out of "going"
@@ -32,4 +34,5 @@ three gestures are **dry-run by default** and need `dry_run=false` to happen: `l
 - dates are ISO 8601 in UTC (`2026-11-04T18:30:00.000Z`); the event's `timezone` is separate. Durations are ISO 8601 too (`PT2H`)
 - a coupon's discount can **never** be edited after creation — only its remaining count and validity window
 - `remove` and `block` on a contact are different: removed people may follow the calendar again, blocked ones cannot join its events
+- guest and contact fields (email, name, phone, registration answers) can be masked by an org admin from the connector's "transformations" tab; nothing is masked by default
 - rate limit: 200 requests per minute per calendar (500 per organization key); a 429 blocks the key for about a minute

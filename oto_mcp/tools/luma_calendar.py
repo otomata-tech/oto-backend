@@ -14,9 +14,9 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastmcp import FastMCP
 
-from .luma_socle import (CONTACT_ROW_OMITTED, TIER_ROW_OMITTED,
-                         WEBHOOK_ROW_OMITTED, _client, _slim, bad_op, need,
-                         run)
+from .luma_socle import (CONTACT_ROW_OMITTED, TIER_ROW_OMITTED, WEBHOOK_SECRET,
+                         WEBHOOK_SECRET_HOW, _client, _slim, bad_op,
+                         dry_run_reply, need, run, without_secret)
 
 _COLORS = Literal["cranberry", "barney", "red", "green", "blue", "purple",
                   "yellow", "orange"]
@@ -238,6 +238,7 @@ def register(mcp: FastMCP) -> None:
         event_ids: Optional[List[str]] = None,
         query: Optional[str] = None,
         content_type: Optional[Literal["image/jpeg", "image/png"]] = None,
+        dry_run: bool = True,
         calendar_id: Optional[str] = None,
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
@@ -250,8 +251,10 @@ def register(mcp: FastMCP) -> None:
           calendar. `update` — its settings (`fields`: name, slug,
           description, avatar_url, tint_color, launch_status, website, social
           handles, location; null clears a website or handle).
-        - `admins` / `add_admins` (`emails`; adds needing more paid Luma Plus
-          seats are refused — do those in the Luma app).
+        - `admins` / `add_admins` (`emails`). ⚠️ An admin manages EVERY event,
+          guest list and setting of the calendar: `add_admins` is **dry-run by
+          default**. Adds needing more paid Luma Plus seats are refused — do
+          those in the Luma app.
         - `event_tags` / `create_event_tag` / `update_event_tag` /
           `delete_event_tag`; `tag_events` / `untag_events` apply `tag` (id or
           name) to `event_ids`.
@@ -273,6 +276,7 @@ def register(mcp: FastMCP) -> None:
             event_ids: tag_events / untag_events.
             query: places / images.
             content_type: op='upload_url'.
+            dry_run: op='add_admins' — True (default) describes without granting.
             calendar_id: the calendar (`cal-…`) — required by op='update';
                 with an ORGANIZATION key, the calendar every op acts on.
             cursor: next page (`next_cursor` of the previous answer).
@@ -291,6 +295,12 @@ def register(mcp: FastMCP) -> None:
             return run(lambda: c.list_calendar_admins())
         if op == "add_admins":
             need(emails, "emails", op)
+            if dry_run:
+                return dry_run_reply(
+                    "make these people admins of the calendar",
+                    "an admin manages every event, guest list and setting of "
+                    "the calendar, and can add or remove other admins",
+                    emails=emails, calendar_id=calendar_id)
             return run(lambda: c.add_calendar_admins(emails))
         if op == "event_tags":
             return run(lambda: c.list_event_tags())
@@ -342,6 +352,7 @@ def register(mcp: FastMCP) -> None:
         skip_payment: Optional[bool] = None,
         registration_answers: Optional[List[Dict[str, Any]]] = None,
         full: bool = False,
+        dry_run: bool = True,
         calendar_id: Optional[str] = None,
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
@@ -355,7 +366,7 @@ def register(mcp: FastMCP) -> None:
           when payment is handled outside Luma.
         - `set_status` — `user_id` → approved or declined. ⚠️ Approving a
           member of a PAID tier captures their payment; declining cancels
-          their subscription.
+          their subscription. **Dry-run by default.**
 
         Args:
             op: the operation, see above.
@@ -366,6 +377,7 @@ def register(mcp: FastMCP) -> None:
             skip_payment: op='add' — payment handled outside Luma.
             registration_answers: op='add' — answers to the tier's questions.
             full: op='tiers' — with each tier's questions and access info.
+            dry_run: op='set_status' — True (default) describes without changing.
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
             cursor: next page (`next_cursor` of the previous answer).
             limit: rows per page (the server caps it).
@@ -384,6 +396,12 @@ def register(mcp: FastMCP) -> None:
         if op == "set_status":
             need(user_id, "user_id", op)
             need(status, "status", op)
+            if dry_run:
+                return dry_run_reply(
+                    f"set this member's status to {status}",
+                    "approving a member of a paid tier CAPTURES their payment; "
+                    "declining cancels their subscription",
+                    user_id=user_id, status=status)
             return run(lambda: c.update_member_status(user_id, status))
         raise bad_op(op, "tiers | add | set_status")
 
@@ -396,7 +414,7 @@ def register(mcp: FastMCP) -> None:
         url: Optional[str] = None,
         event_types: Optional[List[str]] = None,
         status: Optional[Literal["active", "paused"]] = None,
-        full: bool = False,
+        dry_run: bool = True,
         calendar_id: Optional[str] = None,
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
@@ -408,8 +426,12 @@ def register(mcp: FastMCP) -> None:
         calendar.person.unsubscribed, event.created, event.updated,
         event.canceled, guest.registered, guest.updated, guest.refunded,
         ticket.registered. `update` changes the types or pauses / resumes
-        (`status`) without deleting. The signing `secret` is left out of
-        `list` (named in `omitted`); `get` or `full=true` returns it.
+        (`status`) without deleting.
+
+        ⚠️ `create` sends the calendar's notifications — guest names, emails
+        and registrations included — to `url`: it is **dry-run by default**.
+        The signing `secret` is never returned, by any op (named in
+        `omitted`): whoever verifies signatures reads it in Luma's dashboard.
 
         Args:
             op: list | get | create | update | delete.
@@ -417,26 +439,35 @@ def register(mcp: FastMCP) -> None:
             url: op='create' — public HTTPS endpoint.
             event_types: create / update.
             status: op='update' — active or paused.
-            full: op='list' — every field, signing secret included.
+            dry_run: op='create' — True (default) describes without creating.
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
             cursor: next page (`next_cursor` of the previous answer).
             limit: rows per page (the server caps it).
         """
         c = _client(calendar_id)
         if op == "list":
-            return _slim(run(lambda: c.list_webhooks(limit=limit, cursor=cursor)),
-                         WEBHOOK_ROW_OMITTED, full)
+            out = _slim(run(lambda: c.list_webhooks(limit=limit, cursor=cursor)),
+                        (WEBHOOK_SECRET,), False)
+            if isinstance(out, dict) and "omitted" in out:
+                out["omitted"]["how"] = WEBHOOK_SECRET_HOW
+            return out
         if op == "get":
             need(webhook_id, "webhook_id", op)
-            return run(lambda: c.get_webhook(webhook_id))
+            return without_secret(run(lambda: c.get_webhook(webhook_id)))
         if op == "create":
             need(url, "url", op)
             need(event_types, "event_types", op)
-            return run(lambda: c.create_webhook(url, event_types))
+            if dry_run:
+                return dry_run_reply(
+                    "send the calendar's notifications to this URL",
+                    "every selected notification is posted to this URL, guest "
+                    "names, emails and registrations included",
+                    url=url, event_types=event_types, calendar_id=calendar_id)
+            return without_secret(run(lambda: c.create_webhook(url, event_types)))
         if op == "update":
             need(webhook_id, "webhook_id", op)
-            return run(lambda: c.update_webhook(webhook_id, event_types=event_types,
-                                                status=status))
+            return without_secret(run(lambda: c.update_webhook(
+                webhook_id, event_types=event_types, status=status)))
         if op == "delete":
             need(webhook_id, "webhook_id", op)
             return run(lambda: c.delete_webhook(webhook_id))

@@ -188,7 +188,7 @@ PROTECTED_NAMESPACES: frozenset[str] = frozenset({"data", "run", "feedback"})
 # écrire une donnée ou poster un message. FOD (données publiques France) est le
 # cœur de cible. Étendre = ajouter un namespace read-only ici (source unique).
 TESTABLE_NAMESPACES: frozenset[str] = frozenset(
-    {"fr", "foncier", "urba", "sante", "frenchtech", "culture", "infosec"})
+    {"fr", "foncier", "urba", "sante", "frenchtech", "culture", "infosec", "bodacc"})
 
 
 def namespace_of(name: str) -> str:

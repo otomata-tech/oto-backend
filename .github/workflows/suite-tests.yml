@@ -119,6 +119,93 @@ jobs:
           SORTIE="$RUNNER_TEMP/suite-part-$PART"
           echo "SORTIE=$SORTIE" >> "$GITHUB_ENV"
           python scripts/repartir_suite.py part --cible "$CIBLE" --parts "$NOMBRE" --part "$PART" --sortie "$SORTIE" >> "$GITHUB_ENV"
+      # ─────────────────────────────────────────────────────────────────────────
+      # POSTGRESQL 17 + PGVECTOR SUR LE RUNNER — PLUS AUCUNE IMAGE DOCKER EN CI.
+      #
+      # Le 09/10/2026 (runs 37990063487 et 37990074801), les sept parts sont sorties
+      # rouges deux fois sur `docker run pgvector/pgvector:pg17 … exit status 125`, 346 à
+      # 757 erreurs par part, AUCUN test en cause. Cause lue une fois le stderr rendu
+      # (f308eddb) : « toomanyrequests: You have reached your unauthenticated pull rate
+      # limit » — la limite Docker Hub par adresse IP, partagée entre tous les runners
+      # GitHub, atteinte par sept parts × quatre workers anonymes. Décision d'Alexis le
+      # soir même : la CI ne dépend plus de Docker Hub. PostgreSQL 17 et pgvector sont
+      # installés ICI, depuis les paquets officiels PGDG, et la fixture `pg_box` prend le
+      # chemin `OTO_TEST_PG_DSN` qu'elle connaît déjà (`tests/conftest.py`) : chaque
+      # module crée sa base par `CREATE DATABASE` sur ce serveur. Les postes de dev gardent
+      # leur PostgreSQL jetable docker (`tests/_pg_hygiene.py`).
+      #
+      # L'image `ubuntu-latest` embarque PostgreSQL 16 (service arrêté) posé depuis PGDG,
+      # puis RETIRE le dépôt et sa clé (`install-postgresql.sh` des runner-images) : on
+      # les repose, clé officielle vérifiée par EMPREINTE avant d'être crue. Le cluster 17
+      # ne prend pas 5432 (le 16 le réserve, même arrêté) : le port se LIT dans
+      # `pg_lsclusters`, il n'est jamais deviné. Réglages d'une base jetable (`fsync`,
+      # `synchronous_commit`, `full_page_writes` off) : rien à conserver au-delà du job.
+      # `max_connections = 200` : au plus 4 workers (`repartir_suite.py` borne `-n` aux
+      # cœurs, 4 sur ubuntu-latest) × un pool de 24 (`OTO_MCP_DB_POOL_MAX`) + les
+      # connexions racine des fixtures, loin des 100 par défaut. Le mot de passe est
+      # jetable, local au runner et écrit en clair à dessein : un secret n'y protégerait rien.
+      # Pas de cache des `.deb` : ~25 Mo depuis PGDG, et un cache qui casse coûte plus que
+      # les secondes qu'il rend. La durée du pas est mesurée et écrite dans le résumé.
+      - name: PostgreSQL 17 + pgvector sur le runner
+        run: |
+          set -euo pipefail
+          DEBUT=$(date +%s)
+          CODENAME=$(lsb_release -cs)
+
+          echo "── dépôt PGDG (${CODENAME}-pgdg), clé vérifiée par empreinte"
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
+          EMPREINTE=$(gpg --show-keys --with-colons /usr/share/keyrings/postgresql.gpg | awk -F: '$1=="fpr"{print $10; exit}')
+          if [ "$EMPREINTE" != "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" ]; then
+            echo "::error title=Clé PGDG inattendue::empreinte lue $EMPREINTE — rien n'est installé."
+            exit 1
+          fi
+          echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+
+          echo "── paquets postgresql-17 et postgresql-17-pgvector"
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            postgresql-17 postgresql-17-pgvector
+
+          echo "── le cluster 17/main, créé s'il manque"
+          # Sur les images runner, postgresql-common ne crée AUCUN cluster à l'installation
+          # (`create_main_cluster = false` dans /etc/postgresql-common/createcluster.conf) :
+          # /etc/postgresql/17/main n'existe pas, et le premier run (38030634106, 10/10) est
+          # mort sur « conf.d/oto-tests.conf: No such file or directory ». Le cluster se crée
+          # donc explicitement, sans le démarrer : les réglages se posent d'abord.
+          if ! pg_lsclusters -h | awk '$1=="17" && $2=="main"' | grep -q .; then
+            sudo pg_createcluster 17 main
+          fi
+          pg_lsclusters
+
+          echo "── réglages d'une base jetable, puis (re)démarrage du cluster 17/main"
+          sudo install -d -o postgres -g postgres /etc/postgresql/17/main/conf.d
+          sudo tee /etc/postgresql/17/main/conf.d/oto-tests.conf >/dev/null <<'CONF'
+          fsync = off
+          synchronous_commit = off
+          full_page_writes = off
+          max_connections = 200
+          CONF
+          sudo pg_ctlcluster 17 main restart
+          pg_lsclusters
+          PORT=$(pg_lsclusters -h | awk '$1=="17" && $2=="main" {print $3}')
+          if [ -z "$PORT" ]; then
+            echo "::error title=Cluster 17/main introuvable::pg_lsclusters ne le liste pas — voir le tableau ci-dessus."
+            exit 1
+          fi
+
+          echo "── rôle postgres, puis l'extension vector sur une base de contrôle (ce que fait init_db)"
+          sudo -u postgres psql -p "$PORT" -v ON_ERROR_STOP=1 -qc "ALTER USER postgres PASSWORD 'oto-test'"
+          DSN="postgresql://postgres:oto-test@127.0.0.1:${PORT}/postgres"
+          psql "$DSN" -v ON_ERROR_STOP=1 -qc 'CREATE DATABASE oto_controle'
+          psql "${DSN%/postgres}/oto_controle" -v ON_ERROR_STOP=1 -qc 'CREATE EXTENSION vector' \
+            -c "SELECT 'pgvector ' || extversion FROM pg_extension WHERE extname = 'vector'"
+          psql "$DSN" -v ON_ERROR_STOP=1 -qc 'DROP DATABASE oto_controle'
+
+          echo "OTO_TEST_PG_DSN=$DSN" >> "$GITHUB_ENV"
+          FIN=$(date +%s)
+          echo "PostgreSQL 17 + pgvector prêt sur 127.0.0.1:${PORT} en $((FIN - DEBUT)) s (sans docker)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Tests
         # `--dist loadgroup` (#963) : un module à fixture `scope="module"` (une base Postgres
         # jetable) reste sur UN worker — `load` le scindait test par test et le second test ne

@@ -355,6 +355,35 @@ marque) restait aveugle sur une clé morte qu'un agent programmé heurtait chaqu
   pas lire, ou la limite de débit d'un fournisseur (Hunter). Un connecteur dont le 403
   veut dire « clé morte » le déclare sur son exception.
 
+#### Les scopes, mesurés par la sonde (`auth+scopes`, 09/10/2026)
+
+Troisième couverture de sonde, après `auth` et `auth+quota` (`connectors/verify.py`) :
+la clé s'authentifie, **et** on sait, famille par famille, ce qu'elle a le droit de lire.
+Née sur HubSpot, qui accorde ses scopes objet par objet : un portail sans le scope
+tickets s'affichait sain, et le manque n'apparaissait qu'au 403 d'un agent en pleine
+tâche.
+
+- **Une mesure, jamais le verdict.** Les scopes sortent dans `scopes` (clé de mesure,
+  comme `quota` et `identity`) : `granted` | `missing` | `unknown` par famille, les scopes
+  à ajouter, et un résumé (`connected, tickets scope missing`). Une famille manquante
+  laisse `ok:true` — la clé marche pour le reste (troisième règle d'oto#69), et la
+  carte ne passe pas au rouge pour autant.
+- **Lu sur le jeton quand le fournisseur le dit** (HubSpot :
+  `POST /oauth/v2/private-apps/get/access-token-info`), sinon **une lecture minimale par
+  famille** (`limit=1`), où seul le `MISSING_SCOPES` du fournisseur vaut `missing` — un
+  autre 403 vaut `unknown`. Sans effet de bord, et **bornée à son propre niveau** : 8 s
+  par requête, 20 s en tout, sans la reprise sur 429 du client ; ce qui n'a pas été
+  atteint dit `unknown`.
+- **Le refus à l'appel nomme le scope.** Il le prend dans le corps du fournisseur quand il
+  y est (`requiredGranularScopes`), sinon dans la table de référence du connecteur, et
+  dit laquelle des deux sources a parlé (`scopes_source`).
+
+**Des faits structurés sur un refus : `oto_detail`.** L'enveloppe réécrit toute erreur et
+ne gardait que le message. Un outil peut désormais poser un dict `oto_detail` sur son
+exception ; l'enveloppe le relaie tel quel en `data.oto.detail` (HubSpot : `scope_to_add`,
+`accepted_scopes`, `object_id`…). Attribut **dédié**, posé exprès : jamais le `data`
+d'une `McpError` quelconque, jamais rien du corps amont.
+
 **Un fournisseur qui dit « à sec » autrement qu'en 402** se traduit DANS son module, vers
 une exception qui porte `status_code = 402` : la taxonomie et la sonde font le reste, sans
 chemin parallèle. C'est le cas de **Serper**, qui répond `400 « Not enough credits »`

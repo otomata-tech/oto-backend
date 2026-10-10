@@ -70,6 +70,9 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from .hubspot_pipelines import (
+    add_labels, compact_property, fill_pipeline_options, filter_properties)
+from .hubspot_scopes import measure_scopes, missing_scopes_refusal, translate
 
 
 #: The keys that `batch_read_objects` ALWAYS returns, both of them, never
@@ -228,57 +231,38 @@ def _rows_from_memberships(memberships, records, properties=None) -> list[dict]:
 
 # HubSpot returns a 403 `MISSING_SCOPES` whose message — "The scope needed for this
 # API call isn't available for public use" — reads as "this scope is not
-# available to you". That is FALSE for the objects we serve: the `tickets` scope is
-# documented "Available to all accounts", it is ticked in the private app. The raw body
-# went as is to the agent, which had no reason to see a checkbox to tick on the
-# customer's side: the same signal was filed AGAIN IDENTICALLY two days in a row by the
-# same daily procedure (#636 then #649). So we NAME the action.
+# available to you". The raw body went as is to the agent, which had no reason to
+# see a checkbox to tick on the customer's side: the same signal was filed AGAIN
+# IDENTICALLY two days in a row by the same daily procedure (#636 then #649). So we
+# NAME the action — and now the scope (`hubspot_scopes`). Kept under this name:
+# `hubspot_lignes` routes its per-row stop on it.
 def _scope_refusal(e, object_type) -> Optional[McpError]:
     """The MISSING_SCOPES 403 translated into an actionable refusal, or None if anything else."""
-    if getattr(e, "status_code", None) != 403:
-        return None
-    body = getattr(e, "body", None)
-    if not (isinstance(body, dict) and body.get("category") == "MISSING_SCOPES"):
-        return None
-    return McpError(ErrorData(code=INVALID_PARAMS, message=(
-        f"HubSpot refuses this read for lack of a scope on the token "
-        f"(403 MISSING_SCOPES, object_type={object_type!r}). Its message \"isn't "
-        "available for public use\" is misleading: the scope exists and can be ticked. "
-        "On the HubSpot side: Settings > Integrations > Private Apps > the app that carries this "
-        "token > Scopes tab, enable the one for this object (`tickets` for "
-        "tickets, `crm.objects.*` for contacts/companies/deals, "
-        "`crm.lists.*` for lists), then re-read the token. Nothing to fix in "
-        "the call: the other objects answer with the SAME key.")))
+    return missing_scopes_refusal(e, object_type=object_type)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
-    """"Test the connection" probe — otomata-tech/oto#69. Covers `auth` ONLY.
+def _verify(fields: dict, config: dict | None = None) -> dict:
+    """"Test the connection" probe — otomata-tech/oto#69. Covers `auth+scopes`.
 
-    `GET /account-info/v3/details`. What the HubSpot docs establish:
-
-    - **authenticated** — Bearer token (private app token), like the rest of
-      the API;
-    - **no side effects** — an account read (`portalId`, `accountType`,
-      `timeZone`…);
-    - **the cost** — no mention of cost or of a particular rate limit
-      for this call. Absence of mention is a hint, not proof.
-
-    **Authenticated ≠ usable** (oto#69 class): it does NOT distinguish here — this
-    call reveals no scope, and HubSpot grants them OBJECT BY OBJECT
-    (`crm.objects.contacts.*`, `tickets`…, see `_scope_refusal` above):
-    a token can read contacts and not tickets, which is NOT a
-    "dead connector" state, it is a gap LOCAL to one object (403 `MISSING_SCOPES`
-    already translated on the real call). Third rule of oto#69: a partial scope is not
-    measured in the connection verdict.
+    1. **auth** — `GET /account-info/v3/details`: an account read (`portalId`,
+       `accountType`, `timeZone`…), no side effect. A refusal here RAISES: it is
+       the connection's verdict.
+    2. **scopes** — HubSpot grants its scopes OBJECT BY OBJECT: a token can read
+       contacts and not tickets. That is not a dead connector (oto#69, third rule:
+       a partial scope is not the connection's verdict), so it never raises — it
+       is RETURNED as a measurement, per family (`hubspot_scopes.measure_scopes`):
+       read from the token itself when HubSpot answers, else one minimal read per
+       family. Bounded, read-only, and `unknown` for what it could not settle.
     """
     from oto.tools.hubspot.client import HubSpotClient
 
-    infos = HubSpotClient(api_key=fields["key"])._request(
-        "GET", "/account-info/v3/details") or {}
+    client = HubSpotClient(api_key=fields["key"])
+    infos = client._request("GET", "/account-info/v3/details") or {}
     if not infos.get("portalId"):
         raise RuntimeError(
             "HubSpot answered without identifying an account for this key — "
             f"unexpected response: {str(infos)[:200]}")
+    return {"scopes": measure_scopes(client, fields["key"])}
 
 
 def register(mcp: FastMCP) -> None:
@@ -286,7 +270,7 @@ def register(mcp: FastMCP) -> None:
 
     from oto.tools.hubspot.client import HubSpotClient
 
-    connector_verify.register("hubspot", _verify)
+    connector_verify.register("hubspot", _verify, couvre=connector_verify.AUTH_SCOPES)
 
     def _client() -> HubSpotClient:
         key, _ = access.resolve_api_key("hubspot")
@@ -348,6 +332,7 @@ def register(mcp: FastMCP) -> None:
         body: Optional[str] = None,
         limit: int = 100,
         after: Optional[str] = None,
+        resolve_labels: bool = False,
     ) -> dict:
         """HubSpot CRM objects — one tool, the verb in `op`.
 
@@ -407,29 +392,40 @@ def register(mcp: FastMCP) -> None:
             limit: op="search"/"list" — page size (HubSpot caps it at 100).
             after: op="search"/"list" — pagination cursor from a previous response
                 (paging.next.after).
+            resolve_labels: op="search"/"list"/"get" on deals or tickets — add
+                `dealstage_label` / `pipeline_label` (`hs_pipeline_stage_label` /
+                `hs_pipeline_label` on tickets) NEXT TO the raw ids, which stay
+                (writes need them). One pipelines read per call.
         """
         c = _client()
 
+        def _labelled(result):
+            # Opt-in, and only ever ADDS sibling keys: without the flag the client's
+            # answer goes back untouched, exactly as before.
+            if resolve_labels:
+                add_labels(result, object_type, c)
+            return result
+
         try:
             if op == "search":
-                return c.search_objects(
+                return _labelled(c.search_objects(
                     _need(object_type, "object_type", op),
                     query=query, filters=filters,
                     properties=_names(properties, "properties", op),
-                    limit=limit, after=after)
+                    limit=limit, after=after))
 
             if op == "list":
-                return c.list_objects(
+                return _labelled(c.list_objects(
                     _need(object_type, "object_type", op),
                     properties=_names(properties, "properties", op),
-                    limit=limit, after=after)
+                    limit=limit, after=after))
 
             if op == "get":
-                return c.get_object(
+                return _labelled(c.get_object(
                     _need(object_type, "object_type", op),
                     _need(object_id, "object_id", op),
                     properties=_names(properties, "properties", op),
-                    associations=_names(associations, "associations", op))
+                    associations=_names(associations, "associations", op)))
 
             if op == "create":
                 return c.create_object(
@@ -463,7 +459,7 @@ def register(mcp: FastMCP) -> None:
             raise _bad("op must be 'search', 'list', 'get', 'create', 'update', "
                        "'delete', 'associations' or 'add_note'")
         except UpstreamHTTPError as e:
-            refus = _scope_refusal(e, object_type)
+            refus = translate(e, object_type=object_type, object_id=object_id)
             if refus is None:
                 raise          # any other upstream refusal keeps its shape and its trace
             raise refus from None
@@ -663,151 +659,157 @@ def register(mcp: FastMCP) -> None:
                 writing.
         """
         c = _client()
-
-        # `properties` means nothing anywhere but on op='members': silencing it
-        # would be a MUTE divergence — the caller would believe they asked for
-        # columns and would read a result that carries none.
-        if properties is not None and op != "members":
-            raise _bad(
-                f"op='{op}' does not accept properties: column projection "
-                "only exists on op='members' (for objects, "
-                "it is hubspot_object that carries it)")
-        wanted = _names(properties, "properties", op)
-
-        # `properties=[]` asks for ZERO columns. Letting it through would take the
-        # enriched path: one more `get_list`, then a batch read whose
-        # body omits `properties` — to which HubSpot answers its DEFAULT
-        # projection. The caller would pay three calls for columns that
-        # nobody asked for. The two possible intents already each have
-        # their spelling (omit the argument = ids only; fill it = columns);
-        # the third is refused, not guessed.
-        if wanted is not None and not wanted:
-            raise _bad(
-                f"op='{op}' expects properties = NON-EMPTY list of internal "
-                "property names; properties=[] asks for no column — omit "
-                "the argument to get only the record ids")
-
-        if op == "search":
-            return c.search_lists(
-                query=query,
-                object_type_id=(_object_type_id(object_type, op)
-                                if object_type else None))
-
-        if op == "get":
-            if list_id:
-                return c.get_list(list_id, include_filters=include_filters)
-            if name and object_type:
-                return c.get_list_by_name(
-                    _object_type_id(object_type, op), name,
-                    include_filters=include_filters)
-            raise _bad("op='get' requires list_id, or name + object_type")
-
-        if op == "create":
-            if processing_type != "MANUAL" and filter_branch is None:
+        try:
+            # `properties` means nothing anywhere but on op='members': silencing it
+            # would be a MUTE divergence — the caller would believe they asked for
+            # columns and would read a result that carries none.
+            if properties is not None and op != "members":
                 raise _bad(
-                    f"processing_type='{processing_type}' requires filter_branch "
-                    "(a list without criteria would have no members)")
-            return c.create_list(
-                _need(name, "name", op),
-                _object_type_id(object_type, op),
-                processing_type=processing_type,
-                filter_branch=filter_branch)
+                    f"op='{op}' does not accept properties: column projection "
+                    "only exists on op='members' (for objects, "
+                    "it is hubspot_object that carries it)")
+            wanted = _names(properties, "properties", op)
 
-        if op == "update":
-            lid = _need(list_id, "list_id", op)
-            if name is None and filter_branch is None:
-                raise _bad("op='update' requires name and/or filter_branch")
-            out: dict = {}
-            if name is not None:
-                out["renamed"] = c.update_list_name(lid, name)
-            if filter_branch is not None:
-                out["filters"] = c.update_list_filters(lid, filter_branch)
-            return out
+            # `properties=[]` asks for ZERO columns. Letting it through would take the
+            # enriched path: one more `get_list`, then a batch read whose
+            # body omits `properties` — to which HubSpot answers its DEFAULT
+            # projection. The caller would pay three calls for columns that
+            # nobody asked for. The two possible intents already each have
+            # their spelling (omit the argument = ids only; fill it = columns);
+            # the third is refused, not guessed.
+            if wanted is not None and not wanted:
+                raise _bad(
+                    f"op='{op}' expects properties = NON-EMPTY list of internal "
+                    "property names; properties=[] asks for no column — omit "
+                    "the argument to get only the record ids")
 
-        if op == "delete":
-            lid = _need(list_id, "list_id", op)
-            if dry_run:
-                return {"dry_run": True, "would": "delete", "list_id": lid,
-                        "current": c.get_list(lid),
-                        "note": "restorable for 90 days via op='restore'"}
-            return c.delete_list(lid)
+            if op == "search":
+                return c.search_lists(
+                    query=query,
+                    object_type_id=(_object_type_id(object_type, op)
+                                    if object_type else None))
 
-        if op == "restore":
-            return c.restore_list(_need(list_id, "list_id", op))
+            if op == "get":
+                if list_id:
+                    return c.get_list(list_id, include_filters=include_filters)
+                if name and object_type:
+                    return c.get_list_by_name(
+                        _object_type_id(object_type, op), name,
+                        include_filters=include_filters)
+                raise _bad("op='get' requires list_id, or name + object_type")
 
-        if op == "members":
-            lid = _need(list_id, "list_id", op)
-            page = c.get_list_memberships(lid, limit=limit, after=after)
-            if wanted is None:
-                # Historical path INTACT: one call, its response returned as
-                # is — not re-wrapped, not augmented with a key.
-                return page
-            membres = (page or {}).get("results") or []
-            otype = _batch_object_type(c, lid, object_type, op)
-            ids = [str(m.get("recordId")) for m in membres
-                   if m.get("recordId") is not None]
-            # The slicing at 100 is HubSpot's, hence the CLIENT's:
-            # a second slicer here would be a mirror that nothing ties together, and
-            # that would drift silently. An empty batch read is a 400 at
-            # HubSpot — a page without members has nothing to read.
-            #
-            # `batch_read_objects` returns an ENVELOPE, not a list:
-            # `{"results": [...], "missing_ids": [...]}`. We open it, and we SERVE
-            # `missing_ids` — it is the client's verdict on the ids that HubSpot
-            # did not return, and re-deriving it here while throwing away its own would turn
-            # two computations into a single number, with no way to ever compare them.
-            lecture = (c.batch_read_objects(otype, ids, properties=wanted)
-                       if ids else {"results": [], "missing_ids": []})
-            records, absents = _batch_read_envelope(lecture)
-            out = dict(page or {})  # `paging` and `total` survive verbatim
-            out["results"] = _rows_from_memberships(membres, records, wanted)
-            out["object_type"] = otype  # provenance: the type actually read
-            out.update(_missing_report(out["results"], absents))
-            return out
+            if op == "create":
+                if processing_type != "MANUAL" and filter_branch is None:
+                    raise _bad(
+                        f"processing_type='{processing_type}' requires filter_branch "
+                        "(a list without criteria would have no members)")
+                return c.create_list(
+                    _need(name, "name", op),
+                    _object_type_id(object_type, op),
+                    processing_type=processing_type,
+                    filter_branch=filter_branch)
 
-        if op == "add_members":
-            lid = _need(list_id, "list_id", op)
-            ids = _ids(record_ids, "record_ids", op)
-            _writable_list(c, lid, op)
-            if remove_record_ids:
-                return c.add_and_remove_list_memberships(
-                    lid, record_ids_to_add=ids,
-                    record_ids_to_remove=_ids(
-                        remove_record_ids, "remove_record_ids", op))
-            return c.add_list_memberships(lid, ids)
+            if op == "update":
+                lid = _need(list_id, "list_id", op)
+                if name is None and filter_branch is None:
+                    raise _bad("op='update' requires name and/or filter_branch")
+                out: dict = {}
+                if name is not None:
+                    out["renamed"] = c.update_list_name(lid, name)
+                if filter_branch is not None:
+                    out["filters"] = c.update_list_filters(lid, filter_branch)
+                return out
 
-        if op == "remove_members":
-            lid = _need(list_id, "list_id", op)
-            ids = _ids(record_ids, "record_ids", op)
-            info = _writable_list(c, lid, op)
-            if dry_run:
-                return {"dry_run": True, "would": "remove_members",
-                        "list_id": lid, "record_ids": ids, "current": info}
-            return c.remove_list_memberships(lid, ids)
+            if op == "delete":
+                lid = _need(list_id, "list_id", op)
+                if dry_run:
+                    return {"dry_run": True, "would": "delete", "list_id": lid,
+                            "current": c.get_list(lid),
+                            "note": "restorable for 90 days via op='restore'"}
+                return c.delete_list(lid)
 
-        if op == "clear_members":
-            lid = _need(list_id, "list_id", op)
-            info = _writable_list(c, lid, op)
-            if dry_run:
-                return {"dry_run": True, "would": "clear_members",
-                        "list_id": lid, "current": info,
-                        "note": "removes ALL members; the list survives"}
-            return c.delete_all_list_memberships(lid)
+            if op == "restore":
+                return c.restore_list(_need(list_id, "list_id", op))
 
-        if op == "copy_from":
-            lid = _need(list_id, "list_id", op)
-            src = _need(source_list_id, "source_list_id", op)
-            _writable_list(c, lid, op)
-            return c.add_memberships_from_list(lid, src)
+            if op == "members":
+                lid = _need(list_id, "list_id", op)
+                page = c.get_list_memberships(lid, limit=limit, after=after)
+                if wanted is None:
+                    # Historical path INTACT: one call, its response returned as
+                    # is — not re-wrapped, not augmented with a key.
+                    return page
+                membres = (page or {}).get("results") or []
+                otype = _batch_object_type(c, lid, object_type, op)
+                ids = [str(m.get("recordId")) for m in membres
+                       if m.get("recordId") is not None]
+                # The slicing at 100 is HubSpot's, hence the CLIENT's:
+                # a second slicer here would be a mirror that nothing ties together, and
+                # that would drift silently. An empty batch read is a 400 at
+                # HubSpot — a page without members has nothing to read.
+                #
+                # `batch_read_objects` returns an ENVELOPE, not a list:
+                # `{"results": [...], "missing_ids": [...]}`. We open it, and we SERVE
+                # `missing_ids` — it is the client's verdict on the ids that HubSpot
+                # did not return, and re-deriving it here while throwing away its own would turn
+                # two computations into a single number, with no way to ever compare them.
+                lecture = (c.batch_read_objects(otype, ids, properties=wanted)
+                           if ids else {"results": [], "missing_ids": []})
+                records, absents = _batch_read_envelope(lecture)
+                out = dict(page or {})  # `paging` and `total` survive verbatim
+                out["results"] = _rows_from_memberships(membres, records, wanted)
+                out["object_type"] = otype  # provenance: the type actually read
+                out.update(_missing_report(out["results"], absents))
+                return out
 
-        if op == "record_lists":
-            return c.get_record_memberships(
-                _object_type_id(object_type, op),
-                _need(record_id, "record_id", op))
+            if op == "add_members":
+                lid = _need(list_id, "list_id", op)
+                ids = _ids(record_ids, "record_ids", op)
+                _writable_list(c, lid, op)
+                if remove_record_ids:
+                    return c.add_and_remove_list_memberships(
+                        lid, record_ids_to_add=ids,
+                        record_ids_to_remove=_ids(
+                            remove_record_ids, "remove_record_ids", op))
+                return c.add_list_memberships(lid, ids)
 
-        raise _bad("op must be 'search', 'get', 'create', 'update', 'delete', "
-                   "'restore', 'members', 'add_members', 'remove_members', "
-                   "'clear_members', 'copy_from' or 'record_lists'")
+            if op == "remove_members":
+                lid = _need(list_id, "list_id", op)
+                ids = _ids(record_ids, "record_ids", op)
+                info = _writable_list(c, lid, op)
+                if dry_run:
+                    return {"dry_run": True, "would": "remove_members",
+                            "list_id": lid, "record_ids": ids, "current": info}
+                return c.remove_list_memberships(lid, ids)
+
+            if op == "clear_members":
+                lid = _need(list_id, "list_id", op)
+                info = _writable_list(c, lid, op)
+                if dry_run:
+                    return {"dry_run": True, "would": "clear_members",
+                            "list_id": lid, "current": info,
+                            "note": "removes ALL members; the list survives"}
+                return c.delete_all_list_memberships(lid)
+
+            if op == "copy_from":
+                lid = _need(list_id, "list_id", op)
+                src = _need(source_list_id, "source_list_id", op)
+                _writable_list(c, lid, op)
+                return c.add_memberships_from_list(lid, src)
+
+            if op == "record_lists":
+                return c.get_record_memberships(
+                    _object_type_id(object_type, op),
+                    _need(record_id, "record_id", op))
+
+            raise _bad("op must be 'search', 'get', 'create', 'update', 'delete', "
+                       "'restore', 'members', 'add_members', 'remove_members', "
+                       "'clear_members', 'copy_from' or 'record_lists'")
+        except UpstreamHTTPError as e:
+            refus = translate(e, object_type=object_type, object_id=list_id,
+                              family="lists", what="list")
+            if refus is None:
+                raise
+            raise refus from None
 
     @mcp.tool()
     def hubspot_property(
@@ -817,6 +819,11 @@ def register(mcp: FastMCP) -> None:
         definition: Optional[dict] = None,
         archived: bool = False,
         dry_run: bool = False,
+        names: Optional[list[str]] = None,
+        group: Optional[str] = None,
+        include_hidden: bool = False,
+        custom_only: bool = False,
+        verbose: bool = False,
     ) -> dict:
         """HubSpot properties — the field schema of a CRM object type.
 
@@ -827,16 +834,16 @@ def register(mcp: FastMCP) -> None:
         silently writes nothing. List criteria (`hubspot_list`'s `filter_branch`)
         reference the same internal names.
 
-        ⚠️ One enumeration is NOT self-describing here: `dealstage` comes back
-        with an EMPTY `options` list, because deal stages belong to a pipeline,
-        not to the property. Reading this tool is not enough to write a deal
-        stage — that needs the Pipelines API, which this connector does not
-        expose yet.
+        Deal and ticket stages belong to a pipeline, not to the property: their
+        `options` (`dealstage`, `hs_pipeline_stage`) are filled from the
+        pipelines, grouped in `pipeline_options` — `hubspot_pipeline` reads them.
 
         Ops:
-        - **"list"** (default) : every property of `object_type`, with its type,
-          fieldType and enumeration options.
-        - **"get"** : one property, by internal `property_name`.
+        - **"list"** (default) : the properties of `object_type`, one compact row
+          each (name, label, type, fieldType, groupName, options) — hidden
+          HubSpot-internal ones left out unless `include_hidden`. `verbose=true`
+          returns the full cards.
+        - **"get"** : one property (full card), by internal `property_name`.
         - **"create"** : create a property. Requires `definition` — at minimum
           {"name", "label", "type", "fieldType", "groupName"}, plus "options"
           ([{"label", "value"}]) for an enumeration.
@@ -855,17 +862,61 @@ def register(mcp: FastMCP) -> None:
             archived: op="list"/"get" — return archived properties instead.
             dry_run: op="delete" — report the property that would be archived
                 without archiving it.
+            names: op="list" — only these internal names.
+            group: op="list" — only this groupName (see op="groups").
+            include_hidden: op="list" — keep the hidden HubSpot-internal ones.
+            custom_only: op="list" — only the portal's own properties (drops
+                hubspotDefined ones).
+            verbose: op="list" — full HubSpot cards instead of compact rows.
         """
         c = _client()
+        try:
+            return _property_op(c, op, object_type, property_name, definition,
+                                archived, dry_run, names, group, include_hidden,
+                                custom_only, verbose)
+        except UpstreamHTTPError as e:
+            refus = translate(e, object_type=object_type, object_id=property_name,
+                              family="properties", what="property")
+            if refus is None:
+                raise
+            raise refus from None
 
+    def _property_list(c, otype, archived, names, group, include_hidden,
+                       custom_only, verbose) -> dict:
+        """op='list': filter, fill the pipeline-backed options, then project.
+
+        The filters run on the FULL cards (`hidden`/`hubspotDefined` are not in the
+        compact row), and the answer names what they dropped."""
+        raw = c.list_properties(otype, archived=archived) or {}
+        kept, dropped = filter_properties(
+            list(raw.get("results") or []), names=names, group=group,
+            include_hidden=include_hidden, custom_only=custom_only)
+        fill_pipeline_options(kept, otype, c)
+        out = {k: v for k, v in raw.items() if k != "results"}
+        out["results"] = kept if verbose else [compact_property(p) for p in kept]
+        if names:
+            absent = sorted(set(names) - {p.get("name") for p in kept})
+            if absent:
+                out["unknown_names"] = absent
+        out["projection"] = {"compact": not verbose, "dropped": dropped,
+                             "hint": ("verbose=true for full cards; "
+                                      "include_hidden=true for hidden ones")}
+        return out
+
+    def _property_op(c, op, object_type, property_name, definition, archived,
+                     dry_run, names, group, include_hidden, custom_only,
+                     verbose) -> dict:
         if op == "list":
-            return c.list_properties(
-                _need(object_type, "object_type", op), archived=archived)
+            return _property_list(c, _need(object_type, "object_type", op), archived,
+                                  names, group, include_hidden, custom_only, verbose)
 
         if op == "get":
-            return c.get_property(
+            card = c.get_property(
                 _need(object_type, "object_type", op),
                 _need(property_name, "property_name", op), archived=archived)
+            if isinstance(card, dict):
+                fill_pipeline_options([card], object_type, c)
+            return card
 
         if op == "create":
             return c.create_property(
@@ -896,4 +947,10 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def hubspot_owners() -> dict:
         """List HubSpot owners (users) — to assign records by ownerId."""
-        return _client().list_owners()
+        try:
+            return _client().list_owners()
+        except UpstreamHTTPError as e:
+            refus = translate(e, family="owners", what="owner")
+            if refus is None:
+                raise
+            raise refus from None

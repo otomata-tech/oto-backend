@@ -14,15 +14,9 @@ boîte partagée, un agenda d'équipe. Ce banc tient :
 """
 from __future__ import annotations
 
-import os
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_ID", "cid-env")
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-env")
-os.environ.setdefault("OTO_MCP_OAUTH_STATE_SECRET", "state-secret-test")
-os.environ.setdefault("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
 
 from oto_mcp import access, credentials_store, providers, roles  # noqa: E402
 from oto_mcp.auth import google as G  # noqa: E402
@@ -346,7 +340,26 @@ def test_les_identites_proposent_les_comptes_partages_etiquetes(monkeypatch):
     _partages(monkeypatch)
     ids = identities.list_identities("u", "gmail")
     assert [i["id"] for i in ids] == ["group@x.test", "org@x.test"]
-    assert all(i["is_default"] is False and "shared" in i["label"] for i in ids)
+    assert all(i["is_default"] is False and i["shared"] is True for i in ids)
+    # Le libellé reste l'adresse (l'écran dit « partagé » lui-même) ; le palier est servi.
+    assert [(i["label"], i["shared_scope"]) for i in ids] == [
+        ("group@x.test", "team"), ("org@x.test", "org")]
+
+
+def test_le_contrat_sert_shared_pour_que_le_front_masque_revoquer(monkeypatch):
+    """`shared` traverse le modèle de sortie (il le supprimait) : `true` sur un compte
+    partagé par l'équipe/l'org, `false` sur un compte du membre."""
+    from oto_mcp.capabilities.connectors.identities import ConnectorIdentities
+
+    _partages(monkeypatch)
+    monkeypatch.setattr(G.db, "list_google_accounts", lambda sub, org: [
+        {"google_email": "moi@x.test", "is_default": True, "scopes": ALL}])
+    servi = ConnectorIdentities(connector="gmail", supported=True,
+                                identities=identities.list_identities("u", "gmail")
+                                ).model_dump(mode="json")
+    assert {i["id"]: (i["shared"], i["shared_scope"]) for i in servi["identities"]} == {
+        "moi@x.test": (False, None), "group@x.test": (True, "team"),
+        "org@x.test": (True, "org")}
 
 
 def test_le_compte_google_accepte_le_palier_org_et_ses_services_non():
@@ -470,3 +483,11 @@ def test_un_coffre_illisible_ne_fait_pas_revoquer(monkeypatch):
         raise RuntimeError("base indisponible")
     monkeypatch.setattr(G.db, "google_grant_holders", boum)
     assert G._grant_held_elsewhere("moi@x.test", "cid-env", ("org", str(ORG))) is True
+
+
+def test_le_descriptif_openapi_decrit_shared():
+    from oto_mcp import openapi
+
+    proprietes = openapi.build()["components"]["schemas"]["Identity"]["properties"]
+    assert proprietes["shared"]["type"] == "boolean" and proprietes["shared"]["default"] is False
+    assert {"type": "string", "enum": ["team", "org"]} in proprietes["shared_scope"]["anyOf"]

@@ -41,6 +41,19 @@ async def _parametres_de(context, exc) -> list:
     return []
 
 
+def _detail(exc) -> dict:
+    """Le premier `oto_detail` (dict) porté par la chaîne d'exceptions, sinon {}.
+
+    Attribut DÉDIÉ, posé exprès par un outil sur son propre refus : jamais le
+    `data` d'une `McpError` quelconque (une enveloppe déjà posée en porte un, et le
+    recopier l'imbriquerait), jamais rien d'amont (anti-fuite)."""
+    for e in error_taxonomy._chain(exc):
+        d = getattr(e, "oto_detail", None)
+        if isinstance(d, dict) and d:
+            return d
+    return {}
+
+
 class ErrorEnvelopeMiddleware(Middleware):
     """Contrat d'erreur uniforme rendu à l'agent (D2, oto-backend#124).
 
@@ -101,6 +114,12 @@ class ErrorEnvelopeMiddleware(Middleware):
                     session_org.current_call_trace(), None, rejet=info.message)
             if hint:
                 data["hint"] = hint
+            # Faits STRUCTURÉS qu'un outil a posés sur son refus (`oto_detail`, un
+            # dict à nous — ex. hubspot : le scope à ajouter). Sans ce relais, ils
+            # mouraient ici : l'enveloppe réécrit tout et ne gardait que le message.
+            detail = _detail(e)
+            if detail:
+                data["detail"] = detail
             raise McpError(ErrorData(
                 code=error_taxonomy.jsonrpc_code(info),
                 message=info.message,

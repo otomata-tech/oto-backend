@@ -226,8 +226,13 @@ def account_axis_advertised_for(sub: Optional[str]) -> dict[str, str]:
         from . import access, credentials_store
         by_name = {c.name: c for c in providers._REGISTRY_LIST}
         found: dict[str, list[str]] = {}
+        from . import group_store
         for etype, eid, palier in _palier_entities(sub):
-            for row in credentials_store.list_credentials(etype, eid):
+            rows = list(credentials_store.list_credentials(etype, eid))
+            if etype == "group":
+                rows += [{"connector": i["connector"], "account": i["account"], "meta": {}}
+                         for i in group_store.lent_instances(int(eid))]
+            for row in rows:
                 con = by_name.get(row["connector"])
                 if con is None or not con.auth_multi_account:
                     continue

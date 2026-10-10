@@ -19,12 +19,18 @@ import os
 
 import pytest
 
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_ID", "cid-test")
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-test")
-
 from _coffre_google import installer  # noqa: E402
 from oto_mcp import credentials_store  # noqa: E402
 from oto_mcp.auth import google as google_oauth  # noqa: E402
+
+
+# ⚠️ Plus d'écriture d'environnement à l'IMPORT (#1111) : un `os.environ.setdefault` ici
+# valait pour tout le processus dès la collecte, et des bancs d'autres fichiers ne
+# passaient que grâce à lui. Une fixture se déclare, se voit et s'annule.
+@pytest.fixture(autouse=True)
+def _env_google(monkeypatch):
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-test")
 
 
 class _Resp:

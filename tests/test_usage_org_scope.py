@@ -42,7 +42,23 @@ def _wire(monkeypatch):
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink))
     # La borne de durée se juge ailleurs (test_lecture_bornee) : ici, le SQL.
     monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
+    _decoupe_fixe(monkeypatch)
     return sink
+
+
+def _decoupe_fixe(monkeypatch):
+    """Les lentilles lues sur les totaux par jour (#1147) découpent leur fenêtre sur la
+    base ; ici, un découpage FIXE qui porte des jours consolidés ET du direct, pour que
+    le SQL des deux faces (totaux `t.`, journal `l.`) soit écrit et lu."""
+    from oto_mcp.db import journal_jour
+
+    def decouper(conn, objet, *, prefixe, **fenetre):
+        return journal_jour.Decoupe(
+            "2026-10-01", "2026-10-07",
+            f"(now() - make_interval(days => %({prefixe}_jours)s))", None, False,
+            {f"{prefixe}_jours": fenetre.get("jours"), f"{prefixe}_a0": "2026-10-01",
+             f"{prefixe}_a1": "2026-10-07"})
+    monkeypatch.setattr(journal_jour, "decouper", decouper)
 
 
 def test_org_id_adds_scope_clause(monkeypatch):
@@ -71,10 +87,12 @@ def test_without_org_id_no_scope_clause(monkeypatch):
 def test_connector_failure_stats_scope(monkeypatch):
     sink = _wire(monkeypatch)
     usage.connector_failure_stats(since_days=7)
-    assert "l.org_id = %s" not in sink["sql"]
+    assert "org_id = %(jj_org_id)s" not in sink["sql"]
     usage.connector_failure_stats(since_days=7, org_id=35)
-    assert "l.org_id = %s" in sink["sql"]
-    assert 35 in sink["params"]
+    # Le scope sur les DEUX faces : les totaux des jours consolidés et le journal direct.
+    assert "t.org_id = %(jj_org_id)s" in sink["sql"]
+    assert "l.org_id = %(jj_org_id)s" in sink["sql"]
+    assert sink["params"]["jj_org_id"] == 35
 
 
 def test_list_runs_scope(monkeypatch):
@@ -133,9 +151,15 @@ def test_org_adoption_starts_from_members_not_from_calls(monkeypatch):
     précisément lui que l'org_admin cherche."""
     sink = _wire(monkeypatch)
     out = usage.org_adoption(35, active_window_days=30)
-    assert "FROM org_members m" in sink["sql"]
-    assert "c.org_id = m.org_id" in sink["sql"]      # activité raccrochée SOUS cette org
-    assert sink["params"] == (30, 30, 30, 35)
+    sql = sink["sql"]
+    assert "FROM org_members m" in sql and "LEFT JOIN a ON a.sub = m.sub" in sql
+    # L'activité raccrochée SOUS cette org, sur les deux sources (fenêtre, historique)
+    # et les deux faces de chacune (totaux, journal direct).
+    for pref in ("fen", "tout"):
+        assert f"t.org_id = %({pref}_org_id)s" in sql
+        assert f"l.org_id = %({pref}_org_id)s" in sql
+        assert sink["params"][f"{pref}_org_id"] == 35
+    assert sink["params"]["fen_jours"] == 30 and sink["params"]["org_id"] == 35
     # aucune ligne → une org sans membre rend des compteurs à 0, pas une erreur
     assert out["total_members"] == 0 and out["active"] == 0 and out["truncated"] is False
 
@@ -149,6 +173,7 @@ def test_org_adoption_counts_cover_the_whole_population(monkeypatch):
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConnRows(rows))
     # La borne de durée se juge ailleurs (test_lecture_bornee) : ici, le SQL.
     monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
+    _decoupe_fixe(monkeypatch)
     out = usage.org_adoption(35)
     assert out["total_members"] == 5
     assert out["active"] == 2 and out["never_active"] == 3

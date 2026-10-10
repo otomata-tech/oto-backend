@@ -165,6 +165,7 @@ def test_l_usage_compte_les_reussites_de_la_fenetre_et_les_cles_de_plateforme(li
     _appel_journal(org, sub, dans, key_mode="platform")
     _appel_journal(org, sub, dans, ok=False)                   # un échec ne compte pas
     _appel_journal(org, sub, T0 + timedelta(days=40))          # hors fenêtre
+    _consolider_le_journal()
     out = _appel("service.org.usage", org_id=org, since=T0, until=T0 + timedelta(days=30))
     assert out["by_person"] == [{"sub": sub, "calls": 2, "platform_calls": 1}]
     assert _refus("service.org.usage", org_id=org, since=T0, until=T0).code == "invalid_window"
@@ -426,3 +427,11 @@ def test_la_route_effective_n_est_pas_avalee_par_celle_de_la_source():
                if r.matches(scope)[0] is Match.FULL]
     assert [r.path for r in pleines] == [
         "/api/service/users/{sub}/entitlements/{right_key}/effective"]
+
+
+def _consolider_le_journal():
+    """La consommation se lit sur les totaux par jour (#1147) : comme en production après le
+    rattrapage, chaque jour clos du journal du banc est (re)consolidé avant la lecture."""
+    from oto_mcp.db import journal_jour
+    for jour in journal_jour.jours_a_consolider(refaire=True):
+        journal_jour.consolider_jour(jour)

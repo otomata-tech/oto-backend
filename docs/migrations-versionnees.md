@@ -520,19 +520,34 @@ neuve : `poser_au_demarrage`, non concurrent). Au-delà du seuil de taille (esti
 `pg_class.reltuples`), ni la révision ni le démarrage ne le construisent — mesuré en
 production, 172 s pour environ 12 M lignes de `tool_calls`, au-delà des 120 s de la
 fenêtre de démarrage : la révision lève `ConstructionManuelleRequise`, le démarrage le dit
-en erreur et continue. Le geste manuel, que la révision rejouée constate ensuite :
+en erreur et continue. Le geste manuel est une **commande versionnée**, jouée par le
+lanceur comme `migrer` (la ligne `systemd-run` du §5), puis la révision rejouée constate
+les index et ne construit rien :
 
-```sql
-SET statement_timeout = 0;          -- la construction lit deux fois toute la table
-SET lock_timeout = '5min';
-CREATE INDEX CONCURRENTLY IF NOT EXISTS <nom> ON <table> <forme>;
-SELECT indisvalid FROM pg_index WHERE indexrelid = '<nom>'::regclass;   -- doit valoir t
--- si f : DROP INDEX CONCURRENTLY IF EXISTS <nom>; puis rejouer le CREATE
+```
+oto-mcp maintenance index-concurrents 0049      # ou l'identifiant complet de la révision
+oto-mcp migrer upgrade head
 ```
 
-Le `CREATE` exact se tire du code (`IndexConcurrent.ddl_concurrent`), il ne se retape pas :
-une expression d'index qui diffère d'un caractère de celle de la requête ne sert aucune
-lecture.
+Elle prend les index de la révision dans le registre unique du code
+(`index_concurrent.declares()`, gardé par un banc contre toute déclaration oubliée) et,
+un par un, sur une connexion hors transaction (`statement_timeout = 0`,
+`lock_timeout = '5min'`) : un index déjà valide est laissé tel quel ; un index absent est
+construit (`IndexConcurrent.ddl_concurrent`, le `CREATE` exact tiré du code — une
+expression qui diffère d'un caractère de celle de la requête ne sert aucune lecture), sa
+durée journalisée, puis `indisvalid` exigé ; un index **INVALIDE** arrête tout, sans
+construire les suivants, et la commande **nomme** le `DROP INDEX CONCURRENTLY IF EXISTS
+<nom>` à jouer **sans le jouer** — un index cassé reste un geste humain (décision
+d'Alexis, 09/10/2026), qu'on fait suivre de la même commande. Sortie : `0` posés,
+`1` refus (révision sans index de ce régime, index invalide), `2` erreur (base
+injoignable, construction interrompue : la relancer, elle dira si l'index est resté
+invalide). Aucun plafond de taille : c'est tout l'objet du geste.
+
+Un index sans révision (posé avant la référence du registre, §5.4 —
+`idx_tool_calls_org_tool_ok`, les deux index de la recherche dans les valeurs) n'a pas de
+commande : sur une base vivante il existe déjà, et sa procédure reste le SQL brut
+(`SET statement_timeout = 0; SET lock_timeout = '5min'; DROP INDEX CONCURRENTLY IF EXISTS
+<nom>; CREATE INDEX CONCURRENTLY …;` puis vérifier `indisvalid`).
 
 ⚠️ **`lock_timeout` de quelques minutes, pas de quelques secondes** : la phase
 concurrente attend la fin de chaque transaction plus ancienne qu'elle par une attente
@@ -545,8 +560,8 @@ seul un `ShareUpdateExclusiveLock` est demandé sur la table : ni les lectures n
 ⚠️ **Un index invalide ne se répare pas tout seul** : `IF NOT EXISTS` le prend pour
 fait, et il ne sert aucune lecture. D'où la vérification d'`indisvalid` après chaque
 construction, et le `DROP INDEX CONCURRENTLY` avant de reconstruire. Ni la révision ni
-le démarrage ne le font à votre place : la révision lève `IndexInvalide` en donnant ces
-gestes, le démarrage le dit en erreur et continue.
+le démarrage ni la commande ne le font à votre place : la révision et la commande lèvent
+`IndexInvalide` en donnant ces gestes, le démarrage le dit en erreur et continue.
 
 **Le registre au 06/10/2026** (squash, §5.4) — la liste par révision qui précédait, de
 `0001_point_de_depart` à `0040_tenants_desactivation`, est archivée dans git (le tag
@@ -557,7 +572,7 @@ gestes, le démarrage le dit en erreur et continue.
 | `0041_recherche_valeurs_servies` | **référence** — vide, sans précédente | rien : elle documente « schéma = celui du démarrage au 06/10/2026 ». Y monter lève, en descendre lève |
 | `0042_orgs_suspension_par_tenant` | vivante | `orgs.suspended_tenant_id BIGINT`, nullable sans défaut ni index (écriture de catalogue ; `AccessExclusiveLock` bref sur `orgs`, attente bornée par `lock_timeout` 5 s). NULL = suspension posée sur l'org ; sinon le tenant dont la désactivation l'a posée, et que sa réactivation lève. **Avant la fusion** (oto-backend#1165). Retour arrière : retire la colonne |
 | `0048_origine_ecritures_retiree` | vivante | `DROP TABLE IF EXISTS origine_ecritures` (le relevé du préavis d'oto#70, sans lecteur ni écrivain), seulement si la table existe (`to_regclass`, sans verrou) ; là où elle existe, `AccessExclusiveLock` bref sur elle seule, attente bornée par `lock_timeout` 5 s. **Après le tag** : l'ancien code l'écrit et son démarrage la recrée (oto-backend#1109). Retour arrière : lève (irréversible) |
-| `0049_tool_calls_ouvertures_runs` | vivante | trois index partiels des ouvertures de runs (`WHERE tool = 'run_start' AND run_id IS NOT NULL`) : `idx_tool_calls_run_start (created_at DESC, id DESC)`, `idx_tool_calls_run_start_org (org_id, created_at DESC, id DESC)`, `idx_tool_calls_run_start_sub (sub, org_id, created_at DESC, id DESC)` — le choix de page des listes de runs (`usage._derniers_runs`, infra#9). CONCURRENTLY sous le verdict commun : sur la base servie, **geste manuel** (ci-dessus), la révision rejouée le constate. `ShareUpdateExclusiveLock` sur `tool_calls`, rien de bloqué. **Ordre indifférent.** Retour arrière : `DROP INDEX CONCURRENTLY` des trois |
+| `0049_tool_calls_ouvertures_runs` | vivante | trois index partiels des ouvertures de runs (`WHERE tool = 'run_start' AND run_id IS NOT NULL`) : `idx_tool_calls_run_start (created_at DESC, id DESC)`, `idx_tool_calls_run_start_org (org_id, created_at DESC, id DESC)`, `idx_tool_calls_run_start_sub (sub, org_id, created_at DESC, id DESC)` — le choix de page des listes de runs (`usage._derniers_runs`, infra#9). CONCURRENTLY sous le verdict commun : sur la base servie, **geste manuel** (ci-dessus : `oto-mcp maintenance index-concurrents 0049`), la révision rejouée le constate. `ShareUpdateExclusiveLock` sur `tool_calls`, rien de bloqué. **Ordre indifférent.** Retour arrière : `DROP INDEX CONCURRENTLY` des trois |
 
 Les bases vivantes ce jour-là : la base partagée prod/préprod, en `0042`, et une instance
 dédiée (prod et préprod), en `0041`. `0042` vit tant que cette instance ne l'a pas reçue.

@@ -155,6 +155,15 @@ root par la porte : aucun droit de plus à donner au runner ni à la clé de dé
 | registre du tag à plusieurs têtes ou vide | **refus**, sans lire la base |
 | migration en échec, ou pas à la tête une fois jouée | **refus** : la couleur ne démarre pas ; la base peut s'être arrêtée entre deux révisions — lire `migrer current` avant toute relance |
 
+**Un index trop gros pour la montée.** Une révision qui pose un index CONCURRENTLY
+(`migrations-versionnees.md` §5.1 — 0049 par exemple) refuse de le construire au-delà de son
+seuil de taille : la montée s'arrête sur `ConstructionManuelleRequise`, la couleur ne démarre
+pas. Le geste est une commande de l'arbre, jouée par le même lanceur que `migrer current`
+ci-dessous, sur le rôle concerné (sa préprod d'abord, puis sa prod) : `lanceur_secrets.py
+maintenance index-concurrents <révision>`, puis relancer la montée — la révision constate
+ses index et passe. Un index **invalide** est nommé avec son `DROP` à jouer à la main, jamais
+retiré par la commande ni par la montée.
+
 Sur un refus, ce qui sert n'a pas été touché : rien n'a démarré, rien n'a basculé. Une base
 injoignable est nommée par la classe de l'erreur seulement : son message peut porter l'hôte ou
 l'utilisateur, et ce journal remonte jusqu'au run du workflow.

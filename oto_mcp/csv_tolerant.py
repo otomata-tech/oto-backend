@@ -24,6 +24,13 @@ SEPARATORS = (",", ";", "\t", "|")
 _SAMPLE_ROWS = 20
 _BINARY_PROBE = 8192
 
+#: La plus grosse cellule acceptée, en caractères : le défaut du module `csv` (128 ko).
+#: ⚠️ Appliquée ICI, cellule par cellule, et non confiée à `csv.field_size_limit()` : cette
+#: limite est GLOBALE au processus, et n'importe quel code qui la relève (un script
+#: d'archive relu par un banc, le 09/10/2026, #1111) désarmait ce refus sans un mot — un
+#: fichier à cellule géante passait. Le refus ne dépend plus de ce qu'un autre a réglé.
+TAILLE_MAX_CELLULE = 131_072
+
 
 class CsvError(ValueError):
     """Unreadable file. `code` is the refusal token served to the caller."""
@@ -77,6 +84,22 @@ def decode(data: bytes, *, allow_fallback: bool = True) -> Decoded:
         raise CsvError("not_utf8", "The file is neither UTF-8, UTF-16 nor cp1252.")
 
 
+def _cellule_trop_grosse(taille: int) -> CsvError:
+    return CsvError("bad_csv", f"The file is not a readable CSV: a cell of {taille} "
+                               f"characters is larger than the field limit "
+                               f"({TAILLE_MAX_CELLULE}). Nothing was imported.")
+
+
+def _bornee(cellules) -> None:
+    """Refuse une cellule au-delà de TAILLE_MAX_CELLULE, quelle que soit la limite
+    globale de `csv` (cf. sa déclaration)."""
+    for c in cellules:
+        if isinstance(c, list):
+            _bornee(c)
+        elif isinstance(c, str) and len(c) > TAILLE_MAX_CELLULE:
+            raise _cellule_trop_grosse(len(c))
+
+
 def _mal_forme(e: csv.Error) -> CsvError:
     """`csv.Error` (a cell over the field limit, a NUL byte…) is a refusal naming the
     file, never a 500."""
@@ -94,6 +117,8 @@ def detect_separator(text: str) -> str:
                                       _SAMPLE_ROWS + 1) if r]
         except csv.Error as e:
             raise _mal_forme(e) from None
+        for r in rows:
+            _bornee(r)
         if not rows:
             continue
         width = len(rows[0])
@@ -146,6 +171,7 @@ def read_rows(text: str, separator: str) -> tuple[list, list]:
     the header's width are dropped, never written under a `None` column."""
     try:
         reader = csv.DictReader(io.StringIO(text), delimiter=separator)
+        _bornee(reader.fieldnames or [])
         headers = [relire(h.strip()) if isinstance(h, str) else h
                    for h in (reader.fieldnames or [])]
         # Two identical headers: DictReader keeps only the last one — a column
@@ -160,8 +186,11 @@ def read_rows(text: str, separator: str) -> tuple[list, list]:
         reader.fieldnames = headers
         # Un export neutralisé contre les formules (`csv_formules`) se relit
         # tel qu'il est parti : `'+33…` redevient `+33…`.
-        rows = [{k: relire(v) if isinstance(v, str) else v
-                 for k, v in r.items() if k is not None} for r in reader]
+        rows = []
+        for r in reader:
+            _bornee(r.values())
+            rows.append({k: relire(v) if isinstance(v, str) else v
+                         for k, v in r.items() if k is not None})
     except csv.Error as e:
         raise _mal_forme(e) from None
     return headers, rows

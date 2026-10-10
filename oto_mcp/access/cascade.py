@@ -89,7 +89,10 @@ def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
     (`ensure_named_coexistence` migrates the `''` row to "principal" at the first
     named account — review #399 F3). `scope` non-None ⇒ the `oto_identity` refs in the
     ambiguity message carry the tier's scope (org/group)."""
-    accts = credentials_store.list_accounts(entity_type, entity_id, provider)
+    # At the team tier, instances LENT to the team count as its accounts.
+    accts = (group_store.list_group_accounts(int(entity_id), provider)
+             if entity_type == "group" else
+             credentials_store.list_accounts(entity_type, entity_id, provider))
     if len(accts) == 1:
         return accts[0]["account"]
     if not accts:
@@ -246,8 +249,9 @@ def group_secret_map(groups: Optional[list] = None) -> dict:
     par_groupe: dict = {}
     for g in (groups or []):
         gid = int(g["group_id"] if isinstance(g, dict) else g)
-        par_groupe[gid] = {r["connector"]
-                           for r in cs.list_credentials("group", str(gid))}
+        par_groupe[gid] = ({r["connector"]
+                            for r in cs.list_credentials("group", str(gid))}
+                           | {i["connector"] for i in group_store.lent_instances(gid)})
     return par_groupe
 
 

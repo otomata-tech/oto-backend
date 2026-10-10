@@ -582,6 +582,66 @@ def _ranger_rotation(ligne: tuple, lu: str, nouveau: str) -> None:
                                      account=account)
 
 
+def lent_accounts(sub: str) -> list[dict]:
+    """The Microsoft accounts a PEER lent to `sub` (`oto_instance op=lend`, ADR 0044
+    `share_side` naming `user:<sub>`): rows of the carrier at another member's tier.
+    Same shape as `_comptes` (no secret), plus `lent_by` (the lender's sub) and
+    `lender_org`; never the person's default. A loan crosses orgs (the named loan is
+    the consent): the row is the lender's, wherever they set it."""
+    from .. import access  # lazy
+    org = access.current_org(sub)
+    mien = credentials_store.member_id(org, sub) if org is not None else None
+    out = []
+    for r in credentials_store.list_shared_with([f"user:{sub}"]):
+        if (r["connector"] != CONNECTOR or r["entity_type"] != credentials_store.MEMBER
+                or r["entity_id"] == mien):
+            continue
+        lender_org, _, lender = r["entity_id"].partition(":")
+        if not (lender_org.isdigit() and lender):
+            continue
+        out.append({"account": r["account"],
+                    "meta": {**(r.get("meta") or {}), "is_default": False},
+                    "set_at": r.get("set_at"), "lent_by": lender,
+                    "lender_org": int(lender_org)})
+    return out
+
+
+def _lent_for_call(sub: str, service: str, account: Optional[str]):
+    """The resolution of a LENT account, when the person's own accounts resolve nothing
+    for this call: the account named (`account`, `_account=`) among the loans, otherwise
+    the only loan that authorized `service`. Several = a refusal that names them. The
+    loan is re-guarded (`guard_instance_access`: still lent, lender not paused) and the
+    row read by the instance path (`_instance=`), the one an explicit pin takes."""
+    from .. import access, instance_refs, session_org
+    from ..mcp_errors import McpError
+    from mcp.types import ErrorData, INVALID_PARAMS
+    nom = account or session_org.current_call_account()
+    pretes = lent_accounts(sub)
+    if nom:
+        choix = [c for c in pretes if c["account"] == nom]
+    else:
+        choix = [c for c in pretes
+                 if service in services_granted((c.get("meta") or {}).get("scopes"))]
+    if not choix:
+        return None
+    if len(choix) > 1:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Several Microsoft accounts are lent to you for "
+                     f"{SERVICE_LABELS[service]}: pass `_account=`: one of "
+                     + ", ".join(f"`{c['account']}`" for c in choix) + ". Nothing was done."),
+            data={"code": "account_required", "retryable": False}))
+    c = choix[0]
+    ref = instance_refs.parse_ref(instance_refs.make_member_ref(
+        c["lender_org"], c["lent_by"], CONNECTOR, c["account"]))
+    access.guard_instance_access(sub, ref)
+    jeton = session_org.set_call_instance(ref)
+    try:
+        return access.resolve_credential(service, want="byo", sub=sub)
+    finally:
+        session_org.reset_call_instance(jeton)
+
+
 def resolve_account(sub: str, service: str, account: Optional[str] = None):
     """`(ResolvedCredential, meta)` of the account a call to `service` designates.
 
@@ -589,12 +649,20 @@ def resolve_account(sub: str, service: str, account: Optional[str] = None):
     (`access.resolve_credential`, under the SERVICE called): `account` or the call's
     `_account=`, otherwise the account pinned by the project (on the service's card,
     otherwise on the account's), otherwise the only linked account, otherwise the
-    default account, otherwise a refusal that names the accounts (`McpError`)."""
+    default account, otherwise a refusal that names the accounts (`McpError`).
+    The person's OWN accounts first; when they resolve nothing (none, or the named
+    account is not theirs), an account LENT by a peer (`_lent_for_call`)."""
     from .. import access  # lazy: avoids any import cycle at boot
 
     if service not in SERVICE_SCOPES:
         raise RuntimeError(f"\"{service}\" is not a known Microsoft service.")
-    rc = access.resolve_credential(service, want="byo", sub=sub, account=account or None)
+    try:
+        rc = access.resolve_credential(service, want="byo", sub=sub,
+                                       account=account or None)
+    except (access.CredentialUnavailable, access.CompteIntrouvable):
+        rc = _lent_for_call(sub, service, account)
+        if rc is None:
+            raise
     meta = next((a.get("meta") or {} for a in credentials_store.list_accounts(
         rc.entity_type, rc.entity_id, CONNECTOR) if a["account"] == (rc.account or "")),
         None)
@@ -665,13 +733,18 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
 # --- what the cards display --------------------------------------------------
 
 def accounts_for(sub: str, service: Optional[str] = None) -> list[dict]:
-    """The Microsoft accounts of the person in their context org — ALL of them for
-    the account, those that AUTHORIZED `service` for a service's card. Vault rows
-    (`account`, `meta`, `set_at`), no secret."""
+    """The Microsoft accounts of the person in their context org, then those LENT to
+    them (`lent_by`, `lent_accounts`) — ALL of them for the account, those that
+    AUTHORIZED `service` for a service's card. Vault rows (`account`, `meta`,
+    `set_at`), no secret."""
     from .. import access  # lazy
 
     org = access.current_org(sub)
     comptes = _comptes(org, sub) if org is not None else []
+    # The accounts a peer LENT (`lent_by`): reachable like one's own, never revocable
+    # by the borrower. An own account of the same name wins (it is what resolves).
+    siens = {c["account"] for c in comptes}
+    comptes += [c for c in lent_accounts(sub) if c["account"] not in siens]
     if service is None:
         return comptes
     return [c for c in comptes

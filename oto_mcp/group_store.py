@@ -266,12 +266,69 @@ def clear_active_group(sub: str) -> None:
 
 # --- secrets de groupe (coffre chiffré, entity_type='group') ----------------
 
+def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
+    """MEMBER instances lent to the team (`share_side` ∋ `group:<id>`, ADR 0044):
+    `{connector, account, lender, entity_id}`. A lent instance reads as a team key —
+    but it stays its lender's, who takes it back in one gesture.
+
+    Only live instances count: same org as the team (a loan never crosses orgs),
+    lender still a member of that org and not paused (#898), instance not suspended.
+    The rest is skipped, never an error: a key listing does not fail for a loan that
+    lapsed."""
+    from . import account_suspension, roles
+    shared = credentials_store.list_shared_with([f"group:{group_id}"])
+    if not shared:
+        return []
+    g = get_group(group_id)
+    if g is None:
+        return []
+    org = int(g["org_id"])
+    out = []
+    for r in shared:
+        if r["entity_type"] != credentials_store.MEMBER:
+            continue
+        if provider is not None and r["connector"] != provider:
+            continue
+        org_txt, _, lender = str(r["entity_id"]).partition(":")
+        if org_txt != str(org) or not lender:
+            continue
+        if (r.get("meta") or {}).get("suspended") in (True, "true"):
+            continue
+        if not roles.is_org_member(lender, org):
+            continue
+        if account_suspension.refus_preteur(lender, f"The `{r['connector']}` key") is not None:
+            continue
+        out.append({"connector": r["connector"], "account": r["account"] or "",
+                    "lender": lender, "entity_id": r["entity_id"]})
+    return out
+
+
+def list_group_accounts(group_id: int, provider: str) -> list[dict]:
+    """A connector's accounts at the TEAM tier: its own, then the lent ones (a name the
+    team already holds masks the loan). Same shape as `credentials_store.list_accounts`;
+    a lent account carries `meta.lent_by` and never `is_default` — the lender's default
+    is not the team's."""
+    own = credentials_store.list_accounts("group", str(group_id), provider)
+    names = {a["account"] for a in own}
+    lent = [{"account": i["account"], "meta": {"lent_by": i["lender"]}, "set_at": None}
+            for i in lent_instances(group_id, provider) if i["account"] not in names]
+    return own + lent
+
+
 def get_group_secret(group_id: int, provider: str, account: str = "") -> Optional[str]:
-    return credentials_store.get_credential("group", str(group_id), provider, account)
+    own = credentials_store.get_credential("group", str(group_id), provider, account)
+    if own:
+        return own
+    for i in lent_instances(group_id, provider):
+        if i["account"] == account:
+            return credentials_store.get_credential(
+                credentials_store.MEMBER, i["entity_id"], provider, account)
+    return None
 
 
 def has_group_secret(group_id: int, provider: str) -> bool:
-    return credentials_store.has_credential("group", str(group_id), provider)
+    return (credentials_store.has_credential("group", str(group_id), provider)
+            or bool(lent_instances(group_id, provider)))
 
 
 def set_group_secret(group_id: int, provider: str, api_key: str,
@@ -298,4 +355,6 @@ def list_group_secrets(group_id: int) -> list[dict]:
         if base_url:
             entry["base_url"] = base_url
         out.append(entry)
+    out += [{"provider": i["connector"], "account": i["account"], "lent_by": i["lender"]}
+            for i in lent_instances(group_id)]
     return out

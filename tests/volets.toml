@@ -592,6 +592,7 @@ sources = [
   "oto_mcp/capabilities/audit_log.py",
   "oto_mcp/capabilities/usage.py",
   "oto_mcp/db/journal_calls.py",
+  "oto_mcp/db/journal_jour.py",
   "oto_mcp/db/journal_purge.py",
   "oto_mcp/db/usage.py",
   "oto_mcp/db/schema/usage.py",

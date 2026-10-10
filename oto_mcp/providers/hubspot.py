@@ -13,11 +13,12 @@ from ._model import _c
 CONNECTOR = _c(
     "hubspot", ["hubspot"], auth_modes={"byo_user", "byo_org"}, keyed=True,
     secret_kind="api_key", label="HubSpot",
-    help="CRM (contacts, companies, deals, tickets, notes, lists/segments, properties)",
+    help="CRM (contacts, companies, deals, tickets, notes, lists/segments, properties, pipelines)",
     href="https://app.hubspot.com",
     # `hubspot_lignes` only carries `hubspot_push_rows`: the rows of a table
-    # pushed BY REFERENCE. Same namespace, hence same activation.
-    modules=("hubspot", "hubspot_lignes"),
+    # pushed BY REFERENCE; `hubspot_pipelines` carries `hubspot_pipeline` (read-only).
+    # Same namespace, hence same activation.
+    modules=("hubspot", "hubspot_lignes", "hubspot_pipelines"),
 )
 
 CATEGORY = "Prospecting"

@@ -18,15 +18,9 @@ Ce que ce banc tient :
 """
 from __future__ import annotations
 
-import os
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_ID", "cid-env")
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-env")
-os.environ.setdefault("OTO_MCP_OAUTH_STATE_SECRET", "state-secret-test")
-os.environ.setdefault("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
 
 from oto_mcp import access, credentials_store, providers  # noqa: E402
 from oto_mcp.auth import google as G  # noqa: E402

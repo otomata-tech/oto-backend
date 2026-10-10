@@ -26,14 +26,20 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_ID", "cid-env")
-os.environ.setdefault("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-env")
-os.environ.setdefault("OTO_MCP_OAUTH_STATE_SECRET", "state-secret-test")
-os.environ.setdefault("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
-
 from oto_mcp import access, credentials_store, tenancy  # noqa: E402
 from oto_mcp.auth import google as google_oauth  # noqa: E402
 from oto_mcp.capabilities import editor_apps  # noqa: E402
+
+
+# ⚠️ Plus d'écriture d'environnement à l'IMPORT (#1111) : un `os.environ.setdefault` ici
+# valait pour tout le processus dès la collecte, et des bancs d'autres fichiers ne
+# passaient que grâce à lui. Une fixture se déclare, se voit et s'annule.
+@pytest.fixture(autouse=True)
+def _env_google(monkeypatch):
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_ID", "cid-env")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_SECRET", "secret-env")
+    monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "state-secret-test")
+
 
 # Ces bancs démarrent un consentement : la garde des connecteurs coupés lit la base.
 pytestmark = pytest.mark.usefixtures("connecteurs_tous_disponibles")

@@ -533,8 +533,9 @@ avant la base et les boucles de fond), au lieu d'un relais dégradé dit par une
   chez `evil` dans un navigateur ; `…/auth_callback\..\..\x` sort du chemin pour la même raison ;
 - **l'écriture Logto n'envoie que la colonne qui change** (`_register_redirects`) ;
 - **les trois routes du relais répondent** (et refusent en le disant) ;
-- **le journal d'accès** ne garde plus `code` ni `state` sur `/oauth/callback`
-  (`relay.FiltreJournalAcces`, posé sur `uvicorn.access` au démarrage).
+- **le journal d'accès** ne garde plus `code` ni `state` sur `/oauth/callback` — ni sur
+  aucune route : `journal_secrets.MasqueCheminAcces`, posé sur `uvicorn.access` au démarrage,
+  masque la valeur de toute clé de query secrète (cf. `docs/monitoring.md`).
 
 **Mettre un host en service — dans cet ordre :**
 

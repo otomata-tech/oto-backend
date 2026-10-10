@@ -81,7 +81,8 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # sur le pin »**, en bas de ce fichier.
 
 # Tests À BASE (fixture `pg_dsn`) : elle prend `OTO_TEST_PG_DSN` s'il existe, sinon monte
-# un PostgreSQL JETABLE via docker — étiqueté `oto-test=1`, `PGDATA` en tmpfs (aucun
+# un PostgreSQL JETABLE via docker (sur un POSTE ; la CI installe PostgreSQL sur le runner,
+# §Suite parallèle en CI) — étiqueté `oto-test=1`, `PGDATA` en tmpfs (aucun
 # volume), retiré au finalizer ET sur atexit/SIGTERM/SIGINT ; chaque session balaie
 # d'abord les conteneurs étiquetés de plus de 2 h (#640, `tests/_pg_hygiene.py`). Un
 # `oto-test-pg-*` de plus d'une heure est un orphelin : `docker rm -f -v` (sans `-v`
@@ -106,6 +107,10 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 #   `part`      → la matrice : ses fichiers RECALCULÉS DEPUIS LE DISQUE (un fichier absent
 #                 des durées tombe quand même dans une part, à la médiane), sa collecte
 #                 mesurée, son `-n` dérivé, `pytest -n … --dist loadgroup --junitxml` ;
+#                 sa base = PostgreSQL 17 + pgvector INSTALLÉS SUR LE RUNNER (paquets PGDG,
+#                 ~30 s), servis par `OTO_TEST_PG_DSN` — AUCUNE image docker en CI depuis le
+#                 09/10/2026 (Docker Hub « toomanyrequests » sur l'IP partagée des runners,
+#                 sept parts rouges, aucun test en cause) ; les postes gardent docker ;
 #   `reference` → la collecte de toujours (`pytest` sans chemin, ou la cible) + `uv lock --check` ;
 #   `verdict`   → l'AGRÉGATEUR : union des collectes des parts = référence, sans doublon,
 #                 sinon ROUGE (un test perdu ne laisse pas la CI verte et aveugle) ; fusionne

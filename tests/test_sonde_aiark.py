@@ -42,6 +42,19 @@ def test_un_solde_disponible_est_rendu(monkeypatch):
     assert cli.appels == 1
 
 
+def test_un_solde_DECIMAL_est_un_solde(monkeypatch):
+    """AI Ark answers a decimal balance since October 2026 (39519.7): the int-only
+    check read a healthy account as "unreadable"."""
+    _brancher(monkeypatch, _FauxClient(credits=39519.7))
+    assert A._verify(_fields("k")) == {"quota": {"restant": 39519.7, "unite": "credits"}}
+
+
+def test_un_booleen_n_est_pas_un_solde(monkeypatch):
+    _brancher(monkeypatch, _FauxClient(credits=True))
+    with pytest.raises(RuntimeError, match="without a readable credit balance"):
+        A._verify(_fields("k"))
+
+
 def test_un_compte_a_SEC_est_un_refus_de_QUOTA_pas_d_AUTH(monkeypatch):
     _brancher(monkeypatch, _FauxClient(credits=0))
     with pytest.raises(cv.QuotaEpuise) as e:

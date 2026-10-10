@@ -256,7 +256,9 @@ def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001 (
     from oto.tools.aiark.client import AiArkClient
 
     restant = AiArkClient(api_key=fields["key"]).verify_key().get("credits")
-    if not isinstance(restant, int):
+    # AI Ark now answers a DECIMAL balance (39519.7 seen on 07/10/2026): an int-only
+    # check read a healthy account as "unreadable". A bool is not a balance.
+    if not isinstance(restant, (int, float)) or isinstance(restant, bool):
         raise RuntimeError(
             f"AI Ark answered without a readable credit balance: {str(restant)[:200]}")
     if restant <= 0:

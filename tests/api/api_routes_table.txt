@@ -188,6 +188,8 @@ POST /api/admin/instances/{instance_id:int}/health -> _handler
 OPTIONS /api/admin/instances/{instance_id:int}/health -> options_handler
 GET,HEAD /api/admin/vault/health -> _handler
 OPTIONS /api/admin/vault/health -> options_handler
+GET,HEAD /api/admin/platform-keys/balances -> _handler
+OPTIONS /api/admin/platform-keys/balances -> options_handler
 GET,HEAD /api/admin/tenants/{slug}/admins -> _handler
 OPTIONS /api/admin/tenants/{slug}/admins -> options_handler
 POST /api/admin/tenants/{slug}/admins -> _handler

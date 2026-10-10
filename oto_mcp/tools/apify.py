@@ -56,18 +56,49 @@ def _upstream_message(e) -> str:
     return f"Apify refused the request (HTTP {status}): {e.body}"
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
-    """"Test the connection" probe: lists the account's actors — an
-    authenticated, free call that fails if the token is invalid."""
-    from oto.tools.apify.client import ApifyClient
-    ApifyClient(api_key=fields["key"]).actors(limit=1)
+_LIMITS_URL = "https://api.apify.com/v2/users/me/limits"
+
+
+def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001
+    """"Test the connection" probe — covers `auth+quota`.
+
+    `GET /v2/users/me/limits`: authenticated, free, and the only Apify call that says
+    how much of the month is left — `limits.maxMonthlyUsageUsd` against
+    `current.monthlyUsageUsd`. Listing actors (the former probe) authenticated just
+    as well on an account that had hit its cap, and every run then failed upstream.
+
+    The balance is in US DOLLARS of platform usage, not in credits: Apify bills
+    compute and proxy, not results.
+    """
+    import requests
+
+    r = requests.get(_LIMITS_URL, headers={"Authorization": f"Bearer {fields['key']}"},
+                     timeout=15)
+    if r.status_code in (401, 403):
+        raise connector_verify.NonAutorise(
+            f"Apify refused the token (HTTP {r.status_code}).")
+    r.raise_for_status()
+    data = (r.json() or {}).get("data") or {}
+    plafond = (data.get("limits") or {}).get("maxMonthlyUsageUsd")
+    consomme = (data.get("current") or {}).get("monthlyUsageUsd")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               for v in (plafond, consomme)):
+        raise RuntimeError(
+            f"Apify answered without a readable monthly usage: {str(data)[:200]}")
+    restant = round(plafond - consomme, 2)
+    if restant <= 0:
+        raise connector_verify.QuotaEpuise(
+            f"The Apify token is good, but the monthly usage cap is reached "
+            f"(${consomme:.2f} of ${plafond:.2f}). Raise the cap or wait for the next "
+            "cycle — reconnecting would change nothing.")
+    return {"quota": {"restant": restant, "unite": "usd", "limite": plafond}}
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.apify.client import ApifyClient
     from oto.tools.common.errors import UpstreamHTTPError
 
-    connector_verify.register("apify", _verify)
+    connector_verify.register("apify", _verify, couvre=connector_verify.AUTH_QUOTA)
 
     def _client() -> ApifyClient:
         key, _ = access.resolve_api_key("apify")

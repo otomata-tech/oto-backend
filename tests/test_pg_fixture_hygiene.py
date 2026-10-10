@@ -1,6 +1,9 @@
 """La fixture PostgreSQL jetable ne fuit plus (#640) — et ça se prouve sur le VRAI docker.
 
-Sans docker, tout ceci se skippe : le comportement de la suite est inchangé. Avec :
+Sans docker, tout ceci se skippe : le comportement de la suite est inchangé. Sans l'image
+DÉJÀ présente localement aussi : la tirer ici ramènerait Docker Hub dans la CI, qui n'en
+dépend plus depuis le 09/10/2026 (« toomanyrequests » sur l'adresse partagée des runners,
+sept parts rouges) — la base de la CI vient du runner, par `OTO_TEST_PG_DSN`. Avec :
 - le conteneur de la session porte ses deux étiquettes et n'a AUCUN volume (`Mounts`
   vide, `PGDATA` en tmpfs) — et le TÉMOIN prouve que l'assertion mord : le même
   conteneur sans tmpfs a bien un volume anonyme ;
@@ -37,8 +40,22 @@ from _pg_hygiene import IMAGE, LABEL, LABEL_STARTED, PGDATA, Guard, sweep_orphan
 
 TESTS = pathlib.Path(__file__).resolve().parent
 RACINE = TESTS.parent
-_DOCKER = hygiene.docker_available()
-needs_docker = pytest.mark.skipif(not _DOCKER, reason="docker absent : rien à prouver ici")
+
+
+def _raison_de_passer() -> str | None:
+    """Pourquoi ces bancs ne tournent pas ici — dit, jamais un vert muet."""
+    if not hygiene.docker_available():
+        return "docker absent : rien à prouver ici"
+    if subprocess.run(["docker", "image", "inspect", IMAGE],
+                      capture_output=True).returncode != 0:
+        return (f"image {IMAGE} absente localement : la tirer ici ramènerait Docker Hub "
+                "(limite par IP des runners, 09/10/2026) — `docker pull` sur un poste "
+                "pour rejouer ces bancs")
+    return None
+
+
+_PASSER = _raison_de_passer()
+needs_docker = pytest.mark.skipif(_PASSER is not None, reason=_PASSER or "")
 
 # Le balai (`sweep_orphans`) retire TOUT conteneur étiqueté « lancé il y a plus de deux
 # heures » — pas seulement celui du test qui l'appelle. Deux tests de ce fichier posent un

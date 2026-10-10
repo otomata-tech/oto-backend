@@ -150,7 +150,6 @@ jobs:
   suite:
     needs: [selection]
     uses: ./.github/workflows/suite-tests.yml
-    secrets: inherit  # DOCKERHUB_* facultatifs : le tirage de l'image PostgreSQL des tests
     with:
       cible: ${{ needs.selection.outputs.cible }}
 

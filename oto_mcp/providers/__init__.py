@@ -180,6 +180,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "infosec",
     # Open data too, but from the United States: wages and employment by occupation (OEWS).
     "bls",
+    # French open data again: the BODACC as a whole, searched by period, family,
+    # department — not by SIREN, which `sirene` (`fr_events`) already serves.
+    "bodacc",
     # --- third-party API connectors (oto-core clients already written, wired 2026-06-19) ---
     "hubspot",
     "brevo",

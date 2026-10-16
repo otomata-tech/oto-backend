@@ -401,6 +401,26 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > (`publication_field_on_update`, rien d'écrit) plutôt qu'ignorés : ils se redéclarent
 > par `publish_mcp`.
 
+## Dossier d'affichage d'un projet — `folder` (2026-10-16)
+
+**Le besoin.** Une org de conseil tient un projet par client ; à quinze projets, la
+sidebar se lit nom par nom et chaque consultant y cherche les siens. Ce qui manquait
+n'est pas une hiérarchie, c'est un **regroupement visuel** : « les clients de X », « les
+clients de Y ».
+
+**La forme.** Colonne `projects.folder` (TEXT, NULL = hors dossier), posée par
+`oto_project op=update folder="…"` — rognée, `""` la retire, plus de 80 caractères
+refusé (`folder_too_long`, rien d'écrit : un libellé, pas une phrase). Servie par
+`op=get`/`list` (`ProjectOut.folder`). Les projets au même libellé forment un dossier :
+**il n'existe pas d'objet dossier** — ni table, ni id, ni dossier vide ; renommer un
+dossier, c'est reposer le libellé sur chacun de ses projets.
+
+**Ce que ce n'est pas.** Aucune règle d'accès (un dossier ne partage ni ne masque rien —
+la visibilité reste celle du propriétaire et des grants), aucune imbrication, aucun
+effet sur le contexte MCP. Même garde que le renommage : `write` sur le projet. Partagé
+par tous ceux qui voient le projet — c'est un rangement d'équipe, pas une préférence
+personnelle.
+
 ## Périmètre d'URL d'un projet — `excluded_url_prefixes` (#605, 2026-08-29)
 
 **Le besoin.** Un contrat client peut exclure la CONSULTATION de certaines pages — le cas

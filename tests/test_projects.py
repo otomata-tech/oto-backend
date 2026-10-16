@@ -24,7 +24,7 @@ ROW = {"id": 7, "owner_type": "org", "owner_id": "99", "name": "Proj", "brief_md
 
 @pytest.fixture
 def seams(monkeypatch):
-    rec = {"create": [], "update": [], "archive": []}
+    rec = {"create": [], "update": [], "archive": [], "folder": []}
     monkeypatch.setattr(P.db, "create_project",
                         lambda ot, oid, name, brief, created_by=None, context_org_id=None: rec["create"].append((ot, oid, name, brief, created_by, context_org_id)) or 7)
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
@@ -37,7 +37,9 @@ def seams(monkeypatch):
                             rec["list_owners"].append(owners), rec["createurs"].append(createur))
                         and ([dict(ROW, is_template=True)] if templates_only else [ROW]))
     monkeypatch.setattr(P.db, "update_project",
-                        lambda pid, name=None, brief_md=None, is_template=None, icon=None: rec["update"].append((pid, name, brief_md, is_template)))
+                        lambda pid, name=None, brief_md=None, is_template=None, icon=None, folder=None: (
+                            rec["update"].append((pid, name, brief_md, is_template)),
+                            rec["folder"].append(folder)))
     rec["copy"] = []
     # `context_org_id` (ADR 0068) : une copie PERSONNELLE reste rangée dans l'org où
     # elle a été faite, sans y être partagée. Le stub le RETIENT — un seam qui accepte
@@ -388,6 +390,23 @@ def test_get_unknown(seams):
 def test_update(seams):
     P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New"))
     assert seams["update"] == [(7, "New", None, None)]
+
+
+@pytest.mark.parametrize("sent, stored", [("  Clients A  ", "Clients A"), ("", ""), (None, None)])
+def test_update_folder(seams, sent, stored):
+    """Le dossier d'affichage se pose rogné ; `""` le retire (la couche db en fait NULL) ;
+    absent, il n'est pas touché."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, folder=sent))
+    assert seams["folder"] == [stored]
+
+
+def test_update_folder_trop_long(seams):
+    """Un libellé, pas une phrase : refus nommé, et rien n'est écrit."""
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New",
+                                       folder="x" * (P._FOLDER_MAX + 1)))
+    assert (e.value.status, e.value.code) == (400, "folder_too_long")
+    assert seams["update"] == []
 
 
 @pytest.mark.parametrize("owner", [{"owner_type": "org", "owner_id": "5"},

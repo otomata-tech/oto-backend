@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS projects (
     -- Emoji facultatif : repère visuel du projet (listes, sidebar, en-tête).
     -- NULL = pas d'icône, l'UI retombe sur son rendu par défaut.
     icon TEXT,
+    -- Dossier d'affichage facultatif : les listes regroupent les projets au même
+    -- libellé. NULL = hors dossier. Aucune hiérarchie, aucune règle d'accès.
+    folder TEXT,
     brief_md TEXT NOT NULL DEFAULT '',
     created_by TEXT,
     is_template BOOLEAN NOT NULL DEFAULT FALSE,

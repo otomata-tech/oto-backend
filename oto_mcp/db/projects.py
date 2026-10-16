@@ -32,6 +32,10 @@ from .users import upsert_user
 
 
 # --- Projets (couche d'organisation, owned resource ADR 0030) ----------------
+# Dossier d'affichage (docs/projects.md §Dossier d'affichage) : posé par la révision
+# `0062_projects_folder` ET par le démarrage, sous garde de catalogue — même DDL.
+COLONNE_FOLDER = "folder"
+DDL_COLONNE_FOLDER = f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_FOLDER} TEXT"
 # ⚠️ Cette liste est le SEUL chemin de lecture d'un projet (`get_project_by_id`,
 # `get_project_by_mcp_slug`, listes…). Une colonne écrite mais absente d'ici est une
 # colonne MORTE : la valeur part en base et ne revient jamais. Vécu — `mcp_expose_docs`
@@ -41,7 +45,7 @@ from .users import upsert_user
 # destinataire recevant le préambule générique ; l'avertissement « aucune instruction
 # publiée » émis même après en avoir publié). Tenu par
 # `tests/test_project_columns_are_read.py`, qui croise le DDL.
-_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, icon, brief_md, created_by, "
+_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, icon, folder, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
                  "mcp_expose_datastore_write, mcp_expose_docs, mcp_instructions_md, "
                  "excluded_url_prefixes, archived_at, created_at, updated_at")
@@ -165,7 +169,8 @@ def list_all_projects(*, include_archived: bool = False) -> list[dict]:
 def update_project(project_id: int, *, name: Optional[str] = None,
                    brief_md: Optional[str] = None,
                    is_template: Optional[bool] = None,
-                   icon: Optional[str] = None) -> None:
+                   icon: Optional[str] = None,
+                   folder: Optional[str] = None) -> None:
     sets: list[str] = []
     params: list = []
     if name is not None:
@@ -175,6 +180,10 @@ def update_project(project_id: int, *, name: Optional[str] = None,
         # chaîne vide = retirer l'icône (NULL) — on ne stocke pas d'emoji vide
         sets.append("icon = %s")
         params.append(icon or None)
+    if folder is not None:
+        # chaîne vide = sortir du dossier (NULL) — même règle que l'icône
+        sets.append("folder = %s")
+        params.append(folder or None)
     if brief_md is not None:
         sets.append("brief_md = %s")
         params.append(brief_md)

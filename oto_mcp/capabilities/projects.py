@@ -36,6 +36,11 @@ RTYPE = "project"
 _LINK_TYPES = ("tableau", "procedure", "connecteur")
 
 
+# Dossier d'affichage d'un projet : un libellé libre que les listes regroupent.
+# Borné pour rester un libellé — une phrase n'est pas un nom de dossier.
+_FOLDER_MAX = 80
+
+
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
                 "unarchive", "copy", "handoff", "link", "unlink", "activity", "runs", "inventory",
@@ -58,6 +63,10 @@ class ProjectInput(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = Field(default=None, description=(
         "update: emoji shown in lists and headers. `\"\"` clears it."))
+    folder: Optional[str] = Field(default=None, description=(
+        "update: the folder the project is shown under in lists — a free label "
+        f"(≤ {_FOLDER_MAX} characters), shared by every project that carries the "
+        "same one. Display only: no hierarchy, no access rule. `\"\"` clears it."))
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
@@ -331,6 +340,7 @@ def _view(row: dict, sub: Optional[str] = None, nb_partages: Optional[int] = Non
     partages = None if nb_partages is not None else _partages_vivants(row["id"])
     return {
         "id": row["id"], "name": row["name"], "icon": row.get("icon"),
+        "folder": row.get("folder"),
         # L'adresse web du projet, à côté de son id (#599).
         "url": _project_web_url(sub, row["id"]),
         "brief_md": row.get("brief_md", ""),
@@ -1076,6 +1086,12 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                  f"`op=update` ne touche pas à la publication ({', '.join(a_republier)}), "
                  "et rien n'a été modifié. Seule `mcp_instructions_md` s'y corrige ; "
                  "le reste se redéclare par `op=publish_mcp`.")
+        # Avant toute écriture, comme les refus au-dessus : le périmètre d'URL plus bas
+        # s'écrit seul, et « rien n'a été modifié » doit rester vrai.
+        folder = inp.folder.strip() if inp.folder is not None else None
+        _require(folder is None or len(folder) <= _FOLDER_MAX, "folder_too_long",
+                 f"`folder` est un libellé d'au plus {_FOLDER_MAX} caractères, et rien "
+                 "n'a été modifié.")
         # Ce que l'agent d'un TIERS lit au branchement : même autorité que la
         # publication elle-même, pas un simple write.
         if inp.mcp_instructions_md is not None:
@@ -1094,7 +1110,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         db.update_project(int(inp.project_id),
                           name=(inp.name.strip() if inp.name else None),
                           brief_md=inp.brief_md, is_template=inp.is_template,
-                          icon=inp.icon)
+                          icon=inp.icon, folder=folder)
         db.log_project_activity(int(inp.project_id), sub, "project.update", inp.name or None)
         if inp.mcp_instructions_md is not None:
             # L'instruction SEULE : slug, accès, outils et opt-ins ne bougent pas.
@@ -1590,6 +1606,9 @@ class ProjectRead(BaseModel):
     # PUBLICATION du projet vers l'extérieur ; `url`, c'est où on le lit chez soi.
     url: Optional[str] = None
     icon: Optional[str] = None
+    # Dossier d'affichage : les projets au même libellé se regroupent dans les
+    # listes. `null` = hors dossier. Aucune hiérarchie ni règle d'accès.
+    folder: Optional[str] = None
     brief_md: str = ""
     owner_type: str                              # user | org | group | platform
     owner_id: str
@@ -1709,7 +1728,8 @@ CAPABILITIES += [
             "unresolvable_connectors (a linked connector no org credential would resolve — "
             "org-owned projects only, always empty otherwise) / "
             "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "
-            "update (name, icon = an emoji shown in the lists and headers (\"\" clears it), brief_md, is_template = publish/unpublish "
+            "update (name, icon = an emoji shown in the lists and headers (\"\" clears it), folder = a display "
+            "label the lists group projects under (\"\" clears it), brief_md, is_template = publish/unpublish "
             "as a copyable model, excluded_url_prefixes = URL prefixes such as `linkedin.com/in/` "
             "that search tools drop and extraction tools refuse under this project — a whole "
             "host must be written `host/*`, `[]` clears, mcp_instructions_md = the prose "
@@ -1779,7 +1799,7 @@ CAPABILITIES += [
             "op=transfer new_owner_group=<id> hands it to a TEAM so the project and its "
             "connector credentials sit at the SAME level (the team's secrets then resolve "
             "when you open it), new_owner_org=<id> to an org, new_owner_email to a user. "
-            "(op=update only changes name/icon/brief_md/is_template — never the owner; op=copy "
+            "(op=update only changes name/icon/folder/brief_md/is_template — never the owner; op=copy "
             "makes a NEW id.) "
             "inventory = the project's DERIVED surface (union of the linked procedures' "
             "<tool:> refs + tools actually used by the project's runs, plus connectors "

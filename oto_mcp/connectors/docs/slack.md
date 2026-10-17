@@ -37,9 +37,13 @@ oauth_config:
       - chat:write
       - reactions:write
       - files:read
+      - usergroups:read
+      - usergroups:write
     user:
       - search:read
       - chat:write
+      - usergroups:read
+      - usergroups:write
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: false
@@ -71,3 +75,7 @@ send and read slack messages from claude — in your name or under the app's, de
 - "what was said in this thread?" → `slack_read_thread` — a thread's **replies**, which `slack_read_history` does not return (it only shows the count)
 - "get oto into #channel" → `slack_join_channel` (public channels only)
 - "react 👍 to this message" → `slack_add_reaction`
+- "who is in @sales?" → `slack_list_usergroups` (all groups, or one group's members with `usergroup`)
+- "create @support / add jean to @sales / rename a group" → `slack_manage_usergroup` (`dry_run=true` shows the member diff first)
+
+⚠️ **user groups**: they require a paid Slack plan. An app installed before these scopes were added must be **reinstalled** (OAuth & Permissions → add `usergroups:read` / `usergroups:write` → Reinstall), then its new tokens set here. Writing with the **bot** token only works when the workspace lets **everyone** manage user groups; otherwise write with `author="me"` and the user token of a member allowed to (an admin, by default). Slack replaces a group's member list as a whole and refuses an empty one — a group is emptied by disabling it.

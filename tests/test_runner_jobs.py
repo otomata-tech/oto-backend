@@ -624,3 +624,43 @@ def test_les_verbes_du_bail_d_un_worker_passent_par_son_sub(espion, monkeypatch)
     conclut ce qu'il a réservé, sans org — c'est tout ce que ces verbes exigent."""
     monkeypatch.setattr(RJ.db, "bind_job_run", lambda j, s, r: s == "worker:ab12cd34")
     assert _appel(_worker(), op="bind_run", job_id=3, run_id="r1") == {"ok": True}
+
+
+# ── summary : la page Agents en un appel ─────────────────────────────────────
+
+def test_summary_rend_heures_total_et_derniere_panne_des_agents_vus(monkeypatch):
+    """Par agent visible : ses heures non vides (triées), son total, sa dernière
+    panne. Un agent que l'appelant ne voit pas n'apparaît pas — pas même par son
+    nombre de travaux."""
+    import datetime as dt
+    h = lambda d, hh: dt.datetime(2026, 10, d, hh, tzinfo=dt.timezone.utc)  # noqa: E731
+    vu = {}
+    monkeypatch.setattr(RJ.db, "resume_des_declencheurs", lambda org, jours: vu.update(org=org, jours=jours) or (
+        [{"trigger_id": 5, "heure": h(2, 8), "status": "done", "n": 3},
+         {"trigger_id": 5, "heure": h(1, 8), "status": "failed", "n": 1},
+         {"trigger_id": 9, "heure": h(1, 8), "status": "done", "n": 7}],
+        [{"trigger_id": 5, "due_at": h(1, 8), "last_error": "refusé"},
+         {"trigger_id": 9, "due_at": h(1, 8), "last_error": "secret"}],
+    ))
+    monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}, {"id": 9, "sub": "autre"}])
+    monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner", 9: None})
+    rep = _appel(_ctx(sub="u"), op="summary", days=7)
+    assert vu == {"org": 226, "jours": 7}
+    assert [a["trigger_id"] for a in rep["summary"]] == [5]
+    a = rep["summary"][0]
+    assert a["total"] == 4
+    assert [x["status"] for x in a["hours"]] == ["failed", "done"]   # triées par heure
+    assert a["last_failure"]["error"] == "refusé"
+    assert rep["since"].endswith("Z")
+
+
+def test_summary_borne_la_fenetre():
+    with pytest.raises(Exception):
+        RJ.JobsInput(op="summary", days=40)
+
+
+def test_summary_est_un_geste_de_membre_pas_de_worker():
+    ctx = ResolvedCtx(sub="w", org_id=None, platform_worker=True)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(ctx, op="summary")
+    assert e.value.code == "worker_verbs_only"

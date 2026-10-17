@@ -310,6 +310,10 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     org_id BIGINT NOT NULL,
     sub TEXT NOT NULL,
     label TEXT,
+    -- 16/10/2026 : dossier d'affichage facultatif — les listes regroupent les
+    -- agents au même libellé. NULL = hors dossier. Aucune hiérarchie, aucune
+    -- règle d'accès.
+    folder TEXT,
     procedure TEXT NOT NULL,
     project_id BIGINT,
     tools JSONB NOT NULL,

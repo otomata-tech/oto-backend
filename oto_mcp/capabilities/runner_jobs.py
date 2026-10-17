@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 class JobsInput(BaseModel):
-    op: Literal["enqueue", "claim", "bind_run", "complete", "extend", "get", "list"]
+    op: Literal["enqueue", "claim", "bind_run", "complete", "extend", "get", "list",
+                # Ce que la page Agents trace, pour toute l'org en UN appel : voir
+                # `_resume`. Lecture de membre, jamais de worker.
+                "summary"]
     # enqueue —
     kind: Optional[Literal["start", "continue"]] = None
     payload: Optional[dict[str, Any]] = None
@@ -99,6 +102,9 @@ class JobsInput(BaseModel):
             "`total` compte sous le MÊME filtre."),
     )
     limit: int = 50
+    # summary — la fenêtre, en jours (1 à 31). La page en trace au plus 28.
+    days: int = Field(28, ge=1, le=31, description=(
+        "summary: how many days back to count (1-31)."))
     # list — la page suivante, telle que la réponse précédente l'a rendue. Opaque :
     # sa composition nous appartient (même parti que `data_rows` et les lignes d'un
     # nœud), le worker la renvoie telle quelle.
@@ -252,7 +258,32 @@ class Job(BaseModel):
     finished_at: Optional[str] = None
 
 
+class SummaryHour(BaseModel):
+    """Combien de travaux d'un statut sont tombés dus dans une heure."""
+    hour: str
+    status: Literal["pending", "held", "claimed", "done", "failed", "expired"]
+    count: int
+
+
+class SummaryFailure(BaseModel):
+    due_at: str
+    error: Optional[str] = None
+
+
+class TriggerSummary(BaseModel):
+    """Un agent, résumé sur la fenêtre : ses heures non vides, son total, et sa
+    dernière panne. Seuls les agents que l'appelant voit sont rendus."""
+    trigger_id: int
+    total: int
+    hours: list[SummaryHour]
+    last_failure: Optional[SummaryFailure] = None
+
+
 class JobsOut(BaseModel):
+    #: summary — par agent visible, ce que la page Agents trace.
+    summary: Optional[list[TriggerSummary]] = None
+    #: summary — le début de la fenêtre comptée.
+    since: Optional[str] = None
     # enqueue → id/status/due_at ; claim → job (ou null, file vide) ;
     # list → jobs + total + next_cursor ;
     # complete → ok/status + run_id/rows_released/release ; les autres → ok.
@@ -994,6 +1025,37 @@ def _exige_flotte_servie(statut: Optional[str]) -> None:
             "déclares-en une autre.")
 
 
+def _resume(ctx: ResolvedCtx, jours: int) -> dict:
+    """`op=summary` : la page Agents en UN appel — par agent, les travaux par heure
+    et par statut, le total, la dernière panne (oto-front « optimiser le
+    chargement », 17/10/2026). Les cases de l'écran se dessinent depuis ces
+    heures ; le détail d'un travail se lit toujours par `list`/`get`.
+
+    ⚠️ Filtré par VISIBILITÉ, comme `runner.triggers op=list` : un agent que
+    l'appelant ne voit pas n'apparaît pas, pas même par son nombre de travaux."""
+    cases, pannes = db.resume_des_declencheurs(ctx.org_id, jours)
+    ids = {int(r["trigger_id"]) for r in cases}
+    agents = [t for t in db.list_triggers(ctx.org_id) if int(t["id"]) in ids]
+    vus = {i for i, n in _acces_agent.niveaux(ctx.sub, ctx.org_id, agents).items() if n}
+    par_agent: dict[int, dict] = {}
+    for r in cases:
+        tid = int(r["trigger_id"])
+        if tid not in vus:
+            continue
+        a = par_agent.setdefault(tid, {"trigger_id": tid, "total": 0, "hours": [], "last_failure": None})
+        a["total"] += int(r["n"])
+        a["hours"].append({"hour": r["heure"].isoformat(), "status": r["status"], "count": int(r["n"])})
+    for r in pannes:
+        tid = int(r["trigger_id"])
+        if tid in par_agent:
+            par_agent[tid]["last_failure"] = {"due_at": r["due_at"].isoformat(),
+                                              "error": r["last_error"]}
+    for a in par_agent.values():
+        a["hours"].sort(key=lambda h: h["hour"])
+    depuis = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - jours * 86400))
+    return {"summary": sorted(par_agent.values(), key=lambda a: a["trigger_id"]), "since": depuis}
+
+
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
     # Deux principaux, deux files. Un MEMBRE agit sur la file de SON org, et
     # doit en avoir une. Un WORKER de plateforme n'en a aucune : il sonde, et
@@ -1125,6 +1187,9 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             _delegue(_charge_servie(job), bail, ctx.sub), inp.provider,
             ctx.sub, worker=ctx.platform_worker, org_key_only=inp.org_key_only)}
 
+    if inp.op == "summary":
+        return _resume(ctx, inp.days)
+
     if inp.op == "list":
         # Surveillance (page Automatisations) : lecture org-scopée, jamais un
         # geste — la liste rend de quoi écarter, le détail se demande par get.
@@ -1247,7 +1312,9 @@ CAPABILITIES += [
             "claim (atomic, org-scoped, lease — also reclaims expired leases: that "
             "IS the resume) / bind_run / extend (heartbeat) / complete (ok=false "
             "backs off, then marks `failed` VISIBLY at the attempts cap — never "
-            "loops) / get. All claim-side verbs are scoped to the claimant. An org "
+            "loops) / get / summary (per visible agent: jobs per hour and status over "
+            "`days`, the total and the latest failure — what the Agents page draws, "
+            "in one call). All claim-side verbs are scoped to the claimant. An org "
             "member (API token) claims only the jobs it carries itself (`sub`); only "
             "a platform worker takes any job."
         ),

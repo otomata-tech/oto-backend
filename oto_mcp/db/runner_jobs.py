@@ -1714,3 +1714,42 @@ def runner_arme(org_id: int) -> dict:
             "last_seen": str(dernier) if dernier else None,
             "families": list(familles["f"] or []) if familles else [],
             "farm_routed": bool(routee)}
+
+
+def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[dict]]:
+    """Ce que la page Agents DESSINE, en deux lectures pour toute l'org : par
+    déclencheur, combien de travaux de chaque statut sont tombés dus à chaque
+    HEURE des `jours` derniers jours, et la dernière panne de chacun.
+
+    Une heure plutôt qu'un jour : c'est la plus fine des cases que l'écran trace
+    (24 h en heures), et l'écran regroupe lui-même en jours ou en quarts de
+    journée. Les lignes sont creuses — une heure sans travail n'existe pas.
+
+    ⚠️ Remplace, pour la page, une lecture par agent (`list_jobs` × N, 200 lignes
+    pleines chacune) : N requêtes et des mégaoctets de `result`, pour tracer des
+    cases et un total."""
+    with _connect() as conn:
+        cases = conn.execute(
+            """
+            SELECT (payload->>'trigger_id')::bigint AS trigger_id,
+                   date_trunc('hour', due_at) AS heure, status, COUNT(*)::int AS n
+              FROM runner_jobs
+             WHERE org_id = %s AND due_at >= NOW() - make_interval(days => %s)
+               AND payload->>'trigger_id' ~ '^[0-9]+$'
+             GROUP BY 1, 2, 3
+            """,
+            (org_id, int(jours)),
+        ).fetchall()
+        pannes = conn.execute(
+            """
+            SELECT DISTINCT ON (payload->>'trigger_id')
+                   (payload->>'trigger_id')::bigint AS trigger_id, due_at, last_error
+              FROM runner_jobs
+             WHERE org_id = %s AND status = 'failed'
+               AND due_at >= NOW() - make_interval(days => %s)
+               AND payload->>'trigger_id' ~ '^[0-9]+$'
+             ORDER BY payload->>'trigger_id', due_at DESC
+            """,
+            (org_id, int(jours)),
+        ).fetchall()
+    return [dict(r) for r in cases], [dict(r) for r in pannes]

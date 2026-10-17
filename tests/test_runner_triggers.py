@@ -217,3 +217,73 @@ def test_un_cron_devenu_invalide_ne_bloque_pas_les_autres(monkeypatch):
                         lambda org, kind, payload=None, **_: bons.update(t=payload["trigger_id"]))
     assert runner_tick._tick() == 1
     assert bons["t"] == 2, "le déclencheur sain du tour est passé malgré le cassé"
+
+
+# ── le dossier d'affichage ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("sent, stored", [("  Clients A  ", "Clients A"), ("", None)])
+def test_update_du_dossier(monkeypatch, sent, stored):
+    """Le dossier d'affichage se pose rogné ; `""` le retire (NULL)."""
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "sub": "alexis"})
+    vu = {}
+    monkeypatch.setattr(RT.db, "update_trigger",
+                        lambda i, o, champs, **k: vu.update(champs) or {"id": i, **champs})
+    _appel(_ctx(), op="update", trigger_id=3, folder=sent)
+    assert vu == {"folder": stored}
+
+
+def test_dossier_absent_nest_pas_touche(monkeypatch):
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "sub": "alexis"})
+    vu = {}
+    monkeypatch.setattr(RT.db, "update_trigger",
+                        lambda i, o, champs, **k: vu.update(champs) or {"id": i, **champs})
+    _appel(_ctx(), op="update", trigger_id=3, label="Veille")
+    assert "folder" not in vu
+
+
+def test_dossier_trop_long(monkeypatch):
+    """Un libellé, pas une phrase : refus nommé, et rien n'est écrit."""
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "sub": "alexis"})
+    ecrit = []
+    monkeypatch.setattr(RT.db, "update_trigger",
+                        lambda *a, **k: ecrit.append(a) or {"id": 3})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="update", trigger_id=3, label="x",
+               folder="x" * (RT._FOLDER_MAX + 1))
+    assert (e.value.status, e.value.code) == (400, "folder_too_long")
+    assert ecrit == []
+
+
+# ── ranger en lot ─────────────────────────────────────────────────────────────
+
+def test_ranger_en_lot_chaque_agent_comme_seul(monkeypatch):
+    """N agents, un appel : chacun passe par le geste unitaire ; un refus ne coupe pas
+    le lot, il revient avec son code."""
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: None if i == 8 else {"id": i, "sub": "alexis"})
+    ecrits = []
+    monkeypatch.setattr(RT.db, "update_trigger",
+                        lambda i, o, champs, **k: ecrits.append((i, champs)) or {"id": i, **champs})
+    rep = _appel(_ctx(), op="update", trigger_ids=[3, 8, 5, 3], folder=" Clients A ")
+    assert ecrits == [(3, {"folder": "Clients A"}), (5, {"folder": "Clients A"})]
+    assert rep["total"] == 3 and rep["succeeded"] == 2
+    assert rep["failed"] == [{"index": 1, "id": 8, "error": "trigger_not_found"}]
+
+
+@pytest.mark.parametrize("kw, code", [
+    ({"op": "get", "trigger_ids": [3]}, "bulk_unsupported"),
+    ({"trigger_id": 3, "trigger_ids": [4], "folder": "A"}, "ambiguous_target"),
+    ({"trigger_ids": [3]}, "bulk_folder_only"),
+    ({"trigger_ids": [3], "folder": "A", "label": "x"}, "bulk_folder_only"),
+    ({"trigger_ids": [], "folder": "A"}, "missing_fields"),
+    ({"trigger_ids": list(range(RT._LOT_MAX + 1)), "folder": "A"}, "too_many_ids"),
+    ({"trigger_ids": [3], "folder": "x" * (RT._FOLDER_MAX + 1)}, "folder_too_long"),
+])
+def test_ranger_en_lot_refus_avant_toute_ecriture(monkeypatch, kw, code):
+    ecrit = []
+    monkeypatch.setattr(RT.db, "update_trigger", lambda *a, **k: ecrit.append(a) or {"id": 3})
+    kw = {"op": "update", **kw}
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), **kw)
+    assert (e.value.status, e.value.code) == (400, code)
+    assert ecrit == []

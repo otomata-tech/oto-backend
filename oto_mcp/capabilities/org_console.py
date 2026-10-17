@@ -89,7 +89,7 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
 # ── oto_org_settings : get / set / preview × domaine email|mfa|field_filters|model_subscriptions ─
 class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
-    domain: Literal["email", "mfa", "field_filters", "model_subscriptions"]
+    domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -113,10 +113,54 @@ class OrgSettingsInput(BaseModel):
     limit_pct: Optional[int] = None          # set : 1..100, null (EXPLICITE) = défaut
     mode: Optional[str] = None               # set : personnel | pool (seul, sans limit_pct)
     api_fallback: Optional[bool] = None      # set : repli clé de l'org (seul) ; défaut d'instance
+    # time_saved (set) : minutes par type de résultat — {"enrichment": 5, …} ; une
+    # valeur null rend le défaut à ce type, `{}` les rend tous.
+    minutes: Optional[dict[str, Optional[float]]] = None
+
+
+def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Les minutes par type de résultat du temps gagné des agents : défauts de la
+    plateforme (`time_saved.KINDS`), et ce que l'org leur substitue. Rien n'est à
+    poser pour avoir un chiffre — c'est un réglage, jamais une étape."""
+    from .. import db, time_saved
+    if inp.op not in ("get", "set"):
+        raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+    if inp.op == "set":
+        if inp.minutes is None:
+            raise AuthzDenied(400, "missing_minutes",
+                              "`minutes` requis pour set : {type: minutes|null}, `{}` rend les défauts.")
+        inconnus = sorted(set(inp.minutes) - set(time_saved.KINDS))
+        if inconnus:
+            raise AuthzDenied(400, "unknown_kind",
+                              f"Types inconnus : {', '.join(inconnus)} — connus : "
+                              f"{', '.join(time_saved.KINDS)}. Rien n'a été modifié.")
+        hors = sorted(k for k, v in inp.minutes.items()
+                      if v is not None and not time_saved.OVERRIDE_MIN <= v <= time_saved.OVERRIDE_MAX)
+        if hors:
+            raise AuthzDenied(400, "minutes_out_of_range",
+                              f"Entre {time_saved.OVERRIDE_MIN:g} et {time_saved.OVERRIDE_MAX:g} "
+                              f"minutes par résultat : {', '.join(hors)}. Rien n'a été modifié.")
+        actuel = {} if inp.minutes == {} else db.minutes_gagnees_de_l_org(inp.org_id)
+        for k, v in inp.minutes.items():
+            if v is None:
+                actuel.pop(k, None)
+            else:
+                actuel[k] = float(v)
+        if not db.poser_minutes_gagnees(inp.org_id, actuel or None):
+            raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    surcharges = db.minutes_gagnees_de_l_org(inp.org_id)
+    appliquees = time_saved.standards(surcharges)
+    return {"org_id": inp.org_id,
+            "kinds": [{"kind": k, "label": v["label"], "default_minutes": v["minutes"],
+                       "minutes": appliquees[k], "overridden": k in surcharges}
+                      for k, v in time_saved.KINDS.items()],
+            "research_cap_per_run": time_saved.RESEARCH_CAP_PER_RUN}
 
 
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     es, mfa, ff = orgs_email_settings, orgs_mfa, orgs_field_filters
+    if inp.domain == "time_saved":
+        return _temps_gagne(ctx, inp)
     if inp.domain == "model_subscriptions":
         return _plafond_abonnements(ctx, inp)
     if inp.domain == "email":
@@ -321,7 +365,10 @@ CAPABILITIES += [
             "true|false — true lets a job whose subscription is exhausted replay on the "
             "org's OWN deposited API key, same tier, instead of waiting (the default depends on the instance); "
             "get also returns `mode`, `pool_size`, `lenders` (who lends, and whether each is "
-            "usable now — never their tier or usage) and `api_fallback`). "
+            "usable now — never their tier or usage) and `api_fallback`) | time_saved "
+            "(minutes per result type behind the agents' time saved — report, enrichment, "
+            "action, record, research; get returns each kind's default and applied minutes; set takes "
+            "`minutes` {kind: 0..240 | null} — null restores that kind's default, `{}` all). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

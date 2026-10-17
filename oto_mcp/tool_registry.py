@@ -193,6 +193,32 @@ def _entry(tool) -> dict:
 # `oto_use_org` — otomata-private#75). Le cache coupe cette contamination.
 _REGISTRY: dict[str, dict] | None = None
 
+# Ce que chaque outil FAIT, déduit de ce qu'il déclare (`tools/lecture.py`) : `read`
+# (`LECTURE`), `act` (agit chez un tiers : `ENVOI`), `write` (le reste). Réchauffé avec
+# le registre boot, à part de lui : le registre est au contrat servi, l'effet non. Lu
+# par le temps gagné des agents (`time_saved.py`).
+_EFFETS: dict[str, str] = {}
+
+
+def _effet(tool) -> str:
+    a = getattr(tool, "annotations", None)
+    if getattr(a, "readOnlyHint", None) is True:
+        return "read"
+    if getattr(a, "destructiveHint", None) is True and getattr(a, "openWorldHint", None) is True:
+        return "act"
+    return "write"
+
+
+def effet_de(name: str) -> str | None:
+    """`read` | `act` | `write` pour un outil du registre boot ; None s'il est inconnu
+    (ou le registre pas réchauffé — tests)."""
+    return _EFFETS.get(name)
+
+
+def effets_connus() -> dict[str, str]:
+    """Tous les effets connus, par nom d'outil canonique."""
+    return _EFFETS
+
 
 def boot_tool_names() -> list[str]:
     """Noms de TOUS les tools du registre BOOT (réchauffé hors session au lifespan,
@@ -208,6 +234,7 @@ async def _build_registry_live(mcp_instance=None) -> dict[str, dict]:
     if mcp_instance is None:
         return {}
     tools = await mcp_instance.list_tools(run_middleware=False)
+    _EFFETS.update({t.name: _effet(t) for t in tools})
     return {t.name: _entry(t) for t in tools}
 
 

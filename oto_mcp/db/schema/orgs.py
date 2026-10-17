@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- Le tenant dont la DÉSACTIVATION a posé la suspension (NULL = posée sur l'org
     -- elle-même) : sa réactivation ne lève que celles-là. Base existante : révision
     -- `0042_orgs_suspension_par_tenant`.
-    suspended_tenant_id BIGINT
+    suspended_tenant_id BIGINT,
+    -- Les minutes par type de résultat que l'org substitue aux défauts du temps
+    -- gagné des agents (`time_saved.py`) : `{"enrichment": 5, …}`. NULL = les défauts.
+    -- Base existante : révision `0064_orgs_time_saved_minutes`.
+    time_saved_minutes JSONB
 );
 """
 

@@ -2163,3 +2163,77 @@ une automatisation*. Il ne vaudra plus que ça tant qu'oto ne fait rien entre le
 (tracer les tirs, router selon l'événement, dédupliquer). **Aucune API publique de
 création de routine ni de génération de jeton** — le provisionnement reste manuel, par
 construction ; l'état vide de la page Automatisations du dashboard l'explique.
+
+## Dossier d'affichage d'un agent — `folder` (2026-10-16)
+
+**Le besoin.** À vingt automatisations, la liste du dashboard se lit nom par nom. Ce qui
+manquait n'est pas une hiérarchie, c'est un **regroupement visuel** — même réponse que
+`projects.folder` (docs/projects.md §Dossier d'affichage).
+
+**La forme.** Colonne `runner_triggers.folder` (TEXT, NULL = hors dossier), posée par
+`oto_trigger op=update folder="…"` — rognée, `""` la retire, plus de 80 caractères
+refusé (`folder_too_long`, rien d'écrit). Servie par `op=get`/`list`. Les agents au même
+libellé forment un dossier : **il n'existe pas d'objet dossier** — ni table, ni id, ni
+dossier vide. Les campagnes (`runner_fleets`) n'en ont pas.
+
+**Ce que ce n'est pas.** Aucune règle d'accès (un dossier ne partage ni ne masque rien),
+aucune imbrication, aucun effet sur l'exécution. Même garde que le renommage : le droit
+de modifier l'agent. Partagé par tous ceux qui voient l'agent — un rangement d'équipe.
+
+**En lot.** `oto_trigger op=update trigger_ids=[…] folder="…"` range jusqu'à 100 agents en
+un appel (`_LOT_MAX`, bien en deçà des 45 s de l'invocation REST). `trigger_ids` remplace
+`trigger_id` (les deux ensemble : `ambiguous_target`) et `folder` est le seul champ admis
+(`bulk_folder_only`) : un horaire, un modèle ou un interrupteur en lot déplaceraient les
+gardes du geste unitaire vers des refus partiels illisibles. Chaque agent passe par le
+geste unitaire — mêmes gardes, même droit de modifier — et un refus n'arrête pas le lot.
+Reçu léger : `{total, succeeded, failed: [{index, id, error}]}`, jamais N agents.
+
+## Résumé de la page Agents — `runner.jobs op=summary` (2026-10-17)
+
+**Le besoin.** La page Agents chargeait l'historique de chaque agent séparément
+(`op=list trigger_id=… limit=200`) : une requête par agent, des centaines de lignes
+pleines (`result` compris) chacune, pour tracer des cases et un total. Et ces
+historiques ne se rafraîchissaient jamais.
+
+**La forme.** `op=summary days=1..31` (défaut 28) rend, pour chaque agent que
+l'appelant VOIT (`_acces_agent.niveaux`, comme `runner.triggers op=list`) : ses
+travaux par heure et par statut (`hours`, lignes creuses), son `total`, et sa
+dernière panne (`last_failure`). Deux lectures pour toute l'org
+(`db.resume_des_declencheurs`). Un geste de membre : un worker de plateforme est
+refusé (`worker_verbs_only`). L'écran regroupe les heures en cases et le
+rafraîchit avec son sondage ; le détail d'un travail se lit toujours par `list`/`get`.
+
+**À suivre.** Aucun index ne porte `(org_id, due_at)` : la lecture parcourt la file
+de l'org. À poser par `index_concurrent` si la file d'une org grossit.
+
+## Temps gagné des agents — `time_saved.py` (2026-10-17)
+
+**Le besoin.** Montrer ce qu'un agent rapporte sans rien demander à personne : ni
+saisie à la création, ni question, ni table à tenir. Le chiffre doit exister dès le
+premier run réussi, chez toute org, pour tout connecteur — y compris celui ajouté demain.
+
+**La forme.** Temps gagné d'un run = Σ résultats × minutes par type. Le TYPE se déduit de
+ce que l'outil déclare déjà (`tools/lecture.py`, mis en cache au boot par
+`tool_registry.effet_de`) : `LECTURE` → recherche, `ENVOI` → message ou action, le reste →
+écriture ; un nom qui contient `enrich` → enrichissement ; une `op` qui LIT (`get`,
+`list`, `search`…, `time_saved.READ_OPS`) → recherche, même sur un outil écrivain.
+Défauts : rapport 15 min, enrichissement 3, message/action 4, écriture 1,5, recherche 2 —
+**plafonnée à 10 min par run**. Servi par `runner.jobs op=summary` (`time_saved_minutes`,
+`time_saved` par type, `time_standards`).
+
+**La matière : le journal.** Les appels des runs conclus `done` (`tool_calls` par
+`run_id`, `db.appels_des_runs`) : l'`op`, la réussite, et l'enregistrement nommé
+(`CLES_D_ENREGISTREMENT` : id, email, url… — rien d'autre des arguments n'est lu). Un
+run sans journal retombe sur ses `tool_counts` (ni op, ni réussite, ni enregistrement).
+
+**Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
+- un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que
+  dans un run productif (un horaire qui regarde et ne trouve rien comptait 10 min) ;
+- un même enregistrement compte UNE fois par jour et par agent ;
+- un appel refusé ne compte pas ;
+- chercher puis seulement POSTER (un résumé, une alerte) est UN rapport par run.
+
+**Surcharge d'org.** `oto_org_settings domain=time_saved` : `get` (membre) rend défauts et
+minutes appliquées ; `set` (admin) prend `minutes` `{type: 0..240 | null}` — null rend le
+défaut, `{}` les rend tous. Colonne `orgs.time_saved_minutes` (révision
+`0064_orgs_time_saved_minutes` + démarrage). Jamais par agent : c'est un réglage, pas une étape.

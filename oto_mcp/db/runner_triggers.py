@@ -14,7 +14,13 @@ from typing import Any, Optional
 from .. import runner_models
 from ._conn import _connect
 
-_COLS = ("id, org_id, sub, label, procedure, project_id, tools, input, max_steps, "
+# Dossier d'affichage d'un agent (docs/runner-et-automatisations.md §Dossier
+# d'affichage) : posé par la révision `0063_runner_triggers_folder` ET par le
+# démarrage, sous garde de catalogue — même DDL.
+COLONNE_FOLDER = "folder"
+DDL_COLONNE_FOLDER = f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS {COLONNE_FOLDER} TEXT"
+
+_COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, input, max_steps, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
          "cron, tz, enabled, next_due, last_enqueued_at, created_at, hook_auth, "
          "(hook_signing_secret_enc IS NOT NULL) AS signing_secret_set, "
@@ -212,7 +218,7 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
     garde vit dans l'écriture pour qu'une retouche ordinaire ne relise rien : c'est
     l'appelant qui relit, et seulement quand rien n'a été écrit. Le prêt s'y juge
     aussi : retiré entre la lecture et l'écriture, il n'ouvre plus rien."""
-    autorises = {"label", "procedure", "project_id", "tools", "input", "max_steps",
+    autorises = {"label", "folder", "procedure", "project_id", "tools", "input", "max_steps",
                  "max_tokens", "max_run_seconds", "model", "cron", "tz", "enabled", "next_due",
                  # Le webhook. ⚠️ `kind` n'y est PAS : un déclencheur ne change pas
                  # de coup d'envoi en cours de route — ce serait un autre agent, et

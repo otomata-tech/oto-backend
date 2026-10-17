@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, access_shadow, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
-               revision, rowlock, transcription, user_subscriptions, valeurs_servies)
+               revision, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -651,6 +651,14 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # pose la révision `0059` : ordre indifférent entre elles.
     if _colonne_absente(conn, "transcription_jobs", transcription.COLONNE_KEY_MODE):
         conn.execute(transcription.DDL_COLONNE_KEY_MODE)
+    # Le dossier d'affichage d'un agent — le même que pose la révision `0063` : ordre
+    # indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_FOLDER):
+        conn.execute(runner_triggers.DDL_COLONNE_FOLDER)
+    # Les surcharges du temps gagné d'une org — la même que pose la révision `0064` :
+    # ordre indifférent entre elles.
+    if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):
+        conn.execute(runner_jobs.DDL_COLONNE_TEMPS_GAGNE)
     # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
     # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
     # lignes ont doc_id). Idempotent.

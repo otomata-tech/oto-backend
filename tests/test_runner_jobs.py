@@ -624,3 +624,95 @@ def test_les_verbes_du_bail_d_un_worker_passent_par_son_sub(espion, monkeypatch)
     conclut ce qu'il a réservé, sans org — c'est tout ce que ces verbes exigent."""
     monkeypatch.setattr(RJ.db, "bind_job_run", lambda j, s, r: s == "worker:ab12cd34")
     assert _appel(_worker(), op="bind_run", job_id=3, run_id="r1") == {"ok": True}
+
+
+# ── summary : la page Agents en un appel ─────────────────────────────────────
+
+def test_summary_rend_heures_total_et_derniere_panne_des_agents_vus(monkeypatch):
+    """Par agent visible : ses heures non vides (triées), son total, sa dernière
+    panne. Un agent que l'appelant ne voit pas n'apparaît pas — pas même par son
+    nombre de travaux."""
+    import datetime as dt
+    h = lambda d, hh: dt.datetime(2026, 10, d, hh, tzinfo=dt.timezone.utc)  # noqa: E731
+    vu = {}
+    monkeypatch.setattr(RJ.db, "resume_des_declencheurs", lambda org, jours: vu.update(org=org, jours=jours) or (
+        [{"trigger_id": 5, "heure": h(2, 8), "status": "done", "n": 3},
+         {"trigger_id": 5, "heure": h(1, 8), "status": "failed", "n": 1},
+         {"trigger_id": 9, "heure": h(1, 8), "status": "done", "n": 7}],
+        [{"trigger_id": 5, "due_at": h(1, 8), "last_error": "refusé"},
+         {"trigger_id": 9, "due_at": h(1, 8), "last_error": "secret"}],
+    ))
+    monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}, {"id": 9, "sub": "autre"}])
+    monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner", 9: None})
+    monkeypatch.setattr(RJ.db, "minutes_gagnees_de_l_org", lambda org: {})
+    monkeypatch.setattr(RJ.db, "outils_des_runs_conclus", lambda org, jours: [])
+    rep = _appel(_ctx(sub="u"), op="summary", days=7)
+    assert vu == {"org": 226, "jours": 7}
+    assert [a["trigger_id"] for a in rep["summary"]] == [5]
+    a = rep["summary"][0]
+    assert a["total"] == 4
+    assert [x["status"] for x in a["hours"]] == ["failed", "done"]   # triées par heure
+    assert a["last_failure"]["error"] == "refusé"
+    assert rep["since"].endswith("Z")
+
+
+def test_summary_borne_la_fenetre():
+    with pytest.raises(Exception):
+        RJ.JobsInput(op="summary", days=40)
+
+
+def test_summary_est_un_geste_de_membre_pas_de_worker():
+    ctx = ResolvedCtx(sub="w", org_id=None, platform_worker=True)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(ctx, op="summary")
+    assert e.value.code == "worker_verbs_only"
+
+
+def test_summary_rend_le_temps_gagne_de_chaque_agent_vu(monkeypatch):
+    """Les runs `done` d'un agent vu, leurs appels rangés par type aux minutes de l'org ;
+    un agent invisible n'apporte rien, pas même son temps gagné."""
+    import datetime as dt
+    from oto_mcp import time_saved, tool_registry
+    monkeypatch.setattr(tool_registry, "_EFFETS", {"folk_update": "write", "dropcontact_enrich": "read"})
+    h = dt.datetime(2026, 10, 1, 8, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(RJ.db, "resume_des_declencheurs", lambda org, jours: (
+        [{"trigger_id": 5, "heure": h, "status": "done", "n": 2},
+         {"trigger_id": 9, "heure": h, "status": "done", "n": 1}], []))
+    monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}, {"id": 9, "sub": "autre"}])
+    monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner", 9: None})
+    monkeypatch.setattr(RJ.db, "minutes_gagnees_de_l_org", lambda org: {"enrichment": 5})
+    monkeypatch.setattr(RJ.db, "outils_des_runs_conclus", lambda org, jours: [
+        {"trigger_id": 5, "tool_counts": {"folk_update": 2, "dropcontact_enrich": 3}},
+        {"trigger_id": 5, "tool_counts": {"folk_update": 1}},
+        {"trigger_id": 9, "tool_counts": {"folk_update": 100}},
+    ])
+    rep = _appel(_ctx(sub="u"), op="summary", days=7)
+    (a,) = rep["summary"]
+    assert a["time_saved_minutes"] == pytest.approx(3 * 1.5 + 3 * 5)
+    assert [(r["kind"], r["count"], r["minutes_each"]) for r in a["time_saved"]] == [
+        ("enrichment", 3, 5.0), ("record", 3, time_saved.KINDS["record"]["minutes"])]
+    assert rep["time_standards"]["enrichment"] == 5.0
+
+
+def test_summary_lit_les_appels_du_journal_quand_le_run_en_a(monkeypatch):
+    """Un run lié au journal compte ses appels (op, réussite, enregistrement) ; ses
+    `tool_counts` ne servent qu'au run qui n'en a pas."""
+    import datetime as dt
+    from oto_mcp import tool_registry
+    monkeypatch.setattr(tool_registry, "_EFFETS", {"folk_record": "write"})
+    h = dt.datetime(2026, 10, 1, 8, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(RJ.db, "resume_des_declencheurs", lambda org, jours: (
+        [{"trigger_id": 5, "heure": h, "status": "done", "n": 1}], []))
+    monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}])
+    monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner"})
+    monkeypatch.setattr(RJ.db, "minutes_gagnees_de_l_org", lambda org: {})
+    monkeypatch.setattr(RJ.db, "outils_des_runs_conclus", lambda org, jours: [
+        {"trigger_id": 5, "run_id": "r1", "tool_counts": {"folk_record": 50}}])
+    monkeypatch.setattr(RJ.db, "appels_des_runs", lambda ids: [
+        {"run_id": "r1", "tool": "folk_record", "op": "search", "ok": True, "cle": None, "jour": "2026-10-01"},
+        {"run_id": "r1", "tool": "folk_record", "op": "update", "ok": True, "cle": "p1", "jour": "2026-10-01"},
+        {"run_id": "r1", "tool": "folk_record", "op": "update", "ok": False, "cle": "p2", "jour": "2026-10-01"},
+    ])
+    (a,) = _appel(_ctx(sub="u"), op="summary", days=7)["summary"]
+    # une écriture réussie (pas 50 appels), et la recherche de ce run productif
+    assert [(r["kind"], r["count"]) for r in a["time_saved"]] == [("record", 1), ("research", 1)]

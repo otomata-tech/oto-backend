@@ -134,6 +134,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "instagram_meta",
     "meta_ads",
     "cognism",
+    # B2B prospecting and outbound (search, enrichment, sequences) — wired 2026-10-17.
+    # Neighbour of `cognism`/`lusha` by trade; strict BYOK, the customer's own credits.
+    "amplemarket",
     "lighton",
     # --- the Microsoft 365 ACCOUNT (delegated OAuth, per person) and its SERVICES ----
     # The account carries the vault; each service has its card, its activation, its

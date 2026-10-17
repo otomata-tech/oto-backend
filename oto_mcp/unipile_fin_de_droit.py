@@ -8,6 +8,11 @@ bout du délai (7 jours par défaut, `OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS`), si
 n'est pas revenu, le compte est supprimé chez unipile. Un compte branché sur la propre
 clé du client (`platform_seat = false`) n'est jamais regardé.
 
+Ce module n'agit que sur la perte d'un droit `unipile` DÉCLARÉ, jamais sur la fin
+d'un essai : l'essai n'est pas un droit déclaré, sa fin (suspension de l'org,
+libération des comptes Unipile) appartient au service commerce
+(docs/droits-declares.md).
+
 Un travail de maintenance, pas un événement : `oto-mcp maintenance unipile-fin-de-droit`,
 tiré par le timer quotidien (PROD seulement — la base est partagée). Il relit l'état à
 chaque passage et ne dépend d'aucun signal de fin de droit : un droit qui s'éteint par

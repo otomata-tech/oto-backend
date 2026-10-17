@@ -26,7 +26,7 @@ _CLES = ("service.orgs.list", "service.org.members", "service.org.usage",
          "service.org.entitlement.delete", "service.billing.export", "service.users.get",
          "service.user.entitlements.list", "service.user.entitlement.put",
          "service.user.entitlement.delete", "service.user.entitlement.effective",
-         "service.org.suspension")
+         "service.org.suspension", "service.org.trial")
 
 
 def _cap(cle):

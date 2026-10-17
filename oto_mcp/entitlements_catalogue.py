@@ -59,6 +59,8 @@ PLATFORM_KEY_JOKER = PLATFORM_KEY_PREFIX + "*"
 # Les étiquettes `source` qu'un producteur peut poser — liste FERMÉE. Informatives
 # (affichage, reprise), jamais un paramètre de la règle d'application : `value_for` prend
 # le plus généreux, toutes sources confondues.
+# L'essai n'est PAS un droit déclaré (docs/droits-declares.md) : `trial` reste une
+# étiquette acceptée, que rien dans le cœur ne produit ni ne lit.
 SOURCES: tuple[str, ...] = ("subscription", "trial", "offered", "partner", "contract")
 
 FIXES: dict[str, Droit] = {d.cle: d for d in (

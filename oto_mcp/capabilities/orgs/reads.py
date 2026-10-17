@@ -205,6 +205,10 @@ class OrgBrief(BaseModel):
     # ⚠️ Clé **ABSENTE** (pas nulle) quand l'appelant n'est pas membre — cas réel sur
     # la face `/api/admin/orgs/{id}`, où un admin plateforme lit une org étrangère.
     my_role: Optional[OrgRole] = None
+    # Fin d'essai poussée par le commerce (`service.org.trial`), ISO 8601 en UTC
+    # explicite, `null` = pas d'essai en cours. Lue seulement : c'est le commerce qui
+    # suspend l'org à cette date.
+    trial_ends_at: Optional[str] = None
 
 
 class OrgDetail(BaseModel):
@@ -317,7 +321,8 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
              "location": org.get("location") or "",
              # espace perso : non supprimable (gate du bouton « supprimer l'org »).
              "personal": org_store.is_personal_org(org["id"]),
-             "member_count": len(org_store.list_org_members(org["id"]))}
+             "member_count": len(org_store.list_org_members(org["id"])),
+             "trial_ends_at": org_store.get_trial_ends_at(org["id"])}
     if my_role is not None:
         brief["my_role"] = my_role
     return {

@@ -128,7 +128,7 @@ PKG = pathlib.Path(org_store.__file__).parent
 # Les 9 coutures, dans l'ordre du graphe (feuilles d'abord).
 MODULES = ("orgs", "members", "vault", "settings", "instructions",
            "instructions_cycle", "instruction_ownership", "personal",
-           "invitations", "library")
+           "invitations", "library", "essai")
 
 # Arêtes ATTENDUES du graphe interne : module -> modules frères importés.
 EXPECTED_EDGES = {
@@ -141,6 +141,8 @@ EXPECTED_EDGES = {
     "personal": {"orgs", "members"},
     "invitations": {"members"},
     "library": {"instructions"},
+    # La fin d'essai poussée par le commerce (16/10/2026) : une feuille.
+    "essai": set(),
 }
 
 # ── la surface d'avant la découpe, relevée sur `main` (commit 3a40ee0) ───────

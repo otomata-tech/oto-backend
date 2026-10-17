@@ -15,10 +15,11 @@ près, et aucun appelant n'a bougé.
     instruction_ownership  les mêmes, plan GOUVERNANCE (ADR 0030) : identité par
                   `id` surrogate, copie, déplacement, inventaires
     library       la bibliothèque publique de guides (vue `guide_library`)
+    essai         la fin d'essai de l'org (`trial_ends_at`), poussée par le commerce
 
 Le graphe interne est un **DAG à deux étages**, sans cycle possible :
 
-    étage 0 (feuilles) : orgs   members   vault   settings   instructions
+    étage 0 (feuilles) : orgs   members   vault   settings   instructions   essai
                           │  ╲   ╱   │                        │      │
     étage 1              │   ╳      │                         │      │
                        personal  invitations       instruction_ownership  library
@@ -64,6 +65,7 @@ import sys as _sys
 from types import ModuleType as _ModuleType
 
 from . import (  # noqa: F401  (ré-exportés en masse ci-dessous)
+    essai,
     instruction_ownership,
     instructions,
     instructions_cycle,
@@ -81,7 +83,7 @@ from . import (  # noqa: F401  (ré-exportés en masse ci-dessous)
 _OWNERS: dict = {}
 _g = globals()
 for _mod in (orgs, members, vault, settings, personal, invitations, instructions,
-             instructions_cycle, instruction_ownership, library):
+             instructions_cycle, instruction_ownership, library, essai):
     for _name in dir(_mod):
         if not _name.startswith("__"):
             _g[_name] = getattr(_mod, _name)

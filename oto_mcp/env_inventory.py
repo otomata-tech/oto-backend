@@ -281,6 +281,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "Absente, vide ou un non = ces travaux attendent la réinitialisation ; "
              "l'org peut toujours l'ouvrir ou le couper. Toute autre valeur lève.",
              ("oto_mcp/db/org_subscription_pool.py:75",)),
+    Variable("OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT", Classe.REGLAGE, "",
+             "Ouvre à la plateforme, à chaque boot, tout connecteur du registre qui n'y "
+             "a encore AUCUNE ligne (`1`, `true`, `yes`, `on`) : les nouveaux connecteurs "
+             "d'une release sont offerts d'office. Un OFF explicite reste OFF. Absente, "
+             "vide ou un non = deny-by-default (un nouveau connecteur attend son "
+             "activation). Toute autre valeur lève.",
+             ("oto_mcp/connectors/activation.py:130",)),
     Variable("OTO_EQUIPE_PAR_DEFAUT_TENANTS", Classe.REGLAGE, "",
              "Slugs de tenants (virgules) dont les membres d'équipe ne sont jamais "
              "« sans équipe » : faute d'équipe désignée, l'équipe du sub dans l'org "

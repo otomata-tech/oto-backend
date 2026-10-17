@@ -20,7 +20,9 @@ scope COLUMN, not one table per grain.
 
 **One-time seed** (platform rows): the connectors in the registry AT THE TIME the
 tier was introduced are activated; later ones stay OFF until explicit
-activation. **Legacy copy at boot** (guarded by `to_regclass`, newer-wins on `set_at`):
+activation — unless the INSTANCE declares `OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT`
+(`seed_default_on`): every boot then opens, at the platform, each registry
+connector that has no platform row yet. An explicit OFF is never reopened. **Legacy copy at boot** (guarded by `to_regclass`, newer-wins on `set_at`):
 the two historical tables are copied over as long as they exist — they drop
 in B2 once this code is promoted (shared canary/prod DB).
 
@@ -100,6 +102,43 @@ def seed_initial(conn) -> None:
             "VALUES ('platform', '', %s, TRUE, %s) ON CONFLICT DO NOTHING",
             (name, "seed"),
         )
+
+
+ENV_DEFAUT_ACTIF = "OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT"
+
+
+def seed_default_on(conn) -> int:
+    """Open at the platform every registry connector that has NO platform row yet —
+    only on an instance that declares `ENV_DEFAUT_ACTIF` (decision of 17/10/2026).
+
+    The deny-by-default of `seed_initial` is the right rule for oto: a new connector
+    is a product decision. An instance that would rather offer each release's new
+    connectors as they ship declares it, and stops discovering them as « missing »
+    one by one. Only the ABSENCE of a row is filled: an explicit OFF (`enabled =
+    FALSE`) stays OFF, an org override or a team cut is untouched, and the tenant
+    ceiling still applies above. Platform rows are never deleted (`clear_activation`
+    is org-scoped), so replaying it at every boot reopens nothing that was closed.
+
+    Run AFTER the split fan-outs (`db.init_db`): a split's targets must first copy
+    their source's state, ON or OFF, before anything fills them with ON. Read at
+    boot only — a new connector only arrives with a new release, hence a boot.
+    Returns the number of connectors opened."""
+    import os
+
+    from .. import interrupteurs, providers
+
+    brut = os.environ.get("OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT")
+    if not interrupteurs.oui_non(ENV_DEFAUT_ACTIF, brut):
+        return 0
+    # ONE statement, not one per connector: it replays at every boot (`db/_ddl_garde`
+    # spirit — a boot with nothing to do should cost next to nothing).
+    cur = conn.execute(
+        "INSERT INTO connector_availability (scope_type, scope_id, connector, enabled, set_by) "
+        "SELECT 'platform', '', c, TRUE, 'seed:default_on' FROM unnest(%s::text[]) AS c "
+        "ON CONFLICT DO NOTHING",
+        (list(providers.REGISTRY),),
+    )
+    return cur.rowcount or 0
 
 
 def fanout_availability(conn, source: str, targets: tuple[str, ...]) -> int:

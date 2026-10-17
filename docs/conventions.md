@@ -543,6 +543,9 @@ rien ne rendait navigable et que rien ne tenait.
   n'est pas mergée et le backport 1.x est refusé (`not_planned`).
 - **Cran d'activation (ADR 0010/0011)** : déclarer un connecteur ne l'expose PAS —
   gate DB `connectors/activation.py` (master global ± override org, deny-by-default).
+  Une instance peut ouvrir d'office les nouveaux connecteurs de chaque release
+  (`OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT`, `activation.seed_default_on`, au boot, après les
+  fan-outs de split) : seule l'ABSENCE de ligne plateforme est comblée, un OFF explicite reste OFF.
   Gate à la **VISIBILITÉ par session** (`UserDisabledToolsMiddleware` + `connector_
   activation`, **fail-open**) : `register_all` charge tout inconditionnellement, le
   middleware masque les tools d'un connecteur non activé pour l'org → (dés)activer

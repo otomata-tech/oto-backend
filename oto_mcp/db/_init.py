@@ -1625,6 +1625,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
             (list(_conn_sel.GOOGLE_SERVICES), list(_conn_sel.GOOGLE_SERVICES)),
         )
         _conn_sel.mark_split_fanout(conn, _conn_sel.GOOGLE_SPLIT_MARK)
+    # Instance qui ouvre les nouveaux connecteurs d'elle-même
+    # (`OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT`, 17/10/2026) : APRÈS les deux fan-outs, pour
+    # qu'une cible de split hérite d'abord de l'état de sa source, ON ou OFF.
+    _conn_act.seed_default_on(conn)
     # === Le nœud gagne sa DONNÉE et son BAIL (2026-09-01, ADR 0054/0063) ========
     #
     # **Pourquoi une colonne et pas une clé de `props`.** Jusqu'ici, un nœud-ligne

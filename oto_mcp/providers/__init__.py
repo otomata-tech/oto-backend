@@ -300,6 +300,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # scheduling and time-clock product. A GROUP-level API key reads every company
     # of the group; read-only.
     "sivan",
+    # --- payroll and HR, read-only — wired 2026-10-17 -------------------------
+    # Neighbour of `payfit` by trade and by SITUATION (NIR, IBAN): the API key and
+    # the organization id travel together; the redaction floor masks NIR and IBAN/BIC.
+    "malibou",
     # --- a project audio becomes a project page — ADR 0074, #674 ------------
     "transcription",
     # --- US occupations reference — wired 2026-09-22 --------------------------

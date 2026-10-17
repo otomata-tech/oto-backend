@@ -109,8 +109,21 @@ _PAYFIT_PII: list[dict] = [
 # Défauts serveur, par service : le plancher. Sans politique d'org, il s'applique tel
 # quel ; avec, la politique s'y AJOUTE et ne lève un champ qu'en le nommant
 # (`bloc_effectif`, décision du 2026-10-06).
+# Malibou : mêmes natures que PayFit. Chaque nom vérifié sans homonyme dans les
+# réponses de la Public API v1 : le NIR s'appelle `ssn` dans la liste des
+# collaborateurs et `socialSecurityNumber` dans la fiche ; IBAN et BIC sous
+# `bankAccount`. Le type d'une absence (code de congé, maladie comprise) est servi
+# en `absence_type` par `tools/malibou.py` — `type` a des homonymes.
+_MALIBOU_PII: list[dict] = [
+    {"fields": ["ssn", "socialSecurityNumber"], "action": "mask"},
+    {"fields": ["iban"], "action": "mask", "preserve": "iban"},
+    {"fields": ["bic"], "action": "mask"},
+    {"fields": ["absence_type"], "action": "mask"},
+]
+
 SERVER_DEFAULTS: dict[str, dict] = {
     "payfit": {"rules": _PAYFIT_PII},
+    "malibou": {"rules": _MALIBOU_PII},
 }
 
 # Templates appliquables en 1 clic depuis le dashboard (≠ défaut : pas auto-appliqués).

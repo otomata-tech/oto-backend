@@ -169,3 +169,85 @@ def summarize(rows: list[dict], *, body_fields: Iterable[str],
     if not dropped:
         return out, None
     return out, {"omitted": sorted(dropped), "hint": hint or _HINT_TRI}
+
+
+_HINT_SELECTION = (f'Fields kept by `fields`. `fields=["{RAW}"]` returns the whole '
+                   "response.")
+_HINT_AMBIGU = ("Several result lists: nothing was filtered. Call the tool directly, "
+                "or filter on your side.")
+
+
+def _est_liste_de_lignes(valeur: Any) -> bool:
+    """Une liste VIDE compte : `{"results": [], "total": 0}` doit garder sa forme,
+    pas être lu comme un objet unique dont on trierait les clés."""
+    return isinstance(valeur, list) and (
+        not valeur or any(isinstance(v, dict) for v in valeur))
+
+
+def _chemins_de_lignes(payload: dict) -> list[str]:
+    """Les chemins pointés des listes de lignes, sur deux niveaux au plus — la
+    profondeur où les API rangent leurs résultats (`organic`, `data.emails`)."""
+    chemins = []
+    for cle, valeur in payload.items():
+        if _est_liste_de_lignes(valeur):
+            chemins.append(cle)
+        elif isinstance(valeur, dict):
+            chemins += [f"{cle}.{sous}" for sous, v in valeur.items()
+                        if _est_liste_de_lignes(v)]
+    return chemins
+
+
+def select_fields(payload: Any, fields: Iterable[str]) -> tuple[Any, Optional[dict]]:
+    """Le payload réduit aux `fields` demandés par l'APPELANT, quel que soit l'outil
+    (`oto_call fields=`). Pur, non destructif.
+
+    Où porte le tri — sans rien connaître de l'outil :
+    - une liste de lignes, au sommet ou à deux niveaux au plus : chaque ligne ne garde
+      que `fields`, l'enveloppe (`total`, curseur, crédits) reste, comme `project` ;
+    - aucune liste : un objet unique, dont on garde les seules clés demandées ;
+    - PLUSIEURS listes : rien n'est trié. Choisir l'une au hasard ferait disparaître
+      l'autre sans un mot — la notice nomme les chemins.
+
+    Rend `(payload, notice)`. La notice NOMME ce qui a été écarté (`omitted`) et ce qui
+    était demandé mais absent partout (`missing`, leçon oto#174) ; `None` quand rien
+    n'a bougé ou que `["*"]` demande le brut."""
+    voulus = list(dict.fromkeys(fields))
+    if RAW in voulus:
+        return payload, None
+    garde = set(voulus)
+    if isinstance(payload, list):
+        lignes = [r for r in payload if isinstance(r, dict)]
+        out = [{k: v for k, v in r.items() if k in garde} if isinstance(r, dict) else r
+               for r in payload]
+        ecartes = {k for r in lignes for k in r if k not in garde}
+        manquants = [f for f in voulus if lignes and not any(f in r for r in lignes)]
+        return out, _notice(ecartes, manquants)
+    if not isinstance(payload, dict):
+        return payload, None
+    chemins = _chemins_de_lignes(payload)
+    if len(chemins) > 1:
+        return payload, {"ambiguous": chemins, "hint": _HINT_AMBIGU}
+    if chemins:
+        chemin = chemins[0]
+        lignes = [r for r in _rows_at(payload, chemin) if isinstance(r, dict)]
+        ecartes = {k for r in lignes for k in r if k not in garde}
+        manquants = missing_fields(payload, items_paths=[chemin], fields=voulus)
+        notice = _notice(ecartes, manquants)
+        if notice is not None:
+            notice = {"items_path": chemin, **notice}
+        return project(payload, items_path=chemin, fields=voulus), notice
+    out = {k: v for k, v in payload.items() if k in garde}
+    manquants = [f for f in voulus if f not in payload]
+    return out, _notice(set(payload) - garde, manquants)
+
+
+def _notice(ecartes: set[str], manquants: list[str]) -> Optional[dict]:
+    if not ecartes and not manquants:
+        return None
+    notice: dict = {}
+    if ecartes:
+        notice["omitted"] = sorted(ecartes)
+    if manquants:
+        notice["missing"] = manquants
+    notice["hint"] = _HINT_SELECTION
+    return notice

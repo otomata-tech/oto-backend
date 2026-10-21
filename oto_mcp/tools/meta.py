@@ -20,7 +20,8 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, geste,
-                guide_run, outils_du_travail, outils_retires, redaction, run_org,
+                guide_run, outils_du_travail, outils_retires, output_projection,
+                redaction, run_org,
                 session_org, tool_alias, verrou_org)
 from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
@@ -341,6 +342,29 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
     return IssueCible(ok=True, result=servi, quantity=quantite)
 
 
+def _selectionner(result, fields: list[str]):
+    """`oto_call fields=` : le résultat SERVI (rédaction déjà appliquée par
+    `executer_cible`) réduit aux champs demandés. Après la rédaction, jamais avant :
+    le tri ne fait que retirer, il ne peut pas rendre un champ que la politique a masqué.
+
+    Un résultat sans JSON (texte libre) repart tel quel — il n'a pas de clés. La notice
+    va sous `selection`, ou `oto_call_selection` si la cible porte déjà ce nom : elle ne
+    doit jamais écraser un champ de la réponse."""
+    payload = redaction.extract_payload(result)
+    if payload is None:
+        return result
+    out, notice = output_projection.select_fields(payload, fields)
+    if notice is not None:
+        if isinstance(out, dict):
+            out = {**out, ("selection" if "selection" not in out
+                           else "oto_call_selection"): notice}
+        else:
+            out = {"result": out, "selection": notice}
+    if out == payload:
+        return result
+    return redaction.rebuild_result(result, out)
+
+
 def register(mcp: FastMCP) -> None:
     # --- dispatch universel (ADR 0036) --------------------------------------
 
@@ -378,6 +402,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def oto_call(name: str, arguments: Optional[dict] = None,
                        _org: Optional[int] = None, _run_id: Optional[str] = None,
+                       fields: Optional[list[str]] = None,
                        *, ctx: Context):
         """Call ANY oto tool by name — including one that is NOT listed (hidden by
         default, connector not installed, FOD…), for a single call, WITHOUT adding it
@@ -419,6 +444,8 @@ def register(mcp: FastMCP) -> None:
                 listed tool. Accepted here as well as inside `arguments` — same
                 token, same effect — so the instruction « pass it on every call »
                 never costs a call.
+            fields: keep ONLY these keys in each result row (or in the single
+                object returned); `["*"]` = the whole response. Omit = unchanged.
         """
         # Ambient identity: the JWT's sub already carries the call (the target handler
         # resolves its own credentials on it). Soft — without a token (local dev) there is
@@ -440,6 +467,15 @@ def register(mcp: FastMCP) -> None:
                 code=INVALID_PARAMS,
                 message=f"`{demande}` is a meta/spine tool — call it directly, "
                         "not via oto_call."))
+
+        # `fields` is judged BEFORE the run: an empty or malformed selection must not
+        # cost a billed call whose answer would then be thrown away.
+        if fields is not None and (not fields or not all(
+                isinstance(f, str) and f for f in fields)):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="`fields` must name at least one key (`[\"*\"]` = the whole "
+                        "response), or be omitted."))
 
         args = arguments if isinstance(arguments, dict) else {}
         # Call-context axes (ADR 0038). oto_call runs OUTSIDE the middleware → the
@@ -475,7 +511,9 @@ def register(mcp: FastMCP) -> None:
             # `tool` takes the REQUESTED name: the agent re-reads it to retry, and a
             # name it never typed would make it doubt its own request.
             return {"tool": demande, "ok": False, "error": issue.message}
-        return issue.result
+        if fields is None or issue.retenu:
+            return issue.result
+        return _selectionner(issue.result, fields)
 
     # --- admin: sensitive namespace grants ----------------------------------
 

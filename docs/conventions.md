@@ -436,6 +436,17 @@ rien ne rendait navigable et que rien ne tenait.
   - **Denylist de clés nommées, jamais une allowlist** (leçon `fr_get`/`liste_idcc` : un champ
     oublié disparaît en silence). Le seam ne connaît aucun outil — chaque connecteur déclare
     ce qu'il coupe, là où il sait ce que ses champs valent (`full=True` rend le brut).
+  - **L'appelant peut choisir ses champs sur TOUT outil dispatché** : `oto_call(…,
+    fields=[…])`, sans câbler la cible (`output_projection.select_fields`). Ce n'est pas
+    l'allowlist que la règle précédente proscrit : c'est l'agent qui nomme ce qu'il veut,
+    pas le connecteur qui décide à sa place, et la réponse NOMME ce qu'elle a écarté
+    (`selection.omitted`) et ce qui était demandé mais absent (`selection.missing`). Le
+    tri porte sur la liste de lignes trouvée à deux niveaux au plus (l'enveloppe — total,
+    curseur — reste), sinon sur l'objet unique ; **plusieurs listes ⇒ rien n'est trié**
+    et les chemins sont nommés (`selection.ambiguous`), plutôt que d'en choisir une au
+    hasard. Appliqué **après** la rédaction : il ne fait que retirer, un champ masqué
+    par la politique de l'org ne revient pas. `fields=[]` est refusé **avant**
+    l'exécution, pour ne pas facturer un appel dont la réponse serait jetée.
   - **Le handshake aussi a un budget.** Les 6 jetons `_*` sont recopiés dans ~400 schémas : une
     phrase écrite dans `call_axes.py` est payée 400 fois, à chaque tour, par chaque agent. Ils
     pesaient **48,2 % des 880 K caractères servis** par `tools/list` ; ramenés à 36,2 % en

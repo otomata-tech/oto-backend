@@ -63,10 +63,14 @@ def _refus_sans_base(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _mode_personnel(monkeypatch):
-    """L'org de ces bancs n'a réglé aucun mode : `personnel`, le défaut. Le mode `pool`
-    a ses propres bancs (`test_pool_abonnements*.py`)."""
+    """L'org de ces bancs n'a réglé aucun mode, et personne ne lui prête d'abonnement :
+    chaque travail tourne sur celui de son demandeur. Le pool a ses propres bancs
+    (`test_pool_abonnements*.py`). Les deux lectures sont doublées : sans mode réglé,
+    la voie d'un travail compte les prêts (`_abonnement.par_le_pool`)."""
     from oto_mcp.db import org_subscription_pool
     monkeypatch.setattr(org_subscription_pool, "get_mode", lambda org_id, famille: None)
+    monkeypatch.setattr(org_subscription_pool, "taille_du_pool_a_la_pose",
+                        lambda org_id, famille: 0)
 
 
 @pytest.fixture(autouse=True)

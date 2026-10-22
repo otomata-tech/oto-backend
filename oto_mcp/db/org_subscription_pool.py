@@ -2,8 +2,10 @@
 
 Deux tables (`db/schema/runs.py::MODEL_SUBSCRIPTION_POOL`) :
 
-- `org_model_subscription_modes` — une ligne par (org, famille) qui a réglé son mode.
-  Sans ligne : `personnel`, le travail tourne sur l'abonnement de SON demandeur ;
+- `org_model_subscription_modes` — une ligne par (org, famille) qui a réglé son mode
+  (ou son seul repli API : `mode` NULL). Sans mode réglé, le pool COMPLÈTE :
+  l'abonnement du demandeur sert s'il le peut, le pool sert les autres — cf.
+  `sql_par_le_pool` ;
 - `user_model_subscription_loans` — une ligne par (personne, famille, org) : ce
   membre prête son abonnement au pool de CETTE org. Opt-in, par org.
 
@@ -46,7 +48,8 @@ PRET_VIVANT = (
 
 
 def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
-    """Le mode RÉGLÉ par l'org pour cette famille, ou None (rien réglé : personnel)."""
+    """La ligne de réglage de l'org pour cette famille, ou None. Son `mode` peut être
+    NULL : une ligne née du seul repli API n'a choisi aucun mode."""
     if not org_id:
         return None
     with _connect() as conn:
@@ -57,8 +60,62 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def mode_regle(org_id: Optional[int], famille: str) -> Optional[str]:
+    """Le mode que l'org a CHOISI (`personnel` ou `pool`), ou None : rien choisi."""
+    return (get_mode(org_id, famille) or {}).get("mode")
+
+
 def en_pool(org_id: Optional[int], famille: str) -> bool:
-    return ((get_mode(org_id, famille) or {}).get("mode")) == POOL
+    """L'org a-t-elle CHOISI le pool exclusif ? Un réglage d'admin. Sans choix, le pool
+    ne sert que ceux dont l'abonnement ne sert pas (`sql_par_le_pool`) — la question
+    se pose alors par travail, jamais pour toute l'org."""
+    return mode_regle(org_id, famille) == POOL
+
+
+#: Un prêt qui COMPTE pour qu'un travail sans mode réglé passe par le pool : vivant
+#: (`PRET_VIVANT`), sandbox posé, connecté ou au plafond — le plafond tombe à son
+#: échéance. Un prêt à reconnecter ou déconnecté ne compte pas : il ne fait attendre
+#: personne. Les mêmes prêteurs que `taille_du_pool_a_la_pose`.
+PRET_QUI_COMPTE = ("ab.sandbox_id IS NOT NULL "
+                   "AND ab.statut IN ('connected', 'paused_limit')")
+
+
+def sql_propre_sert(sub: str, famille: str, ouvert_ici: str) -> str:
+    """SQL : l'abonnement du demandeur `sub` peut-il servir ce travail — ouvert dans
+    son org (`ouvert_ici`, l'expression de `runner_jobs`), ni à reconnecter, ni
+    déconnecté, ni au plafond non échu ? Exactement la négation de ce qui fait
+    ATTENDRE un travail en mode personnel."""
+    return f"""({ouvert_ici} AND EXISTS (
+                SELECT 1 FROM user_model_subscriptions ab
+                 WHERE ab.sub = {sub} AND ab.famille = {famille}
+                   AND ab.statut NOT IN ('needs_login', 'disconnected')
+                   AND NOT (ab.statut = 'paused_limit'
+                            AND ab.limit_reset_at > NOW())))"""
+
+
+def sql_par_le_pool(org: str, famille: str, flotte: str, propre_sert: str) -> str:
+    """SQL : ce travail passe-t-il par le POOL de son org ? `org`, `famille` et
+    `flotte` (« le travail est d'une flotte ») sont des expressions SQL ;
+    `propre_sert` vient de `sql_propre_sert`.
+
+    - Mode `pool` réglé : toujours (pool exclusif, un réglage d'admin).
+    - Mode `personnel` réglé : jamais.
+    - Rien réglé — le défaut (revue du 19/10/2026) : le pool COMPLÈTE. Un membre
+      dont l'abonnement sert le garde ; le pool sert les autres (pas d'abonnement
+      ouvert ici, ou à reconnecter, ou au plafond), s'il a au moins un prêt qui
+      compte (`PRET_QUI_COMPTE`). Une flotte appartient à l'org : elle passe
+      toujours par le pool, jamais par le forfait de son créateur.
+
+    Prêter ne demande aucun admin ; passer l'org en pool exclusif, si."""
+    return f"""(CASE (SELECT m.mode FROM org_model_subscription_modes m
+                       WHERE m.org_id = {org} AND m.famille = {famille})
+                 WHEN 'pool' THEN TRUE
+                 WHEN 'personnel' THEN FALSE
+                 ELSE {org} IS NOT NULL AND ({flotte} OR (NOT {propre_sert} AND EXISTS (
+                        SELECT 1 FROM user_model_subscription_loans l {PRET_VIVANT}
+                         WHERE l.org_id = {org} AND l.famille = {famille}
+                           AND {PRET_QUI_COMPTE})))
+               END)"""
 
 
 ENV_REPLI_PAR_DEFAUT = "OTO_REPLI_API_PAR_DEFAUT"
@@ -89,19 +146,21 @@ def repli_api_actif(org_id: Optional[int], famille: str) -> bool:
 
 
 def set_repli_api(org_id: int, famille: str, actif: bool, par: Optional[str]) -> dict:
-    """Ouvre ou referme le repli API de cette org. Fait NAÎTRE la ligne à
-    `personnel` si l'org n'a jamais réglé de mode — son mode effectif d'avant, donc
-    rien ne change d'autre que l'interrupteur."""
+    """Ouvre ou referme le repli API de cette org. Fait NAÎTRE la ligne SANS mode
+    (NULL) si l'org n'en a jamais réglé : rien ne change d'autre que l'interrupteur,
+    le pool continue de compléter (`sql_par_le_pool`).
+
+    ⚠️ Exige la révision `mode_pool_non_choisi` (la colonne accepte NULL) : elle se
+    joue AVANT ce code."""
+    sql = ("INSERT INTO org_model_subscription_modes "
+           "  (org_id, famille, mode, repli_api, updated_by) "
+           "VALUES (%s, %s, %s, %s, %s) "
+           "ON CONFLICT (org_id, famille) DO UPDATE "
+           "   SET repli_api = EXCLUDED.repli_api, updated_at = NOW(), "
+           "       updated_by = EXCLUDED.updated_by "
+           "RETURNING org_id, famille, mode, repli_api, updated_at, updated_by")
     with _connect() as conn:
-        row = conn.execute(
-            "INSERT INTO org_model_subscription_modes "
-            "  (org_id, famille, mode, repli_api, updated_by) "
-            "VALUES (%s, %s, %s, %s, %s) "
-            "ON CONFLICT (org_id, famille) DO UPDATE "
-            "   SET repli_api = EXCLUDED.repli_api, updated_at = NOW(), "
-            "       updated_by = EXCLUDED.updated_by "
-            "RETURNING org_id, famille, mode, repli_api, updated_at, updated_by",
-            (org_id, famille, PERSONNEL, bool(actif), par)).fetchone()
+        row = conn.execute(sql, (org_id, famille, None, bool(actif), par)).fetchone()
     return dict(row)
 
 

@@ -113,17 +113,61 @@ def raison_de_l_attente(famille: str, statut: Optional[str], *, pool: bool = Fal
 
 
 def en_pool(org_id: Optional[int], famille: Optional[str]) -> bool:
-    """L'org sert-elle cette famille par son POOL (abonnements prêtés par ses
-    membres) plutôt que par l'abonnement de chaque demandeur ? Réglé par l'org
-    (`org.model_subscriptions`), `personnel` par défaut."""
+    """L'org a-t-elle CHOISI le pool exclusif pour cette famille
+    (`org.model_subscriptions`, un réglage d'admin) ? Sans choix, la voie se décide
+    par travail : `par_le_pool`."""
     return est_abonnement(famille) and org_subscription_pool.en_pool(org_id, famille)
+
+
+def _propre_sert(sub: Optional[str], famille: str, org_id: int, *, a_la_pose: bool) -> bool:
+    """L'abonnement de `sub` sert-il ses travaux dans cette org ? Ouvert ici
+    (`sert_dans`), ni à reconnecter ni déconnecté — et, hors pose, pas au plafond non
+    échu. À la pose, un plafond sert : il tombe à son échéance (même règle que
+    `servable`). La lecture Python de `org_subscription_pool.sql_propre_sert`."""
+    if not sub or not user_subscriptions.sert_dans(sub, famille, org_id):
+        return False
+    ligne = user_subscriptions.get_subscription(sub, famille) or {}
+    statut = ligne.get("statut")
+    if not statut or statut in (user_subscriptions.A_RECONNECTER,
+                                user_subscriptions.DECONNECTE):
+        return False
+    if statut == user_subscriptions.PLAFOND and not a_la_pose:
+        reset = _echeance_utc(ligne.get("limit_reset_at"))
+        return not (reset and reset > datetime.now(timezone.utc))
+    return True
+
+
+def par_le_pool(org_id: Optional[int], famille: Optional[str], sub: Optional[str], *,
+                flotte: bool = False, a_la_pose: bool = False) -> bool:
+    """Un travail de `sub` dans cette org passe-t-il par le POOL ? La lecture Python
+    de la règle que la réservation applique en SQL (`org_subscription_pool.
+    sql_par_le_pool`) : mode `pool` réglé, toujours ; `personnel` réglé, jamais ;
+    rien réglé, le pool COMPLÈTE — il sert une flotte, et un demandeur dont
+    l'abonnement ne sert pas ici, dès qu'un prêt compte.
+
+    ⚠️ Une flotte sans mode réglé et sans prêt qui compte rend `False` ici, quand la
+    réservation la fait attendre un prêt : hors de la file, elle n'a aucune voie, et
+    la pose la refuse (`_FLOTTE_HORS_POOL`) plutôt que de la laisser attendre.
+
+    La remise ne s'en sert pas : elle lit la voie que la réservation a prise
+    (`db_runner_jobs.par_le_pool`). Ici, la pose et le diagnostic d'un travail qui
+    n'a pas encore été pris."""
+    if not est_abonnement(famille) or not org_id:
+        return False
+    regle = org_subscription_pool.mode_regle(org_id, famille)
+    if regle:
+        return regle == org_subscription_pool.POOL
+    if not flotte and _propre_sert(sub, famille, org_id, a_la_pose=a_la_pose):
+        return False
+    return org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille) > 0
 
 
 _FLOTTE_HORS_POOL = (
     "les modèles `{famille}` tournent ici sur l'abonnement d'UNE personne : une flotte "
     "appartient à l'organisation et ferait payer son forfait pour le travail de tous. "
-    "Choisis un modèle servi par une clé d'organisation, ou demande à un admin de "
-    "passer l'organisation en mode pool (des membres y prêtent leur abonnement).")
+    "Choisis un modèle servi par une clé d'organisation, ou qu'un membre prête son "
+    "abonnement à l'organisation (Réglages › Fournisseurs de modèles) : une flotte "
+    "tourne alors sur les abonnements prêtés.")
 
 
 def peut_agir_pour(sub: str, proprietaire: Optional[str], famille: str) -> bool:
@@ -244,7 +288,7 @@ def exiger_a_la_pose(sub: str, proprietaire: Optional[str], famille: Optional[st
     if not est_abonnement(famille):
         return
     exiger_ouvert(sub, famille)
-    pool = en_pool(org_id, famille)
+    pool = par_le_pool(org_id, famille, sub, flotte=flotte, a_la_pose=True)
     if flotte and not pool:
         raise AuthzDenied(400, "subscription_personal_only",
                           _FLOTTE_HORS_POOL.format(famille=famille))
@@ -363,7 +407,7 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
         return base
     if not sub:
         return aucun_agent
-    if en_pool(org_id, famille):
+    if par_le_pool(org_id, famille, sub):
         # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
         # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
         # diagnostic. `taille_totale_du_pool` compte les prêts VIVANTS sans

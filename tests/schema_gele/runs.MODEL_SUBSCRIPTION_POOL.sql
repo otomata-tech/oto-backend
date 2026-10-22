@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS org_model_subscription_modes (
 org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
 famille TEXT NOT NULL,
-mode TEXT NOT NULL CHECK (mode IN ('personnel', 'pool')),
+mode TEXT CHECK (mode IN ('personnel', 'pool')),
 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 updated_by TEXT,
 PRIMARY KEY (org_id, famille)

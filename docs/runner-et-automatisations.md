@@ -1921,14 +1921,20 @@ passe pas par ici : un prêt est son propre consentement. Reprise de l'existant 
 servait déjà — un agent posé dessus, un travail en file, un prêt.
 
 **Le POOL d'org (25/09/2026).** Deux modes, réglés PAR ORG et par famille :
-`personnel` (défaut — tout ce qui précède, à l'octet près) et `pool` — les travaux de
-l'org tournent sur l'abonnement d'un membre qui l'a **prêté à cette org**.
+`personnel` (tout ce qui précède, à l'octet près) et `pool` — les travaux de l'org
+tournent sur l'abonnement d'un membre qui l'a **prêté à cette org**. **Sans mode
+réglé** (le défaut, revue du 19/10/2026), le pool COMPLÈTE, et la voie se décide par
+travail (`org_subscription_pool.sql_par_le_pool`) : un demandeur dont l'abonnement sert
+ici le garde ; le pool sert ceux qui n'en ont pas (ou à reconnecter, ou au plafond non
+échu) et les flottes, dès qu'un prêt compte (`PRET_QUI_COMPTE` : sandbox, connecté ou
+au plafond). La réservation écrit la voie prise (`_plateforme.pool`), la remise la lit ;
+le repli suit la même voie. Prêter ne demande aucun admin ; le pool exclusif, si.
 
 - **Le mode** : `oto_org_settings domain=model_subscriptions op=set mode=personnel|pool`
   (admin d'org ; un appel pour le mode, un autre pour le plafond), REST
   `PUT /api/orgs/{id}/model-subscriptions/{family}/mode`, lu par le `GET` de la même
   ressource avec `pool_size` (membres qui prêtent un abonnement servable). Table
-  `org_model_subscription_modes` ; sans ligne, `personnel`. Une table à part du plafond :
+  `org_model_subscription_modes` ; sans ligne (ou `mode` NULL, une ligne née du seul repli API), le pool complète — l'écran dit `mode: personnel` et `mode_chosen: false`. Une table à part du plafond :
   sa `limite_pct` est `NOT NULL`, et la relâcher aurait fait lever le code d'avant sur la
   base partagée.
 - **Le prêt** : opt-in explicite, désactivé par défaut, **par org** — une personne de deux

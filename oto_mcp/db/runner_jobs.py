@@ -90,6 +90,10 @@ _TRACE_RUN_CLOS = f"""
 #: aucun `ALTER` sur `runner_jobs`, la table la plus sondée de la base PARTAGÉE.
 _CLE_FORFAIT = "abonnement"
 
+#: La clé de `_plateforme` qui dit si la réservation a servi ce travail PAR LE POOL
+#: (`True`) ou par l'abonnement de son demandeur. La remise la lit (`par_le_pool`).
+_CLE_POOL = "pool"
+
 #: Le porteur du forfait d'un travail, en SQL. Un travail pris avant que la clé
 #: n'existe tournait sur l'abonnement de son demandeur : c'est ce que dit le COALESCE,
 #: pas un repli.
@@ -126,12 +130,25 @@ _ABONNEMENT_OUVERT_ICI = f"""(rj.org_id IS NULL OR EXISTS (
                                     AND u.org_id = rj.org_id))"""
 
 
+def _par_le_pool_sql() -> str:
+    from .org_subscription_pool import sql_par_le_pool, sql_propre_sert
+    return sql_par_le_pool(
+        "rj.org_id", _FAMILLE_RJ, "rj.fleet_id IS NOT NULL",
+        sql_propre_sert("rj.sub", _FAMILLE_RJ, _ABONNEMENT_OUVERT_ICI))
+
+
+#: « Ce travail `rj` passe par le pool de son org » — une seule écriture, lue par la
+#: réservation et par le repli (`_jointures_de_repli`).
+_PAR_LE_POOL = _par_le_pool_sql()
+
+
 def _fragments_abonnement(abonnement: bool) -> dict:
     """Ce que la réservation ajoute pour un dépôt d'ABONNEMENT (OTO-130) — et RIEN
     pour tout autre dépôt : le SQL d'un worker de clé ne nomme même pas les tables du
     pool. Ces clauses décrivent ce qu'est un forfait, pas ce qu'est une file.
 
-    **Mode personnel** (défaut d'une org) — le travail tourne sur l'abonnement de SON
+    **Voie personnelle** (mode `personnel` réglé, ou sans mode quand l'abonnement du
+    demandeur sert ici) — le travail tourne sur l'abonnement de SON
     demandeur, `rj.sub` :
 
     1. UN travail à la fois par ABONNEMENT. Le bac à sable est celui de la personne,
@@ -148,7 +165,9 @@ def _fragments_abonnement(abonnement: bool) -> dict:
        la reconnexion. Ce n'est pas un arriéré qui s'accumule : le tick périme les
        occurrences programmées restées en file, et un webhook porte sa fraîcheur.
 
-    **Mode pool** (`org_model_subscription_modes`, réglé par l'org du travail) — le
+    **Par le pool** (`org_subscription_pool.sql_par_le_pool`, décidé PAR TRAVAIL :
+    toujours en mode `pool` réglé ; sans mode réglé, quand l'abonnement du demandeur
+    ne sert pas ici et qu'un prêt compte, ou pour une flotte) — le
     travail tourne sur l'abonnement d'un membre de CETTE org qui l'a PRÊTÉ
     (`user_model_subscription_loans`), toujours membre, servable (même règle que la
     clause 2 : `org_subscription_pool.PRETEUR_SERVABLE`) et sans travail en vol. Le
@@ -156,34 +175,32 @@ def _fragments_abonnement(abonnement: bool) -> dict:
     libre : le travail ATTEND, `pending`, aucune tentative brûlée — jamais un échec.
     L'état du demandeur ne compte pas : il n'est pas celui qui paie.
 
-    Le porteur choisi s'écrit dans la charge (`_plateforme.abonnement`) par la même
-    écriture que la prise ; `_deja_en_vol` tranche ensuite la course de deux
+    Le porteur choisi s'écrit dans la charge (`_plateforme.abonnement`, et
+    `_plateforme.pool` : la remise lit la voie que la réservation a prise, sans la
+    recalculer) par la même écriture que la prise ; `_deja_en_vol` tranche ensuite la course de deux
     réservations simultanées sur le même abonnement."""
     if not abonnement:
         return {"colonnes_forfait": "", "jointure_pret": "", "clause_abonnement": "",
                 "verrou_de": "", "charge_prise": _CHARGE_PRISE, "retour_preteur": ""}
     from .org_subscription_pool import PRET_VIVANT, PRETEUR_SERVABLE
-    en_pool = f"""EXISTS (
-                SELECT 1 FROM org_model_subscription_modes m
-                 WHERE m.org_id = rj.org_id AND m.famille = {_FAMILLE_RJ}
-                   AND m.mode = 'pool')"""
     return {
         "colonnes_forfait": ", pret.sub AS preteur, COALESCE(pret.sub, rj.sub) AS forfait",
         # ⚠️ LATERAL, et `FOR UPDATE OF rj` : la ligne du prêteur n'est pas verrouillée
         # (une jointure externe ne se verrouille pas), la course entre deux prises sur
         # le même prêteur se tranche au verrou consultatif de `_deja_en_vol`.
-        "jointure_pret": f"""LEFT JOIN LATERAL (
+        # `viap` : CE travail passe-t-il par le pool ? Lu une fois, par la prise et
+        # par le choix du prêteur.
+        "jointure_pret": f"""CROSS JOIN LATERAL (SELECT {_PAR_LE_POOL} AS actif) viap
+                LEFT JOIN LATERAL (
                     SELECT l.sub FROM user_model_subscription_loans l
-                      JOIN org_model_subscription_modes m
-                        ON m.org_id = l.org_id AND m.famille = l.famille
-                       AND m.mode = 'pool'
                       {PRET_VIVANT}
-                     WHERE l.org_id = rj.org_id AND l.famille = {_FAMILLE_RJ}
+                     WHERE viap.actif
+                       AND l.org_id = rj.org_id AND l.famille = {_FAMILLE_RJ}
                        AND {PRETEUR_SERVABLE}
                        AND NOT {_en_vol("l.sub", "l.famille")}
                      ORDER BY l.servi_at NULLS FIRST, l.created_at, l.sub
                      LIMIT 1) pret ON TRUE""",
-        "clause_abonnement": f"""AND CASE WHEN {en_pool}
+        "clause_abonnement": f"""AND CASE WHEN viap.actif
                         THEN pret.sub IS NOT NULL
                         ELSE NOT {_en_vol("rj.sub", _FAMILLE_RJ)}
                              -- L'abonnement du demandeur sert CETTE org (08/10/2026) :
@@ -201,7 +218,8 @@ def _fragments_abonnement(abonnement: bool) -> dict:
         "charge_prise": f"""(SELECT jsonb_set(
                         c.charge, '{{{_CHAMP_PLATEFORME}}}',
                         COALESCE(c.charge->'{_CHAMP_PLATEFORME}', '{{}}'::jsonb)
-                        || jsonb_build_object('{_CLE_FORFAIT}', pris.forfait))
+                        || jsonb_build_object('{_CLE_FORFAIT}', pris.forfait,
+                                              '{_CLE_POOL}', pris.preteur IS NOT NULL))
                      FROM (SELECT COALESCE({_CHARGE_PRISE}, '{{}}'::jsonb) AS charge) c)""",
         # `fleet_id` : la remise refuse une flotte hors pool (`_avec_abonnement`) — un
         # passage armé en pool, dont l'org est repassée en personnel, ferait sinon
@@ -925,18 +943,15 @@ def _forfait_de_repli(rj: str, modep: str) -> str:
 
 
 def _jointures_de_repli(seuil_defaut_pct: int) -> str:
-    """Les trois lectures qui décident si un travail `rj` est repliable : le mode de
-    son org, la pause de son demandeur (mode personnel, et seulement dans une org où
-    son abonnement est ouvert : `_ABONNEMENT_OUVERT_ICI`), et celle de TOUS les
-    prêteurs vivants de son pool (mode pool) — la même dans la liste des candidats et
-    dans la prise, qui la revérifie."""
+    """Les trois lectures qui décident si un travail `rj` est repliable : sa voie
+    (`_PAR_LE_POOL`, la même que la réservation), la pause de son demandeur (voie
+    personnelle, et seulement dans une org où son abonnement est ouvert :
+    `_ABONNEMENT_OUVERT_ICI`), et celle de TOUS les prêteurs vivants de son pool
+    (voie du pool) — la même dans la liste des candidats et dans la prise, qui la
+    revérifie."""
     from .org_subscription_pool import PRET_VIVANT
     return f"""
-      LEFT JOIN LATERAL (SELECT EXISTS (
-               SELECT 1 FROM org_model_subscription_modes m
-                WHERE m.org_id = rj.org_id
-                  AND m.famille = rj.payload->>'model_family'
-                  AND m.mode = 'pool') AS actif) modep ON TRUE
+      LEFT JOIN LATERAL (SELECT {_PAR_LE_POOL} AS actif) modep ON TRUE
       LEFT JOIN LATERAL (
              SELECT ab.limit_reset_at
                FROM user_model_subscriptions ab
@@ -1103,8 +1118,8 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     atomique (`claim_fallback_job`, qui revérifie la MÊME pause : entre les deux, une
     reconnexion a pu gagner).
 
-    Mode personnel : le DEMANDEUR est en pause pour l'org du travail
-    (`_pause_pour_l_org`). Mode pool (réglé par l'org) : au moins un prêt VIVANT, et
+    Voie personnelle : le DEMANDEUR est en pause pour l'org du travail
+    (`_pause_pour_l_org`). Voie du pool (`_PAR_LE_POOL`) : au moins un prêt VIVANT, et
     TOUS ses prêteurs le sont — un mélange avec un prêteur simplement déconnecté,
     ou servable, n'est PAS un pool « en pause », et n'ouvre aucun repli (l'état du
     demandeur ne compte jamais en pool : il ne paie pas).
@@ -1311,6 +1326,15 @@ def porteur_et_famille(job_id: int) -> Optional[dict]:
             f"{_FORFAIT_SQL.format(a='runner_jobs')} AS abonnement "
             "FROM runner_jobs WHERE id = %s", (job_id,)).fetchone()
     return dict(row) if row else None
+
+
+def par_le_pool(job: dict) -> Optional[bool]:
+    """La voie que la réservation a prise pour ce travail pris (`_plateforme.pool`) :
+    `True` par le pool, `False` par l'abonnement du demandeur, `None` pour un travail
+    pris avant que la clé n'existe."""
+    plateforme = (job.get("payload") or {}).get(_CHAMP_PLATEFORME) or {}
+    voie = plateforme.get(_CLE_POOL)
+    return None if voie is None else bool(voie)
 
 
 def porteur_du_forfait(job: dict) -> Optional[str]:

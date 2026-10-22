@@ -914,7 +914,12 @@ def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
     # L'abonnement qui PAIE : celui que la réservation a choisi — le demandeur en
     # mode personnel, un prêteur du pool sinon (`db.porteur_du_forfait`).
     porteur = db.porteur_du_forfait(job)
-    pool = _abonnement.en_pool(job.get("org_id"), famille)
+    # La voie que la RÉSERVATION a prise (`_plateforme.pool`) ; un travail pris avant
+    # qu'elle ne s'écrive la recalcule.
+    pool = db.par_le_pool(job)
+    if pool is None:
+        pool = _abonnement.par_le_pool(job.get("org_id"), famille, job.get("sub"),
+                                       flotte=bool(job.get("fleet_id")))
     if job.get("fleet_id") and not pool:
         # Un passage armé pendant le pool, dont l'org est repassée en personnel :
         # servi ici, il ferait payer le forfait de son créateur pour le travail de

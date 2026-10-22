@@ -68,11 +68,19 @@ class OrgPlafond(BaseModel):
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
     mode: str = Field(
-        description=("`personnel` (default): each job runs on the subscription of the "
-                     "member who asked for it. `pool`: the org's jobs — fleets included "
-                     "— run on the subscription of a member who LENT theirs to this org "
+        description=("`personnel`: each job runs on the subscription of the member who "
+                     "asked for it. `pool`: the org's jobs — fleets included — run "
+                     "only on the subscription of a member who LENT theirs to this org "
                      "(`PATCH /api/me/model-subscriptions/{family}` `lent_to`), the "
-                     "least recently used free one first."))
+                     "least recently used free one first. Unset (`mode_chosen: false`, "
+                     "read as `personnel`): the pool COMPLEMENTS — a member whose own "
+                     "subscription is usable here keeps using it; the lent ones serve "
+                     "members without one (or whose own is at its cap) and fleets."))
+    mode_chosen: bool = Field(
+        default=False,
+        description=("`true` = an org admin set `mode`. `false` = nothing set: lending "
+                     "is enough for the pool to serve members who have no usable "
+                     "subscription of their own, without anyone's own being replaced."))
     pool_size: int = Field(
         description=("How many members currently lend this org a usable subscription "
                      "(the `lenders` with `usable_now`). In `pool` mode, zero means the "
@@ -140,8 +148,11 @@ def _servi(org_id: int, famille: str) -> dict:
                 for p in org_subscription_pool.preteurs(org_id, famille)]
     # `pool_size` se DÉDUIT de `lenders` : une seule lecture, aucun écart possible
     # entre le compte et la liste montrés sur le même écran.
-    pool = {"mode": ((org_subscription_pool.get_mode(org_id, famille) or {}).get("mode")
-                     or org_subscription_pool.PERSONNEL),
+    # Sans mode CHOISI, l'écran dit `personnel` comme avant, et `mode_chosen: false` :
+    # le pool complète (`org_subscription_pool.sql_par_le_pool`).
+    regle = org_subscription_pool.mode_regle(org_id, famille)
+    pool = {"mode": regle or org_subscription_pool.PERSONNEL,
+            "mode_chosen": regle is not None,
             "pool_size": sum(p["usable_now"] for p in preteurs),
             "lenders": preteurs}
     ligne = org_subscription_limits.get_limite(org_id, famille)

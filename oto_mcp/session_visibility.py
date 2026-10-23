@@ -201,8 +201,9 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
     # Sélection marketplace (ADR 0019/0050) : régime NOMINAL « non-sélectionné =
     # masqué ». Un connecteur en PAUSE ou non-installé masque ses tools. Le seed
     # de la 1re session d'un (sub, org) installe le socle `default_active` ∩ exposé
-    # — VIDE depuis le 16/07 : un nouveau compte démarre SANS connecteurs installés,
-    # l'agent guide depuis les tools spine + le catalogue injecté (bloc A). Les
+    # — VIDE depuis le 16/07 —, plus ce qu'une clé d'org/équipe/tenant/plateforme sert
+    # déjà (`_avec_credential`) ; le reste part en library, l'agent guide
+    # depuis les tools spine + le catalogue injecté (bloc A). Les
     # pairs pré-0050 ont été backfillés avec leur visible d'alors (db._init).
     # Depuis peu : la baseline PLATEFORME est complétée par la baseline PROPRE à
     # l'org active (`org_store.get_org_default_connectors`, ex-« recommended »,
@@ -232,6 +233,11 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
             # Provenance (§E7) : le socle prime sur le kit — un connecteur que la
             # plateforme installe d'office ne sort pas avec un retrait du kit.
             origins = {n: connector_selection.KIT for n in org_defaults}
+            # Ce qui marche DÉJÀ pour ce membre s'installe aussi : un connecteur dont
+            # une clé de son org, d'une de ses équipes, du tenant ou de la plateforme
+            # répond. ∩ exposé, comme le socle — et sous sa provenance : un retrait du
+            # kit ne les sort pas.
+            socle = socle | (_avec_credential(sub, active_org) & exposed_now)
             origins.update({n: connector_selection.SOCLE for n in socle})
             connector_selection.seed_active(sub, origins, prof_org)
         _sel = connector_selection.list_selection(sub, prof_org)
@@ -273,6 +279,29 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
     # peut croire un outil protégé masqué.
     proteges = {n for n in all_names if is_protected(n)}
     return {nom: noms - proteges for nom, noms in couches.items()}
+
+
+# Les paliers de la cascade qui comptent au semis : partagés avec le membre, pas
+# posés par lui (`user` = sa clé perso, il l'installe lui-même où il veut).
+_PALIERS_PARTAGES = frozenset({"group", "org", "tenant", "platform", "over_quota"})
+
+
+def _avec_credential(sub: str, org: int) -> set[str]:
+    """Connecteurs utilisables d'office par un membre qui arrive dans `org` : une clé
+    d'org, d'équipe (l'active, ou une autre dont il est membre — `team_key_group`),
+    de tenant ou de plateforme résout. Un connecteur sans clé (open data) n'en est
+    pas : le départ VIDE du 16/07 vaut pour lui.
+
+    Fail-OPEN vers le semis d'avant (socle + kit) : un hoquet de lecture ne doit ni
+    priver le membre de sa couche de sélection, ni le laisser non semé."""
+    try:
+        snapshot = access.status_for(sub, org=org, group=access.current_group(sub))
+    except Exception as e:
+        logger.warning("credentialed seed skipped for %s (fail-open): %s", sub, e)
+        return set()
+    return {
+        nom for nom, entree in snapshot["providers"].items()
+        if entree.get("mode") in _PALIERS_PARTAGES or entree.get("team_key_group")}
 
 
 def _roles_des_outils_permis(sub: str) -> dict[str, str]:

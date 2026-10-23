@@ -49,7 +49,7 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from ..auth import hubspot as hubspot_auth
 from .lecture import LECTURE
 
 logger = logging.getLogger(__name__)
@@ -312,7 +312,7 @@ def register(mcp: FastMCP) -> None:
                 have a value, url); page views: occurredAt, url, path, title,
                 id.
         """
-        key, _ = access.resolve_api_key("hubspot")
+        key = hubspot_auth.bearer()
         c = HubSpotClient(api_key=key)
         extra = _names(properties)
         size = max(1, min(limit, 100))

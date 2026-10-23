@@ -1,0 +1,53 @@
+{
+  "uid": "oto_hubspot_org",
+  "type": "app",
+  "config": {
+    "name": "<instance brand>",
+    "description": "Your HubSpot CRM in your agents, connected once for the whole organisation: contacts, companies, deals, tickets, lists, properties and pipelines.",
+    "distribution": "marketplace",
+    "isUserLevel": false,
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "https://<instance-host>/api/hubspot/oauth/callback"
+      ],
+      "requiredScopes": [
+        "crm.objects.contacts.read",
+        "crm.objects.contacts.write",
+        "crm.objects.companies.read",
+        "crm.objects.companies.write",
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.lists.read",
+        "crm.lists.write",
+        "crm.objects.owners.read",
+        "crm.schemas.contacts.read",
+        "crm.schemas.companies.read",
+        "crm.schemas.deals.read"
+      ],
+      "optionalScopes": [
+        "crm.objects.tickets.read",
+        "crm.objects.tickets.write",
+        "crm.schemas.tickets.read",
+        "business-intelligence",
+        "crm.schemas.contacts.write",
+        "crm.schemas.companies.write",
+        "crm.schemas.deals.write",
+        "crm.objects.custom.read",
+        "crm.objects.custom.write",
+        "crm.schemas.custom.read"
+      ],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "<support email>",
+      "documentationUrl": "<setup docs URL>",
+      "supportUrl": "<support URL>"
+    }
+  }
+}

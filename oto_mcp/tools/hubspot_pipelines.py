@@ -31,7 +31,7 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
-from .. import access
+from ..auth import hubspot as hubspot_auth
 from .lecture import LECTURE
 
 #: Object types that have pipelines, and the properties that point INTO them —
@@ -254,7 +254,7 @@ def register(mcp: FastMCP) -> None:
                 (id, label, displayOrder, archived, stages with probability /
                 isClosed for deals, ticketState for tickets).
         """
-        key, _ = access.resolve_api_key("hubspot")
+        key = hubspot_auth.bearer()
         c = HubSpotClient(api_key=key)
         try:
             if op == "list":

@@ -1,3 +1,19 @@
+## setup — the one-click connection ("connect hubspot")
+
+when the instance publishes its hubspot apps, the card shows **connect hubspot**: you pick the portal, approve, and you are connected — no key to create, no scope to tick. **pick the tab first**: it decides which kind of connection you make.
+
+- **personal tab** — connects **your own** hubspot user. every call runs **as you**, with your hubspot permissions (hubspot's audit log shows you, "via" the app), and the contacts, companies, deals and tickets your agents **create** get **you as owner** unless the call names another owner. any member can do it, if their hubspot permissions cover contacts, companies, deals, owners and properties (read); lists, tickets, custom objects and page views are asked as optional
+- **org / team tab** — an org admin (or team lead) connects the portal **once for everyone** there; calls run as the app, owners are whatever the call says. also asks, as optional, to create and edit properties (fields) and custom objects
+- a member with a personal connection uses it; the others use the org's or team's
+- a personal connection cannot do what hubspot keeps from user-level apps (bulk association operations among them): use the org connection for those
+- reconnecting the same level replaces the connection; pasting a key over it replaces it too
+- "test the connection" reads the portal, who connected it, the granted scopes and — on a personal connection — the owner records default to, without using up anything
+- if the app is uninstalled, the next call says **reconnect hubspot** and the card turns red
+- removing a one-click connection also uninstalls the app from the portal — unless another connection here still uses the same app in that portal (hubspot uninstalls for the whole portal, personal app included, and emails its super admins). the connection is removed either way, even if hubspot refuses or is unreachable
+- each hubspot app installs on at most 25 portals until it is listed on the hubspot marketplace
+
+no "connect hubspot" button on a tab: the instance has no hubspot app for that kind of connection yet — the service key below works the same.
+
 ## prerequisite — your hubspot token (service key)
 
 hubspot authenticates via a **service key**. ⚠️ hubspot stops letting you create *private apps* (on 28/09/2026 for new accounts, 26/10/2026 for existing ones — [changelog](https://developers.hubspot.com/changelog/legacy-private-app-creation-sunset)); a private app made before keeps working, and its token is pasted the same way.

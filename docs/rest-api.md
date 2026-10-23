@@ -835,7 +835,7 @@ Trois projections d'une même route, du plus léger au plus lourd :
 | requête | ce que porte chaque ligne | mesuré (145 connecteurs, 14/10/2026) |
 |---|---|---|
 | `GET /api/me/connectors` | la ligne compacte : identité, axes de tri, `secret_kind`, état du membre | ~66 Ko |
-| `GET /api/me/connectors?include=card` | la ligne compacte **+ la carte sans `doc_sections`** : `auth`, `credential_fields`, `connect` (avec `callback_url`, `app_ready`, `fixed` et `warnings`), `namespaces`, `description`, `publisher`, `auth_modes`, `personal_session`, `free_tier`, `identities`, `verifiable`, `href` | ~235 Ko |
+| `GET /api/me/connectors?include=card` | la ligne compacte **+ la carte sans `doc_sections`** : `auth`, `credential_fields`, `connect` (avec `callback_url`, `app_ready`, `app_ready_scopes` — les niveaux `member`/`org`/`group` dont l'app est prête, `null` si le connecteur ne répond pas par niveau —, `fixed` et `warnings`), `namespaces`, `description`, `publisher`, `auth_modes`, `personal_session`, `free_tier`, `identities`, `verifiable`, `href` | ~235 Ko |
 | `GET /api/me/connectors?include=card,docs` ou `?verbose=true` | la carte complète, mode d'emploi markdown (`doc_sections`) compris | ~745 Ko |
 
 Le nombre de requêtes SQL est le même pour les trois (≈ 50, borné depuis #1148) : ce

@@ -98,6 +98,12 @@ class Flow:
     # credentials", even of someone with nothing left to set. `None` = the connector
     # does not declare the question, the front then promises nothing.
     app_ready: Optional[Callable[[str], bool]] = None
+    # The same question PER LEVEL, for a connector whose app depends on the level the
+    # user connects at (HubSpot: a user-level app for "personal", an account-level one
+    # for org/team): the levels (`member`, `org`, `group`) that can consent now. The
+    # card offers "Connect" on those tabs only. `None` = not declared: `app_ready`
+    # answers for every tab.
+    app_ready_scopes: Optional[Callable[[str], list]] = None
     # Parameters the requester's applicable app already BINDS (`{name: value}`): the
     # Zoho region of the app set by their team. The front shows them instead of asking —
     # the start refuses any other value. `None` = nothing ever bound.
@@ -114,6 +120,7 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
             params: tuple[FlowParam, ...] = (), label: str = "Connect",
             callback_path: str = "",
             app_ready: Optional[Callable[[str], bool]] = None,
+            app_ready_scopes: Optional[Callable[[str], list]] = None,
             fixed: Optional[Callable[[str], dict]] = None,
             warnings: Optional[Callable[[str], list]] = None) -> None:
     """Declare this connector's connection flow. Called at MODULE level (like
@@ -128,6 +135,7 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
     _FLOWS[connector] = Flow(connector=connector, start=start,
                              params=tuple(params), label=label,
                              callback_path=callback_path, app_ready=app_ready,
+                             app_ready_scopes=app_ready_scopes,
                              fixed=fixed, warnings=warnings)
 
 
@@ -233,6 +241,24 @@ def app_ready(connector: str, sub: str) -> Optional[bool]:
     except Exception:  # noqa: BLE001
         logger.debug("app_ready failed for %s", connector, exc_info=True)
         return None
+
+
+_LEVELS = ("member", "org", "group")
+
+
+def readiness(connector: str, sub: str) -> tuple[Optional[bool], Optional[list[str]]]:
+    """`(app_ready, app_ready_scopes)` in ONE read when the connector answers per level
+    (`app_ready` is then "any level ready"), else `(app_ready(...), None)`. Same rules as
+    `app_ready`: authenticated projection only, fail-open to "nothing promised"."""
+    f = _FLOWS.get(connector)
+    if not f or f.app_ready_scopes is None or not sub:
+        return app_ready(connector, sub), None
+    try:
+        levels = [lv for lv in (f.app_ready_scopes(sub) or []) if lv in _LEVELS]
+    except Exception:  # noqa: BLE001
+        logger.debug("app_ready_scopes failed for %s", connector, exc_info=True)
+        return None, None
+    return bool(levels), levels
 
 
 def fixed(connector: str, sub: str) -> dict:

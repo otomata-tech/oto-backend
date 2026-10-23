@@ -31,7 +31,7 @@ def client(monkeypatch):
 
     inst = MagicMock()
     monkeypatch.setattr(hs, "HubSpotClient", lambda *a, **k: inst)
-    monkeypatch.setattr("oto_mcp.access.resolve_api_key", lambda *a, **k: ("k", False))
+    monkeypatch.setattr("oto_mcp.auth.hubspot.bearer", lambda *a, **k: "k")
     return inst
 
 

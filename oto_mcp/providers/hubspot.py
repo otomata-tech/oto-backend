@@ -10,6 +10,8 @@ from ._model import _c
 # byo keyed api_key, outside the base set (opt-in, installable from the library), no
 # platform key (everyone sets their own). Inert until activated in DB
 # (connector_activation, deny-by-default), like foncier/sante.
+# The ONE secret is either a pasted token (service key / private app) or, written by
+# "Connect HubSpot" (`auth/hubspot.py`), a refresh token flagged `meta.auth="oauth"`.
 CONNECTOR = _c(
     "hubspot", ["hubspot"], auth_modes={"byo_user", "byo_org"}, keyed=True,
     secret_kind="api_key", label="HubSpot",

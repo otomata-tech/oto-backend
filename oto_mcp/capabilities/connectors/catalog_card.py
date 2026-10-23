@@ -165,6 +165,10 @@ class ConnectFlow(BaseModel):
     # org's, or the vendor's)? `null` = question not declared by the connector —
     # the front must then stay SILENT rather than claim an app remains to be set up.
     app_ready: Optional[bool] = None
+    # The levels (`member`, `org`, `group`) whose app is ready, for a connector whose
+    # app depends on the level (HubSpot: user-level app for personal, account-level for
+    # org/team). `null` = not declared — `app_ready` answers for every tab.
+    app_ready_scopes: Optional[list[str]] = None
     # Parameters this user's applicable app already binds (`{name: value}`), e.g. the
     # Zoho region of the app set by their team: shown, never asked — the start refuses
     # any other value. Empty = every parameter is chosen at click time.

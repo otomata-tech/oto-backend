@@ -26,9 +26,10 @@ from typing import Literal, Optional, Union
 
 from fastmcp import FastMCP
 
-from .. import access, session_org
+from .. import session_org
 from ..datastore import par_reference as pr
 from ..datastore.identite import AdresseJson as Adresse
+from ..auth import hubspot as hubspot_auth
 from .hubspot import _scope_refusal
 from .hubspot_scopes import unknown_properties
 
@@ -108,7 +109,7 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.hubspot.client import HubSpotClient
 
     def _client() -> HubSpotClient:
-        key, _ = access.resolve_api_key("hubspot")
+        key = hubspot_auth.bearer()
         return HubSpotClient(api_key=key)
 
     def _existants(c: HubSpotClient, object_type: str, prop: str,
@@ -306,7 +307,8 @@ def register(mcp: FastMCP) -> None:
                 continue
             try:
                 if cible is None:
-                    rec = c.create_object(object_type, {**fixes, **props}) or {}
+                    rec = c.create_object(object_type, hubspot_auth.default_owner(
+                        object_type, {**fixes, **props})) or {}
                     cible, etat = str(rec.get("id") or ""), CREE
                     if not cible:
                         recu.echec(rid, "hubspot_not_created")

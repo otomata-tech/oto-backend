@@ -1,8 +1,9 @@
 """HubSpot CRM — contacts, companies, deals, tickets, notes (read + write).
 
-Wraps `oto.tools.hubspot.HubSpotClient` (the key: service key or private app).
-Key resolved per call via `access.resolve_api_key("hubspot")` — byo (user key on
-/account or the org's shared credential). No platform key.
+Wraps `oto.tools.hubspot.HubSpotClient` (a Bearer token). Token resolved per
+call via `auth.hubspot.bearer()` — byo (user key on /account or the org's shared
+credential): a pasted service key / private-app token as is, or an access token
+minted from the "Connect HubSpot" OAuth row. No platform key.
 
 Generic surface: `object_type` = contacts | companies | deals | tickets
 (or any custom object) for search/get/create/update/delete — lossless merge.
@@ -69,12 +70,13 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
 from ..connectors import verify as connector_verify
 from . import hubspot_merge
+from ..auth import hubspot as hubspot_auth
 from .hubspot_pipelines import (
     add_labels, compact_property, fill_pipeline_options, filter_properties)
-from .hubspot_scopes import measure_scopes, missing_scopes_refusal, translate
+from .hubspot_scopes import (measure_scopes, missing_scopes_refusal, report_from_granted,
+                             translate)
 
 
 #: The keys that `batch_read_objects` ALWAYS returns, both of them, never
@@ -277,6 +279,8 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
     """
     from oto.tools.hubspot.client import HubSpotClient
 
+    if (config or {}).get("auth") == hubspot_auth.AUTH_OAUTH:
+        return _verify_oauth(fields["key"], config)
     client = HubSpotClient(api_key=fields["key"])
     infos = client._request("GET", "/account-info/v3/details") or {}
     if not infos.get("portalId"):
@@ -287,6 +291,37 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
             "identity": _account(infos)}
 
 
+def _verify_oauth(refresh_token: str, config: dict | None = None) -> dict:
+    """The probe of a "Connect HubSpot" row: the introspection of its REFRESH token.
+
+    It proves the grant is alive (uninstalled or revoked ⟹ `HubSpotReauthRequired`,
+    the connection's verdict), names the portal and lists the granted scopes — in one
+    call, WITHOUT minting an access token, so nothing rotates (the Salesforce lesson,
+    `auth/salesforce.persist_token`). Introspected with the app that minted the row
+    (`meta.app`): the other app's client does not know the token.
+
+    A personal row says who records default to (`default_owner`): the owner id found
+    at connection, or that none was — records then stay unassigned."""
+    config = config or {}
+    kind = hubspot_auth.app_of(config)
+    info = hubspot_auth.introspect(refresh_token, kind=kind)
+    if not info.get("hub_id"):
+        raise RuntimeError(
+            "HubSpot answered without identifying a portal for this connection — "
+            f"unexpected response keys: {sorted(info)[:12]}")
+    granted = info.get("scopes") or []
+    if isinstance(granted, str):
+        granted = granted.split()
+    identity = {"portal_id": info.get("hub_id"), "ui_domain": info.get("hub_domain"),
+                "connected_as": info.get("user"),
+                "connection": "personal" if kind == hubspot_auth.APP_USER else "org"}
+    if kind == hubspot_auth.APP_USER:
+        identity["default_owner_id"] = config.get("owner_id") or (
+            "none: no HubSpot owner for you, created records stay unassigned")
+    return {"scopes": report_from_granted(set(granted), "introspection"),
+            "identity": {k: v for k, v in identity.items() if v not in (None, "")}}
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
 
@@ -295,7 +330,7 @@ def register(mcp: FastMCP) -> None:
     connector_verify.register("hubspot", _verify, couvre=connector_verify.AUTH_SCOPES)
 
     def _client() -> HubSpotClient:
-        key, _ = access.resolve_api_key("hubspot")
+        key = hubspot_auth.bearer()
         return HubSpotClient(api_key=key)
 
     def _bad(msg: str) -> McpError:
@@ -507,7 +542,8 @@ def register(mcp: FastMCP) -> None:
             if op == "create":
                 return c.create_object(
                     _need(object_type, "object_type", op),
-                    _payload(properties, "properties", op),
+                    hubspot_auth.default_owner(
+                        object_type, _payload(properties, "properties", op)),
                     associations=_assoc_objects(associations, op))
 
             if op == "update":

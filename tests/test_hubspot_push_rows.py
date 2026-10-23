@@ -46,7 +46,7 @@ def banc(live, monkeypatch):
     client.update_object.return_value = {}
     client.get_list.return_value = {"list": {"processingType": "MANUAL"}}
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: SUB)
-    monkeypatch.setattr(access, "resolve_api_key", lambda *a, **k: ("k", False))
+    monkeypatch.setattr("oto_mcp.auth.hubspot.bearer", lambda *a, **k: "k")
     monkeypatch.setattr(hubspot_client, "HubSpotClient", lambda **kw: client)
     m = FastMCP("t")
     hubspot_lignes.register(m)

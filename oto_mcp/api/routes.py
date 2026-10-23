@@ -61,6 +61,7 @@ from . import (accords as api_routes_accords,
                datastore as api_routes_datastore,
                hooks as api_routes_hooks,
                instagram_meta as api_routes_instagram_meta,
+               hubspot as api_routes_hubspot,
                meta_ads as api_routes_meta_ads,
                slack as api_routes_slack,
                microsoft as api_routes_microsoft,
@@ -785,6 +786,15 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    # Retour de consentement HubSpot — même forme que Meta Ads.
+    hubspot_routes = api_routes_hubspot.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     # Retour de consentement Meta Ads — même forme qu'Instagram.
     meta_ads_routes = api_routes_meta_ads.make_routes(
         verifier=verifier,
@@ -952,6 +962,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *zoho_routes,
         *salesforce_oauth_routes,
         *instagram_meta_routes,
+        *hubspot_routes,
         *meta_ads_routes,
         *microsoft_routes,
         *ubersuggest_routes,

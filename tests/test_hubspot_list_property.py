@@ -29,7 +29,7 @@ def client(monkeypatch):
     inst.get_list.return_value = {
         "list": {"listId": "9", "name": "ICP France", "processingType": "MANUAL"}}
     monkeypatch.setattr(hs, "HubSpotClient", lambda *a, **k: inst)
-    monkeypatch.setattr("oto_mcp.access.resolve_api_key", lambda *a, **k: ("k", False))
+    monkeypatch.setattr("oto_mcp.auth.hubspot.bearer", lambda *a, **k: "k")
     return inst
 
 

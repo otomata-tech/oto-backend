@@ -48,6 +48,7 @@ _KNOWN: dict[str, str] = {
     "/api/salesforce/oauth/callback": NATURE,
     "/api/instagram_meta/oauth/callback": NATURE,
     "/api/meta_ads/oauth/callback": NATURE,
+    "/api/hubspot/oauth/callback": NATURE,
     "/api/microsoft/oauth/callback": NATURE,
     "/api/ubersuggest/oauth/callback": NATURE,
     "/api/jefacture/oauth/callback": NATURE,

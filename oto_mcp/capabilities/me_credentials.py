@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from .. import access, providers, credentials_store, db, journal_secrets, roles
+from ..auth import hubspot as hubspot_oauth
 from ._authz import SUB_ONLY, _refus_chef_d_equipe, _refus_org_admin
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -511,6 +512,8 @@ def _clear(ctx: ResolvedCtx, inp: CredentialClearInput) -> dict:
     org_id = _org_of(ctx.sub)
     account = (inp.account or "").strip()
     entity_type, entity_id = _scoped_entity(ctx, scope, org_id)
+    if inp.provider == hubspot_oauth.CONNECTOR:
+        hubspot_oauth.uninstall_before_clear(entity_type, entity_id, account)
     credentials_store.clear_credential(entity_type, entity_id, inp.provider,
                                        account=account)
     # `warning` TOUJOURS présent, `None` = rien à signaler : c'est ce qui distingue

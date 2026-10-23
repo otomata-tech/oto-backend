@@ -66,6 +66,14 @@ SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 #: Same shape as `SCOPES`; looked up after it (`_reference`).
 OPTIONAL_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "events": (("business-intelligence",), ()),
+    # Custom objects (`2-<n>`) and writing FIELDS (`hubspot_property` create/update/
+    # delete): asked as optional by the "Connect HubSpot" apps (`auth/hubspot.py`),
+    # never measured — most portals have no custom object, and creating fields is an
+    # admin's gesture.
+    "custom": (("crm.objects.custom.read", "crm.schemas.custom.read"),
+               ("crm.objects.custom.write",)),
+    "properties_write": ((), ("crm.schemas.contacts.write", "crm.schemas.companies.write",
+                              "crm.schemas.deals.write")),
 }
 
 #: Reading the PROPERTIES of an object type: its schema scope, or its object scope
@@ -285,6 +293,15 @@ _REMEDY = ("on the HubSpot side, add the scope to the key that carries this toke
            "(connector hubspot); nothing to fix in the call.")
 
 
+# A "Connect HubSpot" connection holds what its consent granted: an OPTIONAL scope the
+# portal could not grant then (tickets, events) or one the app added since comes only
+# with a new consent.
+_REMEDY_OAUTH = ("this HubSpot connection was made with \"Connect HubSpot\": reconnect "
+                 "it from the connector card — the consent asks for the current scopes. "
+                 "If the portal still cannot grant it (its plan lacks the tool), this "
+                 "call stays unavailable; nothing to fix in the call.")
+
+
 def _refusal(message: str, **data) -> McpError:
     """A curated refusal; its facts ride on `oto_detail`, which the error envelope
     relays as `data.oto.detail` (it rewrites everything else)."""
@@ -316,14 +333,17 @@ def _upstream_refusal(e, message: str, *, retryable=None, **data):
 def _scope_to_tick(names: list[str], source: str, fam: Optional[str], *,
                    object_type=None, cause: str, note: str = "") -> McpError:
     """The refusal that names the ONE scope to tick on the key (service key or private app)."""
+    from ..auth import hubspot as hubspot_auth
+
     pick = recommended(names, fam, object_type)
     which = f"`{pick}`" if pick else "the read scope of this object"
     target = f"object_type={object_type!r}" if object_type else f"family={fam!r}"
+    remedy = _REMEDY_OAUTH if hubspot_auth.served_by_oauth() else _REMEDY
     return _refusal(
         f"HubSpot refuses this call: the token lacks a scope "
-        f"(403 {cause}, {target}). Scope to add: {which}. {_REMEDY}{note}",
+        f"(403 {cause}, {target}). Scope to add: {which}. {remedy}{note}",
         reason="missing_scopes", status=403, family=fam, scope_to_add=pick,
-        accepted_scopes=names, scopes_source=source, remedy=_REMEDY)
+        accepted_scopes=names, scopes_source=source, remedy=remedy)
 
 
 def missing_scopes_refusal(e, *, object_type=None, family=None) -> Optional[McpError]:
@@ -508,10 +528,18 @@ def measure_scopes(client, token: str) -> dict:
     deadline = time.monotonic() + _TOTAL_S
     granted = _token_info(client, token, deadline)
     if granted is not None:
-        families, method = _granted_from_list(granted), "token_info"
-    else:
-        families = {fam: _probe_family(client, fam, deadline) for fam in _PROBES}
-        method = "probe"
+        return report_from_granted(granted, "token_info")
+    families = {fam: _probe_family(client, fam, deadline) for fam in _PROBES}
+    return _report(families, "probe", None)
+
+
+def report_from_granted(granted: set[str], method: str) -> dict:
+    """The same report from a scope list HubSpot already gave — the token-info call
+    of a pasted token, or the introspection of an OAuth connection (`auth/hubspot`)."""
+    return _report(_granted_from_list(granted), method, granted)
+
+
+def _report(families: dict, method: str, granted: Optional[set[str]]) -> dict:
     out = {"method": method, "families": families,
            "missing_scopes": {f: list(SCOPES[f][0]) for f, v in families.items()
                               if v == MISSING},

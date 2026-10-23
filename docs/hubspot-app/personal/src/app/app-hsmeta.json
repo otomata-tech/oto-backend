@@ -1,0 +1,50 @@
+{
+  "uid": "oto_hubspot_personal",
+  "type": "app",
+  "config": {
+    "name": "<instance brand> (personal)",
+    "description": "Your own HubSpot in your agents: they act as you, with your HubSpot permissions, and the records they create are yours.",
+    "distribution": "marketplace",
+    "isUserLevel": true,
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "https://<instance-host>/api/hubspot/oauth/callback"
+      ],
+      "requiredScopes": [
+        "crm.objects.contacts.read",
+        "crm.objects.contacts.write",
+        "crm.objects.companies.read",
+        "crm.objects.companies.write",
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.objects.owners.read",
+        "crm.schemas.contacts.read",
+        "crm.schemas.companies.read",
+        "crm.schemas.deals.read"
+      ],
+      "optionalScopes": [
+        "crm.lists.read",
+        "crm.lists.write",
+        "crm.objects.tickets.read",
+        "crm.objects.tickets.write",
+        "crm.schemas.tickets.read",
+        "business-intelligence",
+        "crm.objects.custom.read",
+        "crm.objects.custom.write",
+        "crm.schemas.custom.read"
+      ],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "<support email>",
+      "documentationUrl": "<setup docs URL>",
+      "supportUrl": "<support URL>"
+    }
+  }
+}

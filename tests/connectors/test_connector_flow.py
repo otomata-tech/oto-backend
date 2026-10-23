@@ -60,6 +60,9 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         "instagram_meta",
         # `meta_ads` (2026-10-02) : Facebook Login for Business, même patron.
         "meta_ads",
+        # `hubspot` (2026-10-22) : « Connect HubSpot », l'app de l'instance, à côté de la
+        # clé collée (`auth/hubspot.py`).
+        "hubspot",
         # `sharepoint` (2026-10-05) : connexion Microsoft de la personne, même patron.
         # Le porteur `microsoft` (2026-10-08) : le compte Microsoft 365 garde le flux
         # du compte, `sharepoint` devient son premier service — un flux par carte,

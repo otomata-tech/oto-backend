@@ -622,10 +622,12 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # already binds (the Zoho region of their team's app) is shown, not asked.
         if base.get("connect"):
             from ...connectors import flow as connector_flow
+            pret, pret_par_niveau = connector_flow.readiness(c["name"], ctx.sub)
             base = {**base, "connect": {
                 **base["connect"],
                 "callback_url": connector_flow.callback_url(c["name"]),
-                "app_ready": connector_flow.app_ready(c["name"], ctx.sub),
+                "app_ready": pret,
+                "app_ready_scopes": pret_par_niveau,
                 "fixed": connector_flow.fixed(c["name"], ctx.sub),
                 "warnings": connector_flow.warnings(c["name"], ctx.sub)}}
         # Layer 3 (paid option) on the USER surface — without it the front end cannot

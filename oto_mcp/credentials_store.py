@@ -1445,6 +1445,21 @@ def set_platform_key(label: str, connector: str, secret: str,
                 (PLATFORM, label, connector))
 
 
+def holders_by_meta(connector: str, field: str, value: str) -> list[dict]:
+    """Toutes les lignes du coffre de `connector` dont `meta.<field>` vaut `value`,
+    quelle que soit l'entité : `entity_type`, `entity_id`, `account`, `meta`. Lecture du
+    meta seulement — rien n'est déchiffré. Sert au retrait qui agit chez le fournisseur
+    sur une ressource que plusieurs lignes partagent (une app HubSpot installée dans un
+    portail)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, account, meta FROM connector_credentials "
+            "WHERE connector = %s AND meta->>%s = %s",
+            (connector, field, str(value))).fetchall()
+    return [{"entity_type": r["entity_type"], "entity_id": r["entity_id"],
+             "account": r["account"], "meta": r["meta"] or {}} for r in rows]
+
+
 def clear_credential(entity_type: str, entity_id: str, connector: str, conn=None,
                      account: str = "") -> bool:
     """Supprime le credential (ce `account` ; '' = mono-compte). `conn` fourni →

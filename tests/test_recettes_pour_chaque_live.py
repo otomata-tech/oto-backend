@@ -231,7 +231,15 @@ def test_le_contrat_de_for_each():
     assert any("for_each.datastore" in p for p in e.value.problemes)
     assert any("for_each.status_column" in p for p in e.value.problemes)
     ok = contrat.valider({**base, "for_each": {"datastore": 12, "status_column": "st"}})
-    assert ok["for_each"]["max_parents"] == contrat.MAX_PARENTS_DEFAUT
+    # Pas de borne de parents imposée : absente, `max_parents` reste absente.
+    assert "max_parents" not in ok["for_each"]
+    with pytest.raises(contrat.RecetteInvalide) as e:
+        contrat.valider({**base, "for_each": {"datastore": 12, "status_column": "st",
+                                              "max_parents": 0}})
+    assert any("max_parents" in p for p in e.value.problemes)
+    assert contrat.valider({**base, "for_each": {"datastore": 12, "status_column": "st",
+                                                 "max_parents": 5000}})["for_each"][
+        "max_parents"] == 5000
     with pytest.raises(contrat.RecetteInvalide) as e:
         contrat.valider({**base, "key": {"column": "k", "template": "{{item.id}}"},
                          "where": [{"path": "d", "op": "not_in_table", "table": 3},

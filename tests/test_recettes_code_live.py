@@ -274,7 +274,7 @@ def test_le_contrat_des_ecritures(crm):
                   _corps_crm(writes=["acme_crm:search"]),
                   _corps_crm(writes=["acme_crm:create", "acme_crm:create"]),
                   _corps_crm(writes="acme_crm:create"),
-                  {**_corps_crm(), "limits": {"max_units": 50, "max_writes": 5000}},
+                  {**_corps_crm(), "limits": {"max_units": 50, "max_writes": -1}},
                   {**_corps(), "writes": ["lemlist_create_lead"]},
                   {**_corps(), "writes": ["lemlist_create_lead"], "allow_sending": "yes"}):
         with pytest.raises(AuthzDenied) as e:

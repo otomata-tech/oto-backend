@@ -137,7 +137,8 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   jouée en épreuve (`write_in_test`), se fait dans l'org du run (`_org`, `_group`,
   `_project` refusés : `write_outside_run_org` ; `_account` choisit le compte), avec le
   compte de connecteur de qui exécute, et compte dans `limits.max_writes` (50 par défaut
-  dès qu'une écriture est déclarée, 1 000 au plus), compté à la TENTATIVE et PAR FICHE
+  dès qu'une écriture est déclarée, sans plafond de plateforme : c'est la borne de qui
+  écrit la recette), compté à la TENTATIVE et PAR FICHE
   (un lot de 50 = 50 écritures) ; un lot qui ne tient pas dans ce qui reste n'est pas
   joué du tout (`budget_exhausted`, le message dit combien il reste) — atteint,
   `stopped: "max_writes"`. Le reçu compte les écritures par nom (`writes`). Un outil qui
@@ -165,7 +166,8 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   nom de l'outil avec sa `quantity`** — donc facturé comme un appel direct — et
   rédaction. Les lignes sont fabriquées depuis le résultat RÉDIGÉ ; un résultat retenu
   par la politique de l'org arrête l'exécution.
-- **`limits.max_units` est obligatoire** (1 à 50 000) et se compte sur ce que l'outil
+- **`limits.max_units` est obligatoire** (au moins 1, sans plafond de plateforme : la
+  borne de dépense est celle de qui écrit la recette) et se compte sur ce que l'outil
   **FACTURE** : la `quantity` de sa ligne `tool_calls` (profils AI Ark, crédits
   Serper…). Seul un outil qui n'en rend pas est compté dans les unités de la recette
   (`units`) ; le reçu le dit (`units_basis` : `billed`, `declared` ou `mixed`). En
@@ -206,8 +208,9 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   coupée par un plafond (dépense, pages, horloge) ou un refus de l'outil reste en
   attente : le jeton `resume` la reprend à sa page, une exécution neuve du début (les
   lignes déjà écrites sont reconnues par leur clé ; les pages, elles, se repaient).
-  `max_parents` (25 par défaut, 200 au plus) borne les parents d'un appel (`max_parents`
-  au reçu, avec `resume`). Le reçu compte `parents: {done, empty, failed}`. Une exécution
+  `max_parents` (facultatif, sans plafond) borne les parents d'un appel (`max_parents`
+  au reçu, avec `resume`) ; absent, les parents se lisent par lots de 25 jusqu'à épuisement
+  ou jusqu'à une autre borne (dépense, horloge). Le reçu compte `parents: {done, empty, failed}`. Une exécution
   NEUVE (sans `resume`) repart d'une dépense à 0 : au fil des exécutions, seuls les quotas
   de l'org bornent le total.
 - **La dérive arrête l'exécution.** Les colonnes que l'épreuve de publication a remplies
@@ -224,7 +227,8 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   ne rien rendre. Elle n'écrit ni la cible, ni l'état des parents.
 - **Budget d'horloge de 30 s**, qui court dès l'entrée (les lectures du tableau parent et
   des listes de correspondance comptent, chacune bornée à 10 s : `table_read_timeout`) et
-  se vérifie après chaque appel, réussi ou non, et **`max_pages` par appel** : au-delà, reçu partiel et
+  se vérifie après chaque appel, réussi ou non, et **`max_pages` par appel** quand la recette
+  en pose un (facultatif, sans plafond de plateforme) : au-delà, reçu partiel et
   `resume`, que l'appel suivant passe pour continuer sans repayer les pages faites. Le
   jeton porte l'empreinte de la recette (une autre recette, ou une autre version, le
   refuse : `invalid_resume`) et jamais une dépense négative. Le

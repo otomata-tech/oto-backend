@@ -301,8 +301,9 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     lim = corps["limits"]
     # `max_pages` borne CET appel (une reprise repart à zéro page) : le plafond de la
     # chaîne d'appels est celui de la dépense, porté par le jeton.
-    pages_max = min(pages_max or lim["max_pages"], lim["max_pages"])
-    if fe and not ecrire:
+    bornes = [b for b in (pages_max, lim.get("max_pages")) if b]
+    pages_max = min(bornes) if bornes else None
+    if fe and not ecrire and pages_max is not None:
         pages_max = max(pages_max, ESSAI_PARENTS)
     # Les appels faits dans CET appel, réussis ou non : l'horloge se vérifie après le
     # premier, quel qu'il soit — dix parents refusés en 0,3 s chacun restent bornés.
@@ -322,7 +323,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
             if restant <= 0 or _page_entiere_hors_plafond(corps, restant):
                 _arreter(recu, "spend_cap")
                 return "spend_cap", pris
-            if recu["pages"] >= pages_max:
+            if pages_max is not None and recu["pages"] >= pages_max:
                 _arreter(recu, "max_pages", resume=_reprise())
                 return "max_pages", pris
             if appels["n"] and time.monotonic() >= fin:
@@ -484,7 +485,12 @@ async def _parcourir(fe: dict, parents, ecrire: bool, etat: dict, recu: dict,
     try:
         while True:
             faits = sum(recu["parents"].values())
-            place = ESSAI_PARENTS - faits if not ecrire else fe["max_parents"] - faits
+            if not ecrire:
+                place = ESSAI_PARENTS - faits
+            elif fe.get("max_parents"):
+                place = fe["max_parents"] - faits
+            else:
+                place = contrat.LOT_PARENTS
             if place <= 0:
                 if ecrire:
                     _arreter(recu, "max_parents", resume=_jeton(

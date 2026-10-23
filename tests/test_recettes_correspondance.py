@@ -98,7 +98,8 @@ def _recette(**surcharge):
 def test_une_recette_complete_passe_et_recoit_ses_defauts():
     c = contrat.valider(_recette())
     assert c["mode"] == "pull" and c["on_existing"] == "skip" and c["units"] == "items"
-    assert c["limits"]["max_pages"] == contrat.MAX_PAGES_DEFAUT and c["where"] == []
+    # Pas de borne de pages imposée : absente, `max_pages` reste absente.
+    assert "max_pages" not in c["limits"] and c["where"] == []
 
 
 @pytest.mark.parametrize("surcharge,morceau", [
@@ -112,7 +113,8 @@ def test_une_recette_complete_passe_et_recoit_ses_defauts():
     ({"mode": "per_row"}, "only `pull`"),
     ({"tool": "jev_ask"}, "runs a model"),
     ({"tool": "lighton_ask"}, "runs a model"),
-    ({"limits": {"max_units": 50_001}}, "1 to 50000"),
+    ({"limits": {"max_units": 0}}, "at least 1"),
+    ({"limits": {"max_units": 1000, "max_pages": 0}}, "`limits.max_pages` is at least 1"),
     ({"limits": {"max_units": 10}}, "at least `source.pagination.size`"),
 ])
 def test_une_recette_fautive_est_refusee_avec_tous_ses_defauts(surcharge, morceau):
@@ -185,3 +187,21 @@ def test_un_normaliseur_refuse_une_liste(filtre):
         co.garde({"e": ["jane@acme.test"]},
                  [{"path": "e", "op": "not_in_table", "normalize": filtre}], {},
                  ensembles={0: set()})
+
+
+def test_une_recette_code_n_a_pas_de_plafond_de_plateforme():
+    """Les bornes d'une recette-code sont celles de qui l'écrit : aucune borne haute imposée,
+    `max_calls` absent = pas de borne en nombre d'appels ; l'absurde reste refusé."""
+    from oto_mcp.recipes import code
+    corps = {"kind": "code", "sources": {"recette.py": "async def run(oto, params):\n"
+                                                      "    return {}\n"},
+             "entrypoint": "recette:run", "params": {}}
+    grand = code.valider({**corps, "limits": {"max_units": 10_000_000, "max_calls": 50_000}})
+    assert grand["limits"]["max_calls"] == 50_000
+    assert "max_calls" not in code.valider({**corps, "limits": {"max_units": 5}})["limits"]
+    for limites, morceau in (({"max_units": 0}, "max_units"),
+                             ({"max_units": 5, "max_calls": 0}, "max_calls"),
+                             ({"max_units": 5, "max_writes": -1}, "max_writes")):
+        with pytest.raises(contrat.RecetteInvalide) as e:
+            code.valider({**corps, "limits": limites})
+        assert any(morceau in p for p in e.value.problemes), e.value.problemes

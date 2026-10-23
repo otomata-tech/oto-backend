@@ -32,13 +32,10 @@ PORTEES_ARGUMENTS = {"params"}
 PORTEES_ELEMENT = {"params", "item"}
 #: `for_each` : chaque ligne d'un tableau PARENT déclenche l'appel ; `{{row.col}}` la cite.
 PORTEE_LIGNE = "row"
-MAX_PARENTS = 200
-MAX_PARENTS_DEFAUT = 25
-MAX_PAGES = 50
-MAX_PAGES_DEFAUT = 20
-#: Plafond du plafond de dépense : 50 pages de 1 000 éléments. Au-delà, ce n'est plus une
-#: recette qu'on rejoue, c'est un import — et une faute de frappe d'un zéro coûte cher.
-MAX_UNITS = 50_000
+#: Pas de plafond de plateforme : `max_units` (obligatoire, sans défaut), `max_pages` et
+#: `for_each.max_parents` (facultatifs : absents, pas de borne) sont ceux de qui écrit la
+#: recette. Sans `max_parents`, les parents se lisent par lots de `LOT_PARENTS`.
+LOT_PARENTS = 25
 
 
 class RecetteInvalide(ValueError):
@@ -109,10 +106,10 @@ def _pour_chaque(probs: list, fe: Any) -> Optional[dict]:
                      "row gets `done` or `empty` once pulled, so a re-run skips it")
     if fe.get("filter") is not None and not isinstance(fe["filter"], dict):
         probs.append("`for_each.filter` must be an object (the grammar of `data_rows`)")
-    n = fe.setdefault("max_parents", MAX_PARENTS_DEFAUT)
-    if not isinstance(n, int) or not 1 <= n <= MAX_PARENTS:
-        probs.append(f"`for_each.max_parents` (parent rows per call) must be 1 to "
-                     f"{MAX_PARENTS}")
+    n = fe.get("max_parents")
+    if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 1):
+        probs.append("`for_each.max_parents` (parent rows per call) is at least 1, or "
+                     "absent for no limit")
     m = fe.get("max_items_per_row")
     if m is not None and (not isinstance(m, int) or m < 1):
         probs.append("`for_each.max_items_per_row` must be a positive integer")
@@ -212,14 +209,15 @@ def valider(corps: Any) -> dict:
         probs.append("`on_existing` must be `skip` or `update`")
     lim = c.get("limits")
     if not isinstance(lim, dict) or not isinstance(lim.get("max_units"), int) \
-            or not 1 <= lim["max_units"] <= MAX_UNITS:
-        probs.append(f"`limits.max_units` (a hard cap, in the tool's own billed units, 1 "
-                     f"to {MAX_UNITS}) is required: there is no default, because units "
+            or isinstance(lim["max_units"], bool) or lim["max_units"] < 1:
+        probs.append("`limits.max_units` (a hard cap, in the tool's own billed units, at "
+                     "least 1) is required: there is no default, because units "
                      "differ per tool")
     else:
-        pages = lim.setdefault("max_pages", MAX_PAGES_DEFAUT)
-        if not isinstance(pages, int) or not 1 <= pages <= MAX_PAGES:
-            probs.append(f"`limits.max_pages` must be 1 to {MAX_PAGES}")
+        pages = lim.get("max_pages")
+        if pages is not None and (not isinstance(pages, int) or isinstance(pages, bool)
+                                  or pages < 1):
+            probs.append("`limits.max_pages` is at least 1, or absent for no limit")
     if c.setdefault("units", "items") not in ("items", "calls"):
         probs.append("`units` must be `items` (one unit per item returned) or `calls`")
     pag = (c.get("source") or {}).get("pagination") or {}

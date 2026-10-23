@@ -44,9 +44,10 @@ _CLES = {"kind", "sources", "entrypoint", "params", "limits", "writes", "allow_s
 #: Le reçu que rend le code : des comptes. Au-delà, il est remplacé par un refus — le
 #: reçu n'est pas un canal de données.
 MAX_RECU = 4000
-MAX_APPELS = 1000
+#: Pas de plafond de plateforme sur `max_calls`, `max_units` ni `max_writes` : ce sont les
+#: bornes de qui écrit la recette (`max_calls` absent = pas de borne). La durée garde le
+#: sien, celui du bac à sable.
 MAX_SECONDES = 600
-MAX_ECRITURES = 1000
 
 
 def est_code(corps: Any) -> bool:
@@ -70,21 +71,22 @@ def valider(corps: Any) -> dict:
     lim = c.get("limits")
     if not isinstance(lim, dict) or not isinstance(lim.get("max_units"), (int, float)) \
             or isinstance(lim.get("max_units"), bool) \
-            or not 0 < lim["max_units"] <= contrat.MAX_UNITS:
-        probs.append(f"`limits.max_units` (a hard cap on what the tools BILL, 1 to "
-                     f"{contrat.MAX_UNITS}) is required: there is no default")
+            or not 0 < lim["max_units"]:
+        probs.append("`limits.max_units` (a hard cap on what the tools BILL, above 0) "
+                     "is required: there is no default")
     else:
-        lim.setdefault("max_calls", 100)
         lim.setdefault("max_seconds", 120)
-        if not isinstance(lim["max_calls"], int) or not 1 <= lim["max_calls"] <= MAX_APPELS:
-            probs.append(f"`limits.max_calls`: 1 to {MAX_APPELS}")
+        appels = lim.get("max_calls")
+        if appels is not None and (not isinstance(appels, int) or isinstance(appels, bool)
+                                   or appels < 1):
+            probs.append("`limits.max_calls`: at least 1, or absent for no limit")
         if not isinstance(lim["max_seconds"], int) \
                 or not 10 <= lim["max_seconds"] <= MAX_SECONDES:
             probs.append(f"`limits.max_seconds`: 10 to {MAX_SECONDES}")
         lim.setdefault("max_writes", 50 if c.get("writes") else 0)
         if not isinstance(lim["max_writes"], int) or isinstance(lim["max_writes"], bool) \
-                or not 0 <= lim["max_writes"] <= MAX_ECRITURES:
-            probs.append(f"`limits.max_writes`: 0 to {MAX_ECRITURES}")
+                or lim["max_writes"] < 0:
+            probs.append("`limits.max_writes`: 0 or more")
     probs += _probs_ecritures(c)
     if probs:
         raise contrat.RecetteInvalide(probs)
@@ -152,7 +154,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
             fastmcp, sub, datastore=datastore, ecrire=ecrire,
             ecritures=frozenset(corps.get("writes") or ()),
             max_ecritures=lim.get("max_writes", 0), compteur=ecritures),
-        budget=pont_bac.Budget(appels=lim["max_calls"], unites=float(lim["max_units"]),
+        budget=pont_bac.Budget(appels=lim.get("max_calls"), unites=float(lim["max_units"]),
                                delai_s=float(lim["max_seconds"])))
     recu = {k: sortie.get(k) for k in ("ok", "calls", "units", "refused", "stopped")}
     # Les écritures chez un tiers, tentées (un délai dépassé a pu écrire) : le reçu les

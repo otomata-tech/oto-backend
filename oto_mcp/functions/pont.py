@@ -65,7 +65,7 @@ Appeler = Callable[[str, dict], Awaitable[dict]]
 @dataclass(frozen=True)
 class Budget:
     """Les bornes d'UNE exécution. Chiffres provisoires, comme ceux de l'aller simple."""
-    appels: int = 100
+    appels: Optional[int] = 100   # None = pas de borne en nombre d'appels
     unites: float = 1000.0
     delai_s: float = 120.0
 
@@ -156,7 +156,7 @@ async def _servir(message: dict, appeler: Appeler, budget: Budget, recu: dict,
         recu["refused"] += 1
         return {"ok": False, "code": "invalid_call",
                 "message": "`tool` is a name and `arguments` a dict."}
-    borne = ("max_calls" if recu["calls"] >= budget.appels else
+    borne = ("max_calls" if budget.appels is not None and recu["calls"] >= budget.appels else
              "spend_cap" if recu["units"] >= budget.unites else
              "time_budget" if time.monotonic() >= fin else None)
     if borne:

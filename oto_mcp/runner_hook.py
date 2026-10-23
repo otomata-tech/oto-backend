@@ -166,6 +166,11 @@ def secret_du_porteur(entete: Optional[str]) -> Optional[str]:
 
 BEARER, STANDARD_WEBHOOKS = "bearer", "standard_webhooks"
 BODY_SECRET, NONE = "body_secret", "none"
+#: L'agent qui répond aux mentions de l'app dans Slack (`slack_events.py`). Sa preuve est la
+#: signature de l'app publiée de l'INSTANCE, vérifiée par la route des événements
+#: Slack — `/api/hooks/{id}` ne l'ouvre jamais : aucune preuve de `_sans_signature`
+#: ne trouve un agent de ce préréglage (garde SQL sur `hook_auth`).
+SLACK = "slack"
 
 
 # ── Les PRÉRÉGLAGES de fournisseur (06/10/2026) ─────────────────────────────────
@@ -215,6 +220,7 @@ PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     # https://developer.lemlist.com/api-reference/endpoints/webhooks/add-webhook
     Prereglage(BODY_SECRET, BODY_SECRET, champ_secret="secret", chemin_id="_id"),
     Prereglage(NONE, NONE),
+    Prereglage(SLACK, SLACK),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
 
@@ -647,6 +653,24 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     # qu'il portait éventuellement.
     t, externe, corps = _authentifier(trigger_id, secret, signature, source,
                                       par_adresse_privee, corps=corps)
+    return enfiler(t, externe, source, corps=corps)
+
+
+def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
+            corps: Any = None, entree: Optional[str] = None,
+            sub: Optional[str] = None, outils_en_plus: tuple[str, ...] = ()) -> dict:
+    """Lisser, plafonner, dédupliquer, enfiler — pour un déclencheur DÉJÀ authentifié.
+
+    `declencher` l'appelle après `_authentifier` ; la route des événements Slack
+    (`slack_events.py`) après avoir vérifié la signature de l'app et résolu qui
+    parle. Les trois arguments qu'elle seule pose :
+      - `entree` : l'instruction COMPLÈTE du run (sinon celle de l'agent, augmentée
+        du corps reçu selon son `payload_mode`) ;
+      - `sub` : l'identité du run (sinon le propriétaire de l'agent) — le membre
+        Slack reconnu, qui tourne avec SES connexions ;
+      - `outils_en_plus` : ajoutés aux outils de l'agent (répondre dans le fil).
+    """
+    trigger_id = t["id"]
     # Posé seulement quand il existe : le chemin du porteur écrit exactement ce
     # qu'il écrivait avant ce lot.
     marque = {"external_id": externe} if externe else {}
@@ -768,10 +792,12 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                         "Raise `max_per_hour` on the agent, or slow the sender down.",
                         issue="rate", retry_after=retard_s)
                 else:
+                    outils = list(t.get("tools") or ())
+                    outils += [o for o in outils_en_plus if o not in outils]
                     charge = {
                         "procedure": t["procedure"],
                         "project_id": t.get("project_id"),
-                        "tools": list(t.get("tools") or ()),
+                        "tools": outils,
                         "label": t.get("label") or f"webhook — {t['procedure']}",
                         "max_steps": t.get("max_steps"),
                         **_limites_du_run.charge(t.get("max_tokens"),
@@ -780,7 +806,7 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                         # Ce qui distingue une exécution déclenchée d'une exécution
                         # programmée, pour qui relit la file plus tard.
                         "hook": True,
-                        "input": instruction_augmentee(
+                        "input": entree if entree is not None else instruction_augmentee(
                             t.get("input") or "", corps,
                             t.get("payload_mode") or IGNORE, t.get("payload_fields"),
                             trigger_id=trigger_id,
@@ -788,7 +814,7 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                         **runner_models.charge(t.get("model")),
                     }
                     job = db.enqueue_job(
-                        t["org_id"], "start", sub=t.get("sub"),
+                        t["org_id"], "start", sub=sub or t.get("sub"),
                         payload={k: v for k, v in charge.items() if v is not None},
                         delai_s=retard_s or None,
                         # La péremption voyage AVEC le travail : c'est la réservation

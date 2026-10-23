@@ -89,8 +89,10 @@ def _lemlist(secret=JETON, _id="act_1"):
 # ── 0. le REGISTRE ────────────────────────────────────────────────────────────
 
 def test_chaque_preregle_nomme_un_schema_CONNU():
+    # `slack` : jugé par la route des événements Slack (`slack_events.py`), jamais
+    # par `/api/hooks/{id}`.
     connus = {runner_hook.BEARER, runner_hook.STANDARD_WEBHOOKS,
-              runner_hook.BODY_SECRET, runner_hook.NONE}
+              runner_hook.BODY_SECRET, runner_hook.NONE, runner_hook.SLACK}
     for p in runner_hook.PREREGLAGES.values():
         assert p.schema in connus, p
         if p.schema == runner_hook.BODY_SECRET:

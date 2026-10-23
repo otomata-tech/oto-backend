@@ -12,6 +12,10 @@ Whichever the path, the two tokens:
 
 ⚠️ **switching app restarts channel memberships.** Memberships belong to the app, not to the key: moving a workspace from your own app to the published one (or back) means re-inviting the new app in private channels (`/invite @<app>`).
 
+## usage — `@<app>` in Slack starts the org's agent
+
+With the instance's published app, an org admin can make one hosted agent answer in Slack: mention the app in a channel (or DM it) and that agent runs, **as you** — your Slack email must be the one of your account in the org — then answers in the thread. Guests and people from another workspace are refused. It only works with the published app ("Add to Slack"), not with your own app.
+
 ## setup — create the app by pasting a manifest (the shortest way)
 
 1. go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → choose **From a manifest** (not "AI agent" nor "Starter app": those are conversational-app templates, unrelated)

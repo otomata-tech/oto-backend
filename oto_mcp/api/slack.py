@@ -7,9 +7,14 @@ a 302 to the front end. Declared as an exception in
 In order: state read, state CONSUMED (single use), provider refusal, right to write at
 the tier RE-CHECKED (`forbidden`), then exchange and storage. The `code` and the
 tokens never enter a log line nor the return URL.
+
+`POST /api/slack/events` — the app's Events API endpoint (`@Tulina`, DMs, uninstall),
+hand-written for the same reason as `api/hooks.py`: a free JSON body, signed by Slack,
+no JWT. It only adapts; `slack_events.recevoir` decides.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Awaitable, Callable
 
@@ -19,10 +24,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .. import slack_events
 from ..auth import flow as oauth_flow
 from ..auth import slack as slack_auth
+from .hooks import _lire_borne
 
 logger = logging.getLogger(__name__)
+
+EVENTS_PATH = "/api/slack/events"
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -79,4 +88,30 @@ def make_routes(
             return RedirectResponse(_retour("error", parsed), status_code=302)
         return RedirectResponse(_retour("connected", parsed), status_code=302)
 
-    return [Route(slack_auth.CALLBACK_PATH, callback, methods=["GET"])]
+    async def events(request: Request) -> Response:
+        """Slack's deliveries. 200 for everything Slack sent properly, refusals
+        included (the person is told in Slack): a non-2xx makes Slack retry, and an
+        endpoint that keeps failing gets the app's events switched off.
+        `X-Slack-No-Retry` on our own refusals — a retry would not change them."""
+        brut = await _lire_borne(request)
+        if brut is None:
+            return JSONResponse({"error": "payload_too_large"}, status_code=413,
+                                headers={"X-Slack-No-Retry": "1"})
+        try:
+            corps = json.loads(brut) if brut.strip() else None
+        except ValueError:
+            corps = None
+        try:
+            rendu = await run_in_threadpool(slack_events.recevoir, brut,
+                                            request.headers, corps)
+        except slack_events.Refus as e:
+            entetes = {} if e.statut == 503 else {"X-Slack-No-Retry": "1"}
+            return JSONResponse({"error": e.code}, status_code=e.statut,
+                                headers=entetes)
+        except Exception:  # noqa: BLE001 — logged whole; Slack retries a 500
+            logger.exception("slack events: delivery failed on our side")
+            return JSONResponse({"error": "slack_event_failed"}, status_code=500)
+        return JSONResponse(rendu, status_code=200)
+
+    return [Route(slack_auth.CALLBACK_PATH, callback, methods=["GET"]),
+            Route(EVENTS_PATH, events, methods=["POST"])]

@@ -113,8 +113,7 @@ def test_l_url_d_installation_porte_l_app_les_scopes_et_un_state_lie(env):
 def test_les_scopes_sont_ceux_du_manifeste_documente():
     """Le manifeste de la fiche est ce que l'utilisateur colle quand il crée SA app :
     l'app publiée n'en demande ni moins (un outil marcherait d'un côté et
-    `missing_scope` de l'autre), ni plus (décision du 22/10 : rien pour un assistant
-    dans Slack)."""
+    `missing_scope` de l'autre), ni plus."""
     from oto_mcp import providers
 
     corps = " ".join(s.body_md for s in providers.REGISTRY["slack"].doc_sections)
@@ -122,15 +121,20 @@ def test_les_scopes_sont_ceux_du_manifeste_documente():
 
     manifeste = yaml.safe_load(corps.split("```yaml", 1)[1].split("```", 1)[0])
     scopes = manifeste["oauth_config"]["scopes"]
-    assert set(scopes["bot"]) == set(slack_auth.BOT_SCOPES)
+    # …sauf ce que seul le bot de l'app publiée demande (`@Tulina`, 23/10) : une app
+    # créée par l'utilisateur n'appelle jamais notre route d'événements.
+    assert set(scopes["bot"]) == set(slack_auth.BOT_SCOPES) - set(slack_auth.SCOPES_DU_BOT)
     assert set(scopes["user"]) == set(slack_auth.USER_SCOPES)
 
 
-def test_l_url_ne_demande_aucun_scope_d_assistant(env):
-    """Retirés le 22/10 : mentions, `assistant:write`, commandes slash."""
+def test_l_url_ne_demande_aucun_scope_sans_code_qui_s_en_sert(env):
+    """Retirés le 22/10 tant qu'aucun code ne s'en servait. `app_mentions:read` est
+    revenu le 23/10 avec le bot (`slack_events.py`) ; `assistant:write` et les
+    commandes slash n'ont toujours aucun code."""
     _out, q = _etat(env)
     demandes = set(q["scope"].split(",")) | set(q["user_scope"].split(","))
-    assert not demandes & {"app_mentions:read", "assistant:write", "commands"}
+    assert not demandes & {"assistant:write", "commands"}
+    assert "app_mentions:read" in demandes
 
 
 def test_sans_coordonnees_le_refus_nomme_la_cle_et_le_flux_reste_muet(env):

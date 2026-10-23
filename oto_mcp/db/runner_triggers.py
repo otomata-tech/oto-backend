@@ -425,6 +425,27 @@ def trigger_sans_preuve(trigger_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def trigger_slack_de_l_org(org_id: int) -> Optional[dict]:
+    """L'agent qui répond à `@Tulina` dans le Slack de cette org (`hook_auth =
+    'slack'`), ou None — pour la route des événements Slack, et pour elle seule.
+
+    Au plus UN par org : la pose le garantit (`runner.trigger.hook_auth`). Le plus
+    ancien gagne si deux lignes le portaient quand même, pour qu'une mention parte
+    toujours vers le même agent.
+
+    `enabled` n'est pas filtré : un agent en pause doit RECEVOIR la livraison pour la
+    refuser en la journalisant (`trigger_paused`), comme tout webhook.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_COLS} FROM runner_triggers "
+            f"WHERE org_id = %s AND kind = 'webhook' AND hook_auth = 'slack' "
+            f"ORDER BY id LIMIT 1",
+            (org_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def trigger_id_par_adresse(slug: str) -> Optional[int]:
     """L'id du webhook dont l'adresse PRIVÉE est `slug`, ou None.
 

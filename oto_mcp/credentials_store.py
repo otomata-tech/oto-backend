@@ -1197,6 +1197,28 @@ def list_accounts(entity_type: str, entity_id: str, connector: str) -> list[dict
     return [{"account": r["account"], "meta": _public_meta(r["meta"]), "set_at": r["set_at"]} for r in rows]
 
 
+def slack_workspace_installs(team_id: str, app_id: str) -> list[dict]:
+    """The ORG rows where THIS app was installed in THIS workspace by the one-click
+    flow (`auth/slack.finish`: `meta.team_id`, `meta.app_id`,
+    `install_source = "oauth"`), oldest first — `(entity_id, account)`, no secret.
+
+    For the Slack Events route (`slack_events.py`): an event names a workspace and an
+    app, never an org. Member and team rows are left out on purpose: a mention
+    in a channel speaks to the org that installed the bot, not to whoever pasted a
+    personal token. A pasted row (their own app) never matches: its events go to
+    THEIR app's endpoint, not ours.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id, account FROM connector_credentials "
+            "WHERE entity_type = 'org' AND connector = 'slack' "
+            "AND meta->>'team_id' = %s AND meta->>'app_id' = %s "
+            "AND meta->>'install_source' = 'oauth' ORDER BY set_at, entity_id",
+            (team_id, app_id),
+        ).fetchall()
+    return [{"entity_id": r["entity_id"], "account": r["account"]} for r in rows]
+
+
 def credential_status(entity_type: str, entity_id: str, connector: str,
                       account: str = "") -> Optional[dict]:
     """Présence + satellites NON-secrets (`meta` filtré par `_public_meta`, `set_at`)

@@ -53,12 +53,18 @@ _REGLAGES = ("client_id", "client_secret")
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="slack", '
              'key="<key>", value="<value>")')
 
-#: The scopes asked at install — exactly the manifest of `connectors/docs/slack.md`,
-#: what the tools use, nothing for an in-Slack assistant (no mentions, no `assistant:`,
-#: no slash commands: decision of 22/10).
+#: The scopes asked at install — the manifest of `connectors/docs/slack.md` (what the
+#: tools use) plus `app_mentions:read`, for the in-Slack bot (`slack_events.py`): a
+#: mention of the app in a channel reaches us only with it. DMs to the bot need
+#: nothing more (`im:history`). No `assistant:` nor slash command: not built.
 #: ⚠️ Adding one later means EVERY connected workspace reinstalls: this list moves
 #: with the app's declared scopes, never ahead of them.
+#: Asked by the published app ONLY: the bot answers through the instance's events
+#: endpoint, which an app you create yourself never calls — the manifest of the card
+#: does not carry them.
+SCOPES_DU_BOT = ("app_mentions:read",)
 BOT_SCOPES = (
+    *SCOPES_DU_BOT,
     "channels:history", "channels:join", "channels:read", "chat:write", "files:read",
     "groups:history", "groups:read", "im:history", "im:read", "im:write",
     "mpim:history", "mpim:read", "reactions:write", "usergroups:read",
@@ -110,6 +116,22 @@ def app() -> dict:
             f"Nothing to do on your account — paste your own app's tokens instead, or "
             f"ask the operator to set them with {_COMMANDE}.")
     return _reglages()
+
+
+#: The app's Events API signing secret — same platform scope, separate from
+#: `_REGLAGES` on purpose: the install works without it, only the bot needs it.
+SIGNING_SECRET = "signing_secret"
+
+
+def signing_secret() -> Optional[str]:
+    """The signing secret of the published app, or None — read on EACH event (one
+    row, platform scope): rotating it in the console takes effect at once."""
+    from ..db import connector_settings as store
+
+    for r in store.list_connector_settings(SIGNING_SECRET):
+        if r["scope_type"] == "platform" and r["connector"] == CONNECTOR:
+            return (r["value"] or "").strip() or None
+    return None
 
 
 def app_disponible(sub: str) -> bool:

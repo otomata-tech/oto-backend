@@ -66,6 +66,7 @@ GET,HEAD /api/ubersuggest/oauth/callback -> callback
 GET,HEAD /api/jefacture/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 GET,HEAD /api/slack/oauth/callback -> callback
+POST /api/slack/events -> events
 POST /api/me/orgs -> _handler
 OPTIONS /api/me/orgs -> options_handler
 PUT /api/me/active-org -> _handler

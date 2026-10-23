@@ -67,6 +67,10 @@ _KNOWN: dict[str, str] = {
     # authentification est un secret par déclencheur (`Authorization: Bearer
     # otoh_…`), pas un jeton Logto.
     "/api/hooks/{trigger_id}": NATURE,
+    # Les ÉVÉNEMENTS de l'app Slack publiée (23/10/2026) : Slack POSTe une mention ou
+    # un DM à l'app. Corps libre (la forme de Slack), signé par le secret de l'app
+    # (`X-Slack-Signature`), aucun JWT — même nature que le webhook des agents.
+    "/api/slack/events": NATURE,
     # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
     # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
     # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.

@@ -1709,6 +1709,59 @@ Webhooks — ni Stripe (`Stripe-Signature: t=…,v1=<hex>`), ni GitHub
 (voir « Les PRÉRÉGLAGES de fournisseur ») : ces signatures seront un schéma
 `hmac_signed` paramétré, puis un préréglage chacune — pas une migration.
 
+### `@Tulina` dans Slack : l'agent de l'org, sous l'identité de qui demande (23/10/2026)
+
+Un agent webhook au préréglage **`slack`** répond aux mentions `@<app>` et aux DM du
+bot de l'**app Slack publiée par l'instance** (celle qu'installe « Add to Slack »,
+`auth/slack.py`). Route `POST /api/slack/events` (`api/slack.py`, écrite à la main
+comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
+
+- **Preuve** : la signature Slack (`X-Slack-Signature`, HMAC-SHA256 sur
+  `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, réglage plateforme
+  `connector_settings(slack, signing_secret)` — pas un secret par agent. Fenêtre de
+  5 min. Pas de secret posé = 503 (Slack retente), journalisé.
+- **Quelle org** : l'événement nomme un espace (`team_id`) et une app (`api_app_id`),
+  jamais une org. C'est la ligne ORG du coffre écrite par l'installation en un clic de
+  CETTE app dans CET espace (`credentials_store.slack_workspace_installs`). Plusieurs
+  orgs sur un espace : la plus ANCIENNE répond — une installation tardive ne détourne
+  pas les demandes d'un espace déjà servi.
+- **Quel agent** : `db.trigger_slack_de_l_org` — **un par org**, posé par un **admin
+  d'org** (`runner.trigger.hook_auth`, `hook_auth=slack`), avec une procédure **d'org**
+  (le run tourne sous un autre que le propriétaire : une procédure perso ne se
+  résoudrait que pour lui). La pose efface porteur et secret de signature :
+  `/api/hooks/{id}` n'ouvre jamais un agent `slack` (aucune preuve n'y cherche ce
+  préréglage).
+- **Sous quelle identité** (décision du 23/10) : l'email Slack de l'auteur
+  (`users.info`, jeton du bot) doit être celui d'**exactement un** membre de l'org ;
+  le travail porte **son** `sub` (`runner_hook.enfiler(…, sub=)`), jamais celui du
+  propriétaire de l'agent. Invités, autre espace (Slack Connect), email inconnu ou
+  porté par deux membres : refus dit à la personne (éphémère), rien n'est enfilé.
+- **Par la file des webhooks** : `runner_hook.enfiler` — pause, plafond journalier,
+  lissage et journal des livraisons s'appliquent ; l'`event_id` est l'identifiant de
+  livraison, donc une retentative de Slack n'ouvre pas un second run. Un refus nommé
+  (`HookRefus`) est relayé à la personne dans Slack, et la route répond **200** :
+  un non-2xx fait retenter Slack, puis couper les événements de l'app.
+- **Ce que le run reçoit** : l'instruction de l'agent, puis la demande (texte de la
+  mention, auteur, canal, fil), puis comment répondre — `slack_post_message` dans le
+  fil, par l'instance ORG (`_instance=`), ajouté à ses outils avec
+  `slack_add_reaction`. La demande n'est **pas** clôturée comme donnée non fiable :
+  c'est la demande d'un membre identifié. 👀 posé sur le message à l'enfilage.
+- **Pas d'historique du fil** : `conversations.replies` est limité à un appel par
+  minute pour une app hors Marketplace ; la demande, c'est le message.
+- **Désinstallation** (`app_uninstalled`, `tokens_revoked` du bot) : les lignes de cet
+  espace écrites par cette app sont supprimées.
+- Côté Slack : l'app déclare le scope `app_mentions:read` (`auth/slack.SCOPES_DU_BOT`,
+  absent du manifeste de la fiche : une app créée par l'utilisateur n'appelle jamais
+  cette route), s'abonne à `app_mention`, `message.im`, `app_uninstalled`,
+  `tokens_revoked` avec l'URL `/api/slack/events` de l'instance, et ouvre l'onglet
+  Messages de l'App Home aux utilisateurs (sans lui, `message.im` n'arrive jamais).
+- **Les outils du MEMBRE** : le run voit la boîte à outils de qui demande, pas celle
+  du propriétaire ; un connecteur qu'il n'a pas activé y est masqué. Vérifié avant
+  d'enfiler (`_outils_manquants.manquants`) : la personne apprend lesquels activer.
+- **Pas d'abonnement personnel** : un agent sur un modèle d'abonnement personnel ne
+  peut pas passer en `slack` (`slack_agent_on_personal_subscription`) — chaque run
+  porte un autre membre.
+
 ### Un worker sans clé propre : ouvrir une famille aux clés clients (13/09/2026)
 
 Pour qu'une organisation fasse tourner ses agents sur **sa** clé Anthropic sans que

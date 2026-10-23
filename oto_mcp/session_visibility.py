@@ -25,6 +25,7 @@ from .connectors import access_level_gate
 from .connectors import activation as connector_activation
 from .connectors import orphelins as connector_orphelins
 from .connectors import selection as connector_selection
+from .connectors import usable as connector_usable
 from .error_taxonomy import _is_client_disconnect
 from .tool_visibility import (
     BETA_OPTION,
@@ -234,6 +235,16 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
             origins = {n: connector_selection.KIT for n in org_defaults}
             origins.update({n: connector_selection.SOCLE for n in socle})
             connector_selection.seed_active(sub, origins, prof_org)
+        # Active = utilisable (22/10/2026, `connectors/usable.py`) : la sélection suit
+        # les clés que le membre peut utiliser — réconciliée ICI, à la session, pour
+        # tout membre et tout run hébergé, au plus une fois par TTL et à chaque
+        # écriture du coffre qui l'atteint. Fail-INERTE et à part : un échec n'écrit
+        # rien, journalise, et la boîte monte ce que la table porte déjà.
+        if active_org is not None:
+            try:
+                connector_usable.run_if_due(sub, active_org, access.current_group(sub))
+            except Exception as e:
+                logger.warning("selection reconcile skipped for %s (fail-inert): %s", sub, e)
         _sel = connector_selection.list_selection(sub, prof_org)
         couches[COUCHE_SELECTION] = {
             n for n in all_names

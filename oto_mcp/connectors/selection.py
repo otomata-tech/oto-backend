@@ -43,7 +43,8 @@ KIT = "kit"            # the org's kit, at seeding or on the admin's gesture
 ADMIN = "admin"        # named push from an admin to ONE member
 MEMBRE = "membre"      # the member themselves (installation, or resuming after a pause)
 INCONNUE = "inconnue"  # predates the trace — never removed by an org gesture
-ORIGINS = (SOCLE, KIT, ADMIN, MEMBRE, INCONNUE)
+CLE = "cle"            # the credential: a usable key made it active (`connectors/usable.py`)
+ORIGINS = (SOCLE, KIT, ADMIN, MEMBRE, INCONNUE, CLE)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_selected_connectors (

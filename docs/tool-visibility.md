@@ -79,6 +79,55 @@ Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) 
 > org », ADR 0030 §8 ; ou une org active qui a changé depuis) ne verra ni ne pourra jamais
 > toucher cette ligne-là par ce chemin, quel que soit le nombre de tentatives.
 
+## Actif = utilisable : la sélection suit les clés (22/10/2026)
+
+**La règle.** Un connecteur est ACTIF pour un membre, dans une org, exactement quand une
+clé y est utilisable pour lui — la sienne, celle de son équipe active, de l'org, du
+tenant ou de la plateforme (`access.status_for` : `mode` ∈ user, group, org, tenant,
+platform, over_quota) — ou qu'il n'en demande aucune (`secret_kind` `none`, `settings`).
+Rien d'utilisable ⟹ pas actif. Le tableau de bord n'a plus d'interrupteur Actif.
+La sélection (`user_selected_connectors`) reste la vérité du montage ; elle est
+**réconciliée** depuis l'instantané des clés par `connectors/usable.py` :
+
+- **où** : à la poignée de main (`session_visibility`, juste après le semis), donc pour
+  tout membre ET tout run hébergé ; au plus une fois par `TTL` (30 min) par `(sub, org)`
+  — marque `connector_selection_reconciled` — et aussitôt après toute écriture du coffre
+  qui atteint le membre (`credentials_store._upsert/_delete` efface les marques
+  concernées : membre → lui dans l'org, `user` → lui partout, org → tous ses membres,
+  équipe/tenant/plateforme → tout le monde) ;
+- **quoi** : un connecteur EXPOSÉ et utilisable qui n'est pas actif s'active (provenance
+  `cle`, un retrait du membre ne tient plus) ; un connecteur actif sans clé passe en
+  pause ; le reste ne bouge pas ;
+- **ce qui ne décide rien** (`unknown`, la ligne reste telle quelle) : une étape en
+  attente (`pending_action` — un canal hébergé dont le compte n'est pas lié), une entrée
+  absente de l'instantané, un connecteur sans outil (une clé de modèle) ;
+- **une clé refusée** (`health_ko`) reste utilisable : elle est là pour être réparée,
+  l'agent doit voir l'échec plutôt que perdre l'outil ;
+- **un seul calcul par rafale** : le tour est PRIS avant le calcul (`claim`, une
+  instruction) — au premier déploiement ou après une clé posée, la flotte de runs
+  hébergés d'une même personne ne paie qu'un instantané ; un échec rend le tour ;
+- ⚠️ **fail-INERTE** : instantané illisible, exception ⟹ rien n'est écrit, la boîte monte
+  ce que la table porte. Une passe dont la lecture des équipes échoue ne met RIEN en
+  pause (`status_for` retombe sinon sur « aucune équipe » et une clé d'équipe y lirait
+  `forbidden`). Reste une fenêtre étroite — l'instantané qui se dégrade APRÈS cette
+  lecture — où un connecteur à clé d'équipe peut passer en pause ≤ `TTL`, réactivé à la
+  passe suivante.
+
+**Les gestes qui contrediraient la règle sont refusés** : `connectors.pause` et
+`connectors.unselect` (REST et `oto_connector op=pause|unselect`) rendent 409
+`connector_usable` sur un connecteur utilisable — la pause serait défaite à la session
+suivante. Pour l'arrêter, le détenteur retire la clé. Une lecture impossible laisse passer
+le geste (courtoisie, pas barrière : la réconciliation suivante dit la règle).
+
+**Ce que ça change au reste** : le kit (`orgs.default_connectors`) et la poussée gardent
+leur sens pour un connecteur SANS clé utilisable… qui est mis en pause à la session
+suivante ; un connecteur avec clé n'a plus besoin du kit. Les lignes `cle` ne sont jamais
+retirées par un retrait du kit (qui ne retire que `kit`). ⚠️ La taille de la boîte croît :
+tout l'open data et les six waterfalls (~63 outils, ~143 Ko de schémas sérialisés,
+mesuré le 22/10/2026) sont actifs pour tout membre — décision produit assumée.
+⚠️ Le run hébergé monte toujours contre l'org MAISON du délégant (§ « La toolbox est celle
+de l'org MAISON » ci-dessus) : la réconciliation hérite de ce choix, elle ne le corrige pas.
+
 ## Surfaces BÊTA : une population CHOISIE, pas une découvrabilité (2026-09-01)
 
 **Troisième grain de masquage, et il ne se confond avec aucun des deux autres.** Un

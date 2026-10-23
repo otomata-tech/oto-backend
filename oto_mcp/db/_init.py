@@ -1558,6 +1558,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # suivent en B3/B4/B5.
     from ..connectors import selection as _conn_sel
     _conn_sel.init_schema(conn)
+    # Active = usable (22/10/2026) : la marque de réconciliation par (sub, org) —
+    # `connectors/usable.py`. Additive, invisible à l'ancien code.
+    from ..connectors import usable as _conn_usable
+    _conn_usable.init_schema(conn)
     # ADR 0050 §E7 (oto#166) : la PROVENANCE d'une installation — socle, kit, admin,
     # membre, inconnue. La base est PARTAGÉE prod/préprod : cet ALTER s'applique à la
     # production dès le boot préprod, pendant qu'elle sert encore l'ancien code. Il

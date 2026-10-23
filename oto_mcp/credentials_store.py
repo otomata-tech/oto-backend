@@ -1296,6 +1296,10 @@ def _upsert(conn, entity_type, entity_id, connector, account, secret, set_by, me
     # instance orpheline. Idempotent : une rotation de secret retombe sur la même
     # instance, elle ne renaît pas.
     connector_instances.name_vault_row(conn, entity_type, entity_id, connector, account)
+    # Active = usable : ce qui vient de devenir utilisable s'active à la prochaine
+    # session des membres qu'il atteint (`connectors/usable.py`), dans CETTE transaction.
+    from .connectors import usable as _usable
+    _usable.invalidate(conn, entity_type, entity_id)
 
 
 def _delete(conn, entity_type, entity_id, connector, account) -> bool:
@@ -1310,6 +1314,11 @@ def _delete(conn, entity_type, entity_id, connector, account) -> bool:
     # et s'il reste une instance vivante sans sa ligne, il RÉPARE l'écart.
     connector_instances.revoke_instances_for_vault_rows(
         conn, entity_type, entity_id, connector, account)
+    if cur.rowcount:
+        # Active = usable : ce qui n'est plus utilisable se met en pause à la prochaine
+        # session des membres qu'il atteignait (`connectors/usable.py`).
+        from .connectors import usable as _usable
+        _usable.invalidate(conn, entity_type, entity_id)
     return (cur.rowcount or 0) > 0
 
 

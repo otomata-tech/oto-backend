@@ -107,6 +107,25 @@ def _0_etat_global_rendu(request: pytest.FixtureRequest) -> Iterator[None]:
             + "\n  ".join(ecarts), pytrace=False)
 
 
+# ── Actif = utilisable : hors des bancs qui l'éprouvent (22/10/2026) ───────────
+# La poignée de main réconcilie la sélection depuis les clés (`connectors/usable.py`) :
+# un connecteur installé SANS clé y passe en pause, l'open data s'y active. Les bancs du
+# kit, des portes d'exposition et des niveaux d'accès décrivent la couche de SÉLECTION
+# seule — ils installent un connecteur sans lui donner de clé et attendent ses outils.
+# La règle a son banc (`tests/connectors/test_active_utilisable.py`, marqueur
+# `reconciliation`), y compris son interaction avec le kit ; ailleurs elle est coupée
+# ici, à la seule couture `claim` (le tour de la session), et se voit.
+_MARQUEUR_RECONCILIATION = "reconciliation"
+
+
+@pytest.fixture(autouse=True)
+def _sans_reconciliation(request: pytest.FixtureRequest, monkeypatch) -> None:
+    if request.node.get_closest_marker(_MARQUEUR_RECONCILIATION):
+        return
+    from oto_mcp.connectors import usable
+    monkeypatch.setattr(usable, "claim", lambda sub, org_id: False)
+
+
 # ── L'adresse publique de l'instance, gréée pour toute la suite ──────────────
 # Le code refuse de fabriquer une adresse qu'il n'a pas : `config.public_base_url()`
 # lève au lieu de retomber sur un domaine (redirection OAuth, rappel de paiement, jeton
@@ -438,6 +457,10 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{MARQUEUR}: ce test n'a de SENS que face à l'oto-core épinglé — il est "
         "passé (non concluant) en local quand le venv est en retard sur le pin, "
         "et reste mordant en CI.")
+    config.addinivalue_line(
+        "markers",
+        f"{_MARQUEUR_RECONCILIATION}: la poignée de main réconcilie la sélection depuis "
+        "les clés (actif = utilisable) — coupée partout ailleurs.")
     config.addinivalue_line(
         "markers",
         f"{_MARQUEUR_RESEAU}(raison): autorise CE test à ouvrir une connexion "

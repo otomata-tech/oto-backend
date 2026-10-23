@@ -33,6 +33,7 @@ from ...connectors import credential_presence
 from ...connectors.credential_presence import CredentialPresence
 from ...connectors import readiness as connector_readiness
 from ...connectors import selection as connector_selection
+from ...connectors import usable as connector_usable
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
@@ -164,8 +165,9 @@ class MyConnectorRow(BaseModel):
     # `not_selected`. `kit` = installed by your organization (removal from the kit
     # removes it); `membre` = by you; `admin` = pushed to you by an admin; `socle` =
     # by default by the platform; `inconnue` = set before the platform
-    # tracked it — the latter is never removed by an org gesture.
-    origin: Optional[Literal["socle", "kit", "admin", "membre", "inconnue"]] = None
+    # tracked it — the latter is never removed by an org gesture; `cle` = a key
+    # usable for you made it active (active = usable, `connectors/usable.py`).
+    origin: Optional[Literal["socle", "kit", "admin", "membre", "inconnue", "cle"]] = None
     # Date ("YYYY-MM-DD HH:MM:SS", UTC) at which YOU removed this connector — present only when
     # `state` = `not_selected` and the removal came from you. No org gesture (kit,
     # push) reinstalls it while it is set; reinstalling it yourself clears it.
@@ -756,9 +758,33 @@ def _select(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
             "hint": _activation_hint(inp.name, tools)}
 
 
+_REFUS_UTILISABLE = DeclaredError(
+    409, "connector_usable",
+    "a key is usable for you on this connector, so it is active (active = usable): "
+    "it can't be paused or removed — the key's owner removes the key instead")
+
+
+def _refuse_if_usable(ctx: ResolvedCtx, name: str, org_id: int) -> None:
+    """Active = usable (`connectors/usable.py`): pausing or removing a connector a key
+    answers for would be undone at the next session — the gesture would lie. Refused
+    by name instead. A snapshot that can't be read lets the gesture through (the
+    refusal is a courtesy, not a barrier: the next reconciliation says the rule)."""
+    try:
+        usable = connector_usable.is_usable(ctx.sub, org_id, access.current_group(ctx.sub), name)
+    except Exception as e:
+        logger.warning("usable check skipped for %s/%s (gesture allowed): %s", ctx.sub, name, e)
+        return
+    if usable:
+        raise AuthzDenied(409, "connector_usable",
+                          f"`{name}` has a key usable for you here, so it is active and stays "
+                          "active (active = usable). To stop it, the key's owner removes the "
+                          "key; nothing to pause or remove on your side.")
+
+
 def _pause(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     org_id = _org_du_geste(ctx)
     _require_exposed(ctx, inp.name)
+    _refuse_if_usable(ctx, inp.name, org_id)
     connector_selection.set_state(ctx.sub, inp.name, connector_selection.PAUSED, org_id)
     return {"connector": inp.name, "state": "paused"}
 
@@ -770,7 +796,9 @@ def _unselect(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     # local state as soon as the call didn't raise). REFUSES by name, on the same pattern
     # as the project unlink (`d3c5de40`): a success that did nothing is worse
     # than a refusal.
-    if not connector_selection.unselect(ctx.sub, inp.name, _org_du_geste(ctx)):
+    org_id = _org_du_geste(ctx)
+    _refuse_if_usable(ctx, inp.name, org_id)
+    if not connector_selection.unselect(ctx.sub, inp.name, org_id):
         raise AuthzDenied(404, "connector_not_selected",
                           f"`{inp.name}` is not in your active selection for this org — "
                           "nothing was removed (already uninstalled, or never installed here). "
@@ -829,13 +857,15 @@ CAPABILITIES += [
         key="connectors.pause", handler=_pause, Input=ConnectorActionInput, authz=SUB_ONLY,
         Output=ConnectorSelectionState,
         description="Pause an installed connector (state=paused): kept installed but its tools "
-                    "are hidden. Resume by selecting it again.",
+                    "are hidden. Resume by selecting it again. REFUSES (connector_usable, 409) "
+                    "when a key is usable for you on it: active = usable, it would come back "
+                    "at your next session.",
         errors=(DeclaredError(404, "unknown_connector",
                               "name unknown to the registry, connector not exposed "
                               "for the active org, or restricted by a rule — "
                               "the three are indistinguishable on the member side, and "
                               "all are resolved by the same request to an admin"),
-                _REFUS_SANS_ORG),
+                _REFUS_SANS_ORG, _REFUS_UTILISABLE),
         rest=RestBinding("POST", "/api/me/connectors/{name}/pause"),
     ),
     Capability(
@@ -844,12 +874,13 @@ CAPABILITIES += [
         description="Remove a connector from your workspace (back to the library). Does not touch "
                     "credentials, only your selection. REFUSES (connector_not_selected, 404) if "
                     "it wasn't in your active selection for this org — it never answers ok on a "
-                    "removal that found nothing.",
+                    "removal that found nothing. REFUSES (connector_usable, 409) when a key is "
+                    "usable for you on it: active = usable.",
         errors=(DeclaredError(404, "connector_not_selected",
                               "the connector is not in your active selection for "
                               "this org: already removed, never installed here, or "
                               "installed under another active org"),
-                _REFUS_SANS_ORG),
+                _REFUS_SANS_ORG, _REFUS_UTILISABLE),
         rest=RestBinding("DELETE", "/api/me/connectors/{name}"),
     ),
     Capability(

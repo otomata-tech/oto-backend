@@ -203,6 +203,9 @@ CLASSEMENT: dict[str, Table] = {
     "connector_selection_seeded": possedee(ParOrg(), comptes=("sub",),
                                            naissance=("org_id", "0")),
     "user_selected_connectors": possedee(ParOrg(), comptes=("sub",)),
+    "connector_selection_reconciled": exclue(ParOrg(), "une marque de cache (active = "
+                                             "utilisable) : son absence fait recalculer "
+                                             "la sélection à la session suivante"),
     "connector_account_grants": possedee(ParSub("owner_sub")),
     "connector_account_group_grants": possedee(ParSub("owner_sub")),
     "credential_disparitions": possedee(ParOrg()),

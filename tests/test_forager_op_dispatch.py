@@ -337,7 +337,7 @@ def test_no_api_key_management_tool_exists(client):
     assert not any("api_key" in n for n in names)
 
 
-# --- the platform key: phone lookups only, metered -------------------------
+# --- the platform key: the ops the instance serves, metered -----------------
 
 @pytest.fixture
 def trace(monkeypatch):
@@ -350,11 +350,24 @@ def trace(monkeypatch):
 def platform_usage(monkeypatch):
     calls: list = []
     from _releve import capter_units
-    capter_units(monkeypatch, "forager", lambda provider, n: calls.append(provider))
+    capter_units(monkeypatch, "forager", lambda provider, n: calls.append((provider, n)))
     return calls
 
 
-@pytest.mark.parametrize("tool, kwargs", [
+@pytest.fixture
+def setting(monkeypatch):
+    """The `platform.ops` row of `connector_settings`: None = unset."""
+    row = {"value": None}
+
+    def _get(scope_type, scope_id, connector, key, *a, **kw):
+        assert (scope_type, scope_id, connector, key) == (
+            "platform", "platform", "forager", "platform.ops")
+        return row["value"]
+    monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting", _get)
+    return row
+
+
+_EVERYTHING_BUT_PHONES = [
     ("forager_job_post", {}),
     ("forager_organization", {}),
     ("forager_person", {"op": "detail", "person_id": 1}),
@@ -363,22 +376,90 @@ def platform_usage(monkeypatch):
     ("forager_account", {}),
     ("forager_feedback", {"op": "phone_number", "contact_status": "connected",
                           "is_correct_person": True, "phone_number": "+33100000000"}),
-])
-def test_platform_key_refuses_everything_but_phone_numbers(client, key_mode, tool, kwargs):
+]
+
+
+@pytest.mark.parametrize("tool, kwargs", _EVERYTHING_BUT_PHONES)
+def test_unset_the_platform_key_refuses_everything_but_phone_numbers(
+        client, key_mode, setting, tool, kwargs):
     key_mode["platform"] = True
     with pytest.raises(McpError, match="needs your own Forager key"):
         _tool(tool)(**kwargs)
     assert not client.method_calls, "a refused op must not reach Forager (no credit spent)"
 
 
-def test_platform_key_runs_phone_numbers_and_meters_it(client, key_mode, trace, platform_usage):
+def test_platform_key_runs_phone_numbers_and_meters_it(
+        client, key_mode, setting, trace, platform_usage):
     key_mode["platform"] = True
     client.lookup_person_phone_numbers.return_value = [{"phone_number": "+33100000000"}]
     out = _tool("forager_person")(op="phone_numbers", person_id=7)
     assert out == [{"phone_number": "+33100000000"}]
     assert trace == {"found_work_emails": 0, "found_personal_emails": 0,
                      "found_phones": 1, "quantity": 1}
-    assert platform_usage == ["forager"]
+    assert platform_usage == [("forager", 1)]
+
+
+def test_the_setting_opens_a_whole_tool_or_one_op(client, key_mode, setting, platform_usage):
+    key_mode["platform"] = True
+    setting["value"] = "forager_organization, forager_person:work_emails"
+    _tool("forager_organization")(op="website", domain="example.com")
+    _tool("forager_person")(op="work_emails", person_id=1)
+    assert platform_usage == [("forager", 1), ("forager", 1)]
+    with pytest.raises(McpError, match="needs your own Forager key"):
+        _tool("forager_person")(op="phone_numbers", person_id=1)
+
+
+def test_a_totals_count_debits_nothing(client, key_mode, setting, trace, platform_usage):
+    key_mode["platform"] = True
+    setting["value"] = "forager_job_post"
+    _tool("forager_job_post")(op="totals")
+    assert trace == {} and platform_usage == [], "units=0: served, nothing debited"
+
+
+def test_free_tools_note_no_units(client, key_mode, setting, platform_usage):
+    key_mode["platform"] = True
+    setting["value"] = "forager_autocomplete"
+    _tool("forager_autocomplete")(op="locations", q="Paris")
+    assert platform_usage == []
+
+
+def test_forager_account_is_never_served_on_the_platform_key(client, key_mode, setting):
+    key_mode["platform"] = True
+    setting["value"] = ",".join(F_OPS())
+    with pytest.raises(McpError, match="needs your own Forager key"):
+        _tool("forager_account")()
+    assert not client.method_calls
+
+
+def test_own_key_notes_no_units_and_ignores_the_setting(client, setting, platform_usage):
+    setting["value"] = "forager_person:phone_numbers"
+    _tool("forager_job_post")()
+    assert platform_usage == []
+
+
+def F_OPS():
+    from oto_mcp.tools import forager as F
+    return sorted(F.OPS)
+
+
+@pytest.mark.parametrize("value, error", [
+    ("forager_account", "not a Forager tool"),
+    ("forager_person:nope", "has no op"),
+    ("apollo_search_people", "not a Forager tool"),
+])
+def test_the_setting_refuses_what_the_tool_would_not_understand(value, error):
+    from oto_mcp.tools import forager as F
+    with pytest.raises(ValueError, match=error):
+        F.parse_platform_ops(value)
+
+
+def test_an_unreadable_setting_serves_the_default(monkeypatch):
+    from oto_mcp.tools import forager as F
+
+    def _boom(*a, **kw):
+        raise RuntimeError("db down")
+    monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting", _boom)
+    assert F.platform_ops() == {("forager_person", "phone_numbers")}
 
 
 def test_a_miss_traces_zero_phones(client, trace, platform_usage):
@@ -390,7 +471,7 @@ def test_a_miss_traces_zero_phones(client, trace, platform_usage):
 
 
 def test_a_miss_on_the_platform_key_traces_zero_and_bills_nothing(
-        client, key_mode, trace, platform_usage):
+        client, key_mode, setting, trace, platform_usage):
     """A miss on OUR key: `quantity=0`, so the aggregated view (NULL reads 1) does not
     count it as a billed lookup."""
     key_mode["platform"] = True
@@ -413,3 +494,34 @@ def test_the_billing_lens_reads_the_trace_as_found_phones(client, trace, platfor
 def test_own_key_still_runs_every_op(client):
     _tool("forager_person")(op="detail", person_id=1)
     client.lookup_person_detail.assert_called_once()
+
+
+# --- the admin console: `platform.ops` is refused unless the tool understands it ---
+
+def _set(monkeypatch, value, org_id=None):
+    from oto_mcp.capabilities import platform_connectors as PC
+    from oto_mcp.capabilities._types import ResolvedCtx
+    written = []
+    monkeypatch.setattr("oto_mcp.db.connector_settings.set_connector_setting",
+                        lambda *a, **k: written.append(a))
+    PC._connector_setting(ResolvedCtx(sub="admin", org_id=1), PC.ConnectorSettingInput(
+        op="set", connector="forager", key="platform.ops", value=value, org_id=org_id))
+    return written
+
+
+def test_the_console_stores_a_list_the_tool_understands(monkeypatch):
+    written = _set(monkeypatch, "forager_person, forager_organization:website")
+    assert written == [("platform", "platform", "forager", "platform.ops",
+                        "forager_person, forager_organization:website")]
+
+
+@pytest.mark.parametrize("value, org_id", [
+    ("forager_account", None),
+    ("forager_person:nope", None),
+    ("forager_person", 42),
+])
+def test_the_console_refuses_a_list_the_tool_would_not_serve(monkeypatch, value, org_id):
+    from oto_mcp.capabilities._types import AuthzDenied
+    with pytest.raises(AuthzDenied) as e:
+        _set(monkeypatch, value, org_id)
+    assert e.value.code == "invalid_setting"

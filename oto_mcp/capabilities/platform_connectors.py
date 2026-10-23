@@ -573,6 +573,19 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
                               f"`{CLE_REGLAGE}` can only be set on a MODEL "
                               f"provider (connector of type credential) — "
                               f"`{inp.connector}` is not one.")
+    from ..tools import forager as _forager
+    if inp.connector == "forager" and inp.key == _forager.PLATFORM_OPS_KEY:
+        # An instance choice — what OUR key serves —, never an org's; and a list the
+        # tool would not understand is refused here, not read as "less" at call time.
+        if inp.org_id is not None:
+            raise AuthzDenied(400, "invalid_setting",
+                              f"`{_forager.PLATFORM_OPS_KEY}` is set platform-wide only "
+                              "(omit `org_id`).")
+        try:
+            _forager.parse_platform_ops(str(inp.value))
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_setting",
+                              f"`{_forager.PLATFORM_OPS_KEY}`: {e}.")
     store.set_connector_setting(scope_type, scope_id, inp.connector, inp.key,
                                 str(inp.value), set_by=ctx.sub)
     return {"op": "set", "changed": True, "active": _actives()}
@@ -586,8 +599,11 @@ CAPABILITIES += [
             "Connector properties that the DATABASE may override, per platform or per "
             "org — the registry constant is only the default. op=list / set "
             "(`connector`, `key`, `value`; `org_id` omitted = platform-wide) / clear / "
-            "reload. Today the only key is `cardinality` (`mono`|`multi`): how many "
-            "accounts one entity may hold for that connector. ⚠️ Overrides are held in "
+            "reload. Keys: `cardinality` (`mono`|`multi`): how many "
+            "accounts one entity may hold for that connector; `platform.ops` on "
+            "`forager`, platform-wide: what the shared key serves, comma-separated "
+            "`tool:op` or `tool` (default `forager_person:phone_numbers`, read at each "
+            "call). ⚠️ Overrides are held in "
             "MEMORY, so a row takes effect only after `reload` — and reload is "
             "PER-PROCESS: reloading preprod does not reload prod."),
         mcp="oto_admin_connector_setting",

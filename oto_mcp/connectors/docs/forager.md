@@ -1,7 +1,7 @@
 ## prerequisite — forager api key
 
 create an API key on [app.forager.ai](https://app.forager.ai) (key management — creation/deletion — is **dashboard only**, not from oto), then paste it into oto.
-- byo-only: no shared oto key
+- your own key, or the shared oto key when it is granted to your org: it serves the lookups this oto instance chose (by default a person's phone numbers), never `forager_account`
 - an optional second field `account_id` exists if your key has access to **several** Forager accounts — leave it empty otherwise, it is resolved automatically
 
 ## note — ⚠️ pay-per-credit, every search/lookup consumes the account balance

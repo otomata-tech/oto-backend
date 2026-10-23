@@ -52,9 +52,6 @@ SANS_DEBIT = frozenset({
     "apollo_reveal_phone_result", "apollo_job_postings", "apollo_contact",
     "apollo_email_accounts", "apollo_email_schedules", "apollo_sequence",
     "apollo_sequence_contacts", "apollo_email", "apollo_act", "apollo_conversation",
-    # forager — only the person lookup debits.
-    "forager_job_post", "forager_organization", "forager_feedback",
-    "forager_autocomplete", "forager_account",
     # fr — only the two INSEE reads (`fr_siret`, `fr_headquarters`) debit the `sirene` key.
     "fr_search", "fr_get", "fr_groupe", "fr_directors", "fr_avis_sirene", "fr_bilans",
     "fr_bilan", "fr_events", "fr_events_batch", "fr_tenders_search", "fr_tenders_get",

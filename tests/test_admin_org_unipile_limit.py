@@ -6,8 +6,9 @@ La colonne `orgs.unipile_account_limit` existait et la connexion la lisait déj�
 applique ses propres crédits (une org gratuite = un seul compte hébergé) n'avait donc aucun
 moyen de la poser. Ce que ce fichier garde :
 
-- **la vue calcule comme la connexion** : plafond propre, sinon défaut plateforme, et le
-  défaut est lu chez `unipile_connect` — pas une seconde lecture de l'environnement ;
+- **la vue dit ce que la connexion applique** : `effective_limit` est lu chez
+  `unipile_connect.plafond_de_comptes` — `0` depuis le 2026-10-23, plus aucune org n'est
+  plafonnée ; la colonne et le défaut restent lisibles et posables, inertes ;
 - **`0` = sans plafond**, `null` = retour au défaut : deux sens distincts, tous deux posables ;
 - **un PUT sans `limit` est refusé**, pas lu comme `null` (il lèverait un plafond en silence) ;
 - **lecture = admin plateforme, écriture = super admin**, REST seule.
@@ -68,25 +69,25 @@ def test_sans_plafond_propre_l_org_suit_le_defaut_plateforme(socle, super_admin)
     code, out = _get()
     assert code == 200, out
     assert out == {"org_id": ORG, "limit": None, "default_limit": 5,
-                   "effective_limit": 5, "accounts": 1}
+                   "effective_limit": 0, "accounts": 1}
     assert set(out) == set(users_admin.OrgUnipileLimitView.model_fields)
 
 
-def test_le_defaut_est_celui_que_lit_la_connexion(socle, super_admin, monkeypatch):
-    """Une seule lecture de l'environnement : celle de `unipile_connect`, qui refuse
-    réellement la connexion. La recopier ici pourrait diverger d'elle."""
+def test_le_defaut_est_lu_chez_unipile_connect_mais_n_est_plus_applique(socle, super_admin, monkeypatch):
+    """Une seule lecture de l'environnement : celle de `unipile_connect`. Le défaut reste
+    affiché, mais la connexion n'applique plus aucun plafond (2026-10-23)."""
     from oto_mcp import unipile_connect
     monkeypatch.setenv("OTO_MCP_UNIPILE_DEFAULT_LIMIT", "3")
     _, out = _get()
     assert out["default_limit"] == unipile_connect._default_limit() == 3
-    assert out["effective_limit"] == 3
+    assert out["effective_limit"] == 0, "la connexion n'applique plus aucun plafond"
 
 
 def test_poser_un_plafond_d_un_compte(socle, super_admin):
     code, out = _put({"limit": 1})
     assert code == 200, out
     assert socle["ecrit"] == [(ORG, 1)]
-    assert (out["limit"], out["default_limit"], out["effective_limit"]) == (1, 5, 1)
+    assert (out["limit"], out["default_limit"], out["effective_limit"]) == (1, 5, 0)
     assert _get()[1] == out, "le PUT rend la même vue que la lecture"
 
 
@@ -103,7 +104,7 @@ def test_null_rend_l_org_au_defaut_plateforme(socle, super_admin):
     code, out = _put({"limit": None})
     assert code == 200, out
     assert socle["ecrit"] == [(ORG, 1), (ORG, None)]
-    assert (out["limit"], out["effective_limit"]) == (None, 5)
+    assert (out["limit"], out["effective_limit"]) == (None, 0)
 
 
 # --- Les refus ---------------------------------------------------------------

@@ -121,11 +121,10 @@ def test_le_gate_lit_le_droit_de_la_personne_qui_connecte(monkeypatch):
     assert lus == [("u1", 39, "unipile")]
 
 
-def test_seat_cap_blocks_new_hosted_account(monkeypatch):
+def test_no_org_cap_on_new_hosted_account(monkeypatch):
+    # plus de plafond par org (2026-10-23) : ni la colonne de l'org ni le défaut ne refusent
     _wire(monkeypatch, existing=None, count=5, limit=5)
-    with pytest.raises(ConnectRefused) as e:
-        _run(hosted_auth_url("u1"))
-    assert e.value.code == "unipile_account_limit_reached" and e.value.status == 429
+    assert _run(hosted_auth_url("u1"))["url"]
 
 
 def test_reconnect_existing_account_bypasses_cap(monkeypatch):

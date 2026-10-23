@@ -2,7 +2,7 @@
 
 A single body of logic for both faces (`POST /api/unipile/connect` on the
 dashboard side, the `unipile_connect_start` tool on the agent side): gates (channel, key,
-context org, hosted-messaging option, seat cap), pending row set (nonce = `name`
+context org, hosted-messaging option), pending row set (nonce = `name`
 of the link = reconciliation key, THE binding path since #581), then Unipile's
 `hosted_auth_link`. Raises `ConnectRefused` (machine code + message) — each
 face translates it (json_error / McpError).
@@ -52,13 +52,13 @@ def _default_limit() -> int:
 
 
 def plafond_de_comptes(org_id: int) -> int:
-    """The org's cap on hosted accounts that the connection applies: its own
-    (`orgs.unipile_account_limit`), otherwise the env default. `0` = no cap.
+    """The org's cap on hosted accounts that the connection applies: none, `0`.
 
-    ⚠️ INHERITED read of the `unipile_seats` right (limit (b) of `docs/droits-declares.md`,
-    where `0` means "unlimited"): it goes away once `value_for` is read here."""
-    limit = db.get_org_unipile_limit(org_id)
-    return _default_limit() if limit is None else limit
+    Orgs are not capped since 2026-10-23: the connection no longer
+    counts an org's hosted accounts, whatever `orgs.unipile_account_limit` or
+    `OTO_MCP_UNIPILE_DEFAULT_LIMIT` say. Kept so the readers of the cap (the
+    commerce read, the admin view) report the one actually applied."""
+    return 0
 
 
 def connections_page(sub: "str | None", org_id: "int | None") -> "str | None":
@@ -208,14 +208,6 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
                              "for you: trial ended or subscription required."
                              + await asyncio.to_thread(detenteurs.qui_leve_une_option,
                                                        sub, org_id))
-    # Hosted seat cap (reconnecting an existing account = replacement, OK;
-    # an ADOPTION below creates a binding in this org → subject to the same cap).
-    if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
-        limit = plafond_de_comptes(org_id)
-        if limit and db.count_unipile_accounts_for_org(org_id) >= limit:
-            logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
-            raise ConnectRefused(429, "unipile_account_limit_reached",
-                                 "Hosted account cap reached for the org.")
     # Explicit ADOPTION (binding-per-org model): the sub's hosted account already lives
     # on the PLATFORM key in another of its orgs → "connect here" does not need
     # the wizard, we write the binding for THIS org. Safe: same shared key

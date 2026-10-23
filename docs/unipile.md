@@ -213,8 +213,12 @@ de paiement).
 > **sièges clé plateforme** `GET /api/admin/unipile/seats` (super_admin, `db.unipile_account_owners`) :
 > réconcilie les comptes de l'instance partagée ↔ leur owner oto (flag **orphelin**).
 >
-> **Plafond de sièges hébergés par org.** `orgs.unipile_account_limit`, lu à la connexion
-> (`hosted_auth_url`) : `NULL` = pas de plafond propre → défaut plateforme
+> **Plafond de sièges hébergés par org — RETIRÉ le 2026-10-23.** La connexion
+> (`hosted_auth_url`) ne compte plus les comptes d'une org : aucune org n'est plafonnée,
+> `unipile_account_limit_reached` n'est plus émis, et `plafond_de_comptes` rend `0`
+> (sans plafond) à ses lecteurs (vue admin `effective_limit`, lecture du commerce). La colonne
+> et le défaut ci-dessous restent lisibles et posables, mais **inertes**. Avant :
+> `orgs.unipile_account_limit`, lu à la connexion : `NULL` = pas de plafond propre → défaut plateforme
 > `OTO_MCP_UNIPILE_DEFAULT_LIMIT` (5 si absent) ; ⚠️ **`0` = sans plafond** (le test est
 > `if limit and count >= limit`). Surface admin : `GET /api/admin/orgs/{id}/unipile-limit`
 > (admin plateforme, vue `{org_id, limit, default_limit, effective_limit, accounts}`) et

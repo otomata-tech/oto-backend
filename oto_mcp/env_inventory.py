@@ -421,7 +421,8 @@ _REGLAGES: tuple[Variable, ...] = (
              "Illisible (pas un entier ≥ 1), la réservation LÈVE.",
              ("oto_mcp/db/rowabandon.py:67",)),
     Variable("OTO_MCP_UNIPILE_DEFAULT_LIMIT", Classe.REGLAGE, "5",
-             "Taille de page par défaut des lectures Unipile.",
+             "Ancien plafond par défaut de comptes hébergés par org — INERTE depuis le "
+             "2026-10-23 (aucune org n'est plafonnée) ; reste lu par la vue admin.",
              ("oto_mcp/unipile_connect.py:49",)),
     Variable("OTO_MCP_UPLOAD_MAX_BYTES", Classe.REGLAGE, "26214400",
              "Plafond dur (octets) d'un contenu poussé par jeton de téléversement — "

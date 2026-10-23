@@ -70,7 +70,7 @@ cœur ne sait pas appliquer.
 |---|---|---|
 | `unipile` | oui/non | la messagerie hébergée — lue pour la personne par l'option payante (`access.quotas`), le branchement d'un compte, l'inventaire et la fin de droit de la messagerie |
 | `platform_unmetered` | oui/non | quotas levés sur les clés de plateforme — lue pour la personne par `access.quotas.plafond_du_jour` (refus, sonde, mode affiché, `/api/me`) |
-| `unipile_seats` | nombre | nombre de comptes de messagerie — **pas encore lue** : le plafond vient toujours de `orgs.unipile_account_limit` et `OTO_MCP_UNIPILE_DEFAULT_LIMIT` |
+| `unipile_seats` | nombre | nombre de comptes de messagerie — **pas lue** : aucune org n'est plafonnée depuis le 2026-10-23 (`unipile_connect.plafond_de_comptes` rend `0`) ; `orgs.unipile_account_limit` et `OTO_MCP_UNIPILE_DEFAULT_LIMIT` sont inertes |
 | `platform_key:<connecteur>` | nombre (quota par jour, `0` = pas d'accès) | l'accès à notre clé de plateforme d'un connecteur du registre `providers` (suffixe vérifié) — **pas encore lue** : le registre (`platform_key_open`, `default_quota`) reste la règle appliquée |
 | `members_max` | nombre | ⚠️ **hérité, sans lecteur** : le nombre de licences d'un abonnement réglé hors plateforme. Le cœur ne connaît aucun plafond de membres ; la clé sort du catalogue quand le commerce posera les droits payants par personne |
 
@@ -275,7 +275,7 @@ appartenance n'est exigée (comme `value_for`, limite (e)). Rend :
 | clé | champ | lu par |
 |---|---|---|
 | `unipile`, `platform_unmetered` | `option_comps: {personne, org}` | `db.has_option_comp` sur le compte et sur l'org (`org` null hors org) — des dons qui n'ouvrent plus rien : la réconciliation qui traduisait ceux de l'org est retirée (#1097) |
-| `unipile_seats` | `plafond_messagerie: {plafond}` | `unipile_connect.plafond_de_comptes`, le plafond que le branchement applique (`0` = sans plafond) ; `lecture_directe` null hors org |
+| `unipile_seats` | `plafond_messagerie: {plafond}` | `unipile_connect.plafond_de_comptes`, le plafond que le branchement applique — `0` (sans plafond) depuis le 2026-10-23 ; `lecture_directe` null hors org |
 | `platform_key:<connecteur>` | `registre: {cle_ouverte, quota_du_jour}` | `platform_key_open` du registre et `quotas.quota_for` (`0` = illimité) — sans l'arête de grant |
 | `members_max` | — | aucune lecture héritée : `null` |
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from .. import runner_models
@@ -31,8 +32,29 @@ logger = logging.getLogger(__name__)
 
 # Backoff linéaire simple : un échec renvoie le job dans la file à +30 s × tentatives.
 # Pas d'exponentiel en V1 — les échecs attendus (amont LLM en vrac) se lissent, et un
-# job vraiment cassé atteint son plafond en minutes, pas en heures.
+# job vraiment cassé atteint son plafond en minutes, pas en heures. Une exception, juste
+# en dessous : le refus passager du fournisseur.
 _BACKOFF_S = 30
+# ⚠️ Un REFUS PASSAGER du fournisseur (429 rate limit, 529 surcharge, 5xx) ne se lisse
+# pas en une minute : le 20/10/2026, trois travaux d'un agent webhook sont morts en quatre
+# minutes, leurs trois tentatives (à +30 s puis +60 s) toutes tombées dans la même
+# fenêtre de refus de six minutes sur la clé de son org. Ces échecs-là reculent plus
+# loin : 2 min, puis 10 min (×5 à chaque tentative) — de quoi sortir de la fenêtre,
+# sans tenir un travail cassé pendant des heures. Tout autre échec garde le linéaire.
+_BACKOFF_PASSAGER_S = 120
+_FACTEUR_PASSAGER = 5
+# Lu sur le motif tel que le runner l'écrit : `fin_anormale (rate_limit, HTTP 429 : …)`
+# (voie abonnement) ou `RateLimitError : HTTP 429 rate_limit_error — …` (API directe).
+_REFUS_PASSAGER = re.compile(
+    r"\bHTTP (?:429|5\d\d)\b|\b(?:rate_limit|overloaded|server_error)", re.IGNORECASE)
+
+
+def refus_passager(motif: Optional[str]) -> bool:
+    """Le motif d'échec nomme-t-il un refus PASSAGER du fournisseur (limite de débit,
+    surcharge, erreur serveur) ? Une clé refusée (401, crédit épuisé, 400) n'en est
+    pas un : attendre plus longtemps ne la répare pas."""
+    return bool(motif) and bool(_REFUS_PASSAGER.search(motif))
+
 #: Les familles servies par un ABONNEMENT personnel (OTO-130) — lues du catalogue,
 #: jamais recopiées. `runner_models` est PUR : la base peut le lire sans remonter
 #: d'une couche (c'est déjà ce que fait la capacité).
@@ -1690,8 +1712,9 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
             ).fetchone()
         else:
             # Échec : au plafond → failed VISIBLE ; sinon retour en file, backoff
-            # linéaire, la trace d'erreur conservée pour l'audit. `result` s'écrit
-            # comme au succès — la conclusion suivante l'écrase, rien ne s'additionne.
+            # linéaire (2 min puis 10 sur un refus passager, `refus_passager`), la trace
+            # d'erreur conservée pour l'audit. `result` s'écrit comme au succès — la
+            # conclusion suivante l'écrase, rien ne s'additionne.
             #
             # ⚠️ `attempt_errors` s'AJOUTE (`||`), là où `last_error` écrase : les
             # tentatives d'un même travail échouent parfois pour des raisons
@@ -1706,7 +1729,9 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
                                        THEN 'failed' ELSE 'pending' END,
                        finished_at = CASE WHEN attempts >= max_attempts
                                           THEN NOW() ELSE NULL END,
-                       due_at   = NOW() + make_interval(secs => %s * attempts),
+                       due_at   = NOW() + make_interval(secs => CASE WHEN %s
+                                          THEN %s * power(%s, attempts - 1)
+                                          ELSE %s * attempts END),
                        lease_until = NULL, claimed_by = NULL,
                        last_error = %s,
                        {_AJOUT_A_ATTEMPT_ERRORS},
@@ -1715,7 +1740,8 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
                 RETURNING status, run_id, org_id, sub, attempts,
                           payload->'_plateforme'->'cle_partagee' AS cle_partagee
                 """,
-                (_BACKOFF_S, motif, motif,
+                (refus_passager(motif), _BACKOFF_PASSAGER_S, _FACTEUR_PASSAGER, _BACKOFF_S,
+                 motif, motif,
                  json.dumps(result) if result is not None else None,
                  job_id, worker_sub),
             ).fetchone()

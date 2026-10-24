@@ -23,6 +23,12 @@ ou `httpx`/`requests` HTTPError, ou erreur connecteur typée portant un statut) 
 ne la reporte pas. Deux chemins de capture à neutraliser : le middleware explicite
 (qui ne capture pas) et la LoggingIntegration sur le `logger.error` de fastmcp (le
 `before_send` la droppe). Les 5xx et les vraies exceptions code restent reportées.
+
+**Panne amont** (5xx d'une API tierce, ou timeout RÉSEAU vers elle) : reportée,
+mais en `warning` et regroupée par outil (`upstream_level`) — une issue par
+fournisseur en panne, pas une alerte « nouvelle issue » par message, et l'alerte
+`#bug-report` (niveau error) n'est plus réveillée par Apollo ou Serper qui
+toussent. Un timeout de NOTRE code (base, boucle) reste une erreur.
 """
 from __future__ import annotations
 
@@ -49,6 +55,8 @@ from .error_taxonomy import (  # noqa: F401
     _is_managed_connector_error,
     _is_user_input_error,
     _upstream_status,
+    _chain,
+    upstream_status_in_chain,
 )
 
 logger = logging.getLogger("oto_mcp")
@@ -68,6 +76,30 @@ def current_tool_event_id() -> Optional[str]:
     # noqa: SILENT — hors contexte de requête : pas d'event_id à corréler
     except Exception:
         return None
+
+
+# Timeouts RÉSEAU vers un tiers, reconnus par TYPE (nom + module) : un
+# `TimeoutError` nu ou un timeout de base (psycopg) reste un défaut de code.
+_NETWORK_TIMEOUT_MODULES = ("requests.", "httpx", "urllib3.", "httpcore")
+
+
+def _is_network_timeout(exc) -> bool:
+    for e in _chain(exc):
+        mod = type(e).__module__ or ""
+        if "Timeout" in type(e).__name__ and mod.startswith(_NETWORK_TIMEOUT_MODULES):
+            return True
+    return False
+
+
+def upstream_level(exc) -> Optional[str]:
+    """`upstream_5xx` / `upstream_timeout` quand l'erreur est une panne d'un
+    fournisseur tiers (à reporter en warning, regroupée), sinon None."""
+    sc = upstream_status_in_chain(exc)
+    if sc is not None and 500 <= sc < 600:
+        return "upstream_timeout" if sc == 504 else "upstream_5xx"
+    if sc is None and _is_network_timeout(exc):
+        return "upstream_timeout"
+    return None
 
 
 def _before_send(event, hint):
@@ -283,6 +315,11 @@ class SentryToolErrorMiddleware(Middleware):
                         client = current_client_id_from_token()
                         if client:
                             scope.set_tag("mcp.client", client)
+                        panne = upstream_level(e)
+                        if panne:
+                            scope.set_level("warning")
+                            scope.set_tag("upstream", panne)
+                            scope.fingerprint = ["upstream", context.message.name, panne]
                         # Hors boucle : construction de l'event (pile, in-app,
                         # linecache) sur un thread du pool. L'id retourné (None si
                         # Sentry est off ou l'event droppé par `before_send`)

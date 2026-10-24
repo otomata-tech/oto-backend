@@ -147,3 +147,60 @@ def test_pydantic_validation_error_is_expected():
     assert _is_expected_error(wrapped)
     # une vraie exception code reste reportée
     assert not _is_expected_error(KeyError("sub"))
+
+
+def test_upstream_outage_is_a_grouped_warning():
+    """2026-10-19/20 : Apollo / Serper / Google / Unipile qui toussent ouvraient
+    chacun une issue « error » sur #bug-report. Panne amont = warning ; un
+    timeout de notre code reste une erreur."""
+    import requests
+    import httpx
+    from oto_mcp.sentry_setup import upstream_level
+
+    assert upstream_level(_Upstream(500)) == "upstream_5xx"
+    assert upstream_level(_HTTPStatusError(502)) == "upstream_5xx"
+    assert upstream_level(_Upstream(504)) == "upstream_timeout"
+    assert upstream_level(_chained(RuntimeError("Error calling tool"),
+                                   requests.exceptions.ReadTimeout("read timeout=60"))) \
+        == "upstream_timeout"
+    assert upstream_level(_chained(RuntimeError("Unipile: network error (ReadTimeout)"),
+                                   httpx.ReadTimeout("timed out"))) == "upstream_timeout"
+    # Not an outage: 4xx, our own timeouts, plain bugs.
+    assert upstream_level(_Upstream(422)) is None
+    assert upstream_level(TimeoutError("statement timeout")) is None
+    assert upstream_level(KeyError("x")) is None
+
+
+def test_middleware_tags_upstream_outage_as_warning(monkeypatch):
+    import asyncio
+
+    import requests
+    import sentry_sdk
+    from oto_mcp import sentry_setup
+
+    seen = {}
+
+    def fake_capture(e):
+        scope = sentry_sdk.get_current_scope()
+        seen.update(level=scope._level, fingerprint=scope._fingerprint)
+        return "evt"
+
+    monkeypatch.setattr(sentry_setup.sentry_sdk, "capture_exception", fake_capture)
+    monkeypatch.setattr(sentry_setup, "current_user_sub_from_token", lambda: None)
+    monkeypatch.setattr(sentry_setup, "current_client_id_from_token", lambda: None)
+
+    class _Msg:
+        name = "apollo_search_people"
+
+    class _Ctx:
+        message = _Msg()
+
+    async def boom(_ctx):
+        raise requests.exceptions.ReadTimeout("read timeout=60")
+
+    try:
+        asyncio.run(sentry_setup.SentryToolErrorMiddleware().on_call_tool(_Ctx(), boom))
+    except requests.exceptions.ReadTimeout:
+        pass
+    assert seen == {"level": "warning",
+                    "fingerprint": ["upstream", "apollo_search_people", "upstream_timeout"]}

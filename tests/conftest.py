@@ -253,6 +253,21 @@ def _aucun_pret_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(credentials_store, "list_shared_with", lambda scopes: [])
 
 
+@pytest.fixture(autouse=True)
+def _procedures_rangees_nulle_part_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucune procédure n'est rangée dans un projet. La pose et la retouche
+    d'un agent, la charge de ses runs et sa lecture lisent les projets de sa procédure
+    (`capabilities/_projet_de_l_agent`, 24/10/2026) ; un banc qui double les agents sans
+    base n'a rien à y lire. Un banc sur base réelle lit les vrais liens ; un banc qui
+    teste la règle double lui-même ces lectures."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp import db
+    monkeypatch.setattr(db, "projets_des_procedures", lambda org_id, slugs: {})
+    monkeypatch.setattr(db, "maisons_des_procedures", lambda org_id, slugs: {})
+    monkeypatch.setattr(db, "maison_de_la_procedure", lambda org_id, slug: None)
+
+
 @pytest.fixture
 def sans_droit_declare(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base : aucune ligne de droit déclaré posée — `value_for` rend le défaut

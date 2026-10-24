@@ -473,47 +473,25 @@ def test_fraicheur_zero_est_ACCEPTEE(pose):
     assert pose["fraicheur_s"] == 0
 
 
-# ── 5. un genre de chaque, pas deux du même ───────────────────────────────────
+# ── 5. plusieurs agents sur un même objet ────────────────────────────────────
 
 def test_un_objet_porte_un_programme_ET_un_webhook(monkeypatch, pose):
-    """La règle du 03/09 (« un objet ne porte qu'un agent ») visait deux réponses
-    à la même question. Une veille du matin et une réaction à un événement sont
-    deux automatisations différentes."""
+    """Une veille du matin et une réaction à un événement sont deux automatisations
+    différentes de la même procédure."""
     monkeypatch.setattr(RT.db, "triggers_for_procedure",
                         lambda o, p: [{"id": 1, "kind": "schedule", "cron": "5 6 * * *"}])
     _appel(op="create", kind="webhook", procedure="v", tools=["a"])
     assert pose["kind"] == "webhook"
 
 
-def test_deux_webhooks_sur_le_MEME_objet_sont_refuses(monkeypatch, pose):
+def test_deux_agents_du_MEME_genre_sur_le_meme_objet_sont_acceptes(monkeypatch, pose):
+    """Levé le 24/10/2026 : deux agents d'une procédure ne font pas forcément le même
+    travail — chacun a ses instructions, et une procédure en sections se partage entre
+    eux. La limite d'un agent de chaque genre ne tenait d'ailleurs qu'à la pose."""
     monkeypatch.setattr(RT.db, "triggers_for_procedure",
                         lambda o, p: [{"id": 1, "kind": "webhook", "cron": None}])
-    with pytest.raises(AuthzDenied) as e:
-        _appel(op="create", kind="webhook", procedure="v", tools=["a"])
-    assert (e.value.status, e.value.code) == (409, "already_scheduled")
-
-
-def test_le_refus_ne_decrit_pas_un_agent_que_l_appelant_ne_voit_pas(monkeypatch, pose):
-    """« Aucun refus ne décrit un agent invisible » (#1117) : le doublon se refuse par
-    son nom, sans le numéro ni la cadence de l'agent qu'un autre ne partage pas."""
-    from oto_mcp.capabilities import _acces_agent
-    monkeypatch.setattr(_acces_agent, "niveaux",
-                        lambda sub, org_id, agents: {int(t["id"]): None for t in agents})
-    monkeypatch.setattr(RT.db, "triggers_for_procedure",
-                        lambda o, p: [{"id": 41, "kind": "schedule", "cron": "5 6 * * *",
-                                       "sub": "quelqu-un"}])
-    with pytest.raises(AuthzDenied) as e:
-        _appel(op="create", procedure="v", tools=["a"], cron="0 9 * * *")
-    assert (e.value.status, e.value.code) == (409, "already_scheduled")
-    assert "#41" not in e.value.message and "5 6 * * *" not in e.value.message
-
-
-def test_le_refus_designe_l_agent_que_l_appelant_voit(monkeypatch, pose):
-    monkeypatch.setattr(RT.db, "triggers_for_procedure",
-                        lambda o, p: [{"id": 41, "kind": "schedule", "cron": "5 6 * * *"}])
-    with pytest.raises(AuthzDenied) as e:
-        _appel(op="create", procedure="v", tools=["a"], cron="0 9 * * *")
-    assert "#41" in e.value.message and "5 6 * * *" in e.value.message
+    _appel(op="create", kind="webhook", procedure="v", tools=["a"])
+    assert pose["kind"] == "webhook"
 
 
 def test_le_GENRE_ne_se_change_pas_par_update():

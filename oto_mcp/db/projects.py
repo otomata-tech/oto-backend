@@ -903,6 +903,55 @@ def projects_pinning_instance(project_ids: list[int], connector: str) -> list[di
     return [dict(r) for r in rows]
 
 
+# --- Les projets d'une procédure (24/10/2026) ---------------------------------
+# Un agent travaille dans UN des projets où sa procédure est rangée
+# (`capabilities/runner_triggers._projet_de_la_pose`) ; sans projet à lui, dans le
+# premier (`capabilities/_projet_de_l_agent`). Ne comptent que les projets de l'ORG,
+# non archivés : la réponse ne dépend pas de qui la lit — le tick la lit sans appelant
+# — et un projet personnel reste l'espace de son membre. Un lien se reconnaît sous ses
+# deux écritures (l'id du guide, ou le slug d'avant la normalisation, ADR 0032).
+
+_PROJETS_DES_PROCEDURES_SQL = (
+    "SELECT i.slug, pl.project_id FROM org_instructions i "
+    "  JOIN project_links pl ON pl.target_type = 'procedure' "
+    "   AND pl.target_ref IN (i.id::text, i.slug) "
+    "  JOIN projects p ON p.id = pl.project_id "
+    " WHERE i.owner_type = 'org' AND i.owner_id = %s AND i.slug = ANY(%s) "
+    "   AND p.owner_type = 'org' AND p.owner_id = %s AND p.archived_at IS NULL "
+    # Le premier lié d'abord : c'est celui d'un agent qui ne dit pas le sien.
+    " ORDER BY i.slug, pl.created_at, pl.project_id")
+
+
+def projets_des_procedures(org_id: int, slugs: list[str]) -> dict[str, list[int]]:
+    """`{slug: [project_id, …]}` — les projets de l'org qui rangent chacune de ces
+    procédures de l'org, le premier lié d'abord, en UNE requête. Une procédure rangée
+    nulle part n'a pas d'entrée."""
+    slugs = sorted({s for s in slugs if s})
+    if not slugs:
+        return {}
+    out: dict[str, list[int]] = {}
+    with _connect() as conn:
+        for r in conn.execute(_PROJETS_DES_PROCEDURES_SQL,
+                              (str(int(org_id)), slugs, str(int(org_id)))).fetchall():
+            liste = out.setdefault(r["slug"], [])
+            if int(r["project_id"]) not in liste:
+                liste.append(int(r["project_id"]))
+    return out
+
+
+def maisons_des_procedures(org_id: int, slugs: list[str]) -> dict[str, int]:
+    """`{slug: project_id}` — le premier projet de chaque procédure rangée
+    (`projets_des_procedures`) : celui où travaille un agent qui ne dit pas le sien."""
+    return {slug: ids[0] for slug, ids in projets_des_procedures(org_id, slugs).items()}
+
+
+def maison_de_la_procedure(org_id: int, slug: Optional[str]) -> Optional[int]:
+    """Le premier projet de l'org où la procédure `slug` est rangée, None si nulle part."""
+    if not slug:
+        return None
+    return maisons_des_procedures(org_id, [slug]).get(slug)
+
+
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
 # `archived_at`, `verified_at`, `verified_by` : `db/doc_archivage.py` (signal #1087).
 _DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, public_token, "

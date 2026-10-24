@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _abonnement, _instruction, _limites_du_run
+from .capabilities import _abonnement, _instruction, _limites_du_run, _projet_de_l_agent
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +144,9 @@ def charge_du_declencheur(t: dict, echeance, origine: str = "planifié",
         relais = None
     return {
         "procedure": t["procedure"],
-        "project_id": t["project_id"],
+        # Le sien, sinon le premier de sa procédure (24/10/2026, `_projet_de_l_agent`) :
+        # un agent travaille dans un des projets où sa procédure est rangée.
+        "project_id": _projet_de_l_agent.de_l_agent(t),
         "tools": outils,
         # ⚠️ DÉRIVÉE quand le déclencheur n'en porte pas. Sans cette ligne
         # le travail part sans instruction de départ, et le worker le refuse

@@ -131,16 +131,17 @@ def test_l_instruction_est_DERIVEE_et_pointe_l_objet(client, org, procedure):
         "l'instruction n'est pas minimale — elle recommence à porter du métier")
 
 
-def test_UN_SEUL_agent_par_objet(client, org, procedure):
-    """Deux agents sur le même objet, c'est deux réponses à « est-ce que ça
-    tourne ? », et l'écran devrait en choisir une."""
+def test_PLUSIEURS_agents_par_objet(client, org, procedure):
+    """Levé le 24/10/2026 : un second agent programmé sur le même objet est accepté —
+    chacun a ses instructions, et une procédure en sections se partage entre eux.
+    L'objet les rend tous les deux."""
     r = client.post(ROUTE, headers=_h(org["membre"]),
-                    json={"op": "create", "model": "mistral-small-2603", "procedure": procedure, "cron": "0 9 * * *"})
-    assert r.status_code == 409, r.text
-    corps = r.json()
-    assert corps["error"] == "already_scheduled"
-    # ⚠️ Le refus DIT lequel existe — sinon l'utilisateur ne peut que réessayer.
-    assert "0 7 * * *" in corps["detail"]
+                    json={"op": "create", "model": "mistral-small-2603", "procedure": procedure,
+                          "cron": "0 9 * * *", "input": "Applique UNIQUEMENT la section B."})
+    assert r.status_code == 200, r.text
+    from oto_mcp import db
+    crons = sorted(t["cron"] for t in db.triggers_for_procedure(org["id"], procedure))
+    assert crons == ["0 7 * * *", "0 9 * * *"]
 
 
 def test_l_etat_se_lit_DEPUIS_l_objet(client, org, procedure):

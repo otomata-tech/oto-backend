@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _limites_du_run
+from .capabilities import _limites_du_run, _projet_de_l_agent
 
 logger = logging.getLogger(__name__)
 
@@ -671,6 +671,9 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
     sans_modele = runner_models.motif_sans_famille(t.get("model"))
+    # Le projet où il travaille : le sien, sinon le premier de sa procédure (24/10/2026). Lu
+    # avant la transaction, pour la même raison que la suspension.
+    projet = _projet_de_l_agent.de_l_agent(t)
     with db._connect() as conn:
         if not t["enabled"]:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PAUSED,
@@ -770,7 +773,7 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                 else:
                     charge = {
                         "procedure": t["procedure"],
-                        "project_id": t.get("project_id"),
+                        "project_id": projet,
                         "tools": list(t.get("tools") or ()),
                         "label": t.get("label") or f"webhook — {t['procedure']}",
                         "max_steps": t.get("max_steps"),

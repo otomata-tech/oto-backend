@@ -842,6 +842,8 @@ POST /api/admin/runner/workers -> _handler
 OPTIONS /api/admin/runner/workers -> options_handler
 POST /api/me/functions -> _handler
 OPTIONS /api/me/functions -> options_handler
+POST /api/me/recipes -> _handler
+OPTIONS /api/me/recipes -> options_handler
 GET,HEAD /api/orgs/{id}/recipes -> _handler
 OPTIONS /api/orgs/{id}/recipes -> options_handler
 POST /api/billing/webhook -> webhook

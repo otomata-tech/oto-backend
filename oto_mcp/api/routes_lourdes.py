@@ -86,6 +86,13 @@ class RouteLourde:
 #: peut prendre.
 ROUTES_LOURDES: tuple[RouteLourde, ...] = (
     RouteLourde(
+        "POST", "/api/me/recipes", par_minute=60, concurrence=4,
+        pourquoi=("Les recettes en REST : un `run` appelle l'outil d'un connecteur page "
+                  "après page et écrit dans un tableau, plusieurs secondes à plusieurs "
+                  "minutes. Lancé d'un clic depuis une page, jamais en boucle : 60 par "
+                  "minute couvre une page qui liste puis lance ; 4 en cours à la fois "
+                  "par processus gardent le pool aux autres routes.")),
+    RouteLourde(
         "GET", "/api/orgs/{id}/usage/calls", par_minute=900, concurrence=8,
         pourquoi=("Relevé de consommation appel par appel, le plus appelé de /api "
                   "(~294 000 appels en deux jours). Un service de facturation de tenant "

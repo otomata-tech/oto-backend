@@ -294,6 +294,16 @@ service, sinon `proposed`), `published_version`, `latest_version`, `updated_at` 
 `display` — écrit, sinon lu dans le corps d'une recette déclarative, null pour une
 recette-code sans affichage écrit.
 
+## La capacité en REST : `POST /api/me/recipes` (PROVISOIRE)
+
+La même capacité `me.recipe` que `oto_recipe`, servie aussi en REST pour qu'une page la
+lance d'un geste, sans session MCP : le corps est l'`Input` entier (`{op, slug, params,
+datastore, …}`), comme `POST /api/me/runner/jobs` ; mêmes ops, même garde par op, même
+reçu. Elle rend donc aussi `create`/`propose`/`publish` joignables en REST — sous la
+garde qu'ils portent déjà, rien de plus. Déclarée **lourde** (`api/routes_lourdes.py`) :
+un `run` appelle un outil page après page, et quatre en cours à la fois par processus
+laissent le pool aux autres routes. Provisoire comme la capacité (`x-oto-provisoire`).
+
 ## Ce qui vient ensuite
 
 Le bloc `async` (soumettre puis collecter : Dropcontact, FullEnrich, Apify), le mode par

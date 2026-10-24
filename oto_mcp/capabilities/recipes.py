@@ -417,6 +417,14 @@ CAPABILITIES += [
             "it declares (`writes`), at most `limits.max_writes` per run (default 50), in "
             "the run's org, with the caller's own connector account. PROVISIONAL surface."),
         mcp="oto_recipe",
+        # La même capacité sur la face REST, pour qu'une page lance une recette en un
+        # geste (un tableau, une ligne) sans session MCP : mêmes ops, même garde par op,
+        # même reçu. Le corps est l'`Input` entier (`{op, slug, params, datastore…}`),
+        # comme `POST /api/me/runner/jobs`. Elle rend aussi `create`/`propose`/`publish`
+        # joignables en REST — sous la garde qu'ils ont déjà en MCP, rien de plus.
+        # Provisoire comme la capacité ; déclarée lourde (`routes_lourdes`) : un `run`
+        # appelle un outil page après page.
+        rest=RestBinding(verb="POST", path="/api/me/recipes", provisoire=True),
     ),
 ]
 

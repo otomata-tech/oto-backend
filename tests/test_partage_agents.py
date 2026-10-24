@@ -64,6 +64,13 @@ def org(monkeypatch):
         return {7: best} if best and 7 in ids else {}
     monkeypatch.setattr(db, "partages_d_agents", _partages)
 
+    def _visibilites(ids, o):
+        org_role = partages.get(("org", str(o)))
+        gens = sum(1 for (t, _) in partages if t != "org")
+        return {int(i): {"org": org_role, "people": gens} for i in ids}
+    monkeypatch.setattr(db, "visibilites_d_agents", _visibilites)
+    monkeypatch.setattr(RT, "_hors_de_l_org", lambda o, t: [])
+
     class _Scope:
         def __init__(self, sub):
             self.sub = sub
@@ -133,6 +140,62 @@ def test_partage_a_toute_l_org_le_rend_visible_et_modifiable(org):
     assert t["my_access"] == "editor"
     _appel(AUTRE, op="update", trigger_id=7, label="renommé")
     assert org["ecrit"] == {"label": "renommé"}
+
+
+def test_chaque_agent_servi_dit_qui_le_voit(org):
+    t, = _appel(PROPRIETAIRE, op="list")["triggers"]
+    assert t["visibility"] == {"org": None, "people": 2}
+    org["partages"][("org", str(ORG))] = "editor"
+    assert _appel(PROPRIETAIRE, op="get", trigger_id=7)["trigger"]["visibility"] == {
+        "org": "editor", "people": 2}
+
+
+def test_get_dit_ce_que_l_org_entiere_ne_lit_pas(monkeypatch):
+    """Procédure personnelle ou d'équipe, projet non possédé par l'org : nommés."""
+    db = RT.db
+    monkeypatch.setattr(db, "get_guide_db",
+                        lambda ot, oid, slug: {"slug": slug} if slug == "d-org" else None)
+    monkeypatch.setattr(db, "get_project_by_id", lambda pid: {
+        1: {"owner_type": "org"}, 2: {"owner_type": "user"}}.get(pid))
+    assert RT._hors_de_l_org(ORG, {"procedure": "d-org", "project_id": 1}) == []
+    assert RT._hors_de_l_org(ORG, {"procedure": "perso", "project_id": 2}) == [
+        "procedure", "project"]
+    assert RT._hors_de_l_org(ORG, {"procedure": "d-org", "project_id": None}) == []
+
+
+# ── naître ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def creation(org, monkeypatch):
+    """Une création : la procédure se lit, rien ne tourne déjà dessus."""
+    db = RT.db
+    org["partages"].clear()
+    monkeypatch.setattr(db, "triggers_for_procedure", lambda o, p: [])
+    monkeypatch.setattr(db, "create_trigger", lambda o, sub, **k: {
+        "id": 7, "org_id": o, "sub": sub, **k})
+    return org
+
+
+def _creer(monkeypatch, **kw):
+    # Ce banc ne parle ni du modèle, ni du runner, ni des clés : seulement du partage.
+    for nom in ("famille_declaree", "exige_un_modele", "exige_un_runner", "exige_servi"):
+        monkeypatch.setattr(RT._modele, nom, lambda *a, **k: None)
+    monkeypatch.setattr(RT._cle_exigee, "exiger_a_la_pose", lambda *a, **k: None)
+    monkeypatch.setattr(RT._abonnement, "exiger_a_la_pose", lambda *a, **k: None)
+    return _appel(PROPRIETAIRE, op="create", procedure="veille", cron="0 8 * * *",
+                  tools=["a"], model="claude-sonnet-5", **kw)["trigger"]
+
+
+def test_un_agent_nait_modifiable_par_toute_son_org(creation, monkeypatch):
+    _creer(monkeypatch)
+    assert creation["partages"] == {("org", str(ORG)): "editor"}, (
+        "un agent travaille pour l'org : il naît à elle, en `editor`")
+
+
+def test_un_agent_prive_ne_s_ouvre_a_personne(creation, monkeypatch):
+    t = _creer(monkeypatch, private=True)
+    assert creation["partages"] == {}
+    assert t["visibility"] == {"org": None, "people": 0}
 
 
 # ── modifier ─────────────────────────────────────────────────────────────────
@@ -305,44 +368,35 @@ def test_on_retire_par_son_adresse_le_partage_d_un_membre_parti(org):
     assert ("user", DEHORS) not in org["partages"]
 
 
-# ── le forfait du propriétaire (04/10/2026) ──────────────────────────────────
+# ── le forfait du propriétaire ───────────────────────────────────────────────
 #
-# Un agent posé sur l'abonnement Claude de son propriétaire ne se modifiait que par
-# lui : un éditeur ne pouvait que l'éteindre, et seule la reprise (`take_over`)
-# ouvrait l'agent. Désormais le propriétaire PRÊTE son forfait pour cet agent en
-# nommant un éditeur. Ne le prêtent pas : un partage à l'org entière (la révision
-# 0035 en pose un sur chaque agent existant), ni un partage posé par un admin.
+# Un agent posé sur l'abonnement Claude de son propriétaire se modifie par quiconque
+# le tient en ÉCRITURE par un partage — à lui, à son équipe ou à toute l'org, posé par
+# qui que ce soit (décidé le 23/10/2026 ; avant, seul un éditeur nommé PAR le
+# propriétaire empruntait son forfait). Sans partage en écriture — un admin qui ne
+# fait que gouverner l'agent, un lecteur — on peut seulement l'éteindre.
 
 NOMME_PAR_ADMIN = "nomme-par-admin"
 
 
 @pytest.fixture
 def forfait(org, monkeypatch):
-    """L'agent tourne sur l'abonnement de PROPRIETAIRE. EDITEUR est nommé par lui ;
-    NOMME_PAR_ADMIN est éditeur nommé, mais par un admin ; AUTRE ne l'est que par
-    le partage à toute l'org."""
+    """L'agent tourne sur l'abonnement de PROPRIETAIRE. EDITEUR est nommé éditeur par
+    lui, NOMME_PAR_ADMIN par un admin ; l'org entière n'a qu'un partage en LECTURE —
+    AUTRE ne fait que voir, ADMIN gouverne sans partage à lui."""
     from oto_mcp import runner_models
     agent = org["agent"]
     agent["model"] = "sub:sonnet"
     partages = org["partages"]
     partages[("user", NOMME_PAR_ADMIN)] = "editor"
-    partages[("org", str(ORG))] = "editor"
-    poses_par = {("user", EDITEUR): PROPRIETAIRE, ("user", LECTEUR): PROPRIETAIRE,
-                 ("user", NOMME_PAR_ADMIN): ADMIN,
-                 ("org", str(ORG)): "migration:0035_agents_partages_a_l_org"}
-    org["poses_par"] = poses_par
-
-    def _grant(kind, rid, ptype, pid, role=None, granted_by=None, **k):
-        partages[(ptype, pid)] = role
-        poses_par[(ptype, pid)] = granted_by
-    monkeypatch.setattr(ownership, "grant", _grant)
+    partages[("org", str(ORG))] = "viewer"
 
     def _pretes(ids, sub):
-        # `_forfait_prete` en base : un partage `write` À LA PERSONNE, posé par le
-        # propriétaire de l'agent.
-        nomme = (partages.get(("user", sub)) == "editor"
-                 and poses_par.get(("user", sub)) == agent["sub"])
-        return {7} if nomme and 7 in ids else set()
+        # `_forfait_prete` en base : un partage `write` vivant, à la personne ou à
+        # toute l'org (dont elle est membre), quel que soit son auteur.
+        ecrit = (partages.get(("user", sub)) == "editor"
+                 or (sub != DEHORS and partages.get(("org", str(ORG))) == "editor"))
+        return {7} if ecrit and 7 in ids else set()
     monkeypatch.setattr(RT.db, "forfaits_pretes", _pretes)
 
     def _maj(i, o, champs, hors_abonnement_d_autrui=None):
@@ -367,7 +421,7 @@ def forfait(org, monkeypatch):
 
 
 @pytest.mark.parametrize("sub,peut", [(PROPRIETAIRE, True), (EDITEUR, True),
-                                      (NOMME_PAR_ADMIN, False), (AUTRE, False),
+                                      (NOMME_PAR_ADMIN, True), (AUTRE, False),
                                       (ADMIN, False), (LECTEUR, False)])
 def test_sur_un_forfait_can_edit_dit_qui_peut_vraiment_le_modifier(forfait, sub, peut):
     t, = _appel(sub, op="list")["triggers"]
@@ -375,55 +429,60 @@ def test_sur_un_forfait_can_edit_dit_qui_peut_vraiment_le_modifier(forfait, sub,
     assert _appel(sub, op="get", trigger_id=7)["trigger"]["can_edit"] is peut
 
 
-def test_l_editeur_nomme_par_le_proprietaire_modifie_l_agent_sur_son_forfait(forfait):
-    t = _appel(EDITEUR, op="update", trigger_id=7, input="nouvelle consigne")["trigger"]
+@pytest.mark.parametrize("sub", [EDITEUR, NOMME_PAR_ADMIN])
+def test_un_editeur_modifie_l_agent_sur_le_forfait_quel_que_soit_l_auteur_du_partage(
+        forfait, sub):
+    t = _appel(sub, op="update", trigger_id=7, input="nouvelle consigne")["trigger"]
     assert forfait["ecrit"] == {"input": "nouvelle consigne"}
     assert t["sub"] == PROPRIETAIRE and t["can_edit"] is True
 
 
-@pytest.mark.parametrize("sub", [AUTRE, NOMME_PAR_ADMIN, ADMIN])
-def test_qui_n_a_pas_ete_nomme_par_le_proprietaire_ne_modifie_pas_son_forfait(forfait, sub):
-    e = _refus(sub, op="update", trigger_id=7, input="autre chose")
+def test_un_partage_en_ecriture_a_toute_l_org_prete_le_forfait(forfait):
+    forfait["partages"][("org", str(ORG))] = "editor"
+    _appel(AUTRE, op="update", trigger_id=7, input="par l'équipe")
+    assert forfait["ecrit"] == {"input": "par l'équipe"}
+
+
+def test_un_admin_sans_partage_ne_modifie_pas_le_forfait_d_autrui(forfait):
+    e = _refus(ADMIN, op="update", trigger_id=7, input="autre chose")
     assert (e.status, e.code) == (400, "subscription_personal_only")
     assert forfait["ecrit"] is None
 
 
-@pytest.mark.parametrize("sub", [AUTRE, ADMIN])
-def test_qui_ecrit_l_eteint_quand_meme(forfait, sub):
+def test_un_admin_l_eteint_quand_meme(forfait):
     forfait["agent"]["enabled"] = True
-    _appel(sub, op="update", trigger_id=7, enabled=False)
+    _appel(ADMIN, op="update", trigger_id=7, enabled=False)
     assert forfait["ecrit"] == {"enabled": False}
 
 
-def test_l_editeur_nomme_rallume_POUR_le_proprietaire(forfait):
+def test_l_editeur_rallume_POUR_le_proprietaire(forfait):
     """C'est la connexion du propriétaire qui servira : c'est elle qui se juge."""
     _appel(EDITEUR, op="update", trigger_id=7, enabled=True)
     assert forfait["poses"] == [(PROPRIETAIRE, PROPRIETAIRE, "claude_subscription")]
     assert forfait["ecrit"]["enabled"] is True
 
 
-def test_un_admin_qui_rallume_se_juge_sur_lui_et_n_ecrit_rien(forfait):
-    """Il gouverne l'agent, il ne dispose pas du forfait d'autrui."""
+def test_un_admin_sans_partage_qui_rallume_se_juge_sur_lui_et_n_ecrit_rien(forfait):
     assert _refus(ADMIN, op="update", trigger_id=7, enabled=True).code == \
         "subscription_personal_only"
     assert forfait["poses"] == [(ADMIN, PROPRIETAIRE, "claude_subscription")]
     assert forfait["ecrit"] is None
 
 
-def test_l_editeur_nomme_change_de_modele_dans_le_forfait(forfait):
+def test_l_editeur_change_de_modele_dans_le_forfait(forfait):
     _appel(EDITEUR, op="update", trigger_id=7, model="sub:opus")
     assert forfait["ecrit"] == {"model": "sub:opus"}
 
 
-def test_l_editeur_nomme_peut_sortir_l_agent_du_forfait(forfait):
+def test_l_editeur_peut_sortir_l_agent_du_forfait(forfait):
     _appel(EDITEUR, op="update", trigger_id=7, model="claude-sonnet-5")
     assert forfait["ecrit"] == {"model": "claude-sonnet-5"}
 
 
-def test_sortir_du_forfait_d_autrui_sans_pret_dit_pourquoi(forfait):
+def test_sortir_du_forfait_d_autrui_sans_partage_dit_pourquoi(forfait):
     """Refusé par la garde d'écriture : le refus nomme le forfait, pas un agent
     inconnu (la clé d'org visée, elle, ne garde rien)."""
-    e = _refus(AUTRE, op="update", trigger_id=7, model="claude-sonnet-5")
+    e = _refus(ADMIN, op="update", trigger_id=7, model="claude-sonnet-5")
     assert (e.status, e.code) == (400, "subscription_personal_only")
     assert forfait["ecrit"] is None
 
@@ -438,28 +497,14 @@ def test_POSER_l_agent_sur_le_forfait_reste_au_proprietaire(forfait):
     assert forfait["ecrit"] == {"model": "sub:sonnet"}
 
 
-def test_retirer_le_partage_retire_le_pret(forfait):
+def test_retirer_le_partage_retire_le_droit_de_modifier(forfait):
     _appel(PROPRIETAIRE, op="unshare", trigger_id=7, share_with_sub=EDITEUR)
-    # Il voit encore l'agent (le partage à toute l'org), sans pouvoir le modifier.
+    # Il voit encore l'agent (le partage à toute l'org, en lecture), sans le modifier.
     assert _refus(EDITEUR, op="update", trigger_id=7, input="x").code == \
-        "subscription_personal_only"
+        "trigger_edit_forbidden"
 
 
-def test_le_proprietaire_qui_nomme_un_editeur_lui_prete_son_forfait(forfait):
-    _appel(PROPRIETAIRE, op="share", trigger_id=7, share_with_sub=AUTRE)
-    _appel(AUTRE, op="update", trigger_id=7, input="x")
+def test_apres_une_reprise_les_editeurs_gardent_la_main(forfait):
+    forfait["agent"]["sub"] = ADMIN   # repris : EDITEUR reste éditeur de l'agent
+    _appel(EDITEUR, op="update", trigger_id=7, input="x")
     assert forfait["ecrit"] == {"input": "x"}
-
-
-def test_un_admin_qui_repose_le_partage_ne_prete_pas_le_forfait_d_autrui(forfait):
-    """Le partage se réécrit avec son auteur (`granted_by`) : reposé par un admin,
-    il garde l'accès à l'agent mais plus le forfait."""
-    _appel(ADMIN, op="share", trigger_id=7, share_with_sub=EDITEUR, role="editor")
-    assert _refus(EDITEUR, op="update", trigger_id=7, input="x").code == \
-        "subscription_personal_only"
-
-
-def test_apres_une_reprise_les_partages_de_l_ancien_ne_pretent_pas_le_nouveau(forfait):
-    forfait["agent"]["sub"] = ADMIN   # repris : EDITEUR avait été nommé par l'ancien
-    assert _refus(EDITEUR, op="update", trigger_id=7, input="x").code == \
-        "subscription_personal_only"

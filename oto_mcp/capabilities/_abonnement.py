@@ -144,8 +144,8 @@ def peut_agir_pour(sub: str, proprietaire: Optional[str], famille: str) -> bool:
     `proprietaire` ? **LA couture du partage** (arbitré le 21/09/2026).
 
     Le propriétaire seul, au niveau de la PERSONNE. Le prêt existe aussi, au niveau
-    d'un AGENT : son propriétaire en nomme un éditeur, qui le modifie alors sur son
-    forfait (`_acces_agent.forfaits_pretes`, 04/10/2026). Il ne passe pas par ici —
+    d'un AGENT : qui le tient en écriture par un partage le modifie sur le forfait
+    de son propriétaire (`_acces_agent.forfaits_pretes`, 23/10/2026). Il ne passe pas par ici —
     il ne vaut que pour cet agent-là — mais par `prete` sur la retouche, et par la
     garde d'écriture (`db.update_trigger`). Demain, une connexion d'abonnement
     s'administrera peut-être comme les autres connecteurs, partagée à des personnes
@@ -157,7 +157,7 @@ def peut_agir_pour(sub: str, proprietaire: Optional[str], famille: str) -> bool:
 def exiger_le_droit_de_modifier(sub: str, agent: dict, famille: Optional[str],
                                 champs: dict, *, prete: bool = False) -> None:
     """Retoucher l'agent d'un AUTRE posé sur un abonnement : refusé, sauf l'éteindre
-    — ou si son propriétaire a nommé `sub` éditeur de cet agent (`prete`).
+    — ou si `sub` le tient en écriture par un partage (`prete`).
 
     Changer sa procédure, sa consigne ou ses outils, c'est faire exécuter SES
     instructions sur le forfait d'un autre — la même faute que changer son modèle,
@@ -178,7 +178,7 @@ def exiger_le_droit_de_modifier(sub: str, agent: dict, famille: Optional[str],
         400, "subscription_personal_only",
         f"cet agent tourne sur l'abonnement `{famille}` de quelqu'un d'autre : ce que "
         "tu y changerais s'exécuterait sur SON forfait. Tu peux l'éteindre ; pour le "
-        "modifier, il faut que son propriétaire te nomme éditeur de cet agent.")
+        "modifier, il faut qu'il te soit partagé en éditeur.")
 
 
 def servable(sub: Optional[str], famille: str) -> tuple[bool, Optional[str], Optional[str]]:

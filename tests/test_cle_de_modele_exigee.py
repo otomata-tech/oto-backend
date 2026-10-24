@@ -28,6 +28,9 @@ from oto_mcp.capabilities import runner_jobs as RJ
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc double la base des agents et ne parle pas de leur partage (conftest).
+pytestmark = pytest.mark.usefixtures("agents_sans_partages")
+
 
 @pytest.fixture(autouse=True)
 def _aucune_cle_partagee(monkeypatch):

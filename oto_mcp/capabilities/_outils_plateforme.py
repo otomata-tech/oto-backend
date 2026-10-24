@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .. import access, deprecations, outils_du_travail, verrou_org
+from .. import access, db, deprecations, outils_du_travail, verrou_org
 from ._types import AuthzDenied, ResolvedCtx
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,14 @@ def outils_plateforme_valides(ctx: ResolvedCtx, noms: list[str], actuel: dict,
         raise AuthzDenied(400, "platform_tools_too_many",
                           f"`platform_tools` : au plus {PLATFORM_TOOLS_MAX} outils — une "
                           "liste BORNÉE, pas tout l'admin.")
+    # Un agent que d'autres modifient (tout partage en écriture — la création en pose
+    # un à l'org depuis le 23/10/2026) n'exerce jamais ses `oto_admin_*`
+    # (`db.outils_plateforme_du_travail`) : les armer serait un réglage inerte.
+    if db.partage_en_ecriture(int(actuel["id"])):
+        raise AuthzDenied(409, "platform_tools_agent_shared",
+                          "`platform_tools` ne vaut que pour un agent que personne d'autre "
+                          "ne modifie : rends-le privé d'abord (`unshare everyone=true`, et "
+                          "retire ses éditeurs).")
     hors = [n for n in liste if not n.startswith(verrou_org.PREFIXE_ADMIN)]
     if hors:
         raise AuthzDenied(400, "platform_tools_not_admin",

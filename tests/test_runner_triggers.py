@@ -20,6 +20,9 @@ from oto_mcp.capabilities import _outils_plateforme as OP
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc double la base des agents et ne parle pas de leur partage (conftest).
+pytestmark = pytest.mark.usefixtures("agents_sans_partages")
+
 
 
 @pytest.fixture(autouse=True)
@@ -343,6 +346,7 @@ def agent_d_operateur(monkeypatch):
         "id": i, "sub": "alexis", "tools": ["fr_siret", "oto_admin_org", "oto_admin_signal"]})
     monkeypatch.setattr(RT.tool_alias, "canonical_names", lambda noms, sub: list(noms))
     monkeypatch.setattr(OP.access, "is_platform_operator", lambda sub: sub == "alexis")
+    monkeypatch.setattr(OP.db, "partage_en_ecriture", lambda i: False)
     vu: dict = {}
     monkeypatch.setattr(RT.db, "update_trigger",
                         lambda i, o, champs, **k: vu.update(champs) or {"id": i, **champs})
@@ -379,6 +383,16 @@ def test_platform_tools_suit_les_outils_poses_dans_le_meme_appel(agent_d_operate
     _appel(_ctx(), op="update", trigger_id=3, tools=["oto_admin_user"],
            platform_tools=["oto_admin_user"])
     assert agent_d_operateur["outils_plateforme"] == ["oto_admin_user"]
+
+
+def test_platform_tools_refuse_sur_un_agent_que_d_autres_modifient(agent_d_operateur,
+                                                                   monkeypatch):
+    """Il ne s'exercerait jamais (`outils_plateforme_du_travail`) : refusé, pas inerte."""
+    monkeypatch.setattr(OP.db, "partage_en_ecriture", lambda i: True)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="update", trigger_id=3, platform_tools=["oto_admin_org"])
+    assert (e.value.status, e.value.code) == (409, "platform_tools_agent_shared")
+    assert agent_d_operateur == {}
 
 
 def test_platform_tools_refuse_a_un_membre(agent_d_operateur, monkeypatch):

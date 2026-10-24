@@ -25,6 +25,9 @@ import pytest
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import ResolvedCtx
 
+# Ce banc double la base des agents et ne parle pas de leur partage (conftest).
+pytestmark = pytest.mark.usefixtures("agents_sans_partages")
+
 ORG = 8148
 
 

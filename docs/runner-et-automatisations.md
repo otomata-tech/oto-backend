@@ -1888,21 +1888,17 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
   qui tourne toujours sous son propriétaire : partager en écriture, c'est confier son
   identité — l'écran de partage le dit. Le changer serait une autre décision (un agent
   qui tourne sous celui qui l'a allumé en dernier).
-- ⚠️ **Un agent d'abonnement se modifie par son propriétaire, et par les personnes
-  qu'IL a nommées éditrices** (04/10/2026). Ce qu'elles y changent s'exécute sur son
-  forfait : c'est à lui de le prêter, agent par agent, en les nommant. Ne prêtent PAS
-  le forfait — l'agent reste alors modifiable seulement pour l'éteindre, et `can_edit`
-  le dit (`false`) :
-  - un partage à l'org entière ou à une équipe : la révision 0035 en pose un sur chaque
-    agent existant, il rouvrirait tous les forfaits à toute l'org ;
-  - un partage posé par un admin (`granted_by` ≠ propriétaire) : un admin gouverne
-    l'agent, il ne dispose pas du forfait d'autrui. Reposé par un admin, un partage
-    perd le prêt (l'upsert réécrit `granted_by`) ; après une reprise, les partages de
-    l'ancien propriétaire ne prêtent pas le forfait du nouveau ;
-  - un admin lui-même, qui reste sous `peut_agir_pour`.
+- ⚠️ **Un agent d'abonnement se modifie par quiconque le tient en écriture**
+  (23/10/2026 ; du 04/10 au 23/10, seuls les éditeurs nommés PAR le propriétaire). Un
+  partage `write` vivant — à la personne, à une équipe dont elle est membre, ou à toute
+  l'org dont elle est membre, quel qu'en soit l'auteur — prête le forfait du
+  propriétaire : ce qu'elle y change s'exécute sur lui. Un agent partagé se modifie,
+  quel que soit le modèle qui le fait tourner. Sans partage en écriture — un admin qui
+  gouverne l'agent sans le tenir, un lecteur — l'agent se modifie seulement pour
+  l'éteindre, et `can_edit` le dit (`false`).
 
   Le prêt (`_acces_agent.forfaits_pretes`, prédicat `db._forfait_prete`) vaut pour la
-  famille où l'agent tourne DÉJÀ : l'éditeur nommé change sa consigne, ses outils, son
+  famille où l'agent tourne DÉJÀ : l'éditeur change sa consigne, ses outils, son
   modèle dans le forfait, le rallume, ou le sort du forfait ; POSER un agent sur un
   abonnement reste au propriétaire. Quand il rallume (ou change le modèle d'un agent
   allumé), la garde de pose se juge sur le PROPRIÉTAIRE — c'est sa connexion qui
@@ -1913,11 +1909,20 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
 - **Retirer un partage ne renouvelle pas le secret du webhook** : un éditeur ne l'a
   jamais vu (rendu une fois, à qui le pose — propriétaire ou admin, seuls à pouvoir le
   renouveler).
+- **Un agent naît à son org** (23/10/2026) : `create` pose un partage `editor` à l'org
+  entière (`_acces_agent.ouvrir_a_l_org`) — un agent tourne sur les clés et les
+  procédures de l'org, pour elle. **Privé = le geste explicite** : `private=true` à la
+  création, ou `unshare everyone=true` ensuite. Ce partage ne prête pas un abonnement
+  personnel (ci-dessus). Avant cette date un agent naissait privé : la révision
+  `20261023_1000_agents_org_default` ouvre ceux-là, et pas un agent plus ancien dont le
+  partage d'org a été fermé à la main.
+- **Chaque agent servi dit qui le voit** : `visibility = {org: editor|viewer|null,
+  people: n}` sur `list`/`get`/`create` (`db.visibilites_d_agents`, une lecture pour
+  toute la liste). `org=null, people=0` = privé (propriétaire et admins seuls) ; le front
+  l'affiche sur chaque ligne, comme les tableaux.
 - **Les agents d'avant restent ouverts** : la révision `0035_agents_partages_a_l_org`
-  pose un partage `editor` à l'org sur chaque agent existant ; son propriétaire le
-  retire depuis l'écran. Un agent créé ensuite naît privé. ⚠️ **La révision se joue
-  AVANT le déploiement du code** (`oto-mcp migrer upgrade head`) : sans elle, chaque
-  agent existant devient privé d'un coup.
+  a posé un partage `editor` à l'org sur chaque agent existant au 02/10/2026 ; son
+  propriétaire le retire depuis l'écran.
 - **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
   (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
   enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le

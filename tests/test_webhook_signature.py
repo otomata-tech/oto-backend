@@ -27,6 +27,9 @@ from oto_mcp import runner_hook
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc double la base des agents et ne parle pas de leur partage (conftest).
+pytestmark = pytest.mark.usefixtures("agents_sans_partages")
+
 ORG = 77
 #: Le vecteur de référence de la spécification (standardwebhooks.com / Svix).
 SPEC_SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"

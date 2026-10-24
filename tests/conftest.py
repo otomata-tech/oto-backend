@@ -690,3 +690,21 @@ def projets_sans_partages(monkeypatch):
     lui-même est couvert par `test_projects.py`."""
     from oto_mcp import ownership
     monkeypatch.setattr(ownership, "list_grants", lambda rtype, rid: [])
+
+
+@pytest.fixture
+def agents_sans_partages(monkeypatch):
+    """Pour un banc qui double la base des agents et ne parle pas de leur partage : la
+    création pose le partage d'org (`_acces_agent.ouvrir_a_l_org`) et chaque agent servi
+    dit qui le voit (`db.visibilites_d_agents`) — deux lectures/écritures de
+    `resource_grants` qu'un tel banc n'a pas. Rend les appels reçus."""
+    from oto_mcp import db, ownership
+    vus: dict[str, list] = {"grants": [], "visibilites": []}
+    monkeypatch.setattr(ownership, "grant",
+                        lambda *a, **k: vus["grants"].append(a) or None)
+    from oto_mcp.capabilities import runner_triggers as RT
+    monkeypatch.setattr(RT, "_hors_de_l_org", lambda org, t: [])
+    monkeypatch.setattr(db, "visibilites_d_agents", lambda ids, org: (
+        vus["visibilites"].append(list(ids))
+        or {int(i): {"org": None, "people": 0} for i in ids}))
+    return vus

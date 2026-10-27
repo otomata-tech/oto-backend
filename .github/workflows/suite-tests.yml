@@ -234,7 +234,7 @@ jobs:
           PART: ${{ matrix.part }}
       - name: Publier le rapport JUnit de cette part
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-shard-${{ matrix.part }}
           path: ${{ runner.temp }}/junit-shard-${{ matrix.part }}
@@ -242,7 +242,7 @@ jobs:
           overwrite: true
       - name: Publier les fichiers et la collecte de cette part
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: suite-part-${{ matrix.part }}
           path: ${{ runner.temp }}/suite-part-${{ matrix.part }}
@@ -291,7 +291,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/suite-reference"
           python scripts/repartir_suite.py reference --cible "$CIBLE" --sortie "$RUNNER_TEMP/suite-reference/reference.txt"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: suite-reference
           path: ${{ runner.temp }}/suite-reference
@@ -336,7 +336,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/junit-suite"
           python3 scripts/repartir_suite.py fusionner "$RUNNER_TEMP"/junit/junit-shard-*.xml --sortie "$RUNNER_TEMP/junit-suite/junit.xml"
       - if: always() && needs.plan.result == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-suite
           path: ${{ runner.temp }}/junit-suite
@@ -358,7 +358,7 @@ jobs:
           SOURCE="CI, run $GITHUB_RUN_ID, sha $(git rev-parse HEAD)"
           python3 scripts/repartir_suite.py mesurer "$RUNNER_TEMP"/junit/junit-shard-*.xml --source "$SOURCE" --sortie "$RUNNER_TEMP/suite-durees/durees_suite.json" --resume "$GITHUB_STEP_SUMMARY"
       - if: success() && inputs.cible == '' && needs.part.result == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: suite-durees
           path: ${{ runner.temp }}/suite-durees

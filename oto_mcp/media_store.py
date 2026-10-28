@@ -37,7 +37,7 @@ _DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 Mo
 # (`upload_image`, `upload_object`), l'import d'un périmètre la repose sur chaque objet
 # versé (`entetes_d_objet`). Un préfixe absent de ces deux ensembles n'a pas de règle.
 PREFIXES_PUBLICS = frozenset({"avatars", "org-logos", "images"})
-PREFIXES_DURABLES = frozenset({"project-files", "transcription-jobs"})
+PREFIXES_DURABLES = frozenset({"project-files", "transcription-jobs", "app-files"})
 # Les préfixes de TRANSIT (`upload_transit`) : la liste FERMÉE de ce qu'une référence de
 # transit peut ouvrir (`oto_mcp/transit.py`), sous `tmp/` comme `upload_private`.
 PREFIXES_TRANSIT = frozenset({"threecx-recordings", "aircall-recordings",

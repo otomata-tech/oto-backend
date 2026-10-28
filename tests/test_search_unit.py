@@ -216,3 +216,40 @@ def test_doc_op_search_reroutes_to_single_path(monkeypatch):
                  D.DocInput(op="search", project_id=3, query="x"))
     assert out["deprecated"]
     assert out["results"][0]["id"] == 5 and out["results"][0]["snippet"] == "<b>x</b>"
+
+
+def test_une_app_se_trouve_par_son_titre_et_dit_ou_elle_vit(monkeypatch):
+    """Les apps : matchées en mémoire sur leur titre (accents repliés, exact avant
+    partiel), avec l'org de leur propriétaire."""
+    _stub_empty(monkeypatch)
+    apps = [{"id": 6, "title": "Klark × Tulina", "owner_type": "user", "owner_id": "x80",
+             "context_org_id": 489, "updated_at": "t"},
+            {"id": 7, "title": "Rapport hebdo Klark", "owner_type": "org", "owner_id": "7",
+             "context_org_id": None, "updated_at": "t"},
+            {"id": 8, "title": "Autre chose", "owner_type": "org", "owner_id": "7",
+             "context_org_id": None, "updated_at": "t"}]
+    out = S.search("u1", 7, "klark", apps_catalog=apps)
+    got = {h["ref"]: (h["kind"], h["origin_org_id"], h["other_org"]) for h in out["hits"]}
+    assert got == {6: ("app", 489, True), 7: ("app", 7, False)}
+    # Accents repliés, titre exact d'abord.
+    out = S.search("u1", 7, "autre chose", apps_catalog=apps)
+    assert [h["ref"] for h in out["hits"]] == [8]
+    # `kinds` sans `app` : aucune app.
+    assert S.search("u1", 7, "klark", kinds=["page"], apps_catalog=apps)["hits"] == []
+
+
+def test_la_capacite_cherche_les_apps_que_la_liste_rend(monkeypatch):
+    """« Cherchable ⇔ lisible » : la source apps est la LISTE des apps de l'org
+    (`apps._org_list`), rien d'autre ; pas d'app dans un scope projet."""
+    from oto_mcp.capabilities import apps as A
+    vus = []
+    monkeypatch.setattr(A, "_org_list", lambda ctx, archived: vus.append((ctx.sub, ctx.org_id, archived))
+                        or ([{"id": 6, "title": "Inbox"}], set()))
+    monkeypatch.setattr(CAP.ownership, "visible_in_org", lambda *a: True)
+    ctx = ResolvedCtx(sub="u1", org_id=7)
+    _, apps = CAP._preparer(ctx, CAP.SearchInput(q="inbox"))
+    assert apps == [{"id": 6, "title": "Inbox"}] and vus == [("u1", 7, False)]
+    _, apps = CAP._preparer(ctx, CAP.SearchInput(q="inbox", kinds=["page"]))
+    assert apps == [] and len(vus) == 1
+    _, apps = CAP._preparer(ctx, CAP.SearchInput(q="inbox", scope="project", project=3))
+    assert apps == []

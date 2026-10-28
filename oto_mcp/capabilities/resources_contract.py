@@ -42,7 +42,7 @@ from .. import ownership
 from . import _publication
 from ._types import DeclaredError
 
-# Les quatre familles gouvernables. Source unique de l'énuméré publié ET du champ
+# Les familles gouvernables. Source unique de l'énuméré publié ET du champ
 # `resource_type` de l'entrée : `tests/test_resources_output.py` la confronte aux
 # clés de `_OPS`, pour qu'un type ne puisse pas s'ajouter au dispatch sans entrer
 # dans le contrat. `doc` = UNE page, partagée sans son projet (#1084).
@@ -50,7 +50,7 @@ from ._types import DeclaredError
 # `procedure` s'est servie sous le mot d'avant #519 jusqu'au 23/09/2026
 # (otomata-tech/oto#65) ; l'ancien nom est encore ACCEPTÉ en entrée, jusqu'à sa date
 # (`deprecations.VALEURS`), et n'est plus jamais servi.
-ResourceType = Literal["datastore_namespace", "project", "procedure", "doc"]
+ResourceType = Literal["datastore_namespace", "project", "procedure", "doc", "app"]
 
 # Famille PUBLIQUE → kind d'`ownership`, c.-à-d. la valeur ÉCRITE en base
 # (`resource_grants.resource_type`). Elles coïncident partout sauf pour la procédure,
@@ -62,6 +62,7 @@ KIND_OF: dict[str, str] = {
     "project": "project",
     "procedure": ownership.TYPE_RESSOURCE_PROCEDURE,
     "doc": "doc",
+    "app": "app",
 }
 
 
@@ -142,8 +143,16 @@ class DocResource(_OwnedResource):
     updated_at: Optional[str] = None
 
 
+class AppResource(_OwnedResource):
+    """UNE app (`oto_apps`). Son propriétaire et ses partages sont les siens ; les
+    projets où elle est rangée ne donnent aucun accès."""
+    resource_type: Literal["app"]
+    title: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 GovernedResource = Annotated[
-    Union[DatastoreResource, ProjectResource, GuideResource, DocResource],
+    Union[DatastoreResource, ProjectResource, GuideResource, DocResource, AppResource],
     Field(discriminator="resource_type"),
 ]
 
@@ -175,9 +184,13 @@ class DocResourceDetail(DocResource, _Avertissement):
     grants: list[ResourceGrant]
 
 
+class AppResourceDetail(AppResource, _Avertissement):
+    grants: list[ResourceGrant]
+
+
 ResourceDetail = Annotated[
     Union[DatastoreResourceDetail, ProjectResourceDetail, GuideResourceDetail,
-          DocResourceDetail],
+          DocResourceDetail, AppResourceDetail],
     Field(discriminator="resource_type"),
 ]
 

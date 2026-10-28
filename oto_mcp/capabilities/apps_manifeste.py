@@ -17,10 +17,9 @@ le `ns_id`) : un nom résout dans l'org active de qui le lit, et à l'APPEL l'ap
 un lecteur qui n'est pas l'auteur — le même nom y désignerait un autre tableau. À
 l'appel (`apps_appel.py`), la règle « droits = auteur ∩ lecteur » juge ce numéro.
 
-**`set`, `add` et `agents` sont jugés mais INERTES** : l'appel d'une app ne sert que
-des lectures (`read_rows`, `read_aggregate`). Écrire une valeur, ajouter une ligne,
-lancer un agent viendront avec le consentement du lecteur (oto-backend#1386) ; le
-manifeste les porte déjà, validés, pour que le front et ce lot parlent la même forme.
+**`set`, `add` et `agents` bornent les gestes** de l'appel d'une app (`write_cell`,
+`add_row`, `start_agent`, `agent_runs`, `run_result`), chacun servi avec le
+consentement du lecteur (`apps_appel.py`, oto-backend#1386).
 """
 from __future__ import annotations
 
@@ -141,6 +140,25 @@ def org_du_projet(project_id: int) -> Optional[int]:
     return None
 
 
+def org_de_l_app(app: dict) -> Optional[int]:
+    """L'org où vit une app — celle de ses tableaux et de ses agents, celle où elle se
+    liste. Celle de son PROPRIÉTAIRE : l'org, l'org de l'équipe ; pour une app perso,
+    l'org où elle a été créée (`context_org_id`), sinon l'org perso de la personne —
+    comme un tableau perso. None = aucune : l'app n'y déclare alors rien."""
+    from .. import group_store, org_store
+
+    t, i = app.get("owner_type"), app.get("owner_id")
+    if t == "org" and i is not None:
+        return int(i)
+    if t == "group" and i is not None:
+        g = group_store.get_group(int(i))
+        return int(g["org_id"]) if g else None
+    if t == "user" and i is not None:
+        return (int(app["context_org_id"]) if app.get("context_org_id")
+                else org_store.get_personal_org(str(i)))
+    return None
+
+
 def tableau_de_l_org(ns_id: str, org_id: Optional[int]) -> bool:
     """Le tableau `ns_id` vit-il dans l'org `org_id` ? Org inconnue = non."""
     from .. import ownership
@@ -153,7 +171,7 @@ def tableau_de_l_org(ns_id: str, org_id: Optional[int]) -> bool:
 
 def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
     """Ce que l'AUTEUR ne peut pas toucher parmi ce que le manifeste déclare, et ce qui
-    ne vit pas dans l'org du projet (`project_org`). Range au passage le numéro de
+    ne vit pas dans l'org de l'app (`project_org`, `org_de_l_app`). Range au passage le numéro de
     chaque tableau résolu dans `clean` (`table`)."""
     from .. import db
     from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
@@ -169,7 +187,7 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
             problems.append(f"tables.{alias}: table `{t['table']}` isn't one you can read here.")
             continue
         if not tableau_de_l_org(str(ns_id), project_org):
-            problems.append(f"tables.{alias}: table `{t['table']}` isn't in this project's "
+            problems.append(f"tables.{alias}: table `{t['table']}` isn't in this app's "
                             "organization.")
             continue
         t["table"] = str(ns_id)
@@ -182,6 +200,6 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
             problems.append(f"tables.{alias}: no such field: {', '.join(unknown)}.")
     for alias, a in clean["agents"].items():
         if project_org is None or db.get_trigger(a["id"], int(project_org)) is None:
-            problems.append(f"agents.{alias}: agent {a['id']} isn't one of this project's "
+            problems.append(f"agents.{alias}: agent {a['id']} isn't one of this app's "
                             "organization.")
     return problems

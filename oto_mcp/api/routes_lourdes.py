@@ -139,6 +139,13 @@ ROUTES_LOURDES: tuple[RouteLourde, ...] = (
                   "reproduiraient #1141. Le débit couvre une page active (60/min) et sa "
                   "relecture sur plusieurs onglets ; la concurrence garde le pool.")),
     RouteLourde(
+        "POST", "/api/me/apps/{app_id}/consent", par_minute=240, concurrence=8,
+        pourquoi=("Le consentement d'un geste d'app (`me.app.consent`) : depuis que le "
+                  "clic du lecteur EST l'accord, chaque écriture, ajout ou lancement "
+                  "d'une app fait DEUX requêtes — ce jeton, puis l'appel. Même budget "
+                  "que l'appel, pour qu'une app qui déplace des cartes à la chaîne ne "
+                  "bute pas sur l'une avant l'autre.")),
+    RouteLourde(
         "POST", "/api/me/projects", par_minute=240, concurrence=8,
         pourquoi=("Console projets (op=list/get/runs/inventory/… ET les écritures) : "
                   "13 s au p95 avant #1145, lectures de runs d'un projet reconstruites "

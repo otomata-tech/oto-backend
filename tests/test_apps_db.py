@@ -32,7 +32,7 @@ def projet(live):
 
 
 def test_creer_lire_mettre_a_jour_avec_revision(projet):
-    app = db.apps.create(projet, title="Leads", manifest={"tables": {}}, html="<p>1</p>",
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="Leads", manifest={"tables": {}}, html="<p>1</p>",
                          thumbnail=None, by=MOI)
     assert app["rev"] == db.apps.app_rev("Leads", {"tables": {}}, "<p>1</p>", None)
     lu = db.apps.get(app["id"])
@@ -56,7 +56,7 @@ def test_creer_lire_mettre_a_jour_avec_revision(projet):
 
 
 def test_conflit_n_ecrit_rien(projet):
-    app = db.apps.create(projet, title="C", manifest={}, html="a", thumbnail=None, by=MOI)
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="C", manifest={}, html="a", thumbnail=None, by=MOI)
     with pytest.raises(db.apps.AppConflict) as e:
         db.apps.update(app["id"], by=MOI, expected_rev="0" * 16, html="b")
     assert e.value.current_rev == app["rev"]
@@ -65,15 +65,15 @@ def test_conflit_n_ecrit_rien(projet):
 
 
 def test_revision_d_une_autre_app_illisible(projet):
-    a = db.apps.create(projet, title="A", manifest={}, html="a", thumbnail=None, by=MOI)
-    b = db.apps.create(projet, title="B", manifest={}, html="b", thumbnail=None, by=MOI)
+    a = db.apps.create(("user", MOI), None, project_id=projet, title="A", manifest={}, html="a", thumbnail=None, by=MOI)
+    b = db.apps.create(("user", MOI), None, project_id=projet, title="B", manifest={}, html="b", thumbnail=None, by=MOI)
     db.apps.update(a["id"], by=MOI, html="a2")
     (rev,) = db.apps.revisions(a["id"])
     assert db.apps.revision(b["id"], rev["id"]) is None
 
 
 def test_liste_cartes_sans_html_et_archives(projet):
-    app = db.apps.create(projet, title="L", manifest={}, html="x" * 100, thumbnail=None, by=MOI)
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="L", manifest={}, html="x" * 100, thumbnail=None, by=MOI)
     cartes = db.apps.list_for_projects([projet])
     assert app["id"] in {c["id"] for c in cartes}
     assert all("html" not in c and "manifest" not in c for c in cartes)
@@ -93,14 +93,17 @@ def test_migration_aller_retour(live, pg_module_dsn):
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_name IN ('apps', 'app_revisions')").fetchall()}
 
-    command.stamp(_alembic(), _REVISION)
+    # Depuis la TÊTE : des tables nées après (`app_consents`…) pointent `apps`, et le
+    # démarrage les a posées — descendre la seule révision des apps ne pourrait pas
+    # retirer une table dont d'autres dépendent.
+    command.stamp(_alembic(), "head")
     command.downgrade(_alembic(), _PRECEDENTE)
     assert tables() == set()
-    command.upgrade(_alembic(), _REVISION)
+    command.upgrade(_alembic(), "head")
     assert tables() == {"apps", "app_revisions"}
     # Rejouée sur une base que le démarrage a servie : rien à faire.
     command.stamp(_alembic(), _PRECEDENTE)
-    command.upgrade(_alembic(), _REVISION)
+    command.upgrade(_alembic(), "head")
     assert tables() == {"apps", "app_revisions"}
 
 
@@ -108,8 +111,31 @@ def test_seules_les_dernieres_revisions_sont_gardees(projet, monkeypatch):
     """Un agent qui réécrit son app en boucle ne remplit pas la base : chaque mise à
     jour purge, dans sa transaction, ce qui dépasse `MAX_REVISIONS`."""
     monkeypatch.setattr(db.apps, "MAX_REVISIONS", 3)
-    app = db.apps.create(projet, title="R", manifest={}, html="0", thumbnail=None, by=MOI)
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="R", manifest={}, html="0", thumbnail=None, by=MOI)
     for i in range(1, 6):
         db.apps.update(app["id"], by=MOI, html=str(i))
     gardees = db.apps.revisions(app["id"], limit=100)
     assert [db.apps.revision(app["id"], r["id"])["html"] for r in gardees] == ["4", "3", "2"]
+
+
+def test_proprietaire_partages_et_rangement(projet):
+    """Une app à elle : listée par son propriétaire, partagée avec la meilleure
+    permission, rangée dans un projet sans que cela donne quoi que ce soit."""
+    from oto_mcp import ownership
+
+    autre = "sub-apps-test-autre"
+    a = db.apps.create(("user", MOI), None, title="Mine", manifest={}, html="", thumbnail=None, by=MOI)
+    b = db.apps.create(("user", autre), None, title="Theirs", manifest={}, html="",
+                       thumbnail=None, by=autre)
+    assert a["id"] in {r["id"] for r in db.apps.list_for_owners([("user", MOI)])}
+    ownership.grant("app", str(b["id"]), "user", MOI, role="viewer")
+    ownership.grant("app", str(b["id"]), "group", "999999", role="editor")
+    vues = {r["id"]: r["permission"] for r in
+            db.apps.list_granted_to([("user", MOI), ("group", "999999")])}
+    assert vues[b["id"]] == "write"
+    assert db.apps.owner(b["id"])["owner_id"] == autre
+    db.apps.file(b["id"], projet, MOI)
+    assert db.apps.projects_of([b["id"]]) == {b["id"]: [projet]}
+    assert b["id"] in {r["id"] for r in db.apps.list_for_projects([projet])}
+    assert db.apps.unfile(b["id"], projet) is True
+    assert db.apps.projects_of([b["id"]]) == {b["id"]: []}

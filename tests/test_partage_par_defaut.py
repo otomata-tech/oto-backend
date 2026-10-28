@@ -40,18 +40,30 @@ def _console(op, **kw):
 
 
 def test_sans_reglage_tout_type_vaut_aucun(stockage):
-    assert _console("get") == {"org_id": ORG, "partage_par_defaut": {"agent": "aucun"},
-                               "values": {"agent": ["aucun", "lecture"]}}
+    assert _console("get") == {"org_id": ORG,
+                               "partage_par_defaut": {"agent": "aucun", "app": "aucun"},
+                               "values": {"agent": ["aucun", "lecture"],
+                                          "app": ["aucun", "lecture", "ecriture"]}}
     assert P.role_a_la_naissance(ORG, "agent") is None
+    assert P.role_a_la_naissance(ORG, "app") is None
 
 
 def test_lecture_se_pose_et_aucun_le_retire(stockage):
     assert _console("set", partage={"agent": "lecture"})["partage_par_defaut"] == {
-        "agent": "lecture"}
+        "agent": "lecture", "app": "aucun"}
     assert stockage["v"] == {"agent": "lecture"}
     assert P.role_a_la_naissance(ORG, "agent") == "viewer"
     _console("set", partage={"agent": "aucun"})
     assert stockage["v"] is None, "`aucun` partout = rien de stocké, comme avant"
+
+
+def test_une_app_peut_naitre_partagee_en_ecriture(stockage):
+    """Une app n'a pas d'identité à elle : chaque geste agit au nom de son lecteur,
+    borné par son auteur — l'écriture d'office n'y prête l'identité de personne."""
+    _console("set", partage={"app": "ecriture"})
+    assert stockage["v"] == {"app": "ecriture"}
+    assert P.role_a_la_naissance(ORG, "app") == "editor"
+    assert P.role_a_la_naissance(ORG, "agent") is None
 
 
 @pytest.mark.parametrize("partage,code", [

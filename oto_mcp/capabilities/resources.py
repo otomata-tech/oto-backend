@@ -174,7 +174,7 @@ def _owner_label(owner_type: str, owner_id: str) -> Optional[str]:
 
 
 _TYPE_LABELS = {"project": "projet", "datastore_namespace": "datastore",
-                "procedure": "procédure", "doc": "page"}
+                "procedure": "procédure", "doc": "page", "app": "app"}
 # Recouvrement EN (oto-backend#700) — seules les clés dont le mot CHANGE : les deux
 # autres s'écrivent à l'identique dans les deux langues, pas la peine de les répéter
 # ici. Le gabarit d'email ne traduit
@@ -197,6 +197,9 @@ def _resource_name(resource_type: str, rid: str) -> Optional[str]:
             return (r.get("title") or r.get("slug")) if r else None
         if resource_type == "doc":
             return page.portee(rid).get("ressource_nom")
+        if resource_type == "app":
+            r = db.apps.get(int(rid))
+            return r.get("title") if r else None
     except (TypeError, ValueError):
         return None
     return None
@@ -263,6 +266,18 @@ def _enrich_datastore(row: dict) -> dict:
     }
 
 
+def _enrich_app(row: dict) -> dict:
+    return {
+        "resource_type": "app",
+        "resource_id": str(row["id"]),
+        "title": row.get("title"),
+        "owner_type": row.get("owner_type"),
+        "owner_id": row.get("owner_id"),
+        "owner_label": _owner_label(row.get("owner_type"), row.get("owner_id")),
+        "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
+    }
+
+
 def _enrich_project(row: dict) -> dict:
     return {
         "resource_type": "project",
@@ -325,6 +340,13 @@ _OPS: dict[str, dict] = {
     },
     # UNE page sans son projet (#1084) — lecture seule, gouvernée par son projet.
     "doc": {**page.OPS, "enrich": lambda row: page.enrich(row, _owner_label)},
+    # UNE app (`oto_apps`) : son propriétaire et ses partages à elle.
+    "app": {
+        "list_all": lambda: db.apps.list_all(),
+        "list_for_owners": lambda owners: db.apps.list_for_owners(owners, archived=None),
+        "get_by_id": lambda i: db.apps.get(i),
+        "enrich": _enrich_app,
+    },
 }
 
 
@@ -837,6 +859,14 @@ TRANSFER_PROCEDURE = (
     "into the target (see DELIVER A FULL PROJECT below).")
 
 
+# Une APP (`oto_apps`) se gouverne comme un tableau — servi aux deux surfaces.
+APP_DESCRIPTION = (
+    "APPS (resource_type=app): an app has its OWN owner and shares — viewer opens and "
+    "uses it, editor changes it, manager re-shares it; op=transfer moves it to a person, "
+    "a team or an org. The projects it is filed in give no access. No `cascade`, no "
+    "`credentials`: an open app acts as its viewer, bounded by its author.")
+
+
 # #480 — le texte servi aux deux surfaces (héritée et stricte), écrit une fois.
 PUBLICATION_DESCRIPTION = (
     "PUBLISHING (`public`/`secret`) also takes being a member of the org that owns the "
@@ -907,7 +937,7 @@ CAPABILITIES += [
             + " " + PENDING_DESCRIPTION
             + " resource_type ∈ {datastore_namespace, "
             "project, procedure, doc} — it is the discriminant, and it also decides which shape "
-            "comes back. " + TRANSFER_PROCEDURE + " " + page.DESCRIPTION
+            "comes back. " + TRANSFER_PROCEDURE + " " + page.DESCRIPTION + " " + APP_DESCRIPTION
             + " ⚠️ KNOWN DEFECT, kept for backward compatibility: resource_type "
             "DEFAULTS to `datastore_namespace`. Omitting it does NOT mean « any type » — the "
             "call silently targets a datastore namespace, so op=get/list answer about the "

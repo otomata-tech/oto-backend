@@ -85,6 +85,9 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.copilot.COPILOT,          # l'agent intégré à l'application : conversations, annulations
     schema.runs.AGENT_EPISODES,      # épisodes de panne d'un agent hébergé, et leurs réparations
     schema.datastore.COMMENTAIRES,   # commentaires des personnes sur une ligne de tableau
+    schema.apps.CONSENTEMENTS,       # consentements d'un lecteur aux gestes d'une app, et leur journal
+    schema.apps.PROPRIETE,           # une app a son propriétaire et ses partages ; un projet la range
+    schema.apps.FICHIERS,            # fichiers déposés dans une app par un lecteur, pour ses agents
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

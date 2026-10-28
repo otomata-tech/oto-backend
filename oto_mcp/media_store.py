@@ -37,7 +37,7 @@ _DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 Mo
 # (`upload_image`, `upload_object`), l'import d'un périmètre la repose sur chaque objet
 # versé (`entetes_d_objet`). Un préfixe absent de ces deux ensembles n'a pas de règle.
 PREFIXES_PUBLICS = frozenset({"avatars", "org-logos", "images"})
-PREFIXES_DURABLES = frozenset({"project-files", "transcription-jobs"})
+PREFIXES_DURABLES = frozenset({"project-files", "transcription-jobs", "app-files"})
 # Les préfixes de TRANSIT (`upload_transit`) : la liste FERMÉE de ce qu'une référence de
 # transit peut ouvrir (`oto_mcp/transit.py`), sous `tmp/` comme `upload_private`.
 PREFIXES_TRANSIT = frozenset({"threecx-recordings", "aircall-recordings",
@@ -553,13 +553,18 @@ def lire_objet(key: str, *, max_bytes: int | None = None) -> ObjetLu:
                    unquote(nom) if nom else None)
 
 
-def presign_get(key: str, *, expiry: int | None = None) -> str:
-    """URL GET signée et expirante pour une clé privée (lecture à la demande)."""
+def presign_get(key: str, *, expiry: int | None = None,
+                download_as: str | None = None) -> str:
+    """URL GET signée et expirante pour une clé privée (lecture à la demande).
+    `download_as` : le navigateur TÉLÉCHARGE sous ce nom au lieu d'afficher
+    (`Content-Disposition: attachment`, porté par la signature)."""
+    params = {"Bucket": _bucket(), "Key": key}
+    if download_as:
+        params["ResponseContentDisposition"] = (
+            f"attachment; filename*=UTF-8''{quote(download_as, safe='')}")
     try:
         return _get_client().generate_presigned_url(
-            "get_object",
-            Params={"Bucket": _bucket(), "Key": key},
-            ExpiresIn=expiry or presign_expiry(),
+            "get_object", Params=params, ExpiresIn=expiry or presign_expiry(),
         )
     except Exception as e:
         raise MediaError(500, "presign_failed", str(e))

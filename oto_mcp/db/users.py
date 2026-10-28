@@ -438,6 +438,8 @@ _SUB_COLUMNS = [
     # ids numériques d'org/groupe : un sub Logto n'est jamais un entier → l'UPDATE nu
     # `col=old_sub` ne peut toucher que les lignes user.
     ("user_datastores", "owner_id"), ("projects", "owner_id"),
+    # Une app possédée par une personne (kind `app`, `owner_type='user'`) : même règle.
+    ("apps", "owner_id"),
     ("resource_grants", "principal_id"), ("resource_grants", "granted_by"),
     # Les couches de contexte d'une personne (sa note, ses guides perso) : des NŒUDS
     # depuis le lot M1. (La table `guides` a quitté cet inventaire le 23/09/2026 avec
@@ -587,6 +589,15 @@ _SUB_COLUMNS = [
     #   UPDATE nu. Laissées, elles désignaient un compte disparu (« inconnu ») ;
     ("docs", "updated_by"), ("docs", "verified_by"), ("doc_revisions", "edited_by"),
     ("apps", "created_by"), ("apps", "updated_by"), ("app_revisions", "edited_by"),
+    # à qui un consentement de geste d'app a été donné — c'est aussi le journal des
+    # gestes d'app : il suit la personne. Un consentement non brûlé ne vaut que deux
+    # minutes ; repointé, il ne gêne rien (aucune unicité sur `sub`).
+    ("app_consents", "sub"),
+    # qui a rangé une app dans un projet : attribution, hors PK, UPDATE nu.
+    ("app_projects", "filed_by"),
+    # qui a déposé un fichier dans une app : c'est aussi qui le LIT (lui seul, et ses
+    # runs) — il suit la personne, sinon ses fichiers lui deviendraient illisibles.
+    ("app_files", "sub"),
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),

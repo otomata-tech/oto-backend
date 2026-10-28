@@ -540,6 +540,7 @@ sources = [
   "oto_mcp/capabilities/apps.py",
   "oto_mcp/capabilities/apps_manifeste.py",
   "oto_mcp/capabilities/apps_appel.py",
+  "oto_mcp/api/apps_files.py",
   "oto_mcp/db/apps.py",
   "oto_mcp/db/schema/apps.py",
 ]

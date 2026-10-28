@@ -78,6 +78,13 @@ DEFAULT_PATHS: dict[str, str] = {
     "marketplace": "/connectors?tab=marketplace",
 }
 
+# Link kinds an instance may DECLARE that our own dashboard does not have: no default
+# path, so `link_for` returns None until the instance's `OTO_DASHBOARD_LINK_PATHS`
+# names one — the "no pattern ⟹ no link" rule, applied to a view only some fronts
+# have. `app` = an app opened full screen (`oto_apps`), `/org/{org}/apps/{id}` on
+# Tulina's front.
+DECLARED_ONLY_KINDS = frozenset({"app"})
+
 
 class InstancePathsInvalid(ValueError):
     """`OTO_DASHBOARD_LINK_PATHS` cannot be read: not JSON, not an object of strings
@@ -104,11 +111,11 @@ def instance_paths() -> dict[str, str]:
             isinstance(k, str) and isinstance(v, str) for k, v in declared.items()):
         raise InstancePathsInvalid(
             f"{ENV_INSTANCE_PATHS} must be a JSON object of strings {{kind: path}}")
-    inconnus = sorted(set(declared) - set(DEFAULT_PATHS))
+    inconnus = sorted(set(declared) - set(DEFAULT_PATHS) - DECLARED_ONLY_KINDS)
     if inconnus:
         raise InstancePathsInvalid(
             f"{ENV_INSTANCE_PATHS} declares unknown link kind(s) {inconnus}; known: "
-            f"{sorted(DEFAULT_PATHS)}")
+            f"{sorted(set(DEFAULT_PATHS) | DECLARED_ONLY_KINDS)}")
     return {**DEFAULT_PATHS, **declared}
 
 

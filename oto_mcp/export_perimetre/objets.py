@@ -7,7 +7,8 @@ l'import (chez elle) la verse dans son stockage, avec ses propres identifiants. 
 copie directe d'un seau à l'autre, aucune URL signée.
 
 **Quels objets.** Ceux que désigne une ligne du périmètre :
-- par une CLÉ (`COLONNES_DE_CLES`) : `project_files.s3_key`, `transcription_jobs.audio_key` ;
+- par une CLÉ (`COLONNES_DE_CLES`) : `project_files.s3_key`, `transcription_jobs.audio_key`,
+  `app_files.s3_key` ;
 - par une URL de notre stockage public, où qu'elle soit : dans une colonne d'URL
   (`COLONNES_D_URL`) comme dans un contenu (le corps d'une page, un JSON). Une image
   qu'un agent a déposée (`images/<sub>/…`) n'a d'autre trace que son URL, collée
@@ -51,7 +52,8 @@ from urllib.parse import unquote
 from .. import media_store
 from ..crypto import seal, unseal
 
-COLONNES_DE_CLES = frozenset({"project_files.s3_key", "transcription_jobs.audio_key"})
+COLONNES_DE_CLES = frozenset({"project_files.s3_key", "transcription_jobs.audio_key",
+                              "app_files.s3_key"})
 COLONNES_D_URL = frozenset({"users.avatar_url", "orgs.logo_url", "project_files.public_url"})
 
 # Ce qui peut suivre `<base>/` dans une clé : tout sauf ce qui termine une URL dans un

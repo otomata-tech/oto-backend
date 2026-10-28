@@ -2,8 +2,12 @@
 
 **Privé par défaut, toujours.** Le code ne partage jamais d'office un objet neuf : seul
 ce réglage, posé par un admin de l'org, le fait. Une valeur par type d'objet,
-`{"agent": "aucun" | "lecture"}` ; générique dans sa forme, lu aujourd'hui par les seuls
-agents (`oto_trigger op=create`). Sans réglage : `aucun` pour chaque type.
+`{"agent": "aucun" | "lecture", "app": "aucun" | "lecture" | "ecriture"}` ; lu par
+`oto_trigger op=create` et `oto_apps op=create`. Sans réglage : `aucun` pour chaque type.
+
+Une app accepte `ecriture` : elle n'a pas d'identité à elle — chaque geste d'une app
+ouverte agit au nom de son LECTEUR, borné par les droits de son AUTEUR (le dernier à
+l'avoir écrite, `apps_appel.py`), et le manifeste se rejuge contre qui la modifie.
 
 ⚠️ **`ecriture` est REFUSÉ pour un agent** (`default_sharing_write_unsupported`). Un agent
 tourne sous l'identité de son propriétaire à chaque run d'horloge ou de webhook
@@ -39,7 +43,8 @@ VALEURS = (AUCUN, LECTURE, ECRITURE)
 #: Par type d'objet : les valeurs qu'il accepte. `ecriture` est une valeur CONNUE du
 #: réglage, refusée pour un agent (tête de module) — d'où un refus nommé, pas
 #: « valeur inconnue ».
-TYPES: dict[str, tuple[str, ...]] = {"agent": (AUCUN, LECTURE)}
+TYPES: dict[str, tuple[str, ...]] = {"agent": (AUCUN, LECTURE),
+                                     "app": (AUCUN, LECTURE, ECRITURE)}
 
 #: Le rôle du partage posé à la naissance, par valeur.
 ROLES = {LECTURE: "viewer", ECRITURE: "editor"}

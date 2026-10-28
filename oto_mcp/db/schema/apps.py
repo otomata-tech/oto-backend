@@ -46,3 +46,28 @@ CREATE TABLE IF NOT EXISTS app_revisions (
 );
 CREATE INDEX IF NOT EXISTS app_revisions_app_idx ON app_revisions (app_id, id DESC);
 """
+
+CONSENTEMENTS = """
+-- Le consentement d'un LECTEUR à UN geste précis d'une app (écrire une valeur, ajouter
+-- une ligne, lancer un agent), émis par le cadre parent hors de l'iframe, à usage
+-- unique. Une fois brûlé, la ligne reste : c'est le journal des gestes d'app (qui,
+-- quelle app, quoi, quand, sous quel geste d'écriture, quel travail lancé).
+CREATE TABLE IF NOT EXISTS app_consents (
+    id BIGSERIAL PRIMARY KEY,
+    -- Empreinte SHA-256 du jeton : le jeton lui-même n'est jamais stocké.
+    token_hash TEXT NOT NULL UNIQUE,
+    app_id BIGINT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    action TEXT NOT NULL,
+    -- Empreinte des arguments du geste, calculée au serveur à l'émission ET à l'usage.
+    fingerprint TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    -- Le geste d'écriture (`datastore_row_revisions.geste_id`) et le travail lancé.
+    geste_id TEXT,
+    job_id BIGINT
+);
+CREATE INDEX IF NOT EXISTS app_consents_app_idx ON app_consents (app_id, id DESC);
+CREATE INDEX IF NOT EXISTS app_consents_sub_idx ON app_consents (sub);
+"""

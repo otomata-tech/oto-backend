@@ -17,10 +17,9 @@ le `ns_id`) : un nom résout dans l'org active de qui le lit, et à l'APPEL l'ap
 un lecteur qui n'est pas l'auteur — le même nom y désignerait un autre tableau. À
 l'appel (`apps_appel.py`), la règle « droits = auteur ∩ lecteur » juge ce numéro.
 
-**`set`, `add` et `agents` sont jugés mais INERTES** : l'appel d'une app ne sert que
-des lectures (`read_rows`, `read_aggregate`). Écrire une valeur, ajouter une ligne,
-lancer un agent viendront avec le consentement du lecteur (oto-backend#1386) ; le
-manifeste les porte déjà, validés, pour que le front et ce lot parlent la même forme.
+**`set`, `add` et `agents` bornent les gestes** de l'appel d'une app (`write_cell`,
+`add_row`, `start_agent`, `agent_runs`, `run_result`), chacun servi avec le
+consentement du lecteur (`apps_appel.py`, oto-backend#1386).
 """
 from __future__ import annotations
 

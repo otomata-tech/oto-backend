@@ -587,6 +587,10 @@ _SUB_COLUMNS = [
     #   UPDATE nu. Laissées, elles désignaient un compte disparu (« inconnu ») ;
     ("docs", "updated_by"), ("docs", "verified_by"), ("doc_revisions", "edited_by"),
     ("apps", "created_by"), ("apps", "updated_by"), ("app_revisions", "edited_by"),
+    # à qui un consentement de geste d'app a été donné — c'est aussi le journal des
+    # gestes d'app : il suit la personne. Un consentement non brûlé ne vaut que deux
+    # minutes ; repointé, il ne gêne rien (aucune unicité sur `sub`).
+    ("app_consents", "sub"),
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),

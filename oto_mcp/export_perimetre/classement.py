@@ -149,6 +149,8 @@ CLASSEMENT: dict[str, Table] = {
     "doc_revisions": indirecte(_DOCS),
     "apps": indirecte(_PROJETS),
     "app_revisions": indirecte(_APPS),
+    "app_consents": indirecte(_APPS, "le journal des gestes d'app part avec son app",
+                              comptes=("sub",)),
     "doc_links": indirecte(Via("docs", ("from_doc",))),
     "doc_change_requests": indirecte(_DOCS),
     "doc_embeddings": indirecte(_DOCS),

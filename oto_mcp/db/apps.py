@@ -190,3 +190,76 @@ def project_owners(project_ids: Iterable[int]) -> dict[str, tuple[str, str]]:
             (ids,),
         ).fetchall()
     return {str(r["id"]): (r["owner_type"], str(r["owner_id"])) for r in rows}
+
+
+# ── Gestes d'app : consentement du lecteur, et ce qu'une app lit des runs ────────
+
+def consent_issue(app_id: int, sub: str, action: str, fingerprint: str,
+                  token_hash: str, ttl_seconds: int) -> None:
+    """Pose un consentement NEUF, non brûlé, valable `ttl_seconds`."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO app_consents (token_hash, app_id, sub, action, fingerprint, "
+            "expires_at) VALUES (%s, %s, %s, %s, %s, now() + make_interval(secs => %s))",
+            (token_hash, app_id, sub, action, fingerprint, ttl_seconds),
+        )
+
+
+def consent_burn(app_id: int, sub: str, action: str, fingerprint: str,
+                 token_hash: str, geste_id: Optional[str]) -> Optional[int]:
+    """Brûle le consentement s'il désigne EXACTEMENT ce geste (même app, lecteur,
+    action, arguments), n'a pas servi et n'a pas expiré — en une écriture, de sorte que
+    deux appels concurrents ne le brûlent pas deux fois. Rend son id, ou None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE app_consents SET used_at = now(), geste_id = %s "
+            "WHERE token_hash = %s AND app_id = %s AND sub = %s AND action = %s "
+            "AND fingerprint = %s AND used_at IS NULL AND expires_at > now() "
+            "RETURNING id",
+            (geste_id, token_hash, app_id, sub, action, fingerprint),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def consent_job(consent_id: int, job_id: int) -> None:
+    """Le travail qu'un consentement a lancé — le journal dit quel run vient de l'app."""
+    with _connect() as conn:
+        conn.execute("UPDATE app_consents SET job_id = %s WHERE id = %s",
+                     (job_id, consent_id))
+
+
+def agent_jobs(org_id: int, trigger_id: int, limit: int) -> list[dict]:
+    """Les derniers travaux d'un agent, du plus récent au plus ancien : statut, dates,
+    erreur, et QUI les a lancés (`sub`) — l'appelant décide ce qu'il en montre."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, status, run_id, sub, created_at, finished_at, last_error "
+            "FROM runner_jobs WHERE org_id = %s "
+            "AND payload->>'trigger_id' = %s ORDER BY id DESC LIMIT %s",
+            (org_id, str(int(trigger_id)), limit),
+        ).fetchall()
+
+
+def job_of_org(org_id: int, job_id: int) -> Optional[dict]:
+    """Un travail de l'org, avec l'agent dont il est un run (`trigger_id`, texte tel
+    que posé par le serveur dans sa charge ; NULL hors agent) et qui l'a lancé."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, status, run_id, sub, created_at, finished_at, last_error, "
+            "payload->>'trigger_id' AS trigger_id "
+            "FROM runner_jobs WHERE id = %s AND org_id = %s",
+            (job_id, org_id),
+        ).fetchone()
+
+
+def run_results(run_ids: Iterable[str]) -> dict[str, dict]:
+    """`{run_id: {outcome, note}}` — ce que l'agent a conclu (`run_finish`), en une
+    requête sur la clé primaire."""
+    ids = sorted({r for r in run_ids if r})
+    if not ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT run_id, outcome, note FROM runs WHERE run_id = ANY(%s)", (ids,)
+        ).fetchall()
+    return {r["run_id"]: {"outcome": r["outcome"], "note": r["note"]} for r in rows}

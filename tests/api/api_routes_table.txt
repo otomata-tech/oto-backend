@@ -760,6 +760,8 @@ POST /api/me/apps -> _handler
 OPTIONS /api/me/apps -> options_handler
 POST /api/me/apps/{app_id}/call -> _handler
 OPTIONS /api/me/apps/{app_id}/call -> options_handler
+POST /api/me/apps/{app_id}/consent -> _handler
+OPTIONS /api/me/apps/{app_id}/consent -> options_handler
 POST /api/me/upload-url -> _handler
 OPTIONS /api/me/upload-url -> options_handler
 POST /api/me/import -> _handler

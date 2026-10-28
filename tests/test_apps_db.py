@@ -93,14 +93,17 @@ def test_migration_aller_retour(live, pg_module_dsn):
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_name IN ('apps', 'app_revisions')").fetchall()}
 
-    command.stamp(_alembic(), _REVISION)
+    # Depuis la TÊTE : des tables nées après (`app_consents`…) pointent `apps`, et le
+    # démarrage les a posées — descendre la seule révision des apps ne pourrait pas
+    # retirer une table dont d'autres dépendent.
+    command.stamp(_alembic(), "head")
     command.downgrade(_alembic(), _PRECEDENTE)
     assert tables() == set()
-    command.upgrade(_alembic(), _REVISION)
+    command.upgrade(_alembic(), "head")
     assert tables() == {"apps", "app_revisions"}
     # Rejouée sur une base que le démarrage a servie : rien à faire.
     command.stamp(_alembic(), _PRECEDENTE)
-    command.upgrade(_alembic(), _REVISION)
+    command.upgrade(_alembic(), "head")
     assert tables() == {"apps", "app_revisions"}
 
 

@@ -68,26 +68,14 @@ def refus(**kw) -> AuthzDenied:
     return e.value
 
 
-# ── Ce qui est servi : des lectures, rien d'autre ───────────────────────────
-
-@pytest.mark.parametrize("action", ["write_cell", "add_row", "start_agent", "agent_runs",
-                                    "run_result"])
-def test_rien_qui_ecrive_ni_lance_n_est_servi(action):
-    """Écrire, ajouter, lancer, lire les runs : pas avant le consentement du lecteur
-    (oto-backend#1386). L'action n'est pas une entrée valide."""
-    with pytest.raises(ValidationError):
-        C.AppCallInput(app_id=5, action=action, table="leads")
-
-
-def test_l_entree_ne_porte_plus_les_champs_d_ecriture():
-    assert set(C.AppCallInput.model_fields) == {"app_id", "action", "table", "options"}
-
+# ── La surface ──────────────────────────────────────────────────────────────
 
 def test_la_capacite_n_a_pas_de_jeton_api_ni_d_outil_mcp():
-    cap = next(c for c in registry.CAPABILITIES if c.key == "me.app.call")
-    assert cap.mcp is None
-    (b,) = cap.rest_bindings()
-    assert b.allow_api_token is False and b.allow_issuer_token is False
+    for cle in ("me.app.call", "me.app.consent"):
+        cap = next(c for c in registry.CAPABILITIES if c.key == cle)
+        assert cap.mcp is None
+        (b,) = cap.rest_bindings()
+        assert b.allow_api_token is False and b.allow_issuer_token is False
 
 
 # ── Qui ─────────────────────────────────────────────────────────────────────
@@ -182,6 +170,7 @@ def test_agregat_borne(seams):
 # ── La porte : un jeton `oto_` est refusé avant le handler ─────────────────
 
 @pytest.mark.parametrize("cle,chemin", [("me.app.call", "/api/me/apps/5/call"),
+                                        ("me.app.consent", "/api/me/apps/5/consent"),
                                         ("me.app", "/api/me/apps")])
 def test_un_jeton_api_ou_delegue_est_refuse_sur_la_route_servie(monkeypatch, cle, chemin):
     """Rejoue l'adaptateur REST avec la VRAIE authentification : un porteur `oto_`
@@ -209,7 +198,7 @@ def test_un_jeton_api_ou_delegue_est_refuse_sur_la_route_servie(monkeypatch, cle
     req = Request({
         "type": "http", "method": "POST", "path": chemin, "query_string": b"",
         "root_path": "", "scheme": "http", "server": ("test", 80), "http_version": "1.1",
-        "path_params": {"app_id": "5"} if "call" in chemin else {},
+        "path_params": {"app_id": "5"} if chemin != "/api/me/apps" else {},
         "headers": [(b"authorization", b"Bearer oto_deadbeef"),
                     (b"content-type", b"application/json")],
     }, receive=lambda: asyncio.sleep(0, {"type": "http.request", "body": b"{}"}))

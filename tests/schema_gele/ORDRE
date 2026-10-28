@@ -59,3 +59,4 @@ apps.APPS
 copilot.COPILOT
 runs.AGENT_EPISODES
 datastore.COMMENTAIRES
+apps.CONSENTEMENTS

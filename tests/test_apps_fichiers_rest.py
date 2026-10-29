@@ -1,0 +1,172 @@
+"""Le dépôt d'un fichier dans une app, de bout en bout par les VRAIES routes, sur une
+vraie base : consentement en JSON (`POST …/consent`), puis multipart
+(`POST …/files`), puis `list_files` par l'appel. Ce que les tests unitaires ne voient
+pas, c'est que l'empreinte se calcule par DEUX chemins — le corps JSON d'un côté, la
+partie multipart (nom décodé, type de la partie) de l'autre — et doit coïncider.
+
+Le stockage S3 est remplacé par un client qui garde les objets ; l'authentification
+est la vraie (`_authenticate`), avec un vérificateur JWT qui rend un `sub` connu.
+"""
+from __future__ import annotations
+
+import types
+
+import pytest
+from starlette.applications import Starlette
+from starlette.testclient import TestClient
+
+from oto_mcp import db, media_store
+
+MOI = "sub-apps-fichiers-rest"
+AUTRE = "sub-apps-fichiers-rest-autre"
+HOTE = "https://manage.oto.cx"
+PDF = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n"
+
+
+class _S3:
+    def __init__(self):
+        self.objets = {}
+        self.signes = []
+
+    def put_object(self, *, Key, Body, **kw):
+        self.objets[Key] = Body
+
+    def generate_presigned_url(self, op, Params, ExpiresIn):
+        self.signes.append((op, Params, ExpiresIn))
+        return f"https://s3.test/{Params['Key']}?sig=1"
+
+
+class _Verifier:
+    def __init__(self):
+        self.sub = MOI
+
+    async def verify_token(self, token):
+        return types.SimpleNamespace(claims={"sub": self.sub})
+
+
+@pytest.fixture
+def client(live, monkeypatch):
+    from oto_mcp.api import routes as api_routes
+    s3 = _S3()
+    monkeypatch.setattr(media_store, "_get_client", lambda: s3)
+    monkeypatch.setattr(media_store, "_bucket", lambda: "media-test")
+    for sub in (MOI, AUTRE):
+        db.upsert_user(sub, f"{sub}@example.com") if hasattr(db, "upsert_user") else None
+    verifier = _Verifier()
+    app = Starlette(routes=list(api_routes.make_routes(verifier)))
+    c = TestClient(app)
+    # L'écran hôte : son origine est déclarée par l'instance (`conftest.ORIGINES_CORS`).
+    c.headers.update({"Authorization": "Bearer jwt-de-test", "Origin": HOTE})
+    c.s3, c.verifier = s3, verifier
+    return c
+
+
+@pytest.fixture
+def app_id(live):
+    app = db.apps.create(("user", MOI), None, title="Inbox",
+                         manifest={"tables": {}, "agents": {}, "files": True},
+                         html="", thumbnail=None, by=MOI)
+    return app["id"]
+
+
+def _consent(client, app_id, name, size, media_type):
+    r = client.post(f"/api/me/apps/{app_id}/consent", json={
+        "action": "upload_file", "file": {"name": name, "size": size, "media_type": media_type}})
+    assert r.status_code == 200, r.text
+    return r.json()["consent"]
+
+
+def test_consentement_json_puis_multipart_se_rejoignent(client, app_id):
+    nom = "Devis été (v2).pdf"  # accents, espaces, parenthèses : le nom multipart se décode
+    jeton = _consent(client, app_id, nom, len(PDF), "application/pdf")
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": jeton},
+                    files={"file": (nom, PDF, "application/pdf")})
+    assert r.status_code == 200, r.text
+    f = r.json()["file"]
+    assert f["name"] == nom and f["media_type"] == "application/pdf" and f["size"] == len(PDF)
+    assert any(k.startswith(f"app-files/{app_id}/") for k in client.s3.objets)
+    # Le même jeton ne sert pas deux fois.
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": jeton},
+                    files={"file": (nom, PDF, "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "consent_invalid")
+    # L'app le liste à qui l'a déposé…
+    r = client.post(f"/api/me/apps/{app_id}/call", json={"action": "list_files"})
+    assert r.status_code == 200, r.text
+    assert [x["name"] for x in r.json()["files"]] == [nom]
+
+
+def test_un_fichier_autre_que_l_annonce_est_refuse(client, app_id):
+    jeton = _consent(client, app_id, "a.pdf", len(PDF), "application/pdf")
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": jeton},
+                    files={"file": ("a.pdf", PDF + b"x", "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "consent_invalid")
+
+
+def test_sans_consentement_ou_sans_fichier(client, app_id):
+    r = client.post(f"/api/me/apps/{app_id}/files", files={"file": ("a.pdf", PDF, "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "consent_required")
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": "x"})
+    assert (r.status_code, r.json()["error"]) == (400, "missing_file")
+
+
+def test_un_jeton_api_est_refuse(client, app_id):
+    r = client.post(f"/api/me/apps/{app_id}/files", headers={"Authorization": "Bearer oto_deadbeef"},
+                    files={"file": ("a.pdf", PDF, "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "api_token_forbidden")
+
+
+
+def test_un_agent_rend_un_fichier_que_le_lecteur_telecharge(client, app_id):
+    """`oto_apps op=put_file` (ici par la face REST, en session : un run hébergé tourne
+    au nom du lecteur), puis l'app le liste et rend un lien qui TÉLÉCHARGE."""
+    r = client.post("/api/me/apps", json={"op": "put_file", "app_id": app_id, "name": "Totaux é.csv",
+                                          "content": "client,total\nAcme,1200\n", "media_type": "text/csv"})
+    assert r.status_code == 200, r.text
+    fid = r.json()["file"]["id"]
+    assert r.json()["file"]["origin"] == "agent"
+    r = client.post(f"/api/me/apps/{app_id}/call", json={"action": "list_files"})
+    assert [(f["id"], f["origin"]) for f in r.json()["files"]] == [(fid, "agent")]
+    r = client.post(f"/api/me/apps/{app_id}/call", json={"action": "file_url", "file_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["expires_in"] == 300 and r.json()["name"] == "Totaux é.csv"
+    (op, params, ttl), = client.s3.signes
+    assert op == "get_object" and ttl == 300
+    assert params["ResponseContentDisposition"].startswith("attachment; filename*=UTF-8''Totaux%20%C3%A9.csv")
+
+
+def test_une_app_dans_son_cadre_n_obtient_pas_de_jeton(client, app_id):
+    """Origine `null` (iframe sandbox) ou requête de cadre : refusé sur la route servie,
+    session interactive comprise."""
+    corps = {"action": "upload_file", "file": {"name": "a.pdf", "size": len(PDF),
+                                               "media_type": "application/pdf"}}
+    for entetes in ({"Origin": "null"}, {"Origin": HOTE, "Sec-Fetch-Dest": "iframe"}):
+        r = client.post(f"/api/me/apps/{app_id}/consent", json=corps, headers=entetes)
+        assert (r.status_code, r.json()["error"]) == (403, "consent_from_host_only"), entetes
+
+
+def test_un_corps_annonce_trop_gros_est_refuse_sans_etre_lu(monkeypatch):
+    """`Content-Length` au-delà de 20 Mo (plus l'enveloppe) : 413 avant toute lecture —
+    le corps n'est jamais demandé au client."""
+    import asyncio
+
+    from starlette.requests import Request
+
+    from oto_mcp.api import apps_files
+    from oto_mcp.capabilities import apps_appel
+
+    async def authentifier(request, verifier, **kw):
+        return MOI, None
+    monkeypatch.setattr(apps_files, "_authenticate", authentifier)
+
+    async def receive():
+        raise AssertionError("le corps a été lu")
+    taille = apps_appel.MAX_FILE_BYTES + 1024 * 1024
+    req = Request({
+        "type": "http", "method": "POST", "path": "/api/me/apps/5/files", "query_string": b"",
+        "root_path": "", "scheme": "http", "server": ("test", 80), "http_version": "1.1",
+        "path_params": {"app_id": "5"},
+        "headers": [(b"content-type", b"multipart/form-data; boundary=x"),
+                    (b"content-length", str(taille).encode())]}, receive=receive)
+    rep = asyncio.run(apps_files.app_files_upload(req, verifier=None))
+    assert rep.status_code == 413
+    assert b"content_too_large" in bytes(rep.body)

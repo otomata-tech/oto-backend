@@ -89,7 +89,7 @@ from .base import _file_stream
 from . import alias_routes, public
 from . import datastore_export
 from . import media
-from . import projects
+from . import apps_files, projects
 from . import transcription as api_transcription
 from . import copilot as api_copilot
 from . import uploads
@@ -166,6 +166,7 @@ _READ_OPS = frozenset({
     "links", "graph",  # les liens entre agents, et les chaînes (`runner.triggers`)
     "outline",  # le plan d'une page, ses titres sans son corps (`me.doc`, #1266)
     "validate",  # juger un manifeste d'app sans rien écrire (`me.app`)
+    "read_file",  # un agent lit un fichier de l'app, sans rien écrire (`me.app`)
 })
 
 
@@ -912,6 +913,8 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/avatar", bind(media.avatar_save, verifier=verifier), methods=["POST"]),
         Route("/api/me/avatar", options_handler, methods=["OPTIONS"]),
         Route("/api/me/projects/{project_id:int}/files", bind(projects.project_files_upload, verifier=verifier), methods=["POST"]),
+        Route("/api/me/apps/{app_id:int}/files", bind(apps_files.app_files_upload, verifier=verifier), methods=["POST"]),
+        Route("/api/me/apps/{app_id:int}/files", options_handler, methods=["OPTIONS"]),
         Route("/api/me/projects/{project_id:int}/files", options_handler, methods=["OPTIONS"]),
         # Dépôt DIRECT d'un audio à transcrire (multipart) — la forme par référence,
         # `POST …/transcriptions`, est une capacité (`capabilities/transcription.py`).

@@ -310,3 +310,14 @@ def test_sans_declaration_d_instance_rien_ne_change(registre, monkeypatch):
     monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
     links.verifier_reglages()
     assert links.instance_paths() is links.DEFAULT_PATHS
+
+
+def test_le_lien_d_une_app_n_existe_que_declare(registre, monkeypatch):
+    """`app` n'a pas de chemin par défaut (notre tableau de bord n'a pas d'apps) : pas
+    de lien tant que l'instance ne le déclare pas, puis `/org/{org}/apps/{id}`."""
+    monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
+    assert links.link_for("app", sub=None, org=42, id=6) is None
+    monkeypatch.setenv(links.ENV_INSTANCE_PATHS, '{"app": "/org/{org}/apps/{id}"}')
+    links.verifier_reglages()
+    assert links.link_for("app", sub=None, org=42, id=6) == f"{config.dashboard_url()}/org/42/apps/6"
+    assert links.link_for("app", sub=None, id=6) is None, "sans org, pas de lien troué"

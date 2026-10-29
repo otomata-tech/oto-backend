@@ -84,7 +84,9 @@ ECRITURES = {
     "admin.tenant_disablement": {"disable", "enable"},
     "service.org.suspension": {"suspend", "resume"},
     "admin.outreach": {"test", "send", "optout_clear"},
-    "me.app": {"create", "update", "archive", "unarchive", "restore"},
+    # `file`/`unfile` rangent l'app dans un projet ; `put_file` y range un fichier.
+    "me.app": {"create", "update", "archive", "unarchive", "restore", "file", "unfile",
+               "put_file"},
     "me.doc": {"create", "bulk_create", "update", "patch", "delete", "move", "revert",
                "set_public", "archive", "unarchive", "verify"},
     "me.function": {"create", "propose", "run", "test", "publish", "refuse"},

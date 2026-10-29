@@ -40,9 +40,11 @@ def test_sub_columns_inventory_matches_ddl():
             problems.append(f"{table}.{col} : table absente de _schema.py")
             continue
         in_create = re.search(rf"^\s*{col}\b", body, re.M) is not None
-        in_alter = re.search(
-            rf"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col}\b",
-            _INIT_SRC) is not None
+        # Une colonne ajoutée par un fragment du schéma (`ALTER TABLE … ADD COLUMN IF NOT
+        # EXISTS` dans `_schema.py`, ex. `apps.owner_id`) compte comme celle de `_init.py`.
+        in_alter = any(re.search(
+            rf"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col}\b", src) is not None
+            for src in (_INIT_SRC, _SCHEMA))
         if not (in_create or in_alter):
             problems.append(f"{table}.{col} : colonne introuvable (CREATE et ALTER)")
     assert not problems, (
@@ -103,10 +105,10 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         table, body = m.group(1), m.group(2)
         for lm in re.finditer(rf"^\s*({NAMES})\s+TEXT", body, re.M):
             porteurs.add((table, lm.group(1)))
-    for am in re.finditer(
-            rf"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS ({NAMES})\s+TEXT",
-            _INIT_SRC):
-        porteurs.add((am.group(1), am.group(2)))
+    for src in (_INIT_SRC, _SCHEMA):
+        for am in re.finditer(
+                rf"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS ({NAMES})\s+TEXT", src):
+            porteurs.add((am.group(1), am.group(2)))
     assert porteurs, "le parse du DDL ne trouve plus de colonne porteuse — test à réparer"
 
     # Hors inventaire, chacune pour une raison STRUCTURELLE (pas un oubli) :

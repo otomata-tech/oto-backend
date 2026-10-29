@@ -6,7 +6,7 @@ Ce module ne porte QUE du DDL, en chaînes SQL, et n'est jamais exécuté seul.
 `docs/apps.md`) : un manifeste (les tableaux, champs, agents qu'elle touche), du HTML, une
 vignette. Elle appartient à un PROJET et en hérite l'accès, comme une page — mais ce
 n'est PAS une page de mémoire : elle n'entre ni dans l'arbre des pages, ni dans la
-recherche, ni dans la base de connaissance. Ses révisions sont à part
+base de connaissance (`oto_search` la trouve par son titre seulement). Ses révisions sont à part
 (`app_revisions`), comme celles des pages.
 """
 from __future__ import annotations
@@ -45,4 +45,95 @@ CREATE TABLE IF NOT EXISTS app_revisions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS app_revisions_app_idx ON app_revisions (app_id, id DESC);
+"""
+
+CONSENTEMENTS = """
+-- Le consentement d'un LECTEUR à UN geste précis d'une app (écrire une valeur, ajouter
+-- une ligne, lancer un agent), émis par le cadre parent hors de l'iframe, à usage
+-- unique. Une fois brûlé, la ligne reste : c'est le journal des gestes d'app (qui,
+-- quelle app, quoi, quand, sous quel geste d'écriture, quel travail lancé).
+CREATE TABLE IF NOT EXISTS app_consents (
+    id BIGSERIAL PRIMARY KEY,
+    -- Empreinte SHA-256 du jeton : le jeton lui-même n'est jamais stocké.
+    token_hash TEXT NOT NULL UNIQUE,
+    app_id BIGINT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    action TEXT NOT NULL,
+    -- Empreinte des arguments du geste, calculée au serveur à l'émission ET à l'usage.
+    fingerprint TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    -- Le geste d'écriture (`datastore_row_revisions.geste_id`) et le travail lancé.
+    geste_id TEXT,
+    job_id BIGINT
+);
+CREATE INDEX IF NOT EXISTS app_consents_app_idx ON app_consents (app_id, id DESC);
+CREATE INDEX IF NOT EXISTS app_consents_sub_idx ON app_consents (sub);
+"""
+
+PROPRIETE = """
+-- Une app a son PROPRIÉTAIRE, comme un tableau : une personne, une équipe ou une org
+-- (`ownership`, kind `app`), et ses partages (`resource_grants`, resource_type `app`).
+-- `context_org_id` : l'org où une app PERSO a été créée — là où vivent ses tableaux et
+-- ses agents, là où elle se liste. `project_id` n'est plus lu : il ne donne plus
+-- d'accès ; un projet RANGE une app (`app_projects`), sans rien ouvrir.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS owner_type TEXT;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS owner_id TEXT;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS context_org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL;
+ALTER TABLE apps ALTER COLUMN project_id DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS apps_owner_idx ON apps (owner_type, owner_id);
+-- `owner_id` EN TÊTE : la fusion de comptes repointe la colonne d'un bloc
+-- (`db/users._SUB_COLUMNS`, `owner_id = ANY(…)`), l'index ci-dessus ne lui sert pas.
+CREATE INDEX IF NOT EXISTS apps_owner_id_idx ON apps (owner_id);
+CREATE INDEX IF NOT EXISTS apps_context_org_idx ON apps (context_org_id);
+
+-- Les projets où une app est RANGÉE (0..n) : elle s'affiche sur leur page. Ranger ne
+-- donne aucun accès — ni à l'app, ni au projet.
+CREATE TABLE IF NOT EXISTS app_projects (
+    app_id BIGINT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    filed_by TEXT,
+    filed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (app_id, project_id)
+);
+CREATE INDEX IF NOT EXISTS app_projects_project_idx ON app_projects (project_id);
+-- Colonne-compte repointée d'un bloc par la fusion de comptes : indexée.
+CREATE INDEX IF NOT EXISTS app_projects_filed_by_idx ON app_projects (filed_by);
+"""
+
+FICHIERS = """
+-- Les fichiers qu'un LECTEUR dépose dans une app (un PDF, un tableur, un document
+-- Word) pour qu'un agent les traite. Liés à l'app ET à qui les a déposés : seul lui — et
+-- les runs qu'il lance, qui tournent en son nom — les lit. Les octets sont sur le
+-- stockage média (`app-files/`), jamais en base.
+CREATE TABLE IF NOT EXISTS app_files (
+    id BIGSERIAL PRIMARY KEY,
+    -- `SET NULL`, pas `CASCADE` : une app supprimée laisse ses lignes SANS app, que la
+    -- purge de maintenance retire (l'objet du stockage d'abord) — jamais un objet
+    -- orphelin que plus aucune ligne ne désigne. Une ligne sans app n'est lue par
+    -- personne : toutes les lectures portent `app_id = …`.
+    app_id BIGINT REFERENCES apps(id) ON DELETE SET NULL,
+    sub TEXT NOT NULL,
+    s3_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    -- Le texte extrait AU DÉPÔT (`file_extract`, borné) et son statut (`ok`, `empty`
+    -- pour un scan sans texte, `unsupported` pour une image…) : un run le reçoit sans
+    -- relire l'objet, et l'app peut dire tout de suite qu'un scan n'a pas de texte.
+    text TEXT,
+    text_status TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS app_files_app_sub_idx ON app_files (app_id, sub, id DESC);
+CREATE INDEX IF NOT EXISTS app_files_sub_idx ON app_files (sub);
+"""
+
+FICHIERS_ORIGINE = """
+-- D'où vient un fichier d'app : `upload` = déposé par le lecteur dans l'app ; `agent` =
+-- rendu par un agent qu'il a lancé (`oto_apps op=put_file`), pour qu'il le récupère dans
+-- l'app. Colonne AJOUTÉE (révision `20261029_2100_app_files_origin`) : le fragment
+-- `FICHIERS` a déjà été joué là où elle manque.
+ALTER TABLE app_files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'upload';
 """

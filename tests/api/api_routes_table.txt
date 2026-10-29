@@ -15,6 +15,8 @@ OPTIONS /api/invitations/{token} -> options_handler
 POST /api/me/avatar -> avatar_save
 OPTIONS /api/me/avatar -> options_handler
 POST /api/me/projects/{project_id:int}/files -> project_files_upload
+POST /api/me/apps/{app_id:int}/files -> app_files_upload
+OPTIONS /api/me/apps/{app_id:int}/files -> options_handler
 OPTIONS /api/me/projects/{project_id:int}/files -> options_handler
 POST /api/me/projects/{project_id:int}/transcriptions/upload -> transcription_upload
 OPTIONS /api/me/projects/{project_id:int}/transcriptions/upload -> options_handler
@@ -762,6 +764,8 @@ POST /api/me/apps -> _handler
 OPTIONS /api/me/apps -> options_handler
 POST /api/me/apps/{app_id}/call -> _handler
 OPTIONS /api/me/apps/{app_id}/call -> options_handler
+POST /api/me/apps/{app_id}/consent -> _handler
+OPTIONS /api/me/apps/{app_id}/consent -> options_handler
 POST /api/me/upload-url -> _handler
 OPTIONS /api/me/upload-url -> options_handler
 POST /api/me/import -> _handler

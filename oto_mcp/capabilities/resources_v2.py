@@ -38,7 +38,7 @@ from ._types import Capability, RestBinding
 from .docs import partage as page
 from .registry import CAPABILITIES
 from .resources import (CREDENTIALS_DESCRIPTION, EXPIRY_DESCRIPTION,
-                        PENDING_DESCRIPTION, PUBLICATION_DESCRIPTION, TRANSFER_PROCEDURE,
+                        APP_DESCRIPTION, PENDING_DESCRIPTION, PUBLICATION_DESCRIPTION, TRANSFER_PROCEDURE,
                         ResourceInput, _resources)
 from .resources_contract import REFUS, ResourceOut, ResourceType
 
@@ -86,7 +86,7 @@ CAPABILITIES += [
             "BETA. Same governance surface as oto_resource (ADR 0030), with a STRICT "
             "input contract: resource_type is REQUIRED (no default) ∈ {datastore_namespace, "
             "project, procedure, doc}, and resource_id must be numeric. "
-            + TRANSFER_PROCEDURE + " " + page.DESCRIPTION
+            + TRANSFER_PROCEDURE + " " + page.DESCRIPTION + " " + APP_DESCRIPTION
             + " Prefer this tool over "
             "oto_resource: on the legacy one, omitting resource_type silently targets a "
             "datastore namespace, so op=transfer/share act on a DIFFERENT resource than the "

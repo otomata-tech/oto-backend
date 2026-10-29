@@ -741,6 +741,24 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
                                "qui ne mesure pas chaque appel — rendu à la file",
                                job.get("id"), job["org_id"], depot, appelant)
                 return None
+            if payeur is not None:
+                # LE PLANCHER (#1376, B) : l'entrée du premier tour ne se réserve pas ;
+                # un travail que le solde ne couvre pas ne part pas pour mourir au
+                # premier appel. AVANT l'estampille : refusé, il n'a rien consommé.
+                manque = tours.sous_le_plancher(job.get("sub"), job["org_id"],
+                                                (job.get("payload") or {}).get("model"))
+                if manque is not None and manque["code"] == budget.INDISPONIBLE:
+                    # Un solde ILLISIBLE n'est pas un solde insuffisant : rejouable,
+                    # comme au tour (`_REFUS_DU_TOUR`). Ni servi — le plancher n'est pas
+                    # su —, ni arrêté — une raison écrite sur un doute serait fausse :
+                    # rendu à la file sans compter la tentative.
+                    db.rendre_a_la_file(job["id"], appelant, _SOLDE_ILLISIBLE)
+                    logger.warning("travail %s (org %s) : solde de crédits illisible au "
+                                   "plancher — rendu à la file, ni servi ni arrêté",
+                                   job.get("id"), job["org_id"])
+                    return None
+                if manque is not None:
+                    return _refuser_sans_cle(job, appelant, _sous_le_plancher(job))
             if payeur is not None and not db.estampiller_cle_partagee(
                     job["id"], appelant, depot, payeur):
                 # Plus à ce worker (course) : rien n'est servi sur une clé qu'on ne
@@ -884,7 +902,7 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
              **({"cache_non_declare": True} if cache_non_declare else {})},
             prise.get("model"))
     except Exception:
-        enforce = budget.mode() == "enforce"
+        enforce = tours.mode_du_modele(prise.get("model")) == "enforce"
         logger.exception("travail %s : tour %s NON réglé (clé partagée `%s`) — %s", job_id,
                          tour, est.get("depot"), "refusé" if enforce else "le worker continue")
         if enforce:
@@ -1087,6 +1105,38 @@ _CLE_DEPOSEE_ILLISIBLE = (
     "clé `{depot}` déposée par l'organisation, mais illisible au coffre à la "
     "réservation — travail ni exécuté ni arrêté, réessai. Si cela dure, redépose la "
     "clé (Connecteurs).")
+
+
+_SOUS_LE_PLANCHER = (
+    f"{budget.INSUFFISANT} : le solde de crédits ne couvre pas le démarrage d'un agent "
+    "sur la clé partagée. Travail non exécuté. Recharge des crédits, ou dépose ta propre "
+    "clé (Connecteurs) ; {suite}")
+_SUITE_RECURRENT = "l'agent repartira à sa prochaine échéance."
+_SUITE_PONCTUEL = "puis relance ce travail."
+_SOLDE_ILLISIBLE = (
+    f"{budget.INDISPONIBLE} : solde de crédits illisible à la réservation — travail ni "
+    "exécuté ni arrêté, réessai.")
+
+
+def _agent_a_horloge(job: dict) -> bool:
+    """Le travail est-il l'occurrence d'un agent qui REPART seul — un déclencheur
+    programmé (`kind` `schedule`, un `cron`), allumé ? Le `trigger_id` de la charge n'est
+    posé que par le serveur (horloge, webhook, `oto_trigger op=run`) : c'est lui qui dit
+    de quel agent ce travail est un run. Un webhook, un appel direct, un agent éteint ou
+    retiré : ponctuel — rien ne le relancera à une échéance."""
+    tid = (job.get("payload") or {}).get("trigger_id")
+    if not str(tid or "").isdigit():
+        return False
+    t = db.get_trigger(int(tid), job["org_id"])
+    return bool(t and (t.get("kind") or "schedule") == "schedule" and t.get("cron")
+                and t.get("enabled"))
+
+
+def _sous_le_plancher(job: dict) -> str:
+    """La raison du plancher : « repartira à sa prochaine échéance » n'est vraie que pour
+    un agent à horloge ; un travail ponctuel doit être relancé."""
+    return _SOUS_LE_PLANCHER.format(
+        suite=_SUITE_RECURRENT if _agent_a_horloge(job) else _SUITE_PONCTUEL)
 
 
 _ATTEND_UN_WORKER_QUI_MESURE = (

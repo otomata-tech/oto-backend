@@ -237,6 +237,11 @@ _KNOWN: dict[str, str] = {
     # rend un `Match.PARTIAL` sur méthode non trouvée et poursuit son balayage.
     "/api/me/projects/{project_id:int}/files": NATURE,   # POST multipart
     "/api/me/projects/{project_id:int}/transcriptions/upload": NATURE,   # POST multipart (audio à transcrire)
+    # Le dépôt d'un fichier dans une app ouverte (`api/apps_files.py`) : même raison que
+    # le dépôt d'un fichier de projet — un `POST` multipart, corps BINAIRE borné avant
+    # lecture, sans modèle pydantic à en dériver. Tout le jugement (app, consentement de
+    # l'écran hôte, type sur les octets, plafonds) est dans `apps_appel.deposer`.
+    "/api/me/apps/{app_id:int}/files": NATURE,           # POST multipart
     "/api/copilot/attachments": NATURE,  # POST multipart (fichier joint à l'agent intégré) ; GET = capacité
     "/api/me/projects/{id}/export": NATURE,              # réponse application/zip
     # Le PDF d'une facture (#488). Même raison que l'export ci-dessus, et elle est

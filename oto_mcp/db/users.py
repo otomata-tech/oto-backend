@@ -74,14 +74,27 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
                 locale: Optional[str] = None) -> None:
     """Create the user row if missing, refresh email/name if known.
 
-    Le `(xmax = 0)` distingue insert/update sans SELECT préalable : 0 sur une ligne
-    fraîchement insérée, ≠ 0 sur un UPDATE — ce qui permet de ne déclencher les
-    effets de première inscription (réconciliation d'invitation, org maison) qu'au
-    vrai INSERT.
+    ⚠️ **N'écrit que si une colonne posée CHANGE.** Appelée à chaque requête REST
+    authentifiée et à chaque message MCP : l'ancien `INSERT … ON CONFLICT DO UPDATE`
+    réécrivait la ligne (et `updated_at`) à chaque fois, donc un verrou de ligne et un
+    COMMIT par requête — les appels parallèles d'un même compte se sérialisaient sur
+    sa ligne `users`. Une seule requête, deux CTE : l'UPDATE ne vise la ligne que si
+    `(email, name, locale)` change vraiment (`IS DISTINCT FROM`, donc NULL compris) ;
+    l'INSERT ne part que si la ligne manque. Ligne en place et rien de neuf = une
+    lecture pure, ni verrou ni écriture. Pas de `DO UPDATE … WHERE` : PostgreSQL y
+    VERROUILLE la ligne en conflit même quand la condition est fausse.
+    ⟹ `updated_at` date le dernier CHANGEMENT de la ligne, pas la dernière requête :
+    l'activité d'un compte se lit dans `tool_calls`, et rien ne la lisait ici.
+
+    `inserted` (un `EXISTS` sur ce que l'INSERT a rendu) distingue la naissance sans
+    SELECT préalable — ce qui permet de ne déclencher les effets de première
+    inscription (réconciliation d'invitation, org maison) qu'au vrai INSERT. Deux
+    premières requêtes simultanées : l'une insère, l'autre bute sur le conflit
+    (`DO NOTHING`) et rend `inserted=False`, comme l'UPDATE d'avant.
 
     `locale` (oto-backend#701) : signal DÉDUIT (`Accept-Language`, chemin REST
     interactif — cf. `api/base._authenticate`), jamais un choix. `COALESCE(users.locale,
-    EXCLUDED.locale)` — dans ce sens précis, pas celui d'email/name — pose la valeur
+    %(locale)s)` — dans ce sens précis, pas celui d'email/name — pose la valeur
     déduite UNIQUEMENT si la ligne n'en porte aucune : un `PUT /api/me/locale`
     (`me.locale.set`) reste prioritaire à vie, y compris face aux logins suivants.
     Les 14 autres sites d'appel ne passent rien (`None`) → `COALESCE(x, NULL) = x`,
@@ -90,16 +103,26 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     with _connect() as conn:
         row = conn.execute(
             """
-            INSERT INTO users (sub, email, name, locale)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT(sub) DO UPDATE SET
-                email = COALESCE(EXCLUDED.email, users.email),
-                name  = COALESCE(EXCLUDED.name,  users.name),
-                locale = COALESCE(users.locale, EXCLUDED.locale),
-                updated_at = NOW()
-            RETURNING (xmax = 0) AS inserted
+            WITH maj AS (
+                UPDATE users SET
+                    email = COALESCE(%(email)s, users.email),
+                    name  = COALESCE(%(name)s,  users.name),
+                    locale = COALESCE(users.locale, %(locale)s),
+                    updated_at = NOW()
+                 WHERE users.sub = %(sub)s
+                   AND (users.email, users.name, users.locale) IS DISTINCT FROM
+                       (COALESCE(%(email)s, users.email), COALESCE(%(name)s, users.name),
+                        COALESCE(users.locale, %(locale)s))
+            ), ins AS (
+                INSERT INTO users (sub, email, name, locale)
+                SELECT %(sub)s::text, %(email)s::text, %(name)s::text, %(locale)s::text
+                 WHERE NOT EXISTS (SELECT 1 FROM users WHERE sub = %(sub)s)
+                ON CONFLICT (sub) DO NOTHING
+                RETURNING 1
+            )
+            SELECT EXISTS (SELECT 1 FROM ins) AS inserted
             """,
-            (sub, email, name, locale),
+            {"sub": sub, "email": email, "name": name, "locale": locale},
         ).fetchone()
         # ⚠️ Une ligne qui vient de NAÎTRE peut être la résurrection d'un compte
         # qu'on a délibérément neutralisé, et le scénario n'a rien de théorique : un
@@ -445,6 +468,8 @@ _SUB_COLUMNS = [
     # ids numériques d'org/groupe : un sub Logto n'est jamais un entier → l'UPDATE nu
     # `col=old_sub` ne peut toucher que les lignes user.
     ("user_datastores", "owner_id"), ("projects", "owner_id"),
+    # Une app possédée par une personne (kind `app`, `owner_type='user'`) : même règle.
+    ("apps", "owner_id"),
     ("resource_grants", "principal_id"), ("resource_grants", "granted_by"),
     # Les couches de contexte d'une personne (sa note, ses guides perso) : des NŒUDS
     # depuis le lot M1. (La table `guides` a quitté cet inventaire le 23/09/2026 avec
@@ -598,6 +623,15 @@ _SUB_COLUMNS = [
     #   UPDATE nu. Laissées, elles désignaient un compte disparu (« inconnu ») ;
     ("docs", "updated_by"), ("docs", "verified_by"), ("doc_revisions", "edited_by"),
     ("apps", "created_by"), ("apps", "updated_by"), ("app_revisions", "edited_by"),
+    # à qui un consentement de geste d'app a été donné — c'est aussi le journal des
+    # gestes d'app : il suit la personne. Un consentement non brûlé ne vaut que deux
+    # minutes ; repointé, il ne gêne rien (aucune unicité sur `sub`).
+    ("app_consents", "sub"),
+    # qui a rangé une app dans un projet : attribution, hors PK, UPDATE nu.
+    ("app_projects", "filed_by"),
+    # qui a déposé un fichier dans une app : c'est aussi qui le LIT (lui seul, et ses
+    # runs) — il suit la personne, sinon ses fichiers lui deviendraient illisibles.
+    ("app_files", "sub"),
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),

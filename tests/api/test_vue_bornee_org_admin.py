@@ -470,3 +470,35 @@ def test_is_platform_operator_une_seule_requete_pour_toute_la_liste(client, mond
     r = client.get(f"/api/orgs/{monde['o']}", headers=_soi(ADMIN, monde["o"]))
     assert r.status_code == 200, r.text
     assert {m["sub"] for m in r.json()["members"]} == {ADMIN, MEMBRE, SIMPLE, OPERATEUR}
+
+
+def test_la_fiche_lit_ses_membres_une_fois_sans_get_user_par_membre(client, monde,
+                                                                    monkeypatch):
+    """La liste des membres tient en UNE lecture jointe à `users` — plus de
+    `db.get_user` par membre — et `member_count` la réutilise au lieu de la relire."""
+    from oto_mcp import db, org_store
+
+    vus, lectures = [], []
+    vrai_get_user = db.get_user
+    vraie_liste = org_store.list_org_members_with_users
+
+    def _get_user(sub):
+        vus.append(sub)
+        return vrai_get_user(sub)
+
+    def _liste(org_id):
+        lectures.append(org_id)
+        return vraie_liste(org_id)
+
+    monkeypatch.setattr(db, "get_user", _get_user)
+    monkeypatch.setattr(org_store, "list_org_members_with_users", _liste)
+    r = client.get(f"/api/orgs/{monde['o']}", headers=_soi(ADMIN, monde["o"]))
+    assert r.status_code == 200, r.text
+    corps = r.json()
+    assert lectures == [monde["o"]]
+    assert corps["org"]["member_count"] == len(corps["members"]) == 4
+    # Seul le porteur peut être relu (authentification, rôle) — jamais un autre membre.
+    assert set(vus) <= {ADMIN}
+    par_sub = {m["sub"]: m for m in corps["members"]}
+    assert par_sub[MEMBRE]["email"] == f"{MEMBRE}@vue-bornee.invalid"
+    assert par_sub[MEMBRE]["name"] == MEMBRE

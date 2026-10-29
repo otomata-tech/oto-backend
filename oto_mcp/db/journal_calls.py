@@ -127,13 +127,24 @@ def count_org_mcp_calls(org_id: int, *, since: datetime) -> int:
     `count_calls_of_org_runs_elsewhere`.
 
     `since` OBLIGATOIRE, même raison que ci-dessous : le coût est linéaire en fenêtre.
+
+    **Lu sur les totaux par jour** (`journal_jour.source`, `kind='mcp'`, filtre
+    `org_id`) : les jours clos consolidés, plus le journal direct pour le reste (la
+    veille avant la maintenance, le jour courant). Le compte direct d'un mois relisait
+    au heap toutes les lignes du mois de l'org, REST du tableau de bord comprises —
+    jusqu'au `statement_timeout` de la fiche d'org, qui l'appelle à chaque vue. Un jour
+    clos manquant au registre lève `journal_jour.AgregatIncomplet`.
     """
-    with _connect() as conn:
+    # Import différé : `journal_jour` importe ce module à son import.
+    from . import journal_jour
+    objet = "usage inclus d'une org"
+    with lecture_d_agregat(objet) as conn:
+        src, params = journal_jour.source(
+            conn, objet, kinds=("mcp",), mesures=("appels",),
+            filtres={"org_id": int(org_id)}, depuis=since)
         row = conn.execute(
-            "SELECT count(*) AS n FROM tool_calls l "
-            "WHERE l.kind = 'mcp' AND l.org_id = %s AND l.created_at >= %s",
-            (int(org_id), since),
-        ).fetchone()
+            f"SELECT COALESCE(sum(s.appels), 0)::bigint AS n FROM ({src}) s",
+            params).fetchone()
     return int(row["n"]) if row else 0
 
 

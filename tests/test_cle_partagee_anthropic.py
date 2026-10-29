@@ -189,6 +189,85 @@ def test_la_ferme_ne_recoit_jamais_la_cle_partagee(remise):
     assert remise["estampilles"] == []
 
 
+def test_sous_le_plancher_le_travail_s_arrete_AVANT_l_estampille(remise, monkeypatch):
+    """#1376 B : l'entrée du premier tour ne se réserve pas ; un travail que le solde ne
+    couvre pas ne part pas pour mourir au premier appel — arrêté, raison nommée, sans
+    estampille (il n'a rien consommé)."""
+    from oto_mcp.access import credits_tours as tours
+    vu = {}
+    monkeypatch.setattr(tours, "sous_le_plancher", lambda sub, org, model:
+                        vu.update(demande=(sub, org, model))
+                        or {"code": "insufficient_credits", "needed": 500, "available": 10})
+    rendu = RJ._avec_cle(_travail(payload={"model_family": "anthropic",
+                                           "model": "claude-sonnet-5"}),
+                         "anthropic", "worker:banc", worker=True, metre=True)
+    assert "model_key" not in rendu and "insufficient_credits" in rendu["delegation_refusee"]
+    assert remise["estampilles"] == [] and "insufficient_credits" in remise["arret"]
+    assert "rendu" not in remise
+    assert vu["demande"] == ("alexis", ORG, "claude-sonnet-5"), "le payeur, au modèle du travail"
+
+
+def test_un_solde_ILLISIBLE_au_plancher_rend_le_travail_a_la_file(remise, monkeypatch):
+    """Un registre illisible n'est pas un solde insuffisant : `spend_ledger_unavailable`
+    est rejouable. Ni servi (le plancher n'est pas su), ni arrêté : rendu à la file sans
+    compter la tentative, comme le worker qui ne mesure pas."""
+    from oto_mcp.access import credits_tours as tours
+    monkeypatch.setattr(tours, "sous_le_plancher", lambda sub, org, model: {
+        "code": "spend_ledger_unavailable", "needed": 500, "available": None})
+    assert _reserver() is None
+    assert remise["estampilles"] == [] and "arret" not in remise
+    assert remise["rendu"].startswith("spend_ledger_unavailable")
+
+
+def _agent(**kw):
+    return {"id": 7, "org_id": ORG, "kind": "schedule", "cron": "0 8 * * *",
+            "enabled": True, **kw}
+
+
+@pytest.mark.parametrize("declencheur,suite", [
+    (_agent(), "prochaine échéance"),
+    (_agent(kind="webhook", cron=None), "relance ce travail"),
+    (_agent(enabled=False), "relance ce travail"),
+    (None, "relance ce travail"),
+])
+def test_la_raison_du_plancher_suit_le_type_de_travail(remise, monkeypatch,
+                                                       declencheur, suite):
+    """« L'agent repartira à sa prochaine échéance » n'est vrai que d'un agent à horloge
+    allumé : un webhook, un agent éteint ou retiré ne repart pas seul."""
+    from oto_mcp.access import credits_tours as tours
+    monkeypatch.setattr(tours, "sous_le_plancher", lambda sub, org, model: {
+        "code": "insufficient_credits", "needed": 500, "available": 10})
+    monkeypatch.setattr(RJ.db, "get_trigger", lambda tid, org:
+                        declencheur if (tid, org) == (7, ORG) else pytest.fail("autre agent"))
+    rendu = RJ._avec_cle(_travail(payload={"model_family": "anthropic", "trigger_id": 7}),
+                         "anthropic", "worker:banc", worker=True, metre=True)
+    assert suite in rendu["delegation_refusee"] and suite in remise["arret"]
+
+
+def test_un_travail_direct_doit_etre_relance(remise, monkeypatch):
+    from oto_mcp.access import credits_tours as tours
+    monkeypatch.setattr(tours, "sous_le_plancher", lambda sub, org, model: {
+        "code": "insufficient_credits", "needed": 500, "available": 10})
+    monkeypatch.setattr(RJ.db, "get_trigger", lambda *a: pytest.fail("aucun agent"))
+    rendu = _reserver()
+    assert "relance ce travail" in rendu["delegation_refusee"]
+    assert "prochaine échéance" not in rendu["delegation_refusee"]
+
+
+def test_au_dessus_du_plancher_la_cle_partagee_part(remise, monkeypatch):
+    from oto_mcp.access import credits_tours as tours
+    monkeypatch.setattr(tours, "sous_le_plancher", lambda sub, org, model: None)
+    assert _reserver()["model_key"] == "sk-partagee"
+
+
+def test_la_cle_de_l_org_ne_lit_jamais_le_plancher(remise, monkeypatch):
+    from oto_mcp.access import credits_tours as tours
+    monkeypatch.setattr(RJ, "_cle_de_modele", lambda org, depot: ("sk-de-l-org", None))
+    monkeypatch.setattr(tours, "sous_le_plancher",
+                        lambda *a: pytest.fail("l'org paie son fournisseur"))
+    assert _reserver()["model_key"] == "sk-de-l-org"
+
+
 def test_la_cle_du_tenant_PRIMAIRE_se_refacture_comme_celle_de_la_plateforme(
         remise, monkeypatch):
     monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")

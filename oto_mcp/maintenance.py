@@ -36,6 +36,8 @@ Ils sont ici, chacun nommé, chacun jouable seul :
     oto-mcp maintenance copilot       purge des conversations de l'agent intégré sans vie
                                           depuis 30 jours (leurs annulations avec) et de
                                           ses jours de dépense de plus de 30 jours
+    oto-mcp maintenance app-files     purge des fichiers déposés dans une app depuis
+                                          30 jours (l'objet d'abord, puis la ligne)
     oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance index-concurrents <révision>
@@ -618,6 +620,32 @@ def copilot(*, dry_run: bool = False) -> dict:
             "attachments": store.oublier_pieces([p["id"] for p in pieces])}
 
 
+#: Ce qu'une app garde d'un fichier déposé par un lecteur : comme les pièces jointes de
+#: l'agent intégré (oto-backend#1420), décision du 28/10/2026.
+APP_FILES_RETENTION_JOURS = 30
+#: Au plus par passage : une purge en retard se rattrape sur plusieurs jours, sans
+#: tenir le timer.
+APP_FILES_PAR_PASSAGE = 5000
+
+
+def app_files(*, dry_run: bool = False) -> dict:
+    """Purge les fichiers déposés dans une app (`docs/apps.md`, « Des fichiers pour les
+    agents ») depuis `APP_FILES_RETENTION_JOURS` jours, et SANS ATTENDRE ceux dont l'app
+    a été supprimée (`app_files.app_id ON DELETE SET NULL` : la ligne reste pour que son
+    objet soit retiré) : l'objet du stockage d'abord, puis la ligne. Un run déjà lancé a
+    reçu leur texte ; un `read_file` après la purge rend `unknown_file`."""
+    from . import media_store
+    from .db import apps as store
+    if dry_run:
+        return {"retention_days": APP_FILES_RETENTION_JOURS,
+                "purgeables": store.count_files_older_than(APP_FILES_RETENTION_JOURS)}
+    rows = store.files_older_than(APP_FILES_RETENTION_JOURS, APP_FILES_PAR_PASSAGE)
+    for r in rows:
+        media_store.delete_by_key(r["s3_key"])
+    return {"retention_days": APP_FILES_RETENTION_JOURS,
+            "purged": store.delete_files(r["id"] for r in rows)}
+
+
 def digest_lecteurs(*, dry_run: bool = False) -> dict:
     """Résumé quotidien des lecteurs d'une procédure partagée, un mail par propriétaire.
 
@@ -658,6 +686,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "activation": activation,
     "digest-lecteurs": digest_lecteurs,
     "copilot": copilot,
+    "app-files": app_files,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -679,7 +708,8 @@ _ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # ⚠️ `journal-jour` est EN TÊTE de `_ALL` : la veille doit être consolidée tôt, avant
 # qu'un travail plus long (re-projection, index) ne consomme la fenêtre du timer.
 _ALL = ("journal-jour", "retention", "revisions", "blocks", "key-indexes", "alertes-credential",
-        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot")
+        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot",
+        "app-files")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

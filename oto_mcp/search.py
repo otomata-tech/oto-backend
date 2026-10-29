@@ -15,7 +15,10 @@ Invariants (plan lot 3 §4.2) :
   org active ∪ user (ce dernier dans l'org perso seulement).
 - **jamais de LLM au read** ; V1 lexicale (FTS `french` + repli d'accents).
 - la source connecteurs (registre en mémoire) est INJECTÉE par la capacité
-  (`connectors_catalog`) — ce module ne remonte pas dans la couche adaptateur.
+  (`connectors_catalog`) — ce module ne remonte pas dans la couche adaptateur ;
+- la source apps aussi (`apps_catalog`) : les apps que la LISTE des apps de l'org rend
+  (`capabilities/apps._org_list` — mêmes seams que la liste des projets), matchées
+  en mémoire sur leur titre.
 
 Deux familles de hits : **passages** (prose — page/brief/procedure/guide + ligne de
 datastore, avec fragment surligné) et **conteneurs** (tableau/fichier/connecteur —
@@ -37,7 +40,8 @@ from . import db, org_origin, ownership
 logger = logging.getLogger(__name__)
 
 _RRF_K = 60
-KINDS = ("page", "brief", "procedure", "guide", "tableau", "ligne", "fichier", "connecteur")
+KINDS = ("page", "brief", "procedure", "guide", "tableau", "ligne", "fichier", "connecteur",
+         "app")
 
 # Repli d'accents côté Python (miroir de db.projects._fold) — pour les sources
 # matchées en mémoire (tableaux, connecteurs).
@@ -70,7 +74,8 @@ def search(sub: str, org_id: int, q: str, *,
            scope: str = "org", project_id: Optional[int] = None,
            kinds: Optional[list[str]] = None, limit: int = 20,
            connectors_catalog: Optional[list[dict]] = None,
-           query_embedding: Optional[list[float]] = None) -> dict:
+           query_embedding: Optional[list[float]] = None,
+           apps_catalog: Optional[list[dict]] = None) -> dict:
     """Le verbe « retrouver ». `scope='project'` restreint à UN projet (déjà validé
     accessible par le caller) ; défaut = tous les projets accessibles de l'org.
     `query_embedding` (fourni par le handler async, hors event loop) active la
@@ -188,6 +193,8 @@ def search(sub: str, org_id: int, q: str, *,
             "updated_at": r.get("created_at"), "matched_by": "content"})
     if "connecteur" in wanted and connectors_catalog:
         _add(_match_connectors(q, connectors_catalog), lambda r: r)
+    if "app" in wanted and apps_catalog:
+        _add(_match_apps(q, apps_catalog), lambda r: r)
 
     # ── fusion RRF : dédup par (kind, ref) en SOMMANT les rangs réciproques ──
     # Une page trouvée par lexical ET sémantique cumule ses deux contributions →
@@ -209,7 +216,7 @@ def search(sub: str, org_id: int, q: str, *,
     for h in hits:
         if h.get("project_id") in projects:
             h["project_name"] = projects[h["project_id"]]["name"]
-    _stamp_origins(hits, sub, org_id, projects, namespaces)
+    _stamp_origins(hits, sub, org_id, projects, namespaces, apps_catalog or [])
 
     # Télémétrie (lot 3 Ship 1 §5) : le calllog ne trace que le MCP — log applicatif
     # anonymisé (hash de q, jamais la saisie) pour rendre les conditions V2 décidables.
@@ -285,7 +292,8 @@ def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
 
 
 def _stamp_origins(hits: list[dict], sub: str, org_id: int,
-                   projects: dict[int, dict], namespaces: list[dict]) -> None:
+                   projects: dict[int, dict], namespaces: list[dict],
+                   apps: Optional[list[dict]] = None) -> None:
     """Pose sur CHAQUE hit l'org où vit l'objet (`origin_org_id`) et s'il vit dans une
     AUTRE org que l'org active (`other_org`, `None` = on ne sait pas) — ADR 0071 : l'org
     d'un objet, jamais le chemin par lequel on l'atteint (`org_origin`).
@@ -298,14 +306,18 @@ def _stamp_origins(hits: list[dict], sub: str, org_id: int,
     - procédure → l'org active (la source ne lit que les procédures qu'elle possède) ;
     - guide → son palier : org active, plateforme (aucune org), note personnelle
       (inconnue — un nœud personnel ne porte pas son org) ;
-    - connecteur → une entrée du catalogue, pas un contenu rangé dans une org.
+    - connecteur → une entrée du catalogue, pas un contenu rangé dans une org ;
+    - app → son propriétaire (org, équipe, ou personne et son org de création).
 
     Coût : aucune requête au-delà de `project_labels` (déjà lue pour les noms), sauf
     UNE, groupée, si un propriétaire est une équipe."""
     ns_by_id = {r["id"]: r for r in namespaces}
+    app_by_id = {int(a["id"]): a for a in (apps or [])}
     owners = ([(p["owner_type"], p["owner_id"]) for p in projects.values()]
               + [(ns_by_id[i]["owner_type"], ns_by_id[i]["owner_id"])
-                 for i in {_ns_id(h) for h in hits} if i in ns_by_id])
+                 for i in {_ns_id(h) for h in hits} if i in ns_by_id]
+              + [(app_by_id[h["ref"]]["owner_type"], app_by_id[h["ref"]]["owner_id"])
+                 for h in hits if h["kind"] == "app" and h["ref"] in app_by_id])
     groups = org_origin.group_orgs(owners)
 
     def origine(h: dict) -> org_origin.Origine:
@@ -326,12 +338,39 @@ def _stamp_origins(hits: list[dict], sub: str, org_id: int,
             return org_origin.org_of(scope, owner_id, groups=groups)
         if h["kind"] == "connecteur":
             return None, True
+        if h["kind"] == "app":
+            a = app_by_id.get(h["ref"])
+            if a is None:
+                return None, False
+            return org_origin.org_of(a.get("owner_type"), a.get("owner_id"),
+                                     context_org_id=a.get("context_org_id"), groups=groups)
         raise ValueError(f"grain de recherche sans org d'origine : {h['kind']!r}")
 
     for h in hits:
         o = origine(h)
         h["origin_org_id"] = o[0]
         h["other_org"] = org_origin.other_org(o, org_id)
+
+
+def _match_apps(q: str, apps: list[dict]) -> list[dict]:
+    """Apps du CONTEXTE (`apps` = ce que la liste des apps de l'org rend) matchées en
+    mémoire sur leur titre. Rang : titre exact > titre partiel."""
+    fq = fold(q)
+    scored: list[tuple[int, dict]] = []
+    for a in apps:
+        title = a.get("title") or ""
+        ft = fold(title)
+        if ft == fq:
+            rank = 0
+        elif fq and fq in ft:
+            rank = 1
+        else:
+            continue
+        scored.append((rank, {
+            "kind": "app", "ref": int(a["id"]), "title": title,
+            "updated_at": a.get("updated_at"), "matched_by": "lexical"}))
+    scored.sort(key=lambda t: t[0])
+    return [h for _, h in scored]
 
 
 def _ns_id(hit: dict) -> Optional[int]:

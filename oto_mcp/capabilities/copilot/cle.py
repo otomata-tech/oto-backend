@@ -106,7 +106,7 @@ def reserver(cle: Cle, uid: str, sub: str, org_id: Optional[int], modele: str,
     except tours.TourRefuse as e:
         raise SansCle(e.code, str(e), {budget.INSUFFISANT: 402,
                                        budget.SANS_BAREME: 422}.get(e.code, 503)) from None
-    if not r.get("held") and budget.mode() != "off":
+    if not r.get("held") and tours.mode_du_modele(modele) != "off":
         raise SansCle(budget.SANS_BAREME, f"Calls to `{modele}` have no price in this "
                       "instance's credit scale yet: the shared key cannot be used for the "
                       "in-app agent.", 422)

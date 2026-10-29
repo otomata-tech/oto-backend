@@ -41,8 +41,7 @@ for an asynchronous job, the job (`meta.job_id`).
 nothing — it logs what `enforce` would refuse; `enforce` refuses with a named code;
 `off` reserves nothing. Named refusals: `insufficient_credits`, `credits_unpriced`
 (the function has no line in the scale), `spend_ledger_unavailable` (the ledger could
-not be written: retryable). An unreadable setting refuses to start
-(`verifier_reglages`).
+not be written: retryable). An unreadable setting refuses to start (`verifier_reglages`).
 
 Off the event loop: every function here that reads or writes the database is called
 from a worker thread (the tool's, or the edge's `run_in_threadpool`).
@@ -62,6 +61,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import bornes_processus, error_taxonomy, geste, limite_refus_top, session_org, tenancy
 from ..db import credits as db_credits
 from ..mcp_errors import McpError
+from . import credits_modes as modes
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +125,13 @@ def marge_sync_s() -> int:
 
 
 def verifier_reglages() -> None:
-    """The startup guard: every `OTO_CREDITS_*` setting is read once, and an unreadable
-    one refuses to start, naming it."""
-    mode()
+    """The startup guard: each `OTO_CREDITS_*` setting is read once, or refuses to start."""
+    modes.verifier()  # the instance's mode, and the per-function ones (`credits_modes`)
+    from .credits_tours import verifier_les_noms  # it reads the model catalogue
+    verifier_les_noms(modes.modes_par_fonction())
     hold_max_s()
     marge_sync_s()
-    if mode() != "off" and bornes_processus.reglages().outil_s <= 0:
+    if modes.un_mode_arme() and bornes_processus.reglages().outil_s <= 0:
         logger.warning("crédits : OTO_BORNE_OUTIL_S=0 (borne d'un appel d'outil désarmée) "
                        "— l'échéance d'un appel synchrone sans `timeout_s` déclaré est "
                        "OTO_CREDITS_HOLD_MAX_S (%d s)", hold_max_s())
@@ -304,11 +305,12 @@ def reserver(sub: str, org: Optional[int], key_mode: str) -> None:
     perimeter. Called by the resolver when a re-billed key wins (`check_usage`), once
     or several times per call: the reservation is made once. `key_mode`: its rung
     (`rang_refacture`)."""
-    m = mode()
     appel = _appel()
-    if m == "off" or appel is None or "hold" in appel or "refus" in appel:
+    if appel is None or "hold" in appel or "refus" in appel:
         return
     c = _PERIMETRE[appel["outil"]]
+    if (m := modes.mode_de(c.connector, c.function)) == "off":
+        return
     from oto.connectors import cost
     try:
         if c.unites is not None:
@@ -423,7 +425,7 @@ def solder_reussite(releve: Optional[dict]) -> None:
         logger.warning("crédits : %s n'a pas noté ses réponses — réglé au pire cas",
                        appel["outil"])
         limite_refus_top.noter_credits(f"unreported:{appel['outil']}", hold["payer"],
-                                       mode(), time.time())
+                                       modes.mode_de(c, f), time.time())
         _regler(appel["uid"], hold, hold["quantity"], {"from": "unreported",
                                                        "exceeded": False})
         return

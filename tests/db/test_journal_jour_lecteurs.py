@@ -360,6 +360,26 @@ def test_tenants(registre, jours):
             if c["appels"]} == nus
 
 
+def _ref_usage_inclus(org_id, since):
+    with _connect() as conn:
+        return int(conn.execute(
+            "SELECT count(*) AS n FROM tool_calls l "
+            "WHERE l.kind = 'mcp' AND l.org_id = %s AND l.created_at >= %s",
+            (int(org_id), since)).fetchone()["n"])
+
+
+@pytest.mark.parametrize("decalage", [timedelta(0), timedelta(days=1), timedelta(days=2),
+                                      timedelta(days=5), timedelta(days=11),
+                                      timedelta(days=5, hours=7)])
+@pytest.mark.parametrize("org_id", [1, 2, 3])
+def test_usage_inclus_du_mois(registre, jeu, decalage, org_id):
+    """Le compteur de la fiche d'org (`billing.status`) : un début de mois est minuit
+    pile ; un début au milieu d'un jour vérifie le morceau direct d'avant les totaux."""
+    since = jeu["minuit"] - decalage
+    assert journal_calls.count_org_mcp_calls(org_id, since=since) == \
+        _ref_usage_inclus(org_id, since)
+
+
 # ── les refus : jamais une somme fausse, jamais le journal en silence ──────────────
 
 

@@ -123,7 +123,9 @@ def test_les_deux_chemins_d_authentification_PUBLIENT(monkeypatch):
     # Trois depuis le 09/09/2026 : jeton de compte `oto_`, session JWT, et le
     # secret de MACHINE d'un worker de plateforme (`otow_`) — qui publie son
     # `worker_sub`, pas un compte, mais publie. Quatre depuis le 24/09/2026 :
-    # l'identité de SERVICE (#1068), qui publie `service:<client_id>`.
-    assert len(succes) == 4, f"{len(succes)} chemins de succès — le banc doit suivre"
+    # l'identité de SERVICE (#1068), qui publie `service:<client_id>`. Cinq depuis le
+    # 29/10/2026 : le porteur déjà jugé pour la même requête (`CLE_PORTEUR`), qui
+    # republie ce que le premier appel a publié.
+    assert len(succes) == 5, f"{len(succes)} chemins de succès — le banc doit suivre"
     src = inspect.getsource(ab._authenticate)
-    assert src.count("_publier_principal(") == 4
+    assert src.count("_publier_principal(") == 5

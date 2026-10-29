@@ -444,6 +444,36 @@ def test_une_reservation_ouverte_la_veille_tient_settled_as_of_jusqu_a_sa_clotur
     assert regle == as_of > lendemain
 
 
+
+def test_settled_as_of_par_payeur_n_attend_pas_la_reservation_d_un_autre(live):
+    """`payer` : la réservation ouverte d'un payeur ne retient que SON horizon. Celui
+    d'un autre payeur suit `as_of` ; celui du flux entier (sans `payer`) l'attend."""
+    retenu, libre = f"org:{_org()}", f"org:{_org()}"
+    call_uid = f"autre-{uuid.uuid4().hex[:8]}"
+    assert db_credits.reserver(
+        call_uid=call_uid, payer=retenu, connector="fullenrich", function="submit",
+        unit="credits", scale_version=1, quantity=1, reserved=3, deadline_s=24 * 3600,
+        forcer=True).posee
+    try:
+        with _connect() as conn:
+            posee = datetime.fromisoformat(conn.execute(
+                "UPDATE credit_holds SET created_at = NOW() - interval '25 hours' "
+                "WHERE call_uid = %s RETURNING created_at", (call_uid,)
+            ).fetchone()["created_at"]).replace(tzinfo=timezone.utc)
+
+        def horizons(payer=None):
+            page = _appel("service.credits.movements", limit=1000, payer=payer)
+            return (datetime.fromisoformat(page["as_of"]),
+                    datetime.fromisoformat(page["settled_as_of"]))
+        assert _attendre(lambda: (lambda h: h[1] == h[0])(horizons(libre))), \
+            "l'horizon d'un payeur sans réservation suit as_of"
+        as_of, regle = horizons(retenu)
+        assert regle == posee < as_of, "le payeur qui attend reste à sa réservation"
+        assert horizons()[1] <= posee, "sans payer : tous payeurs, comme avant"
+    finally:
+        assert db_credits.liberer(call_uid)
+    assert _refus("service.credits.movements", payer="pas-un-payeur").code == "invalid_payer"
+
 def test_un_reglement_que_l_horizon_retient_tient_settled_as_of(live, pg_dsn):
     """La réservation est réglée, sa transaction validée, mais un xid plus ancien — d'une
     autre base : `_SESSIONS_ECRIVANTES` ne le voit pas, `as_of` passe la réservation —

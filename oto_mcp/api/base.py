@@ -156,6 +156,28 @@ def _publier_principal(request: Request, sub: str, *,
     }
 
 
+# Clé du porteur DÉJÀ authentifié pour cette requête, déposée dans le `scope` ASGI.
+#
+# ⚠️ Pourquoi : `ViewAsMiddleware` authentifie le porteur pour juger `X-Oto-Org` /
+# `X-Oto-Group` / `X-Oto-View-As`, puis le handler rappelle `_authenticate` — la
+# même requête payait DEUX fois la vérification, la garde d'identité et
+# l'`upsert_user` (4 à 5 emprunts au pool de plus, sur le chemin de chaque appel du
+# tableau de bord, qui pose `X-Oto-Org` partout). Le second appel reprend ici le
+# porteur du premier, à options IDENTIQUES seulement (`cle`) : une route qui
+# refuse les jetons API ou ouvre les services refait tout. Les gardes (pause,
+# tenant désactivé, portée du jeton, verrou d'org) ont été jugées par le premier
+# appel, sur la même requête ; le second ne fait qu'appliquer la vue.
+# ⚠️ Un REFUS ne se mémorise pas : le handler le refait, et le rend.
+CLE_PORTEUR = "oto_porteur_authentifie"
+
+
+def _memoriser_porteur(request: Request, cle: tuple, sub: str, *, scopes=None,
+                       token_id=None, token_kind=None, verrou=None) -> None:
+    request.scope[CLE_PORTEUR] = {"cle": cle, "sub": sub, "scopes": scopes,
+                                  "token_id": token_id, "token_kind": token_kind,
+                                  "verrou": verrou}
+
+
 def _id_du_tableau(sub: str, adresse: str):
     """L'identifiant du tableau que `adresse` (un nom) désigne pour `sub` — `None` s'il
     n'en désigne aucun, ou plusieurs : un nom qui ne résout pas n'ouvre rien."""
@@ -191,6 +213,26 @@ async def _authenticate(
     (`auth.service_identity`). Faux par défaut : seule une capacité dont la règle
     lit ce principal l'ouvre (`_rest_adapter`).
     """
+    # Porteur déjà authentifié pour CETTE requête (`CLE_PORTEUR`) : les variables de
+    # contexte sont reposées depuis la mémoire plutôt que supposées survivre — une
+    # portée de jeton perdue en route vaudrait un jeton non porté.
+    cle = (allow_query_token, allow_api_token, allow_issuer_token, allow_service)
+    deja = request.scope.get(CLE_PORTEUR)
+    if deja is not None and deja["cle"] == cle:
+        platform_worker.set_current(None)
+        service_identity.set_current(None)
+        token_scopes.set_current(deja["scopes"], deja["token_id"])
+        verrou_org.poser(deja["verrou"])
+        servi = _maybe_view_as(deja["sub"], apply_view_as)
+        if deja["verrou"] is not None and servi != deja["sub"] and verrou_org.courant():
+            return None, _json_error(
+                request, 403, verrou_org.CODE,
+                "A hosted agent's token cannot view as another account.")
+        # Le journal a la même publication que le premier appel : reposée, pas supposée.
+        _publier_principal(request, deja["sub"], token_id=deja["token_id"],
+                           token_kind=deja["token_kind"])
+        return servi, None
+
     auth = request.headers.get("authorization", "")
     token: str | None = None
     if auth.lower().startswith("bearer "):
@@ -310,6 +352,9 @@ async def _authenticate(
         if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"])):
             return None, _json_error(request, 403, *coupe)
         verrou_org.poser(verrou := verrou_org.depuis_ligne(row))
+        _memoriser_porteur(request, cle, row["sub"], scopes=scopes,
+                           token_id=row.get("token_id"),
+                           token_kind=row.get("token_kind"), verrou=verrou)
         servi = _maybe_view_as(row["sub"], apply_view_as)
         # Le verrou ne vise que le porteur : « voir en tant que » un autre compte
         # l'éteindrait. Sous un jeton verrouillé, la consultation est refusée.
@@ -365,7 +410,8 @@ async def _authenticate(
     # de l'émetteur du tenant. Vérifier avant le drain ne la verrait pas.
     if (coupe := await run_in_threadpool(garde_identite.refus, sub)):
         return None, _json_error(request, 403, *coupe)
-    # upsert_user = DB à CHAQUE requête REST → threadpool (jamais dans la loop).
+    # upsert_user = DB à CHAQUE requête REST → threadpool (jamais dans la loop) ; une
+    # LECTURE quand rien ne change (cf. son docstring), une écriture sinon.
     # locale (#701) : signal déduit de l'en-tête, jamais un choix — `upsert_user`
     # ne le pose que si la ligne n'en porte encore aucun (COALESCE côté SQL).
     try:
@@ -383,6 +429,7 @@ async def _authenticate(
         # la NAISSANCE d'un compte d'un tenant désactivé (#1165) — la garde ci-dessus la
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
+    _memoriser_porteur(request, cle, sub)
     servi = _maybe_view_as(sub, apply_view_as)
     # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
     # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une

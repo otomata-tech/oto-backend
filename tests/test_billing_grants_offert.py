@@ -306,14 +306,16 @@ def test_la_fenetre_est_le_mois_en_cours(monkeypatch):
 
 def test_le_compteur_compte_les_appels_dagent_pas_la_navigation():
     """Le rattachement RÉEL (`tool_calls.org_id`) et le seul genre 'mcp'. Un préfixe
-    de nom d'outil a déjà produit un faux résultat : il n'en reste aucune trace ici."""
+    de nom d'outil a déjà produit un faux résultat : il n'en reste aucune trace ici.
+    Lu sur les totaux par jour : la nature et l'org passent par `journal_jour.source`,
+    dont l'exactitude se juge dans `tests/db/test_journal_jour_lecteurs.py`."""
     import inspect
 
     from oto_mcp.db import journal_calls
 
     src = inspect.getsource(journal_calls.count_org_mcp_calls)
-    assert "l.kind = 'mcp'" in src
-    assert "l.org_id = %s" in src
+    assert 'kinds=("mcp",)' in src
+    assert 'filtres={"org_id": int(org_id)}' in src
     assert "LIKE" not in src.upper().replace("UNLIKE", ""), \
         "aucun filtre par motif de nom d'outil"
 

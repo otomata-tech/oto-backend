@@ -33,6 +33,7 @@ from oto.tools.http import HttpConnectorClient
 from .. import access, egress
 from ..connectors import http_operations
 from ..texte_tiers import cloture
+from .lecture import LECTURE
 from ..auth.hooks import current_user_sub_from_token
 
 log = logging.getLogger("oto_mcp.tools.http")
@@ -54,6 +55,7 @@ RETRYABLE_STATUSES = frozenset({429, 503})
 def register(mcp: FastMCP) -> None:
     @mcp.tool(
         name="http_get",
+        annotations=LECTURE,
         description=(
             "Read-only HTTP GET call to the API configured for your org "
             "(`http` connector). `path` = path relative to the base_url (starts "

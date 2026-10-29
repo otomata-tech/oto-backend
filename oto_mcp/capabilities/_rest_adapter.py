@@ -207,7 +207,9 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         # la requête suivante servie par la même tâche.
         jeton_client = client_trace.set_current(
             ip=client_trace.ip_de_requete(request),
-            user_agent=request.headers.get("user-agent"))
+            user_agent=request.headers.get("user-agent"),
+            origin=request.headers.get("origin"),
+            fetch_dest=request.headers.get("sec-fetch-dest"))
         # Le GESTE de la requête (oto#273), autour du handler comme l'empreinte : QUI
         # écrit et par quel porteur, tel que l'authentification l'a résolu
         # (`api.base._publier_principal`). Le porteur réel, jamais la cible d'un

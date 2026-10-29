@@ -213,8 +213,8 @@ def current_user_sub_from_token() -> Optional[str]:
     if not alias_drain_armed():
         return sub
     # Une portée ouverte ⟹ la canonicalisation (un SELECT) et le
-    # rafraîchissement (un INSERT … ON CONFLICT, donc un COMMIT) ne se
-    # paient qu'UNE fois par message, quel que soit le nombre
+    # rafraîchissement (une lecture, une écriture seulement si l'adresse ou le
+    # nom change) ne se paient qu'UNE fois par message, quel que soit le nombre
     # d'intermédiaires qui redemandent la même identité dans le même
     # appel. Mesuré le 09/09/2026 sur la chaîne servie : 10 allers-retours
     # PG par `tools/call`, tous dans la boucle, pour UNE valeur.

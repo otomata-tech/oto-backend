@@ -17,6 +17,7 @@ rejoindre n'avait aucun moyen de le dire, et son invitation restait en attente.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from typing import Literal, Optional
@@ -29,6 +30,8 @@ from ... import email as email_mod  # alias : le param `email` d'emit_invitation
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 _ID = {"id": "org_id"}
 _INVITE_TTL_DAYS = int(os.environ.get("OTO_MCP_INVITE_TTL_DAYS", "7"))
@@ -211,6 +214,11 @@ class InvitationAccepted(BaseModel):
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
     resource_role: Optional[str] = None
+    # L'org d'où l'invité OUVRE cet objet, pour que le front y mène —
+    # `/org/<resource_org_id>/apps/<resource_id>` : celle où l'objet vit s'il en est
+    # membre, sinon son org active (un objet partagé à une personne se lit par son
+    # numéro, d'où qu'elle soit). Null quand aucune n'est connue.
+    resource_org_id: Optional[int] = None
 
 
 # --- Inputs -----------------------------------------------------------------
@@ -339,6 +347,7 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     pour router, l'agent pour supposer où tombent ses appels sans axe."""
     if not inp.token:
         raise AuthzDenied(400, "missing_token", "Aucun token d'invitation fourni.")
+    _garde_partage_d_app(ctx, inp.token)
     res = org_store.accept_invitation(inp.token, ctx.sub)
     if not res:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide, expirée ou déjà utilisée.")
@@ -346,6 +355,8 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
         return {"ok": True, "resource_type": res["resource_type"],
                 "resource_id": res.get("resource_id"),
                 "resource_role": res.get("resource_role"),
+                "resource_org_id": _org_ou_l_ouvrir(ctx.sub, res["resource_type"],
+                                                    res.get("resource_id")),
                 "name": res.get("resource_name"),
                 "active_org": org_store.get_active_org(ctx.sub)}
     org = org_store.get_org(res["org_id"]) if res.get("org_id") else None
@@ -359,6 +370,61 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
             "group_id": res.get("group_id"), "group_role": res.get("group_role"),
             "active_org": org_store.get_active_org(ctx.sub),
             "name": org["name"] if org else None}
+
+
+# Les partages en attente LIÉS à l'adresse invitée : les accepter n'est pas bearer. Une
+# app agit au nom de son lecteur (elle écrit, lance des agents en son nom) : le lien
+# d'invitation transféré, ou tombé dans une autre boîte, ne doit pas en ouvrir une à un
+# autre compte que celui de l'adresse qui l'a reçu. Les invitations d'ORG et d'équipe,
+# et les partages en attente des autres objets, restent bearer (inchangés).
+_PARTAGES_LIES_A_L_ADRESSE = frozenset({"app"})
+
+
+def _garde_partage_d_app(ctx: ResolvedCtx, token: str) -> None:
+    """Refuse d'accepter le partage en attente d'une APP depuis un compte qui n'a pas
+    l'adresse invitée (l'adresse du compte, `users.email`, celle que l'annuaire a
+    vérifiée à l'inscription). Une invitation déjà consommée ou inconnue passe : c'est
+    l'acceptation qui la juge (idempotence, 410)."""
+    inv = org_store.get_invitation_by_token(token)
+    if not inv or inv.get("resource_kind") not in _PARTAGES_LIES_A_L_ADRESSE:
+        return
+    if not _same_address(inv.get("email"), (db.get_user(ctx.sub) or {}).get("email")):
+        raise AuthzDenied(
+            403, "not_the_invitee",
+            "Ce partage d'app est adressé à une autre adresse que celle de ton compte : "
+            "connecte-toi avec l'adresse invitée, ou demande à l'émetteur de partager "
+            "l'app avec la tienne.")
+
+
+def _org_de_la_ressource(resource_type: Optional[str], rid) -> Optional[int]:
+    """L'org où vit un objet partagé, pour y mener l'invité. Best-effort : None plutôt
+    qu'un refus — l'accès est donné, seule l'adresse d'arrivée en dépend."""
+    if not resource_type or rid is None:
+        return None
+    try:
+        if resource_type == "app":
+            from ..apps_manifeste import org_de_l_app
+            row = db.apps.owner(int(rid))
+            return org_de_l_app(row) if row else None
+        from ... import ownership
+        from ..resources_contract import KIND_OF
+        org, connue = ownership.org_ou_vit(KIND_OF.get(resource_type, resource_type), str(rid))
+        return int(org) if connue and org is not None else None
+    except Exception:  # noqa: BLE001 — l'adresse d'arrivée ne casse jamais l'acceptation
+        logger.warning("org d'un objet partagé illisible (%s %s)", resource_type, rid,
+                       exc_info=True)
+        return None
+
+
+def _org_ou_l_ouvrir(sub: str, resource_type: Optional[str], rid) -> Optional[int]:
+    """L'org d'où l'invité (l'appelant, `sub`) ouvre l'objet : celle où il vit s'il en
+    est membre, sinon son org courante — par le seam (`access.current_org`), l'appelant
+    étant l'acteur de cette requête."""
+    from ... import access, roles
+    org = _org_de_la_ressource(resource_type, rid)
+    if org is not None and roles.is_org_member(sub, int(org)):
+        return int(org)
+    return access.current_org(sub)
 
 
 def _invite_reject(ctx: ResolvedCtx, inp: InviteRejectInput) -> dict:
@@ -435,8 +501,12 @@ CAPABILITIES += [
         description=("Accept an invitation by its mail token. An org/team invitation "
                      "joins the org; a pending SHARE of one resource (`resource_type` "
                      "in the answer) gives access to that resource only, and joins "
-                     "nothing."),
+                     "nothing. A pending share of an APP is accepted only by the "
+                     "account whose address it was sent to."),
         rest=RestBinding("POST", "/api/me/invitations/accept"),
+        errors=(DeclaredError(403, "not_the_invitee",
+                              "partage en attente d'une app accepté depuis un compte "
+                              "dont l'adresse n'est pas l'adresse invitée"),),
     ),
     Capability(
         key="org.invite.reject", handler=_invite_reject, Input=InviteRejectInput,

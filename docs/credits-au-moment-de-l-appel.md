@@ -160,7 +160,8 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   son règlement, à venir, sera daté de plus tard. Juger réglés les appels d'une
   période se fait donc sur `settled_as_of`, pas sur `as_of`, sans connaître l'échéance.
   - **Le calcul** : le plus ancien de `as_of` et du début (`created_at`) de la plus
-    ancienne réservation, tous payeurs confondus, encore OUVERTE ou réglée par un
+    ancienne réservation — tous payeurs confondus, ou ceux du seul `payer` passé en
+    paramètre — encore OUVERTE ou réglée par un
     mouvement `settle` que l'horizon du curseur retient encore (`xid >=
     pg_snapshot_xmin`) — lu dans le MÊME instantané que la page et le terme (3)
     d'`as_of`. Toute réservation posée avant est close (réglée, libérée ou échue), et
@@ -180,6 +181,10 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
     son `created_at` (`NOW()`, le début de la transaction) —, ou elle a commencé après.
     D'où le terme (2), qui compte aussi les rôles qui peuvent insérer dans
     `credit_holds`.
+  - **Par payeur** (`?payer=org:<id>`) : le même calcul sur les seules réservations de
+    ce payeur, et la même preuve de monotonie, restreinte à lui. Le relevé d'un payeur
+    n'attend plus l'appel asynchrone d'un autre (24 h au pire) ; la page et `as_of`
+    restent ceux du flux entier.
   - **`null`** quand `as_of` l'est.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
@@ -282,6 +287,34 @@ tenant→org (son quota) est vérifiée d'abord : son refus ne laisse aucune ré
 | `report` (défaut) | oui ; la réservation est posée même au-delà du disponible | jamais : journalise ce qu'`enforce` refuserait |
 | `enforce` | oui | `insufficient_credits` (non rejouable), `credits_unpriced` (fonction sans ligne au barème, non rejouable), `spend_ledger_unavailable` (registre illisible ou non écrit, rejouable) |
 | `off` | non | jamais |
+
+**Un mode par fonction** (`OTO_CREDITS_MODE_FUNCTIONS`, #1376 E) : une fonction du barème
+peut tourner dans son propre mode, qui l'emporte sur `OTO_CREDITS_MODE` pour elle
+(`credits_modes.mode_de`). Liste `<connecteur>.<fonction>=<mode>` séparée par des virgules ; un
+`*` final nomme toute fonction qui commence ainsi ; un nom exact l'emporte toujours sur un
+motif (l'étoile ne compte pas), et entre motifs le préfixe le plus long. Le cas pour
+lequel il existe : `anthropic.messages:*=enforce` — les appels au modèle d'un agent
+hébergé ou de l'agent intégré refusent (`credits_tours.mode_du_modele`), pendant que les
+outils du périmètre restent en `report`. Illisible, nommée deux fois, ou qui ne nomme aucune
+fonction que le barème sait tarifer — coût déclaré d'un connecteur (`oto.connectors.declared`),
+ou `anthropic.messages:<modèle>` du catalogue des agents hébergés (`runner_models`) — :
+refuse le démarrage (`credits_modes.verifier`), jamais un retour silencieux au mode de
+l'instance. La garde de la borne d'outil désarmée (`OTO_BORNE_OUTIL_S=0`) se lit dès
+qu'UNE fonction réserve, même sur une instance `off`.
+
+**Le plancher d'un travail** (`OTO_CREDITS_JOB_FLOOR`, #1376 B) : avant qu'un travail
+d'agent hébergé parte sur une clé refacturée, son payeur doit avoir ce disponible, en
+unités (solde − réservations ouvertes, `credits_tours.sous_le_plancher`) — l'entrée du
+premier tour ne se réserve pas, et un travail ne doit pas partir pour mourir au premier
+appel. Lu à la réservation du travail, APRÈS les gardes ferme et mesure, AVANT
+l'estampille (`capabilities/runner_jobs._avec_cle`) : en `enforce` (mode de la fonction du
+modèle), le travail s'arrête, raison écrite `insufficient_credits` — « l'agent repartira à sa
+prochaine échéance » pour l'occurrence d'un agent à horloge allumé, « relance ce travail »
+sinon (`runner_jobs._agent_a_horloge`) ; en `report`, journalisé. Un solde illisible, en
+`enforce`, n'est pas un solde insuffisant : `spend_ledger_unavailable`, rejouable — le travail
+est rendu à la file sans compter la tentative, ni servi ni arrêté. Absent ou 0 : aucun
+plancher. Un dépassement d'un tour sous zéro reste admis (l'entrée et le cache se règlent `exceeded: true`), visible au
+grand livre.
 
 Le TEXTE de `insufficient_credits` ne porte aucun montant : l'unité de budget est celle de
 l'instance, et un nombre nu tromperait le lecteur. Le pire cas réservé et le disponible

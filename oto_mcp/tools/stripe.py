@@ -53,6 +53,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from .lecture import LECTURE
 
 # Stripe caps its lists at 100 and falls back SILENTLY to 10 when `limit` is
 # omitted. So we always set an explicit value.
@@ -177,7 +178,7 @@ def register(mcp: FastMCP) -> None:
     # Search — the most valuable read surface
     # ================================================================
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def stripe_search(
         resource: Literal["customers", "invoices", "subscriptions", "charges",
                           "payment_intents", "products", "prices"],
@@ -297,7 +298,7 @@ def register(mcp: FastMCP) -> None:
     # Subscriptions
     # ================================================================
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def stripe_subscription(
         op: Literal["list", "get", "items"] = "list",
         subscription_id: Optional[str] = None,
@@ -532,7 +533,7 @@ def register(mcp: FastMCP) -> None:
     # Payments — intents, charges, refunds, disputes
     # ================================================================
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def stripe_payment(
         op: Literal["list_intents", "get_intent", "list_charges", "get_charge",
                     "list_refunds", "get_refund", "list_disputes",
@@ -605,7 +606,7 @@ def register(mcp: FastMCP) -> None:
     # Balance, balance transactions, payouts
     # ================================================================
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def stripe_balance(
         op: Literal["get", "transactions", "transaction", "payouts", "payout"] = "get",
         transaction_id: Optional[str] = None,
@@ -1001,7 +1002,7 @@ def register(mcp: FastMCP) -> None:
     # Account activity
     # ================================================================
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def stripe_event(
         op: Literal["list", "get", "webhook_endpoints"] = "list",
         event_id: Optional[str] = None,

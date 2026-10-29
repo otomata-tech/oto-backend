@@ -79,6 +79,19 @@ async def test_les_lecteurs_de_messagerie_sont_declares_en_lecture():
 
 
 @pytest.mark.asyncio
+async def test_les_lectures_stripe_et_http_get_sont_declarees():
+    """Un rapport financier (Stripe + une banque branchée en API personnalisée) se
+    synchronise par recette : ces outils ne font que lire chez leur fournisseur.
+    `stripe_invoice` et `stripe_customer` restent non déclarés (brouillon, création)."""
+    servis = {t.name: t for t in await _outils()}
+    for nom in ("http_get", "stripe_search", "stripe_subscription", "stripe_payment",
+                "stripe_balance", "stripe_event"):
+        assert en_lecture(servis[nom]), nom
+    for nom in ("stripe_invoice", "stripe_customer", "stripe_catalog", "stripe_checkout"):
+        assert not en_lecture(servis[nom]), nom
+
+
+@pytest.mark.asyncio
 async def test_les_lecteurs_lemlist_sont_declares_en_lecture():
     """Une recette compare les leads d'un tableau aux campagnes avant de pousser :
     lister, lire une campagne, ses leads, ses activités, un résultat d'enrichissement."""

@@ -342,3 +342,66 @@ def test_une_ligne_discrete_d_un_tableau_tres_actif_rend_ses_gestes(live, monkey
         with _connect() as conn:
             conn.execute("DELETE FROM tool_calls WHERE args->>'ns_id' = %s", (ns,))
             conn.commit()
+
+
+def test_l_activite_d_un_tableau_lit_l_index_du_tableau_sans_doublon(live, monkeypatch):
+    """Contre une vraie base (29/10/2026, `GET …/activity` en 503 `route_busy`) :
+    20 000 gestes d'un autre tableau, dans une autre org, et sur le tableau visé deux
+    gestes résolus (`ns_id`) et une création journalisée par son seul NOM. La page rend
+    les trois, une fois chacun ; la branche `ns_id` passe par `idx_tool_calls_ns`, et
+    plus rien ne parcourt `tool_calls` à rebours par date."""
+    from contextlib import contextmanager
+
+    from oto_mcp.db import usage
+    from oto_mcp.db._conn import _connect
+
+    ns, autre, nom, org = "876543", "876544", "activite-sans-ou", 4242
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO tool_calls (tool, kind, org_id, args, created_at) "
+            "SELECT 'data_write', 'mcp', %s, jsonb_build_object('ns_id', %s::text), "
+            "now() - g * interval '1 minute' FROM generate_series(1, 20000) g",
+            (org + 1, autre))
+        for minutes, args in (
+                (5, {"ns_id": ns, "datastore": nom}),
+                (900, {"ns_id": ns, "datastore": ns}),
+                # la création : le tableau n'est pas encore résolu, seul le nom est écrit
+                (19990, {"datastore": nom}),
+                # un homonyme résolu vers un AUTRE tableau : pas ce tableau
+                (60, {"ns_id": autre, "datastore": nom})):
+            conn.execute(
+                "INSERT INTO tool_calls (tool, kind, org_id, args, created_at) "
+                "VALUES ('data_write', 'mcp', %s, %s::jsonb, "
+                "now() - %s * interval '1 minute')", (org, json.dumps(args), minutes))
+        conn.execute("ANALYZE tool_calls")
+        conn.commit()
+
+    vus: dict = {}
+
+    class _Espion:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, params=None):
+            vus.update(sql=sql, params=params)
+            return self._conn.execute(sql, params)
+
+    @contextmanager
+    def _agregat(objet, **kw):
+        with _connect() as conn:
+            yield _Espion(conn)
+
+    monkeypatch.setattr(usage, "_agregat", _agregat)
+    try:
+        out = usage.datastore_activity(int(ns), nom, owner_type="org",
+                                       owner_id=str(org), limit=50)
+        assert len(out) == 3, out
+        with _connect() as conn:
+            plan = "\n".join(next(iter(r.values())) for r in conn.execute(
+                "EXPLAIN " + vus["sql"], vus["params"]).fetchall())
+        assert "idx_tool_calls_ns" in plan, plan
+        assert "idx_tool_calls_created_at" not in plan, plan
+    finally:
+        with _connect() as conn:
+            conn.execute("DELETE FROM tool_calls WHERE org_id IN (%s, %s)", (org, org + 1))
+            conn.commit()

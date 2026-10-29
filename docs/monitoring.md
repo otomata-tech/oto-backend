@@ -739,6 +739,7 @@ réponse à l'ancienne lecture du journal, recopiée dans le banc.
 | `connector_failure_stats` | `monitoring.connectors`, `org.monitoring.connectors`, `op=connectors` | oui |
 | `org_adoption` | `org.monitoring.adoption`, `op=adoption` | oui — le dernier appel sur tout l'historique consolidé |
 | `list_tenants_overview`, `get_tenant_overview` | `admin.tenants`, `admin.tenant`, console de tenant | oui |
+| `count_org_mcp_calls` | `billing.status` (usage inclus du mois), fiche d'org `org.get`, `org.admin.get` | oui |
 | `list_billable_calls_for_org`, `list_tool_calls`, `list_runs`, `export_tool_calls_for_org`, activité d'un tableau | `usage/calls`, `calls`, `runs`, `export`… | non — des LISTES, ligne à ligne |
 | `rest_call_stats`, `list_rest_calls`, `transport_refusal_stats`, `activation_funnel` | `monitoring.{rest,rest_calls,transport,funnel}` | non — le REST n'est pas agrégé (vues plateforme, vers Grafana) |
 | `instruction_usage`, `instructions_usage_by_slug` | `org.instruction.usage`, `me/instructions-usage` | non — la procédure vient d'`args`, servie par l'index partiel `(org_id, tool) WHERE ok` sur deux verbes |

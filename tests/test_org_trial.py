@@ -159,6 +159,7 @@ def _fiche(monkeypatch, fin):
     monkeypatch.setattr(org_store, "get_org_role", lambda i, sub: None)
     monkeypatch.setattr(org_store, "is_personal_org", lambda i: False)
     monkeypatch.setattr(org_store, "list_org_members", lambda i: [])
+    monkeypatch.setattr(org_store, "list_org_members_with_users", lambda i: [])
     monkeypatch.setattr(org_store, "list_org_secrets", lambda i: [])
     monkeypatch.setattr(access, "is_platform_operator", lambda sub: True)
     monkeypatch.setattr(db, "list_option_comps", lambda *a: [])

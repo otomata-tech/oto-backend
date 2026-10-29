@@ -349,8 +349,9 @@ def test_datastore_activity_matches_id_and_name(monkeypatch):
 
     assert "l.args->>'ns_id' = %s" in sink["sql"]
     assert "COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s)" in sink["sql"]
-    # ns_id (rest) puis l'axe NOM : les deux formes tapables par l'agent, BORNÉES à l'org
-    assert sink["params"][:3] == ("160", ["160", "leads-clients"], 35)
+    # ns_id (rest) et sa page, puis l'axe NOM : les deux formes tapables par l'agent,
+    # BORNÉES à l'org, et sa page ; enfin la page commune.
+    assert sink["params"] == ("160", 50, ["160", "leads-clients"], 35, 50, 50)
     assert [e["kind"] for e in out] == ["rest", "mcp", "mcp"]
     assert out[0]["from_status"] == "enrichi" and out[0]["to_status"] == "ecarte"
 
@@ -616,11 +617,39 @@ def test_datastore_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch)
                                        owner_type="org", owner_id="2", limit=50)
 
     sql = sink["sql"]
-    assert "l.args->>'ns_id' = %s" in sql
-    id_axis = [c for c in sql.split(" OR ") if "ns_id" in c][0]
+    id_axis, name_axis = sql.split(" UNION ALL ")
+    assert "l.args->>'ns_id' = %s" in id_axis
     assert "org_id" not in id_axis                      # l'id ne se borne pas
     assert ("COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s) "
-            "AND l.org_id = %s") in sql   # le nom, si
+            "AND l.org_id = %s") in name_axis   # le nom, si
+
+
+def test_datastore_activity_ne_melange_jamais_le_nom_et_le_ns_id_dans_un_ou(monkeypatch):
+    """29/10/2026 : `GET …/activity` en 503 `route_busy`. Le OU entre l'axe `ns_id`
+    (indexé, `idx_tool_calls_ns`) et l'axe nom (hors index) interdisait l'index : le
+    plan parcourait `tool_calls` à rebours par date. Chaque axe est sa propre branche
+    en `UNION ALL`, avec sa page ; la branche nom ne prend que les lignes SANS
+    `ns_id` — disjointe de la première, donc aucun doublon."""
+    sink: dict = {}
+    monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
+    monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
+
+    usage.datastore_activity(160, "leads-clients", owner_type="org", owner_id="35")
+    sql = sink["sql"]
+    assert " OR " not in sql, sql
+    assert sql.count(" UNION ALL ") == 1, sql
+    id_axis, name_axis = sql.split(" UNION ALL ")
+    assert "l.args->>'ns_id' = %s" in id_axis and "COALESCE" not in id_axis
+    assert "l.args->>'ns_id' IS NULL" in name_axis
+    assert "l.args->>'ns_id' = %s" not in name_axis
+    # chaque branche a sa page, puis la page commune
+    assert id_axis.count("ORDER BY l.created_at DESC LIMIT %s") == 1
+    assert name_axis.count("ORDER BY l.created_at DESC LIMIT %s") == 2, name_axis
+
+    # sans borne de propriétaire : la seule branche ns_id
+    usage.datastore_activity(160, "leads-clients")
+    assert " UNION ALL " not in sink["sql"] and " OR " not in sink["sql"]
+    assert sink["params"] == ("160", 50, 50)
 
 
 def test_row_activity_est_bornee_au_tableau(monkeypatch):

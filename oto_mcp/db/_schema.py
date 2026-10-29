@@ -87,6 +87,10 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.datastore.COMMENTAIRES,   # commentaires des personnes sur une ligne de tableau
     schema.grants.DEMANDES_D_ACCES,  # demandes d'accès d'une personne bloquée, et leur décision
     schema.copilot.PIECES,           # fichiers joints aux messages de l'agent intégré
+    schema.apps.CONSENTEMENTS,       # consentements d'un lecteur aux gestes d'une app, et leur journal
+    schema.apps.PROPRIETE,           # une app a son propriétaire et ses partages ; un projet la range
+    schema.apps.FICHIERS,            # fichiers déposés dans une app par un lecteur, pour ses agents
+    schema.apps.FICHIERS_ORIGINE,    # d'où vient un fichier d'app : déposé, ou rendu par un agent
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

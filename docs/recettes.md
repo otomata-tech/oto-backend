@@ -161,6 +161,12 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   si toutes ses ops lisent. Les connecteurs à modèle (`jev`, `lighton`) sont refusés
   même s'ils lisent : une recette est « sans modèle ». Pour marquer un outil : le
   décorateur, et la garde `tests/test_outils_en_lecture.py` le vérifie.
+  ⚠️ `http_get` est déclaré en lecture : il ne joint que la `base_url` de la carte `http`
+  posée par l'org (plus un chemin), sous la garde d'egress. Mais si cette adresse est
+  un RELAIS (un webhook qui agit sur un simple GET, une automatisation), une recette
+  « en lecture » peut y déclencher un effet de bord, ou y porter des cases d'un tableau
+  dans la query string. Le périmètre de confiance reste celui de l'org qui a branché
+  l'adresse : ne déclarer en `http` qu'une API qu'on accepte de voir appelée ainsi.
 - **Chaque page est un appel ordinaire de l'outil** (`tools/meta.executer_cible`, le
   corps d'`oto_call`) : activation du connecteur, axes, org du run, **journal sous le
   nom de l'outil avec sa `quantity`** — donc facturé comme un appel direct — et

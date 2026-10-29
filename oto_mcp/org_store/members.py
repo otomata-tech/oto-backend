@@ -365,6 +365,22 @@ def list_org_members(org_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_org_members_with_users(org_id: int) -> list[dict]:
+    """`list_org_members`, plus ce que la fiche d'org lit de la ligne `users` de chaque
+    membre (`email`, `name`, `avatar_url`, `suspended_at`, `user_role`), en UNE
+    requête : la fiche faisait un `db.get_user` par membre. `None` pour un membre sans
+    ligne `users`, comme le `get_user(...) or {}` qu'elle remplace."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT m.sub, m.org_role, m.is_active, m.joined_at, u.email, u.name, "
+            "u.avatar_url, u.suspended_at, u.role AS user_role "
+            "FROM org_members m LEFT JOIN users u ON u.sub = m.sub "
+            "WHERE m.org_id = %s ORDER BY m.joined_at",
+            (org_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_member_events(org_id: int, *, limit: int,
                        before_id: Optional[int] = None) -> list[dict]:
     """Le journal des entrées/sorties de l'org, le plus récent d'abord, par pages de

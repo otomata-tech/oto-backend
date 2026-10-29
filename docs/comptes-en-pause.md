@@ -86,7 +86,8 @@ injecte les instructions de l'org (guides de plateforme, d'org, d'équipe) et
 un compte sorti continuer à **lire** ce qu'on lui a retiré le droit de faire.
 
 Coût : une lecture sur clé primaire par requête — à côté d'un `upsert_user` que la
-face REST fait déjà à chaque appel. **Pas de cache** : une pause doit mordre à la
+face REST fait déjà à chaque appel (une lecture aussi tant que l'adresse, le nom et la
+langue ne changent pas : il n'écrit que ce qui change, cf. `docs/event-loop-perf.md`). **Pas de cache** : une pause doit mordre à la
 requête suivante, pas à la prochaine expiration d'un cache.
 
 ### ③ Ce qui survit : tout le reste

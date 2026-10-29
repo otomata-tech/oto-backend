@@ -8,8 +8,11 @@ and the cache are not reserved (no token count before the call) and settle as
 `exceeded` — then settled at the four token counts the provider answered, under the
 scale lines of `anthropic.messages:<model>`, one per unit. The MODEL is in the scale
 key: models are not priced alike, and a turn is reserved at the price of the model its
-job names (`fonction_du_modele`). The mode, the scale and the payer are the budget's
-(`access/credits`). A turn's hold is keyed `runner:<job>:<attempt>:<turn>`
+job names (`fonction_du_modele`). The scale and the payer are the budget's
+(`access/credits`); the mode is that of the model's function (`mode_du_modele`), so
+model calls can be enforced while the tools stay in `report`. Before a job starts on a
+re-billed key, its payer must have the floor available (`sous_le_plancher`): the first
+turn's input is never reserved. A turn's hold is keyed `runner:<job>:<attempt>:<turn>`
 (`cle_du_tour`), which every settlement of it says back (`appariement`).
 """
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Optional
 from .. import limite_refus_top
 from ..db import credits as db_credits
 from . import credits as budget
+from . import credits_modes as modes
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,72 @@ def fonction_du_modele(model: Optional[str]) -> Optional[str]:
     return f"{PREFIXE_DES_MODELES}{cle_du_modele(model)}"
 
 
+def fonctions_connues(connector: str) -> frozenset[str]:
+    """The functions of `connector` the scale can price: a model call of the catalogue
+    (`messages:<model>`, `fonction_du_modele`) for the model connector, a
+    function with a declared cost for any other. Empty: an unknown connector."""
+    if connector == MODELE_CONNECTOR:
+        from .. import runner_models
+        return frozenset(fonction_du_modele(m.id) for m in runner_models.MODELES
+                         if m.family == MODELE_CONNECTOR)
+    from oto.connectors.declared import DECLARED
+    return frozenset(f for f, d in DECLARED.get(connector, {}).items() if "cost" in d)
+
+
+def verifier_les_noms(lus: dict[tuple[str, str], str]) -> None:
+    """The startup guard of the per-function modes (`credits_modes.modes_par_fonction`),
+    here because it reads the model catalogue: every entry names at least one function
+    the scale can price, or raises naming it."""
+    for connector, function in lus:
+        connues = fonctions_connues(connector)
+        p = modes._prefixe(function)
+        if not connues:
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` — unknown "
+                             f"connector `{connector}`: no function of it has a price")
+        if (function not in connues if p is None
+                else not any(f.startswith(p) for f in connues)):
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` names no "
+                             f"priced function of `{connector}` (one of "
+                             f"{', '.join(sorted(connues))})")
+
+
+def mode_du_modele(model: Optional[str]) -> str:
+    """The budget mode of a call to `model` (`credits.mode_de` on its scale function); a
+    job that names no model reads the mode of `messages:` itself."""
+    return modes.mode_de(MODELE_CONNECTOR, fonction_du_modele(model) or PREFIXE_DES_MODELES)
+
+
+def sous_le_plancher(sub: Optional[str], org: Optional[int],
+                     model: Optional[str]) -> Optional[dict]:
+    """Before a hosted agent's job starts on a re-billed key: does its payer have the
+    floor (`credits.plancher_travail`) available — balance minus open holds? Returns
+    None when the job may start, else `{code, needed, available}` — in `enforce` only:
+    `report` logs what it would refuse and returns None, and so does `off` or a floor of
+    0. `code` names the refusal: `insufficient_credits` (below the floor, final), or
+    `spend_ledger_unavailable` when the balance cannot be read (`available: None`) —
+    replayable: the job goes back to the queue, neither served nor stopped."""
+    plancher = modes.plancher_travail()
+    m = mode_du_modele(model)
+    if plancher <= 0 or m == "off":
+        return None
+    try:
+        qui = budget.payeur(sub, org, budget._relire()["personnes"])
+        s = db_credits.solde(qui)
+        disponible = int(s["balance"]) - int(s["holds_open"])
+    except Exception:
+        logger.exception("crédits (%s) : solde illisible au plancher (org %s) — %s", m,
+                         org, "refusé" if m == "enforce" else "servi")
+        return ({"code": budget.INDISPONIBLE, "needed": plancher, "available": None}
+                if m == "enforce" else None)
+    if disponible >= plancher:
+        return None
+    logger.warning("crédits (%s) : %s à %d disponibles, sous le plancher %d d'un travail "
+                   "— %s", m, qui, disponible, plancher,
+                   "refusé" if m == "enforce" else "servi")
+    return ({"code": budget.INSUFFISANT, "needed": plancher, "available": disponible}
+            if m == "enforce" else None)
+
+
 def _lignes_du_modele(lignes: dict, fonction: Optional[str]) -> Optional[dict]:
     """`{unit: (budget, per_n)}` for the four units, or None if one is missing (or the
     job names no model)."""
@@ -93,7 +163,7 @@ def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
     worker that asks again gets the same answer). Returns `{held, reserved}`; `enforce`
     raises `TourRefuse`, `report` reserves anyway (forced) and logs what it would refuse
     — a model without its four lines is `credits_unpriced` —, `off` holds nothing."""
-    m = budget.mode()
+    m = mode_du_modele(model)
     if m == "off":
         return {"held": False, "reserved": 0}
     try:
@@ -153,7 +223,7 @@ def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
     hold = db_credits.reservation(uid)
     if hold is not None and hold["state"] != db_credits.OUVERTE:
         return {"settled": False, "amount": 0, "exceeded": False}
-    if hold is None and budget.mode() == "off":
+    if hold is None and mode_du_modele(model) == "off":
         return None
     lu = budget._relire()
     # The lines of the version the turn was reserved under, not today's.

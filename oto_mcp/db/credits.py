@@ -215,25 +215,31 @@ _MARGE_S = 1
 # mouvement `settle` (une échéance en est un ; une libération n'en écrit aucun). Deux
 # lectures bornées plutôt qu'un `OR` : les réservations ouvertes par leur index partiel,
 # les règlements retenus par l'index du curseur puis la clé de leur réservation.
+# Un `payeur` (non NULL) ne retient `settled_as_of` qu'à SES réservations : le relevé
+# d'un payeur n'attend pas l'appel asynchrone d'un autre ; NULL = tous payeurs.
 _PAGE = f"""
 WITH h AS MATERIALIZED (
-    SELECT x, least(%s::timestamptz, (SELECT min(r.created_at) FROM credit_movements r
+    SELECT x, least(%(borne)s::timestamptz, (SELECT min(r.created_at) FROM credit_movements r
                                        WHERE r.xid >= x)) AS as_of,
-           least((SELECT min(o.created_at) FROM credit_holds o WHERE o.state = 'open'),
+           least((SELECT min(o.created_at) FROM credit_holds o WHERE o.state = 'open'
+                  AND (%(payeur)s::text IS NULL OR o.payer = %(payeur)s)),
                  (SELECT min(o.created_at) FROM credit_movements r
                   JOIN credit_holds o ON o.call_uid = r.call_uid
-                  WHERE r.xid >= x AND r.kind = 'settle')) AS non_reglee
+                  WHERE r.xid >= x AND r.kind = 'settle'
+                  AND (%(payeur)s::text IS NULL OR o.payer = %(payeur)s))) AS non_reglee
     FROM (SELECT pg_snapshot_xmin(pg_current_snapshot()) AS x) s)
 SELECT h.as_of, least(h.as_of, h.non_reglee) AS settled_as_of, p.*
 FROM h LEFT JOIN LATERAL (
     SELECT {_MOUVEMENT}, xid AS _ordre FROM credit_movements
-    WHERE xid < h.x AND (xid, id) > (%s::text::xid8, %s) ORDER BY xid, id LIMIT %s
+    WHERE xid < h.x AND (xid, id) > (%(xid)s::text::xid8, %(id)s) ORDER BY xid, id
+    LIMIT %(limite)s
 ) p ON true
 ORDER BY p._ordre, p.id
 """
 
 
-def page_de_mouvements(xid: int, id_: int, limite: int) -> dict:
+def page_de_mouvements(xid: int, id_: int, limite: int,
+                       payeur: Optional[str] = None) -> dict:
     """`{mouvements, as_of, settled_as_of}` : les mouvements d'après `(xid, id)`, validés
     sous l'horizon, par `(xid, id)` ; et `as_of`, l'instant sous lequel aucun mouvement
     ne peut plus apparaître : tout mouvement qui n'est pas DÉJÀ sous l'horizon (servi
@@ -260,10 +266,14 @@ def page_de_mouvements(xid: int, id_: int, limite: int) -> dict:
     maintenant l'était déjà à la lecture précédente (une réservation close ne se rouvre
     pas, et un règlement retenu maintenant l'était déjà s'il était visible), ou vient
     d'une transaction que `_SESSIONS_ECRIVANTES` comptait alors, ou qui a commencé
-    après — datée, donc, d'au moins l'`as_of` d'alors. `None` avec `as_of`."""
+    après — datée, donc, d'au moins l'`as_of` d'alors. `None` avec `as_of`.
+
+    `payeur` : `settled_as_of` ne compte que ses réservations (même preuve, restreinte à
+    un payeur) ; la page et `as_of`, eux, restent ceux du flux entier."""
     with _connect() as conn:
         s = conn.execute(_SESSIONS_ECRIVANTES, (_MARGE_S,)).fetchone()
-        rows = conn.execute(_PAGE, (s["borne"], str(xid), id_, limite)).fetchall()
+        rows = conn.execute(_PAGE, {"borne": s["borne"], "xid": str(xid), "id": id_,
+                                    "limite": limite, "payeur": payeur}).fetchall()
     indeterminees = s["illisibles"] + s["sans_suivi"] + s["preparees"]
     if indeterminees:
         logger.warning("credits: horizon indéterminable : %s session(s) illisible(s) (rôle "

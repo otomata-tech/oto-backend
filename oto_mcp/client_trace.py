@@ -37,7 +37,11 @@ logger = logging.getLogger(__name__)
 _CLIENT: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "oto_client_trace", default=None)
 
-VIDE = {"ip": None, "user_agent": None}
+VIDE = {"ip": None, "user_agent": None, "origin": None, "fetch_dest": None}
+
+# Ce qu'un en-tête `Origin` ou `Sec-Fetch-Dest` porte au plus : une origine est un
+# schéma, un hôte et un port. Au-delà, ce n'est pas une origine (et on ne la garde pas).
+MAX_ORIGIN = 256
 
 
 #: Les réseaux des proxies dont on croit les en-têtes d'adresse. Lus UNE fois, au
@@ -165,12 +169,23 @@ def ip_de_requete(request) -> Optional[str]:
                    request.client.host if request.client else None)
 
 
-def set_current(*, ip: Optional[str],
-                user_agent: Optional[str]) -> contextvars.Token:
-    """Pose l'empreinte du client pour la durée de l'appel courant."""
+def set_current(*, ip: Optional[str], user_agent: Optional[str],
+                origin: Optional[str] = None,
+                fetch_dest: Optional[str] = None) -> contextvars.Token:
+    """Pose l'empreinte du client pour la durée de l'appel courant.
+
+    `origin` (en-tête `Origin`) et `fetch_dest` (`Sec-Fetch-Dest`) : d'OÙ, dans le
+    navigateur, la requête est partie — posés par le navigateur, pas par la page. Une
+    seule capacité les lit aujourd'hui : l'émission d'un consentement de geste d'app
+    (`capabilities/apps_appel`), qui n'est servie qu'à l'écran hôte, jamais à une app
+    dans son cadre isolé (origine `null`). Un en-tête trop long n'est pas une origine :
+    il vaut `None`, que la capacité refuse."""
+    origin = (origin or "").strip()
     return _CLIENT.set({
         "ip": ip or None,
         "user_agent": (user_agent or "")[:MAX_USER_AGENT] or None,
+        "origin": origin if 0 < len(origin) <= MAX_ORIGIN else None,
+        "fetch_dest": (fetch_dest or "").strip().lower()[:32] or None,
     })
 
 
@@ -179,7 +194,7 @@ def reset(token: contextvars.Token) -> None:
 
 
 def current() -> dict:
-    """`{"ip", "user_agent"}` de la requête courante — les deux à `None` hors requête
-    REST. Rend toujours un dict : un appelant qui écrit une trace n'a pas à savoir
+    """`{"ip", "user_agent", "origin", "fetch_dest"}` de la requête courante — tous à
+    `None` hors requête REST. Rend toujours un dict : un appelant qui écrit une trace n'a pas à savoir
     par quelle surface il est arrivé."""
     return _CLIENT.get() or dict(VIDE)

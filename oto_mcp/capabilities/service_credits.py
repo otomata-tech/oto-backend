@@ -176,6 +176,11 @@ class CreditBalance(BaseModel):
 class CreditMovementsInput(BaseModel):
     after: Optional[str] = None
     limit: int = 500
+    payer: Optional[str] = Field(
+        None, description="`org:<id>` or `user:<sub>`: `settled_as_of` then counts only "
+                          "this payer's reservations, so another payer's pending "
+                          "asynchronous call does not hold it. The page and `as_of` stay "
+                          "those of the whole feed. Omitted: every payer.")
 
     @field_validator("limit")
     @classmethod
@@ -205,7 +210,8 @@ class CreditMovements(BaseModel):
     settled_as_of: Optional[str] = Field(
         description="ISO 8601 instant, on every page, read in the same snapshot as "
                     "`as_of`: the earliest of `as_of` and the start (`created_at`) of "
-                    "the oldest reservation, every payer included, still OPEN or "
+                    "the oldest reservation (every payer, or only `payer` when given), "
+                    "still OPEN or "
                     "settled by a movement the cursor still holds back. Every call that "
                     "reserved before it is settled, released or expired, and its "
                     "movement, if any, is served by the feed (on this page or the next "
@@ -252,7 +258,9 @@ def _balance(ctx: ResolvedCtx, inp: CreditBalanceInput) -> dict:
 
 def _movements(ctx: ResolvedCtx, inp: CreditMovementsInput) -> dict:
     xid, id_ = _lire_curseur(inp.after)
-    lu = db_credits.page_de_mouvements(xid, id_, inp.limit)
+    if inp.payer is not None:
+        _payeur_existant(inp.payer)
+    lu = db_credits.page_de_mouvements(xid, id_, inp.limit, payeur=inp.payer)
     page = [_mouvement(m) for m in lu["mouvements"]]
     return {"movements": page,
             "next_cursor": page[-1]["cursor"] if page else inp.after,
@@ -297,11 +305,12 @@ CAPABILITIES += [
                rest=RestBinding("GET", "/api/service/credits/balance")),
     Capability(key="service.credits.movements", handler=_movements,
                Input=CreditMovementsInput, authz=COMMERCE_SERVICE, mcp=None,
-               Output=CreditMovements, errors=(_CURSEUR_ILLISIBLE,),
+               Output=CreditMovements, errors=(_CURSEUR_ILLISIBLE, *_ERREURS_PAYEUR),
                description="[service commerce] Movements of every payer after the opaque "
                            "cursor `after`, in the order their transactions became "
                            "visible (default 500, at most 1000). Read up to the end, it "
                            "misses none; `as_of` tells up to when a period is "
-                           "complete, `settled_as_of` up to when its calls are settled.",
+                           "complete, `settled_as_of` up to when its calls are settled "
+                           "(those of `payer` only, when given).",
                rest=RestBinding("GET", "/api/service/credits/movements")),
 ]

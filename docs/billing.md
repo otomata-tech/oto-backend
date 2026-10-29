@@ -169,6 +169,14 @@ droit de manquer. Un dépassement s'affiche, il ne coupe pas, et il ne facture p
 - **`kind='mcp'` et `tool_calls.org_id`** : les appels d'agent, par le rattachement
   RÉEL. Jamais un préfixe de nom d'outil (les noms ne portent pas l'org, et un tenant
   peut les voir préfixés autrement).
+- **Lu sur les totaux par jour** (`journal_jour.source`, `docs/monitoring.md`) : les
+  jours clos du mois consolidés, plus le journal direct pour la veille et le jour
+  courant. Le compte direct d'un mois relisait au heap toutes les lignes de l'org,
+  REST du tableau de bord comprises (l'index `(org_id, created_at)` ne porte pas
+  `kind`) : la fiche d'org (`GET /api/orgs/{id}`, `/api/admin/orgs/{id}`), qui
+  l'appelle à chaque vue, finissait au `statement_timeout`. Un jour clos absent du
+  registre lève `AgregatIncomplet` ; le compteur se tait alors (`usage: null`),
+  comme sur toute lecture qui échoue.
 - **Mois en cours SEULEMENT** : la purge du journal ne garde qu'environ 35 jours (la
   politique en annonce 90 — écart corrigé le 2026-08-28). Le mois précédent n'est pas
   calculable ; ne pas bâtir de comparaison dessus.

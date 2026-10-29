@@ -197,6 +197,7 @@ résolu serveur** : la face REST le tient de sa route, la face MCP du **relevé 
 (`session_org.note_call_trace`, rempli par `DatastorePg._resolve` APRÈS les gardes —
 un tableau refusé ne laisse pas de trace ; versé dans les args par `_calllog_sink`,
 clés **fermées** `server._TRACED_ARGS`). Index d'expression partiel `idx_tool_calls_ns`.
+⚠️ **`…/activity` lit ses deux axes en `UNION ALL`, jamais en OU** (29/10/2026, 503 `route_busy`) : le OU `ns_id`/nom privait le plan de `idx_tool_calls_ns` ; l'axe nom, borné au propriétaire, ne prend plus que les lignes SANS `ns_id` (création, refus de garde, relevé REST vide).
 
 > Le relevé est un **HOLDER MUTABLE** (dict posé vide par `CallContextMiddleware`), pas
 > une valeur rebindée : les handlers de tools sont majoritairement des `def` sync

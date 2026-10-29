@@ -2738,20 +2738,35 @@ def datastore_activity(ns_id: int, namespace: Optional[str] = None,
     `data_write("160")` et `data_write("slot:vivier")` retombent sur la même ligne, et
     un renommage de tableau n'orpheline plus son historique.
 
-    ⚠️ L'axe NOM subsiste en **repli, uniquement pour l'historique** écrit avant que le
-    ns_id ne soit journalisé (il s'éteint de lui-même avec la rétention 30 j du calllog).
-    Il est **BORNÉ AU PROPRIÉTAIRE, jamais matché nu** (`_owner_clause`) : un nom n'est
-    unique que par propriétaire (`uq_user_datastores_owner_ns`), deux orgs ont chacune le
-    droit d'avoir un `leads`, et un `args->>'namespace' = 'leads'` sans borne ferait lire
-    à l'org B les gestes de l'org A. Résiduel de ce repli, borné dans le temps : un
-    homonyme DANS le même tenant reste indistinguable (même tenant, pas une fuite).
+    ⚠️ L'axe NOM subsiste pour les gestes journalisés **sans** `ns_id` : l'historique
+    d'avant le 31/07/2026 (v1.39.0) est sorti de la rétention 30 j, mais des écrivains
+    vivants posent encore le nom seul — `data_create_datastore` (la création ne passe
+    pas par `_resolve`), un appel refusé par une garde de `_resolve` (le relevé n'est
+    posé qu'APRÈS les gardes), une mutation REST dont le relevé est resté vide
+    (`journal.from_trace`). Il est **BORNÉ AU PROPRIÉTAIRE, jamais matché nu**
+    (`_owner_clause`) : un nom n'est unique que par propriétaire
+    (`uq_user_datastores_owner_ns`), deux orgs ont chacune le droit d'avoir un `leads`,
+    et un `args->>'namespace' = 'leads'` sans borne ferait lire à l'org B les gestes de
+    l'org A. Résiduel : un homonyme DANS le même tenant reste indistinguable (même
+    tenant, pas une fuite).
+
+    Deux axes, deux branches en `UNION ALL`, chacune avec sa propre page — **jamais un
+    OU** (29/10/2026 : le OU entre `ns_id` et le nom empêchait tout usage de
+    `idx_tool_calls_ns`, le plan parcourait `tool_calls` à rebours par `created_at`
+    jusqu'à remplir la page, et la route saturait sa concurrence bornée en 503
+    `route_busy`). Même forme que `datastore_row_activity` :
+    - **`ns_id`** : `idx_tool_calls_ns`, une lecture directe ;
+    - **nom** : sur la borne de propriétaire (`idx_tool_calls_org` ou
+      `idx_tool_calls_sub`), et **seulement les lignes SANS `ns_id`** — une ligne qui
+      porte un `ns_id` a été résolue serveur : elle est à la première branche si c'est
+      ce tableau, à un autre tableau sinon (homonyme renommé). Les deux branches sont
+      donc disjointes : aucun doublon.
     """
     limit = max(1, min(int(limit), 200))
     ns_id = int(ns_id)
-    match = ["l.args->>'ns_id' = %s"]
-    params: list[Any] = [str(ns_id)]
-    # Repli historique : les formes sous lesquelles un agent a pu nommer CE tableau
-    # avant que le ns_id résolu ne soit journalisé — son id en texte et son nom canonique.
+    branches: list[tuple[str, list[Any]]] = [("l.args->>'ns_id' = %s", [str(ns_id)])]
+    # Les formes sous lesquelles un agent a pu nommer CE tableau sans que le serveur
+    # n'ait journalisé son ns_id : son id en texte et son nom canonique.
     names = [str(ns_id)]
     name = (namespace or "").strip()
     if name and name != str(ns_id):
@@ -2769,16 +2784,22 @@ def datastore_activity(ns_id: int, namespace: Optional[str] = None,
         # exactement le symptôme qu'on cherchait à corriger sur cette route.
         # Cette ligne n'a pas de date de péremption : elle en aura une le jour où la
         # rétention aura effacé le dernier appel écrit sous l'ancien nom.
-        match.append(
-            f"(COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s) "
-            f"AND {sql})")
-        params += [names, bound]
+        branches.append((
+            "l.args->>'ns_id' IS NULL "
+            f"AND COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s) "
+            f"AND {sql}",
+            [names, bound]))
+    pages, params = [], []
+    for axe, valeurs in branches:
+        pages.append(f"(SELECT l.id FROM tool_calls l WHERE {_DS_ACTIVITY_KINDS} "
+                     f"AND l.tool LIKE 'data\\_%%' AND {axe} "
+                     "ORDER BY l.created_at DESC LIMIT %s)")
+        params += [*valeurs, limit]
     params.append(limit)
     with _agregat("activité d'un tableau") as conn:
         rows = conn.execute(
             f"""{_DS_ACTIVITY_SELECT}
-            WHERE {_DS_ACTIVITY_KINDS} AND l.tool LIKE 'data\\_%%'
-                  AND ({' OR '.join(match)})
+            WHERE l.id IN ({' UNION ALL '.join(pages)})
             ORDER BY l.created_at DESC LIMIT %s
             """,
             tuple(params),

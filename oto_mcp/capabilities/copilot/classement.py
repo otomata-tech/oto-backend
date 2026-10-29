@@ -79,6 +79,7 @@ OPS_EN_LECTURE: dict[str, frozenset] = {
     "oto_recipe": frozenset({"list", "get", "versions"}),
     "oto_function": frozenset({"list", "get", "versions"}),
     "oto_profile": frozenset({"get"}),
+    "oto_apps": frozenset({"list", "get", "revisions", "validate"}),
 }
 #: Spine tools with no `op` that only read.
 OUTILS_EN_LECTURE = frozenset({

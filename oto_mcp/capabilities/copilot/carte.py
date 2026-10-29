@@ -34,7 +34,8 @@ _VERBES = {"create": "Create", "update": "Update", "patch": "Edit", "delete": "D
            "share": "Share", "publish_mcp": "Publish", "move": "Move", "link": "Link",
            "unlink": "Unlink"}
 _NOMS = {"oto_doc": "doc", "oto_procedure": "process", "oto_trigger": "agent",
-         "oto_fleet": "batch", "oto_project": "project", "oto_guide": "guide"}
+         "oto_fleet": "batch", "oto_project": "project", "oto_guide": "guide",
+         "oto_apps": "app"}
 
 
 def libelle(name: str, args: Optional[dict]) -> str:

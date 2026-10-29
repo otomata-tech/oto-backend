@@ -27,6 +27,14 @@ MAX_ETAPES = 30
 VERROU_S = 900
 
 ECHEC_ARRETE = "Interrupted: the person sent a new message instead."
+#: To the model, for each tool call its own output cut short: nothing ran, write less.
+COUPE = ("Your output reached its length limit before this call was complete, so it did "
+         "not run. Make the change in smaller calls: never resend a long text whole — "
+         "for an app, `oto_apps` op=patch with only the lines that change (exact find → "
+         "replace); for a doc or a guide, op=patch on one section.")
+#: To the person, when the model was cut again — or mid-answer.
+COUPE_ECHEC = ("The assistant's reply was too long to finish. Ask for a smaller change, or "
+               "split it into steps.")
 REFUS = "The person declined this action. Do not retry it; ask what they want instead."
 
 
@@ -263,6 +271,7 @@ async def conduire(fil: dict, b: Boite, cle: cles.Cle) -> AsyncIterator[dict]:
     if fil["results"]:
         fil["messages"].append({"role": "user", "content": fil["results"]})
         fil["results"] = []
+    coupes = 0
     for _ in range(MAX_ETAPES):
         await run_in_threadpool(store.prolonger, fil["id"], fil["_verrou"], VERROU_S)
         sortie: dict = {}
@@ -287,6 +296,24 @@ async def conduire(fil: dict, b: Boite, cle: cles.Cle) -> AsyncIterator[dict]:
             yield ev("done")
             return
         appels = [blk for blk in message["content"] if blk.get("type") == "tool_use"]
+        if message.get("stop_reason") == "max_tokens":
+            # Coupé net (typiquement : un long texte réécrit en entier dans un appel). Fini
+            # « normalement », le fil s'arrêtait sans un mot ; l'appel coupé ne s'exécute
+            # jamais (son entrée est tronquée) — le modèle l'apprend et réessaie UNE fois.
+            coupes += 1
+            logger.warning("copilot : sortie coupée à max_tokens (conversation %s, outils %s, "
+                           "%s fois)", fil["id"], [a.get("name") for a in appels], coupes)
+            if appels and coupes == 1:
+                fil["messages"].append({"role": "user", "content": [
+                    _resultat(a["id"], COUPE, True) for a in appels]})
+                await sauver(fil)
+                continue
+            if appels:
+                regler_interrompus(fil, COUPE)
+            await sauver(fil)
+            yield ev("error", message=COUPE_ECHEC)
+            yield ev("done")
+            return
         if message.get("stop_reason") != "tool_use" or not appels:
             await sauver(fil)
             if sortie.get("suggestions"):

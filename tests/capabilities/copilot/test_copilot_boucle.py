@@ -197,3 +197,55 @@ def _pas_de_base(monkeypatch):
     """These tests never reach the base: preparing an undo is stubbed."""
     from oto_mcp.capabilities.copilot import annulation
     monkeypatch.setattr(annulation, "preparer", lambda *a, **k: None)
+
+
+# ── Une sortie coupée à max_tokens ──────────────────────────────────────────
+
+def _conduire(monkeypatch, messages):
+    """Runs one leg against scripted model turns; returns (events, conversation)."""
+    from oto_mcp.capabilities.copilot import cle as cles
+
+    tours = list(messages)
+
+    async def faux_appel(fil, b, cle, sortie):
+        sortie["message"] = tours.pop(0)
+        return
+        yield  # an async generator
+
+    monkeypatch.setattr(boucle, "_un_appel", faux_appel)
+    monkeypatch.setattr(boucle.store, "prolonger", lambda *a, **k: None)
+    monkeypatch.setattr(boucle.store, "enregistrer", lambda *a, **k: None)
+    fil = _fil(_verrou="v")
+
+    async def go():
+        return [e async for e in boucle.conduire(fil, _boite("oto_apps"), cles.Cle("sk", None, None))]
+
+    return asyncio.run(go()), fil
+
+
+COUPE_APPEL = {"stop_reason": "max_tokens", "content": [
+    {"type": "tool_use", "id": "tu_c", "name": "oto_apps", "input": {}}]}
+
+
+def test_appel_coupe_dit_au_modele_et_reessaie_une_fois(monkeypatch):
+    fin = {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Done."}]}
+    events, fil = _conduire(monkeypatch, [COUPE_APPEL, fin])
+    assert [e["type"] for e in events] == ["done"]
+    resultat = fil["messages"][1]["content"][0]
+    assert resultat["tool_use_id"] == "tu_c" and resultat["is_error"]
+    assert "op=patch" in resultat["content"]
+
+
+def test_coupe_deux_fois_le_dit_a_la_personne(monkeypatch):
+    events, fil = _conduire(monkeypatch, [COUPE_APPEL, dict(COUPE_APPEL, content=[
+        {"type": "tool_use", "id": "tu_d", "name": "oto_apps", "input": {}}])])
+    assert [e["type"] for e in events] == ["error", "done"]
+    assert events[0]["message"] == boucle.COUPE_ECHEC
+    # The history stays sendable: the second cut call is answered too.
+    assert fil["messages"][-1]["content"][0]["tool_use_id"] == "tu_d"
+
+
+def test_reponse_coupee_le_dit_sans_reessayer(monkeypatch):
+    texte = {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "Here is a lo"}]}
+    events, _ = _conduire(monkeypatch, [texte])
+    assert [e["type"] for e in events] == ["error", "done"]

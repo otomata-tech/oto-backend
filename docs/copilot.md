@@ -60,6 +60,15 @@ réflexion repartent tels quels, un tour interrompu se solde en AJOUTANT des ré
 texte. Un résultat d'outil est coupé à 80 000 caractères, et la coupe est dite au modèle.
 30 étapes au plus par étape de la personne.
 
+**Une sortie coupée à `max_tokens` ne finit jamais en silence.** Le cas typique : un long
+texte réécrit en entier dans un appel (le HTML d'une app, 40 000 caractères, pour changer
+une ligne). L'appel coupé ne s'exécute pas (son entrée est tronquée) ; il reçoit un résultat
+en erreur qui dit au modèle d'éditer par morceaux (`oto_apps` op=patch, `op=patch` d'une
+page) et le tour reprend, **une fois** par jambe. Coupé de nouveau — ou coupé au milieu d'une
+réponse sans appel — : chaque appel est soldé, l'événement `error` le dit à la personne,
+`done`. Avant, `stop_reason` autre que `tool_use` valait « fini » : la conversation
+s'arrêtait sans un mot et sans une ligne de journal.
+
 ## Pièces jointes (`pieces.py`, `api/copilot.py`)
 
 La personne joint jusqu'à **5 fichiers** à un message : images png, jpeg, gif, webp (5 Mo, la
@@ -139,7 +148,8 @@ qui dépasse le délai n'est pas annulée : elle est réglée comme tout appel.
 
 Bâtie sur les déclarations (`tools/lecture.py`) : `readOnlyHint` → lit ; `destructiveHint`
 (`ENVOI`/`ACTE`) → demande toujours. Les outils du socle sans annotation ont une table
-des `op` qui lisent (`classement.OPS_EN_LECTURE`) ; **tout ce qui n'est pas déclaré lecteur
+des `op` qui lisent (`classement.OPS_EN_LECTURE`, `oto_apps` compris : `get`, `list`,
+`revisions`, `validate` ne demandent plus) ; **tout ce qui n'est pas déclaré lecteur
 demande**. Une écriture sur les objets de la personne (tableau, doc, projet), sans URL
 extérieure, demande sauf « ne plus demander » pour cette sorte (outil + op) dans la
 conversation, ou le mode `act` ; tout le reste (envoi, suppression, lancement, écriture qui

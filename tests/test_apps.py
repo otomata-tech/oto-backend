@@ -374,3 +374,29 @@ def test_tableau_de_l_org(monkeypatch):
     assert M.tableau_de_l_org("1", None) is False
     assert M.tableau_de_l_org("2", 4) is False
     assert M.tableau_de_l_org("3", 4) is False
+
+
+# ── Ce que le HTML demande hors du manifeste ────────────────────────────────
+
+_TRI = '<script>tulina.rows("leads", {orderBy: "score"})</script>'
+
+
+def test_ecrire_rend_les_avertissements_du_html(seams):
+    """L'app s'écrit quand même ; qui l'écrit apprend tout de suite qu'elle sera
+    refusée à l'ouverture."""
+    out = A._app(CTX, A.AppInput(op="create", project_id=7, title="x", manifest=GOOD, html=_TRI))
+    assert out["app"] and any('"score"' in w for w in out["warnings"])
+    assert seams["create"]
+    ok = A._app(CTX, A.AppInput(op="create", project_id=7, title="x", manifest=GOOD,
+                                html='<script>tulina.rows("leads", {orderBy: "_created_at"})</script>'))
+    assert "warnings" not in ok
+
+
+def test_validate_juge_le_html(seams):
+    out = A._app(CTX, A.AppInput(op="validate", project_id=7, manifest=GOOD, html=_TRI))
+    assert out["ok"] is True and out["warnings"]
+
+
+def test_validate_ne_juge_pas_le_html_d_un_manifeste_a_corriger(seams):
+    out = A._app(CTX, A.AppInput(op="validate", project_id=7, manifest={"tables": "leads"}, html=_TRI))
+    assert out["ok"] is False and "warnings" not in out

@@ -36,6 +36,7 @@ from .. import access, db, ownership
 from ..tool_visibility import BETA_OPTION
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .apps_html import avertissements
 from .apps_manifeste import auteur, forme, org_du_projet
 from .registry import CAPABILITIES
 
@@ -98,6 +99,9 @@ class AppOut(BaseModel):
     # validate : vide = le manifeste passe.
     problems: Optional[list[str]] = None
     ok: Optional[bool] = None
+    # create, update, restore, validate : ce que le HTML demande hors du manifeste
+    # (`apps_html.py`) — un avertissement, l'app est écrite quand même.
+    warnings: Optional[list[str]] = None
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -194,6 +198,15 @@ def _view(row: dict) -> dict:
     return {k: row[k] for k in AppView.model_fields if k in row}
 
 
+def _ecrite(row: dict) -> dict:
+    """La réponse d'une écriture : l'app, et ce que son HTML demande hors du manifeste."""
+    out: dict = {"app": _view(row)}
+    warnings = avertissements(row.get("manifest") or {}, row.get("html"))
+    if warnings:
+        out["warnings"] = warnings
+    return out
+
+
 def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
     sub = ctx.sub
 
@@ -212,16 +225,26 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
 
     if inp.op == "validate":
         # Jugé contre l'org du projet où l'app vivra : celui nommé, ou celui de l'app.
+        app = None
         if inp.app_id is not None:
-            pid = _app_or_404(sub, inp.app_id, "read")["project_id"]
+            app = _app_or_404(sub, inp.app_id, "read")
+            pid = app["project_id"]
         else:
             _require(inp.project_id is not None, "missing_project",
                      "`project_id` (or `app_id`) is required to validate a manifest.")
             _require(_can(sub, int(inp.project_id), "read"), "forbidden",
                      "You can't read this project.", 403)
             pid = int(inp.project_id)
-        _, problems = _problemes(sub, pid, inp.manifest)
-        return {"ok": not problems, "problems": problems}
+        clean, problems = _problemes(sub, pid, inp.manifest)
+        # Le HTML se juge contre le manifeste passé, sinon contre celui de l'app — et
+        # pas contre un manifeste à corriger : chaque appel y paraîtrait hors manifeste.
+        html = inp.html if inp.html is not None else (app or {}).get("html")
+        out: dict = {"ok": not problems, "problems": problems}
+        warnings = [] if problems else avertissements(
+            clean if inp.manifest is not None else (app or {}).get("manifest") or {}, html)
+        if warnings:
+            out["warnings"] = warnings
+        return out
 
     if inp.op == "create":
         _require(inp.project_id is not None, "missing_project", "`project_id` is required.")
@@ -232,7 +255,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         row = db.apps.create(int(inp.project_id), title=inp.title.strip(), manifest=manifest,
                              html=inp.html or "", thumbnail=_thumbnail(inp.thumbnail), by=sub)
         db.log_project_activity(int(inp.project_id), sub, "app.create", row["title"])
-        return {"app": _view(row)}
+        return _ecrite(row)
 
     row = _app_or_404(sub, inp.app_id, "read" if inp.op in ("get", "revisions") else "write")
 
@@ -257,7 +280,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                           manifest=_checked_manifest(ctx, row["project_id"], old["manifest"]),
                           html=old["html"], thumbnail=old["thumbnail"])
         db.log_project_activity(row["project_id"], sub, "app.restore", row["title"])
-        return {"app": _view(changed)}
+        return _ecrite(changed)
 
     # update
     _content(inp, creating=False)
@@ -271,7 +294,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
     changed = _update(sub, row, inp.expected_rev, title=inp.title.strip() if inp.title else None,
                       manifest=manifest, html=inp.html, thumbnail=thumb)
     db.log_project_activity(row["project_id"], sub, "app.update", changed["title"])
-    return {"app": _view(changed)}
+    return _ecrite(changed)
 
 
 def _update(sub: str, row: dict, expected_rev: Optional[str], **fields) -> dict:
@@ -300,8 +323,12 @@ CAPABILITIES += [
             "optional `thumbnail`) / update (`app_id`, any of those; pass "
             "`expected_rev` from get → 409 if it changed) / archive / unarchive / "
             "revisions / restore (`revision_id`) / validate (`manifest` and "
-            "`project_id` or `app_id`: the problems a create would refuse, nothing "
-            "written). Every declared table and agent must be within YOUR reach and "
+            "`project_id` or `app_id`, optional `html`: the problems a create would "
+            "refuse, nothing written). create, update, restore and validate also "
+            "return `warnings`: calls in the HTML that sort, filter, group or measure "
+            "on a field the manifest doesn't declare (`_created_at` / `_updated_at` "
+            "are always sortable and filterable) — the open app would refuse them, "
+            "so fix them before anyone opens it. Every declared table and agent must be within YOUR reach and "
             "in the project's organization: otherwise 400 invalid_manifest, each "
             "problem listed. Writing apps is open to beta accounts only."
         ),

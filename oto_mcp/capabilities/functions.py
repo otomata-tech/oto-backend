@@ -4,11 +4,11 @@ Une fonction est un calcul propre à un client — entrée JSON, sortie JSON, av
 et fichiers — qui ne lit rien d'Oto, n'appelle aucun réseau et ne voit aucun secret.
 Elle remplace le micro-service qu'on montait à côté pour 200 lignes de calcul.
 
-**Proposer est ouvert, publier ne l'est pas** (0073 §D3). Un membre de l'org — ou son
-agent — crée une fonction ou en propose une version. **Tester, publier et refuser sont
-réservés à la plateforme** tant que le bac à sable n'a pas fait ses preuves : ce sont les
-seuls gestes qui exécutent du code non publié — et une PERSONNE les fait, jamais un agent
-hébergé (`_code_humain`). **Exécuter** (`run`) ne joue que la
+**Proposer et publier sont ouverts au membre, dans sa portée** (0073 §D3, ouvert le
+28/10/2026 : le bac à sable tourne en production depuis les recettes-code, sans réseau ni
+secret). Un membre de l'org — ou son agent — crée une fonction ou en propose une version ;
+**tester, publier et refuser** exécutent ou décident du code non publié : une PERSONNE
+les fait, jamais un agent hébergé (`_code_humain`). **Exécuter** (`run`) ne joue que la
 version PUBLIÉE, et c'est ouvert à qui lit la fonction.
 
 L'exécution passe par `functions/executor.py` (Pyodide sous Deno, sans réseau), toujours
@@ -26,7 +26,7 @@ from .. import db, media_store, ownership
 from ..db import functions as db_functions
 from ..functions import contract, executor
 from . import _code_humain
-from ._authz import BY_OP, ORG_MEMBER_OPT, PLATFORM_ADMIN, SUB_ONLY
+from ._authz import BY_OP, ORG_MEMBER_OPT, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -350,26 +350,12 @@ async def _function(ctx: ResolvedCtx, inp: FunctionInput) -> dict:
     return await run_in_threadpool(_dispatch, ctx, inp)
 
 
-# Tester, publier, refuser : la PLATEFORME, et la portée d'une fonction se résout quand
-# même par son scope — un administrateur de plateforme qui teste la fonction d'une org
-# passe `org=<id>`, que `ORG_MEMBER_OPT` honore pour lui (escalade `platform_admin`).
-def _PLATEFORME(raw, inp=None):
-    PLATFORM_ADMIN(raw, inp)
-    return _PORTEE(raw, inp)
-
-
-# Introspection, comme les combinateurs de `_authz` : le plancher plateforme (qui masque
-# l'op à qui ne l'atteint pas) et les branches (que les cliquets de portée parcourent).
-_PLATEFORME.platform_floor = PLATFORM_ADMIN.platform_floor
-_PLATEFORME.autz_branches = (PLATFORM_ADMIN, _PORTEE)
-
-
 CAPABILITIES += [
     Capability(
         key="me.function", handler=_function, Input=FunctionInput, Output=FunctionOut,
         authz=BY_OP({"list": _PORTEE, "get": _PORTEE, "versions": _PORTEE,
                      "create": _PORTEE, "propose": _PORTEE, "run": _PORTEE,
-                     "test": _PLATEFORME, "publish": _PLATEFORME, "refuse": _PLATEFORME}),
+                     "test": _PORTEE, "publish": _PORTEE, "refuse": _PORTEE}),
         description=(
             "FUNCTIONS: pure code stored and run by Oto for an exact, deterministic "
             "calculation (JSON in → JSON result, warnings and files out). A function reads "
@@ -383,8 +369,8 @@ CAPABILITIES += [
             "version you read, sources, entrypoint, requirements, note → next version, "
             "PROPOSED). `sources` is {filename: content} — flat `.py` modules (tests are "
             "`test_*.py`, plain functions named `test_*`) and `.json` data. A proposed "
-            "version never runs until the platform tests and publishes it "
-            "(op=test/publish/refuse, platform only, by a person: never from a hosted "
+            "version never runs until it is tested and published "
+            "(op=test/publish/refuse, by a person in scope: never from a hosted "
             "agent). Scope: your active org (default) or "
             "`scope='user'`. PROVISIONAL surface."),
         mcp="oto_function",

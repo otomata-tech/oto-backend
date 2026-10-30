@@ -214,19 +214,25 @@ def test_list_sans_scope_montre_aussi_la_plateforme(monkeypatch, scope, attendus
 
 
 @pytest.mark.parametrize("op", ["test", "publish"])
-def test_un_operateur_sous_delegation_n_eprouve_ni_ne_publie_le_code(monkeypatch, op):
-    """La porte de la plateforme ne remplace pas `code_human_only` : même un opérateur,
-    sous le jeton d'un agent hébergé, n'éprouve ni ne publie une recette-code."""
+def test_un_agent_heberge_n_eprouve_ni_ne_publie_le_code(op):
+    """`code_human_only` tient : sous le jeton d'un agent hébergé, personne n'éprouve ni
+    ne publie une recette-code — opérateur ou non."""
     from oto_mcp import verrou_org
-    monkeypatch.setattr(access, "is_platform_operator", lambda sub: True)
     jeton = verrou_org.poser(verrou_org.Verrou(sub="op", org_id=7, job_id=1))
     try:
         with pytest.raises(AuthzDenied) as e:
-            asyncio.run(cap._plateforme_pour_le_code(ResolvedCtx(sub="op", org_id=7),
-                                                     {"kind": "code"}, op))
+            asyncio.run(cap._personne_pour_le_code({"kind": "code"}, op))
     finally:
         verrou_org.lever(jeton)
     assert (e.value.status, e.value.code) == (403, "code_human_only")
+
+
+@pytest.mark.parametrize("op", ["test", "publish"])
+def test_un_membre_eprouve_et_publie_son_code(monkeypatch, op):
+    """#1202, 28/10/2026 : le code tourne avec les droits de qui l'EXÉCUTE, son auteur
+    l'éprouve et le publie dans sa portée — sans être opérateur de la plateforme."""
+    monkeypatch.setattr(access, "is_platform_operator", lambda sub: False)
+    asyncio.run(cap._personne_pour_le_code({"kind": "code"}, op))
 
 
 def test_oto_recipe_declare_ses_deux_refus_de_porte():

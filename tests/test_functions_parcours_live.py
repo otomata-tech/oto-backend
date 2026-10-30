@@ -153,10 +153,14 @@ def test_une_version_refusee_garde_son_motif_et_ne_se_publie_plus(live, bac):
 
 
 @pytest.mark.parametrize("op", ["test", "publish", "refuse"])
-def test_tester_publier_refuser_sont_reserves_a_la_plateforme(monkeypatch, op):
-    monkeypatch.setattr(access, "is_platform_operator", lambda sub: False)
+def test_tester_publier_refuser_suivent_la_portee(op):
+    """28/10/2026 : tester, publier et refuser une fonction suivent sa portée (membre de
+    l'org, soi), comme la créer — plus de plancher plateforme. Une personne seulement
+    (`code_human_only`, couvert à part)."""
     capacite = next(c for c in F.CAPABILITIES if c.key == "me.function")
-    with pytest.raises(AuthzDenied) as refus:
-        capacite.authz(RawCtx(sub="sub-membre"),
-                       F.FunctionInput(op=op, slug="devis", version=1))
-    assert refus.value.status == 403
+    assert capacite.authz.platform_floor is None or \
+        capacite.authz.platform_floor == F._PORTEE.platform_floor
+    assert F._PORTEE in capacite.authz.autz_branches
+    assert not hasattr(F, "_PLATEFORME")
+
+

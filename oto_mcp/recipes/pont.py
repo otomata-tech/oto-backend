@@ -10,10 +10,11 @@ l'appelant (`sub`) : le code qui tourne n'en a aucune à lui.
 
 Aucun outil de connecteur qui écrit pour une recette déclarative ni pour le pont en
 lecture : il est refusé ici, avant tout appel. Une recette-code (`appeleur_de_recette`)
-écrit dans le tableau que son exécution désigne et, depuis le lot 3, chez un tiers par
-les seuls outils de la liste fermée `recipes/ecritures.py` — les écritures qu'elle
-DÉCLARE (`writes`), jamais en épreuve, dans l'org du run, bornées par `max_writes`. Sa
-publication reste à la plateforme (auteur ≠ appelant, #1202).
+écrit dans le tableau que son exécution désigne et chez un tiers par TOUT outil de
+connecteur, classé par le verbe de son op (`ecritures.classer_appel`) : les écritures et
+les envois qu'elle DÉCLARE (`writes`), jamais en épreuve, dans l'org du run, bornés par
+`max_writes` (et `max_sends`) ; jamais une op qui détruit. Elle tourne avec les droits
+de qui l'EXÉCUTE (#1202) : le pont n'ouvre rien que l'appelant ne puisse appeler.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from typing import Any, Optional
 
 from .. import outils_du_travail, redaction
 from ..mcp_errors import McpError
+from ..tools import lecture as lecture_declaree
 from . import ecritures as ec
 from . import moteur
 
@@ -79,12 +81,14 @@ _AXES_HORS_RUN = frozenset({"_org", "_group", "_project"})
 
 
 def compteur_neuf() -> dict:
-    """L'état des écritures chez un tiers d'UNE exécution, lu par le reçu."""
-    return {"writes": {}, "total": 0, "stopped": None}
+    """L'état des écritures chez un tiers d'UNE exécution, lu par le reçu. `envois` :
+    celles d'entre elles qui envoient."""
+    return {"writes": {}, "total": 0, "envois": 0, "stopped": None}
 
 
 def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: bool,
                         ecritures: frozenset = frozenset(), max_ecritures: int = 0,
+                        max_envois: Optional[int] = None,
                         compteur: Optional[dict] = None):
     """L'`appeler` d'une recette-code (lot 2) : celui de la lecture, plus les tableaux.
 
@@ -100,13 +104,15 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     rédaction. Le pont ne fait que RÉTRÉCIR ce que le code peut leur passer (arguments,
     tableau cible) ; il n'ouvre jamais le store lui-même.
 
-    Un outil de `ecritures.ECRITURES` (lot 3) : ses ops de lecture passent ; une op qui
-    écrit doit être dans `ecritures` (ce que la recette déclare), hors épreuve, sans
-    jeton qui l'emmène hors de l'org du run, et dans la limite de `max_ecritures` —
-    comptée À LA TENTATIVE (un délai dépassé a pu écrire), PAR FICHE : un appel en lot
-    (`items` / `ids`, au plus `MAX_FICHES_PAR_APPEL`) compte autant d'écritures que de
-    fiches, et n'est joué que s'il tient en entier dans ce qui reste. `compteur` reçoit
-    les comptes. Tout autre nom suit `appeleur_en_lecture`."""
+    Un outil déclaré `LECTURE` suit `appeleur_en_lecture`. Tout autre outil de
+    connecteur est classé (`ecritures.classer_appel`) : une op qui lit passe ; une op qui
+    écrit ou envoie doit être dans `ecritures` (ce que la recette déclare), hors
+    épreuve, sans jeton qui l'emmène hors de l'org du run, et dans la limite de
+    `max_ecritures` (et de `max_envois` pour un envoi, s'il est posé) — comptée À LA
+    TENTATIVE (un délai dépassé a pu écrire), PAR FICHE : un appel en lot (`items` /
+    `ids` / `entries`, au plus `MAX_FICHES_PAR_APPEL`) compte autant d'écritures que de
+    fiches, et n'est joué que s'il tient en entier dans ce qui reste ; une op qui détruit
+    est refusée. `compteur` reçoit les comptes."""
     lecture = appeleur_en_lecture(fastmcp, sub)
     etat = compteur if compteur is not None else compteur_neuf()
 
@@ -130,39 +136,42 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                 return refus
             return await _outil_de_tableau(fastmcp, sub, outil,
                                            {**arguments, "datastore": datastore})
-        if outil in ec.ECRITURES:
-            return await _chez_un_tiers(outil, arguments)
-        return await lecture(outil, arguments)
+        return await _chez_un_tiers(outil, arguments)
 
     async def _chez_un_tiers(outil: str, arguments: dict) -> dict:
-        sens, nom = ec.juger(outil, arguments)
-        if sens == "refus":
-            return {"ok": False, "code": "write_op_not_allowed", "message": nom}
-        fiches = 0
-        if sens == "ecrire":
-            fiches = _fiches(arguments)
-            refus = _refus_ecrire_chez_un_tiers(nom, arguments, fiches)
-            if refus:
-                return refus
-            # Réservées AVANT le premier `await` : le pont sert des appels en parallèle,
-            # et deux écritures jugées sur le même reste passeraient toutes les deux.
-            etat["total"] += fiches
-            etat["writes"][nom] = etat["writes"].get(nom, 0) + fiches
         from ..tools import meta
+        if outil not in ec.ECRITURES and ec.hors_connecteur(outil):
+            # Outil de plateforme, à modèle ou hors connecteur : la lecture le refuse en
+            # le nommant, comme avant.
+            return await lecture(outil, arguments)
         tool = await meta.resoudre_outil(fastmcp, outil)
         if tool is None:
-            if sens == "ecrire":
-                # Rien n'a été tenté : la réservation est rendue.
-                etat["total"] -= fiches
-                etat["writes"][nom] -= fiches
-                if not etat["writes"][nom]:
-                    del etat["writes"][nom]
+            if outil not in ec.ECRITURES:
+                return await lecture(outil, arguments)
             return {"ok": False, "code": "unknown_tool",
                     "message": f"`{outil}` is not served by this instance."}
+        if outil not in ec.ECRITURES and lecture_declaree.en_lecture(tool):
+            return await lecture(outil, arguments)
+        sens, nom = ec.classer_appel(outil, arguments, multiplexe=_multiplexe(tool))
+        if sens == "refus":
+            return {"ok": False, "code": "write_op_not_allowed", "message": nom}
+        if sens == "lire":
+            return await _executer(tool, sub, outil, arguments)
+        fiches = _fiches(arguments)
+        envoi = sens == "envoyer"
+        refus = _refus_ecrire_chez_un_tiers(nom, arguments, fiches, envoi=envoi)
+        if refus:
+            return refus
+        # Réservées AVANT le premier `await` : le pont sert des appels en parallèle, et
+        # deux écritures jugées sur le même reste passeraient toutes les deux.
+        etat["total"] += fiches
+        etat["writes"][nom] = etat["writes"].get(nom, 0) + fiches
+        if envoi:
+            etat["envois"] += fiches
         return await _executer(tool, sub, outil, arguments)
 
-    def _refus_ecrire_chez_un_tiers(nom: str, arguments: dict,
-                                    fiches: Optional[int]) -> Optional[dict]:
+    def _refus_ecrire_chez_un_tiers(nom: str, arguments: dict, fiches: Optional[int], *,
+                                    envoi: bool = False) -> Optional[dict]:
         if nom not in ecritures:
             return {"ok": False, "code": "write_not_declared",
                     "message": f"`{nom}` writes at the provider and this recipe does not "
@@ -179,6 +188,12 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
             return {"ok": False, "code": "invalid_call",
                     "message": f"A batch (`items` / `ids` / `entries`) is a list of 1 to "
                                f"{MAX_FICHES_PAR_APPEL} records. Nothing was called."}
+        if envoi and max_envois is not None and fiches > max_envois - etat["envois"]:
+            etat["stopped"] = etat["stopped"] or "max_sends"
+            return {"ok": False, "code": "budget_exhausted",
+                    "message": f"This run's send budget (max_sends={max_envois}) has "
+                               f"{max(max_envois - etat['envois'], 0)} send(s) left; this "
+                               f"call sends {fiches}. Nothing was called."}
         reste = max_ecritures - etat["total"]
         if fiches > reste:
             # Un lot qui ne tient pas n'est pas joué en partie : le code peut le
@@ -195,6 +210,12 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
 #: Ce qu'un appel EN LOT peut porter de fiches : la borne des outils CRM de la liste
 #: (`items` / `ids` / `entries`, 50 au plus).
 MAX_FICHES_PAR_APPEL = 50
+
+
+def _multiplexe(tool) -> bool:
+    """L'outil prend-il une `op` ? Lu dans son schéma d'entrée."""
+    schema = getattr(tool, "parameters", None) or {}
+    return "op" in (schema.get("properties") or {})
 
 
 def _fiches(arguments: dict) -> Optional[int]:

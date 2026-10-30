@@ -276,7 +276,8 @@ def test_une_ecriture_declaree_est_appelee_comptee_et_journalisee(crm):
     reponse = _ecrire(m, "acme_crm", {"op": "create", "name": "a"}, compteur=compteur)
     assert reponse["ok"] and reponse["result"]["id"] == "rec-a"
     assert appels == ["acme_crm:create"]
-    assert compteur == {"writes": {"acme_crm:create": 1}, "total": 1, "stopped": None}
+    assert compteur == {"writes": {"acme_crm:create": 1}, "total": 1, "envois": 0,
+                        "stopped": None}
     with _connect() as conn:
         lignes = conn.execute("SELECT ok FROM tool_calls WHERE sub = %s AND tool = %s "
                               "AND args->>'op' = 'create'", (SUB, "acme_crm")).fetchall()
@@ -321,7 +322,8 @@ def test_un_lot_est_compte_fiche_par_fiche(crm):
     assert _ecrire(m, "acme_crm", {"op": "create", "ids": ["a", "b"]}, max_ecritures=100,
                    compteur=compteur)["ok"]
     assert appels == ["acme_crm:createx50", "acme_crm:createx2"]
-    assert compteur == {"writes": {"acme_crm:create": 52}, "total": 52, "stopped": None}
+    assert compteur == {"writes": {"acme_crm:create": 52}, "total": 52, "envois": 0,
+                        "stopped": None}
 
 
 def test_un_lot_mal_forme_ou_trop_gros_n_appelle_rien(crm):
@@ -406,13 +408,109 @@ def test_une_ecriture_dont_l_outil_manque_rend_sa_reservation(monkeypatch):
         None, SUB, datastore=None, ecrire=True, ecritures=frozenset({"acme_crm:create"}),
         max_ecritures=2, compteur=compteur)("acme_crm", {"op": "create", "name": "a"}))
     assert reponse["code"] == "unknown_tool"
-    assert compteur == {"writes": {}, "total": 0, "stopped": None}
+    assert compteur == {"writes": {}, "total": 0, "envois": 0, "stopped": None}
 
 
-def test_un_outil_qui_ecrit_hors_liste_reste_refuse(crm):
+def test_un_outil_hors_connecteur_reste_refuse(crm):
+    """Un outil qui n'est d'aucun connecteur (ici, `acme` n'en est pas un) : la lecture
+    le refuse en le nommant, comme avant la règle générale."""
     m, appels = crm
     assert _ecrire(m, "acme_post", {"text": "x"})["code"] == "recipe_tool_not_read_only"
     assert appels == []
+
+
+@pytest.fixture
+def connecteur(serveur, monkeypatch):
+    """Un faux connecteur HORS de la liste forcée (28/10/2026) : la règle générale le
+    classe par le verbe de son op — `list` lit, `create` écrit, `send` envoie,
+    `delete` détruit."""
+    from oto_mcp.recipes import ecritures as ec
+    m, appels = serveur
+    monkeypatch.setattr(ec, "_est_connecteur", lambda ns: ns == "acme")
+
+    @m.tool()
+    def acme_act(op: str, text: str = "", ids: Optional[list] = None) -> dict:
+        appels.append(f"acme_act:{op}" + (f"x{len(ids)}" if ids is not None else ""))
+        return {"op": op}
+
+    @m.tool()
+    def acme_post_message(text: str = "") -> dict:
+        appels.append("acme_post_message")
+        return {"ok": True}
+    return m, appels
+
+
+def _agir(m, outil, arguments, *, ecrire=True, declarees=(), max_ecritures=5,
+          max_envois=None, compteur=None):
+    from oto_mcp.recipes import pont
+    return asyncio.run(pont.appeleur_de_recette(
+        m, SUB, datastore=None, ecrire=ecrire, ecritures=frozenset(declarees),
+        max_ecritures=max_ecritures, max_envois=max_envois,
+        compteur=compteur)(outil, arguments))
+
+
+def test_regle_generale_une_lecture_passe_sans_declaration_meme_en_epreuve(connecteur):
+    m, appels = connecteur
+    assert _agir(m, "acme_act", {"op": "list"}, ecrire=False)["ok"]
+    assert appels == ["acme_act:list"]
+
+
+def test_regle_generale_une_ecriture_declaree_est_appelee_et_comptee(connecteur):
+    from oto_mcp.recipes import pont
+    m, appels = connecteur
+    compteur = pont.compteur_neuf()
+    assert _agir(m, "acme_act", {"op": "create", "text": "x"},
+                 declarees=("acme_act:create",), compteur=compteur)["ok"]
+    assert appels == ["acme_act:create"]
+    assert compteur["writes"] == {"acme_act:create": 1} and compteur["envois"] == 0
+
+
+def test_regle_generale_une_ecriture_non_declaree_ou_en_epreuve_n_appelle_rien(connecteur):
+    m, appels = connecteur
+    assert _agir(m, "acme_act", {"op": "create"})["code"] == "write_not_declared"
+    assert _agir(m, "acme_act", {"op": "create"}, ecrire=False,
+                 declarees=("acme_act:create",))["code"] == "write_in_test"
+    assert appels == []
+
+
+@pytest.mark.parametrize("op", ["delete", "merge", "bulk_update", "archive"])
+def test_regle_generale_une_op_qui_detruit_est_refusee(connecteur, op):
+    m, appels = connecteur
+    reponse = _agir(m, "acme_act", {"op": op}, declarees=(f"acme_act:{op}",))
+    assert reponse["code"] == "write_op_not_allowed"
+    assert appels == []
+
+
+def test_regle_generale_l_op_d_un_outil_multiplexe_est_litterale(connecteur):
+    m, appels = connecteur
+    assert _agir(m, "acme_act", {})["code"] == "write_op_not_allowed"
+    assert appels == []
+
+
+def test_regle_generale_un_outil_sans_op_se_classe_par_son_nom(connecteur):
+    """`acme_post_message` : le verbe `post`, un envoi, déclaré sous son nom seul."""
+    from oto_mcp.recipes import pont
+    m, appels = connecteur
+    compteur = pont.compteur_neuf()
+    assert _agir(m, "acme_post_message", {"text": "x"},
+                 declarees=("acme_post_message",), compteur=compteur)["ok"]
+    assert appels == ["acme_post_message"] and compteur["envois"] == 1
+
+
+def test_regle_generale_max_sends_borne_les_envois(connecteur):
+    from oto_mcp.recipes import pont
+    m, appels = connecteur
+    compteur = pont.compteur_neuf()
+    declarees = ("acme_act:send", "acme_act:create")
+    assert _agir(m, "acme_act", {"op": "send", "ids": ["a", "b"]}, declarees=declarees,
+                 max_envois=2, compteur=compteur)["ok"]
+    refus = _agir(m, "acme_act", {"op": "send", "text": "x"}, declarees=declarees,
+                  max_envois=2, compteur=compteur)
+    assert refus["code"] == "budget_exhausted" and compteur["stopped"] == "max_sends"
+    # Une écriture qui n'envoie pas reste permise : seul `max_writes` la borne.
+    assert _agir(m, "acme_act", {"op": "create"}, declarees=declarees, max_envois=2,
+                 compteur=compteur)["ok"]
+    assert appels == ["acme_act:sendx2", "acme_act:create"]
 
 
 def test_un_appel_annule_en_vol_n_est_ni_regle_ni_journalise_comme_un_succes(serveur,

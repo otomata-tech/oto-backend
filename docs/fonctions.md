@@ -3,8 +3,8 @@ title: Les fonctions — du code pur, stocké et exécuté par Oto
 type: explanation
 description: >-
   `oto_function` (ADR 0073) : un calcul propre à un client — entrée JSON, résultat,
-  avertissements, fichiers — stocké en versions immuables, publié par la plateforme
-  sous la garde de ses tests, et exécuté dans un bac à sable Pyodide sous Deno sans
+  avertissements, fichiers — stocké en versions immuables, publié par un membre de sa
+  portée sous la garde de ses tests, et exécuté dans un bac à sable Pyodide sous Deno sans
   réseau. Ce que le bac à sable refuse au code et comment on le prouve, où il vit sur
   une instance, ce que les tests garantissent et ce qu'ils ne garantissent pas. À lire
   avant de toucher `oto_mcp/functions/`, `db/functions.py` ou `capabilities/functions.py`.
@@ -24,7 +24,7 @@ besoin, elle rend un résultat exact. Décision et arbitrages : ADR 0073 (meta-r
 | `list`, `get`, `versions` | lire (le code n'est rendu que par `get`) | membre du scope |
 | `create`, `propose` | écrire une version, toujours PROPOSÉE | membre du scope |
 | `run` | exécuter la version PUBLIÉE ; ses fichiers vont dans `project` | membre du scope |
-| `test`, `publish`, `refuse` | exécuter du code non publié, et en décider | **plateforme** |
+| `test`, `publish`, `refuse` | exécuter du code non publié, et en décider | membre du scope, une **personne** |
 
 Scope : l'org active (défaut) ou `scope='user'`. Surface bêta (`BETA_TOOLS`), REST
 `POST /api/me/functions`.
@@ -89,8 +89,10 @@ mode `bwrap`.
 
 ⚠️ **Les tests prouvent la non-régression d'un code HONNÊTE, pas l'innocuité d'un code
 hostile** : le code tourne dans le même interpréteur que le harnais et pourrait le
-tromper. C'est la relecture avant publication, réservée à la plateforme, qui garde ce
-point — et la raison pour laquelle `test`/`publish` n'ont pas été ouverts aux orgs.
+tromper. Depuis le 28/10/2026, `test`/`publish` sont ouverts au membre de la portée :
+plus aucune relecture de plateforme ne garde ce point. Ce qui borne un code hostile est
+le bac à sable (ni réseau, ni secret, mémoire et durée bornées) ; ce qu'une fonction
+rend, son org le tient de ce que ses membres publient.
 
 ⚠️ **La mémoire** : `--max-old-space-size` borne le tas V8, pas la mémoire WASM de
 Pyodide ; c'est l'isolement qui borne le processus entier (`isolement.MEMOIRE_MO` :
@@ -170,11 +172,12 @@ code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.
   sont attendus sur la boucle, sans fil ni SQL dans ce module.
 
 ⚠️ **Auteur ≠ appelant** : le code d'une recette publiée tourne avec les droits de qui
-l'exécute, pas de qui l'a écrite. C'est pourquoi l'épreuve et la publication d'une
-recette-code restent à la plateforme (#1202). Le pont en lecture
-(`appeleur_en_lecture`) n'appelle que des outils en lecture ; une recette-code y ajoute
-les tableaux et, depuis le lot 3, les écritures chez un tiers qu'elle DÉCLARE, par une
-liste fermée (`recipes/ecritures.py`, `docs/recettes.md`).
+l'exécute, jamais de qui l'a écrite (#1202, tranché le 28/10/2026) : son auteur
+l'éprouve et la publie dans sa portée. Le pont en lecture (`appeleur_en_lecture`)
+n'appelle que des outils en lecture ; une recette-code y ajoute les tableaux et les
+écritures et envois chez un tiers qu'elle DÉCLARE, par tout outil de connecteur classé
+par le verbe de son op — jamais une op qui détruit (`recipes/ecritures.py`,
+`recipes/effets.py`, `docs/recettes.md`).
 
 ## Où vit le bac à sable
 

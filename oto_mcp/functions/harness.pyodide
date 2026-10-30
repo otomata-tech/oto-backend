@@ -6,8 +6,8 @@ puis joue soit la fonction (`run`), soit ses tests (`test`), et rend du JSON.
 
 ⚠️ Le code de la fonction tourne dans le MÊME interpréteur que ce harnais. Les tests
 prouvent donc la non-régression d'un code honnête, pas l'innocuité d'un code hostile :
-c'est la relecture avant publication, réservée à la plateforme (ADR 0073 §D3), qui
-garde ce second point.
+depuis le 28/10/2026, le membre publie dans sa portée, sans relecture de plateforme ;
+c'est le bac à sable (ni réseau, ni secret, bornes) qui borne un code hostile.
 
 Ce fichier est lu comme du TEXTE par `executor.py` et n'est jamais importé côté serveur :
 d'où son extension, qui n'est pas `.py`. Importé, il lèverait à la première ligne

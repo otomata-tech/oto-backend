@@ -108,3 +108,71 @@ def test_une_recette_lit_les_watch_lists_les_desinscriptions_et_les_fiches_lemli
         for op in ops:
             assert ec.juger(outil, {"op": op})[0] == "refus", (outil, op)
         assert not any(d.startswith(outil) for d in ec.declarables()), outil
+
+
+# --- La règle générale (28/10/2026) : tout outil de connecteur, classé par son verbe ---
+
+from oto_mcp.recipes import effets  # noqa: E402
+
+
+@pytest.mark.parametrize("outil,op,classe", [
+    ("slack_act", "send", "envoyer"),
+    ("slack_post_message", None, "envoyer"),
+    ("slack_delete_message", None, "detruire"),
+    ("hubspot_object", "create", "ecrire"),
+    ("acme_act", "upsert_contact", "ecrire"),
+    ("acme_act", "list", "lire"),
+    ("acme_act", "bulk_create", "detruire"),
+    ("acme_act", "merge", "detruire"),
+    # Un verbe inconnu n'est JAMAIS présumé lecteur.
+    ("acme_act", "reveal_phone", "ecrire"),
+    ("acme_act", "export_start", "ecrire"),
+])
+def test_effets_classe_par_le_verbe(outil, op, classe):
+    assert effets.classer(outil, op) == classe
+
+
+@pytest.mark.parametrize("nom", ["slack_act:send", "hubspot_object:create",
+                                 "slack_post_message", "notion_act:create_page"])
+def test_une_ecriture_de_connecteur_se_declare(nom):
+    assert ec.probleme_de_declaration(nom) is None, ec.probleme_de_declaration(nom)
+
+
+@pytest.mark.parametrize("nom,motif", [
+    ("slack_delete_message", "deletes"),
+    ("hubspot_object:delete", "not open"),        # outil forcé : ses seules ops
+    ("slack_act:list", "reads"),
+    ("jev_rows", "model"),
+    ("data_write", "platform"),
+    ("acme_thing:create", "not a connector"),
+    ("Slack Act:send", "is named"),
+])
+def test_ce_qui_ne_se_declare_pas(nom, motif):
+    assert motif in (ec.probleme_de_declaration(nom) or "")
+
+
+def test_les_envois_de_la_regle_generale():
+    assert ec.envoient(["slack_act:send", "hubspot_object:create",
+                        "lemlist_create_lead", "notion_act:create_page"]) == \
+        ["lemlist_create_lead", "slack_act:send"]
+
+
+def test_une_recette_code_declare_un_envoi_hors_liste_avec_allow_sending():
+    from oto_mcp.recipes import code
+    corps = {"kind": "code", "sources": {"r.py": "async def run(oto, params):\n    return {}\n"},
+             "entrypoint": "r:run", "writes": ["slack_act:send"],
+             "limits": {"max_units": 1, "max_sends": 5}}
+    with pytest.raises(Exception) as e:
+        code.valider(corps)
+    assert "allow_sending" in str(e.value.problemes)
+    valide = code.valider({**corps, "allow_sending": True})
+    assert valide["limits"]["max_sends"] == 5 and valide["limits"]["max_writes"] == 50
+
+
+def test_max_sends_est_un_entier_positif_ou_absent():
+    from oto_mcp.recipes import code
+    corps = {"kind": "code", "sources": {"r.py": "async def run(oto, params):\n    return {}\n"},
+             "entrypoint": "r:run", "limits": {"max_units": 1, "max_sends": -1}}
+    with pytest.raises(Exception) as e:
+        code.valider(corps)
+    assert "max_sends" in str(e.value.problemes)

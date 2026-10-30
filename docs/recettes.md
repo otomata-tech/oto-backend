@@ -110,11 +110,12 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
 
 - **Le code** tourne dans le bac à sable d'`oto_function` par le pont
   (`docs/fonctions.md` §Le pont) : `await oto.call(outil, arguments)`. Il peut appeler
-  les outils de connecteur DÉCLARÉS EN LECTURE (mêmes refus que ci-dessous), `data_rows`
+  TOUT outil de connecteur (ni outil de plateforme, ni connecteur à modèle : mêmes refus
+  que ci-dessous) — ses lectures librement, ses écritures et ses envois s'il les DÉCLARE
+  (« Écrire chez un tiers » ci-dessous) —, `data_rows`
   (une page d'un tableau que l'appelant lit, `MAX_LIGNES_LUES`) et `data_write(rows, key)`
   — dans le SEUL tableau qu'`op=run` désigne (`datastore`), jamais en épreuve, `key`
-  exigée (`write_outside_target`, `write_in_test`). Aucun autre outil de connecteur qui
-  écrit, hors la liste fermée ci-dessous (« Écrire chez un tiers »).
+  exigée (`write_outside_target`, `write_in_test`).
   Ces deux-là sont des appels ORDINAIRES des outils `data_*` (`meta.executer_cible`,
   comme tout appel du pont) : leurs gardes (droits sur le tableau, org suspendue, org du
   run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
@@ -125,31 +126,57 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   écritures par clé ne doublent rien.
 - **Le reçu** est ce que rend le code, borné à `code.MAX_RECU` caractères : des
   comptes, pas des données (`receipt_too_large`). L'épreuve rend en plus le `journal`.
-- **Écrire chez un tiers** (lot 3) : un CRM, par une liste FERMÉE d'outils
-  (`recipes/ecritures.py`) — créer, mettre à jour, ajouter à un groupe ; jamais
-  supprimer ni fusionner. Une op permise peut s'appeler EN LOT (`items` / `ids` de
-  l'outil, 50 fiches au plus) : c'est ce qui rend une poussée de quelques milliers de
-  fiches faisable (≈50 appels au lieu de ≈2 000). Chaque écriture se DÉCLARE dans le corps,
-  `writes: ["folk_record:create", "folk_record:update"]` : c'est ce que la plateforme relit
-  avant de publier, et le pont refuse toute autre (`write_not_declared`). Les ops qui
-  lisent de ces outils (`search`, `get`) passent sans déclaration ; un outil multiplexé
-  exige son `op` littérale (`write_op_not_allowed` sinon). Une écriture n'est jamais
-  jouée en épreuve (`write_in_test`), se fait dans l'org du run (`_org`, `_group`,
-  `_project` refusés : `write_outside_run_org` ; `_account` choisit le compte), avec le
-  compte de connecteur de qui exécute, et compte dans `limits.max_writes` (50 par défaut
-  dès qu'une écriture est déclarée, sans plafond de plateforme : c'est la borne de qui
-  écrit la recette), compté à la TENTATIVE et PAR FICHE
-  (un lot de 50 = 50 écritures) ; un lot qui ne tient pas dans ce qui reste n'est pas
-  joué du tout (`budget_exhausted`, le message dit combien il reste) — atteint,
-  `stopped: "max_writes"`. Le reçu compte les écritures par nom (`writes`). Un outil qui
-  peut déclencher un envoi (`lemlist_create_lead`) exige `allow_sending: true`. Pas de
-  reprise ici non plus : une recette qui écrit cherche avant de créer, pour qu'une relance
-  ne crée pas deux fois. Chaque appel reste un appel ordinaire de l'outil
-  (`meta.executer_cible`) : sa garde d'activation, son journal, sa facturation.
-- **Qui fait quoi** : le membre écrit (`create`, `propose`) et exécute (`run`) ; la
-  PLATEFORME seule éprouve (`test`) et publie (`publish`, `platform_only` sinon). Le code
-  tourne avec les droits de qui l'EXÉCUTE, pas de qui l'a écrit : tant que cette règle
-  n'est pas tranchée (#1202), c'est celle d'`oto_function`. La publication exige une
+- **Écrire chez un tiers** : par TOUT outil de connecteur (règle générale, 28/10/2026 ;
+  le lot 3 tenait une liste fermée de CRM). Chaque appel d'un outil qui n'est pas
+  déclaré `LECTURE` est classé par le verbe de son op — ou de son nom, sans op
+  (`recipes/effets.py`, `ecritures.classer_appel`) :
+  - `lire` — un verbe de la liste COURTE et positive `effets.LIRE` (`get`, `list`,
+    `search`…) : passe sans déclaration, en épreuve comprise. Un verbe inconnu n'est
+    JAMAIS présumé lecteur : c'est une écriture ;
+  - `ecrire` — tout autre verbe (`create`, `update`, `add`, `upsert`, `reveal`…) ;
+  - `envoyer` — un verbe d'`effets.ENVOI` (`send`, `post`, `invite`, `publish`, `push`,
+    `request`…) : une écriture qui part chez quelqu'un ;
+  - `detruire` — un verbe d'`effets.DESTRUCTION` (`delete`, `remove`, `archive`,
+    `cancel`…), `merge` ou une op `bulk_*` : REFUSÉ (`write_op_not_allowed`). Une recette
+    relancée repart du début, et une boucle sans modèle qui se trompe détruirait en série.
+
+  `ECRITURES` (`recipes/ecritures.py`) reste la classe FORCÉE de quelques outils, décidée
+  op par op : seules ses ops nommées passent, quel que soit leur verbe (la file d'Allo
+  n'est jamais remplacée par `create_queue`, `lemlist_create_lead` est un envoi). Une
+  écriture ou un envoi se DÉCLARE dans le corps, `writes: ["folk_record:create",
+  "slack_act:send", "slack_post_message"]` (`outil:op`, ou `outil` sans op) — vérifié à
+  l'écriture (`ecritures.probleme_de_declaration` : une lecture, une destruction, un
+  outil hors connecteur ne se déclarent pas), et le pont refuse toute autre
+  (`write_not_declared`). Un outil multiplexé exige son `op` littérale
+  (`write_op_not_allowed` sinon). Une op permise peut s'appeler EN LOT (`items` / `ids` /
+  `entries`, 50 fiches au plus) : c'est ce qui rend une poussée de quelques milliers de
+  fiches faisable (≈50 appels au lieu de ≈2 000). Une écriture n'est jamais jouée en
+  épreuve (`write_in_test`), se fait dans l'org du run (`_org`, `_group`, `_project`
+  refusés : `write_outside_run_org` ; `_account` choisit le compte), avec le compte de
+  connecteur de qui exécute, et compte dans `limits.max_writes` (50 par défaut dès qu'une
+  écriture est déclarée, sans plafond de plateforme : c'est la borne de qui écrit la
+  recette), compté à la TENTATIVE et PAR FICHE (un lot de 50 = 50 écritures) ; un lot qui
+  ne tient pas dans ce qui reste n'est pas joué du tout (`budget_exhausted`, le message
+  dit combien il reste) — atteint, `stopped: "max_writes"`. Un ENVOI exige
+  `allow_sending: true` et compte en plus dans `limits.max_sends` s'il est posé (absent :
+  seul `max_writes` le borne) — atteint, `stopped: "max_sends"`. Le reçu compte les
+  écritures par nom (`writes`). ⚠️ Un lot passé par une autre clé qu'`items` / `ids` /
+  `entries` compte UNE écriture : borner ce qu'un appel porte reste au code. Pas de
+  reprise ici non plus : une recette qui écrit cherche avant de créer, pour qu'une
+  relance ne crée pas deux fois. Chaque appel reste un appel ordinaire de l'outil
+  (`meta.executer_cible`) : sa garde d'activation, son journal, sa facturation, la liste
+  d'outils d'un agent hébergé.
+- **Qui fait quoi** (#1202, tranché le 28/10/2026) : une recette-code tourne avec les
+  droits de qui l'EXÉCUTE, jamais de qui l'a écrite — elle ne fait rien que son
+  exécutant ne pourrait faire avec ses propres outils, et l'auteur qui quitte l'org n'y
+  change rien. Le membre l'écrit, l'éprouve, la publie et l'exécute dans sa portée (org
+  ou soi), comme une recette déclarative ; seule une PERSONNE éprouve ou publie, jamais
+  un agent hébergé (`code_human_only`) ; la portée `platform` reste aux opérateurs.
+  ⚠️ Ce que ce choix laisse ouvert, et qu'aucune garde ne ferme : un membre peut publier
+  dans l'org un code qui, lancé par un collègue, lit ce que CE collègue lit (sa boîte, ses
+  comptes) et l'écrit là où l'auteur le voit (un tableau partagé, le CRM de l'org) ou
+  l'envoie. L'org fait confiance à ce que publient ses membres ; le journal (`tool_calls`,
+  sous l'identité de qui exécute) dit ce qui est parti. La publication exige une
   épreuve sans erreur ; une borne atteinte n'en est pas une.
 
 ## Les garde-fous

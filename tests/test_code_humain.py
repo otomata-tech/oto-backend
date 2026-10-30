@@ -31,13 +31,13 @@ def test_une_fonction_ne_s_eprouve_ni_ne_se_decide_depuis_un_agent(agent_heberge
 @pytest.mark.parametrize("op", ["test", "publish"])
 def test_une_recette_code_ne_s_eprouve_ni_ne_se_publie_depuis_un_agent(agent_heberge, op):
     with pytest.raises(AuthzDenied) as e:
-        asyncio.run(R._plateforme_pour_le_code(CTX, {"kind": "code"}, op))
+        asyncio.run(R._personne_pour_le_code({"kind": "code"}, op))
     assert (e.value.status, e.value.code) == (403, "code_human_only")
 
 
 def test_une_recette_declarative_reste_ouverte_a_un_agent(agent_heberge):
     """Une recette sans code n'exécute rien de non publié : la règle ne la touche pas."""
-    assert asyncio.run(R._plateforme_pour_le_code(CTX, {"tool": "x"}, "publish")) is None
+    assert asyncio.run(R._personne_pour_le_code({"tool": "x"}, "publish")) is None
 
 
 def test_hors_jeton_de_delegation_rien_ne_change(monkeypatch):

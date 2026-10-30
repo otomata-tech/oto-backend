@@ -19,7 +19,8 @@ verrou du jeton, `verrou_org.py`) et ses droits sur le tableau ; les refus du co
 valent pour tous (outils de la plateforme et outils à modèle exclus, outil déclaré en
 lecture seulement). Une seule règle propre aux agents : éprouver ou publier une
 recette-CODE est un geste de personne (`_code_humain`) — c'est exécuter du code non
-publié.
+publié. Une recette-code tourne avec les droits de QUI L'EXÉCUTE (#1202, 28/10/2026) :
+son auteur l'éprouve et la publie dans sa portée, comme une recette déclarative.
 
 **La face REST (`POST /api/me/recipes`) sert trois ops : `list`, `get` et `run`** —
 ce qu'une page fait d'un geste (nommer les recettes, en lancer une). Écrire, éprouver
@@ -47,7 +48,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, session_org, tool_alias, tool_registry
+from .. import session_org, tool_alias, tool_registry
 from ..db import recipes as db_recipes
 from ..functions import executor as bac
 from ..functions import pont as pont_bac
@@ -133,12 +134,15 @@ class RecipeInput(BaseModel):
         "A CODE recipe instead: {kind: \"code\", sources: {\"recipe.py\": \"async def "
         "run(oto, params): ...\"}, entrypoint: \"recipe:run\", params, writes?, "
         "allow_sending?, limits {max_units, max_calls?, max_seconds?, max_writes?}} — the "
-        "code calls `await oto.call(tool, arguments)` (read-only connector tools, "
+        "code calls `await oto.call(tool, arguments)` (any connector tool: reads freely, "
         "`data_rows`, `data_write(rows, key)` into the run's `datastore` only, and the "
-        "CRM writes it declares in `writes`, e.g. \"folk_record:create\" — never in a "
-        "test, never delete/merge; a batch via `items`/`ids` (≤50) counts one write per "
-        "record against `max_writes`) and returns a receipt of counts; test/publish of "
-        "a code recipe are platform-only, by a person (never from a hosted agent)."))
+        "writes and sends it declares in `writes` as `tool:op`, e.g. "
+        "\"hubspot_object:create\", \"slack_act:send\" — never in a test, never an op "
+        "that deletes, merges or acts in bulk; a batch via `items`/`ids` (≤50) counts one "
+        "write per record against `max_writes`; a send needs `allow_sending: true` and "
+        "counts against `max_sends` when set) and returns a receipt of counts; it runs "
+        "with the rights of whoever RUNS it; test/publish are done by a person in scope "
+        "(never from a hosted agent)."))
     display: Optional[dict[str, Any]] = Field(default=None, description=(
         "create/describe: what a process page shows where a process runs this recipe — "
         "{steps: [{label, detail?, credits?, per: contact|company|row}], saves?}: 1 to "
@@ -343,18 +347,14 @@ def _epingler_org(ctx: ResolvedCtx):
 BORNES_D_EPREUVE = frozenset({None, "max_pages", "spend_cap", "time_budget"})
 
 
-async def _plateforme_pour_le_code(ctx: ResolvedCtx, corps: dict, op: str) -> None:
-    """Éprouver ou publier une recette-CODE : la plateforme seule, comme une fonction, et
-    une personne, jamais un agent hébergé (`_code_humain`). Le code tourne avec les
-    droits de qui l'exécute, pas de qui l'a écrit (#1202)."""
-    if not code.est_code(corps):
-        return
-    _code_humain.exiger_une_personne(op)
-    if not await run_in_threadpool(access.is_platform_operator, ctx.sub):
-        raise AuthzDenied(403, "platform_only",
-                          f"op={op} on a code recipe is reserved to the platform: the code "
-                          "runs with the rights of whoever runs it. `create` / `propose` "
-                          "it, and ask the platform to test and publish it.")
+async def _personne_pour_le_code(corps: dict, op: str) -> None:
+    """Éprouver ou publier une recette-CODE : une personne, jamais un agent hébergé
+    (`_code_humain`) — c'est exécuter du code que personne n'a mis en service. La portée
+    suit l'op comme pour toute recette (membre de l'org, soi ; la plateforme à ses
+    opérateurs) : le code tourne avec les droits de qui l'EXÉCUTE, jamais de qui l'a
+    écrit (#1202), il n'ouvre donc rien à son auteur."""
+    if code.est_code(corps):
+        _code_humain.exiger_une_personne(op)
 
 
 async def _executer(ctx: ResolvedCtx, inp: RecipeInput, corps: dict, *, ecrire: bool,
@@ -448,7 +448,7 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
     if inp.slug is None and inp.op == "test":
         corps = _corps(ctx, _besoin(inp.recipe, "missing_recipe",
                                     "Pass `slug` (a stored recipe) or `recipe` (inline)."))
-        await _plateforme_pour_le_code(ctx, corps, "test")
+        await _personne_pour_le_code(corps, "test")
         recu = await _executer(ctx, inp, corps, ecrire=False, pages_max=1)
         return {"receipt": recu}
     fiche = await run_in_threadpool(_fiche, ctx, inp)
@@ -462,7 +462,7 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
         return {"recipe": fiche, "version": {"version": version["version"]},
                 "receipt": await _executer(ctx, inp, version["body"], ecrire=True,
                                            temoin=version.get("test_report"))}
-    await _plateforme_pour_le_code(ctx, version["body"], inp.op)
+    await _personne_pour_le_code(version["body"], inp.op)
     recu = await _executer(ctx, inp, version["body"], ecrire=False, pages_max=1)
     if inp.op == "test":
         return {"recipe": fiche, "version": {"version": version["version"]}, "receipt": recu}
@@ -541,11 +541,13 @@ CAPABILITIES += [
             "recipe runs with the caller's identity, org and table rights. A hosted agent "
             "runs recipes like any caller: its identity and its job's org. A recipe can "
             "also be CODE (`kind: \"code\"`, Python in the function sandbox calling tools "
-            "through `oto.call`): anyone in scope creates and runs it, only the platform "
-            "tests and publishes it. A code recipe may also "
-            "create or update CRM records through a closed list of tools, only the writes "
-            "it declares (`writes`), at most `limits.max_writes` per run (default 50), in "
-            "the run's org, with the caller's own connector account. PROVISIONAL surface."),
+            "through `oto.call`): anyone in scope creates, tests, publishes and runs it "
+            "(test and publish by a person, never a hosted agent); it runs with the rights "
+            "of whoever RUNS it. A code recipe may also write or send through any "
+            "connector tool, only the `tool:op` writes it declares (`writes`, never a "
+            "delete, merge or bulk op), at most `limits.max_writes` per run (default 50) "
+            "and `limits.max_sends` sends when set, in the run's org, with the caller's "
+            "own connector account. PROVISIONAL surface."),
         mcp="oto_recipe",
         # La même capacité sur la face REST, pour qu'une page nomme les recettes et en
         # lance une d'un geste (un tableau, une ligne) sans session MCP : même garde par

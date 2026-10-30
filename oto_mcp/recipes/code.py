@@ -16,14 +16,17 @@ oto.call(outil, arguments)`) et rend un reçu — des COMPTES, pas des données 
 borné à `MAX_RECU` caractères. Ce qu'il peut appeler est jugé par `pont.appeleur_de_recette` :
 outils de connecteur déclarés en lecture, `data_rows`, `data_write` dans le seul tableau
 désigné par `op=run` (jamais en épreuve), et — lot 3 — les écritures chez un tiers de la
-liste fermée `ecritures.ECRITURES` que la recette DÉCLARE dans `writes` (jamais en
-épreuve, `limits.max_writes` par exécution ; un outil qui peut envoyer exige
-`allow_sending: true`).
+écritures chez un tiers que la recette DÉCLARE dans `writes` — tout outil de connecteur,
+classé par le verbe de son op (`ecritures.classer_appel`, `effets`), jamais une op qui
+détruit ; jamais en épreuve, `limits.max_writes` par exécution (et `limits.max_sends`
+pour les envois, s'il est posé) ; un envoi exige `allow_sending: true`.
 
-**Qui publie** : une recette-code tourne avec les droits de qui l'EXÉCUTE, pas de qui
-l'a écrite (auteur ≠ appelant, #1202). Tant que cette règle n'est pas tranchée, l'épreuve
-et la publication d'une recette-code sont réservées à la PLATEFORME — la règle
-d'`oto_function`. L'écrire et la proposer restent ouverts au membre.
+**Qui publie** : une recette-code tourne avec les droits de qui l'EXÉCUTE, jamais de qui
+l'a écrite (#1202, tranché le 28/10/2026) : elle ne fait rien que son exécutant ne
+pourrait faire avec ses propres outils, et l'auteur qui quitte l'org n'y change rien.
+Son auteur l'éprouve et la publie dans sa portée (org ou soi) ; seule une PERSONNE le
+fait, jamais un agent hébergé (`_code_humain`). La portée `platform` reste aux
+opérateurs.
 """
 from __future__ import annotations
 
@@ -87,6 +90,11 @@ def valider(corps: Any) -> dict:
         if not isinstance(lim["max_writes"], int) or isinstance(lim["max_writes"], bool) \
                 or lim["max_writes"] < 0:
             probs.append("`limits.max_writes`: 0 or more")
+        envois = lim.get("max_sends")
+        if envois is not None and (not isinstance(envois, int) or isinstance(envois, bool)
+                                   or envois < 0):
+            probs.append("`limits.max_sends`: 0 or more, or absent (then `max_writes` "
+                         "bounds the sends too)")
     probs += _probs_ecritures(c)
     if probs:
         raise contrat.RecetteInvalide(probs)
@@ -94,16 +102,13 @@ def valider(corps: Any) -> dict:
 
 
 def _probs_ecritures(c: dict) -> list[str]:
-    """`writes` : une liste sans doublon de noms de `ecritures.declarables()` ;
-    `allow_sending: true` si l'une peut envoyer."""
+    """`writes` : une liste sans doublon d'écritures de connecteur
+    (`ecritures.probleme_de_declaration`) ; `allow_sending: true` si l'une peut envoyer."""
     declarees = c.setdefault("writes", [])
     if not isinstance(declarees, list) or not all(isinstance(d, str) for d in declarees):
         return ["`writes` is a list of `tool:op` names (e.g. \"folk_record:create\")"]
-    probs = []
-    inconnues = sorted(set(declarees) - ec.declarables())
-    if inconnues:
-        probs.append(f"`writes`: {inconnues} cannot be declared (allowed: "
-                     f"{sorted(ec.declarables())})")
+    probs = [f"`writes`: {p}" for p in
+             (ec.probleme_de_declaration(d) for d in dict.fromkeys(declarees)) if p]
     if len(set(declarees)) != len(declarees):
         probs.append("`writes` names each write once")
     envoi = c.get("allow_sending", False)
@@ -153,7 +158,8 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
         appeler=pont.appeleur_de_recette(
             fastmcp, sub, datastore=datastore, ecrire=ecrire,
             ecritures=frozenset(corps.get("writes") or ()),
-            max_ecritures=lim.get("max_writes", 0), compteur=ecritures),
+            max_ecritures=lim.get("max_writes", 0), max_envois=lim.get("max_sends"),
+            compteur=ecritures),
         budget=pont_bac.Budget(appels=lim.get("max_calls"), unites=float(lim["max_units"]),
                                delai_s=float(lim["max_seconds"])))
     recu = {k: sortie.get(k) for k in ("ok", "calls", "units", "refused", "stopped")}

@@ -9,8 +9,8 @@ déclarée (`write_cell`), ajouter une ligne (`add_row`), lancer un agent
 (`start_agent`), suivre ses runs (`agent_runs`, `run_result`).
 
 **Un geste qui écrit, ajoute, lance ou dépose exige un jeton, demandé par l'ÉCRAN HÔTE**
-(oto-backend#1386). Le clic dans l'app VAUT accord, jugé par l'hôte (décision du
-31/10/2026, qui remplace celle du 29/10). L'app DEMANDE (par `postMessage`) ; l'hôte, le
+(oto-backend#1386). Le clic dans l'app VAUT accord, jugé par l'hôte (décision d'Alexis du
+31/10/2026, sur proposition de Julien, qui remplace celle du 29/10). L'app DEMANDE (par `postMessage`) ; l'hôte, le
 front qui embarque l'app, demande le jeton (`POST …/consent`, même corps que l'appel),
 reçoit avec lui un RÉSUMÉ de l'opération construit ICI, et utilise le jeton aussitôt sur
 un clic récent dans l'app, sinon après confirmation dans son propre chrome.

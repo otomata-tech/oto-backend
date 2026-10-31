@@ -144,7 +144,7 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
 
-**Le clic dans l'app VAUT accord, jugé par l'hôte** (décision du 31/10/2026, qui remplace
+**Le clic dans l'app VAUT accord, jugé par l'hôte** (décision d'Alexis du 31/10/2026, sur proposition de Julien, qui remplace
 celle du 29/10). Le serveur ne distingue pas un clic du lecteur d'un appel que l'app fait
 seule : c'est l'écran hôte qui en juge, sur l'activation navigateur. Un geste qui écrit ou
 lance (`write_cell`, `add_row`, `start_agent`, `upload_file`) exige toujours un **jeton de

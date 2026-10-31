@@ -214,26 +214,26 @@ def test_website_contacts_caps_its_billed_results_at_one_row_per_site():
 
 
 @pytest.mark.parametrize("name", sorted(CAS))
-def test_the_ceiling_is_accepted_up_to_25_dollars(name):
-    _, inst, _ = _lancer(name, {**CAS[name][0], "max_total_charge_usd": 25})
-    assert inst.run.call_args.kwargs["max_total_charge_usd"] == 25
+def test_the_ceiling_has_no_upper_limit(name):
+    _, inst, _ = _lancer(name, {**CAS[name][0], "max_total_charge_usd": 250})
+    assert inst.run.call_args.kwargs["max_total_charge_usd"] == 250
 
 
-@pytest.mark.parametrize("usd", [25.01, 100, 0, -1])
+@pytest.mark.parametrize("usd", [0, -1])
 @pytest.mark.parametrize("name", sorted(CAS))
-def test_a_ceiling_out_of_bounds_is_refused_by_name_before_the_run(name, usd):
+def test_a_ceiling_at_or_below_zero_is_refused_by_name_before_the_run(name, usd):
     with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
             patch("oto.tools.apify.client.ApifyClient") as cls:
         with pytest.raises(McpError) as e:
             _tool(name).fn(**{**CAS[name][0], "max_total_charge_usd": usd})
         cls.return_value.run.assert_not_called()
-    assert "max_total_charge_usd" in str(e.value) and "apify_run_sync" in str(e.value)
+    assert "max_total_charge_usd" in str(e.value)
 
 
 @pytest.mark.parametrize("name", sorted(CAS))
-def test_the_ceiling_and_its_bound_are_declared_in_the_served_text(name):
+def test_the_ceiling_is_declared_in_the_served_text(name):
     prop = _tool(name).parameters["properties"]["max_total_charge_usd"]
-    assert prop["default"] == 5.0 and "$25 at most" in prop["description"], name
+    assert prop["default"] == 5.0 and "raise it" in prop["description"], name
 
 
 def test_no_platform_usage_figure_is_written_in_the_module_or_served():

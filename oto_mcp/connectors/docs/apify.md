@@ -5,7 +5,7 @@ get the API token from [Apify](https://console.apify.com/settings/integrations) 
 
 ## usage — the common actors, one tool each
 
-reach for these first: a name that says what it does, typed arguments, the actor's input built for you, `max_items` and a $5 ceiling (`max_total_charge_usd`, $25 at most) set by default.
+reach for these first: a name that says what it does, typed arguments, the actor's input built for you, `max_items` and a $5 ceiling (`max_total_charge_usd`, raise it as needed) set by default.
 - "full LinkedIn profiles of these people" → `apify_linkedin_profiles(urls)` (`with_email=true` adds an email search)
 - "who works at this company" → `apify_linkedin_company_employees(companies, job_titles, locations)` — `profile_mode="short"` to pick people, enrich only those you keep
 - "the LinkedIn page of this company" / "find its LinkedIn URL from its name" → `apify_linkedin_companies(urls | names)` — check `website` against the domain

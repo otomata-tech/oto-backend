@@ -1437,8 +1437,12 @@ de la source que l'APPELANT résout dans l'org (`want="byo"` : jamais une clé
 partagée, qui inscrirait le webhook sur le compte d'un autre ; `check_usage=False` :
 configurer ne consomme pas), passe l'agent en `body_secret` (adresse privée posée
 s'il n'en a pas), et ne rend que les identifiants chez la source, dans
-`runner_triggers.hook_sources` (`[{source, remote_id, event, campaign_id}]`, révision
-`0072_triggers_hook_sources` + démarrage). **Le porteur n'apparaît dans aucune
+`runner_triggers.hook_sources` (`[{source, remote_id, event, campaign_id, account?}]`,
+révision `0072_triggers_hook_sources` + démarrage). Une org qui tient plusieurs clés de
+la source (deux espaces Lemlist) nomme celle à brancher avec `account` : épinglé comme
+`_account=` sur un outil `lemlist_*` (sans lui, la résolution refuse plutôt que de
+choisir), et retenu avec chaque inscription — débrancher, rebrancher et supprimer la
+retirent avec la clé qui l'a posée. **Le porteur n'apparaît dans aucune
 réponse ni aucun journal** ; un refus du tiers se décrit par son type et son statut,
 jamais par `str(e)`, qui peut recopier la requête.
 

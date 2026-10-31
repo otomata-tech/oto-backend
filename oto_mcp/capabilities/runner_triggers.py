@@ -317,6 +317,13 @@ class TriggerInput(BaseModel):
     is_first: Optional[bool] = Field(default=None, description=(
         "op=connect_source, Lemlist only: only the first occurrence of each event "
         "per lead."))
+    account: Optional[str] = Field(default=None, description=(
+        "op=connect_source: the sender's account to register with, when the org "
+        "holds several (two Lemlist workspaces: `oto_identity op=list "
+        "connector=lemlist scope=org`). Kept with each registration, so "
+        "`disconnect_source` and `delete` remove it with the same key. Omitted = "
+        "the one account that resolves; refused when several do and none is the "
+        "default."))
     #: `deliveries` : combien de livraisons rendre.
     limit: Optional[int] = None
     with_input: Optional[bool] = Field(
@@ -454,7 +461,7 @@ class Trigger(BaseModel):
     #: L'agent a-t-il une adresse privée ? (Elle est dans `hook_url`.)
     private_address: Optional[bool] = None
     #: Les webhooks qu'oto a inscrits chez la source (`connect_source`) :
-    #: `[{source, remote_id, event, campaign_id}]`. Jamais le porteur.
+    #: `[{source, remote_id, event, campaign_id, account?}]`. Jamais le porteur.
     hook_sources: Optional[list[dict]] = None
     #: Ce que ce déclencheur a reçu sur 24 h : reçues, refusées, la dernière.
     #: `0` est un vrai zéro, jamais une absence de mesure.
@@ -1686,7 +1693,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if inp.op == "connect_source":
             rendu = _source_du_hook.connecter(
                 ctx, t, source=inp.source, events=inp.events,
-                campaign_id=inp.campaign_id, is_first=inp.is_first)
+                campaign_id=inp.campaign_id, is_first=inp.is_first,
+                account=inp.account)
         else:
             rendu = _source_du_hook.deconnecter(ctx, t)
         return {"trigger": _avec_hook(ctx.org_id,
@@ -2859,7 +2867,8 @@ CAPABILITIES += [
             "move with it; an agent switched ON on your personal subscription is "
             "refused unless they can run it — disable it first, they re-enable it). "
             "op=connect_source (webhook agent, owner or org admin; `source=lemlist` or "
-            "`allo`, `events=[…]`, Lemlist only: optional `campaign_id`, `is_first`): "
+            "`allo`, `events=[…]`, optional `account` when the org holds several keys "
+            "of the sender, Lemlist only: optional `campaign_id`, `is_first`): "
             "oto registers the webhook AT the sender — with a fresh token it never "
             "returns (Lemlist), or keeping, encrypted, the signing secret the sender "
             "makes (Allo) — the agent is wired end to end in one call, no secret "

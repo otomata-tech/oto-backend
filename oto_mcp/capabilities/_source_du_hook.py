@@ -82,13 +82,16 @@ def exiger_aucune_source(t: Optional[dict]) -> None:
         raise AuthzDenied(409, "source_connected", SOURCE_CONNECTED)
 
 
-def _client(ctx: ResolvedCtx, source: str) -> Any:
+def _client(ctx: ResolvedCtx, source: str, account: Optional[str] = None) -> Any:
     """Le client de la source, sur la clé que l'APPELANT résout dans l'org de
     l'agent — la même cascade qu'un outil `lemlist_*` dans cette org.
 
     `want="byo"` : la clé d'un compte de l'appelant (perso, équipe, org) — jamais un
     rang partagé, qui inscrirait le webhook sur le compte d'un autre.
-    `check_usage=False` : configurer une connexion ne consomme pas de quota."""
+    `check_usage=False` : configurer une connexion ne consomme pas de quota.
+    `account` : le compte NOMMÉ quand l'org en tient plusieurs (deux espaces Lemlist),
+    épinglé comme le ferait `_account=` sur un outil `lemlist_*` — sans lui la
+    résolution refuse plutôt que de choisir."""
     from .. import access, session_org
     from ..auth import hooks as auth_hooks
     from ..mcp_errors import McpError
@@ -96,14 +99,22 @@ def _client(ctx: ResolvedCtx, source: str) -> Any:
     try:
         with auth_hooks.sub_override(ctx.sub):
             jeton = session_org.set_call_org(int(ctx.org_id))
+            compte = session_org.set_call_account(account) if account else None
             try:
                 rc = access.resolve_credential(source, want="byo", sub=ctx.sub,
                                                check_usage=False)
             finally:
+                if compte is not None:
+                    session_org.reset_call_account(compte)
                 session_org.reset_call_org(jeton)
     except McpError as e:
-        # `from e` : la face MCP rend l'erreur d'origine, déjà actionnable.
-        raise AuthzDenied(400, "credential_unavailable", e.error.message) from e
+        # `from e` : la face MCP rend l'erreur d'origine, déjà actionnable. Elle dit
+        # `_account=` — le nom de l'axe sur les outils de connecteur ; ici c'est
+        # `account` (oto_trigger est un outil du socle, sans axe compte).
+        message = e.error.message
+        if not account and "_account" in message:
+            message += " On `oto_trigger`, name it with `account`."
+        raise AuthzDenied(400, "credential_unavailable", message) from e
     if source == "allo":
         from oto.tools.allo import AlloClient
         return AlloClient(api_key=rc.key)
@@ -141,6 +152,40 @@ def _retirer(client: Any, inscrites: list) -> list:
             logger.warning("webhook %s chez %s : retrait impossible (%s)",
                            ins.get("remote_id"), ins.get("source"), _motif(e))
             restees.append({**ins, "error": _motif(e)})
+    return restees
+
+
+def _retirer_partout(ctx: ResolvedCtx, t: dict, inscrites: list,
+                     clients: Optional[dict] = None) -> list:
+    """Retire chaque inscription avec la clé qui l'a POSÉE — sa source et son compte
+    (`account`, absent avant qu'on le retienne : la clé par défaut, comme alors).
+    `clients` : ceux déjà ouverts, par (source, compte). Rend ce qui a RÉSISTÉ ; une
+    source inconnue ou sans clé n'empêche pas de retirer le reste."""
+    clients = dict(clients or {})
+    lots: dict = {}
+    for ins in inscrites:
+        lots.setdefault((ins.get("source"), ins.get("account")), []).append(ins)
+    restees = []
+    for (source, compte), lot in lots.items():
+        if source not in SOURCES:
+            logger.warning("webhook %s : source inconnue `%s`, %s non retiré(s)",
+                           t["id"], source, _ids(lot))
+            restees += [{**i, "error": "unknown_source"} for i in lot]
+            continue
+        client = clients.get((source, compte))
+        if client is None:
+            try:
+                client = _client(ctx, source, compte)
+            except AuthzDenied as e:
+                # Sans clé, rien ne se retire — mais `delete` ne doit pas en être
+                # bloqué : ce qui reste est rendu, avec la raison, et journalisé.
+                logger.warning("webhook %s : aucune clé %s%s pour %s (%s), %s non "
+                               "retiré(s)", t["id"], source,
+                               f" ({compte})" if compte else "", ctx.sub, e.code,
+                               _ids(lot))
+                restees += [{**i, "error": e.code} for i in lot]
+                continue
+        restees += _retirer(client, lot)
     return restees
 
 
@@ -270,7 +315,7 @@ def _inscrire_allo(ctx: ResolvedCtx, t: dict, client: Any, url: str,
 
 def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
               events: Optional[list], campaign_id: Optional[str],
-              is_first: Optional[bool]) -> dict:
+              is_first: Optional[bool], account: Optional[str] = None) -> dict:
     """Branche `source` sur l'agent `t` (porte DÉJÀ vérifiée par l'appelant).
 
     Rend `{"connected": [...], "remote_cleanup_failed": [...]}` — sans porteur."""
@@ -289,7 +334,7 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
     # remplacerait l'adresse numérique, qu'une autre source utilise peut-être.
     slug = t.get("hook_slug") or runner_hook.nouvelle_adresse()
     url = _url_publique(slug)
-    client = _client(ctx, source)
+    client = _client(ctx, source, account)
     # Un porteur NEUF dans les deux cas : en mode signature il n'ouvre rien (le
     # porteur y est refusé), mais l'ancien, s'il traînait quelque part, cesse de valoir.
     porteur, hache = runner_hook.nouveau_secret()
@@ -307,6 +352,10 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
     else:
         inscrites = _inscrire(ctx, t, client, source, url, porteur, evenements,
                               campaign_id, is_first)
+    if account:
+        # Retenu avec chaque inscription : débrancher et supprimer la retireront avec
+        # la clé qui l'a posée, pas avec celle que l'org résoudrait par défaut.
+        inscrites = [{**i, "account": account} for i in inscrites]
 
     anciennes = list(t.get("hook_sources") or [])
     try:
@@ -337,7 +386,8 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
                    ctx.sub, len(evenements),
                    "secret de signature chiffré posé" if signe
                    else "porteur neuf posé chez la source")
-    restees = _retirer(client, [a for a in anciennes if a.get("remote_id")])
+    restees = _retirer_partout(ctx, t, [a for a in anciennes if a.get("remote_id")],
+                               clients={(source, account): client})
     return {"connected": inscrites, "remote_cleanup_failed": restees}
 
 
@@ -348,26 +398,7 @@ def deconnecter(ctx: ResolvedCtx, t: dict) -> dict:
     inscrites = list(t.get("hook_sources") or [])
     if not inscrites:
         return {"disconnected": [], "remote_cleanup_failed": []}
-    restees = []
-    par_source: dict = {}
-    for ins in inscrites:
-        par_source.setdefault(ins.get("source"), []).append(ins)
-    for source, lot in par_source.items():
-        if source not in SOURCES:
-            logger.warning("webhook %s : source inconnue `%s`, %s non retiré(s)",
-                           t["id"], source, _ids(lot))
-            restees += [{**i, "error": "unknown_source"} for i in lot]
-            continue
-        try:
-            client = _client(ctx, source)
-        except AuthzDenied as e:
-            # Sans clé, rien ne se retire — mais `delete` ne doit pas en être
-            # bloqué : ce qui reste est rendu, avec la raison, et journalisé.
-            logger.warning("webhook %s : aucune clé %s pour %s (%s), %s non retiré(s)",
-                           t["id"], source, ctx.sub, e.code, _ids(lot))
-            restees += [{**i, "error": e.code} for i in lot]
-            continue
-        restees += _retirer(client, lot)
+    restees = _retirer_partout(ctx, t, inscrites)
     ids_restes = {r.get("remote_id") for r in restees}
     if not db.poser_sources_de_hook(
             t["id"], ctx.org_id,

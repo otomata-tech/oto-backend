@@ -30,7 +30,7 @@ DDL_COLONNE_OUTILS_PLATEFORME = (
 # Les webhooks qu'oto a INSCRITS chez la source pour cet agent (`connect_source`,
 # docs/runner-et-automatisations.md §Brancher une source) : posée par la révision
 # `0072_triggers_hook_sources` ET par le démarrage, sous garde de catalogue — même DDL.
-# `[{source, remote_id, event, campaign_id}]` ; NULL = rien d'inscrit. Des
+# `[{source, remote_id, event, campaign_id, account?}]` ; NULL = rien d'inscrit. Des
 # identifiants chez le tiers, jamais un secret : la colonne se sert.
 COLONNE_HOOK_SOURCES = "hook_sources"
 DDL_COLONNE_HOOK_SOURCES = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "

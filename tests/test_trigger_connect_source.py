@@ -18,6 +18,8 @@ prouve en SQL dans `test_declencheur_webhook_db.py`) :
 7. **Allo SIGNE** : un endpoint pour tous les topics, son secret `whsec_` chiffré
    pour la ligne en mode `standard_webhooks` — ni rendu, ni journalisé ; une réponse
    sans secret utilisable retire l'endpoint et n'écrit rien.
+8. **Le compte nommé** (`account`, deux espaces Lemlist) est épinglé à la résolution
+   de la clé, retenu avec chaque inscription, et réutilisé pour la retirer.
 """
 from __future__ import annotations
 
@@ -113,7 +115,8 @@ def base(monkeypatch):
                         ligne.update(hook_auth=m) or True)
     monkeypatch.setattr(RT.db, "delete_trigger",
                         lambda t, o: etat.update(supprime=True) or True)
-    monkeypatch.setattr(S, "_client", lambda ctx, source: etat["client"])
+    monkeypatch.setattr(S, "_client",
+                        lambda ctx, source, account=None: etat["client"])
     etat["interdit"] = _interdit
     return etat
 
@@ -412,13 +415,87 @@ def test_supprimer_un_agent_JAMAIS_branche_garde_son_recu(base):
 def test_supprimer_SANS_cle_de_la_source_supprime_quand_meme_et_le_dit(base, monkeypatch):
     _brancher()
 
-    def _sans_cle(ctx, source):
+    def _sans_cle(ctx, source, account=None):
         raise AuthzDenied(400, "credential_unavailable", "no key")
 
     monkeypatch.setattr(S, "_client", _sans_cle)
     out = _appel(op="delete")
     assert base["supprime"]
     assert {x["error"] for x in out["remote_cleanup_failed"]} == {"credential_unavailable"}
+
+
+# ── 8. le compte nommé ────────────────────────────────────────────────────────
+
+def test_le_compte_NOMME_est_epingle_a_la_resolution_puis_relache(monkeypatch):
+    """Deux espaces Lemlist : `account` vise l'un d'eux comme `_account=` le ferait."""
+    from oto_mcp import access, session_org
+    vu = {}
+
+    def _resoudre(provider, want="auto", sub=None, **kw):
+        vu["compte"] = session_org.current_call_account()
+        return SimpleNamespace(key="cle-de-test")
+
+    monkeypatch.setattr(access, "resolve_credential", _resoudre)
+    S._client(_ctx(), "lemlist", "Lemlist Team 2")
+    assert vu["compte"] == "Lemlist Team 2"
+    assert session_org.current_call_account() is None
+    S._client(_ctx(), "lemlist")
+    assert vu["compte"] is None
+
+
+def test_plusieurs_comptes_SANS_account_dit_comment_le_nommer(monkeypatch):
+    from mcp.types import ErrorData, INVALID_PARAMS
+
+    from oto_mcp import access
+    from oto_mcp.mcp_errors import McpError
+
+    def _ambigu(*a, **k):
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            "Multiple comptes `lemlist` — pass `_account=\"<name>\"` on this call.")))
+
+    monkeypatch.setattr(access, "resolve_credential", _ambigu)
+    with pytest.raises(AuthzDenied) as e:
+        S._client(_ctx(), "lemlist")
+    assert e.value.code == "credential_unavailable"
+    assert "`account`" in e.value.message
+
+
+class _ParCompte:
+    """`_client` doublé : un client Lemlist par compte, pour voir lequel retire quoi."""
+
+    def __init__(self):
+        self.clients: dict = {}
+
+    def __call__(self, ctx, source, account=None):
+        return self.clients.setdefault(account, _Lemlist())
+
+
+def test_brancher_avec_un_compte_le_RETIENT_et_debrancher_le_reutilise(base, monkeypatch):
+    par_compte = _ParCompte()
+    monkeypatch.setattr(S, "_client", par_compte)
+    out = _brancher(account="Lemlist Team 2")
+    assert {x["account"] for x in out["connected"]} == {"Lemlist Team 2"}
+    assert {x["account"] for x in base["ligne"]["hook_sources"]} == {"Lemlist Team 2"}
+    assert len(par_compte.clients["Lemlist Team 2"].ajouts) == 2
+    _appel(op="disconnect_source")
+    assert par_compte.clients["Lemlist Team 2"].retraits == ["hoo_1", "hoo_2"]
+    assert None not in par_compte.clients, "jamais la clé par défaut pour retirer"
+
+
+def test_REBRANCHER_sur_un_autre_compte_retire_les_anciennes_avec_LEUR_cle(base, monkeypatch):
+    par_compte = _ParCompte()
+    monkeypatch.setattr(S, "_client", par_compte)
+    _brancher(account="Lemlist Team 1", events=["emailsReplied"])
+    out = _brancher(account="Lemlist Team 2", events=["emailsReplied"])
+    assert par_compte.clients["Lemlist Team 1"].retraits == ["hoo_1"]
+    assert par_compte.clients["Lemlist Team 2"].retraits == []
+    assert out["remote_cleanup_failed"] == []
+    assert {x["account"] for x in base["ligne"]["hook_sources"]} == {"Lemlist Team 2"}
+
+
+def test_sans_account_les_inscriptions_restent_COMME_AVANT(base):
+    out = _brancher()
+    assert all("account" not in x for x in out["connected"])
 
 
 # ── 7. Allo : la source signe ─────────────────────────────────────────────────

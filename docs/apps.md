@@ -144,13 +144,11 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
 
-**Le clic dans l'app NE VAUT PAS accord** (décision du 29/10/2026). Le serveur ne
-distingue pas un clic du lecteur d'un appel que l'app fait seule, et une activation
-utilisateur transmise par l'iframe ne dit pas CE que le lecteur a voulu : une app ne
-peut donc ni écrire, ni créer de ligne, ni lancer un agent, ni déposer un fichier au nom
-de son lecteur sur son seul clic. Un geste qui écrit ou lance (`write_cell`, `add_row`,
-`start_agent`, `upload_file`) exige un **jeton de consentement**, que seul l'écran hôte
-obtient, après avoir montré au lecteur ce qui va être fait :
+**Le clic dans l'app VAUT accord, jugé par l'hôte** (décision d'Alexis du 31/10/2026, sur proposition de Julien, qui remplace
+celle du 29/10). Le serveur ne distingue pas un clic du lecteur d'un appel que l'app fait
+seule : c'est l'écran hôte qui en juge, sur l'activation navigateur. Un geste qui écrit ou
+lance (`write_cell`, `add_row`, `start_agent`, `upload_file`) exige toujours un **jeton de
+consentement**, que seul l'écran hôte obtient :
 
 1. l'app DEMANDE le geste à l'écran hôte (`postMessage`) ;
 2. l'hôte appelle `POST /api/me/apps/{app_id}/consent` avec le MÊME corps que l'appel ;
@@ -162,17 +160,16 @@ obtient, après avoir montré au lecteur ce qui va être fait :
    agent, ou l'app), `content` (ce qui est ÉCRIT ou remis : `{set: {champ: valeur}}`,
    `{row: {colonne: valeur…}}`, `{input, files: [{id, name, media_type, size}]}`,
    `{file: {name, media_type, size}}`) et `text`, les mêmes faits en une phrase ;
-3. l'hôte AFFICHE ce résumé dans son propre chrome et attend un clic de confirmation
-   DANS ce chrome ; puis il exécute l'appel (`POST …/call` avec `consent`, ou le dépôt
-   `POST …/files`) ou transmet le jeton à l'app ;
+3. sur un clic récent dans l'app, l'hôte utilise le jeton aussitôt ; sinon il AFFICHE ce
+   résumé dans son propre chrome et attend un clic de confirmation. Puis il exécute
+   l'appel (`POST …/call` avec `consent`, ou le dépôt `POST …/files`) ;
 4. le serveur rejuge, BRÛLE le jeton en une écriture (`UPDATE … WHERE used_at IS NULL
    AND expires_at > now() RETURNING id` : deux appels concurrents ne le brûlent pas deux
    fois ; `consent_invalid` s'il est brûlé, expiré, d'un autre lecteur ou d'autres
    arguments ; `consent_required` sans jeton), puis agit.
 
 **Un jeton = un geste** (`GESTES_PAR_ACCORD = 1`) : app, lecteur, action et empreinte
-des arguments, calculée au serveur aux deux bouts — jamais un lot de gestes sur un
-clic. Valable **deux minutes, une fois** (15 minutes pour un dépôt, plus bas).
+des arguments, calculée au serveur aux deux bouts. Valable **deux minutes, une fois** (15 minutes pour un dépôt, plus bas).
 
 **L'émission n'est servie qu'à l'hôte** — 403 `consent_from_host_only` sinon :
 
@@ -194,17 +191,16 @@ qu'une app demande :
 2. **Demander le jeton** : `POST /api/me/apps/{app_id}/consent`, même corps que l'appel,
    depuis le chrome de l'hôte (son origine déclarée, sa session). Un refus (403, 400,
    413…) se montre au lecteur et se rend à l'app ; aucun jeton n'existe.
-3. **Afficher `summary`** dans le chrome de l'hôte — jamais dans l'iframe, jamais un
-   texte fourni par l'app : l'action, la cible, le CONTENU écrit en entier (valeurs,
-   ligne, entrée de l'agent, fichiers remis ; nom, type et taille d'un fichier
-   déposé), et que le geste agit au nom du lecteur.
-4. **Attendre un clic de confirmation dans ce chrome.** Une activation reçue de
-   l'iframe, un minuteur, l'ouverture de l'app ne confirment rien.
-5. **Confirmer** : exécuter l'appel (ou le dépôt) avec `consent`, ou transmettre le
-   jeton à l'app pour ce seul geste. **Annuler** : n'utiliser aucun jeton (il expire en
-   deux minutes), rendre un refus à l'app.
-6. Un geste à la fois : une nouvelle demande de l'app pendant qu'une confirmation est
-   ouverte attend ou est refusée ; jamais une confirmation pour un lot.
+3. **Juger le clic** : le geste vaut accord si le navigateur montre une activation
+   (`navigator.userActivation.isActive`), si le chrome de l'hôte n'a pas été touché
+   depuis 5 secondes, et sous 20 gestes en 5 secondes. Sans activation (minuteur,
+   ouverture de l'app), le geste est refusé.
+4. **Sinon, demander** : afficher `summary` dans le chrome de l'hôte, jamais dans
+   l'iframe, et attendre un clic de confirmation dans ce chrome. **Annuler** : n'utiliser
+   aucun jeton (il expire en deux minutes), rendre un refus à l'app.
+5. **Exécuter** l'appel (ou le dépôt) avec `consent`. Le jeton ne quitte pas l'hôte.
+6. L'hôte n'affiche rien après un geste : l'app dessine son propre retour (`oto:done`,
+   `oto.undo`, `oto:undone`).
 
 **Ce que le serveur garantit** : l'app seule, dans son cadre isolé, n'obtient pas de
 jeton (origine `null`, pas de réseau) ; un agent ou un script porteur de clé non plus ;
@@ -212,9 +208,9 @@ un jeton ne sert qu'une fois, deux minutes, au geste résumé — mêmes app, le
 action, arguments ; le résumé décrit les arguments que le serveur a jugés et que l'appel
 exécutera ; chaque geste est journalisé (`app_consents`).
 
-**Ce qu'il ne peut pas garantir** : que l'hôte a AFFICHÉ le résumé et attendu un clic
-dans son chrome avant d'utiliser le jeton. C'est le devoir de l'hôte : un hôte qui
-transmet les jetons sans confirmer rouvre exactement ce que cette règle ferme.
+**Ce qu'il ne peut pas garantir** : que le lecteur a voulu ce geste. Un clic dans une app
+déclenche ce que son manifeste permet, en son nom, sans résumé affiché, y compris une
+entrée remise à un agent. Le manifeste, auteur ∩ lecteur et le journal restent les bornes.
 
 - `write_cell` : un champ déclaré (`set`), à une valeur déclarée, avec la `_revision`
   montrée (sinon 400 `revision_required`) ; l'auteur doit pouvoir ÉCRIRE le tableau.

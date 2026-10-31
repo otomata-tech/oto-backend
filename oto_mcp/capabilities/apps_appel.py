@@ -8,16 +8,12 @@ la seule porte : le front n'appelle plus les tableaux ni les agents pour une app
 déclarée (`write_cell`), ajouter une ligne (`add_row`), lancer un agent
 (`start_agent`), suivre ses runs (`agent_runs`, `run_result`).
 
-**Un geste qui écrit, ajoute, lance ou dépose exige l'ACCORD du lecteur, donné HORS de
-l'app** (oto-backend#1386). Le clic dans l'app NE VAUT PAS accord (décision du
-29/10/2026) : une app ne peut ni écrire, ni créer de ligne, ni lancer un agent, ni
-déposer un fichier au nom de son lecteur sur son seul clic. L'app DEMANDE (par
-`postMessage`) ; l'écran HÔTE — le front qui embarque l'app, hors de l'iframe — demande
-le jeton (`POST …/consent`, même corps que l'appel), reçoit avec lui un RÉSUMÉ de
-l'opération construit ICI (action, cible, et le contenu écrit : valeurs posées, ligne
-ajoutée, entrée et fichiers remis à un agent, nom, type et taille d'un fichier déposé),
-l'AFFICHE dans son propre chrome, et n'utilise le jeton qu'après un clic de
-confirmation dans ce chrome. Annuler = aucun jeton utilisé ; il expire.
+**Un geste qui écrit, ajoute, lance ou dépose exige un jeton, demandé par l'ÉCRAN HÔTE**
+(oto-backend#1386). Le clic dans l'app VAUT accord, jugé par l'hôte (décision du
+31/10/2026, qui remplace celle du 29/10). L'app DEMANDE (par `postMessage`) ; l'hôte, le
+front qui embarque l'app, demande le jeton (`POST …/consent`, même corps que l'appel),
+reçoit avec lui un RÉSUMÉ de l'opération construit ICI, et utilise le jeton aussitôt sur
+un clic récent dans l'app, sinon après confirmation dans son propre chrome.
 
 L'émission n'est servie qu'à l'hôte (`_depuis_l_hote`, 403 `consent_from_host_only`) :
 face REST, session interactive (JWT, aucun jeton `oto_`, porté ou délégué), `Origin`
@@ -29,10 +25,9 @@ L'appel le brûle en une écriture avant d'agir ; brûlé, il reste comme journa
 d'app (`app_consents` : qui, quelle app, quoi, le `geste_id` des révisions écrites, le
 travail lancé).
 
-**Ce que le serveur ne peut pas garantir** : que l'hôte a AFFICHÉ le résumé et attendu
-un clic dans son chrome. C'est le devoir de l'hôte (`docs/apps.md`, « Contrat de l'écran
-hôte ») ; le serveur garantit seulement que l'app seule n'obtient pas de jeton, et qu'un
-jeton ne sert qu'au geste résumé.
+**Ce que le serveur ne peut pas garantir** : que le lecteur a voulu ce geste. Le clic est
+jugé par l'hôte (`docs/apps.md`, « Contrat de l'écran hôte ») ; le serveur garantit
+seulement que l'app seule n'obtient pas de jeton, et qu'un jeton ne sert qu'au geste résumé.
 
 **Les runs** : le statut et les dates des runs d'un agent DÉCLARÉ, que l'auteur et le
 lecteur voient tous deux (les mêmes que l'écran de l'agent montre au lecteur) ; l'erreur

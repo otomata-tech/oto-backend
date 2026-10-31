@@ -97,6 +97,8 @@ from . import (
     demandes_acces,
     # NON aplati : `noter`/`lire`/`purger` sont trop communs — `db.slack_agent_posts.<fn>`.
     slack_agent_posts,
+    # NON aplati : `noter`/`lire`/`marquer` sont trop communs — `db.apify_runs.<fn>`.
+    apify_runs,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

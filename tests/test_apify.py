@@ -88,6 +88,15 @@ def test_client_exposes_methods_called_by_tools():
 
 # --- garde-fous de coût & orientation sur 408 ---------------------------------
 
+@pytest.fixture(autouse=True)
+def _sans_base():
+    """Ces tests ne parlent pas à la base : le suivi des lancements a son fichier
+    (`test_apify_spend_control.py`), et son repli journalise."""
+    with patch("oto_mcp.tools.apify._org_de_lancement", return_value=(False, None)), \
+            patch("oto_mcp.tools.apify._plafond_par_defaut", return_value=1.0):
+        yield
+
+
 def _with_fake_client():
     key = patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False))
     cls = patch("oto.tools.apify.client.ApifyClient")

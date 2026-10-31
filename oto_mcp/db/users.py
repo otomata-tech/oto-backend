@@ -442,6 +442,7 @@ _SUB_COLUMNS = [
     # Phase H B1 du 10/07, qui a aussi sorti les reliques datastore `user_datastores.sub`
     # et `datastore_shares` : colonnes mortes, plus rien ne les lit, DROP en B2).
     # données de l'user
+    ("apify_runs", "sub"),
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
     # Les totaux du journal par jour (#1147) suivent le journal : sans unicité (un
     # total en double s'additionne juste), UPDATE nu — sinon le compte fusionné

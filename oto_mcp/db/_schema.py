@@ -92,6 +92,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.apps.FICHIERS,            # fichiers déposés dans une app par un lecteur, pour ses agents
     schema.apps.FICHIERS_ORIGINE,    # d'où vient un fichier d'app : déposé, ou rendu par un agent
     schema.runs.SLACK_AGENT_POSTS,   # messages postés dans Slack par un agent : à qui va une réponse
+    schema.usage.APIFY_RUNS,         # runs Apify de la clé plateforme, notés au lancement
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

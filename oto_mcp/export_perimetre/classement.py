@@ -246,6 +246,9 @@ CLASSEMENT: dict[str, Table] = {
     "runner_hook_deliveries": possedee(ParOrg()),
     "runner_trigger_links": possedee(ParOrg(), comptes=("created_by",)),
     "slack_agent_posts": possedee(ParOrg()),
+    "apify_runs": exclue(ParOrg(), "suivi de la clé PLATEFORME de l'instance d'origine : "
+                         "ses runs ne se relèvent qu'avec cette clé, et le coût relevé "
+                         "part avec le journal"),
     "agent_episodes": exclue(ParOrg(), "état d'exploitation de la PLATEFORME sur les agents "
                              "de l'org (pannes, relances, diagnostics d'opérateur) : la "
                              "boucle le reconstruit sur la cible à partir de `runner_jobs`"),

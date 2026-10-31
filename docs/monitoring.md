@@ -999,3 +999,22 @@ n'est jamais rendu en bloc.
 
 ⚠️ **`client_id` n'identifie PAS le front d'où vient l'utilisateur** : énumérer avant d'en
 tirer une population.
+
+## Le coût des runs Apify de la clé plateforme
+
+Un run Apify survit à l'appel qui l'a lancé, et seul un `apify_run_status` lisant le run
+TERMINÉ trace son coût. Trois garde-fous (`tools/apify.py`, `apify_releve.py`) :
+
+- **Un plafond part toujours.** `apify_run_sync`/`apify_run` sans `max_total_charge_usd` :
+  dérivé de `max_items` et des prix d'événements de la carte de l'acteur, sinon 1 $
+  (réglage plateforme `default_max_charge_usd` du connecteur `apify`, sans déploiement).
+  ⚠️ `max_items` ne borne pas un acteur facturé à l'événement. Les outils dédiés gardent
+  leur plafond à 5 $ : leurs acteurs sont connus, et certains facturent à la page. Un run
+  arrivé à son plafond finit `SUCCEEDED` avec une sortie partielle : la réponse le dit.
+- **Un run se note au lancement** (table `apify_runs`, clé plateforme seulement) et
+  `oto-mcp maintenance apify-runs` relève chaque nuit ceux que personne n'a relus : une
+  ligne `apify_run_status` sous l'org et la personne qui l'ont LANCÉ. Une lecture depuis
+  une autre org ne facture personne.
+- **Le mois se compare à ce qu'Apify compte** : au-delà de 5 $ d'écart, un signal `gap` de
+  cible `apify_cost_gap`. Il ne se compare qu'une fois la table couvrant tout le cycle.
+

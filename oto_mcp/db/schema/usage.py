@@ -395,3 +395,33 @@ CREATE TABLE IF NOT EXISTS limite_refus_jour (
     PRIMARY KEY (jour, env, limiteur, classe, cle)
 );
 """
+
+
+# Les runs Apify lancés sur la clé plateforme — fragment séparé (révision
+# `20261031_1000_apify_runs`, `db/apify_runs.py`).
+APIFY_RUNS = """
+-- Un run Apify vit hors de l'appel qui l'a lancé : à 300 s, `apify_run_sync` rend la
+-- main et le run continue. Seul un `apify_run_status` lisant le run TERMINÉ le trace,
+-- donc un run que personne ne relit coûte à la plateforme sans jamais être facturé
+-- (30/10/2026 : cinq runs, 25,43 $, aucune ligne). Cette table le note AU LANCEMENT :
+-- `oto-mcp maintenance apify-runs` relève ce qui n'a pas de coût, et le trace sous
+-- l'org qui a lancé. PAS un `job_id` sur la trace : le facturant garde le premier
+-- chiffre d'un job, et un run en cours n'en a qu'un partiel.
+CREATE TABLE IF NOT EXISTS apify_runs (
+    apify_run_id TEXT PRIMARY KEY,
+    org_id BIGINT,
+    sub TEXT,
+    outil TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    run_id TEXT,                     -- le run de l'appel, NULL hors run
+    plafond_usd NUMERIC,             -- `max_total_charge_usd` passé à Apify
+    lance_le TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    releve_le TIMESTAMPTZ,           -- NULL = pas encore de coût final
+    statut TEXT,                     -- le statut Apify final, ou `introuvable`
+    cout_usd NUMERIC                 -- NULL tant que non relevé, ou run introuvable
+);
+CREATE INDEX IF NOT EXISTS idx_apify_runs_a_relever
+    ON apify_runs(lance_le) WHERE releve_le IS NULL;
+CREATE INDEX IF NOT EXISTS idx_apify_runs_lance_le ON apify_runs(lance_le);
+CREATE INDEX IF NOT EXISTS idx_apify_runs_sub ON apify_runs(sub);
+"""

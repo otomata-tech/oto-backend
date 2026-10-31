@@ -454,6 +454,8 @@ sources = [
   "oto_mcp/slack_events.py",
   # Les messages qu'un agent y poste, à qui une réponse dans leur fil revient.
   "oto_mcp/db/slack_agent_posts.py",
+  "oto_mcp/db/apify_runs.py",
+  "oto_mcp/apify_releve.py",
   "oto_mcp/anthropic_usage.py",
   "oto_mcp/time_saved.py",
   "oto_mcp/capabilities/runner_*.py",

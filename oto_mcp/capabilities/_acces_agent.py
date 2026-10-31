@@ -39,6 +39,21 @@ agent (`forfaits_pretes`) — c'est à lui seul de le prêter, agent par agent. 
 Ne prêtent jamais : un partage posé par un admin (`granted_by` ≠ propriétaire), ceux de
 la révision 0035 et du réglage `partage_par_defaut` (marqués), ceux d'un ancien
 propriétaire.
+⚠️ **Sauf quand son org le sert par son POOL exclusif** (31/10/2026, à trancher) : l'org
+a réglé `mode = pool` pour la famille où l'agent tourne (`org_subscription_pool`), ses
+travaux ne tournent que sur des abonnements PRÊTÉS à l'org, jamais sur celui du
+propriétaire — il n'y a pas de forfait à prêter. Tout partage en écriture vivant (à une
+personne, à une équipe, à l'org entière, quel qu'en soit l'auteur) le rend alors
+modifiable, comme un agent sur une clé d'org (`db._forfait_prete_par_le_pool`) ; sans
+partage en écriture, pause seule, comme ailleurs. Lié au modèle comme le prêt
+collectif (`collectif` dans `exiger_le_droit_de_modifier`) : qui modifie par le pool n'y
+pose pas un autre modèle d'abonnement. Le mode non réglé, où le pool ne fait que
+COMPLÉTER, garde la règle du prêt.
+⚠️ **`give`** applique le préréglage du DESTINATAIRE (`preset_agents`) — ses deux gestes,
+comme à la création — et garde l'ancien propriétaire en éditeur NOMMÉ, partage posé par
+lui-même (`granted_by` = ancien) : il ne prête donc jamais le forfait du nouveau par
+lui seul. L'ancien garde la main là où le forfait du nouveau n'est pas en jeu (pool,
+clé d'org), ou si le nouveau y a consenti (préréglage).
 ⚠️ Le prêt ne change PAS l'identité d'exécution : l'agent tourne toujours sous son
 propriétaire, à l'horloge comme au webhook. POSER un agent sur un abonnement reste au
 propriétaire.

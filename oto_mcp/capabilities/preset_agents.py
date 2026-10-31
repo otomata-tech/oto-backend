@@ -9,6 +9,11 @@ toute l'org, puis prêt du forfait si l'agent tourne sur un abonnement personnel
 partage porte son `granted_by`, il prête donc comme un geste manuel et se retire pareil.
 Rien de rétroactif. `private=true` à la création l'emporte.
 
+⚠️ **Lu aussi à `op=give`** (31/10/2026, à trancher) : un agent qu'un collègue me DONNE
+reçoit les deux mêmes gestes, à mon nom (`runner_triggers._apres_le_don`). Le
+consentement s'étend ainsi des agents que je crée à ceux que je reçois ; le refus de
+l'admin vaut pareil.
+
 **L'exception, et elle seule, à « le prêt est un geste, jamais un réglage »**
 (`_acces_agent`, `partage_par_defaut`) : le titulaire consent une fois pour tous ses
 futurs agents de cette org. Ce consentement vaut parce que personne d'autre ne peut le

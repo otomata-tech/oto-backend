@@ -2109,8 +2109,8 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
 - ⚠️ **Un agent d'abonnement se modifie par son propriétaire, et par ceux à qui IL prête
   son forfait pour cet agent.** Ce qu'ils y changent s'exécute sur son forfait : c'est à
   lui de le prêter, agent par agent. Sans prêt, l'agent n'est modifiable par personne
-  d'autre que pour l'éteindre, et `can_edit` le dit (`false`). Deux prêts (prédicat
-  `db._forfait_prete` = nommé OR collectif) :
+  d'autre que pour l'éteindre, et `can_edit` le dit (`false`). Deux prêts, et le pool
+  (prédicat `db._forfait_prete` = nommé OR collectif OR pool) :
   - **Le prêt NOMMÉ** (04/10/2026, inchangé, `_forfait_prete_nomme`) : un partage en
     écriture À UNE PERSONNE posé par le propriétaire. Nommer est le geste : ni
     `op=lend`, ni lien au modèle ; l'éditeur nommé change sa consigne, ses outils, son
@@ -2125,6 +2125,21 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     un autre modèle d'abonnement (`subscription_personal_only`) ; il peut sortir l'agent
     du forfait. Servi `subscription_lent`. L'appartenance est relue en base au moment
     d'écrire.
+  - **Le POOL exclusif de l'org** (31/10/2026, à trancher, `_forfait_prete_par_le_pool`) :
+    quand l'org de l'agent a réglé `mode = pool` pour la famille où il tourne
+    (`oto_org_settings domain=model_subscriptions`), ses travaux ne tournent QUE sur des
+    abonnements prêtés à l'org, jamais sur celui du propriétaire (la réservation lit la
+    même table, `sql_par_le_pool`) : il n'y a pas de forfait à prêter. Tout partage en
+    écriture VIVANT — à une personne, à une équipe dont l'éditeur est membre, à l'org
+    entière dont il est membre, QUI QU'EN SOIT l'auteur — le rend modifiable. Sans partage
+    en écriture (un admin qui gouverne sans), pause seule, comme ailleurs. Lié au modèle
+    comme le prêt collectif : qui modifie par le pool n'y pose pas un autre modèle
+    d'abonnement, il peut le sortir du forfait. Le mode NON réglé (le pool complète) n'y
+    est pas : le propriétaire y paie dès que son abonnement sert, et un droit de modifier
+    ne dépend pas de l'état de sa connexion au moment de la réservation. ⚠️ Si l'org
+    repasse en `personnel`, ce que ces éditeurs ont posé tourne sur le forfait du
+    propriétaire (le risque que `exiger_a_la_pose` nomme) ; leurs droits, eux, se
+    referment au même instant.
   - Ne prêtent jamais : un partage posé par un admin (`granted_by` ≠ propriétaire ;
     reposé par un admin, un partage perd le prêt — l'upsert réécrit `granted_by`), ceux
     de la révision 0035 et du réglage `partage_par_defaut` (marqués), ceux d'un ancien
@@ -2162,7 +2177,9 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     lecture et l'écriture, il n'ouvre plus rien.
   - **Les `oto_admin_*` d'un agent** (`outils_plateforme_du_travail`) ne s'exercent que
     sans éditeur nommé par le propriétaire ET sans prêt collectif vivant : dès le geste,
-    la liste se ferme, qu'un partage atteigne déjà quelqu'un ou non.
+    la liste se ferme, qu'un partage atteigne déjà quelqu'un ou non. Sur un agent que
+    l'org sert par son pool exclusif, elle se ferme dès qu'il porte un partage en
+    écriture vivant, quel qu'il soit.
   - **Qui a modifié** : chaque retouche (`update`) écrit son auteur dans
     `runner_triggers.updated_by` avec `updated_at` — servi sur `get`/`list`, c'est ce que
     le propriétaire lit pour savoir quel éditeur a changé son agent (§Dater un
@@ -2286,7 +2303,20 @@ previous_owner, jobs_moved}`.
   qui n'en est pas membre compris. Se donner son agent ne fait rien.
 - **Les partages restent en place**, et ceux de l'ancien propriétaire ne prêtent pas le
   forfait du nouveau (`_forfait_prete` exige `granted_by` = propriétaire courant).
-  L'ancien propriétaire ne garde aucun accès que ses partages ne lui donnent pas.
+- **L'ancien propriétaire reste ÉDITEUR NOMMÉ** (31/10/2026, à trancher ;
+  `keep_previous_owner=false` pour ne rien laisser) : un partage `editor` à lui, posé à
+  son nom (`granted_by` = ancien). Il ne prête donc jamais le forfait du nouveau par lui
+  seul ; il modifie là où ce forfait n'est pas en jeu (clé d'org, pool exclusif de
+  l'org) ou si le nouveau y a consenti (point suivant) — ailleurs, pause seule.
+- **Le préréglage du DESTINATAIRE s'applique** (31/10/2026, à trancher,
+  `_apres_le_don`) : `default_sharing=shared` (et pas de refus de l'admin) fait ses deux
+  gestes à son nom, exactement comme à la création — partage `editor` à l'org, puis prêt
+  de son forfait sur un abonnement personnel. Sinon rien n'est prêté. `take_over` ne le
+  fait pas (l'ancien est parti, le repreneur est un admin qui choisit).
+- **Rendu** : `{trigger, previous_owner, jobs_moved, kept_previous_owner, preset_applied,
+  lent, lend_ended, handover_note}` — `lend_ended` = le prêt collectif de l'ancien, en
+  vigueur, éteint par le don ; `trigger` est servi du point de vue du donneur (`can_edit`
+  dit s'il garde la main) ; `handover_note` dit en une phrase qui peut encore le modifier.
 - **Un agent ALLUMÉ sur un abonnement** : comme la reprise, la garde de pose se juge sur
   le DESTINATAIRE. Refusée, rien n'est écrit — l'agent reste au donneur, sur son
   forfait ; il l'éteint, le donne, et le destinataire le rallume sur le sien (ou sur le

@@ -12,7 +12,11 @@ geste. Ce que ces bancs tiennent :
    les travaux en attente le suivent, le retour dit qui possédait l'agent ;
 4. un agent ALLUMÉ sur un abonnement passe la garde de pose jugée sur le
    DESTINATAIRE — refusée, rien n'est écrit ; éteint, il se donne librement ;
-5. se donner son propre agent ne fait rien.
+5. se donner son propre agent ne fait rien ;
+6. après le don (31/10/2026) : l'ancien propriétaire reste éditeur NOMMÉ, partage à son
+   nom (`keep_previous_owner=false` n'en laisse aucun), et le préréglage du
+   destinataire fait ses deux gestes à SON nom — le prêt, lui, ne se pose qu'en base
+   (`test_partage_agents_db.py`). `keep_previous_owner` hors de `give` est refusé.
 
 Le transfert en base (déclencheur + travaux en attente, une transaction) est celui
 de `take_over` : `test_reprise_agent_db.py`.
@@ -45,7 +49,8 @@ def monde(monkeypatch):
             "niveaux": {_PROPRIETAIRE: "owner", _EDITEUR: "editor", _ADMIN: "admin"},
             "adresses": {"collegue@exemple.test": [_COLLEGUE],
                          "super@exemple.test": [_SUPER_ADMIN_DEHORS]},
-            "agent": _agent(), "transferts": [], "gardes": []}
+            "agent": _agent(), "transferts": [], "gardes": [], "partages": [],
+            "preset": set(), "prets": []}
 
     monkeypatch.setattr(RT.org_store, "get_org_role",
                         lambda org_id, sub: "org_member"
@@ -73,6 +78,22 @@ def monde(monkeypatch):
             raise AuthzDenied(400, etat["refus"], "refusé")
 
     monkeypatch.setattr(RT._abonnement, "exiger_a_la_pose", _garde)
+    # Après le don (`_apres_le_don`) : ce qui s'écrit, et le préréglage du destinataire.
+    monkeypatch.setattr(RT.ownership, "grant",
+                        lambda kind, rid, ptype, pid, *, role, granted_by:
+                        etat["partages"].append((ptype, pid, role, granted_by)))
+    monkeypatch.setattr(RT.preset_agents, "ouvre_a_la_naissance",
+                        lambda sub, org_id: sub in etat["preset"])
+
+    def _preter(tid, oid, sub, modele):
+        etat["prets"].append((tid, sub, modele))
+        return {**etat["agent"], "subscription_lent": True}
+
+    monkeypatch.setattr(RT.db, "poser_pret_du_forfait", _preter)
+    monkeypatch.setattr(RT.org_subscription_pool, "en_pool", lambda org_id, famille: False)
+    monkeypatch.setattr(RT._acces_agent, "avec_visibilites", lambda org_id, agents: agents)
+    monkeypatch.setattr(RT._acces_agent, "forfait_ferme", lambda sub, agent: False)
+    monkeypatch.setattr(RT._portee, "observer", lambda *a, **k: None)
     return etat
 
 
@@ -174,3 +195,53 @@ def test_un_agent_ETEINT_sur_un_abonnement_se_donne_librement(monde):
     _donner()
     assert monde["gardes"] == []
     assert monde["transferts"] == [(1, _ORG, _COLLEGUE)]
+
+
+def test_l_ancien_proprietaire_reste_editeur_NOMME_a_son_propre_nom(monde):
+    """Posé par lui (`granted_by` = l'ancien) : ce partage ne prête jamais le forfait du
+    nouveau par lui seul (`_forfait_prete_nomme` exige le propriétaire courant)."""
+    rep = _donner()
+    assert monde["partages"] == [("user", _PROPRIETAIRE, "editor", _PROPRIETAIRE)]
+    assert (rep["kept_previous_owner"], rep["preset_applied"], rep["lent"]) == (
+        True, False, False)
+
+
+def test_keep_previous_owner_false_ne_laisse_aucun_partage(monde):
+    rep = _donner(share_with_sub=_COLLEGUE, keep_previous_owner=False)
+    assert monde["partages"] == []
+    assert rep["kept_previous_owner"] is False
+
+
+def test_le_prereglage_du_DESTINATAIRE_fait_ses_deux_gestes_a_son_nom(monde):
+    monde["agent"] = _agent(model="sub:sonnet", enabled=False, subscription_lent=True)
+    monde["preset"] = {_COLLEGUE}
+    rep = _donner()
+    assert ("org", str(_ORG), "editor", _COLLEGUE) in monde["partages"]
+    assert monde["prets"] == [(1, _COLLEGUE, "sub:sonnet")]
+    assert (rep["preset_applied"], rep["lent"], rep["lend_ended"]) == (True, True, True)
+
+
+def test_sans_prereglage_rien_n_est_prete_et_le_retour_le_dit(monde):
+    monde["agent"] = _agent(model="sub:sonnet", enabled=False, subscription_lent=True)
+    rep = _donner()
+    assert monde["prets"] == []
+    assert (rep["preset_applied"], rep["lent"], rep["lend_ended"]) == (False, False, True)
+    assert "Nothing is lent" in rep["handover_note"]
+
+
+def test_la_reprise_ne_fait_ni_l_un_ni_l_autre(monde, monkeypatch):
+    """`take_over` (membre parti) ne garde personne et n'applique aucun préréglage."""
+    monde["membres"].discard(_PROPRIETAIRE)
+    monde["preset"] = {_ADMIN}
+    monkeypatch.setattr(RT.roles, "is_org_admin", lambda sub, org_id: sub == _ADMIN)
+    rep = RT._triggers_sync(ResolvedCtx(sub=_ADMIN, org_id=_ORG),
+                            RT.TriggerInput(op="take_over", trigger_id=1))
+    assert monde["partages"] == [] and monde["prets"] == []
+    assert rep.get("kept_previous_owner") is None
+
+
+def test_keep_previous_owner_hors_de_give_est_refuse(monde):
+    with pytest.raises(AuthzDenied) as e:
+        RT._triggers_sync(ResolvedCtx(sub=_PROPRIETAIRE, org_id=_ORG),
+                          RT.TriggerInput(op="get", trigger_id=1, keep_previous_owner=True))
+    assert (e.value.status, e.value.code) == (400, "keep_previous_owner_give_only")

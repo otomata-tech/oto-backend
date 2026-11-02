@@ -91,7 +91,7 @@ def test_input_guards(fr_get):
         fr_get(siren="1", sirens=["2"])
     with pytest.raises(McpError, match="not both"):
         fr_get()
-    with pytest.raises(McpError, match="is empty"):
+    with pytest.raises(McpError, match="liste vide"):
         fr_get(sirens=["  "])
-    with pytest.raises(McpError, match="limited to 20"):
+    with pytest.raises(McpError, match="20 au plus"):
         fr_get(sirens=[str(i).zfill(9) for i in range(21)])

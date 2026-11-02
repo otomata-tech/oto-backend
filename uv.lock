@@ -701,14 +701,14 @@ server = [
 
 [[package]]
 name = "france-opendata"
-version = "0.47.0"
+version = "0.51.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/74/e4f59d26f8dbc34e019dd969d36765518a5c9f6e32a57633669beca1f081/france_opendata-0.47.0.tar.gz", hash = "sha256:d573f05a8dc3a314f3a58c037dea5d0fbb9f1255762fe2c0afc4cf4d9aeea634", size = 1149308, upload-time = "2026-09-27T20:40:08.051Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/ae/475aa3b5c2821df1c5102701c8d16d33a7106e350ae24b08e064924cadfb/france_opendata-0.51.0.tar.gz", hash = "sha256:ef27e5cd77c10bae318ca0e7096e78655ae91093f30475df414b9c9a62152fef", size = 1186684, upload-time = "2026-11-02T17:36:23.382Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/0e/e93812be9301878e39000101f54f43400beb4fe52aa520ba7a16cb0aab1f/france_opendata-0.47.0-py3-none-any.whl", hash = "sha256:09fae9371e930648e7aed876b7da34db235b089b7904f6b35383bbfb62d0b0df", size = 1148434, upload-time = "2026-09-27T20:40:06.191Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/a3/f49a6d3ed453a5534afd4e7600720b1baf5a19dd5588626ebd5b8d9991db/france_opendata-0.51.0-py3-none-any.whl", hash = "sha256:f6851855c3ac9ad8d0254b86c17eec33ed26f5e3c0a6fbe1f0eb55a06ae6eb67", size = 1173788, upload-time = "2026-11-02T17:36:21.556Z" },
 ]
 
 [[package]]
@@ -1468,6 +1468,7 @@ dependencies = [
     { name = "croniter" },
     { name = "cryptography" },
     { name = "fastmcp", extra = ["apps"] },
+    { name = "france-opendata" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
@@ -1508,6 +1509,7 @@ requires-dist = [
     { name = "croniter", specifier = ">=2.0" },
     { name = "cryptography", specifier = ">=42" },
     { name = "fastmcp", extras = ["apps"], specifier = ">=3.4.7,<3.5" },
+    { name = "france-opendata", specifier = ">=0.51.0" },
     { name = "google-api-python-client", specifier = ">=2.0" },
     { name = "google-auth", specifier = ">=2.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.0" },

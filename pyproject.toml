@@ -550,11 +550,13 @@ dependencies = [
     "sqlalchemy>=2.0",
     "psycopg-pool>=3.2",
     "croniter>=2.0",           # déclencheurs du runner (R3) : next_due depuis le cron, dans le fuseau du déclencheur
-    # france-opendata : plus de dép DIRECTE (ADR 0028 extraction totale — foncier/fr/
-    # urba/sante/frenchtech + SIRENE/DILA/BOAMP/ACCO passent tous par le service FOD).
-    # Reste tirée TRANSITIVEMENT par oto-core (>=0.7.0, base sans extras) pour le seul
-    # SireneClient keyé INSEE, qui reste in-process (FOD ne porte aucun credential).
-    # Le backend n'exécute plus AUCUN DuckDB in-process → extras [stock,sante] retirés.
+    # france-opendata : les APPELS passent tous par le service FOD (ADR 0028 extraction
+    # totale — foncier/fr/urba/sante/frenchtech + SIRENE/DILA/BOAMP/ACCO), sauf le seul
+    # SireneClient keyé INSEE, in-process (FOD ne porte aucun credential). Dép DIRECTE
+    # pour `france_opendata.compact` (≥ 0.51.0) : la lecture agent des fiches entreprise
+    # et ICPE (projection, profil, lot), pure, sans I/O — partagée avec les autres
+    # consommateurs au lieu d'une copie ici. Base sans extras : aucun DuckDB in-process.
+    "france-opendata>=0.51.0",
     "cryptography>=42",
     "boto3>=1.34",  # upload avatars/logos → Scaleway Object Storage (S3-compatible)
     "python-multipart>=0.0.9",  # parsing multipart des uploads (Starlette request.form())

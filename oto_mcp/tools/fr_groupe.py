@@ -259,7 +259,7 @@ def register(mcp: FastMCP) -> None:
             # A level is read IN PARALLEL: each node is an upstream round trip, and
             # a holding company readily has three per level. In series, the budget of
             # 60 nodes would mean a minute of waiting — the tool would be correct, and
-            # unusable. Same remedy as `_fr_profile` in `tools/fr.py`.
+            # unusable. Same remedy as `france_opendata.compact.profil_entreprise`.
             with ThreadPoolExecutor(max_workers=8) as pool:
                 lues = list(zip(suivants, pool.map(_fiche, suivants)))
             for cible, f in lues:

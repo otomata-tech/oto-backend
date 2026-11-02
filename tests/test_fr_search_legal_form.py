@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp.tools.fr import _split_legal_form
+from france_opendata.compact import split_legal_form as _split_legal_form
 
 
 class _Reg:

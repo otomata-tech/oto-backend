@@ -20,60 +20,11 @@ from .lecture import LECTURE
 # people register. `tools/<m>.py` is reserved for modules mounted from
 # the connector registry (guardrail `test_capabilities_drift`).
 from .. import fr_registre
-
-# The annotations on the `finances` block (0 = not declared, unreadable value,
-# implausible amount) are set by **FOD**, not here: they are true whichever the
-# consumer, so they live at the single point everyone goes through (ADR 0028
-# amended on 12/08 — "FOD says what it KNOWS, never what it BELIEVES"). The backend
-# passes them through, without recomputing them: two detections would diverge.
-#
-# WHAT remains here is specific to the AGENT SURFACE — the warning on the filter
-# parameters, which exist only in this tool.
-_FILTRE_CA_AVERTISSEMENT = (
-    "⚠️ `ca_min`/`ca_max` filter upstream on an amount whose unit is UNKNOWN "
-    "(euros for some, thousands for others, sometimes from one year to the next for "
-    "the same company) and whose 0 means \"not declared\". Measured consequences: "
-    "the range lets through companies with NO known revenue (they equal 0, hence ≤ any "
-    "upper bound) and misses those that filed in thousands. On "
-    "`tranche_effectif_salarie=51,52,53 & ca_max=400000`, the 12 results are "
-    "large companies — 11 are there only because of their 0, and the 12th is a bank at "
-    "€392M read as €392k. To qualify by size, prefer "
-    "`tranche_effectif_salarie` or `categorie_entreprise`, and only conclude on revenue "
-    "after reading the filing (`fr_bilans`)."
-)
-
-# Legal forms commonly SPOKEN before the name ("the SCI Untel"), and the matching
-# INSEE legal categories. The register almost never writes the form into the
-# name: "SCI ASC" only brings back companies literally named that, and never the SCI
-# registered as "ASC".
-# The form therefore belongs to a FILTER, not to the searched text (feedback #325).
-# Codes validated against the list the API returns on an invalid value (30/07/2026).
-_LEGAL_FORM_CODES: dict[str, tuple[str, ...]] = {
-    "SCI": ("6540", "6541", "6542", "6543", "6544"),   # 654x family = real-estate civil companies (SCI)
-    "SCCV": ("6540", "6541"),
-    "SCM": ("6533",),
-    "SCP": ("6532",),
-    "SARL": ("5499", "5485", "5410"),
-    "EURL": ("5499",),                                  # single-member SARL — same category
-    "SAS": ("5710", "5785"),
-    "SASU": ("5710",),
-    "SA": ("5599", "5699"),
-    "SNC": ("5202", "5203"),
-}
-
-
-def _split_legal_form(query: Optional[str]) -> Optional[tuple[str, str]]:
-    """(form, rest) if `query` starts with a legal form followed by a name.
-
-    "SCI ASC" → ("SCI", "ASC"). "SCI" alone → None (no name to search for),
-    "ASCENSEURS" → None (prefix not isolated)."""
-    if not query:
-        return None
-    parts = query.strip().split(maxsplit=1)
-    if len(parts) != 2:
-        return None
-    form = parts[0].upper().strip(".")
-    return (form, parts[1].strip()) if form in _LEGAL_FORM_CODES and parts[1].strip() else None
+from france_opendata.erreurs import ParametreInvalide
+# The agent reading of company records (projection, legal-form retry, CA-filter warning,
+# multi-source profile, batch) lives in the shared library, used as is by every consumer
+# — no local copy to drift. The NAF labels stay here: they come from oto-core.
+from france_opendata import compact
 
 
 # The REAL values of the BODACC `familleavis` field (taken from the france-opendata lib,
@@ -98,29 +49,6 @@ def _famille_bodacc(famille: Optional[str]) -> Optional[str]:
         f"{', '.join(_FAMILLES_BODACC)} (or omitted for all). The output gives a "
         "label (e.g. \"Modifications diverses\"): the input takes the code "
         "(`modification`).")))
-
-
-def _cloture_liquidation(events: list[dict]) -> Optional[dict]:
-    """The most recent BODACC judgment CLOSING a liquidation among `events`
-    (newest first), or None. The SIRENE register does not always record the end
-    of a company whose liquidation was closed: `etat_administratif` stays "A"
-    while the same call carries the closing judgment. Only a liquidation closure
-    counts — closing a safeguard plan leaves a living company."""
-    for e in events:
-        if e.get("familleavis") != "collective":
-            continue
-        jugement = e.get("jugement") if isinstance(e.get("jugement"), dict) else {}
-        nature = (jugement.get("nature") or "").lower()
-        if "clôture" not in nature and "cloture" not in nature:
-            continue
-        if "insuffisance d'actif" in nature or "liquidation" in nature:
-            return {k: v for k, v in {
-                "nature": jugement.get("nature"),
-                "date_jugement": jugement.get("date"),
-                "date_parution": e.get("dateparution"),
-                "id": e.get("id"),
-            }.items() if v is not None}
-    return None
 
 
 _NAF_LABELS: dict[str, str] = {}
@@ -261,229 +189,16 @@ def register(mcp: FastMCP) -> None:
             page: 1-based page number.
             per_page: Page size (max 25).
         """
-        def _search(q, nj, pg):
-            return entreprises.search(
-                query=q,
-                naf=[s.strip() for s in naf.split(",")] if naf else None,
-                departement=departement,
-                code_postal=code_postal,
-                commune=commune,
-                employees=[s.strip() for s in employees.split(",")] if employees else None,
-                categorie_entreprise=categorie_entreprise,
-                ca_min=ca_min, ca_max=ca_max,
-                idcc=[s.strip() for s in idcc.split(",")] if idcc else None,
-                nature_juridique=nj,
-                page=pg, per_page=per_page,
-            )
+        def _csv(v):
+            return [x.strip() for x in v.split(",")] if v else None
 
-        explicit_nj = [s.strip() for s in nature_juridique.split(",")] if nature_juridique else None
-        res = _search(query, explicit_nj, page)
-        # Legal-form retry — page 1 only (that is where we conclude
-        # "not found") and only if the caller has not already settled the form.
-        # The literal search stays first: companies truly named
-        # "SCI ASC" exist and are legitimate answers.
-        form = _split_legal_form(query) if page == 1 and not explicit_nj else None
-        # Same compaction as fr_get: the raw payload (headquarters 30+ fields,
-        # full-geo matching_etablissements) blows up fast (seen 48k chars).
-        # The compacted establishments stay — co-location test.
-        # Compact BEFORE flagging: the projection keeps only known keys,
-        # a flag set earlier would be silently lost.
-        res["results"] = [_compact_identity(r) for r in res.get("results", [])]
-        if form:
-            label, name = form
-            codes = list(_LEGAL_FORM_CODES[label])
-            extra = _search(name, codes, 1)
-            seen = {r.get("siren") for r in res["results"]}
-            added = [_compact_identity(r) for r in extra.get("results", [])
-                     if r.get("siren") not in seen]
-            for r in added:
-                r["matched_by"] = "legal_form"
-            res["results"] += added
-            res["legal_form_retry"] = {
-                "form": label, "query": name, "nature_juridique": codes,
-                "total_results": extra.get("total_results"), "added": len(added),
-            }
-        # Whoever filters on revenue needs to know WHAT they just filtered on:
-        # the upstream compares a bound in euros to a unitless number whose 0 means
-        # "not declared". Said here, at the moment the question arises (#399).
-        if ca_min is not None or ca_max is not None:
-            res["filtre_ca_avertissement"] = _FILTRE_CA_AVERTISSEMENT
-        return res
-
-    # 7 top B2B ratios + fiscal-year metadata. The rest (marge_brute, ebit,
-    # capacite_de_remboursement, couverture_des_interets, caf_sur_ca,
-    # ratio_de_vetuste) remains accessible via fr_bilan(siren, date).
-    _LATEST_BILAN_KEYS = (
-        "date_cloture_exercice", "type_bilan",
-        "chiffre_d_affaires", "resultat_net", "ebe",
-        "marge_ebe", "autonomie_financiere", "taux_d_endettement",
-        "ratio_de_liquidite",
-        # The upstream WARNINGS, never projected out of the response: a
-        # `chiffre_d_affaires: None` accompanied by `valeur_indisponible` says "the
-        # filing carries an amount we cannot read"; the same None alone says
-        # "no filing". Dropping them would hand the consumer back exactly the
-        # ambiguity FOD has just removed (ADR 0028 amended).
-        "alerte", "postes_indisponibles",
-    )
-
-    # compact fr_get: the raw recherche-entreprises payload weighs up to 40k chars
-    # (full matching_etablissements with geo, complements, headquarters 30+ fields).
-    # We keep everything a prospecting agent consumes — identity, NAF,
-    # headcount, directors, finances, and the LIST of establishments (compacted:
-    # needed for the INSEE commune / active establishment co-location test).
-    _ETAB_KEEP = (
-        "siret", "adresse", "code_postal", "commune", "libelle_commune",
-        "etat_administratif", "est_siege", "activite_principale",
-        "liste_enseignes", "nom_commercial", "date_creation",
-    )
-    _DIRIGEANT_KEEP = (
-        "nom", "prenoms", "denomination", "siren", "qualite",
-        "annee_de_naissance", "type_dirigeant",
-    )
-    _IDENTITY_KEEP = (
-        "siren", "nom_complet", "nom_raison_sociale", "sigle",
-        "etat_administratif", "nature_juridique", "activite_principale",
-        "section_activite_principale", "tranche_effectif_salarie",
-        "annee_tranche_effectif_salarie", "categorie_entreprise",
-        "date_creation", "date_fermeture", "site_internet",
-        "nombre_etablissements", "nombre_etablissements_ouverts", "finances",
-        # Sibling of `finances`, set by FOD: without it in this list, the
-        # projection would silently eat it (it keeps only known keys).
-        "finances_avertissement",
-    )
-    # Collective agreement(s) — the upstream carries it under `complements.liste_idcc`.
-    # It was lost in the mapping even though `fr_search` ACCEPTS the IDCC as a FILTER:
-    # you could search by agreement without ever reading that of a company
-    # you already held. The asymmetry is the trap — being able to filter suggests
-    # the data is accessible (signal: "IDCC verified" field stuck at 0% over 500
-    # rows, although the client had explicitly asked for it).
-    # Surfaced FLAT rather than under `complements`: it is the only key of that block
-    # that carries business data; exposing the whole block would bring back ~30 directory
-    # booleans (est_bio, est_qualiopi…) that nobody asked for.
-    _COMPLEMENT_KEEP = ("liste_idcc",)
-    _EVENT_KEEP = (
-        "id", "dateparution", "familleavis", "familleavis_lib", "typeavis",
-        "typeavis_lib", "tribunal", "commercant", "jugement", "registre",
-        # The official DILA permalink (#341, links file #335: full trust,
-        # to be copied never rebuilt) — it went through fr_events but was
-        # eaten here: the "projection that lies by omission" class (ADR 0028).
-        "url_complete",
-        # The notice CONTENT for two families (#341): the description of a
-        # modification and that of an accounts filing — same nature as
-        # `jugement` (always kept for collective proceedings).
-        "modificationsgenerales", "depot",
-    )
-
-    def _pick(d: dict, keys: tuple) -> dict:
-        return {k: d[k] for k in keys if k in d and d[k] is not None}
-
-    def _with_naf_label(d: dict) -> dict:
-        """`activite_principale_libelle` beside the code: the upstream serves the
-        NAF code alone ("58.11Z"), and a qualification that must quote "the code
-        and its words" was left to justify a target on a bare code. Absent when
-        the code is outside NAF rév. 2 (older nomenclature of a closed company):
-        no label is better than a wrong one."""
-        libelle = _naf_labels().get(d.get("activite_principale") or "")
-        if libelle:
-            d["activite_principale_libelle"] = libelle
-        return d
-
-    def _compact_identity(identity: dict) -> dict:
-        out = _with_naf_label(_pick(identity, _IDENTITY_KEEP))
-        out.update(_pick(identity.get("complements") or {}, _COMPLEMENT_KEEP))
-        siege = identity.get("siege")
-        if isinstance(siege, dict):
-            out["siege"] = _with_naf_label(_pick(siege, _ETAB_KEEP))
-        dirigeants = identity.get("dirigeants") or []
-        out["dirigeants"] = [_pick(d, _DIRIGEANT_KEEP) for d in dirigeants[:10]]
-        etabs = identity.get("matching_etablissements") or []
-        out["etablissements"] = [_with_naf_label(_pick(e, _ETAB_KEEP)) for e in etabs[:25]]
-        if len(etabs) > 25:
-            out["_etablissements_truncated"] = len(etabs)
-        return out
-
-    # Max number of SIRENs per batch call: bounds the fan-out on upstream APIs
-    # (recherche-entreprises/INPI/BODACC, rate-limited) AND the response size.
-    _FR_GET_BATCH_MAX = 20
-
-    def _fr_profile(siren: str) -> dict:
-        """Body of `fr_get` for ONE siren — factored out for batch mode."""
-        from concurrent.futures import ThreadPoolExecutor
-
-        partial_errors: dict[str, str] = {}
-
-        def _safe(label, fn, *fn_args):
-            try:
-                return fn(*fn_args)
-            # noqa: SILENT — the per-source failure is rendered in partial_errors
-            except Exception as exc:  # graceful degradation per sub-source
-                partial_errors[label] = f"{type(exc).__name__}: {exc}"
-                return None
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            f_identity = pool.submit(_safe, "identity", entreprises.get_by_siren, siren)
-            f_bilans = pool.submit(_safe, "latest_bilan", inpi.list_exercises, siren)
-            f_events = pool.submit(_safe, "recent_events", bodacc.search_by_siren, siren, None, 10)
-
-        identity = f_identity.result()
-        if not identity:
-            # Identity is the keystone: without it, no profile.
-            if "identity" in partial_errors:
-                return {"error": "identity_unavailable", "siren": siren,
-                        "partial_errors": partial_errors}
-            return {"error": "not_found", "siren": siren}
-
-        exercises = f_bilans.result()
-        latest_bilan = None
-        finances_note = None
-        latest_confidentiality = None
-        if exercises:  # non-empty list = at least one usable filing (BdF)
-            latest_ex = exercises[0]
-            latest_confidentiality = latest_ex.get("confidentiality")
-            full = _safe("latest_bilan", inpi.get_bilan, siren,
-                         latest_ex["date_cloture_exercice"])
-            if full:
-                latest_bilan = {k: full.get(k) for k in _LATEST_BILAN_KEYS}
-            if latest_confidentiality and latest_confidentiality != "Public":
-                finances_note = (
-                    f"accounts \"{latest_confidentiality.lower()}\" (art. L.232-25) — "
-                    "some ratios are absent due to a confidentiality declaration"
-                )
-        elif exercises == []:  # success but 0 usable filing in the BdF dataset
-            finances_note = (
-                "no usable accounts in the Banque de France dataset: never filed "
-                "OR filed under full confidentiality (micro/small companies "
-                "may keep their accounts confidential). Check for a "
-                "confidential filing via the RNE records on data.inpi.fr."
-            )
-
-        events_data = f_events.result() or {}
-
-        out = {
-            "siren": siren,
-            "identity": _compact_identity(identity),
-            "latest_bilan": latest_bilan,
-            "latest_bilan_confidentiality": latest_confidentiality,
-            "recent_events": [
-                _pick(e, _EVENT_KEEP) for e in events_data.get("results", [])
-            ],
-            "events_total": events_data.get("total_count", 0),
-        }
-        cloture = _cloture_liquidation(events_data.get("results", []))
-        if cloture:
-            out["procedure_collective_cloturee"] = cloture
-            if out["identity"].get("etat_administratif") == "A":
-                out["etat_administratif_avertissement"] = (
-                    "`identity.etat_administratif` is \"A\" (active) in the SIRENE "
-                    f"register, but BODACC published a judgment closing its liquidation "
-                    f"({cloture.get('nature')}, {cloture.get('date_jugement') or cloture.get('date_parution')}): "
-                    "the register has not recorded the cessation. Treat the company "
-                    "as closed, not as active.")
-        if finances_note:
-            out["finances_note"] = finances_note
-        if partial_errors:
-            out["partial_errors"] = partial_errors
-        return out
+        return compact.rechercher(
+            entreprises, query=query, naf=_csv(naf), departement=departement,
+            code_postal=code_postal, commune=commune, employees=_csv(employees),
+            categorie_entreprise=categorie_entreprise, ca_min=ca_min, ca_max=ca_max,
+            idcc=_csv(idcc), nature_juridique=_csv(nature_juridique),
+            page=page, per_page=per_page, naf_labels=_naf_labels(),
+        )
 
     @mcp.tool(annotations=LECTURE)
     def fr_get(siren: str | None = None, sirens: list | None = None) -> dict:
@@ -514,6 +229,10 @@ def register(mcp: FastMCP) -> None:
         without failing the batch. For bulk HQ addresses only (no financials),
         `fr_stock_enrich` is cheaper.
 
+        `bilans_outline` surveys every usable exercise, newest first (closing date,
+        type, confidentiality, `chiffre_d_affaires`, `alerte`): the place to look for
+        the first year that carries a revenue.
+
         `latest_bilan` is trimmed to 7 B2B-relevant ratios (CA, résultat net,
         EBE, marge EBE, autonomie financière, taux d'endettement, liquidité).
         For the full ratio set, call `fr_bilan(siren, date_cloture)`.
@@ -528,32 +247,15 @@ def register(mcp: FastMCP) -> None:
             sirens: list of SIREN numbers (max 20) — batch mode. Give one OR
                 the other, not both.
         """
-        from concurrent.futures import ThreadPoolExecutor
-
         if (siren is None) == (sirens is None):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="give `siren` (single) OR `sirens` (batch), not both"))
+        sources = dict(entreprises=entreprises, inpi=inpi, bodacc=bodacc, naf_labels=_naf_labels())
         if sirens is None:
-            return _fr_profile(str(siren).strip())
-        cleaned = [str(s).strip() for s in sirens if str(s).strip()]
-        if not cleaned:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="`sirens` is empty"))
-        if len(cleaned) > _FR_GET_BATCH_MAX:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"`sirens` is limited to {_FR_GET_BATCH_MAX} per call "
-                        f"(received {len(cleaned)}) — split into batches"))
-        def _one(s: str) -> dict:
-            try:
-                return _fr_profile(s)
-            # noqa: SILENT — the per-siren failure is rendered in the result row
-            except Exception as exc:  # one failing SIREN does not bring down the batch
-                return {"error": f"{type(exc).__name__}: {exc}", "siren": s}
-
-        # 4 profiles in flight max (each opens 3-4 upstream calls): stays under the
-        # public APIs' rate limits while still parallelizing the batch.
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            profiles = list(pool.map(_one, cleaned))
-        return {"profiles": profiles, "count": len(profiles)}
+            return compact.profil_entreprise(str(siren).strip(), **sources)
+        try:
+            return compact.profils_entreprises(sirens, **sources)
+        except ParametreInvalide as e:  # empty list, or over the batch bound
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     # Bound of the `fr_directors` batch: 5x that of `fr_get`, because a record there
     # costs ONE upstream call (the identity, from which we take directors AND legal

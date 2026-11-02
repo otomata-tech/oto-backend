@@ -85,6 +85,14 @@ DDL_COLONNE_PARTAGE_PAR_DEFAUT = (f"ALTER TABLE orgs ADD COLUMN IF NOT EXISTS "
 #: Le `granted_by` d'un partage NÉ du réglage, jamais d'un geste : on le retire
 #: (`granted_by = MARQUE_PARTAGE_PAR_DEFAUT`) sans toucher aux partages faits à la main.
 MARQUE_PARTAGE_PAR_DEFAUT = "reglage:partage_par_defaut"
+#: Le `granted_by` du partage `editor` que le DON laisse à celui qui donne
+#: (`keep_previous_owner`, défaut vrai) : ni son nom (il ne prêterait rien, et un admin
+#: qui se partage un agent porterait la même forme), ni celui du nouveau (il prêterait
+#: son forfait). Marqué, il n'ouvre l'écriture QUE là où le forfait du propriétaire
+#: n'est pas en jeu — l'org sert l'agent par son pool exclusif (`_forfait_prete_par_le_pool`) ;
+#: reposé par quiconque, il perd sa marque ; le nouveau propriétaire le retire
+#: (`op=unshare`).
+MARQUE_GARDE_AU_DON = "don:ancien_proprietaire"
 
 
 def partage_par_defaut_stocke(org_id: int) -> Any:
@@ -355,18 +363,35 @@ def _servi_par_le_pool(alias_trigger: str) -> str:
             f"  AND pm.mode = '{POOL}')")
 
 
+def _partage_ouvrant_le_pool(alias_trigger: str) -> str:
+    """Le partage qui ouvre l'écriture à `%s` sur un agent servi par le pool : un partage
+    collectif du PROPRIÉTAIRE (`_partage_collectif_du_proprietaire`, même filtre), OU le
+    partage que le don a laissé À `%s` lui-même (`MARQUE_GARDE_AU_DON`) — celui qui a
+    construit et donné l'agent continue de le maintenir, tant que le nouveau
+    propriétaire ne le retire pas. UN paramètre, une seule lecture de `resource_grants`."""
+    from ._partage_vivant import PARTAGE_VIVANT_G
+    a = alias_trigger
+    return ("EXISTS (SELECT 1 "
+            "FROM (SELECT %s::text AS qui) q, resource_grants g "
+            "WHERE g.resource_type = 'runner_trigger' "
+            f"  AND g.resource_id = {a}.id::text "
+            f"  AND g.permission = 'write' AND {PARTAGE_VIVANT_G} "
+            f"  AND ((g.granted_by = {a}.sub AND {_atteint_par_equipe_ou_org(a)}) "
+            f"    OR (g.granted_by = '{MARQUE_GARDE_AU_DON}' "
+            "        AND g.principal_type = 'user' AND g.principal_id = q.qui)))")
+
+
 def _forfait_prete_par_le_pool(alias_trigger: str) -> str:
     """Le POOL (31/10/2026) : l'org sert l'agent par son pool exclusif
     (`_servi_par_le_pool`), donc le forfait du propriétaire n'est pas en jeu, ET le
-    PROPRIÉTAIRE l'a partagé en écriture à une équipe ou à l'org dont `%s` est membre
-    (`_partage_collectif_du_proprietaire`) — sans `op=lend`, puisqu'il n'y a pas de
-    forfait à prêter. Le même filtre que le prêt collectif : ni un partage d'admin, ni
-    ceux de la révision 0035 ou de `partage_par_defaut`, ni ceux d'un ancien
-    propriétaire n'ouvrent l'écriture — le pool retire le forfait du jeu, pas
-    l'identité sous laquelle l'agent agit. Le partage NOMMÉ du propriétaire compte déjà
-    (`_forfait_prete_nomme`). UN paramètre."""
+    PROPRIÉTAIRE l'a partagé en écriture à une équipe ou à l'org dont `%s` est membre,
+    ou `%s` l'a donné en gardant la main (`_partage_ouvrant_le_pool`) — sans `op=lend`,
+    puisqu'il n'y a pas de forfait à prêter. Ni un partage d'admin, ni ceux de la
+    révision 0035 ou de `partage_par_defaut` n'ouvrent l'écriture — le pool retire le
+    forfait du jeu, pas l'identité sous laquelle l'agent agit. Le partage NOMMÉ du
+    propriétaire compte déjà (`_forfait_prete_nomme`). UN paramètre."""
     a = alias_trigger
-    return f"({_servi_par_le_pool(a)} AND {_partage_collectif_du_proprietaire(a)})"
+    return f"({_servi_par_le_pool(a)} AND {_partage_ouvrant_le_pool(a)})"
 
 
 def _forfait_prete(alias_trigger: str) -> str:
@@ -443,7 +468,8 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
     (`payload->>'trigger_id'`) — SEULEMENT si cet agent ne peut être changé que par celui
     sous qui le travail tourne. Même org, même porteur, posé sur l'abonnement PERSONNEL
     de ce porteur, prêté à aucun éditeur NOMMÉ (`_forfait_prete_nomme`, ici pour
-    n'importe quel éditeur) et SANS prêt collectif vivant (`_pret_vivant`) : un admin de
+    n'importe quel éditeur), sans l'éditeur que le don a gardé (`MARQUE_GARDE_AU_DON`)
+    et SANS prêt collectif vivant (`_pret_vivant`) : un admin de
     l'org et un partage à l'org entière ne peuvent alors que l'éteindre
     (`_acces_agent`). ⚠️ Le prêt collectif ferme la liste dès qu'il est posé, qu'un
     partage atteigne déjà quelqu'un ou non : la liste se ferme du côté sûr. De même sur
@@ -462,7 +488,8 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
             "  AND NOT EXISTS (SELECT 1 FROM resource_grants g "
             "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "
             "      AND g.principal_type = 'user' AND g.permission = 'write' "
-            f"      AND g.granted_by = t.sub AND {PARTAGE_VIVANT_G}) "
+            f"      AND g.granted_by IN (t.sub, '{MARQUE_GARDE_AU_DON}') "
+            f"      AND {PARTAGE_VIVANT_G}) "
             f"  AND NOT {_pret_vivant('t')} "
             f"  AND NOT ({_servi_par_le_pool('t')} AND EXISTS (SELECT 1 FROM resource_grants g "
             "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "

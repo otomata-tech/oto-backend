@@ -221,10 +221,11 @@ class TriggerInput(BaseModel):
         "agent a colleague GIVES you (op=give), `shared` only shares it with the whole "
         "org as editor: it never lends your plan — you lend it yourself (op=lend)."))
     keep_previous_owner: Optional[bool] = Field(default=None, description=(
-        "op=give only: `true` keeps you as a named editor of the agent you give (default "
-        "false: no share left behind). That share never lends the new owner's plan: on "
-        "their personal subscription you may only pause it, unless they lend it (`can_edit` "
-        "says so)."))
+        "op=give only: keeps you as a named editor of the agent you give (default true; "
+        "`false` leaves no share behind). That share never lends the new owner's plan: on "
+        "their personal subscription you may only pause it, unless they lend it; in an org "
+        "that runs the model on its pool you can still change it. They can remove it "
+        "(op=unshare). `can_edit` says which."))
     # ── le WEBHOOK ────────────────────────────────────────────────────────────
     #: `schedule` (défaut) ou `webhook`. Posé à la CRÉATION et jamais après : un
     #: agent ne change pas de coup d'envoi en cours de route.
@@ -1892,7 +1893,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         pret_avant = bool(t.get("subscription_lent"))
         donne = _transferer(ctx, t, destinataire, "DONNÉ")
         return {**donne, **_apres_le_don(ctx, donne["trigger"], destinataire,
-                                         garder=inp.keep_previous_owner is True,
+                                         garder=inp.keep_previous_owner is not False,
                                          pret_avant=pret_avant)}
 
     if inp.op in ("shares", "share", "unshare"):
@@ -2252,10 +2253,12 @@ def _apres_le_don(ctx: ResolvedCtx, t: dict, nouveau_sub: str, *, garder: bool,
     suit n'OUVRE que des partages, jamais un prêt, et un échec à mi-chemin laisse
     l'agent au nouveau propriétaire, plus fermé que voulu, jamais plus ouvert.
 
-    1. `garder=True` (`keep_previous_owner`, défaut False) : l'ancien propriétaire
-       (l'appelant) reste ÉDITEUR NOMMÉ. Le partage porte SON `granted_by` : il ne prête
-       jamais le forfait du nouveau (`db._forfait_prete` exige `granted_by` = le
-       propriétaire courant) ; sur un abonnement personnel, pause seule.
+    1. `garder=True` (`keep_previous_owner`, défaut True) : l'ancien propriétaire
+       (l'appelant) reste ÉDITEUR NOMMÉ. Le partage est MARQUÉ
+       (`db.MARQUE_GARDE_AU_DON`) : il ne prête jamais le forfait du nouveau
+       (`db._forfait_prete_nomme` exige `granted_by` = le propriétaire courant) ; sur
+       un abonnement personnel, pause seule ; dans une org qui sert la famille par son
+       pool exclusif, il lui ouvre l'écriture (`db._partage_ouvrant_le_pool`).
     2. le PRÉRÉGLAGE du nouveau (`preset_agents`, sauf refus de l'admin) : partage
        `editor` à l'org posé à SON nom, et RIEN d'autre. Le don ne prête jamais son
        forfait : il le prête lui-même (`op=lend`). Ce partage, posé par le propriétaire,
@@ -2267,7 +2270,7 @@ def _apres_le_don(ctx: ResolvedCtx, t: dict, nouveau_sub: str, *, garder: bool,
     rid = str(t["id"])
     if garder:
         ownership.grant(_acces_agent.KIND, rid, "user", ctx.sub, role="editor",
-                        granted_by=ctx.sub)
+                        granted_by=db.MARQUE_GARDE_AU_DON)
     partage = preset_agents.ouvre_a_la_naissance(nouveau_sub, ctx.org_id)
     if partage:
         ownership.grant(_acces_agent.KIND, rid, "org", str(ctx.org_id),
@@ -2285,9 +2288,10 @@ def _apres_le_don(ctx: ResolvedCtx, t: dict, nouveau_sub: str, *, garder: bool,
         _acces_agent.niveau(ctx.sub, ctx.org_id, lu),
         ferme=_acces_agent.forfait_ferme(ctx.sub, lu))
     personnel = lu.get("model") in runner_models.MODELES_PERSONNELS
+    pool = personnel and int(lu["id"]) in db.servis_par_le_pool([int(lu["id"])])
     if not personnel:
         note = "It runs on the org's key: whoever holds a write share can edit it."
-    elif partage and int(lu["id"]) in db.servis_par_le_pool([int(lu["id"])]):
+    elif partage and pool:
         note = ("The new owner's preset shared it with the whole org as editor, and the "
                 "org runs this model on its pool, never on the owner's plan: its members "
                 "can edit it. Nothing of the new owner's plan is lent.")
@@ -2297,9 +2301,14 @@ def _apres_le_don(ctx: ResolvedCtx, t: dict, nouveau_sub: str, *, garder: bool,
                 "editors they name can change it; others can pause it, until they lend "
                 "it (op=lend).")
     else:
-        note = ("Nothing is shared or lent: it now runs on the new owner's personal plan, "
-                "so only they and the editors they name can change it; others can pause "
-                "it. They can share it and lend it (op=share, op=lend).")
+        note = ("Nothing is shared with the org or lent: it now runs on the new owner's "
+                "personal plan, so only they and the editors they name can change it; "
+                "others can pause it. They can share it and lend it (op=share, op=lend).")
+    if garder and personnel and not pool:
+        note += (" You stay a named editor, but on their plan you can only pause it "
+                 "until they lend it.")
+    elif garder:
+        note += " You stay an editor and can keep changing it, until they remove you."
     return {"trigger": servi, "kept_previous_owner": garder, "preset_applied": partage,
             "lend_ended": pret_avant, "handover_note": note}
 
@@ -2991,8 +3000,10 @@ CAPABILITIES += [
             "move with it; an agent switched ON on your personal subscription is "
             "refused unless they can run it — disable it first, they re-enable it. "
             "A person's gesture: refused to a hosted agent (`give_human_only`). "
-            "`keep_previous_owner=true` keeps you as a named editor (default false); "
-            "that share never lends THEIR plan. Give never lends their plan either: "
+            "You stay a named editor (`keep_previous_owner`, default true; `false` "
+            "leaves nothing): that share never lends THEIR plan, but in an org that "
+            "runs the model on its pool it lets you keep changing the agent, until "
+            "they remove it (op=unshare). Give never lends their plan either: "
             "if their `default_sharing` is `shared` (and the org admin allows it), "
             "the agent is shared with the whole org as editor in their name, nothing "
             "more — they lend it themselves (op=lend). The reply says "

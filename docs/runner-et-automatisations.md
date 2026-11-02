@@ -2175,11 +2175,14 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     même table, `sql_par_le_pool`) : il n'y a pas de forfait à prêter. Un partage en
     écriture vivant que le PROPRIÉTAIRE a posé à une équipe ou à l'org
     (`_partage_collectif_du_proprietaire`, le même filtre que le prêt collectif) le rend
-    alors modifiable par leurs membres, sans `op=lend`. Ne comptent jamais, comme
-    ailleurs : un partage d'admin, ceux de la révision 0035 et de `partage_par_defaut`
-    (marqués), ceux d'un ancien propriétaire — le pool retire le forfait du jeu, pas
-    l'identité sous laquelle l'agent agit (ses connexions personnelles). Sans un tel
-    partage, pause seule. Lié au modèle comme le prêt collectif : qui modifie par le pool
+    alors modifiable par leurs membres, sans `op=lend`. Ouvre aussi l'écriture, à lui
+    seul, le partage que le DON a laissé à celui qui donne (`MARQUE_GARDE_AU_DON`, voir
+    `give`) : qui a construit et donné l'agent continue de le maintenir, tant que le
+    nouveau propriétaire ne le retire pas (`_partage_ouvrant_le_pool`). Ne comptent
+    jamais, comme ailleurs : un partage d'admin, ceux de la révision 0035 et de
+    `partage_par_defaut` (marqués), les partages collectifs d'un ancien propriétaire — le
+    pool retire le forfait du jeu, pas l'identité sous laquelle l'agent agit (ses
+    connexions personnelles). Sans un tel partage, pause seule. Lié au modèle comme le prêt collectif : qui modifie par le pool
     n'y pose pas un autre modèle d'abonnement, il peut le sortir du forfait. Le mode NON
     réglé (le pool complète) n'y est pas : le propriétaire y paie dès que son abonnement
     sert, et un droit de modifier ne dépend pas de l'état de sa connexion au moment de la
@@ -2360,10 +2363,15 @@ previous_owner, jobs_moved}`.
 - **Une personne seule donne** : sous un jeton de délégation, `403 give_human_only` (le
   motif de `links_human_only` : un agent qui lit des données tierces changerait sur une
   injection l'identité et le forfait d'un agent).
-- **L'ancien propriétaire peut rester ÉDITEUR NOMMÉ** (02/11/2026,
-  `keep_previous_owner=true`, défaut `false`) : un partage `editor` à lui, posé à son nom
-  (`granted_by` = ancien). Il ne prête donc jamais le forfait du nouveau ; sur un
-  abonnement personnel, pause seule, sauf prêt du nouveau.
+- **L'ancien propriétaire RESTE ÉDITEUR NOMMÉ** (`keep_previous_owner`, défaut `true`
+  depuis le 03/11/2026 ; `false` ne laisse rien) : on construit un agent pour quelqu'un,
+  on le lui donne, on continue de le maintenir. Un partage `editor` à lui, MARQUÉ
+  (`granted_by = MARQUE_GARDE_AU_DON`) : il ne prête jamais le forfait du nouveau — sur
+  son abonnement personnel, pause seule, sauf prêt du nouveau ; dans une org qui sert la
+  famille par son pool exclusif, où ce forfait n'est pas en jeu, il ouvre l'écriture au
+  donneur, et à lui seul (`_partage_ouvrant_le_pool`). Il ferme les `oto_admin_*`
+  (`outils_plateforme_du_travail`). Le nouveau propriétaire le retire (`op=unshare`) ;
+  reposé par quiconque, il perd sa marque.
 - **Le don ne PRÊTE jamais le forfait du destinataire** (02/11/2026, `_apres_le_don`) :
   son préréglage `default_sharing=shared` (et pas de refus de l'admin) pose au plus le
   partage `editor` à l'org, à SON nom — il n'a pas écrit cette consigne, le prêt reste

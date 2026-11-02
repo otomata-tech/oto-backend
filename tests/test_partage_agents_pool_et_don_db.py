@@ -14,8 +14,9 @@
    a changés en dernier ; le propriétaire les rallume, et sa retouche le remet auteur.
 5. `give` ne prête jamais le forfait du destinataire : son préréglage pose au plus le
    partage à l'org (rien si l'admin le refuse) ; un jeton de délégation ne donne pas ;
-   l'ancien propriétaire n'est gardé éditeur que sur `keep_previous_owner=true`, et ce
-   partage, à son nom, n'ouvre l'écriture nulle part, pool compris.
+   l'ancien propriétaire reste éditeur (`keep_previous_owner`, défaut true) par un
+   partage MARQUÉ qui ne prête rien : hors pool, la pause ; en pool, la main — à lui
+   seul, jusqu'à ce que le nouveau le retire ou qu'un autre le repose.
 Joué sur une vraie base.
 """
 from __future__ import annotations
@@ -264,7 +265,7 @@ def test_le_don_a_qui_partage_par_prereglage_partage_SANS_preter(org_reelle):
     rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU)
     assert rep["trigger"]["sub"] == NOUVEAU
     assert (rep["preset_applied"], rep["kept_previous_owner"], rep["lend_ended"]) == (
-        True, False, False)
+        True, True, False)
     assert "lent" not in rep
     assert rep["trigger"]["visibility"]["org"] == "editor"
     assert not rep["trigger"].get("subscription_lent"), "le don ne prête pas"
@@ -296,10 +297,11 @@ def test_le_don_quand_l_admin_refuse_le_prereglage_ne_partage_rien(org_reelle):
     P.poser(org, {P.PRESET: P.REFUSE})
     t = _creer(org, private=True)
 
-    rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU)
+    rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU,
+                 keep_previous_owner=False)
     assert rep["preset_applied"] is False
     assert rep["trigger"]["visibility"] == {"org": None, "people": 0}
-    assert "Nothing is shared or lent" in rep["handover_note"]
+    assert "Nothing is shared with the org or lent" in rep["handover_note"]
     assert db.forfaits_pretes([t["id"]], MEMBRE) == set()
 
 
@@ -313,22 +315,76 @@ def test_le_don_par_un_jeton_de_delegation_est_refuse(org_reelle, monkeypatch):
     assert db.get_trigger(t["id"], org)["sub"] == PROPRIO, "rien n'est transféré"
 
 
-def test_le_don_ne_garde_l_ancien_que_sur_demande_et_sans_ecriture(org_reelle):
+def test_hors_pool_le_donneur_garde_ne_peut_que_mettre_en_pause(org_reelle):
+    """Sur le forfait personnel du nouveau, le partage gardé ne prête rien."""
+    from oto_mcp import db
+    org, _ = org_reelle
+    t = _creer(org, private=True)
+    _appel(org, op="share", trigger_id=t["id"], everyone=True, role="editor")
+    assert _appel(org, op="lend", trigger_id=t["id"])["trigger"]["subscription_lent"]
+    rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU)
+    assert (rep["kept_previous_owner"], rep["lend_ended"]) == (True, True)
+    assert (rep["trigger"]["my_access"], rep["trigger"]["can_edit"]) == ("editor", False)
+    assert "only pause it" in rep["handover_note"]
+    assert db.forfaits_pretes([t["id"]], PROPRIO) == set()
+    assert db.forfaits_pretes([t["id"]], MEMBRE) == set()
+    assert _refus(org, PROPRIO, op="update", trigger_id=t["id"],
+                  input="x").code == "subscription_personal_only"
+
+
+def test_en_pool_le_donneur_garde_la_main_et_lui_seul(org_reelle):
+    """On construit un agent pour quelqu'un, on le lui donne, on le maintient."""
     from oto_mcp import db
     org, _ = org_reelle
     org_subscription_pool.poser_mode(org, FAMILLE, "pool", ADMIN)
-    sans = _creer(org, private=True)
-    rep = _appel(org, op="give", trigger_id=sans["id"], share_with_sub=NOUVEAU)
-    assert rep["kept_previous_owner"] is False
-    assert rep["trigger"]["my_access"] is None, "défaut : il ne garde rien"
+    t = _creer(org, private=True)
+    rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU)
+    assert (rep["trigger"]["my_access"], rep["trigger"]["can_edit"]) == ("editor", True)
+    assert "can keep changing it" in rep["handover_note"]
+    ecrit = _appel(org, op="update", trigger_id=t["id"], input="maintenu")["trigger"]
+    assert (ecrit["input"], ecrit["updated_by"]) == ("maintenu", PROPRIO)
+    assert db.forfaits_pretes([t["id"]], PROPRIO) == {t["id"]}
+    assert db.forfaits_pretes([t["id"]], MEMBRE) == set(), "à lui seul"
+    e = _refus(org, PROPRIO, op="update", trigger_id=t["id"], model="sub:haiku")
+    assert e.code == "subscription_personal_only", "lié au modèle, comme le pool"
 
-    garde = _creer(org, private=True)
-    _appel(org, op="share", trigger_id=garde["id"], everyone=True, role="editor")
-    assert _appel(org, op="lend", trigger_id=garde["id"])["trigger"]["subscription_lent"]
-    rep = _appel(org, op="give", trigger_id=garde["id"], share_with_sub=NOUVEAU,
-                 keep_previous_owner=True)
-    assert (rep["kept_previous_owner"], rep["lend_ended"]) == (True, True)
-    assert (rep["trigger"]["my_access"], rep["trigger"]["can_edit"]) == ("editor", False), (
-        "ses partages, à son nom, n'ouvrent l'écriture nulle part — pool compris")
-    assert db.forfaits_pretes([garde["id"]], PROPRIO) == set()
-    assert db.forfaits_pretes([garde["id"]], MEMBRE) == set()
+    _appel(org, sub=NOUVEAU, op="unshare", trigger_id=t["id"], share_with_sub=PROPRIO)
+    assert _refus(org, PROPRIO, op="update", trigger_id=t["id"],
+                  input="x").status in (403, 404), "le nouveau le retire"
+
+
+def test_en_pool_le_partage_garde_REPOSE_par_un_admin_perd_sa_marque(org_reelle):
+    org, _ = org_reelle
+    org_subscription_pool.poser_mode(org, FAMILLE, "pool", ADMIN)
+    t = _creer(org, private=True)
+    _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU)
+    _appel(org, sub=ADMIN, op="share", trigger_id=t["id"], share_with_sub=PROPRIO,
+           role="editor")
+    assert _appel(org, op="get", trigger_id=t["id"])["trigger"]["can_edit"] is False
+
+
+def test_le_don_sans_garder_ne_laisse_rien(org_reelle):
+    org, _ = org_reelle
+    org_subscription_pool.poser_mode(org, FAMILLE, "pool", ADMIN)
+    t = _creer(org, private=True)
+    rep = _appel(org, op="give", trigger_id=t["id"], share_with_sub=NOUVEAU,
+                 keep_previous_owner=False)
+    assert rep["kept_previous_owner"] is False
+    assert rep["trigger"]["my_access"] is None
+
+
+def test_le_partage_garde_au_don_ferme_les_outils_plateforme(org_reelle):
+    from oto_mcp import db
+    org, _ = org_reelle
+    liste = ["oto_admin_org"]
+    t = db.create_trigger(org, PROPRIO, procedure="veille", tz="UTC", tools=["a", *liste],
+                          cron="0 8 * * *", model=MODELE)
+    db.update_trigger(t["id"], org, {"outils_plateforme": liste})
+
+    def travail():
+        return db.enqueue_job(org, "start", {"trigger_id": t["id"]}, sub=PROPRIO)["id"]
+
+    assert db.outils_plateforme_du_travail(travail()) == liste
+    db.grant_resource("runner_trigger", str(t["id"]), "user", MEMBRE, role="editor",
+                      granted_by=db.MARQUE_GARDE_AU_DON)
+    assert db.outils_plateforme_du_travail(travail()) == [], "fermée du côté sûr"

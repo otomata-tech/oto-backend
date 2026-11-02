@@ -13,9 +13,10 @@ geste. Ce que ces bancs tiennent :
 4. un agent ALLUMÉ sur un abonnement passe la garde de pose jugée sur le
    DESTINATAIRE — refusée, rien n'est écrit ; éteint, il se donne librement ;
 5. se donner son propre agent ne fait rien ;
-6. après le don : `keep_previous_owner=true` (défaut false) garde l'ancien propriétaire
-   en éditeur NOMMÉ, partage à son nom ; le préréglage du destinataire pose au plus le
-   partage à l'org, à SON nom — le don ne prête JAMAIS son forfait ;
+6. après le don : l'ancien propriétaire reste éditeur NOMMÉ (`keep_previous_owner`,
+   défaut true ; `false` ne laisse rien), partage MARQUÉ (`MARQUE_GARDE_AU_DON`) ; le
+   préréglage du destinataire pose au plus le partage à l'org, à SON nom — le don ne
+   prête JAMAIS son forfait ;
    `keep_previous_owner` hors de `give` est refusé ;
 7. une personne seule donne : sous un jeton de délégation, `give_human_only`.
 
@@ -198,26 +199,36 @@ def test_un_agent_ETEINT_sur_un_abonnement_se_donne_librement(monde):
     assert monde["transferts"] == [(1, _ORG, _COLLEGUE)]
 
 
-def test_par_defaut_l_ancien_proprietaire_ne_garde_aucun_partage(monde):
+def test_par_defaut_l_ancien_proprietaire_reste_editeur_NOMME_partage_MARQUE(monde):
+    """On construit un agent pour quelqu'un, on le lui donne, on le maintient. Marqué
+    (ni le nom de l'ancien, ni celui du nouveau) : il ne prête jamais le forfait du
+    nouveau (`_forfait_prete_nomme` exige le propriétaire courant)."""
     rep = _donner()
+    assert monde["partages"] == [("user", _PROPRIETAIRE, "editor", RT.db.MARQUE_GARDE_AU_DON)]
+    assert (rep["kept_previous_owner"], rep["preset_applied"]) == (True, False)
+    assert monde["prets"] == [] and "lent" not in rep
+
+
+def test_keep_previous_owner_false_ne_laisse_aucun_partage(monde):
+    rep = _donner(share_with_sub=_COLLEGUE, keep_previous_owner=False)
     assert monde["partages"] == []
-    assert (rep["kept_previous_owner"], rep["preset_applied"]) == (False, False)
-    assert "lent" not in rep
+    assert rep["kept_previous_owner"] is False
+    assert "You stay" not in rep["handover_note"]
 
 
-def test_keep_previous_owner_le_garde_editeur_NOMME_a_son_propre_nom(monde):
-    """Posé par lui (`granted_by` = l'ancien) : ce partage ne prête jamais le forfait du
-    nouveau (`_forfait_prete` exige le propriétaire courant)."""
-    rep = _donner(share_with_sub=_COLLEGUE, keep_previous_owner=True)
-    assert monde["partages"] == [("user", _PROPRIETAIRE, "editor", _PROPRIETAIRE)]
-    assert rep["kept_previous_owner"] is True
-    assert monde["prets"] == []
+def test_le_retour_dit_au_donneur_ce_qu_il_garde(monde, monkeypatch):
+    """Sur le forfait personnel du nouveau : la pause. En pool : la main."""
+    monde["agent"] = _agent(model="sub:sonnet", enabled=False)
+    assert "only pause it until they lend it" in _donner()["handover_note"]
+    monkeypatch.setattr(RT.db, "servis_par_le_pool", lambda ids: set(ids))
+    monde["agent"] = _agent(model="sub:sonnet", enabled=False)
+    assert "can keep changing it, until they remove you" in _donner()["handover_note"]
 
 
 def test_le_prereglage_du_DESTINATAIRE_partage_a_son_nom_et_ne_PRETE_jamais(monde):
     monde["agent"] = _agent(model="sub:sonnet", enabled=False, subscription_lent=True)
     monde["preset"] = {_COLLEGUE}
-    rep = _donner()
+    rep = _donner(share_with_sub=_COLLEGUE, keep_previous_owner=False)
     assert monde["partages"] == [("org", str(_ORG), "editor", _COLLEGUE)]
     assert monde["prets"] == [], "le don ne prête pas : le destinataire prête lui-même"
     assert (rep["preset_applied"], rep["lend_ended"]) == (True, True)
@@ -226,10 +237,10 @@ def test_le_prereglage_du_DESTINATAIRE_partage_a_son_nom_et_ne_PRETE_jamais(mond
 
 def test_sans_prereglage_rien_n_est_partage_ni_prete_et_le_retour_le_dit(monde):
     monde["agent"] = _agent(model="sub:sonnet", enabled=False, subscription_lent=True)
-    rep = _donner()
+    rep = _donner(share_with_sub=_COLLEGUE, keep_previous_owner=False)
     assert monde["partages"] == [] and monde["prets"] == []
     assert (rep["preset_applied"], rep["lend_ended"]) == (False, True)
-    assert "Nothing is shared or lent" in rep["handover_note"]
+    assert "Nothing is shared with the org or lent" in rep["handover_note"]
 
 
 def test_un_jeton_de_delegation_ne_donne_pas(monde, monkeypatch):

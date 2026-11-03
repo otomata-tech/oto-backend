@@ -30,8 +30,10 @@ The classes, from least to most constraining (`CLASSES`):
 
 A doubt is the most constraining class, never `lire` by default.
 
-**Scope**: every connector tool that is not declared `LECTURE` (`tools/lecture.en_lecture`
-is its declaration: all its ops read). Platform tools (`oto_*`, `data_*`…) are not here.
+**Scope**: every tool the server mounts that is not declared `LECTURE`
+(`tools/lecture.en_lecture` is its declaration: all its ops read) — connector tools AND
+platform tools (`oto_*`, `data_*`, `run_*`, `email_send`, `feedback`) — plus the
+capabilities declared but not mounted yet (feature flag off).
 
 **Nothing reads this table at call time yet**: `effet()` is what the next lots plug into
 the common path. No call is refused because of it today.
@@ -77,19 +79,63 @@ def _plus_contraignante(*classes: str) -> str:
 
 # --- judges -----------------------------------------------------------------------------
 
+#: What an HTTP verb does to the org's API: GET reads, POST/PATCH may send anything,
+#: PUT replaces, DELETE deletes.
+_CLASSE_PAR_METHODE = {"GET": "lire", "HEAD": "lire", "POST": "envoyer", "PATCH": "envoyer",
+                       "PUT": "detruire", "DELETE": "detruire"}
+
+
 def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
-    """A raw request does what its verb does: GET reads, POST/PATCH may send anything to
-    the org's API, PUT replaces, DELETE deletes. No verb: doubt (the declared class)."""
-    if op != "request":
-        return None
-    methode = str(args.get("method") or "").upper()
-    return {"GET": "lire", "HEAD": "lire", "POST": "envoyer", "PATCH": "envoyer",
-            "PUT": "detruire", "DELETE": "detruire"}.get(methode)
+    """`request` does what its `method` does (none given: the declared doubt). `call` does
+    what its SAVED action's method does, read in the database
+    (`http_calls.methode_de_l_action`): an unknown action raises, never a default."""
+    if op == "request":
+        return _CLASSE_PAR_METHODE.get(str(args.get("method") or "").upper())
+    if op == "call":
+        from .http_calls import methode_de_l_action
+        methode = str(methode_de_l_action(args.get("operation"))).upper()
+        if methode not in _CLASSE_PAR_METHODE:
+            raise EffetNonDeclare(f"`http_act` action `{args.get('operation')}`: "
+                                  f"unknown method `{methode}`")
+        return _CLASSE_PAR_METHODE[methode]
+    return None
 
 
 JUGES: dict[str, Juge] = {
     "http_act": _juge_http_act,
 }
+#: The judges that READ THE DATABASE, by tool and op: `effet()` on such a call is
+#: synchronous I/O — from an `async def`, run it off the event loop
+#: (`await run_in_threadpool(effet, name, args)`), as `lit_la_base()` tells.
+JUGES_EN_BASE: dict[str, frozenset[str]] = {
+    "http_act": frozenset({"call"}),
+}
+
+#: A tool that only RELAYS a call to another (`oto_call`): its effect is its target's,
+#: named by these arguments (target name, target arguments). Its own line in `EFFETS` is
+#: the class of a call that names no target.
+RELAIS: dict[str, tuple[str, str]] = {
+    "oto_call": ("name", "arguments"),
+}
+
+
+def cible(name: str, args: Optional[dict] = None) -> tuple[str, dict]:
+    """The tool and arguments a call really reaches: itself, or the target of a relay
+    (`oto_call(name=…, arguments=…)`). The caller checks `lecture.en_lecture` on THIS
+    tool (and canonicalizes a tenant-prefixed name, as `oto_call` does) before `effet`."""
+    args = args or {}
+    relais = RELAIS.get(name)
+    if relais is not None and isinstance(args.get(relais[0]), str) and args[relais[0]]:
+        cibles = args.get(relais[1])
+        return cible(args[relais[0]], cibles if isinstance(cibles, dict) else {})
+    return name, args
+
+
+def lit_la_base(name: str, args: Optional[dict] = None) -> bool:
+    """True when `effet(name, args)` reads the database (a judge in `JUGES_EN_BASE`):
+    call it off the event loop then."""
+    nom, a = cible(name, args)
+    return a.get("op") in JUGES_EN_BASE.get(nom, ())
 
 
 # --- the declaration --------------------------------------------------------------------
@@ -162,10 +208,9 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "apify_linkedin_jobs": "lire",
     "apify_linkedin_posts": "lire",
     "apify_linkedin_profiles": "lire",
-    # any actor: some post, message or submit forms on third-party sites
-    "apify_run": "envoyer",
-    # any actor: some post, message or submit forms on third-party sites
-    "apify_run_sync": "envoyer",
+    # any actor: a run is created at the provider (decided: a write, not a send)
+    "apify_run": "ecrire",
+    "apify_run_sync": "ecrire",
     "apify_website_contacts": "lire",
     "apify_website_crawl": "lire",
     "apify_welcome_to_the_jungle_jobs": "lire",
@@ -260,8 +305,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "clay_list_tables": "lire",
     # each new row triggers the table's automations
     "clay_push_rows": "envoyer",
-    # a routine may be a Clay Workflow (an external automation)
-    "clay_run_routine": "envoyer",
+    # a routine run at the provider (decided: a write)
+    "clay_run_routine": "ecrire",
     "clay_search": "lire",
     "clay_search_fields": "lire",
     "clay_search_next": "lire",
@@ -339,7 +384,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "folk_record": {"lire": "search get", "ecrire": "create add_to_group mark_done mark_todo", "detruire": "update delete"},
     "folk_user": {"lire": "list get"},
     # update can replace the subscribed events or redirect the target URL
-    "folk_webhook": {"lire": "list", "ecrire": "create", "detruire": "update"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "folk_webhook": {"lire": "list", "envoyer": "create", "detruire": "update"},
     "foncier_beges": "lire",
     "foncier_comparables_app": "lire",
     "foncier_conso_elec": "lire",
@@ -403,14 +449,16 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "google_ads_fields": "lire",
     "google_ads_search": "lire",
     "gr_lookup": "lire",
-    "grain_hook": {"lire": "list", "ecrire": "create", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "grain_hook": {"lire": "list", "envoyer": "create", "detruire": "delete"},
     "grain_org": {"lire": "users teams meeting_types"},
     "grain_recording": {"lire": "list get", "ecrire": "update tag", "envoyer": "share_user share_team", "detruire": "untag unshare_user unshare_team"},
     "grain_recording_file": {"lire": "download", "ecrire": "create_upload_url"},
     "grain_transcript": "lire",
     "granola_content": {"lire": "list_notes get_note get_transcript list_folders"},
     # update can disable the endpoint or replace its scopes/events
-    "granola_webhook_endpoint": {"lire": "list", "ecrire": "create", "detruire": "update delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "granola_webhook_endpoint": {"lire": "list", "envoyer": "create", "detruire": "update delete"},
     "greenhouse_application": {"lire": "list get"},
     "greenhouse_candidate": {"lire": "list get", "ecrire": "create add_note"},
     "greenhouse_job": {"lire": "list get"},
@@ -514,7 +562,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "lemlist_unsubscribe": {"lire": "list get export var_list var_get var_export contact_status contact_export", "ecrire": "add var_add contact_add", "detruire": "delete var_bulk var_remove contact_remove"},
     # create/update with push_to_campaign and activate feed a campaign on their own
     "lemlist_watchlist": {"lire": "list filters filter_values library history signals", "envoyer": "create update push_signals", "detruire": "delete"},
-    "lemlist_webhook": {"lire": "list", "ecrire": "add", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "lemlist_webhook": {"lire": "list", "envoyer": "add", "detruire": "delete"},
     "lever_add_candidate": "ecrire",
     "lever_add_note": "ecrire",
     "lever_opportunities": "lire",
@@ -549,7 +598,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "linear_project": {"lire": "list get", "ecrire": "create update", "detruire": "delete"},
     "linear_team": {"lire": "list get states"},
     "linear_user": {"lire": "list get viewer"},
-    "linear_webhook": {"lire": "list", "ecrire": "create update", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "linear_webhook": {"lire": "list", "envoyer": "create update", "detruire": "delete"},
     "linkedin_unipile_account": {"lire": "status contracts inmail_balance", "ecrire": "select"},
     # update can archive a thread; update_member can reject an applicant
     "linkedin_unipile_act": {"envoyer": "send react_message publish_post comment_post react_post invite accept_invitation endorse", "detruire": "update update_member decline_invitation cancel_invitation"},
@@ -578,7 +628,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # add may charge the person (paid tier)
     "luma_memberships": {"lire": "tiers", "envoyer": "add", "detruire": "set_status"},
     "luma_tickets": {"lire": "types type coupons", "ecrire": "create_type update_type create_coupon update_coupon", "detruire": "delete_type"},
-    "luma_webhooks": {"lire": "list get", "ecrire": "create update", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "luma_webhooks": {"lire": "list get", "envoyer": "create update", "detruire": "delete"},
     "lusha_search_and_enrich": "lire",
     "mailpool_account": {"lire": "slots warmup warmup_inbox warmup_available"},
     # Rewrites the whole DNS record set, removes records, replaces a CNAME (dry_run=True previews).
@@ -612,8 +663,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "modjo_ask": "lire",
     "modjo_calls": {"lire": "list get transcript summaries notes next_steps recording crm_answers tags", "ecrire": "add_tag upload", "detruire": "remove_tag"},
     "monid_endpoint": {"lire": "discover inspect"},
-    # Generic paid gateway to ~2,000 third-party endpoints: what a run does is not bounded.
-    "monid_run": "envoyer",
+    # generic paid gateway to third-party endpoints (decided: a write)
+    "monid_run": "ecrire",
     # `stop` cancels a running run.
     "monid_runs": {"lire": "list get", "detruire": "stop"},
     "monid_wallet": "lire",
@@ -649,7 +700,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "nextmotion_product": {"lire": "list get", "ecrire": "create update", "detruire": "delete"},
     "nextmotion_quote": {"lire": "list get", "ecrire": "update validate", "detruire": "delete"},
     # placeholders reads; update writes template and form bodies whole (overwrite).
-    "nextmotion_setting": {"lire": "list get placeholders", "ecrire": "create duplicate", "detruire": "update delete"},
+    # create may register a webhook setting: data then leaves to its URL (decided: a send)
+    "nextmotion_setting": {"lire": "list get placeholders", "ecrire": "duplicate", "envoyer": "create", "detruire": "update delete"},
     "nextmotion_statistics": "lire",
     "notion_add_comment": "envoyer",
     "notion_append_blocks": "ecrire",
@@ -873,14 +925,14 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "serpapi_google_trends": "lire",
     "serpapi_jobs": {"lire": "search details"},
     "serpapi_search": "lire",
-    # overwrites cells in place
-    "sharepoint_excel_act": {"detruire": "update_range"},
+    # writing cells is a write (decided), even over existing values
+    "sharepoint_excel_act": {"ecrire": "update_range"},
     # conflict='replace' overwrites an existing file or folder
     "sharepoint_file": {"lire": "list get search download", "detruire": "upload create_folder"},
     "sharepoint_site": {"lire": "search get drives"},
     "sheets_create": "ecrire",
-    # write overwrites the range unless append=true
-    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "add_sheet rename_sheet number_format copy_sheet format column_width freeze dropdown", "detruire": "write clear delete_sheet delete_rows"},
+    # writing cells is a write (decided), even over existing values; clear empties a range
+    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "write add_sheet rename_sheet number_format copy_sheet format column_width freeze dropdown", "detruire": "clear delete_sheet delete_rows"},
     "signwell_account": {"lire": "me api_application", "detruire": "delete_api_application"},
     "signwell_act": {"envoyer": "send_document remind_document"},
     # create sends one signature request per CSV row: a mass send with no countable list
@@ -889,7 +941,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "signwell_document": {"lire": "get completed_pdf nom151_certificate", "ecrire": "update_authentication", "envoyer": "create update_recipients", "detruire": "delete"},
     # create_document sends immediately when draft=false
     "signwell_template": {"lire": "get", "ecrire": "create update", "envoyer": "create_document", "detruire": "delete"},
-    "signwell_webhook": {"lire": "list", "ecrire": "create", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "signwell_webhook": {"lire": "list", "envoyer": "create", "detruire": "delete"},
     "silae_declaration": {"lire": "dsn_list dsn_content states"},
     "silae_dossier": {"lire": "list numbers collective_agreements current_period establishments organisms"},
     "silae_employee": {"lire": "list get jobs from_internal_id"},
@@ -948,7 +1001,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "tally_form": {"lire": "list get questions blocks", "ecrire": "update_question", "envoyer": "create", "detruire": "update update_blocks delete"},
     "tally_submission": {"lire": "list get", "detruire": "delete"},
     # retry fires a real delivery to the endpoint
-    "tally_webhook": {"lire": "list events", "ecrire": "create update", "envoyer": "retry", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "tally_webhook": {"lire": "list events", "envoyer": "create update retry", "detruire": "delete"},
     "tally_workspace": {"lire": "list get folders", "ecrire": "create update create_folder update_folder", "detruire": "delete delete_folder"},
     # lists by default, but `create` creates a task list
     "tasks_lists": "ecrire",
@@ -1013,7 +1067,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "webflow_publish": "envoyer",
     "webflow_site_publish": "envoyer",
     "webflow_submissions": {"lire": "list get", "ecrire": "update", "detruire": "delete"},
-    "webflow_webhooks": {"lire": "list get", "ecrire": "create", "detruire": "delete"},
+    # registers a webhook: data then leaves to its URL (decided: a send)
+    "webflow_webhooks": {"lire": "list get", "envoyer": "create", "detruire": "delete"},
     "whatsapp_act": {"envoyer": "send"},
     "wordpress_article": "ecrire",
     "wordpress_content": {"lire": "list get", "ecrire": "create update", "detruire": "delete"},
@@ -1063,6 +1118,122 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "zohodesk_tickets": "lire",
     "zohodesk_update_ticket": "ecrire",
     "zohosign_act": {"envoyer": "send_from_template remind", "detruire": "cancel"},
+    # --- platform tools (oto_*, data_*, run_*, email_send, feedback): not connectors, but
+    # every direct MCP call goes through the same path. Inviting, granting, sharing or
+    # lending gives a person access: `envoyer`; revoking, removing, replacing: `detruire`.
+    "data_aggregate": "lire",
+    "data_app": "lire",
+    # takes a lease on the next row: a write
+    "data_claim_next": "ecrire",
+    "data_create_datastore": "ecrire",
+    "data_delete_datastore": "detruire",
+    "data_delete_row": "detruire",
+    "data_drop_column": "detruire",
+    "data_get_schema": "lire",
+    "data_list_datastores": "lire",
+    # `remove` drops columns
+    "data_patch_schema": "detruire",
+    "data_release": "ecrire",
+    "data_rename_datastore": "ecrire",
+    # the card writes the status the user clicks
+    "data_review_app": "ecrire",
+    "data_row_comment": "ecrire",
+    "data_row_comments": "lire",
+    "data_row_history": "lire",
+    "data_rows": "lire",
+    # replaces the whole schema
+    "data_set_schema": "detruire",
+    "data_share": "envoyer",
+    # updates every row a filter matches: no batch can bound it
+    "data_update_where": "detruire",
+    "data_url": "lire",
+    "data_write": "ecrire",
+    "email_send": "envoyer",
+    "feedback": "ecrire",
+    "oto_account_access": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
+    "oto_admin_access_shadow": {"lire": "read"},
+    "oto_admin_account": {"ecrire": "resume", "detruire": "suspend"},
+    "oto_admin_agent_repair": {"lire": "list get diagnose", "ecrire": "close", "envoyer": "rerun escalate"},
+    # dark-launched capabilities (feature flag): declared before they mount
+    "oto_admin_cancel_contract": "detruire",
+    # free-string `op`
+    "oto_admin_connector_setting": {"lire": "list", "ecrire": "reload", "detruire": "set clear"},
+    "oto_admin_guide": {"lire": "get list", "detruire": "set delete"},
+    "oto_admin_guides_semis": "lire",
+    "oto_admin_instance_health": "lire",
+    "oto_admin_invite": {"lire": "list", "envoyer": "create", "detruire": "revoke"},
+    "oto_admin_key_grant": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
+    "oto_admin_legal_proof": "lire",
+    "oto_admin_model_spend": "lire",
+    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins"},
+    "oto_admin_org": {"lire": "list get entitlements", "ecrire": "create", "detruire": "archive"},
+    "oto_admin_org_member": {"lire": "list connectors events", "envoyer": "add", "detruire": "remove set_role"},
+    "oto_admin_platform_balances": "lire",
+    "oto_admin_platform_instructions": {"lire": "list get drift", "detruire": "set"},
+    "oto_admin_set_contract": "detruire",
+    "oto_admin_set_option": "detruire",
+    "oto_admin_set_plan": "detruire",
+    "oto_admin_signal": {"lire": "list notify_preview", "ecrire": "set_status reroute", "envoyer": "notify_send"},
+    "oto_admin_tenant": {"lire": "list get keys admins org_grants", "ecrire": "reload enable", "envoyer": "admin_add org_grant", "detruire": "key_clear admin_remove org_revoke disable"},
+    "oto_admin_unipile_seat": {"lire": "list", "detruire": "release"},
+    "oto_admin_user": {"lire": "list get", "detruire": "set_role"},
+    "oto_admin_vault_health": "lire",
+    "oto_apps": {"lire": "list get revisions validate read_file", "ecrire": "create update patch unarchive file", "detruire": "archive restore unfile put_file"},
+    # its class is its target's (`RELAIS`); this is the class of a call without a target
+    "oto_call": "detruire",
+    "oto_clear_group": "ecrire",
+    "oto_clear_org": "ecrire",
+    "oto_clear_project": "ecrire",
+    # recommend REPLACES the org's kit
+    "oto_connector": {"lire": "list", "ecrire": "select force", "detruire": "pause unselect recommend"},
+    "oto_connector_access_level": {"lire": "get", "detruire": "set clear"},
+    "oto_connector_activation": {"lire": "list", "detruire": "set clear"},
+    "oto_context": "lire",
+    "oto_disable_tool": "detruire",
+    "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
+    "oto_doc_app": "lire",
+    "oto_enable_tool": "ecrire",
+    "oto_fleet": {"lire": "list get state", "ecrire": "create update take beat ack_stop", "envoyer": "launch", "detruire": "stop"},
+    # `run` executes stored pure code (no network, no secret) and stores its files
+    "oto_function": {"lire": "list get versions", "ecrire": "create propose run test", "envoyer": "publish", "detruire": "refuse"},
+    "oto_group": {"lire": "list get list_invites", "ecrire": "create", "envoyer": "add_member invite", "detruire": "remove_member set_instruction"},
+    "oto_guide": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
+    "oto_guide_v2": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
+    "oto_identity": {"lire": "list", "ecrire": "rename", "detruire": "set"},
+    "oto_import": "ecrire",
+    "oto_instance": {"lire": "list verify", "envoyer": "lend"},
+    "oto_list_my_tools": {"lire": "list search"},
+    "oto_list_orgs": "lire",
+    "oto_node": "lire",
+    "oto_node_edit": {"ecrire": "create update move", "detruire": "delete"},
+    "oto_node_rows": "lire",
+    "oto_org": {"lire": "list_invites list_loans", "ecrire": "create update accept_invite", "envoyer": "invite", "detruire": "archive reject_invite"},
+    "oto_org_monitoring": {"lire": "summary calls call connectors adoption runs run gaps tool_quality signals export agents_en_echec"},
+    "oto_org_settings": {"lire": "get preview", "detruire": "set"},
+    "oto_procedure": {"lire": "get list describe library_list library_get share_get share_readers", "ecrire": "create rename unarchive fork", "envoyer": "publish share_publish", "detruire": "set archive delete unpublish share_unpublish share_set"},
+    "oto_profile": {"lire": "get", "ecrire": "update"},
+    "oto_project": {"lire": "list list_templates get activity runs inventory lint", "ecrire": "create update unarchive copy link rank_link", "envoyer": "handoff publish_mcp", "detruire": "archive unlink unpublish_mcp"},
+    "oto_project_files": {"lire": "list", "detruire": "delete"},
+    # `run` writes rows into a table through declared readers
+    "oto_recipe": {"lire": "list get versions describe sample test", "ecrire": "create propose run", "envoyer": "publish"},
+    # transfer hands ownership away
+    "oto_resource": {"lire": "list get", "envoyer": "share", "detruire": "transfer unshare"},
+    "oto_resource_v2": {"lire": "list get", "envoyer": "share", "detruire": "transfer unshare"},
+    "oto_run_thread": {"lire": "read", "ecrire": "append"},
+    "oto_scheduled_emails": {"lire": "list", "detruire": "cancel"},
+    "oto_search": "lire",
+    "oto_shell": "lire",
+    "oto_tool_schema": "lire",
+    # a trigger launches agents later; connect_source registers a webhook at the sender;
+    # take_over/give move an agent's ownership; rotations revoke the previous secret
+    "oto_trigger": {"lire": "list get deliveries shares links graph", "ecrire": "update link", "envoyer": "create run_now share connect_source lend", "detruire": "delete rotate_secret rotate_address clear_queue take_over give unshare disconnect_source unlink unlend default_sharing"},
+    "oto_upload_url": {"ecrire": "create update"},
+    "oto_use_group": "ecrire",
+    "oto_use_org": "ecrire",
+    "oto_use_project": "ecrire",
+    "oto_whoami": "lire",
+    "run_finish": "ecrire",
+    "run_start": "ecrire",
 }
 
 #: `tool:op` (or `tool` without op) → the batch it may carry. Every op that writes or sends
@@ -1235,14 +1406,6 @@ LOTS: dict[str, Lot] = {
     "salesforce_record:create": Lot("items"),
     "salesforce_record:update": Lot("items"),
     "salesforce_record:upsert": Lot("items"),
-    "sheets_spreadsheet:add_sheet": Lot("values"),
-    "sheets_spreadsheet:rename_sheet": Lot("values"),
-    "sheets_spreadsheet:number_format": Lot("values"),
-    "sheets_spreadsheet:copy_sheet": Lot("values"),
-    "sheets_spreadsheet:format": Lot("values"),
-    "sheets_spreadsheet:column_width": Lot("values"),
-    "sheets_spreadsheet:freeze": Lot("values"),
-    "sheets_spreadsheet:dropdown": Lot("values"),
     "signwell_act:send_document": Lot("recipients"),
     "signwell_act:remind_document": Lot("recipients"),
     "signwell_document:create": Lot("recipients"),
@@ -1270,6 +1433,11 @@ LOTS: dict[str, Lot] = {
     "yousign_creer": Lot("signataires"),
     "zohosign_act:send_from_template": Lot("recipients"),
     "zohosign_act:remind": Lot("recipients"),
+    "data_write": Lot("rows"),
+    "email_send": Lot("cc"),
+    "oto_admin_signal:notify_send": Lot("only"),
+    "oto_admin_signal:set_status": Lot("only"),
+    "oto_admin_signal:reroute": Lot("only"),
 }
 
 #: Tool → its list arguments that are NOT a batch of records (fields, tags, sorts…).
@@ -1424,8 +1592,11 @@ PAS_UN_LOT: dict[str, str] = {
     "sellsy_opportunity": "fields embed",
     "sellsy_task": "fields embed",
     "sellsy_third_party": "fields embed",
+    # a grid of cells written in place, not a batch of records
+    "sharepoint_excel_act": "values",
     "sheets_create": "sheets",
-    "sheets_spreadsheet": "options",
+    # a grid of cells written in place, not a batch of records
+    "sheets_spreadsheet": "options values",
     "signwell_document": "files fields",
     "signwell_template": "template_ids files placeholders template_fields fields",
     "slack_act": "channels",
@@ -1448,6 +1619,24 @@ PAS_UN_LOT: dict[str, str] = {
     "webflow_site_publish": "custom_domains",
     "wordpress_article": "categories tags",
     "wttj_candidate": "fields",
+    "data_claim_next": "filters",
+    "data_review_app": "fields",
+    "data_write": "force versions",
+    "oto_admin_guide": "slots",
+    "oto_apps": "project_ids edits",
+    "oto_call": "fields",
+    "oto_connector": "connectors",
+    "oto_doc": "pages fields",
+    "oto_fleet": "tools",
+    "oto_function": "requirements",
+    "oto_instance": "services",
+    "oto_node_edit": "columns",
+    "oto_org_settings": "senders rules unmask",
+    "oto_procedure": "slots tags",
+    "oto_project": "mcp_tools excluded_url_prefixes include fields",
+    "oto_resource": "mcp_tools",
+    "oto_resource_v2": "mcp_tools",
+    "oto_trigger": "trigger_ids tools platform_tools events",
 }
 
 
@@ -1473,9 +1662,11 @@ def effet(name: str, args: Optional[dict] = None) -> tuple[str, Optional[Lot]]:
     The op is `args["op"]`; a multiplexed tool called WITHOUT `op` takes the most
     constraining class of its ops (its served default is the caller's to resolve, as
     `access_level_gate.default_op` does). A judge (`JUGES`) may set the class from the
-    arguments. A tool declared `LECTURE` is not in this table: the caller checks
-    `lecture.en_lecture` first. Raises `EffetNonDeclare` for anything undeclared."""
-    args = args or {}
+    arguments; one in `JUGES_EN_BASE` reads the database (`lit_la_base`: then call this
+    off the event loop). A relay (`oto_call`) takes its target's effect (`cible`). A tool
+    declared `LECTURE` is not in this table: the caller checks `lecture.en_lecture` on the
+    target first. Raises `EffetNonDeclare` for anything undeclared."""
+    name, args = cible(name, args)
     par_op = classes_par_op(name)
     if None in par_op:
         op = None

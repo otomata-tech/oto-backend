@@ -67,8 +67,9 @@ def _send(rc, headers: dict, plan: dict):
         raise http_tool._upstream_error(e)
 
 
-def _call(sub: str, operation: Optional[str], args: Optional[dict],
-          dry_run: bool) -> dict:
+def _action(sub: str, operation: Optional[str]):
+    """`(row, definition, action)` of the saved action `operation` this call resolves
+    to — refused (`McpError`) when there is none. Reads the database."""
     if not operation:
         raise _bad("`http_act(op=\"call\")` needs `operation` — the action's name, "
                    "from `http(op=\"list\")`.")
@@ -79,6 +80,23 @@ def _call(sub: str, operation: Optional[str], args: Optional[dict],
         names = ", ".join(o["name"] for o in d["operations"][:30]) or "none yet"
         raise _bad(f"no action `{operation}` on custom connector `{rc.account}` — "
                    f"available: {names}.")
+    return rc, d, found
+
+
+def methode_de_l_action(operation: Optional[str]) -> str:
+    """The HTTP verb (`GET`, `POST`…) of the saved action `operation`, resolved as
+    `http_act(op="call")` resolves it (the call's `_account`, else the org's connector
+    that carries it). Raises like the call itself — never a default verb.
+
+    SYNCHRONOUS and it reads the database (`connector_instances.config`): from an
+    `async def`, call it off the event loop (`await run_in_threadpool(...)`), never
+    directly. It is what `tools/effets` judges `http_act(op="call")` on."""
+    return _action(_sub(), operation)[2]["method"]
+
+
+def _call(sub: str, operation: Optional[str], args: Optional[dict],
+          dry_run: bool) -> dict:
+    rc, d, found = _action(sub, operation)
     try:
         plan = custom_ops.plan_call(found, args, d["variables"])
     except custom_ops.CallRefused as e:

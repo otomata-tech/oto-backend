@@ -24,18 +24,25 @@ import asyncio
 import pytest
 
 from _mcp_app import static_mcp
-from oto_mcp import providers
+from oto_mcp.capabilities import registry
+from oto_mcp.mcp_errors import McpError
 from oto_mcp.recipes import ecritures
-from oto_mcp.tool_visibility import namespace_of
-from oto_mcp.tools import effets
-from oto_mcp.tools.effets import EFFETS, JUGES, LOTS, PAS_UN_LOT, EffetNonDeclare, Lot, effet
+from oto_mcp.tools import effets, http_calls
+from oto_mcp.tools.effets import (EFFETS, JUGES, LOTS, PAS_UN_LOT, RELAIS, EffetNonDeclare,
+                                  Lot, effet)
 from oto_mcp.tools.lecture import en_lecture
 
 
 def _servis():
+    """TOUT ce que le serveur monte : outils de connecteur ET de plateforme."""
     outils = asyncio.run(static_mcp().list_tools(run_middleware=False))
-    return {t.name: t for t in outils
-            if providers.connector_for_namespace(namespace_of(t.name)) is not None}
+    return {t.name: t for t in outils}
+
+
+def _capacites_non_montees(servis) -> set[str]:
+    """Les capacités déclarées au registre mais pas montées (drapeau éteint) : elles se
+    déclarent AVANT d'être servies."""
+    return {c.mcp for c in registry.caps_with_mcp()} - set(servis)
 
 
 @pytest.fixture(scope="module")
@@ -79,15 +86,17 @@ def test_toute_op_d_un_outil_qui_agit_est_declaree(servis):
                 nom, sorted(set(ops) ^ set(effets.classes_par_op(nom))))
         elif not _op_schema(t):
             assert isinstance(declare, str), f"`{nom}` n'a pas d'`op` : une classe entière"
+    manquants += sorted(_capacites_non_montees(servis) - set(EFFETS))
     assert not manquants, (
         f"{len(manquants)} outil(s) sans effet déclaré (scripts/amorcer_effets.py) : "
         f"{manquants}")
 
 
 def test_rien_de_declare_qui_ne_soit_servi(servis):
+    connus = set(servis) | _capacites_non_montees(servis)
     for nom in EFFETS:
-        assert nom in servis, f"`{nom}` n'est plus servi : retire-le d'EFFETS"
-    for table in (JUGES, PAS_UN_LOT):
+        assert nom in connus, f"`{nom}` n'est plus servi : retire-le d'EFFETS"
+    for table in (JUGES, effets.JUGES_EN_BASE, RELAIS, PAS_UN_LOT):
         for nom in table:
             assert nom in EFFETS, nom
     for cle in LOTS:
@@ -176,12 +185,33 @@ def test_une_ecriture_forcee_des_recettes_n_est_pas_declaree_en_lecture():
     ("http_act", {"op": "request", "method": "delete"}, "detruire", None),
     ("http_act", {"op": "request", "method": "PUT"}, "detruire", None),
     ("http_act", {"op": "request", "method": "GET"}, "lire", None),
-    # Sans méthode, ou une action enregistrée dont le verbe n'est pas dans l'appel : le doute.
+    # Sans méthode : le doute. Remplacer la liste des actions détruit.
     ("http_act", {"op": "request"}, "detruire", None),
-    ("http_act", {"op": "call", "operation": "x"}, "detruire", None),
     ("http_act", {"op": "set_definition"}, "detruire", None),
+    ("http_act", {"op": "import"}, "lire", None),
     # Créer une liste chez le fournisseur écrit, même si son verbe est `list`.
     ("lemlist_contact", {"op": "list_create"}, "ecrire", "contact_ids"),
+    # Décidé : lancer un run chez le fournisseur écrit, il n'envoie pas.
+    ("apify_run", {}, "ecrire", None),
+    ("apify_run_sync", {}, "ecrire", None),
+    ("clay_run_routine", {}, "ecrire", "items"),
+    ("monid_run", {}, "ecrire", None),
+    # Décidé : écrire des cellules écrit, même par-dessus des valeurs ; vider détruit.
+    ("sheets_spreadsheet", {"op": "write"}, "ecrire", None),
+    ("sheets_spreadsheet", {"op": "clear"}, "detruire", None),
+    ("sharepoint_excel_act", {"op": "update_range"}, "ecrire", None),
+    # Décidé : enregistrer un webhook vers une URL envoie (les données partent).
+    ("lemlist_webhook", {"op": "add"}, "envoyer", None),
+    ("folk_webhook", {"op": "create"}, "envoyer", None),
+    ("linear_webhook", {"op": "update"}, "envoyer", None),
+    ("oto_trigger", {"op": "connect_source"}, "envoyer", None),
+    # Outils de plateforme.
+    ("email_send", {}, "envoyer", "cc"),
+    ("data_write", {}, "ecrire", "rows"),
+    ("data_delete_datastore", {}, "detruire", None),
+    ("oto_org", {"op": "invite"}, "envoyer", None),
+    ("oto_fleet", {"op": "launch"}, "envoyer", None),
+    ("oto_admin_set_plan", {}, "detruire", None),
 ])
 def test_les_cas_de_l_audit(nom, args, classe, cle):
     obtenu, lot = effet(nom, args)
@@ -231,5 +261,61 @@ def test_un_lot_n_est_rendu_qu_a_une_op_qui_ecrit_ou_envoie():
     assert effet("apollo_sequence_contacts", {"op": "add"})[1] == Lot("contact_ids")
     for nom in EFFETS:
         for op, classe in effets.classes_par_op(nom).items():
-            if classe in ("lire", "detruire") and nom not in JUGES:
+            if classe in ("lire", "detruire") and nom not in JUGES and nom not in RELAIS:
                 assert effet(nom, {"op": op} if op else {})[1] is None, (nom, op)
+
+
+def test_tout_webhook_cree_envoie():
+    """Décidé : une op qui crée ou enregistre un webhook vers une URL fait partir des
+    données — `envoyer` (ou `detruire` quand elle remplace)."""
+    for nom in EFFETS:
+        if "hook" not in nom:
+            continue
+        for op, classe in effets.classes_par_op(nom).items():
+            if op in ("create", "add", "upsert"):
+                assert classe in ("envoyer", "detruire"), (nom, op)
+
+
+# --- un relais prend l'effet de sa cible ---------------------------------------------------
+
+def test_oto_call_prend_l_effet_de_sa_cible():
+    assert effet("oto_call", {"name": "apollo_sequence_contacts",
+                              "arguments": {"op": "add"}}) == ("envoyer", Lot("contact_ids"))
+    assert effet("oto_call", {"name": "http_act", "arguments": {
+        "op": "request", "method": "GET"}}) == ("lire", None)
+    # Sans cible : la classe déclarée du relais, la plus contraignante.
+    assert effet("oto_call", {}) == ("detruire", None)
+    assert effets.cible("oto_call", {"name": "apollo_sequence", "arguments": {
+        "op": "activate"}}) == ("apollo_sequence", {"op": "activate"})
+    with pytest.raises(EffetNonDeclare):
+        effet("oto_call", {"name": "outil_inconnu", "arguments": {}})
+
+
+# --- http_act call : la méthode de l'action enregistrée, lue en base -----------------------
+
+def _action_enregistree(monkeypatch, operations):
+    monkeypatch.setattr(http_calls, "_sub", lambda: "sub-1")
+    monkeypatch.setattr(http_calls, "_account_for", lambda sub, operation: None)
+    monkeypatch.setattr(http_calls, "_resolved",
+                        lambda account=None: type("Rc", (), {"account": "acme"})())
+    monkeypatch.setattr(http_calls, "_definition", lambda rc: {"operations": operations})
+
+
+@pytest.mark.parametrize("methode, classe", [("GET", "lire"), ("POST", "envoyer"),
+                                             ("PATCH", "envoyer"), ("PUT", "detruire"),
+                                             ("DELETE", "detruire")])
+def test_http_act_call_se_juge_sur_la_methode_enregistree(monkeypatch, methode, classe):
+    _action_enregistree(monkeypatch, [{"name": "faire", "method": methode, "path": "/x"}])
+    assert effet("http_act", {"op": "call", "operation": "faire"}) == (classe, None)
+    assert effets.lit_la_base("http_act", {"op": "call", "operation": "faire"})
+    assert effets.lit_la_base("oto_call", {"name": "http_act",
+                                           "arguments": {"op": "call"}})
+    assert not effets.lit_la_base("http_act", {"op": "request", "method": "GET"})
+
+
+def test_http_act_call_sans_action_leve(monkeypatch):
+    _action_enregistree(monkeypatch, [{"name": "autre", "method": "GET", "path": "/x"}])
+    with pytest.raises(McpError):
+        effet("http_act", {"op": "call", "operation": "faire"})
+    with pytest.raises(McpError):
+        effet("http_act", {"op": "call"})

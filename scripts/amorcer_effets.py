@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Amorce la déclaration des effets d'outil (`oto_mcp/tools/effets.py`) : pour chaque outil
-de connecteur qui n'est pas déclaré `LECTURE`, une classe PROPOSÉE par op, et le lot
+monté (connecteur ou plateforme) qui n'est pas déclaré `LECTURE`, une classe PROPOSÉE par op, et le lot
 proposé de chaque op qui écrit ou envoie et prend une liste.
 
 ⚠️ Hors du chemin d'exécution, et sa sortie n'est PAS la vérité : elle se relit op par op
@@ -25,7 +25,6 @@ import re
 import sys
 from typing import Optional
 
-from oto_mcp import providers
 from oto_mcp.recipes import ecritures
 from oto_mcp.recipes import effets as effets_recette
 from oto_mcp.tool_visibility import namespace_of
@@ -123,9 +122,8 @@ def listes(tool) -> list[str]:
 def catalogue():
     from oto_mcp.server import _build_mcp
     outils = asyncio.run(_build_mcp("noauth").list_tools(run_middleware=False))
-    return [t for t in outils
-            if providers.connector_for_namespace(namespace_of(t.name)) is not None
-            and not en_lecture(t)]
+    # Tout outil monté qui n'est pas `LECTURE` : connecteurs ET plateforme.
+    return [t for t in outils if not en_lecture(t)]
 
 
 def main(argv: list[str]) -> int:

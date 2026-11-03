@@ -120,6 +120,25 @@ def _donnees(texte: str):
         return None
 
 
+#: What a read returns to the model when it did not ask for `fields`. Only tools whose
+#: rows are known to carry a bulky key the model rarely needs: `data_list_datastores`
+#: returns each table with its whole schema (`data_get_schema` gives it for ONE table).
+#: The served notice names what was left out, and `fields=["*"]` asks for the raw result.
+CHAMPS_PAR_DEFAUT = {
+    "data_list_datastores": ["id", "ns_id", "datastore", "namespace", "name", "owner_type",
+                             "shared", "permission", "context_org_id"],
+}
+
+
+def champs_de(name: str, args: dict, target: str):
+    """The `fields` to apply: the caller's (`oto_call fields=`), else the default of the
+    target, else None (the result is served whole)."""
+    voulus = args.get("fields") if name == "oto_call" else None
+    if isinstance(voulus, list) and voulus:
+        return voulus
+    return CHAMPS_PAR_DEFAUT.get(target)
+
+
 async def executer(b: Boite, sub: str, name: str, args: dict, *, org: Optional[int],
                    projet: Optional[int], run_id: Optional[str],
                    geste_id: Optional[str] = None) -> Issue:
@@ -144,7 +163,7 @@ async def executer(b: Boite, sub: str, name: str, args: dict, *, org: Optional[i
         return Issue(False, json.dumps({"ok": False, "error": issue.message,
                                         "code": issue.code}, ensure_ascii=False))
     result = issue.result
-    champs = args.get("fields") if name == "oto_call" else None
+    champs = champs_de(name, args, target)
     if isinstance(champs, list) and champs and not issue.retenu:
         result = meta._selectionner(result, champs)
     if getattr(result, "is_error", False):

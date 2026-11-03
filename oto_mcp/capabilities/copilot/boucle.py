@@ -18,7 +18,7 @@ from ... import geste
 from ...db import copilot as store
 from . import annulation, carte, classement, cle as cles, depense, modele, palier, pieces
 from .outils import Boite, a_la_demande, executer
-from .texte import FiltreSuite, couper
+from .texte import FiltreSuite, alleger, couper, plafond_de
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,10 @@ async def _lancer_outil(fil: dict, b: Boite, bloc: dict) -> AsyncIterator[dict]:
             "schema": bool(re.search(r"schema|column|create|datastore", target)),
             "scope": carte.portee(target)}.items() if v is not None}
     note = bloc.get("_edits")
-    contenu = couper(texte)
+    # A read is lightened before it is cut (compact JSON, no empty keys in rows): what the
+    # model reads costs tokens at every later call. A write's answer is served as it came.
+    lu = alleger(texte) if sorte == classement.LECTURE else texte
+    contenu = couper(lu, plafond_de(target))
     if note:
         contenu = (f"[The person edited the call on the card before applying it: "
                    f"{', '.join(note)}.]\n{contenu}")

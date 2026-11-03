@@ -59,7 +59,8 @@ posé sur une COPIE envoyée, jamais dans l'historique stocké (il resterait sin
 message passé, au-delà des quatre points de l'API). **L'historique ne se réécrit jamais** : les blocs de
 réflexion repartent tels quels, un tour interrompu se solde en AJOUTANT des résultats
 « interrompu ». `<next>a | b</next>` en fin de réponse devient `suggestions`, jamais du
-texte. Un résultat d'outil est coupé à 80 000 caractères, et la coupe est dite au modèle.
+texte. Un résultat d'outil est coupé à 20 000 caractères (80 000 pour `oto_procedure` et
+`oto_guide`), et la coupe est dite au modèle.
 30 étapes au plus par étape de la personne. Un `pause_turn` (outil serveur : la recherche
 d'outils) renvoie le message tel quel et relance l'appel. Chaque appel journalise ses
 quatre comptes de jetons par modèle (`copilot : appel au modèle — …`) : la mesure de ce que
@@ -212,6 +213,39 @@ pire.
 - **Exécution en interne** par `tools/meta.executer_cible` : mêmes gardes, même journal,
   même rédaction, même règlement que la cible d'`oto_call` — sous `sub_override`, un
   contexte FastMCP lié à l'instance servie, et un **geste propre à l'appel**.
+- **Un résultat d'outil est coupé à 20 000 caractères** (`texte.PLAFOND_RESULTAT`, 80 000
+  avant ; `oto_procedure` et `oto_guide` gardent 80 000 : leur lecture n'a ni section ni champs, une
+  procédure ou un guide coupé serait illisible — `texte.PLAFONDS_PAR_OUTIL`), et la coupe est DITE au modèle (« narrow the call (filter, fields, limit) »). Raison :
+  chaque caractère gardé est écrit une fois dans le cache de prompt (1,25 × le prix d'entrée)
+  puis relu à chaque appel suivant de la conversation. Mesuré sur les conversations stockées
+  (30 jours) : les résultats d'outils font ~86 % de l'historique rejoué, et les ~13 % de
+  résultats de plus de 20 000 caractères portent ~77 % de leurs caractères. Les réponses de la
+  page (outils côté client) ont leur propre coupe, à 20 000 (`boucle.repondre_page`).
+- **Une lecture est allégée avant d'être coupée** (`texte.alleger`, lectures seulement, jamais la
+  réponse d'une écriture) : JSON compact (pas d'espace après `,` et `:`) et, dans une liste d'au
+  moins trois lignes, plus de clé dont la valeur est `null`, `""`, `[]` ou `{}` (0 et `false`
+  restent). Même contenu pour le modèle, moins de jetons à chaque appel suivant. Un texte qui
+  n'est pas un objet ou une liste JSON passe tel quel. Pas de format TOON : il ne toucherait
+  que les listes uniformes (~4 % des résultats mesurés) et le copilote relit les résultats en
+  JSON (résumé, annulation, coupe par éléments).
+- **La coupe se fait par éléments quand le résultat est une liste JSON** (ou un objet qui
+  porte une longue liste) : des éléments ENTIERS, un JSON qui reste valide, et un
+  `{"_cut": N, "_hint": …}` qui dit combien il en manque ; sinon, par caractères
+  (`texte.couper`).
+- **Une lecture dont les lignes portent une clé volumineuse est projetée par défaut**
+  (`outils.CHAMPS_PAR_DEFAUT`, aujourd'hui `data_list_datastores` sans son `schema` ; le schéma
+  d'UN tableau se lit par `data_get_schema`). Même mécanisme que `oto_call fields=` : la notice
+  nomme ce qui est écarté, `fields=["*"]` rend le brut, et le champ demandé par le modèle
+  l'emporte toujours.
+- **Une conversation reprise à froid (plus de 5 minutes, `compactage.FROID_S`) perd les gros
+  résultats de LECTURE de ses questions ANCIENNES** : ils sont remplacés, une fois, sur les
+  messages stockés, par une ligne (outil, taille, « rappelle l'outil si besoin »). Chaque appel
+  est classé comme dans la boucle (`classement.classer`, annotations déclarées comprises) :
+  ce qu'une écriture a répondu reste entier, car la rappeler referait l'acte. Le cache est
+  réécrit en entier de toute façon à ce moment-là ; ensuite l'historique est de nouveau
+  stable et se relit en cache. Les résultats du dernier échange restent entiers, rien n'est
+  touché en pleine boucle d'outils ni sous 20 000 caractères de gain
+  (`compactage.GAIN_MIN`).
 - **Les axes sont ceux du serveur** : `_org` (l'org consultée), `_project` (celui de la
   page), `_run_id` (un run par conversation) posés sur l'appel ET dans les arguments de la
   cible d'`oto_call` ; `_group` retiré ; ils ne sont pas offerts au modèle.

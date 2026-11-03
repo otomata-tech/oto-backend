@@ -7,7 +7,22 @@ import json
 import re
 
 #: A tool result is cut here, and the model is TOLD so — never a silent fragment.
-PLAFOND_RESULTAT = 80_000
+#: Every character kept is written to the prompt cache once (1.25 × the input price) and
+#: read back at every later call of the conversation. Measured on stored conversations
+#: (30 days): tool results are ~86 % of the replayed history, and the ~13 % of results
+#: longer than 20 000 characters carry ~77 % of the characters of all results. This was
+#: 80 000; at 20 000 the history shrinks by about 40 %.
+PLAFOND_RESULTAT = 20_000
+#: Tools whose result is PROSE read in one piece and that offer no way to read a part of it
+#: (`oto_procedure op=get` has no section, field or outline; `oto_guide op=read` neither):
+#: cut at 20 000 the model would hold half a procedure or half a guide with no way to ask
+#: for the rest. They keep the old limit.
+PLAFONDS_PAR_OUTIL = {"oto_procedure": 80_000, "oto_guide": 80_000}
+
+
+def plafond_de(outil: str) -> int:
+    """The cut for the result of `outil` (the TARGET tool, `oto_call` already unwrapped)."""
+    return PLAFONDS_PAR_OUTIL.get(outil, PLAFOND_RESULTAT)
 _OUVRANT = "<next>"
 
 
@@ -29,13 +44,109 @@ def texte_du_resultat(result) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
-def couper(texte: str) -> str:
-    """At most `PLAFOND_RESULTAT` characters, and the cut said in words to the model."""
-    if len(texte) <= PLAFOND_RESULTAT:
+_INDICE = "narrow the call (filter, fields, limit) to see the rest"
+#: Room left for the `_cut` notice when a JSON list is cut by items.
+_MARGE = 300
+
+
+def _compact(x) -> str:
+    """JSON re-written for the model: no space after `,` and `:` (the same data, fewer
+    tokens)."""
+    return json.dumps(x, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _garder(items: list, budget: int):
+    """The leading items that fit `budget` characters, and how many were left out;
+    `(None, 0)` when none fits (one huge item) or all fit (nothing to cut)."""
+    if budget <= 0:
+        return None, 0
+    total = n = 0
+    for it in items:
+        t = len(_compact(it)) + 1
+        if total + t > budget:
+            break
+        total += t
+        n += 1
+    if n == 0 or n == len(items):
+        return None, 0
+    return items[:n], len(items) - n
+
+
+def _couper_en_elements(texte: str, plafond: int):
+    """A result that is a JSON list (or an object carrying a long list) is cut by WHOLE
+    items: still valid JSON, and the model is told how many it does not have. `None` when
+    the text is not that shape or no item boundary helps — the caller cuts characters."""
+    try:
+        obj = json.loads(texte)
+    except (ValueError, TypeError):
+        return None
+    compact = _compact(obj)
+    if len(compact) <= plafond:
+        return compact
+    if isinstance(obj, list):
+        garde, reste = _garder(obj, plafond - _MARGE)
+        if garde is None:
+            return None
+        return _compact([*garde, {"_cut": reste, "_hint": _INDICE}])
+    if isinstance(obj, dict):
+        listes = {k: v for k, v in obj.items() if isinstance(v, list) and len(v) > 1}
+        if not listes:
+            return None
+        cle = max(listes, key=lambda k: len(_compact(listes[k])))
+        autres = len(_compact({k: v for k, v in obj.items() if k != cle}))
+        garde, reste = _garder(obj[cle], plafond - _MARGE - autres)
+        if garde is None:
+            return None
+        return _compact({**obj, cle: garde, "_cut": {cle: reste}, "_hint": _INDICE})
+    return None
+
+
+#: Past this size a result is not re-parsed to be lightened: the cut handles it.
+_ALLEGER_MAX = 2_000_000
+_VIDES = (None, "", [], {})
+
+
+def _sans_vides(x, profondeur: int = 0):
+    """In every list of at least three rows (objects), drops the keys whose value is
+    null, "" , [] or {}. Zero and false stay: they say something."""
+    if profondeur > 3:
+        return x
+    if isinstance(x, list):
+        lignes = [r for r in x if isinstance(r, dict)]
+        if len(x) >= 3 and len(lignes) == len(x):
+            return [{k: _sans_vides(v, profondeur + 1) for k, v in r.items()
+                     if not any(v is vide or (type(v) is type(vide) and v == vide)
+                                for vide in _VIDES)} for r in x]
+        return [_sans_vides(r, profondeur + 1) for r in x]
+    if isinstance(x, dict):
+        return {k: _sans_vides(v, profondeur + 1) for k, v in x.items()}
+    return x
+
+
+def alleger(texte: str) -> str:
+    """The same JSON for the model with fewer tokens: no space after `,` and `:`, and, in
+    lists of rows, no empty keys. Text that is not a JSON object or list is returned as
+    it came. Reads only: the caller does not use it on what a write answered."""
+    if not texte or len(texte) > _ALLEGER_MAX or texte[0] not in "[{":
+        return texte
+    try:
+        obj = json.loads(texte)
+    except (ValueError, TypeError):
+        return texte
+    return _compact(_sans_vides(obj))
+
+
+def couper(texte: str, plafond: int = PLAFOND_RESULTAT) -> str:
+    """At most `plafond` characters, and the cut said in words to the model. A JSON list
+    is cut by whole items (valid JSON, the count of what is missing); anything else by
+    characters."""
+    if len(texte) <= plafond:
         return texte or "(empty)"
-    reste = len(texte) - PLAFOND_RESULTAT
-    return (f"{texte[:PLAFOND_RESULTAT]}\n[cut: {reste} more characters — narrow the call "
-            "(filter, fields, limit) to see the rest]")
+    par_elements = _couper_en_elements(texte, plafond)
+    if par_elements is not None:
+        return par_elements
+    reste = len(texte) - plafond
+    return (f"{texte[:plafond]}\n[cut: {reste} more characters — {_INDICE}]")
 
 
 class FiltreSuite:

@@ -35,7 +35,8 @@ from .._authz import ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, EventStream, ResolvedCtx,
                       RestBinding)
 from ..registry import CAPABILITIES
-from . import annulation, boucle, cle as cles, consigne, depense, dictee, outils, palier, pieces
+from . import (annulation, boucle, cle as cles, compactage, consigne, depense, dictee, outils,
+               palier, pieces)
 from .boucle import ev
 
 logger = logging.getLogger(__name__)
@@ -322,8 +323,16 @@ async def _tour(ctx: ResolvedCtx, inp: TurnInput, marques: list[dict], canal: st
     else:
         fil = _fil(ligne)
     yield ev("thread", thread_id=fil["id"])
+    inactif_s = compactage.inactif_depuis((ligne or {}).get("last_seen"))
 
     def avant(f: dict) -> Optional[str]:
+        # A conversation back after the cache's 5 minutes is re-written whole anyway: the
+        # long results of its earlier questions leave the history now (`compactage`).
+        if compactage.est_froid(inactif_s):
+            libres = compactage.compacter(f["messages"], b.annotations)
+            if libres:
+                logger.info("copilot : conversation %s reprise à froid, %s caractères de "
+                            "résultats anciens retirés", f["id"], libres)
         # Per leg, never written back (`boucle.sauver` keeps a fixed list of fields).
         f["_speak"] = inp.speak
         f["mode"] = inp.mode

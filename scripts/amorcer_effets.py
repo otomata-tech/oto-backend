@@ -123,7 +123,8 @@ def catalogue():
     from oto_mcp.server import _build_mcp
     outils = asyncio.run(_build_mcp("noauth").list_tools(run_middleware=False))
     # Tout outil monté qui n'est pas `LECTURE` : connecteurs ET plateforme.
-    return [t for t in outils if not en_lecture(t)]
+    # Un relais (`oto_call`) n'a pas de classe : il prend celle de sa cible (`RELAIS`).
+    return [t for t in outils if not en_lecture(t) and t.name not in effets.RELAIS]
 
 
 def main(argv: list[str]) -> int:

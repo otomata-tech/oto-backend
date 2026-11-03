@@ -26,7 +26,11 @@ The classes, from least to most constraining (`CLASSES`):
   publication, a campaign or a sequence that will send (contacts added to an active
   sequence, a list that feeds a sending tool), an agent launched.
 - `detruire`: deletes, removes, merges, acts in bulk, archives, purges, refunds, voids,
-  deactivates, cancels, revokes, or REPLACES (a `set_*` that overwrites).
+  deactivates, cancels, revokes, or REPLACES (a `set_*` that overwrites, an `oto_guide`
+  `write`, which keeps no prior version). A switch the same person flips back with a
+  plain write is not destroyed: `oto_disable_tool` writes (`oto_enable_tool` undoes it).
+
+A relay (`oto_call`) has no class of its own: it takes its target's (`RELAIS`).
 
 A doubt is the most constraining class, never `lire` by default.
 
@@ -112,8 +116,9 @@ JUGES_EN_BASE: dict[str, frozenset[str]] = {
 }
 
 #: A tool that only RELAYS a call to another (`oto_call`): its effect is its target's,
-#: named by these arguments (target name, target arguments). Its own line in `EFFETS` is
-#: the class of a call that names no target.
+#: named by these arguments (target name, target arguments). This is its declaration: it
+#: has no line in `EFFETS`, and a call that names no target RAISES `EffetNonDeclare` —
+#: it reaches nothing, so there is nothing to judge (decision of 03/11/2026).
 RELAIS: dict[str, tuple[str, str]] = {
     "oto_call": ("name", "arguments"),
 }
@@ -122,13 +127,18 @@ RELAIS: dict[str, tuple[str, str]] = {
 def cible(name: str, args: Optional[dict] = None) -> tuple[str, dict]:
     """The tool and arguments a call really reaches: itself, or the target of a relay
     (`oto_call(name=…, arguments=…)`). The caller checks `lecture.en_lecture` on THIS
-    tool (and canonicalizes a tenant-prefixed name, as `oto_call` does) before `effet`."""
+    tool (and canonicalizes a tenant-prefixed name, as `oto_call` does) before `effet`.
+    Raises `EffetNonDeclare` for a relay call that names no target."""
     args = args or {}
     relais = RELAIS.get(name)
-    if relais is not None and isinstance(args.get(relais[0]), str) and args[relais[0]]:
-        cibles = args.get(relais[1])
-        return cible(args[relais[0]], cibles if isinstance(cibles, dict) else {})
-    return name, args
+    if relais is None:
+        return name, args
+    nom = args.get(relais[0])
+    if not (isinstance(nom, str) and nom):
+        raise EffetNonDeclare(f"`{name}` without `{relais[0]}`: it reaches no tool, "
+                              "there is no effect to judge")
+    cibles = args.get(relais[1])
+    return cible(nom, cibles if isinstance(cibles, dict) else {})
 
 
 def lit_la_base(name: str, args: Optional[dict] = None) -> bool:
@@ -1179,8 +1189,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_user": {"lire": "list get", "detruire": "set_role"},
     "oto_admin_vault_health": "lire",
     "oto_apps": {"lire": "list get revisions validate read_file", "ecrire": "create update patch unarchive file", "detruire": "archive restore unfile put_file"},
-    # its class is its target's (`RELAIS`); this is the class of a call without a target
-    "oto_call": "detruire",
     "oto_clear_group": "ecrire",
     "oto_clear_org": "ecrire",
     "oto_clear_project": "ecrire",
@@ -1189,7 +1197,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_connector_access_level": {"lire": "get", "detruire": "set clear"},
     "oto_connector_activation": {"lire": "list", "detruire": "set clear"},
     "oto_context": "lire",
-    "oto_disable_tool": "detruire",
+    # reversible by oto_enable_tool
+    "oto_disable_tool": "ecrire",
     "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
     "oto_doc_app": "lire",
     "oto_enable_tool": "ecrire",
@@ -1197,6 +1206,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # `run` executes stored pure code (no network, no secret) and stores its files
     "oto_function": {"lire": "list get versions", "ecrire": "create propose run test", "envoyer": "publish", "detruire": "refuse"},
     "oto_group": {"lire": "list get list_invites", "ecrire": "create", "envoyer": "add_member invite", "detruire": "remove_member set_instruction"},
+    # write REPLACES the body in place and keeps no prior version (`db/guides.set_guide_db`)
     "oto_guide": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
     "oto_guide_v2": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
     "oto_identity": {"lire": "list", "ecrire": "rename", "detruire": "set"},
@@ -1624,7 +1634,6 @@ PAS_UN_LOT: dict[str, str] = {
     "data_write": "force versions",
     "oto_admin_guide": "slots",
     "oto_apps": "project_ids edits",
-    "oto_call": "fields",
     "oto_connector": "connectors",
     "oto_doc": "pages fields",
     "oto_fleet": "tools",
@@ -1663,8 +1672,8 @@ def effet(name: str, args: Optional[dict] = None) -> tuple[str, Optional[Lot]]:
     constraining class of its ops (its served default is the caller's to resolve, as
     `access_level_gate.default_op` does). A judge (`JUGES`) may set the class from the
     arguments; one in `JUGES_EN_BASE` reads the database (`lit_la_base`: then call this
-    off the event loop). A relay (`oto_call`) takes its target's effect (`cible`). A tool
-    declared `LECTURE` is not in this table: the caller checks `lecture.en_lecture` on the
+    off the event loop). A relay (`oto_call`) takes its target's effect (`cible`), and
+    raises without one. A tool declared `LECTURE` is not in this table: the caller checks `lecture.en_lecture` on the
     target first. Raises `EffetNonDeclare` for anything undeclared."""
     name, args = cible(name, args)
     par_op = classes_par_op(name)

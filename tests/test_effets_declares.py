@@ -73,7 +73,7 @@ def _listes(tool) -> set[str]:
 def test_toute_op_d_un_outil_qui_agit_est_declaree(servis):
     manquants = []
     for nom, t in sorted(servis.items()):
-        if en_lecture(t):
+        if en_lecture(t) or nom in RELAIS:
             continue
         if nom not in EFFETS:
             manquants.append(nom)
@@ -96,9 +96,13 @@ def test_rien_de_declare_qui_ne_soit_servi(servis):
     connus = set(servis) | _capacites_non_montees(servis)
     for nom in EFFETS:
         assert nom in connus, f"`{nom}` n'est plus servi : retire-le d'EFFETS"
-    for table in (JUGES, effets.JUGES_EN_BASE, RELAIS, PAS_UN_LOT):
+    for table in (JUGES, effets.JUGES_EN_BASE, PAS_UN_LOT):
         for nom in table:
             assert nom in EFFETS, nom
+    # Un relais n'a pas de classe à lui : il prend celle de sa cible.
+    for nom in RELAIS:
+        assert nom in connus, f"`{nom}` n'est plus servi : retire-le de RELAIS"
+        assert nom not in EFFETS, f"`{nom}` est un relais : pas de ligne dans EFFETS"
     for cle in LOTS:
         nom, _, op = cle.partition(":")
         assert nom in EFFETS and (op or None) in effets.classes_par_op(nom), cle
@@ -212,11 +216,21 @@ def test_une_ecriture_forcee_des_recettes_n_est_pas_declaree_en_lecture():
     ("oto_org", {"op": "invite"}, "envoyer", None),
     ("oto_fleet", {"op": "launch"}, "envoyer", None),
     ("oto_admin_set_plan", {}, "detruire", None),
+    # Décidé : désactiver un outil écrit (oto_enable_tool le rétablit) ; réécrire un
+    # guide détruit (aucune version précédente n'est gardée).
+    ("oto_disable_tool", {}, "ecrire", None),
+    ("oto_guide", {"op": "write"}, "detruire", None),
+    ("oto_guide_v2", {"op": "write"}, "detruire", None),
 ])
 def test_les_cas_de_l_audit(nom, args, classe, cle):
     obtenu, lot = effet(nom, args)
     assert obtenu == classe, (nom, args, obtenu)
     assert (lot.cle if lot else None) == cle, (nom, args, lot)
+
+
+#: Décidé : un interrupteur que la même personne rebascule par une simple écriture
+#: (`oto_enable_tool`) écrit, il ne détruit pas.
+_REVERSIBLES = {("oto_disable_tool", None)}
 
 
 def test_rembourser_annuler_desactiver_detruisent():
@@ -225,6 +239,8 @@ def test_rembourser_annuler_desactiver_detruisent():
     verbes = {"refund", "void", "deactivate", "cancel", "revoke", "disable"}
     for nom in EFFETS:
         for op, classe in effets.classes_par_op(nom).items():
+            if (nom, op) in _REVERSIBLES:
+                continue
             mots = set((op or nom).split("_"))
             if mots & verbes:
                 assert classe == "detruire", (nom, op)
@@ -283,12 +299,21 @@ def test_oto_call_prend_l_effet_de_sa_cible():
                               "arguments": {"op": "add"}}) == ("envoyer", Lot("contact_ids"))
     assert effet("oto_call", {"name": "http_act", "arguments": {
         "op": "request", "method": "GET"}}) == ("lire", None)
-    # Sans cible : la classe déclarée du relais, la plus contraignante.
-    assert effet("oto_call", {}) == ("detruire", None)
     assert effets.cible("oto_call", {"name": "apollo_sequence", "arguments": {
         "op": "activate"}}) == ("apollo_sequence", {"op": "activate"})
     with pytest.raises(EffetNonDeclare):
         effet("oto_call", {"name": "outil_inconnu", "arguments": {}})
+
+
+@pytest.mark.parametrize("args", [{}, {"name": ""}, {"name": None},
+                                  {"arguments": {"op": "add"}}])
+def test_oto_call_sans_cible_leve(args):
+    """Décidé : un appel qui ne nomme aucune cible n'atteint rien — il n'y a rien à
+    juger, il lève (jamais une classe par défaut)."""
+    with pytest.raises(EffetNonDeclare):
+        effet("oto_call", args)
+    with pytest.raises(EffetNonDeclare):
+        effets.lit_la_base("oto_call", args)
 
 
 # --- http_act call : la méthode de l'action enregistrée, lue en base -----------------------

@@ -173,6 +173,7 @@ BODY_SECRET, NONE = "body_secret", "none"
 #: préréglage (`Prereglage`), pas du code : Linear en est le premier.
 HMAC_CORPS = "hmac_body"
 LINEAR = "linear"
+MINARI = "minari"
 #: L'agent qui répond aux mentions de l'app dans Slack (`slack_events.py`). Sa preuve est la
 #: signature de l'app publiée de l'INSTANCE, vérifiée par la route des événements
 #: Slack — `/api/hooks/{id}` ne l'ouvre jamais : aucune preuve de `_sans_signature`
@@ -216,6 +217,12 @@ class Prereglage:
       - `statut_accepte` : le statut d'une livraison acceptée. 202 partout, sauf
         pour une source qui compte tout autre statut comme un ÉCHEC (Linear : « a
         non-200 HTTP status code » → retentée, puis le webhook désactivé).
+      - `secret_colle` : QUI fabrique le secret. Faux (Linear) : le serveur, posé par
+        `connect_source`, rien à coller. Vrai (Minari) : la SOURCE, qui n'offre aucune
+        API pour inscrire un webhook — le propriétaire colle sur l'écran de l'agent
+        le secret qu'elle affiche (`PUT …/hook-auth`, `signing_secret`).
+      - sans `entete_id`, `chemin_id` sert à la déduplication : le chemin, DANS le
+        corps SIGNÉ, de l'identifiant de livraison (lu seulement après la preuve).
     """
     nom: str
     schema: str
@@ -228,11 +235,26 @@ class Prereglage:
     horodatage_ms: bool = False
     tolerance_s: Optional[int] = None
     statut_accepte: int = 202
+    secret_colle: bool = False
 
     @property
     def porte_le_porteur(self) -> bool:
         """Ce préréglage s'ouvre-t-il avec NOTRE `otoh_` (en-tête ou corps) ?"""
         return self.schema in (BEARER, BODY_SECRET)
+
+    @property
+    def rejouable(self) -> bool:
+        """Une livraison capturée se rejoue-t-elle ? Un `hmac_body` sans horodatage
+        signé (Minari) : la signature reste bonne indéfiniment, seule la déduplication
+        par identifiant la borne, et pas pour tous les événements."""
+        return self.schema == HMAC_CORPS and not self.chemin_horodatage
+
+    @property
+    def exige_un_plafond(self) -> bool:
+        """Un agent sur ce préréglage doit-il porter un `max_per_day` ? Sans preuve
+        (`none`), quiconque voit l'adresse déclenche ; rejouable, quiconque a capturé
+        un corps signé. Dans les deux cas, la dépense doit avoir un fond."""
+        return self.schema == NONE or self.rejouable
 
 
 PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
@@ -257,6 +279,19 @@ PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
                encodage="hex", entete_id="linear-delivery",
                chemin_horodatage="webhookTimestamp", horodatage_ms=True,
                tolerance_s=60, statut_accepte=200),
+    # Minari signe le corps BRUT : `X-Webhook-Signature` = HMAC-SHA256 hexadécimal,
+    # clé = le secret que Minari affiche (Settings → API & webhook → « Show Secret »).
+    # ⚠️ AUCUN horodatage, ni en-tête ni champ signé, et aucun identifiant de
+    # livraison en en-tête : un corps capturé se rejouerait. Borné ainsi : un
+    # `call.completed` est dédupliqué pour de bon par son `call.call_id` SIGNÉ
+    # (le journal des livraisons n'est pas purgé) ; `call.meeting_booked` et
+    # `contact.updated` n'en portent pas à ce chemin et restent rejouables — d'où
+    # un `max_per_day` sur l'agent. Retentatives de Minari : ~7 s en tout (immédiate,
+    # +1 s, +2 s, +4 s), réponse attendue en 10 s. Le secret est fabriqué par
+    # Minari, qui n'a pas d'API d'inscription : il se COLLE (`secret_colle`).
+    # https://api.minari.ai/docs/openapi.json (« Webhooks »)
+    Prereglage(MINARI, HMAC_CORPS, entete_signature="x-webhook-signature",
+               encodage="hex", chemin_id="call.call_id", secret_colle=True),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
 
@@ -757,7 +792,12 @@ def _par_signature_du_corps(trigger_id: int, secret: Optional[str], corps: Any,
             raise
         verdict = verifier_signature_du_corps(cle, p, recue, corps)
         del cle
-        externe = recue.msg_id[:_ID_MAX] if recue.msg_id else None
+        externe = recue.msg_id
+        if not externe and p.chemin_id and verdict == "ok":
+            # Sans en-tête d'identifiant (Minari) : celui du corps SIGNÉ, lu
+            # seulement une fois la signature prouvée.
+            externe = _extraire(corps, p.chemin_id)
+        externe = externe[:_ID_MAX] if externe else None
         if verdict == "invalid":
             raise HookRefus(404, "hook_not_found", HOOK_INCONNU)
         if verdict == "stale":

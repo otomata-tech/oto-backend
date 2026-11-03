@@ -1275,6 +1275,7 @@ donc son mode, `runner_triggers.hook_auth` :
 | `bearer` (**défaut**) | `Authorization: Bearer otoh_…`, généré par nous | accepté |
 | `standard_webhooks` | `webhook-id`, `webhook-timestamp`, `webhook-signature: v1,<b64>` — HMAC-SHA256 de `{id}.{ts}.{corps brut}`, clé = le `whsec_…` sans préfixe, décodé de base64 | **refusé** |
 | `linear` (schéma `hmac_body`, 01/11/2026) | `Linear-Signature: <hex>` — HMAC-SHA256 du **corps brut**, clé = les octets UTF-8 du secret ; `webhookTimestamp` (ms) **dans le corps** à 60 s près ; `Linear-Delivery` = identifiant de livraison | **refusé** |
+| `minari` (schéma `hmac_body`, 03/11/2026) | `X-Webhook-Signature: <hex>` — HMAC-SHA256 du **corps brut**, clé = les octets UTF-8 du secret que Minari affiche ; **aucun horodatage** ; `call.call_id` du corps signé = identifiant de livraison | **refusé** |
 
 - **Le mode signature ÉTEINT le porteur** — c'est tout le sens de « désactiver le
   porteur » : un `otoh_` fuité ne rouvre pas une porte que son propriétaire croit
@@ -1343,6 +1344,7 @@ membre (`op=default_sharing`, `preset_agents`, plus bas).
 | `body_secret` (ex-`lemlist`) | `body_secret` | le **même** `otoh_`, renvoyé par la source dans le champ `secret` de son corps JSON | `_id` du corps, s'il y en a un |
 | `none` | `none` | **aucune** — choix explicite du propriétaire | — |
 | `linear` | `hmac_body` | en-tête `Linear-Signature`, HMAC-SHA256 hexadécimal du corps brut ; `webhookTimestamp` du corps à 60 s près | en-tête `Linear-Delivery` (non signé, voir ci-dessous) |
+| `minari` | `hmac_body` | en-tête `X-Webhook-Signature`, HMAC-SHA256 hexadécimal du corps brut ; **pas d'horodatage** | `call.call_id` du corps (**signé**) |
 
 - **`hmac_body`, le schéma « HMAC du corps brut » (01/11/2026).** Beaucoup de sources
   signent les octets reçus avec un secret partagé, chacune dans SON en-tête. Le
@@ -1374,6 +1376,26 @@ membre (`op=default_sharing`, `preset_agents`, plus bas).
   `connect_source`, il n'y a rien à coller ; accepté, le mode serait tombé dans la
   branche du porteur. D'un agent `linear` débranché, passer en `standard_webhooks`
   exige un `whsec_` neuf (le secret posé n'a pas cette forme).
+- **`minari`** (03/11/2026, https://api.minari.ai/docs/openapi.json, « Webhooks ») :
+  `X-Webhook-Signature` = HMAC-SHA256 hexadécimal du corps brut, clé = le secret que
+  Minari affiche (Settings → API & webhook → « Show Secret »). Événements
+  `call.completed`, `call.meeting_booked`, `contact.updated` ; retentatives sur ~7 s
+  (immédiate, +1 s, +2 s, +4 s), réponse attendue en 10 s ; 202 lui va (« 2xx »).
+  ⚠️ **Ni horodatage ni identifiant de livraison en en-tête** : un corps capturé se
+  rejouerait. Borné ainsi : `chemin_id="call.call_id"` déduplique pour de bon un
+  `call.completed` (l'identifiant est lu dans le corps SIGNÉ, après la preuve ; le
+  journal des livraisons n'est pas purgé) ; les deux autres événements n'en portent
+  pas à ce chemin et restent rejouables — le `max_per_day` est donc **exigé**, comme
+  pour `none` : la pose sans plafond et son retrait sont refusés (`daily_cap_required`,
+  `Prereglage.rejouable` : tout `hmac_body` sans horodatage signé). Le
+  registre l'admet : un `hmac_body` sans horodatage doit dédupliquer par le corps
+  (`test_chaque_preregle_nomme_un_schema_CONNU`). **Se pose à la main**, secret
+  compris (`secret_colle=True`) : Minari n'a pas d'API pour inscrire un webhook, donc
+  pas de `connect_source`. Le secret est pris tel quel (ses octets UTF-8 sont la clé) ;
+  seul l'évidemment faux est refusé (`invalid_signing_secret` : vide, multiligne,
+  > 512 caractères, ou notre `otoh_`). D'un agent `linear` débranché, passer en
+  `minari` exige un secret neuf : on compare le **nom** du préréglage, pas le schéma —
+  le secret posé est `hmac_body` aussi, mais c'est celui de Linear.
 
 - **`body_secret`, pour une source qui ne sait ni poser un en-tête ni signer.**
   **Le nom est générique** (20/10/2026) : le préréglage s'appelait `lemlist`, la

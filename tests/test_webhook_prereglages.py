@@ -100,8 +100,14 @@ def test_chaque_preregle_nomme_un_schema_CONNU():
             assert p.champ_secret, f"{p.nom} : un body_secret sans champ n'ouvre rien"
         if p.schema == runner_hook.HMAC_CORPS:
             # Sans en-tête, rien ne se relève ; sans horodatage, un corps capturé se
-            # rejouerait indéfiniment.
-            assert p.entete_signature and p.chemin_horodatage and p.tolerance_s, p
+            # rejouerait indéfiniment — sauf à dédupliquer par un identifiant lu DANS
+            # le corps signé (Minari, qui n'envoie pas d'horodatage) : le rejeu d'un
+            # corps déjà accepté ne refait alors rien.
+            assert p.entete_signature, p
+            assert (p.chemin_horodatage and p.tolerance_s) or (
+                p.rejouable and p.chemin_id and not p.entete_id), p
+            # Rejouable : le plafond journalier est EXIGÉ, comme pour `none`.
+            assert p.exige_un_plafond == p.rejouable, p
         else:
             assert p.statut_accepte == 202, f"{p.nom} : rien d'autre ne change de statut"
 
@@ -348,6 +354,37 @@ def test_le_plafond_d_un_agent_none_ne_se_RETIRE_pas(base):
     assert e.value.code == "daily_cap_required"
     _appel(op="update", trigger_id=5, max_per_day=40)   # le BAISSER/CHANGER, oui
     assert base["ligne"]["max_per_day"] == 40
+
+
+_SECRET_MINARI = "le-secret-que-minari-affiche"
+
+
+def test_minari_SANS_plafond_journalier_est_refuse(base):
+    """Minari ne signe aucun horodatage : une livraison capturée se rejoue. Le plafond
+    est exigé comme pour `none`, et rien n'est écrit."""
+    base["ligne"]["max_per_day"] = None
+    with pytest.raises(AuthzDenied) as e:
+        _auth(hook_auth="minari", signing_secret=_SECRET_MINARI)
+    assert e.value.code == "daily_cap_required" and e.value.status == 400
+    assert base["ligne"]["hook_auth"] == "bearer" and base["enc"] == "enc0"
+
+
+def test_le_plafond_d_un_agent_minari_ne_se_RETIRE_pas(base):
+    _auth(hook_auth="minari", signing_secret=_SECRET_MINARI)
+    assert base["ligne"]["hook_auth"] == "minari"
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="update", trigger_id=5, max_per_day=0)
+    assert e.value.code == "daily_cap_required"
+    assert base["ligne"]["max_per_day"] == 20
+    _appel(op="update", trigger_id=5, max_per_day=40)   # le CHANGER, oui
+    assert base["ligne"]["max_per_day"] == 40
+
+
+def test_un_agent_SIGNE_avec_horodatage_garde_le_choix_du_plafond(base):
+    """`standard_webhooks` signe un horodatage : le plafond reste un choix."""
+    _auth(hook_auth="standard_webhooks", signing_secret="whsec_" + "QUFB" * 8)
+    _appel(op="update", trigger_id=5, max_per_day=0)
+    assert base["ligne"]["max_per_day"] is None
 
 
 def test_la_rotation_du_porteur_marche_sur_body_secret_PAS_sur_none(base):

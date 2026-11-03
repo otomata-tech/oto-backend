@@ -2001,15 +2001,18 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 # `max_per_day=0` RETIRE le plafond : stocké NULL, pas 0 — un 0
                 # stocké se lirait « aucune livraison acceptée ».
                 champs[col] = (v or None) if c == "max_per_day" else v
-        if (champs.get("max_per_day", 1) is None
-                and runner_hook.prereglage(_actuel().get("hook_auth")).schema
-                == runner_hook.NONE):
-            # Retirer le plafond d'un agent SANS preuve rouvrirait une dépense sans
-            # fond à quiconque voit l'adresse.
+        porte = runner_hook.prereglage(_actuel().get("hook_auth"))
+        if champs.get("max_per_day", 1) is None and porte.exige_un_plafond:
+            # Retirer le plafond d'un agent SANS preuve, ou dont les livraisons se
+            # REJOUENT (signature sans horodatage), rouvrirait une dépense sans fond
+            # à quiconque voit l'adresse ou a capturé un corps signé.
             raise AuthzDenied(
                 400, "daily_cap_required",
-                "cet agent n'exige aucune preuve (`none`) : son plafond `max_per_day` "
-                "ne se retire pas. Change d'abord sa méthode d'authentification.")
+                f"cet agent (`{porte.nom}`) "
+                + ("n'exige aucune preuve" if porte.schema == runner_hook.NONE
+                   else "reçoit des livraisons signées sans horodatage, donc rejouables")
+                + " : son plafond `max_per_day` ne se retire pas. Change d'abord sa "
+                "méthode d'authentification.")
     if inp.cron is not None or inp.tz is not None:
         if not _actuel():
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -2389,7 +2392,7 @@ class HookAuthInput(BaseModel):
     # `lemlist` : l'ANCIEN nom de `body_secret`, admis par le schéma pour être
     # REFUSÉ en le nommant (`hook_auth_renamed`), jamais traduit en silence.
     hook_auth: Literal["bearer", "standard_webhooks", "body_secret", "lemlist",
-                       "none", "slack", "linear"] = Field(
+                       "none", "slack", "linear", "minari"] = Field(
         description=(
         "How the sender proves who it is. `bearer`: the sender posts "
         "`Authorization: Bearer otoh_…`, a secret the platform generates. "
@@ -2415,12 +2418,17 @@ class HookAuthInput(BaseModel):
         "opens. `linear`: Linear signs the raw body (`Linear-Signature`) with a "
         "secret oto made — set only by `oto_trigger op=connect_source "
         "source=linear`, REFUSED here (`hook_auth_needs_connect_source`): there is "
-        "nothing to paste."))
+        "nothing to paste. `minari`: Minari signs the raw body "
+        "(`X-Webhook-Signature`, hex HMAC-SHA256) with the secret Minari shows "
+        "(Settings → API & webhook → Show Secret) — paste it as `signing_secret`; "
+        "Minari sends no timestamp, so a retry of the same `call.call_id` does not "
+        "start a second run but other events can be replayed: the agent must carry "
+        "a `max_per_day` cap (`daily_cap_required`), which then cannot be removed."))
     signing_secret: Optional[str] = Field(default=None, description=(
-        "`standard_webhooks` only: the signing secret the SENDER generated "
-        "(starts with `whsec_`). Required when switching to `standard_webhooks`; "
-        "optional afterwards (a new one replaces the old one). Write-only: stored "
-        "encrypted, never returned."))
+        "The signing secret the SENDER generated. `standard_webhooks`: starts with "
+        "`whsec_`. `minari`: the secret Minari shows, as is. Required when switching "
+        "to either mode; optional afterwards (a new one replaces the old one). "
+        "Write-only: stored encrypted, never returned."))
 
 
 class HookAuthOut(BaseModel):
@@ -2455,6 +2463,19 @@ def _exiger_la_porte(ctx: ResolvedCtx, agent: dict) -> None:
         "tourne sous l'identité de son propriétaire.")
 
 
+#: Un secret collé plus long que ça n'est pas un secret de signature (une clé PEM, un
+#: corps entier collé par erreur) : refusé plutôt que stocké.
+_SECRET_COLLE_MAX = 512
+
+
+def _secret_colle_plausible(secret: str) -> bool:
+    """Un secret de source `hmac_body` collé : non vide, une ligne, sans espace
+    autour (il serait faux d'un octet), borné — et pas NOTRE porteur."""
+    return (bool(secret) and secret == secret.strip() and len(secret) <= _SECRET_COLLE_MAX
+            and not any(c in secret for c in "\r\n\t")
+            and not secret.startswith(runner_hook.HOOK_SECRET_PREFIX))
+
+
 def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> None:
     """Refusé à la POSE plutôt qu'accepté inerte : un secret sur un agent au
     porteur ne servirait à rien, et un agent en mode signature SANS secret aurait
@@ -2469,7 +2490,9 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
     if not actuel or (actuel.get("kind") or "schedule") != "webhook":
         # Même 404 qu'un agent inconnu : un agent programmé n'a pas de porte.
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
-    if runner_hook.prereglage(inp.hook_auth).schema == runner_hook.HMAC_CORPS:
+    vise = runner_hook.prereglage(inp.hook_auth)
+    colle = vise.schema == runner_hook.HMAC_CORPS and vise.secret_colle
+    if vise.schema == runner_hook.HMAC_CORPS and not colle:
         # Le secret d'un `hmac_body` est fabriqué par le serveur et donné à la source
         # par `connect_source` : il n'y a rien à coller ici. Accepté, le mode
         # tomberait dans la branche du porteur (`_hook_auth_sync`) et poserait un
@@ -2480,28 +2503,53 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
             f"source={inp.hook_auth}` : le serveur fabrique le secret et l'inscrit chez "
             "la source lui-même — rien à coller.")
     secret = inp.signing_secret
-    if secret is not None and runner_hook.cle_de_signature(secret) is None:
+    if (secret is not None and vise.schema == runner_hook.STANDARD_WEBHOOKS
+            and runner_hook.cle_de_signature(secret) is None):
         raise AuthzDenied(
             400, "invalid_signing_secret",
             "le secret de signature doit être celui que la SOURCE a généré : "
             "`whsec_` suivi de base64. Un jeton `otoh_` ou une clé d'API n'en sont "
             "pas.")
-    if inp.hook_auth == runner_hook.NONE:
-        # L'adresse privée n'est pas exigée ici : passer en `none` en ÉMET une
-        # neuve (`_hook_auth_sync`), l'id numérique cesse alors d'ouvrir.
-        # Quiconque voit l'adresse déclenche : la dépense doit avoir un fond.
-        if not actuel.get("max_per_day"):
-            raise AuthzDenied(
-                400, "daily_cap_required",
-                "`none` exige un plafond `max_per_day` : quiconque voit l'adresse "
-                "peut déclencher l'agent. Pose-le d'abord (op=update).")
+    if secret is not None and colle and not _secret_colle_plausible(secret):
+        # Le secret est pris TEL QUEL (ses octets UTF-8 sont la clé HMAC) : seul
+        # l'évidemment faux est refusé — vide, multiligne, démesuré, ou NOTRE porteur
+        # collé au mauvais endroit.
+        raise AuthzDenied(
+            400, "invalid_signing_secret",
+            f"le secret de signature doit être celui que `{inp.hook_auth}` affiche, "
+            "collé tel quel (une ligne, sans espace autour). Un jeton `otoh_` n'en est "
+            "pas un.")
+    if vise.exige_un_plafond and not actuel.get("max_per_day"):
+        # `none` : l'adresse privée n'est pas exigée ici — passer en `none` en ÉMET
+        # une neuve (`_hook_auth_sync`), l'id numérique cesse alors d'ouvrir.
+        # Quiconque voit l'adresse déclenche. Rejouable (`minari`, signature sans
+        # horodatage) : quiconque a capturé un corps signé le rejoue. Dans les deux
+        # cas, la dépense doit avoir un fond.
+        raise AuthzDenied(
+            400, "daily_cap_required",
+            (f"`{inp.hook_auth}` exige un plafond `max_per_day` : "
+             + ("quiconque voit l'adresse peut déclencher l'agent."
+                if vise.schema == runner_hook.NONE else
+                "la source ne signe aucun horodatage, une livraison capturée se "
+                "rejouerait.")
+             + " Pose-le d'abord (op=update)."))
     if inp.hook_auth == runner_hook.SLACK:
         _valide_l_agent_slack(actuel)
-    if secret is not None and inp.hook_auth != runner_hook.STANDARD_WEBHOOKS:
+    if (secret is not None and inp.hook_auth != runner_hook.STANDARD_WEBHOOKS
+            and not colle):
         raise AuthzDenied(
             400, "not_signature_mode",
-            "`signing_secret` n'est lu qu'en `hook_auth=standard_webhooks` — posé "
-            "avec le porteur, il serait inerte.")
+            "`signing_secret` n'est lu qu'en mode signature à secret collé "
+            "(`standard_webhooks`, `minari`) — posé avec le porteur, il serait inerte.")
+    if colle and not secret and (not actuel.get("signing_secret_set")
+                                 # ⚠️ Le NOM, pas le schéma : le secret d'un agent
+                                 # `linear` débranché est aussi `hmac_body`, mais c'est
+                                 # celui de Linear — rien de Minari ne se vérifierait.
+                                 or actuel.get("hook_auth") != inp.hook_auth):
+        raise AuthzDenied(
+            400, "missing_signing_secret",
+            f"`{inp.hook_auth}` exige `signing_secret` — le secret que la source "
+            "affiche. Sans lui, aucune livraison ne pourrait être vérifiée.")
     if (inp.hook_auth == runner_hook.STANDARD_WEBHOOKS and not secret
             and (not actuel.get("signing_secret_set")
                  # Le secret posé est celui d'un AUTRE schéma (un agent `linear`
@@ -2600,6 +2648,21 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
             db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
         logger.warning("webhook %s (org %s) : authentification par SIGNATURE posée "
                        "par %s%s", inp.trigger_id, ctx.org_id, ctx.sub,
+                       " (secret posé)" if enveloppe else "")
+    elif vise.schema == runner_hook.HMAC_CORPS and vise.secret_colle:
+        # Comme `standard_webhooks` : le secret de la SOURCE, chiffré pour CETTE
+        # ligne ; le porteur s'efface au changement de mode (un `otoh_` fuité ne
+        # rouvre pas la porte). Sans secret neuf, celui déjà posé pour ce même
+        # préréglage reste (`_valide_l_authentification` l'a vérifié).
+        enveloppe = (runner_hook.chiffrer_secret_de_signature(
+                         inp.trigger_id, inp.signing_secret)
+                     if inp.signing_secret else None)
+        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
+                              secret_enc=enveloppe)
+        if mode_avant != mode:
+            db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
+        logger.warning("webhook %s (org %s) : signature `%s` posée par %s%s",
+                       inp.trigger_id, ctx.org_id, mode, ctx.sub,
                        " (secret posé)" if enveloppe else "")
     elif vise.schema == runner_hook.NONE:
         # SANS preuve : ni porteur ni secret de signature ne doivent survivre —
@@ -2835,8 +2898,9 @@ CAPABILITIES += [
                           "`private_address=false` — l'adresse numérique d'un webhook "
                           "ne se choisit plus ; `rotate_address` pour en changer"),
             DeclaredError(400, "daily_cap_required",
-                          "`max_per_day=0` sur un webhook SANS preuve (`none`) : son "
-                          "plafond ne se retire pas"),
+                          "`max_per_day=0` sur un webhook SANS preuve (`none`) ou dont "
+                          "les livraisons se rejouent (`minari`, signature sans "
+                          "horodatage) : son plafond ne se retire pas"),
             DeclaredError(400, "no_auth_address",
                           "`rotate_address` sur un webhook SANS preuve : son adresse "
                           "est son credential, elle se renouvelle par l'écran (REST)"),
@@ -3106,13 +3170,16 @@ CAPABILITIES += [
                           "un préréglage `hmac_body` (`linear`) : son secret est fabriqué "
                           "par `oto_trigger op=connect_source`, il ne se pose pas ici"),
             DeclaredError(400, "invalid_signing_secret",
-                          "le secret n'a pas la forme `whsec_` + base64"),
+                          "`standard_webhooks` : le secret n'a pas la forme `whsec_` + "
+                          "base64 ; `minari` : vide, multiligne, démesuré ou un `otoh_`"),
             DeclaredError(400, "not_signature_mode",
                           "`signing_secret` avec `hook_auth=bearer` — il serait inerte"),
             DeclaredError(400, "missing_signing_secret",
-                          "`standard_webhooks` sans secret, ni fourni ni déjà posé"),
+                          "`standard_webhooks` ou `minari` sans secret, ni fourni ni "
+                          "déjà posé pour ce même mode"),
             DeclaredError(400, "daily_cap_required",
-                          "`none` sans plafond `max_per_day`"),
+                          "`none` ou `minari` (signature sans horodatage, rejouable) "
+                          "sans plafond `max_per_day`"),
             DeclaredError(503, "encryption_unavailable",
                           "le serveur ne peut pas chiffrer le secret"),
             DeclaredError(404, "trigger_not_found",
@@ -3147,7 +3214,11 @@ CAPABILITIES += [
             "private address, returned once. Switching to `bearer` or `body_secret` erases the signing secret and "
             "returns a fresh `hook_secret`, once. `slack`: the agent answers DMs to the app "
             "in the org's Slack (org admin, one per org, ORG procedure); each run "
-            "carries the identity of the member who asked. REST only: a raw secret never goes through a "
+            "carries the identity of the member who asked. `minari`: Minari signs the "
+            "raw body (`X-Webhook-Signature`, hex HMAC-SHA256) with the secret it shows, "
+            "pasted here as `signing_secret`; retries of an accepted `call.call_id` are "
+            "deduplicated, other events can be replayed, so it requires a `max_per_day` "
+            "cap like `none`. REST only: a raw secret never goes through a "
             "tool call. Only the agent's owner or an org admin may change it: the "
             "agent runs as its owner."),
     ),

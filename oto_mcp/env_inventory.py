@@ -106,7 +106,7 @@ _REQUISES: tuple[Variable, ...] = (
              "Émetteur Logto qui SIGNE (vérification JWT ES384), et que la découverte "
              "ANNONCE comme serveur d'autorisation (+ `/oidc`) : une seule adresse, "
              "celle de l'`issuer`. Le Logto doit avoir CIMD activé.",
-             ("oto_mcp/server.py:243", "oto_mcp/auth/decouverte.py:35",
+             ("oto_mcp/server.py:243", "oto_mcp/auth/decouverte.py:37",
               "oto_mcp/auth/annuaire.py:70")),
     Variable("MCP_AUDIENCE", Classe.REQUISE, None,
              "Audience RFC 9728 canonique vérifiée sur chaque jeton.",
@@ -375,6 +375,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "nommé dans le flux avant l'appel suivant. Lu à chaque appel ; une valeur "
              "qui n'est pas un montant positif lève (jamais le défaut en silence).",
              ("oto_mcp/capabilities/copilot/depense.py:65",)),
+    Variable("OTO_SLACK_COPILOT_MAX_SIMULTANES", Classe.REGLAGE, "8",
+             "L'agent intégré à l'application, dans Slack : tours SIMULTANÉS dans le "
+             "processus (`slack_copilot_places.py`), en plus d'un seul par compte. Un "
+             "tour tient un fil du pool du serveur ; au-delà, la personne lit dans Slack "
+             "« déjà occupé, réessaie dans un instant » et rien ne tourne, sans attente ni "
+             "nouvel essai. PAR PROCESSUS : double pendant une bascule bleu/vert. Lu au "
+             "démarrage ; une valeur qui n'est pas un entier ≥ 1 refuse de démarrer.",
+             ("oto_mcp/slack_copilot_places.py:48",)),
     Variable("OTO_COPILOT_MODEL", Classe.REGLAGE, "claude-sonnet-5-5",
              "L'agent intégré à l'application : le modèle sur lequel une conversation "
              "COMMENCE (`capabilities/copilot/palier.py`, docs/copilot.md §Quel modèle "

@@ -2,10 +2,10 @@
 les gestes qui s'en servent (email primaire, double authentification, lien magique,
 ressource d'API d'un sous-domaine publié).
 
-L'inscription des clients MCP ne passe plus par nous : Logto la fait lui-même, par
-CIMD (Client ID Metadata Document) — le `client_id` d'un client est l'URL de son
-document de métadonnées (`docs/auth-logto.md`). Ce module ne touche à aucune
-application cliente.
+L'inscription des clients MCP passe par Logto lui-même, par CIMD (Client ID Metadata
+Document) — le `client_id` d'un client est l'URL de son document de métadonnées
+(`docs/auth-logto.md`). Ce module ne touche à aucune application cliente ; celles des
+clients sans CIMD sont créées par `auth/inscription_dynamique.py`, sous ce même jeton.
 """
 from __future__ import annotations
 

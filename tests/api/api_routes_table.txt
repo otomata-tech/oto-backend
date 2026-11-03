@@ -72,6 +72,7 @@ GET,HEAD /api/jefacture/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 GET,HEAD /api/slack/oauth/callback -> callback
 POST /api/slack/events -> events
+POST /api/slack/interactions -> interactions
 POST /api/me/orgs -> _handler
 OPTIONS /api/me/orgs -> options_handler
 PUT /api/me/active-org -> _handler
@@ -494,6 +495,10 @@ PUT /api/groups/{id}/connectors/{name}/oauth-app -> _handler
 OPTIONS /api/groups/{id}/connectors/{name}/oauth-app -> options_handler
 DELETE /api/groups/{id}/connectors/{name}/oauth-app -> _handler
 OPTIONS /api/groups/{id}/connectors/{name}/oauth-app -> options_handler
+GET,HEAD /api/orgs/{id}/connectors/{name}/charge-cap -> _handler
+OPTIONS /api/orgs/{id}/connectors/{name}/charge-cap -> options_handler
+PUT /api/orgs/{id}/connectors/{name}/charge-cap -> _handler
+OPTIONS /api/orgs/{id}/connectors/{name}/charge-cap -> options_handler
 GET,HEAD /api/admin/connectors/activation -> _handler
 OPTIONS /api/admin/connectors/activation -> options_handler
 POST /api/admin/connectors/activation -> _handler

@@ -1,8 +1,9 @@
 """The instance's bot in Slack — what an event of its PUBLISHED app becomes.
 
-Two requests reach an agent: a DM to the bot (the org's Slack agent, below), and a
-reply in the thread of a message an agent posted as the app (THAT agent — see
-"A reply to an agent's message").
+Two requests reach an agent: a DM to the bot (the org's Slack agent, below — an org with
+none has its DMs answered by the in-app agent, `slack_copilot.py`), and a reply in the
+thread of a message an agent posted as the app (THAT agent — see "A reply to an agent's
+message"). A mention of the app in a channel is the in-app agent's.
 
 `POST /api/slack/events` (`api/slack.py`) only adapts: it reads the body capped, then
 calls `recevoir` off the loop. Everything that decides lives here, testable without
@@ -81,9 +82,12 @@ Slack side: the events `message.channels`, `message.groups`, `message.mpim` next
 `message.im` — their scopes (`channels:history`, `groups:history`, `mpim:history`)
 are already asked, so no workspace reinstalls.
 
-⚠️ **No `@<app>` in channels.** A channel mention reaches an app only with the
-`app_mentions:read` scope, which the published app does not ask (decision of 22/10,
-`auth/slack.BOT_SCOPES`). A reply in an agent's thread needs no mention.
+⚠️ **A channel `@<app>` is the in-app agent's** (`slack_copilot.py`, `docs/copilot.md`
+§Dans Slack), never a hosted agent's. It reaches the app as the `app_mention` event, which
+needs the `app_mentions:read` scope (`auth/slack.BOT_SCOPES` asks it; a workspace installed
+before must reinstall once). A mention in the thread of one of OUR agents' messages is a
+reply to that agent — its `message` event restarts it, and the mention is left to that. A
+reply in an agent's thread needs no mention.
 
 ⚠️ **Never a 5xx for a business reason**: Slack retries a failed delivery three times,
 then disables the endpoint of an app that keeps failing. Every refusal planned here
@@ -203,6 +207,14 @@ class Demande:
     thread_ts: str
     texte: str
     dm: bool = True
+    #: The app was @-mentioned (the `app_mention` event) — a request to the in-app agent
+    #: (`slack_copilot.py`), in a channel.
+    mention: bool = False
+    #: The app's own user id, for removing its mention from the text ('' = not told).
+    bot_user: str = ""
+    #: The Enterprise Grid the event's workspace belongs to ('' = not a Grid), as the
+    #: signed body names it — what a member from a sibling workspace must share.
+    enterprise_id: str = ""
 
     @property
     def reponse(self) -> bool:
@@ -210,19 +222,33 @@ class Demande:
         return self.thread_ts != self.ts
 
 
+def _bot_de(corps: dict) -> str:
+    """The app's user id, as the event's `authorizations` name it ('' when it does not)."""
+    for a in corps.get("authorizations") or ():
+        if isinstance(a, dict) and a.get("is_bot") and isinstance(a.get("user_id"), str):
+            return a["user_id"]
+    return ""
+
+
+def _chaine(v: Any) -> str:
+    return v if isinstance(v, str) else ""
+
+
 def demande_de(corps: dict) -> Optional[Demande]:
     """The request an `event_callback` carries, or None when it is not one to answer.
 
-    A DM to the bot (`message`, `channel_type = im`), or a REPLY IN A THREAD of a
-    channel, a private channel or a group DM — whether the thread is an agent's is
-    read after the ACK (`traiter`). A channel message that answers no thread is
-    nobody's request; a channel mention never arrives (no `app_mentions:read`), and an
-    `app_mention` that did would be ignored.
+    A DM to the bot (`message`, `channel_type = im`), a REPLY IN A THREAD of a channel, a
+    private channel or a group DM — whether the thread is an agent's or one of the in-app
+    agent's is read after the ACK (`traiter`) —, or an `@<app>` mention in a channel
+    (`app_mention`, a request to the in-app agent, `slack_copilot.py`). A channel message
+    that answers no thread and mentions nobody is nobody's request.
     ⚠️ An event is ALSO sent for the bot's own messages and for edits: anything with a
     `bot_id` is skipped, and any `subtype` but a reply's — or the bot would answer
     itself."""
     ev = corps.get("event") or {}
-    if ev.get("type") != "message" or ev.get("channel_type") not in CANAUX:
+    mention = ev.get("type") == "app_mention"
+    if not mention and (ev.get("type") != "message"
+                        or ev.get("channel_type") not in CANAUX):
         return None
     fil = ev.get("thread_ts")
     reponse = isinstance(fil, str) and bool(fil) and fil != ev.get("ts")
@@ -230,8 +256,8 @@ def demande_de(corps: dict) -> Optional[Demande]:
         return None
     if ev.get("subtype") and not (reponse and ev["subtype"] in SOUS_TYPES_D_UNE_REPONSE):
         return None
-    dm = ev.get("channel_type") == "im"
-    if not dm and not reponse:
+    dm = not mention and ev.get("channel_type") == "im"
+    if not dm and not mention and not reponse:
         return None
     champs = (corps.get("event_id"), corps.get("team_id"), corps.get("api_app_id"),
               ev.get("user"), ev.get("channel"), ev.get("ts"))
@@ -241,7 +267,9 @@ def demande_de(corps: dict) -> Optional[Demande]:
     texte = str(ev.get("text") or "").strip()[:TEXTE_MAX]
     return Demande(event_id=event_id, team_id=team_id, app_id=app_id, user=user,
                    channel=channel, ts=ts, thread_ts=str(ev.get("thread_ts") or ts),
-                   texte=texte, dm=dm)
+                   texte=texte, dm=dm, mention=mention,
+                   bot_user=_bot_de(corps) if mention else "",
+                   enterprise_id=_chaine(corps.get("enterprise_id")))
 
 
 # --- the org, its bot, the member -------------------------------------------
@@ -293,6 +321,23 @@ class Membre:
     email: str
 
 
+def meme_espace(u: dict, d: Demande) -> bool:
+    """Is this Slack user one of the workspace the request came from?
+
+    Their `team_id` must be the event's — or, in an Enterprise Grid, another workspace of
+    the SAME enterprise (`enterprise_user.enterprise_id` equal to the event's, neither
+    empty). ⚠️ An absent `team_id` is a NO: a user Slack does not place is nobody's member
+    (someone from a Slack Connect channel, a guest, would otherwise pass as a member who
+    carries the same email)."""
+    equipe = u.get("team_id")
+    if not isinstance(equipe, str) or not equipe:
+        return False
+    if equipe == d.team_id:
+        return True
+    grille = (u.get("enterprise_user") or {}).get("enterprise_id")
+    return bool(d.enterprise_id) and grille == d.enterprise_id
+
+
 def membre(client: Any, org_id: int, d: Demande) -> tuple[Optional[Membre], Optional[str]]:
     """`(member, None)` or `(None, the message to show the person)`.
 
@@ -310,8 +355,7 @@ def membre(client: Any, org_id: int, d: Demande) -> tuple[Optional[Membre], Opti
         return None, "I couldn't check who you are in Slack. Try again in a minute."
     if u.get("is_bot") or u.get("deleted"):
         return None, None
-    if u.get("is_restricted") or u.get("is_ultra_restricted") \
-            or (u.get("team_id") and u.get("team_id") != d.team_id):
+    if u.get("is_restricted") or u.get("is_ultra_restricted") or not meme_espace(u, d):
         return None, _ETRANGER
     profil = u.get("profile") or {}
     email = (profil.get("email") or "").strip().lower()
@@ -510,8 +554,12 @@ def _reponse_a_l_agent(client: Any, inst: Installation, d: Demande,
 
 def traiter(d: Demande) -> dict:
     """A reply in the thread of an agent's message → a run of THAT agent, as its owner;
-    a DM to the bot → a run of the org's Slack agent, as the member who asked."""
+    a DM to the bot → a run of the org's Slack agent, as the member who asked; a mention,
+    a follow-up in a thread of the in-app agent's, or a DM in an org with no Slack agent →
+    a turn of the in-app agent (`slack_copilot.py`), as the member."""
     from oto.tools.slack.client import SlackClient
+
+    from . import slack_copilot
 
     # Read FIRST, before any credential: every thread reply of every channel the bot
     # sits in arrives here, and almost none is under one of ours.
@@ -522,7 +570,11 @@ def traiter(d: Demande) -> dict:
         return {"ok": True, "ignored": "agent_post"}
     message = (db.slack_agent_posts.lire(d.channel, d.thread_ts)
                if d.reponse else None)
-    if message is None and not d.dm:
+    if message is not None and d.mention:
+        # A mention in an agent's thread is a reply to it: the reply's own event starts
+        # that agent. One sentence must not start two runs.
+        return {"ok": True, "ignored": "agent_thread"}
+    if message is None and not d.dm and not d.mention and not slack_copilot.fil_en_cours(d):
         return {"ok": True, "ignored": "not_an_agent_thread"}
     inst = installation(d.team_id, d.app_id)
     if inst is None:
@@ -533,15 +585,15 @@ def traiter(d: Demande) -> dict:
     if message is not None and int(message["org_id"]) == inst.org_id:
         return _reponse_a_l_agent(client, inst, d, message)
     if not d.dm:
-        # Noted by ANOTHER org's agent (a channel shared across workspaces): not this
-        # org's to answer.
-        return {"ok": True, "ignored": "not_an_agent_thread"}
+        if message is not None:
+            # Noted by ANOTHER org's agent (a channel shared across workspaces): not this
+            # org's to answer.
+            return {"ok": True, "ignored": "not_an_agent_thread"}
+        return slack_copilot.traiter(client, inst, d)
     t = db.trigger_slack_de_l_org(inst.org_id)
     if t is None:
-        _dire(client, d, "No agent answers in Slack for this workspace yet. An admin "
-                         f"of its {_marque()} organization can choose one on the "
-                         "agent's page.")
-        return {"ok": True, "ignored": "no_agent"}
+        # No Slack agent: the DM is the in-app agent's.
+        return slack_copilot.traiter(client, inst, d)
     m, message = membre(client, inst.org_id, d)
     if m is None:
         if message:

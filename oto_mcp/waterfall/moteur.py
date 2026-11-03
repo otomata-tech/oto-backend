@@ -160,7 +160,7 @@ def _limits(max_paid_steps: Optional[int], apify_max_usd: Optional[float]) -> di
         raise _bad("`max_paid_steps` must be at least 1 — omit it for no limit.")
     if apify_max_usd is not None and apify_max_usd < 0.50:
         raise _bad("`apify_max_usd` must be at least 0.50: Apify refuses a lower ceiling "
-                   "on a run. Omit it for no ceiling.")
+                   "on a run. Omit it for the default ceiling of an Apify launch.")
     return {"max_paid_steps": max_paid_steps, "apify_max_usd": apify_max_usd}
 
 

@@ -288,10 +288,12 @@ def test_la_garde_centrale_est_traversee_par_les_quatre_portes():
     chaque ouverture) — et le
     worker de `jev_rows(background=true)`,
     qui rejoue chaque tranche sous l'identité de l'appelant SANS requête : la garde y
-    est relue avant chaque tranche. Une porte d'identité neuve doit s'ajouter ICI —
+    est relue avant chaque tranche — et l'agent intégré dans Slack (`slack_copilot.py`) :
+    le compte y est nommé par l'e-mail Slack, sans requête REST. Une porte d'identité
+    neuve doit s'ajouter ICI —
     c'est l'endroit où elle se déclare."""
     assert _appels("garde_identite", "refus") == {
         "api/base.py", "middleware/account_suspended.py", "api/uploads.py",
-        "api/pennylane_firm.py", "api/wttj.py", "jev_jobs_worker.py"}
+        "api/pennylane_firm.py", "api/wttj.py", "jev_jobs_worker.py", "slack_copilot.py"}
     base_src = (RACINE / "api" / "base.py").read_text()
     assert base_src.count("garde_identite.refus") == 2

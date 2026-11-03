@@ -53,16 +53,17 @@ _REGLAGES = ("client_id", "client_secret")
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="slack", '
              'key="<key>", value="<value>")')
 
-#: The scopes asked at install — exactly the manifest of `connectors/docs/slack.md`,
-#: what the tools use, nothing for an in-Slack assistant (no mentions, no `assistant:`,
-#: no slash commands: decision of 22/10). The bot of `slack_events.py` answers DMs and
-#: replies in the thread of an agent's message: `im:history`, `channels:history`,
-#: `groups:history` and `mpim:history` cover them; a channel `@<app>` would need
-#: `app_mentions:read`, not asked.
-#: ⚠️ Adding one later means EVERY connected workspace reinstalls: this list moves
-#: with the app's declared scopes, never ahead of them.
+#: The scopes asked at install — what the tools use (the manifest of
+#: `connectors/docs/slack.md`), plus `app_mentions:read` for the in-app agent in Slack
+#: (`slack_copilot.py`: `@<app>` in a channel; no `assistant:`, no slash commands). The bot
+#: of `slack_events.py` answers DMs and replies in the thread of an agent's message:
+#: `im:history`, `channels:history`, `groups:history` and `mpim:history` cover them.
+#: ⚠️ A scope declared on the Slack app but NOT asked here is never granted by this install
+#: flow: without `app_mentions:read` here a workspace installed through "Add to Slack" gets no
+#: `app_mention` event. And adding one later means EVERY connected workspace reinstalls
+#: once: this list moves with the app's declared scopes, never ahead of them.
 BOT_SCOPES = (
-    "channels:history", "channels:join", "channels:read", "chat:write", "files:read",
+    "app_mentions:read", "channels:history", "channels:join", "channels:read", "chat:write", "files:read",
     "groups:history", "groups:read", "im:history", "im:read", "im:write",
     "mpim:history", "mpim:read", "reactions:write", "usergroups:read",
     "usergroups:write", "users:read", "users:read.email",

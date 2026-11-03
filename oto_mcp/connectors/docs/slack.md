@@ -32,6 +32,7 @@ features:
 oauth_config:
   scopes:
     bot:
+      - app_mentions:read
       - channels:read
       - channels:history
       - channels:join

@@ -88,6 +88,8 @@ import oto_mcp.capabilities.connectors.cle_perso  # noqa: F401 — connectors.pe
 # dédiée d'une org ou d'une équipe (REST seule : un secret brut).
 import oto_mcp.capabilities.connectors.access_level  # noqa: F401 — connectors.access_level.{org_get,set_org,clear_org,group_get,set_group,clear_group}
 import oto_mcp.capabilities.connectors.oauth_app  # noqa: F401 — connectors.oauth_app.{org_get,set_org,clear_org,group_get,set_group,clear_group}
+# Plafond par lancement Apify d'une org (03/11/2026), borné par la plateforme.
+import oto_mcp.capabilities.connectors.apify_charge_cap  # noqa: F401 — connectors.apify.charge_cap.{org_get,set_org}
 # Palier PLATEFORME de la même famille (#121) — cran d'activation global + accès
 # plateforme (ADR 0010 B4, ADR 0044 §H). Ex-routes écrites à la main : les paliers org
 # et équipe étaient déjà des capacités, c'est l'étage qui manquait.

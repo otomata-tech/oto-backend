@@ -12,6 +12,11 @@ tokens never enter a log line nor the return URL.
 hand-written for the same reason as `api/hooks.py`: a free JSON body, signed by Slack,
 no JWT. It only adapts; `slack_events.recevoir` decides, and what talks to Slack
 runs AFTER the 200 (`slack_events.apres_l_accuse`, background task): Slack waits 3 s.
+
+`POST /api/slack/interactions` — the app's Interactivity endpoint: a press of an Approve /
+Cancel / Undo button of the in-app agent's messages (`slack_copilot.py`). A FORM body
+(`payload=<json>`), signed by Slack like the events, no JWT; 200 at once, the press is
+handled after the ACK.
 """
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 from starlette.routing import Route
 
-from .. import slack_events
+from .. import slack_copilot, slack_events
 from ..auth import flow as oauth_flow
 from ..auth import slack as slack_auth
 from .hooks import _lire_borne
@@ -34,6 +39,7 @@ from .hooks import _lire_borne
 logger = logging.getLogger(__name__)
 
 EVENTS_PATH = "/api/slack/events"
+INTERACTIONS_PATH = "/api/slack/interactions"
 
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
@@ -119,5 +125,27 @@ def make_routes(
                  if demande is not None else None)
         return JSONResponse(rendu, status_code=200, background=tache)
 
+    async def interactions(request: Request) -> Response:
+        """A button press. Same rule as the events: 200 for everything Slack sent
+        properly — a press we will not honour is told to the person in Slack, after the
+        ACK — and `X-Slack-No-Retry` on our own refusals."""
+        brut = await _lire_borne(request)
+        if brut is None:
+            return JSONResponse({"error": "payload_too_large"}, status_code=413,
+                                headers={"X-Slack-No-Retry": "1"})
+        try:
+            action = await run_in_threadpool(slack_copilot.recevoir_interaction, brut,
+                                             request.headers)
+        except slack_events.Refus as e:
+            entetes = {} if e.statut == 503 else {"X-Slack-No-Retry": "1"}
+            return JSONResponse({"error": e.code}, status_code=e.statut, headers=entetes)
+        except Exception:  # noqa: BLE001 — logged whole; Slack shows the press as failed
+            logger.exception("slack interactions: delivery failed on our side")
+            return JSONResponse({"error": "slack_interaction_failed"}, status_code=500)
+        tache = (BackgroundTask(slack_copilot.apres_l_accuse_action, action)
+                 if action is not None else None)
+        return Response(status_code=200, background=tache)
+
     return [Route(slack_auth.CALLBACK_PATH, callback, methods=["GET"]),
-            Route(EVENTS_PATH, events, methods=["POST"])]
+            Route(EVENTS_PATH, events, methods=["POST"]),
+            Route(INTERACTIONS_PATH, interactions, methods=["POST"])]

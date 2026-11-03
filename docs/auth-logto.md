@@ -8,8 +8,9 @@ description: >-
   qualification du sub par tenant (ADR 0052 — le tenant `oto` garde un sub NU, l'AAD
   du coffre en dérive), et inscription des clients MCP chez Logto par CIMD (Client ID
   Metadata Document, Logto ≥ 1.44) : la métadonnée de ressource protégée annonce
-  l'émetteur Logto lui-même (auth/decouverte.py), la plateforme n'enregistre plus aucun
-  client (la façade DCR et le relais d'autorisation sont retirés le 20/10/2026). Inclut
+  l'émetteur Logto lui-même (auth/decouverte.py) ; les clients sans CIMD (Le Chat)
+  s'inscrivent par DCR RFC 7591 sous le domaine de l'émetteur
+  (auth/inscription_dynamique.py, sans relais : l'`iss` reste celui de Logto). Inclut
   les variables d'environnement requises (LOGTO_ENDPOINT, LOGTO_ENDPOINT_ALT,
   OTO_MCP_LOGTO_M2M_*) ; à consulter dès qu'un 401 JWT ou un échec d'installation MCP
   est à diagnostiquer.
@@ -22,9 +23,10 @@ aujourd'hui `auth.oto.ninja/oidc`). Sur 401, le header `WWW-Authenticate` pointe
 `/.well-known/oauth-protected-resource/mcp` (RFC 9728) ce qui amorce le discovery OAuth
 côté client MCP.
 
-⚠️ **Une instance exige un Logto avec CIMD activé (version minimale 1.44).** La plateforme
-n'inscrit aucun client : le client MCP s'inscrit chez Logto par CIMD (§ « L'inscription des
-clients MCP : CIMD, chez Logto »). Un Logto sans CIMD ne sait inscrire aucun client à la
+⚠️ **Une instance exige un Logto avec CIMD activé (version minimale 1.44).** Le client MCP
+s'inscrit chez Logto par CIMD (§ « L'inscription des clients MCP : CIMD, chez Logto ») ;
+seuls les clients sans CIMD passent par l'inscription dynamique (§ « Les clients sans
+CIMD : inscription dynamique sous le domaine de l'émetteur »). Un Logto sans CIMD ne sait inscrire aucun client à la
 volée, et l'installation d'un connecteur MCP y échoue.
 
 ### Le corps du 401 de `/mcp` (#1071)
@@ -238,6 +240,37 @@ l'écran de connexion est celui du domaine de l'émetteur — ce que `LOGTO_PUBL
   `<host>/oauth/token`, qui répond désormais 404 — il doit se reconnecter.
 - **L'application partagée et ses rappels restent dans Logto** : rien ne les retire. La
   nettoyer est un geste d'exploitation, une fois les clients passés à CIMD.
+
+## Les clients sans CIMD : inscription dynamique sous le domaine de l'émetteur
+
+Un client qui ne porte pas CIMD (Le Chat) ne pouvait plus s'inscrire depuis le retrait de
+la façade : la description de Logto n'annonce aucun `registration_endpoint`. Il est rétabli
+(`auth/inscription_dynamique.py`) **sans changer d'émetteur** : le PRM annonce toujours
+Logto, l'`iss` reste le sien (RFC 9207), et seuls trois chemins du domaine de l'émetteur
+(l'origine de `LOGTO_ENDPOINT`) sont menés au backend par son proxy :
+
+| chemin | rendu |
+| --- | --- |
+| `GET /.well-known/oauth-authorization-server/oidc` | la description de Logto (`/oidc/.well-known/openid-configuration`) TELLE QUELLE + `registration_endpoint` |
+| `GET /.well-known/openid-configuration/oidc` | idem |
+| `POST /oauth/register` | l'inscription RFC 7591 |
+
+- **Liste fermée des adresses de retour** (`RETOURS_ADMIS`) : égalité exacte (Le Chat,
+  claude.ai, claude.com) ou préfixe (`https://chatgpt.com/connector/oauth/`). Une seule
+  adresse hors liste : `400 invalid_redirect_uri`, refus journalisé.
+- **Une application Logto par type et adresses de retour** : `Traditional` (secret rendu)
+  pour `client_secret_basic` (défaut) ou `client_secret_post`, `Native` pour `none`, jamais
+  SPA. Nom `DCR · <client_name>` ; une demande de même type et mêmes adresses retrouve
+  l'application existante, quel que soit le nom.
+- **Plafond** : 30 applications `DCR · ` à adresse admise par préfixe ; au-delà, une
+  nouvelle inscription à adresse préfixe est refusée (`invalid_client_metadata`). Les
+  adresses exactes ne sont jamais plafonnées. Faire le ménage dans la console Logto.
+- **Aucun repli** : Logto injoignable (description) ou API de gestion en panne
+  (inscription) rendent une erreur 500. Le secret se lit par
+  `GET /api/applications/{id}/secrets` (Logto 1.44 ne le rend plus à la création) ; aucun
+  secret, erreur. Le secret n'est jamais journalisé.
+- **Débit** : la limite globale (`limite_debit`, classe `anonyme`, par adresse) ; pas de
+  borne propre à la route.
 
 ## MFA par org## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 

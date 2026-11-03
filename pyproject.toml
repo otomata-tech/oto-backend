@@ -51,6 +51,8 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.208.0 = crisp : client messagerie client en lecture seule (`oto.tools.crisp`,
+    # connectors#174), servi par le connecteur `crisp` ;
     # v1.207.0 = pipecorn : opérations synchrones (personne, entreprise, technologies,
     # offres d'emploi ; connectors#171, vague 2), servies par le connecteur `pipecorn` ;
     # v1.206.0 = pipecorn : client décrit, enrichissement asynchrone (envoi puis relève,
@@ -491,7 +493,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.207.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.208.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

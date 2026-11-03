@@ -11,6 +11,7 @@ import pytest
 
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tool_visibility import namespace_of
+from oto_mcp.tools import apify
 from oto_mcp.tools import apify_actors as A
 
 RUN = "HG7ML7M8z78YcAPEB"   # the SHAPE of an Apify run id, made up
@@ -87,6 +88,30 @@ def _tool(name):
     m = FastMCP("t")
     A.register(m)
     return asyncio.run(m.get_tool(name))
+
+
+# The platform settings of the `apify` connector a test sees: empty = none set.
+REGLAGES: dict = {}
+REGLAGES_ORG: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _reglages(monkeypatch):
+    """Every launch reads the bound of the launch (`apify._borne_du_lancement`): each
+    test starts from a process that has not read the platform's settings, a base where
+    none is set, and a call under org 7 whose ceiling is in `REGLAGES_ORG`."""
+    from oto_mcp.db import connector_settings
+    monkeypatch.setattr(apify, "_reglages_lus", {})
+    REGLAGES.clear()
+    REGLAGES_ORG.clear()
+    monkeypatch.setattr(connector_settings, "get_connector_setting",
+                        lambda _t, _i, _c, cle: REGLAGES.get(cle))
+    monkeypatch.setattr(connector_settings, "org_settings_for_key",
+                        lambda _o, cle: {"apify": REGLAGES_ORG[cle]} if cle in REGLAGES_ORG
+                        else {})
+    monkeypatch.setattr(apify, "_org_de_l_appel", lambda: 7)
+    monkeypatch.setattr(apify, "_admin_de", lambda _o: False)
+    monkeypatch.setattr(apify, "_org_qui_prete", lambda _o: None)
 
 
 def _lancer(name, kwargs):
@@ -219,21 +244,33 @@ def test_the_ceiling_is_accepted_up_to_25_dollars(name):
     assert inst.run.call_args.kwargs["max_total_charge_usd"] == 25
 
 
-@pytest.mark.parametrize("usd", [25.01, 100, 0, -1])
+@pytest.mark.parametrize("usd", [25.01, 30, 100, 0, -1])
 @pytest.mark.parametrize("name", sorted(CAS))
 def test_a_ceiling_out_of_bounds_is_refused_by_name_before_the_run(name, usd):
+    """Until 03/11/2026 the refusal sent the caller to `apify_run_sync` with an explicit
+    ceiling, which passed as is: no way around the maximum now, so none is named."""
     with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
             patch("oto.tools.apify.client.ApifyClient") as cls:
         with pytest.raises(McpError) as e:
             _tool(name).fn(**{**CAS[name][0], "max_total_charge_usd": usd})
         cls.return_value.run.assert_not_called()
-    assert "max_total_charge_usd" in str(e.value) and "apify_run_sync" in str(e.value)
+    assert "max_total_charge_usd" in str(e.value) and "apify_run_sync" not in str(e.value)
+    if usd > 25:
+        assert str(e.value).startswith(apify.MAX_CHARGE_ABOVE_CAP)
+
+
+@pytest.mark.parametrize("name", sorted(CAS))
+def test_the_org_ceiling_is_a_setting(name):
+    REGLAGES[apify.CLE_PLAFOND_MAX] = "50"
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    _, inst, _ = _lancer(name, {**CAS[name][0], "max_total_charge_usd": 40})
+    assert inst.run.call_args.kwargs["max_total_charge_usd"] == 40
 
 
 @pytest.mark.parametrize("name", sorted(CAS))
 def test_the_ceiling_and_its_bound_are_declared_in_the_served_text(name):
     prop = _tool(name).parameters["properties"]["max_total_charge_usd"]
-    assert prop["default"] == 5.0 and "$25 at most" in prop["description"], name
+    assert prop["default"] == 5.0 and "your organization's ceiling per run ($25" in prop["description"], name
 
 
 def test_no_platform_usage_figure_is_written_in_the_module_or_served():

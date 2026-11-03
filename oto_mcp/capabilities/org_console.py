@@ -18,7 +18,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel
 
 from . import scheduled_emails
-from .connectors import sharing as connectors_sharing
+from .connectors import apify_charge_cap as connectors_apify_charge_cap, sharing as connectors_sharing
 from .groups import core as groups, guide as groups_guide, invites as groups_invites, members as groups_members
 from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, partage_par_defaut as orgs_partage_par_defaut, update as orgs_update
 from ._authz import (
@@ -90,7 +90,7 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
 class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
     domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved",
-                    "partage_par_defaut"]
+                    "partage_par_defaut", "apify_charge_cap"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -120,6 +120,8 @@ class OrgSettingsInput(BaseModel):
     # partage_par_defaut (set) : par type d'objet neuf — {"agent": "aucun"|"lecture"} —
     # et la porte des préréglages personnels — {"preset_agent": "permis"|"refuse"}.
     partage: Optional[dict[str, str]] = None
+    # apify_charge_cap (set) : le plafond par lancement Apify de l'org, en dollars.
+    usd: Optional[float] = None
 
 
 def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -177,8 +179,22 @@ def _partage_par_defaut(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     return rep
 
 
+def _plafond_apify(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Le plafond par lancement Apify de l'org (`connectors/apify_charge_cap.py`)."""
+    cc = connectors_apify_charge_cap
+    if inp.op == "get":
+        return cc._get(ctx, cc.OrgChargeCapInput(org_id=inp.org_id))
+    if inp.op == "set":
+        if inp.usd is None:
+            raise AuthzDenied(400, "missing_usd", "`usd` requis pour set.")
+        return cc._set(ctx, cc.OrgChargeCapSetInput(org_id=inp.org_id, usd=inp.usd))
+    raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+
+
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     es, mfa, ff = orgs_email_settings, orgs_mfa, orgs_field_filters
+    if inp.domain == "apify_charge_cap":
+        return _plafond_apify(ctx, inp)
     if inp.domain == "time_saved":
         return _temps_gagne(ctx, inp)
     if inp.domain == "partage_par_defaut":
@@ -400,7 +416,11 @@ CAPABILITIES += [
             "for agents: a scheduled run runs as its owner; `preset_agent` permis|refuse "
             "allows or refuses members' personal presets (`oto_trigger op=default_sharing`), "
             "future agents only; an org admin's get also lists in `preset_agent_shared` "
-            "the members whose new agents are born shared). "
+            "the members whose new agents are born shared) | apify_charge_cap (the "
+            "org's ceiling per Apify run, $25 by default: set takes `usd`; at most the "
+            "platform maximum without an Apify key of the org's own, at most the "
+            "platform's safety bound with one; get also returns the bound and the "
+            "ceiling in force on each key). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

@@ -1882,10 +1882,11 @@ de l'**app Slack publiée par l'instance** (celle qu'installe « Add to Slack »
 `auth/slack.py`). Route `POST /api/slack/events` (`api/slack.py`, écrite à la main
 comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
 
-- **DM seulement, pas de `@<app>` dans un canal** : une mention n'arrive à une app qu'avec
-  le scope `app_mentions:read`, que l'app publiée ne demande pas (décision du 22/10,
-  `auth/slack.BOT_SCOPES`). Un DM ne demande que `im:history`, déjà demandé. Une
-  `app_mention` livrée quand même est ignorée.
+- **DM seulement pour un agent hébergé** : un `@<app>` dans un canal n'est jamais un run
+  d'agent — c'est un tour de l'agent intégré (`slack_copilot.py`, `docs/copilot.md` §Dans
+  Slack), qui répond aussi aux DM d'une org SANS agent Slack. L'événement `app_mention`
+  demande le scope `app_mentions:read`, posé dans `auth/slack.BOT_SCOPES` : un espace
+  installé avant se réinstalle une fois. Un DM ne demande que `im:history`.
 - **Preuve** : la signature Slack (`X-Slack-Signature`, HMAC-SHA256 sur
   `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, réglage plateforme
   `connector_settings(slack, signing_secret)` — pas un secret par agent. Fenêtre de

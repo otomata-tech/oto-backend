@@ -157,10 +157,14 @@ def store(monkeypatch):
     def get_recipe(ot, oid, slug):
         return fiches.get((ot, str(oid), slug))
 
-    def get_recipe_or_platform(ot, oid, slug):
-        return get_recipe(ot, oid, slug) or get_recipe("platform", "platform", slug)
+    def get_recipe_and_platform(ot, oid, slug):
+        return get_recipe(ot, oid, slug), get_recipe("platform", "platform", slug)
+
+    def jamais(*a):
+        raise AssertionError("`oto_recipe` ne résout plus par get_recipe_or_platform")
     monkeypatch.setattr(cap.db_recipes, "get_recipe", get_recipe)
-    monkeypatch.setattr(cap.db_recipes, "get_recipe_or_platform", get_recipe_or_platform)
+    monkeypatch.setattr(cap.db_recipes, "get_recipe_and_platform", get_recipe_and_platform)
+    monkeypatch.setattr(cap.db_recipes, "get_recipe_or_platform", jamais)
     return fiches
 
 
@@ -172,8 +176,72 @@ def _fiche_de(op: str, slug: str, org_id=7, **kw) -> dict:
 @pytest.mark.parametrize("op", ["get", "versions", "run"])
 def test_sans_scope_une_lecture_ou_un_lancement_retombe_sur_la_plateforme(store, op):
     assert _fiche_de(op, "public")["owner_type"] == "platform"
-    # L'org gagne toujours sur une recette de la plateforme du même slug.
-    assert _fiche_de(op, "shared")["owner_type"] == "org"
+    # Sans collision, rien ne change : la recette de l'org seule est la sienne.
+    assert _fiche_de(op, "mine")["owner_type"] == "org"
+
+
+@pytest.mark.parametrize("op", ["get", "versions", "run"])
+def test_sans_scope_une_collision_est_refusee_jamais_masquee(store, op):
+    """Une recette d'org du slug d'une recette de la plateforme (collision antérieure à
+    la garde de `create`) : sans `scope`, ni l'une ni l'autre — sinon qui suit une
+    procédure publique exécuterait le code du membre qui l'a posée."""
+    with pytest.raises(AuthzDenied) as e:
+        _fiche_de(op, "shared")
+    assert (e.value.status, e.value.code) == (409, "ambiguous_slug")
+    assert "scope" in str(e.value)
+
+
+@pytest.mark.parametrize("scope, attendu", [("platform", 3), ("org", 2)])
+def test_avec_scope_la_collision_se_lance(store, scope, attendu):
+    assert _fiche_de("run", "shared", scope=scope)["id"] == attendu
+
+
+# ── `create` : un slug de la plateforme est réservé ─────────────────────────────
+
+
+@pytest.fixture
+def creation(store, monkeypatch):
+    crees = []
+    monkeypatch.setattr(cap.db_recipes, "create_recipe",
+                        lambda **kw: crees.append(kw) or _fiche(kw["slug"],
+                                                                (kw["owner_type"],
+                                                                 kw["owner_id"])))
+
+    def creer(slug: str, **kw):
+        return cap._gerer(ResolvedCtx(sub="u", org_id=7),
+                          cap.RecipeInput(op="create", slug=slug, title="t",
+                                          recipe={**DECLARATIVE,
+                                                  "limits": {"max_units": 5}}, **kw))
+    return creer, crees
+
+
+@pytest.mark.parametrize("scope", [None, "org", "user"])
+def test_create_d_un_slug_de_la_plateforme_est_refuse(creation, scope):
+    creer, crees = creation
+    with pytest.raises(AuthzDenied) as e:
+        creer("public", scope=scope)
+    assert (e.value.status, e.value.code) == (409, "slug_reserved_by_platform")
+    assert crees == []
+
+
+@pytest.mark.parametrize("scope", [None, "org", "user"])
+def test_create_d_un_slug_libre_passe(creation, scope):
+    creer, crees = creation
+    creer("brand-new", scope=scope)
+    assert [c["slug"] for c in crees] == ["brand-new"]
+
+
+def test_un_operateur_cree_toujours_sous_scope_platform(creation):
+    """La garde vise la portée d'org ou de soi : sous `scope="platform"`, un slug déjà
+    pris tombe sur l'unicité de la table (`recipe_exists`), pas sur cette garde."""
+    creer, crees = creation
+    creer("brand-new", scope="platform")
+    assert crees[0]["owner_type"] == "platform"
+
+
+def test_les_deux_refus_de_slug_sont_declares():
+    codes = {(e.status, e.code) for e in _capacite("me.recipe").errors}
+    assert {(409, "slug_reserved_by_platform"), (409, "ambiguous_slug")} <= codes
 
 
 @pytest.mark.parametrize("op", ["propose", "describe", "test", "publish"])

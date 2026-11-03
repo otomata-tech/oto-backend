@@ -30,7 +30,7 @@ import types
 
 import pytest
 
-from oto_mcp import runner_hook, slack_events
+from oto_mcp import runner_hook, slack_copilot, slack_events
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
@@ -142,6 +142,15 @@ def slack(monkeypatch):
     monkeypatch.setattr("oto_mcp.capabilities._outils_manquants.manquants",
                         lambda org, sub, tools: [])
     monkeypatch.setenv("OTO_BRAND_NAME", "Acme")
+    # The in-app agent's threads (`copilot_slack_threads`): none unless a test files one;
+    # what its turn does is `tests/test_slack_copilot.py`'s, here only WHO it is routed to.
+    vu["copilot_fils"] = set()
+    vu["copilot"] = []
+    monkeypatch.setattr(slack_copilot.store, "slack_fil_existe",
+                        lambda team, canal, ts: (team, canal, ts) in vu["copilot_fils"])
+    monkeypatch.setattr(slack_copilot, "traiter",
+                        lambda client, inst, d: vu["copilot"].append((inst.org_id, d))
+                        or {"ok": True, "copilot": True})
     vu["client"] = client
     return vu
 
@@ -214,11 +223,19 @@ def test_un_espace_que_PERSONNE_n_a_installe_est_ignore_sans_bruit(slack):
     assert slack["enfile"] is None and "c" not in slack["client"]
 
 
-def test_sans_agent_Slack_la_personne_l_apprend(slack):
+def test_sans_agent_Slack_le_DM_est_celui_de_l_agent_integre(slack):
+    """Une org sans agent Slack n'a plus un « personne ne répond » : son DM est un tour
+    de l'agent intégré (`slack_copilot.py`) — et rien ne part vers un agent hébergé."""
     slack["agent"] = None
-    assert _recevoir(_mention())["ignored"] == "no_agent"
-    (genre, canal, fil, texte), = slack["client"]["c"].dit
-    assert (genre, canal, fil) == ("message", "D0DM", "1700.01") and "admin" in texte
+    assert _recevoir(_mention())["copilot"] is True
+    (org, d), = slack["copilot"]
+    assert org == ORG and d.dm and d.texte == "find 20 CTOs"
+    assert slack["enfile"] is None
+
+
+def test_avec_un_agent_Slack_le_DM_reste_a_l_agent_Slack(slack):
+    assert _recevoir(_mention())["job_id"] == 900
+    assert slack["copilot"] == []
 
 
 @pytest.mark.parametrize("champ", [{"is_restricted": True}, {"is_ultra_restricted": True},
@@ -228,6 +245,32 @@ def test_un_INVITE_ou_un_membre_d_un_AUTRE_espace_ne_lance_rien(slack, champ):
     assert _recevoir(_mention())["ignored"] == "unknown_member"
     assert slack["enfile"] is None
     assert "guests" in slack["client"]["c"].dit[0][3]
+
+
+def test_un_utilisateur_SANS_team_id_ne_lance_rien(slack):
+    """Slack ne le place dans aucun espace : ce n'est le membre de personne."""
+    slack["user"].pop("team_id")
+    assert _recevoir(_mention())["ignored"] == "unknown_member"
+    assert slack["enfile"] is None
+    assert "guests" in slack["client"]["c"].dit[0][3]
+
+
+def test_en_Enterprise_Grid_un_membre_d_un_espace_FRERE_est_accepte(slack):
+    slack["user"].update(team_id="T0FRERE", enterprise_user={"enterprise_id": "E0GRID"})
+    assert _recevoir({**_mention(), "enterprise_id": "E0GRID"})["job_id"] == 900
+
+
+@pytest.mark.parametrize("grille_user, grille_evt", [("E0AUTRE", "E0GRID"), ("", ""),
+                                                      (None, None), ("E0GRID", "")])
+def test_en_Grid_une_AUTRE_entreprise_ou_une_entreprise_vide_ne_lance_rien(
+        slack, grille_user, grille_evt):
+    slack["user"].update(team_id="T0FRERE",
+                         enterprise_user={"enterprise_id": grille_user})
+    corps = _mention()
+    if grille_evt is not None:
+        corps["enterprise_id"] = grille_evt
+    assert _recevoir(corps)["ignored"] == "unknown_member"
+    assert slack["enfile"] is None
 
 
 def test_un_email_sans_membre_dans_l_org_ne_lance_rien(slack):
@@ -433,14 +476,59 @@ def test_un_agent_sur_ABONNEMENT_PERSONNEL_ne_passe_pas_en_slack(pose):
 
 # ── reprise : corrections de la revue de sécurité ─────────────────────────────
 
-def test_une_mention_dans_un_CANAL_n_est_pas_une_demande(slack):
-    """`app_mention` n'arrive qu'avec le scope `app_mentions:read`, que l'app ne
-    demande pas : si Slack en livrait une quand même, rien ne part."""
-    corps = _mention(text="<@U0BOT> find 20 CTOs")
-    corps["event"] = {"type": "app_mention", "user": "U0ASKER", "channel": "C0CHAN",
-                      "ts": "1700.01", "text": "<@U0BOT> find 20 CTOs"}
-    assert _recevoir(corps)["ignored"] == "event"
-    assert slack["enfile"] is None and "c" not in slack["client"]
+def _app_mention(text="<@U0BOT> find 20 CTOs", **ev):
+    """`@<app>` in a channel — the `app_mention` event, with the app's own user named."""
+    return {"type": "event_callback", "event_id": "Ev9", "team_id": TEAM, "api_app_id": APP,
+            "authorizations": [{"user_id": "U0BOT", "is_bot": True}],
+            "event": {"type": "app_mention", "user": "U0ASKER", "channel": "C0CHAN",
+                      "ts": "1700.01", "text": text, **ev}}
+
+
+def test_une_mention_dans_un_CANAL_est_une_demande_a_l_agent_integre(slack):
+    """`app_mention` (le scope `app_mentions:read` est posé sur l'app) : la mention d'un
+    canal est un tour de l'agent intégré, jamais un run d'agent hébergé."""
+    assert _recevoir(_app_mention())["copilot"] is True
+    (org, d), = slack["copilot"]
+    assert (org, d.channel, d.mention, d.dm, d.bot_user) == (ORG, "C0CHAN", True, False, "U0BOT")
+    assert d.thread_ts == "1700.01" and not d.reponse
+    assert slack["enfile"] is None
+
+
+def test_une_mention_dans_un_fil_garde_le_fil(slack):
+    _recevoir(_app_mention(thread_ts="1600.00"))
+    (_, d), = slack["copilot"]
+    assert d.thread_ts == "1600.00" and d.reponse
+
+
+def test_une_mention_ne_prend_ni_un_bot_ni_une_edition(slack):
+    for extra in ({"bot_id": "B1"}, {"subtype": "message_changed"}):
+        corps = _app_mention(**extra)
+        assert _recevoir(corps)["ignored"] == "event"
+    assert slack["copilot"] == []
+
+
+def test_une_mention_dans_le_fil_d_un_AGENT_est_la_reponse_a_cet_agent_pas_un_second_run(slack):
+    """Une phrase ne lance pas deux runs : l'événement `message` de la réponse relance
+    l'agent, la mention (même message) est laissée à celui-là."""
+    slack["posts"][("C0CHAN", "1690.00")] = {"org_id": ORG, "trigger_id": 12,
+                                            "job_id": 5, "text": "hello"}
+    out = _recevoir(_app_mention(thread_ts="1690.00"))
+    assert out["ignored"] == "agent_thread" and slack["copilot"] == []
+    assert slack["enfile"] is None
+
+
+def test_une_reponse_dans_un_fil_de_l_agent_integre_lui_est_passee(slack):
+    """Une réponse sans mention sous une de NOS conversations est un message suivant :
+    la route lit d'abord, sans coffre, qu'un fil nous appartient — puis lui passe."""
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
+    corps = {"type": "event_callback", "event_id": "Ev2", "team_id": TEAM,
+             "api_app_id": APP,
+             "event": {"type": "message", "channel_type": "channel", "user": "U0ASKER",
+                       "channel": "C0CHAN", "ts": "1601.00", "thread_ts": "1600.00",
+                       "text": "and the other table?"}}
+    assert _recevoir(corps)["copilot"] is True
+    (_, d), = slack["copilot"]
+    assert d.thread_ts == "1600.00" and not d.mention and d.reponse
 
 
 def test_la_PORTE_ne_parle_pas_a_Slack_avant_le_200(slack):

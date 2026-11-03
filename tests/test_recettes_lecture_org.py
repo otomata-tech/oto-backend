@@ -175,6 +175,8 @@ def test_create_ecrit_l_affichage_avec_la_recette(monkeypatch):
     """Une seule écriture, dans la transaction de la création : pas de second UPDATE."""
     crees = []
     monkeypatch.setattr(cap, "_corps", lambda ctx, brut: brut)
+    # Aucune recette de la plateforme de ce slug (`slug_reserved_by_platform`).
+    monkeypatch.setattr(cap.db_recipes, "get_recipe", lambda *a: None)
     monkeypatch.setattr(cap.db_recipes, "create_recipe",
                         lambda **kw: crees.append(kw) or _fiche(kw["slug"], None, 1))
     monkeypatch.setattr(cap.db_recipes, "describe_recipe",

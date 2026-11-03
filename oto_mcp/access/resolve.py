@@ -95,39 +95,40 @@ def _note_resolved_instance(rc: ResolvedCredential) -> ResolvedCredential:
     The journal said which tool and which org; never UNDER WHICH KEY. Yet that is
     precisely the question of an access switchover ("did the call go through the
     edge or the old path?") and of a credential incident
-    ("which instance was called?"). Best-effort and no-op outside an MCP call: a
-    trace never makes a resolution fail."""
-    try:
-        ref = instance_refs.ref_for_credential(   # ONE ref per row: its CARRIER's
-            rc.entity_type or "", rc.entity_id or "",
-            providers.credential_provider(rc.provider), rc.account)
-        # `instance` = the fingerprint for the JOURNAL. `resolved_*` = what lets us tell
-        # the AGENT on return from the call (`_account` echo, `CallContextMiddleware`):
-        # without it, it posts to one of its two workspaces without ever knowing which.
-        # The connector is noted WITH the account: a composite tool may resolve an
-        # auxiliary credential, and the echo must only announce the connector called.
-        # `key_mode` = UNDER WHICH KEY the call goes through (`user|group|org|tenant|
-        # platform`). Set here, at the SINGLE resolver, so every keyed tool
-        # carries it without any tool having to think about it — and a connector added
-        # tomorrow will get it for free.
-        # What it decides: the partner's billing consumer (external repo)
-        # bills ONLY the `platform` mode.
-        # A customer on THEIR own key already pays the provider; counting credits
-        # on top makes no sense (partner's ruling, 09/09).
-        # ⚠️ The `mode` and not `is_platform`: the boolean collapses user/group/org/
-        # tenant into a single "no", whereas these are four origins an
-        # invoice may need to distinguish.
-        # `credential_row` = the vault row ITSELF (not its ref): it is what
-        # the health tracking marks when upstream refuses for lack of credits, and
-        # clears on first success (`connectors.health.suivre_appel`). Neither journaled
-        # (outside `_TRACED_ARGS`) nor billed.
-        session_org.note_call_trace(instance=ref, resolved_connector=rc.provider,
-                                    resolved_account=rc.account,
-                                    key_mode=rc.mode,
-                                    credential_row=(rc.entity_type, rc.entity_id,
-                                                    rc.provider, rc.account or ""))
-    except Exception:  # noqa: BLE001
-        logger.debug("instance trace failed", exc_info=True)
+    ("which instance was called?"). No-op outside an MCP call (`note_call_trace`).
+
+    ⚠️ NOT best-effort: what it notes DECIDES (`key_mode` bills, `credential_row` names
+    the payer of an Apify run, `tools/apify._org_qui_prete`). The body is pure (a ref
+    projected from the row, a write into the call's trace); a failure here is a bug,
+    and it RAISES — swallowed, it turned the readers' verdict into a lottery."""
+    ref = instance_refs.ref_for_credential(   # ONE ref per row: its CARRIER's
+        rc.entity_type or "", rc.entity_id or "",
+        providers.credential_provider(rc.provider), rc.account)
+    # `instance` = the fingerprint for the JOURNAL. `resolved_*` = what lets us tell
+    # the AGENT on return from the call (`_account` echo, `CallContextMiddleware`):
+    # without it, it posts to one of its two workspaces without ever knowing which.
+    # The connector is noted WITH the account: a composite tool may resolve an
+    # auxiliary credential, and the echo must only announce the connector called.
+    # `key_mode` = UNDER WHICH KEY the call goes through (`user|group|org|tenant|
+    # platform`). Set here, at the SINGLE resolver, so every keyed tool
+    # carries it without any tool having to think about it — and a connector added
+    # tomorrow will get it for free.
+    # What it decides: the partner's billing consumer (external repo)
+    # bills ONLY the `platform` mode.
+    # A customer on THEIR own key already pays the provider; counting credits
+    # on top makes no sense (partner's ruling, 09/09).
+    # ⚠️ The `mode` and not `is_platform`: the boolean collapses user/group/org/
+    # tenant into a single "no", whereas these are four origins an
+    # invoice may need to distinguish.
+    # `credential_row` = the vault row ITSELF (not its ref): it is what
+    # the health tracking marks when upstream refuses for lack of credits, and
+    # clears on first success (`connectors.health.suivre_appel`). Neither journaled
+    # (outside `_TRACED_ARGS`) nor billed.
+    session_org.note_call_trace(instance=ref, resolved_connector=rc.provider,
+                                resolved_account=rc.account,
+                                key_mode=rc.mode,
+                                credential_row=(rc.entity_type, rc.entity_id,
+                                                rc.provider, rc.account or ""))
     return rc
 
 

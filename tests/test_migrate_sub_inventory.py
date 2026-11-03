@@ -124,6 +124,10 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # carries it (30 days at most) and is shown to the model only on the turn it
         # came with: after a merge, the person attaches it again.
         ("copilot_attachments", "sub"),
+        # Where a conversation lives in Slack (`slack_copilot.py`): a filing that follows
+        # the conversation above (30 days at most). After a merge the person mentions the
+        # app again and a new one opens.
+        ("copilot_slack_threads", "sub"),
         # Le COMPTE DE SERVICE d'une org (clés d'org, #1188) n'est pas une identité Logto :
         # aucune bascule de tenant ni fusion de comptes ne le vise, il n'a rien à suivre.
         ("org_service_accounts", "sub"),

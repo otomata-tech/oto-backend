@@ -354,6 +354,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `aircall` by situation: a team's calls and texts with their AI
     # summaries, its contacts CRM and Power Dialer queue, on one Allo API key.
     "allo",
+    # --- customer messaging, read-only — wired 2026-11-03 --------------------
+    # A workspace's conversations across its channels, their messages, contacts
+    # and knowledge base, on one website token and the website ID.
+    "crisp",
     # --- KEY carriers, no tools (kind="credential") --------------------------
     # The model key an org deposits for its scheduled agents. They serve
     # no tool: the worker consumes it on the org's behalf.

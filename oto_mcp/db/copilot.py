@@ -245,6 +245,71 @@ def compter_purgeables(jours: int) -> dict:
     return {"threads": int(fils["n"]), "spend_days": int(jours_["n"])}
 
 
+# --- l'agent intégré dans Slack (`slack_copilot.py`) ------------------------------------
+
+#: Un message de Slack déjà pris en charge se garde ce long : le temps d'un retry et du
+#: second événement de la même mention, pas plus.
+SLACK_EVENEMENT_JOURS = 2
+
+
+def slack_reclamer(channel: str, ts: str) -> bool:
+    """Prend en charge le message `(channel, ts)` : vrai pour le PREMIER événement qui le
+    réclame, faux pour les suivants (l'autre événement de la même mention, un retry)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO copilot_slack_events (channel, ts) VALUES (%s, %s) "
+            "ON CONFLICT (channel, ts) DO NOTHING RETURNING ts", (channel, ts)).fetchone()
+    return row is not None
+
+
+def slack_fil_existe(team_id: str, channel: str, thread_ts: str) -> bool:
+    """Un fil de Slack porte-t-il une conversation, de qui que ce soit ? La lecture bon
+    marché, avant tout identifiant : chaque réponse de chaque canal où l'app siège arrive
+    ici, et presque aucune n'est sous une de nos conversations."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM copilot_slack_threads WHERE team_id = %s AND channel = %s "
+            "AND thread_ts = %s LIMIT 1", (team_id, channel, thread_ts)).fetchone() is not None
+
+
+def slack_fil(team_id: str, channel: str, thread_ts: str, sub: str) -> Optional[dict]:
+    """La conversation de `sub` dans ce fil de Slack (`thread_ts` = '' : le message
+    direct) : `{thread_id, inactif_min}` — depuis combien de minutes elle n'a pas vécu —,
+    ou `None`."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT s.thread_id, EXTRACT(EPOCH FROM (NOW() - t.last_seen)) / 60 AS inactif_min "
+            "FROM copilot_slack_threads s JOIN copilot_threads t ON t.id = s.thread_id "
+            "WHERE s.team_id = %s AND s.channel = %s AND s.thread_ts = %s AND s.sub = %s",
+            (team_id, channel, thread_ts, sub)).fetchone()
+    return {"thread_id": row["thread_id"], "inactif_min": float(row["inactif_min"])} \
+        if row else None
+
+
+def slack_lier(thread_id: str, team_id: str, channel: str, thread_ts: str,
+               sub: str) -> None:
+    """Range la conversation sous son fil de Slack. Une conversation neuve REMPLACE celle
+    du même fil (un message direct dont la précédente a vieilli)."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM copilot_slack_threads WHERE team_id = %s AND channel = %s "
+            "AND thread_ts = %s AND sub = %s", (team_id, channel, thread_ts, sub))
+        conn.execute(
+            "INSERT INTO copilot_slack_threads (thread_id, team_id, channel, thread_ts, sub) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (thread_id) DO NOTHING",
+            (thread_id, team_id, channel, thread_ts, sub))
+
+
+def slack_de(thread_id: str) -> Optional[dict]:
+    """Où est la conversation dans Slack : `{team_id, channel, thread_ts, sub}`, ou `None`
+    (une conversation de l'application)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT team_id, channel, thread_ts, sub FROM copilot_slack_threads "
+            "WHERE thread_id = %s", (thread_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def purger(jours: int) -> dict:
     """Retire les conversations sans vie depuis `jours` (leurs annulations partent avec,
     `ON DELETE CASCADE`) et les jours de dépense plus vieux que `jours`. Une conversation
@@ -256,4 +321,7 @@ def purger(jours: int) -> dict:
         jours_ = conn.execute(
             "DELETE FROM copilot_spend WHERE day < (NOW() AT TIME ZONE 'UTC')::date - %s",
             (int(jours),)).rowcount
+        conn.execute(
+            "DELETE FROM copilot_slack_events WHERE created_at < NOW() - make_interval(days => %s)",
+            (SLACK_EVENEMENT_JOURS,))
     return {"threads": int(fils), "spend_days": int(jours_)}

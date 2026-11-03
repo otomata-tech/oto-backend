@@ -1,2 +1,5 @@
 GET,HEAD,OPTIONS /.well-known/oauth-protected-resource -> prm
 GET,HEAD,OPTIONS /.well-known/oauth-protected-resource/mcp -> prm
+GET,HEAD /.well-known/oauth-authorization-server/oidc -> description
+GET,HEAD /.well-known/openid-configuration/oidc -> description
+POST /oauth/register -> register

@@ -137,8 +137,13 @@ def get_recipe(owner_type: str, owner_id: str, slug: str) -> Optional[dict]:
 
 def get_recipe_or_platform(owner_type: str, owner_id: str, slug: str) -> Optional[dict]:
     """La fiche de ce slug chez ce propriétaire, sinon celle de la PLATEFORME, ou `None`.
-    Celle du propriétaire gagne toujours : une org ne perd jamais sa recette au profit
-    d'une recette de la plateforme du même nom. Une requête."""
+    Celle du propriétaire passe devant. Une requête.
+
+    ⚠️ Pour LIRE seulement (les outils qu'une procédure fera appeler, un avertissement),
+    jamais pour choisir ce qui S'EXÉCUTE : une recette d'org ou de soi qui porte le slug
+    d'une recette de la plateforme la masquerait, et qui lance ce slug sans `scope`
+    exécuterait le code de son auteur. `oto_recipe` résout par
+    `get_recipe_and_platform`, qui rend les deux et laisse refuser la collision."""
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_RECIPE_COLS}, {_LATEST} FROM recipes r WHERE r.slug = %s AND "
@@ -147,6 +152,25 @@ def get_recipe_or_platform(owner_type: str, owner_id: str, slug: str) -> Optiona
             "ORDER BY (r.owner_type = %s) LIMIT 1",
             (slug, owner_type, str(owner_id), *PLATEFORME, PLATEFORME[0])).fetchone()
     return dict(row) if row else None
+
+
+def get_recipe_and_platform(owner_type: str, owner_id: str,
+                            slug: str) -> tuple[Optional[dict], Optional[dict]]:
+    """`(fiche de ce propriétaire, fiche de la plateforme)` pour ce slug, chacune ou
+    `None`. Une requête. Les deux rendues : à l'appelant de refuser une collision plutôt
+    que de laisser l'une masquer l'autre."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_RECIPE_COLS}, {_LATEST} FROM recipes r WHERE r.slug = %s AND "
+            "((r.owner_type = %s AND r.owner_id = %s) "
+            "OR (r.owner_type = %s AND r.owner_id = %s))",
+            (slug, owner_type, str(owner_id), *PLATEFORME)).fetchall()
+    fiches = [dict(r) for r in rows]
+    plateforme = next((f for f in fiches
+                       if (f["owner_type"], f["owner_id"]) == PLATEFORME), None)
+    propre = next((f for f in fiches
+                   if (f["owner_type"], f["owner_id"]) == (owner_type, str(owner_id))), None)
+    return propre, plateforme
 
 
 def list_recipes(owners: Iterable[tuple[str, str]]) -> list[dict]:

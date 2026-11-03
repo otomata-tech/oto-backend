@@ -368,14 +368,25 @@ recettes n'appartiennent donc à aucune org : leur propriétaire est la platefor
   refus nommé 403 `platform_only`). `list`, `get`, `versions` et `run` sous
   `scope="platform"` sont ouverts à tout compte.
 - **La résolution, sans `scope`** : `get`, `versions` et `run` prennent la recette
-  de l'org active, sinon celle de la plateforme du même slug — **celle de l'org gagne
-  toujours**. Sans org active, celle de la plateforme, sinon `no_active_org`. Les écritures
-  sans `scope` ne visent que l'org, jamais la plateforme : un membre ne modifie pas une
-  recette de la plateforme en omettant `scope`. `test` non plus : éprouver une version
-  non publiée de la plateforme reste aux opérateurs, sous `scope="platform"`.
-  `scope="org"` et `scope="user"` ne retombent sur rien. Une recette d'org du même slug
-  masque donc celle de la plateforme pour l'org : accepté, c'est borné à l'org et à des
-  outils en lecture.
+  de l'org active, sinon celle de la plateforme du même slug. Sans org active, celle de
+  la plateforme, sinon `no_active_org`. Les écritures sans `scope` ne visent que l'org,
+  jamais la plateforme : un membre ne modifie pas une recette de la plateforme en
+  omettant `scope`. `test` non plus : éprouver une version non publiée de la plateforme
+  reste aux opérateurs, sous `scope="platform"`. `scope="org"` et `scope="user"` ne
+  retombent sur rien.
+- **Un slug de la plateforme n'est jamais masqué en silence.** Depuis que le membre
+  publie sa recette-code dans sa portée (#1202), une recette d'org qui prendrait le slug
+  d'une recette de la plateforme ferait exécuter SON code à quiconque lance ce slug sans
+  `scope` — un admin, un agent qui suit la procédure publique qui le nomme. Donc :
+  - `create` dans une org ou pour soi refuse un slug que la plateforme porte déjà :
+    409 `slug_reserved_by_platform` ;
+  - `get`, `versions` et `run` sans `scope` refusent une collision qui existe quand même
+    (posée avant cette garde, ou recette de la plateforme créée après celle de l'org) :
+    409 `ambiguous_slug`, à relancer avec `scope="org"` ou `scope="platform"`. Avec un
+    `scope` explicite, rien ne change ;
+  - la lecture `db_recipes.get_recipe_or_platform` (org d'abord) ne sert plus qu'aux
+    avertissements ci-dessous, jamais à choisir ce qui s'exécute
+    (`get_recipe_and_platform` rend les deux fiches).
 - **Visible de toute l'instance** : une recette de la plateforme est listée et lançable
   par tous les comptes de l'instance, quel que soit leur tenant — c'est le principe d'une
   bibliothèque de plateforme.
@@ -394,7 +405,8 @@ recettes n'appartiennent donc à aucune org : leur propriétaire est la platefor
   lecture (`_lister`), `display` écrit sinon dérivé du corps. Ouverte en consultation
   (« voir en tant que ») : aucune donnée d'org.
 - Les avertissements `missing_tools` d'un agent (`oto_trigger`) lisent les outils d'une
-  recette nommée par sa procédure selon la même résolution.
+  recette nommée par sa procédure : celle de l'org, sinon celle de la plateforme (sur une
+  collision, celle de l'org — une proposition d'outils, pas un lancement).
 
 ## Ce qui vient ensuite
 

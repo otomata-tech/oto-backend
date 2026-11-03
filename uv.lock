@@ -1438,8 +1438,8 @@ wheels = [
 
 [[package]]
 name = "oto-core"
-version = "1.207.0"
-source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.207.0#64d9b6230e61e69df33d14b0f9035f0efb266a9c" }
+version = "1.208.0"
+source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.208.0#03759bc0d5db429f2ac69ece0cbaa075808c6da0" }
 dependencies = [
     { name = "defusedxml" },
     { name = "france-opendata" },
@@ -1515,7 +1515,7 @@ requires-dist = [
     { name = "markdown", specifier = ">=3.5" },
     { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "openpyxl", specifier = ">=3.1" },
-    { name = "oto-core", extras = ["anonymize", "planity"], git = "https://github.com/otomata-tech/oto-core.git?rev=v1.207.0" },
+    { name = "oto-core", extras = ["anonymize", "planity"], git = "https://github.com/otomata-tech/oto-core.git?rev=v1.208.0" },
     { name = "packaging", specifier = ">=23" },
     { name = "patchright", specifier = ">=0.1.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },

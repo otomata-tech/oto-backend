@@ -41,8 +41,10 @@ def test_probe_does_not_emit(captured, monkeypatch):
 
 def test_success_does_not_emit(captured, monkeypatch):
     # Une résolution sous clé propre : le résolveur lit `is_platform` (L8, le porteur
-    # que le règlement débite) — une doublure sans lui ne serait plus une résolution.
-    sentinel = SimpleNamespace(is_platform=False)
+    # que le règlement débite) — une doublure sans lui ne serait plus une résolution ;
+    # ni sans la ligne qui a servi, que le relevé de l'appel pose (il ne s'avale plus).
+    sentinel = SimpleNamespace(is_platform=False, mode="org", provider="serper",
+                               entity_type="org", entity_id="7", account="")
     monkeypatch.setattr(access, "_resolve_credential_impl", lambda *a, **k: sentinel)
     assert access.resolve_credential("serper", sub="u1") is sentinel
     assert captured == []  # le chemin heureux n'émet jamais

@@ -434,7 +434,9 @@ optionnels, sur chacun des outils, pour l'agent qui veut une limite :
 - `max_paid_steps` — au plus N appels PAYANTS par recherche (les étapes gratuites ne
   comptent pas) ; les suivantes sont `skipped / max_paid_steps`.
 - `apify_max_usd` — un plafond de coût par exécution Apify (≥ 0,50 \$, le minimum
-  d'Apify), transmis tel quel.
+  d'Apify), transmis tel quel ; au-delà du plafond par lancement de l'org (25 \$ par
+  défaut, borné par la plateforme, `docs/monitoring.md`), l'exécution est refusée
+  (`max_charge_above_cap`).
 
 Restent les bornes de forme, pas de dépense : la réponse (`limit` des gens, jusqu'à 100),
 le délai de la cascade (40 s, la route REST coupe à 45 s) et celui d'une exécution Apify.

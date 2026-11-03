@@ -52,7 +52,7 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 
 ## Auth, rôles, coffre, REST & version servie
 
-JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
+JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé), DCR RFC 7591 pour les clients sans CIMD sous le domaine de l'émetteur (`auth/inscription_dynamique.py`) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
 sert oto sous sa marque) · ⚠️ **on n'étend plus le tenant** : ni capacité, route, table,
 colonne, rang de cascade, marque ou réglage par tenant neufs — un besoin « par tenant » se traite par instance ou
 par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :

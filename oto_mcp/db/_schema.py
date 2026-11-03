@@ -94,6 +94,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.runs.SLACK_AGENT_POSTS,   # messages postés dans Slack par un agent : à qui va une réponse
     schema.usage.APIFY_RUNS,         # runs Apify de la clé plateforme, notés au lancement
     schema.usage.HIGGSFIELD_JOBS,    # travaux Higgsfield de la clé plateforme, notés à la soumission
+    schema.copilot.SLACK,            # l'agent intégré dans Slack : où vit sa conversation, messages déjà pris
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

@@ -44,9 +44,32 @@ def test_c_est_le_mode_qui_est_trace_PAS_le_booleen():
     assert modes == {"user", "group", "org", "tenant"}
 
 
-def test_un_releve_qui_echoue_ne_fait_jamais_echouer_la_resolution():
-    """Le relevé est best-effort : journaliser ne doit jamais casser un appel."""
+def test_un_releve_qui_echoue_fait_echouer_la_resolution():
+    """Le relevé DÉCIDE (`key_mode` facture, `credential_row` désigne qui paie un run
+    Apify) : avalé, son échec rendait leur verdict aléatoire. Il lève."""
+    import pytest
     with patch("oto_mcp.access.resolve.instance_refs.ref_for_credential",
-               side_effect=RuntimeError("coffre indisponible")):
-        rc = resolve._note_resolved_instance(_rc("platform", True))
-    assert rc.key == "sk-test"
+               side_effect=RuntimeError("bug de projection")), \
+            pytest.raises(RuntimeError, match="bug de projection"):
+        resolve._note_resolved_instance(_rc("org", False))
+
+
+def test_la_ligne_qui_a_servi_est_toujours_posee_meme_sans_ref_projetable():
+    """Une ligne dont la ref ne se projette pas (résidu `user`) pose quand même son
+    `credential_row` et son `key_mode` : leurs lecteurs ne dépendent pas de la ref."""
+    from oto_mcp import session_org
+    rc = ResolvedCredential("apify", "sk-test", False, "user", "user", "sub-x", "")
+    tok = session_org.set_call_trace({})
+    try:
+        resolve._note_resolved_instance(rc)
+        trace = session_org.current_call_trace()
+    finally:
+        session_org.reset_call_trace(tok)
+    assert "instance" not in trace
+    assert trace["key_mode"] == "user"
+    assert trace["credential_row"] == ("user", "sub-x", "apify", "")
+
+
+def test_hors_appel_mcp_le_releve_ne_pose_rien_et_ne_leve_pas():
+    rc = _rc("org", False)
+    assert resolve._note_resolved_instance(rc) is rc

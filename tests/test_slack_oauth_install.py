@@ -113,8 +113,8 @@ def test_l_url_d_installation_porte_l_app_les_scopes_et_un_state_lie(env):
 def test_les_scopes_sont_ceux_du_manifeste_documente():
     """Le manifeste de la fiche est ce que l'utilisateur colle quand il crée SA app :
     l'app publiée n'en demande ni moins (un outil marcherait d'un côté et
-    `missing_scope` de l'autre), ni plus (décision du 22/10 : rien pour un assistant
-    dans Slack)."""
+    `missing_scope` de l'autre), ni plus. `app_mentions:read` y est depuis l'agent intégré
+    dans Slack (`slack_copilot.py`, décision du 03/11 qui lève celle du 22/10)."""
     from oto_mcp import providers
 
     corps = " ".join(s.body_md for s in providers.REGISTRY["slack"].doc_sections)
@@ -126,11 +126,13 @@ def test_les_scopes_sont_ceux_du_manifeste_documente():
     assert set(scopes["user"]) == set(slack_auth.USER_SCOPES)
 
 
-def test_l_url_ne_demande_aucun_scope_d_assistant(env):
-    """Retirés le 22/10 : mentions, `assistant:write`, commandes slash."""
+def test_l_url_demande_les_mentions_mais_aucun_autre_scope_d_assistant(env):
+    """`app_mentions:read` : un `@<app>` dans un canal est un tour de l'agent intégré
+    (levé le 03/11). Restent retirés : `assistant:write`, les commandes slash."""
     _out, q = _etat(env)
     demandes = set(q["scope"].split(",")) | set(q["user_scope"].split(","))
-    assert not demandes & {"app_mentions:read", "assistant:write", "commands"}
+    assert "app_mentions:read" in demandes
+    assert not demandes & {"assistant:write", "commands"}
 
 
 def test_sans_coordonnees_le_refus_nomme_la_cle_et_le_flux_reste_muet(env):

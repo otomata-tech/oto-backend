@@ -35,9 +35,18 @@ motif que `_publication.refuser_si_agent`) : un appel interne sans canal passe.
 (create, propose, describe, test, publish) est réservé aux opérateurs plateforme
 (`PLATFORM_OPERATOR_OPT`, 403 `platform_only`) ; les lire et les lancer est ouvert à
 tous. Sans `scope`, get, versions et run cherchent la recette de l'org, PUIS celle
-de la plateforme — la recette de l'org gagne toujours ; les écritures sans `scope` ne
-visent que l'org, jamais la plateforme. Une recette de la plateforme s'exécute comme
-toute autre : identité, org et droits sur le tableau de QUI la lance.
+de la plateforme ; les écritures sans `scope` ne visent que l'org, jamais la plateforme.
+Une recette de la plateforme s'exécute comme toute autre : identité, org et droits sur
+le tableau de QUI la lance.
+
+**Un slug de la plateforme n'est jamais masqué en silence.** Un membre publie une
+recette-code dans son org (#1202) : s'il pouvait prendre le slug d'une recette de la
+plateforme qu'une procédure publique nomme, tout `run` sans `scope` de son org (un
+admin, un agent qui suit la procédure) exécuterait SON code. Donc `create` dans une
+org ou pour soi refuse un slug que la plateforme porte déjà (409
+`slug_reserved_by_platform`), et get, versions et run sans `scope` refusent une
+collision qui existe quand même (posée avant, ou plateforme créée après) : 409
+`ambiguous_slug`, à relancer avec `scope`. Avec `scope`, rien ne change.
 """
 from __future__ import annotations
 
@@ -74,6 +83,14 @@ _OPS_ECRITURE = ("create", "propose", "describe", "test", "publish")
 #: écritures n'y sont pas, ni `test` : sans `scope`, elles ne visent que l'org — éprouver
 #: une version non publiée de la plateforme reste aux opérateurs, sous `scope="platform"`.
 _OPS_REPLI_PLATEFORME = ("get", "versions", "run")
+_REFUS_SLUG_RESERVE = DeclaredError(
+    409, "slug_reserved_by_platform",
+    "create in an org or for yourself: a platform recipe already has this `slug` "
+    "(a public procedure may name it); pick another slug")
+_REFUS_AMBIGU = DeclaredError(
+    409, "ambiguous_slug",
+    "get, versions or run without `scope`: both your org and the platform have a recipe "
+    "of this `slug`; pass `scope='org'` or `scope='platform'`")
 _REFUS_PLATEFORME = DeclaredError(
     403, CODE_PLATEFORME_SEULE,
     "`scope='platform'`: create, propose, describe, test and publish are reserved to "
@@ -111,7 +128,8 @@ class RecipeInput(BaseModel):
         "Whose recipes: your active org (default), `user` (your own), or `platform` "
         "(open to everyone to read and run; written by platform operators only). "
         "Without scope, get/versions/run fall back to the platform recipe of that "
-        "slug when the org has none; list shows org, own and platform recipes."))
+        "slug when the org has none, and refuse `ambiguous_slug` when both have one "
+        "(pass `org` or `platform`); list shows org, own and platform recipes."))
     org: Optional[int] = None
     version: Optional[int] = Field(default=None, description=(
         "get/test/publish/run: the version (default: the published one, else the latest)."))
@@ -219,7 +237,9 @@ def _corps(ctx: ResolvedCtx, brut: Any) -> dict:
 def _fiche(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
     """La fiche visée. Sans `scope`, une op de `_OPS_REPLI_PLATEFORME` prend celle de
     l'org, sinon celle de la plateforme (sans org active : celle de la plateforme, puis
-    `no_active_org`) ; une écriture sans `scope` ne vise que l'org."""
+    `no_active_org`) — et refuse `ambiguous_slug` si les deux existent : l'org ne masque
+    jamais en silence une recette de la plateforme (cf. la docstring du module). Une
+    écriture sans `scope` ne vise que l'org."""
     slug = _besoin(inp.slug, "missing_slug", f"`slug` is required for op={inp.op}.")
     repli = inp.scope is None and inp.op in _OPS_REPLI_PLATEFORME
     if repli and ctx.org_id is None:
@@ -228,7 +248,13 @@ def _fiche(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
             return fiche
     owner = _proprietaire(ctx, inp)
     if repli:
-        fiche = db_recipes.get_recipe_or_platform(owner[0], owner[1], slug)
+        fiche, plateforme = db_recipes.get_recipe_and_platform(owner[0], owner[1], slug)
+        if fiche is not None and plateforme is not None:
+            raise AuthzDenied(
+                409, "ambiguous_slug",
+                f"Both your org and the platform have a recipe `{slug}`: pass "
+                "`scope='org'` for your org's or `scope='platform'` for the platform's.")
+        fiche = fiche or plateforme
     else:
         fiche = db_recipes.get_recipe(owner[0], owner[1], slug)
     if fiche is None:
@@ -273,6 +299,12 @@ def _gerer(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
         title = _besoin(inp.title, "missing_title", "`title` is required for create.")
         corps = _corps(ctx, _besoin(inp.recipe, "missing_recipe", "`recipe` is required."))
         owner = _proprietaire(ctx, inp)
+        if (owner != db_recipes.PLATEFORME
+                and db_recipes.get_recipe(*db_recipes.PLATEFORME, slug) is not None):
+            raise AuthzDenied(409, "slug_reserved_by_platform",
+                              f"A platform recipe is already named `{slug}`: a recipe of "
+                              "your own under that slug would shadow it. Pick another "
+                              "slug.")
         display = _affichage(inp.display) if inp.display is not None else None
         try:
             fiche = db_recipes.create_recipe(
@@ -539,7 +571,9 @@ CAPABILITIES += [
             "caller's own rights on it. Scope: your active org (default), "
             "`scope='user'`, or `scope='platform'` (recipes any org can run; only platform "
             "operators write them). Without scope, get/versions/run use the org's "
-            "recipe, else the platform's of that slug, and list shows both: a platform "
+            "recipe, else the platform's of that slug (both exist: 409 `ambiguous_slug`, "
+            "pass scope); create in an org or for yourself refuses a slug the platform "
+            "already uses (409 `slug_reserved_by_platform`); list shows both: a platform "
             "recipe runs with the caller's identity, org and table rights. A hosted agent "
             "runs recipes like any caller: its identity and its job's org. A recipe can "
             "also be CODE (`kind: \"code\"`, Python in the function sandbox calling tools "
@@ -560,7 +594,7 @@ CAPABILITIES += [
         # page après page et tient la requête jusqu'à son reçu.
         rest=RestBinding(verb="POST", path="/api/me/recipes", provisoire=True),
         errors=(_REFUS_HORS_REST, _REFUS_PLATEFORME, _code_humain.REFUS, _REFUS_DELAI,
-                _bac_occupe.REFUS),
+                _REFUS_SLUG_RESERVE, _REFUS_AMBIGU, _bac_occupe.REFUS),
     ),
 ]
 

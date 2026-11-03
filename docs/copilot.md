@@ -321,9 +321,80 @@ Avant d'ouvrir l'agent sur une instance :
 La voix (`voix.py`) emprunte la clé **ElevenLabs** de plateforme, une autre ligne et un
 autre accord : accorder la clé Anthropic ne la donne pas.
 
+## Dans Slack (`slack_copilot.py`, `slack_events.py`)
+
+`@<app>` dans un canal, un canal privé ou un DM de groupe où l'app siège — ou un DM à l'app
+quand l'org n'a **pas d'agent Slack** — fait répondre CETTE boucle (`routes._tour`, la même
+fonction que le panneau, `canal="slack"`) : la boîte à outils, les droits et les crédits du
+**membre**, le routage de modèle, le plafond quotidien. Ce que le panneau montre en
+événements, Slack le montre en messages. Une org qui a un agent Slack (`hook_auth=slack`)
+garde son chemin d'avant pour ses DM, inchangé.
+
+- **Qui** : l'e-mail CONFIRMÉ de l'utilisateur Slack désigne exactement UN membre réel de l'org
+  qui a installé l'app (`slack_events.membre`, `org_members` seul). Invité, autre société,
+  e-mail inconnu : la raison est dite (en privé dans un canal), rien ne tourne. « Du même
+  espace » (`slack_events.meme_espace`) : le `team_id` de l'utilisateur est celui de
+  l'événement ; en Enterprise Grid, un autre espace de la MÊME entreprise
+  (`enterprise_user.enterprise_id` égal à l'`enterprise_id` de l'événement, aucun des deux
+  vide). Un `team_id` absent est un refus. L'agent doit
+  être ouvert à ce compte (`OTO_COPILOT_SUBS`) et sous le plafond du jour. Une réponse
+  d'un inconnu sous un fil à nous n'est pas répondue du tout.
+- **Combien à la fois** : un tour tient un fil du pool du serveur pendant toute sa durée.
+  Au plus `OTO_SLACK_COPILOT_MAX_SIMULTANES` tours (défaut 8) dans le processus, et un seul
+  par compte (`slack_copilot_places.py`) ; au-delà, la personne lit « déjà occupé,
+  réessaie dans un instant » et rien ne tourne, sans attente ni nouvel essai. Un appui sur
+  Approuver/Annuler reprend un tour : même règle. Le plafond est PAR PROCESSUS (il double
+  pendant une bascule bleu/vert).
+- **Une fois** : une mention arrive DEUX fois (`app_mention` et `message`) et Slack
+  réessaie ; `(channel, ts)` est pris dans `copilot_slack_events`, le premier événement gagne.
+  La prise vient APRÈS la décision « c'est une demande » : un événement ignoré ne prive pas
+  l'autre.
+- **Où vit la conversation** : `(workspace, canal, fil, membre)` → conversation
+  (`copilot_slack_threads`, clé étrangère vers `copilot_threads`, cascade). La mention ouvre
+  une conversation dans le fil sous elle ; les réponses de la MÊME personne dans ce fil la
+  continuent **sans nouvelle mention**. Un autre membre qui mentionne l'app dans ce fil en
+  ouvre une à lui : rien ne se partage entre deux personnes. Un DM est une conversation
+  courante par personne (`thread_ts` = ''), renouvelée après 30 minutes d'inactivité.
+  Chaque réponse de chaque canal arrive à la route : « un fil porte-t-il une conversation de
+  quelqu'un ? » se lit AVANT tout credential.
+- **Ce que Slack montre** : 👀 sur la demande ; UN message « working » dans le fil, édité avec
+  les notes de progrès (au plus une édition par 1,5 s : `chat.update` est limité), puis
+  remplacé par la réponse, en `mrkdwn` de Slack (`vers_mrkdwn` échappe `&`, `<`, `>` AVANT
+  tout : rien de ce que le modèle écrit, ou lit dans une ligne, ne devient une mention, un
+  lien de canal ou `<!channel>`). La consigne du fil Slack dit qu'il n'y a ni page ni outil de
+  page ; aucun outil client n'est offert (`client_tools` vide).
+- **Les changements demandent d'abord, dans Slack** : la carte d'approbation est un message
+  avec **Approuver / Annuler**, la phrase écrite par le serveur et CHAQUE argument de l'appel,
+  en entier. Un appel trop long pour être montré en entier (`DETAIL_MAX`) n'a **pas** de
+  bouton Approuver : rien ne part qu'on n'ait pu lire. Une carte destructive demande
+  confirmation. Un changement défaisable porte un bouton **Défaire** (`routes.revert_pour`,
+  une fois, le même journal de révisions que le panneau). « Ne plus demander » et la
+  modification des champs d'une carte n'existent pas ici.
+- **Les boutons** : `POST /api/slack/interactions` (route de NATURE, formulaire
+  `payload=<json>`, même signature que les événements, 200 vide puis traitement APRÈS
+  l'accusé). Seul celui qui a demandé répond : le `sub` du membre qui appuie doit être celui
+  de la conversation, dans CE canal, ou rien. **Rejouable sans danger** : le même appui est
+  pris une fois (`copilot_slack_events`), et `boucle.repondre_carte` refuse une réponse à ce
+  qui n'attend plus ; un appui qui ne produit qu'une erreur est dit en privé, sans toucher au
+  message (qui porte déjà une carte ou une réponse qu'un autre appui réécrit).
+- **Le fil d'un agent hébergé** : une mention dans le fil d'un message d'un de NOS agents est
+  la réponse à cet agent (l'événement `message` le relance, §Une réponse dans le fil d'un
+  agent de `runner-et-automatisations.md`) ; l'agent intégré l'ignore — une phrase ne
+  lance pas deux runs.
+
+Côté Slack (geste d'opérateur) : événements `app_mention` (scope `app_mentions:read`),
+`message.channels`, `message.groups`, `message.mpim`, `message.im` ; **Interactivity & Shortcuts**
+activée, l'URL de requête étant `/api/slack/interactions` de l'instance ; scope
+`reactions:write` (déjà demandé : 👀).
+
+Non couvert : la conversation n'est pas relue dans Slack (`conversations.replies` : un appel
+par minute hors Marketplace) — la demande est le message ; les fichiers joints au message
+Slack ne sont pas passés à l'agent.
+
 ## L'état (`db/copilot.py`, révision `20261026_1337_copilot`)
 
-`copilot_threads` (messages, file, carte en attente, sortes retenues, actions de page, mode,
+`copilot_slack_threads` et `copilot_slack_events` (l'agent dans Slack, révision
+`20261103_1000_copilot_slack`, voir ci-dessus), `copilot_threads` (messages, file, carte en attente, sortes retenues, actions de page, mode,
 run, rang du prochain appel, modèle — révision `20261030_1000_copilot_model` —, verrou),
 `copilot_undos`, `copilot_spend` et `copilot_attachments`
 (révision `20261029_1700_copilot_pieces`). **Purgés à

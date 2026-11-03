@@ -39,6 +39,8 @@ def base_d_avant(live, pg_module_dsn):
     from alembic import command
 
     with psycopg.connect(pg_module_dsn, autocommit=True) as c:
+        # The Slack filing (`20261103_1000_copilot_slack`) rests on the conversations.
+        c.execute("DROP TABLE IF EXISTS copilot_slack_threads")
         c.execute("DROP TABLE copilot_spend")
         c.execute("DROP TABLE copilot_undos")
         c.execute("DROP TABLE copilot_threads")

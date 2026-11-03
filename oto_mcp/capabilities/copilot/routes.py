@@ -288,7 +288,10 @@ async def _etape(fil: dict, b, avant) -> Any:
             await run_in_threadpool(store.rendre, fil["id"], jeton)
 
 
-async def _tour(ctx: ResolvedCtx, inp: TurnInput, marques: list[dict]):
+async def _tour(ctx: ResolvedCtx, inp: TurnInput, marques: list[dict], canal: str = "app"):
+    """A turn of the person's message. `canal` names where the conversation lives — `app`
+    (the panel) or `slack` (`slack_copilot.py`, which drives this same function): it only
+    changes the prompt a NEW conversation is born with."""
     sub, org = ctx.sub, ctx.org_id
     await run_in_threadpool(_fermer_inactives, sub)
     ligne = None
@@ -312,7 +315,7 @@ async def _tour(ctx: ResolvedCtx, inp: TurnInput, marques: list[dict]):
             contexte = issue.texte if issue.ok else ""
         thread_id = f"thr_{uuid.uuid4().hex}"
         await run_in_threadpool(store.creer, thread_id, sub, org, projet,
-                                consigne.consigne(contexte), palier.defaut())
+                                consigne.consigne(contexte, canal), palier.defaut())
         fil = _fil(await run_in_threadpool(store.lire, thread_id, sub))
         await run_in_threadpool(_ouvrir_run, fil, inp.text)
         await run_in_threadpool(store.enregistrer, thread_id, {"run_id": fil["run_id"]})
@@ -405,19 +408,21 @@ async def _approval(ctx: ResolvedCtx, inp: ApprovalInput) -> EventStream:
                                             inp.edits, bool(inp.remember))))))
 
 
-def _revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
-    _garde(ctx)
-    ligne = store.consommer(inp.revert_id, ctx.sub)
+def revert_pour(sub: str, revert_id: str) -> dict:
+    """Undoes one change for `sub`, once: what `POST /api/copilot/actions/{id}/revert` does,
+    without the REST gate — the Slack button (`slack_copilot.py`) is another door to the
+    same undo, and checks its own caller. Raises `AuthzDenied` 404/409 like the route."""
+    ligne = store.consommer(revert_id, sub)
     if ligne is None:
         raise AuthzDenied(404, "nothing_to_undo",
                           "Nothing to undo: already undone, expired, or not yours.")
     jeton = session_org.set_call_org(int(ligne["org_id"])) if ligne.get("org_id") else None
     try:
-        out = annulation.defaire(ctx.sub, ligne)
+        out = annulation.defaire(sub, ligne)
     except Exception:
         # The store's own words stay in the log: they can name a table, a column or a
         # rule of another account's data. The client gets the named refusal.
-        logger.exception("copilot : annulation %s refusée", inp.revert_id)
+        logger.exception("copilot : annulation %s refusée", revert_id)
         raise AuthzDenied(409, "undo_failed",
                           "Undo failed: the change could not be put back, or only in "
                           "part. Check the table before trying again.") from None
@@ -425,6 +430,11 @@ def _revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
         if jeton is not None:
             session_org.reset_call_org(jeton)
     return {"ok": True, "undone": ligne.get("label") or "", "skipped": int(out["skipped"])}
+
+
+def _revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
+    _garde(ctx)
+    return revert_pour(ctx.sub, inp.revert_id)
 
 
 async def _dictation(ctx: ResolvedCtx, inp: DictationInput) -> dict:

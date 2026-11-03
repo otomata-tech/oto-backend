@@ -453,6 +453,17 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   déclare pas), `400 unknown_access_level`, `409 access_level_wider_than_org` (une équipe
   ne fait que restreindre). Sous un niveau ≠ `full`, un appel non couvert est refusé
   `access_level_denied` (`docs/tool-visibility.md`).
+- **Plafond par lancement Apify d'une org** (03/11/2026, `capabilities/connectors/apify_charge_cap.py`,
+  `docs/monitoring.md` §Apify) — `GET /api/orgs/{id}/connectors/{name}/charge-cap` (membre) et
+  `PUT` même chemin (`ORG_ADMIN_OF`), corps `{usd}` — chemin générique comme le niveau
+  d'accès (aucune face REST ne nomme un connecteur), seul `name=apify` y répond
+  (`404 no_charge_cap` sinon) ; face MCP `oto_org_settings`
+  (`domain=apify_charge_cap`, op `get|set`). La réponse (`ChargeCapState`) rend la valeur
+  posée (`usd`, `null` = le défaut `default_usd`), si l'org a sa clé Apify (`own_key`), la
+  borne qu'elle peut atteindre (`bound` `platform|byok`, `bound_usd`), le plafond en vigueur
+  sur la clé plateforme et sur une clé propre, et `set_by`/`set_at`. Refus : `404 no_charge_cap`, `404 unknown_org`,
+  `400 invalid_charge_cap`, `409 charge_cap_above_platform_max` (sans clé propre),
+  `409 charge_cap_above_byok_bound`.
 - **App OAuth DÉDIÉE d'une org ou d'une équipe** (14/10/2026, `capabilities/connectors/oauth_app.py`,
   `docs/connector-vault.md` §App DÉDIÉE) — `GET|PUT|DELETE /api/orgs/{id}/connectors/{name}/oauth-app`
   (`ORG_ADMIN_OF`) et `/api/groups/{id}/connectors/{name}/oauth-app` (`GROUP_ADMIN_OF`).

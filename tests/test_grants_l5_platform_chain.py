@@ -405,15 +405,26 @@ def test_the_trace_says_which_key_actually_served(monkeypatch):
         42, "sub-x", "fullenrich", "a@b.c")
 
 
-def test_the_trace_never_breaks_a_resolution(monkeypatch):
-    """Best-effort, et il faut que ce soit vrai : un relevé qui lève ferait échouer
-    un appel qui a pourtant résolu sa clé."""
-    monkeypatch.setattr(access.session_org, "note_call_trace",
-                        lambda **k: (_ for _ in ()).throw(RuntimeError("journal HS")))
+def test_a_row_without_a_projectable_ref_still_resolves(monkeypatch):
+    """Une ligne dont l'id ne se projette pas en ref résout quand même : le relevé
+    n'y pose simplement pas d'`instance`."""
     weird = access.ResolvedCredential("fullenrich", "SECRET", False, "user",
                                       "member", "pas-un-id")
     monkeypatch.setattr(access, "_resolve_credential_impl", lambda *a, **k: weird)
     assert access.resolve_credential("fullenrich", sub="s") is weird
+
+
+def test_a_failing_trace_fails_the_resolution(monkeypatch):
+    """Le relevé n'est PLUS best-effort : il décide (`key_mode` facture,
+    `credential_row` désigne qui paie un run Apify). Avalé, son échec rendait ces
+    verdicts aléatoires ; il lève."""
+    import pytest
+    monkeypatch.setattr(access.session_org, "note_call_trace",
+                        lambda **k: (_ for _ in ()).throw(RuntimeError("journal HS")))
+    rc = access.ResolvedCredential("fullenrich", "SECRET", False, "org", "org", "7")
+    monkeypatch.setattr(access, "_resolve_credential_impl", lambda *a, **k: rc)
+    with pytest.raises(RuntimeError, match="journal HS"):
+        access.resolve_credential("fullenrich", sub="s")
 
 
 def test_instance_is_in_the_journal_allowlist():

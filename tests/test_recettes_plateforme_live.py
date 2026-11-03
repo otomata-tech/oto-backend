@@ -1,7 +1,7 @@
 """Les recettes de la PLATEFORME de bout en bout sur un vrai store : un opérateur l'écrit
 et la publie (`scope="platform"`), un membre d'une autre org la trouve et la lance sans
 `scope` — avec SON identité, SON org et SES droits sur le tableau — et une recette de
-l'org du même slug gagne toujours.
+l'org du même slug n'est jamais choisie en silence à sa place.
 
 ⚠️ Le propriétaire plateforme est partagé par tous les modules d'une même base : slugs
 uniques, et jamais d'égalité sur une liste entière."""
@@ -157,21 +157,51 @@ def test_un_membre_lance_la_recette_de_la_plateforme_avec_ses_propres_droits(mon
         session_org.reset_call_org(jeton)
 
 
-def test_la_recette_de_l_org_gagne_sur_celle_de_la_plateforme(monde):
+def test_un_membre_ne_prend_pas_le_slug_d_une_recette_de_la_plateforme(monde):
+    from oto_mcp.capabilities._types import AuthzDenied
     appeler, org = monde
     slug = f"acme-plat-{uuid.uuid4().hex[:6]}"
     _publier_plateforme(appeler, slug)
-    appeler(MEMBRE, org, op="create", slug=slug, title="Ours",
-            recipe={**CORPS, "limits": {"max_units": 7}})
-    fiche = appeler(MEMBRE, org, op="get", slug=slug)
-    assert (fiche["recipe"]["owner_type"], fiche["recipe"]["title"]) == ("org", "Ours")
-    assert fiche["version"]["body"]["limits"]["max_units"] == 7
-    # Celle de l'org n'est pas publiée : son run est refusé, il ne retombe PAS sur la
-    # recette publiée de la plateforme.
+    for scope in ({}, {"scope": "org"}, {"scope": "user"}):
+        with pytest.raises(AuthzDenied) as e:
+            appeler(MEMBRE, org, op="create", slug=slug, title="Ours", recipe=CORPS,
+                    **scope)
+        assert (e.value.status, _code(e)) == (409, "slug_reserved_by_platform"), scope
+    libre = f"acme-org-{uuid.uuid4().hex[:6]}"
+    cree = appeler(MEMBRE, org, op="create", slug=libre, title="Ours", recipe=CORPS)
+    assert cree["recipe"]["owner_type"] == "org"
+
+
+def _poser_en_base(org: int, slug: str, corps: dict, titre: str) -> None:
+    """Une recette d'org PUBLIÉE, posée sans passer par `create` : une collision
+    antérieure à la garde, ou une recette de la plateforme créée après celle de l'org."""
+    from oto_mcp.db import recipes as db_recipes
+    from oto_mcp.recipes import contrat
+    fiche = db_recipes.create_recipe(owner_type="org", owner_id=str(org), slug=slug,
+                                     title=titre, description="", created_by=MEMBRE,
+                                     body=contrat.valider(corps), note=None)
+    db_recipes.decide_version(fiche["id"], 1, status="publiee", decided_by=MEMBRE,
+                              test_report=None)
+
+
+def test_une_collision_existante_est_refusee_sans_scope(monde):
+    """Sans `scope`, get, versions et run refusent `ambiguous_slug` : ni la recette du
+    membre (son code s'exécuterait chez qui suit la procédure publique), ni celle de la
+    plateforme en silence. Avec `scope`, chacune se lance."""
     from oto_mcp.capabilities._types import AuthzDenied
-    with pytest.raises(AuthzDenied) as e:
-        appeler(MEMBRE, org, op="run", slug=slug, datastore=_table_de_l_org(org)[0])
-    assert _code(e) == "not_published"
+    appeler, org = monde
+    slug = f"acme-plat-{uuid.uuid4().hex[:6]}"
+    _publier_plateforme(appeler, slug)
+    _poser_en_base(org, slug, {**CORPS, "limits": {"max_units": 7}}, "Ours")
+    ns, _ = _table_de_l_org(org)
+    for op, extra in (("get", {}), ("versions", {}), ("run", {"datastore": ns})):
+        with pytest.raises(AuthzDenied) as e:
+            appeler(MEMBRE, org, op=op, slug=slug, **extra)
+        assert (e.value.status, _code(e)) == (409, "ambiguous_slug"), op
+    plat = appeler(MEMBRE, org, op="run", slug=slug, scope="platform", datastore=ns)
+    assert plat["recipe"]["owner_type"] == "platform"
+    sienne = appeler(MEMBRE, org, op="run", slug=slug, scope="org", datastore=ns)
+    assert (sienne["recipe"]["owner_type"], sienne["recipe"]["title"]) == ("org", "Ours")
     # Les deux restent nommées par `list`, chacune avec son propriétaire.
     listees = [(r["owner_type"], r["title"])
                for r in appeler(MEMBRE, org, op="list")["recipes"] if r["slug"] == slug]

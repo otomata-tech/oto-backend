@@ -81,8 +81,10 @@ _COMMON_ARGS = """            providers: the steps to try for THIS call, in this
                 steps don't count); the steps past it are skipped. Omitted = no limit —
                 the default: set it when spend matters more than finding.
             apify_max_usd: a cost ceiling for each Apify run of this lookup (≥ 0.50 —
-                Apify refuses less). Omitted = no ceiling — the default: a run is bounded
-                by its size and its time."""
+                Apify refuses less; above your organization's ceiling per run, $25
+                unless its admins set another, the step is refused). Omitted = the
+                ceiling Apify launches take by default: derived from the run's size,
+                else the platform default ($5), and never above that ceiling."""
 
 
 def register(mcp: FastMCP) -> None:

@@ -72,6 +72,10 @@ _KNOWN: dict[str, str] = {
     # un DM à l'app. Corps libre (la forme de Slack), signé par le secret de l'app
     # (`X-Slack-Signature`), aucun JWT — même nature que le webhook des agents.
     "/api/slack/events": NATURE,
+    # Les BOUTONS des messages de l'agent intégré dans Slack (Approuver, Annuler, Défaire) :
+    # Slack POSTe un formulaire (`payload=<json>`), signé par le même secret d'app
+    # (`X-Slack-Signature`), aucun JWT — même nature que la ligne au-dessus.
+    "/api/slack/interactions": NATURE,
     # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
     # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
     # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.

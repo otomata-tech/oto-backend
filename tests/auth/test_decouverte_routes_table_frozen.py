@@ -1,4 +1,5 @@
-"""CLIQUET de la face OAuth : la table de routes SERVIE par la découverte == la table attendue.
+"""CLIQUET de la face OAuth : la table de routes SERVIE par la découverte et l'inscription
+dynamique == la table attendue.
 
 Pourquoi. La table `tests/api/api_routes_table.txt` ne couvre que `/api/*`. Les routes de
 la découverte (RFC 9728) sont un contrat avec des clients qui gardent ce qu'ils ont lu : un
@@ -10,9 +11,10 @@ Régénérer après un changement VOULU :
 
     python - <<'PY'
     import pathlib
-    from oto_mcp.auth import decouverte
+    from oto_mcp.auth import decouverte, inscription_dynamique
     lignes = [f"{','.join(sorted(r.methods or []))} {r.path} -> {r.name}"
-              for r in decouverte.make_routes("https://mcp.example.test")]
+              for r in [*decouverte.make_routes("https://mcp.example.test"),
+                        *inscription_dynamique.make_routes()]]
     pathlib.Path("tests/auth/decouverte_routes_table.txt").write_text("\\n".join(lignes) + "\\n")
     PY
 """
@@ -20,14 +22,15 @@ from __future__ import annotations
 
 import pathlib
 
-from oto_mcp.auth import decouverte
+from oto_mcp.auth import decouverte, inscription_dynamique
 
 ATTENDU = pathlib.Path(__file__).resolve().parent / "decouverte_routes_table.txt"
 
 
 def _servie() -> list[str]:
     return [f"{','.join(sorted(getattr(r, 'methods', None) or []))} {r.path} -> {r.name}"
-            for r in decouverte.make_routes("https://mcp.example.test")]
+            for r in [*decouverte.make_routes("https://mcp.example.test"),
+                      *inscription_dynamique.make_routes()]]
 
 
 def test_table_des_routes_de_la_decouverte_figee():

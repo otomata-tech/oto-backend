@@ -1,5 +1,7 @@
 """La découverte OAuth d'un client MCP : la métadonnée de ressource protégée (RFC 9728),
-sensible au host. C'est la SEULE pièce de découverte que nous servons.
+sensible au host. La description d'autorisation, elle, reste celle de Logto ; seule
+l'inscription des clients sans CIMD l'augmente d'un `registration_endpoint`, sous le
+domaine de l'émetteur (`auth/inscription_dynamique.py`).
 
 Le serveur d'autorisation annoncé est l'émetteur Logto LUI-MÊME — le nôtre
 (`LOGTO_ENDPOINT` + `/oidc`), ou celui du tenant qui réclame le host. Le client lit

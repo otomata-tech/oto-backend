@@ -21,11 +21,41 @@ from oto_mcp.db import journal_jour, usage
 from oto_mcp.tools import apify
 
 
+# Les réglages plateforme du connecteur `apify` que voit un test : vide = aucun posé.
+REGLAGES: dict = {}
+# Ceux de l'org de l'appel (`ORG_ID`), et le mode de clé de l'appel.
+REGLAGES_ORG: dict = {}
+ORG_ID = 7
+# Ceux de l'org qui prête sa clé à l'appel, quand elle en prête une.
+REGLAGES_PRETEUSE: dict = {}
+PRETEUSE_ID = 9
+APPEL = {"plateforme": False, "admin": False, "preteuse": None}
+
+
 @pytest.fixture(autouse=True)
 def _reglage_non_lu(monkeypatch):
-    """Le réglage du plafond par défaut est gardé par processus : chaque test part
-    d'un processus qui ne l'a pas encore lu."""
-    monkeypatch.setattr(apify, "_reglage_lu", None)
+    """Les réglages de plafond sont gardés par processus : chaque test part d'un
+    processus qui ne les a pas encore lus, et d'une base où aucun n'est posé (un test
+    qui en pose un le met dans `REGLAGES` ou `REGLAGES_ORG`, ou remplace la lecture).
+    L'appel tourne par défaut sur une clé propre (BYOK), sous l'org `ORG_ID`, par un
+    membre qui n'en est pas admin."""
+    from oto_mcp.db import connector_settings
+    monkeypatch.setattr(apify, "_reglages_lus", {})
+    REGLAGES.clear()
+    REGLAGES_ORG.clear()
+    REGLAGES_PRETEUSE.clear()
+    APPEL.update(plateforme=False, admin=False, preteuse=None)
+    monkeypatch.setattr(connector_settings, "get_connector_setting",
+                        lambda _t, _i, _c, cle: REGLAGES.get(cle))
+
+    def _org(org_id, cle):
+        reglages = {str(ORG_ID): REGLAGES_ORG, str(PRETEUSE_ID): REGLAGES_PRETEUSE}[org_id]
+        return {"apify": reglages[cle]} if cle in reglages else {}
+    monkeypatch.setattr(connector_settings, "org_settings_for_key", _org)
+    monkeypatch.setattr(apify, "_org_de_l_appel", lambda: ORG_ID)
+    monkeypatch.setattr(apify, "_sur_cle_plateforme", lambda: APPEL["plateforme"])
+    monkeypatch.setattr(apify, "_org_qui_prete", lambda _o: APPEL["preteuse"])
+    monkeypatch.setattr(apify, "_admin_de", lambda _o: APPEL["admin"])
 
 
 def _carte(evenements, modele="PAY_PER_EVENT", minimum=None):
@@ -65,10 +95,311 @@ def test_une_carte_sans_prix_lisible_ne_derive_rien(carte):
     assert apify._plafond_derive(carte, 10) is None
 
 
-def test_un_plafond_demande_passe_tel_quel_sans_lire_la_carte():
+def test_un_plafond_demande_sous_le_maximum_passe_tel_quel_sans_lire_la_carte():
     client = MagicMock()
     assert apify._plafond_du_lancement(client, "a/b", 5, 12.5) == 12.5
     client.actor.assert_not_called()
+
+
+# --- le maximum par lancement, pour tous les appelants -------------------------------
+# Avant le 03/11/2026, un plafond DEMANDÉ passait tel quel (`if demande is not None:
+# return demande`) : au-delà des 25 $ des outils dédiés, `apify_run_sync` servait
+# d'échappatoire. Fermée : la même vérification vaut pour tout lancement.
+
+def test_le_maximum_par_defaut_est_de_vingt_cinq_dollars():
+    assert apify._PLAFOND_MAX_USD == 25.0
+    assert apify._plafond_max() == 25.0
+
+
+def test_un_plafond_demande_au_maximum_passe():
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 25) == 25
+
+
+@pytest.mark.parametrize("usd", [25.01, 30, 1000])
+def test_un_plafond_demande_au_dela_du_maximum_est_refuse_sans_echappatoire(usd):
+    from oto_mcp.mcp_errors import McpError
+    client = MagicMock()
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(client, "a/b", 5, usd)
+    msg = str(e.value)
+    assert msg.startswith(apify.MAX_CHARGE_ABOVE_CAP) and "$25" in msg
+    assert "apify_run_sync" not in msg
+    client.actor.assert_not_called()
+
+
+@pytest.mark.parametrize("usd", [0, -1])
+def test_un_plafond_demande_nul_ou_negatif_est_refuse(usd):
+    from oto_mcp.mcp_errors import McpError
+    with pytest.raises(McpError, match="above 0"):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, usd)
+
+
+def test_le_maximum_se_regle_par_la_plateforme():
+    APPEL["plateforme"] = True
+    REGLAGES[apify.CLE_PLAFOND_MAX] = "50"
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 40) == 40
+
+
+@pytest.mark.parametrize("pose", ["", "abc", "0", "-1", "inf", "nan"])
+def test_un_maximum_illisible_fait_echouer_le_lancement(pose):
+    APPEL["plateforme"] = True
+    REGLAGES[apify.CLE_PLAFOND_MAX] = pose
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_MAX):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_MAX):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, None)
+
+
+def test_une_base_illisible_pour_le_maximum_fait_echouer_le_lancement():
+    APPEL["plateforme"] = True
+    with patch("oto_mcp.db.connector_settings.get_connector_setting",
+               side_effect=psycopg.OperationalError("base")), \
+            pytest.raises(psycopg.OperationalError):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+
+
+def test_un_plafond_derive_ou_par_defaut_est_ramene_au_maximum():
+    APPEL["plateforme"] = True
+    REGLAGES[apify.CLE_PLAFOND_MAX] = "3"
+    client = MagicMock()
+    client.actor.return_value = _carte(EVENEMENTS)
+    # 1 000 000 items : dérivé ≈ 1 200 $, ramené à 3 $
+    assert apify._plafond_du_lancement(client, "a/b", 1_000_000, None) == 3.0
+    assert apify._plafond_du_lancement(client, "a/b", None, None) == 3.0
+
+
+# --- le plafond de l'org (décision du 03/11/2026) -----------------------------------
+# Le plafond par lancement est un réglage de l'ORG (25 $ sans réglage) ; sur la clé de la
+# plateforme, il ne dépasse jamais le maximum de la plateforme ; sur une clé propre,
+# jamais la borne de sécurité de la plateforme (1 000 $).
+
+@pytest.mark.parametrize("plateforme", [True, False])
+def test_sans_reglage_d_org_le_plafond_est_de_vingt_cinq_dollars(plateforme):
+    APPEL["plateforme"] = plateforme
+    assert apify._PLAFOND_ORG_DEFAUT_USD == 25.0 and apify._BORNE_BYOK_USD == 1000.0
+    assert apify._borne_du_lancement() == (25.0, "default", ORG_ID)
+
+
+@pytest.mark.parametrize("plateforme", [True, False])
+def test_une_org_a_dix_dollars_plafonne_a_dix_sur_toute_cle(plateforme):
+    from oto_mcp.mcp_errors import McpError
+    APPEL["plateforme"] = plateforme
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 10) == 10
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 12)
+    assert "your organization's ceiling of $10" in str(e.value)
+    # le défaut (5 $) passe, un dérivé au-delà est ramené à 10, et le dit
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, None) == 5.0
+    with patch.object(apify, "_plafond_derive", return_value=80.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", 10_000, None) == 10.0
+    assert "your organization's ceiling of $10" in avis.call_args.args[0]
+
+
+def test_sur_la_cle_plateforme_le_maximum_borne_l_org_et_le_refus_le_dit():
+    from oto_mcp.mcp_errors import McpError
+    APPEL["plateforme"] = True
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._borne_du_lancement() == (25.0, "platform", ORG_ID)
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 30)
+    msg = str(e.value)
+    assert msg.startswith(apify.MAX_CHARGE_ABOVE_CAP)
+    assert "this platform's maximum of $25" in msg and "own Apify key" in msg
+
+
+def test_sur_une_cle_propre_l_org_a_quarante_dollars_passe():
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 40) == 40
+
+
+def test_sur_une_cle_propre_une_valeur_posee_au_dela_de_la_borne_est_bornee():
+    from oto_mcp.mcp_errors import McpError
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "2000"
+    assert apify._borne_du_lancement() == (1000.0, "byok", ORG_ID)
+    with pytest.raises(McpError, match=r"safety bound of \$1000"):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 1500)
+
+
+def test_la_borne_byok_se_regle_par_la_plateforme():
+    REGLAGES[apify.CLE_BORNE_BYOK] = "300"
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "500"
+    assert apify._borne_du_lancement() == (300.0, "byok", ORG_ID)
+
+
+@pytest.mark.parametrize("pose", ["", "abc", "0", "-1", "inf", "nan"])
+def test_une_borne_byok_illisible_fait_echouer_le_lancement(pose):
+    REGLAGES[apify.CLE_BORNE_BYOK] = pose
+    with pytest.raises(RuntimeError, match=apify.CLE_BORNE_BYOK):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+
+
+@pytest.mark.parametrize("plateforme", [True, False])
+@pytest.mark.parametrize("pose", ["", "abc", "0", "-1", "inf", "nan"])
+def test_un_reglage_d_org_illisible_fait_echouer_le_lancement(pose, plateforme):
+    APPEL["plateforme"] = plateforme
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = pose
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_ORG):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_ORG):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, None)
+
+
+def test_sans_org_le_defaut_sert_sans_lire_la_base():
+    with patch.object(apify, "_org_de_l_appel", return_value=None), \
+            patch("oto_mcp.db.connector_settings.org_settings_for_key") as lu:
+        assert apify._borne_du_lancement() == (25.0, "default", None)
+    lu.assert_not_called()
+
+
+# --- la clé prêtée par une autre org (arbitrage du 03/11/2026) ------------------------
+# C'est le prêteur qui paie : sur sa clé, le plus strict des deux plafonds s'applique ;
+# la plateforme qui prête la sienne borne par son maximum.
+
+def test_un_preteur_plus_strict_impose_son_plafond_et_le_refus_le_nomme():
+    from oto_mcp.mcp_errors import McpError
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "10"
+    assert apify._borne_du_lancement() == (10.0, "lender", PRETEUSE_ID)
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 12)
+    msg = str(e.value)
+    assert "ceiling of organization #9, which lends this Apify key" in msg
+    assert "set by the admins of organization #9" in msg
+
+
+def test_un_preteur_sans_reglage_impose_le_defaut():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._borne_du_lancement() == (25.0, "lender", PRETEUSE_ID)
+
+
+def test_une_appelante_plus_stricte_garde_son_plafond():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._borne_du_lancement() == (10.0, "org", ORG_ID)
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 10) == 10
+
+
+def test_deux_plafonds_au_dela_de_la_borne_byok_y_restent():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "2000"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "1500"
+    assert apify._borne_du_lancement() == (1000.0, "byok", ORG_ID)
+
+
+def test_la_plateforme_qui_prete_borne_par_son_maximum_sans_chercher_de_preteuse():
+    APPEL["plateforme"] = True
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    with patch.object(apify, "_org_qui_prete") as preteuse:
+        assert apify._borne_du_lancement() == (25.0, "platform", ORG_ID)
+    preteuse.assert_not_called()
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    assert apify._borne_du_lancement() == (10.0, "org", ORG_ID)
+
+
+# L'original, avant que la fixture ne le remplace.
+_ORG_QUI_PRETE = apify._org_qui_prete
+
+
+def _sous(trace):
+    return patch.object(apify.session_org, "current_call_trace", return_value=trace)
+
+
+@pytest.mark.parametrize("ligne,attendu", [
+    (("org", "9", "apify", ""), PRETEUSE_ID),
+    (("org", "7", "apify", ""), None),
+    (("member", "9:sub-x", "apify", ""), PRETEUSE_ID),
+    (("member", "7:sub-x", "apify", ""), None),
+])
+def test_la_preteuse_se_lit_sur_la_ligne_qui_a_servi(ligne, attendu):
+    with _sous({"key_mode": ligne[0], "credential_row": ligne}):
+        assert _ORG_QUI_PRETE(ORG_ID) == attendu
+
+
+def test_la_cle_d_une_equipe_est_pretee_par_l_org_de_l_equipe():
+    with _sous({"key_mode": "group", "credential_row": ("group", "3", "apify", "")}), \
+            patch("oto_mcp.group_store.get_group", return_value={"org_id": PRETEUSE_ID}):
+        assert _ORG_QUI_PRETE(ORG_ID) == PRETEUSE_ID
+
+
+@pytest.mark.parametrize("mode", ["platform", "tenant"])
+def test_ni_la_plateforme_ni_un_tenant_ne_sont_une_org_preteuse(mode):
+    with _sous({"key_mode": mode}):
+        assert _ORG_QUI_PRETE(ORG_ID) is None
+
+
+@pytest.mark.parametrize("trace", [
+    None, {}, {"key_mode": "org"},
+    {"key_mode": "user", "credential_row": ("user", "sub-x", "apify", "")},
+])
+def test_un_preteur_inconnaissable_fait_echouer_le_lancement(trace):
+    with _sous(trace), pytest.raises(RuntimeError, match="lender of the key"):
+        _ORG_QUI_PRETE(ORG_ID)
+
+
+def test_une_equipe_sans_org_fait_echouer_le_lancement():
+    with _sous({"key_mode": "group", "credential_row": ("group", "3", "apify", "")}), \
+            patch("oto_mcp.group_store.get_group", return_value=None), \
+            pytest.raises(RuntimeError, match="lender of the key"):
+        _ORG_QUI_PRETE(ORG_ID)
+
+
+# L'original, avant que la fixture ne le remplace.
+_SUR_CLE_PLATEFORME = apify._sur_cle_plateforme
+
+
+@pytest.mark.parametrize("mode,attendu", [("platform", True), ("org", False),
+                                          ("user", False), (None, False)])
+def test_le_mode_de_cle_se_lit_au_releve_de_l_appel(mode, attendu):
+    with patch.object(apify.session_org, "current_call_trace",
+                      return_value={"key_mode": mode} if mode else None):
+        assert _SUR_CLE_PLATEFORME() is attendu
+
+
+def test_le_refus_dit_a_l_admin_comment_changer_le_plafond_de_l_org():
+    from oto_mcp.mcp_errors import McpError
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    with pytest.raises(McpError) as membre:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 12)
+    assert "set by the admins of organization #7" in str(membre.value)
+    assert "oto_org_settings" not in str(membre.value)
+    APPEL["admin"] = True
+    with pytest.raises(McpError) as admin:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 12)
+    assert 'domain="apify_charge_cap"' in str(admin.value)
+    assert "/api/orgs/7/connectors/apify/charge-cap" in str(admin.value)
+
+
+def _lance(nom, **kwargs):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("k", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch.object(apify.session_org, "current_call_trace", return_value={}):
+        cls.return_value.run.return_value = {"data": {"id": "r1", "status": "RUNNING"}}
+        _tool(nom).fn(actor_id="a/b", **kwargs)
+    return cls.return_value.run
+
+
+@pytest.mark.parametrize("nom", ["apify_run", "apify_run_sync"])
+def test_les_outils_de_lancement_refusent_au_dela_du_maximum(nom):
+    from oto_mcp.mcp_errors import McpError
+    with pytest.raises(McpError, match=apify.MAX_CHARGE_ABOVE_CAP):
+        _lance(nom, max_total_charge_usd=30)
+
+
+def test_apify_run_accepte_le_maximum_et_sans_plafond_part_a_cinq_dollars():
+    assert _lance("apify_run", max_total_charge_usd=25).call_args.kwargs[
+        "max_total_charge_usd"] == 25
+    assert _lance("apify_run").call_args.kwargs["max_total_charge_usd"] == 5.0
+
+
+def test_la_description_servie_dit_le_refus():
+    prop = _tool("apify_run_sync").parameters["properties"]["max_total_charge_usd"]
+    assert "max_charge_above_cap" in prop["description"]
 
 
 def test_le_plafond_par_defaut_est_de_cinq_dollars():
@@ -126,7 +457,8 @@ def test_le_reglage_se_lit_une_fois_par_fenetre_et_par_processus():
         assert apify._plafond_par_defaut() == 2.5
         assert apify._plafond_par_defaut() == 2.5
         assert lire.call_count == 1
-        apify._reglage_lu = (time.monotonic() - apify._REGLAGE_TTL_S - 1, "2.5")
+        apify._reglages_lus[apify.CLE_PLAFOND_DEFAUT] = (
+            time.monotonic() - apify._REGLAGE_TTL_S - 1, "2.5")
         assert apify._plafond_par_defaut() == 2.5
         assert lire.call_count == 2
 
@@ -208,6 +540,33 @@ def test_un_marquage_rate_n_empeche_pas_la_trace():
             patch.object(apify.session_org, "noter_avis"):
         apify._releve(TERMINE, "r1")
     assert trace.call_args.kwargs == {"quantity": 500000, "apify_run_id": "r1"}
+
+
+def test_un_plafond_derive_au_dela_du_maximum_est_ramene_et_le_dit():
+    """Ramené au maximum, jamais en silence : la réponse dit la sortie partielle."""
+    with patch.object(apify, "_plafond_max", return_value=25.0), \
+            patch.object(apify, "_plafond_derive", return_value=80.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", 10_000, None) == 25.0
+    texte = avis.call_args.args[0]
+    assert "partial" in texte and "$25" in texte
+
+
+def test_un_plafond_derive_sous_le_maximum_passe_sans_avis():
+    with patch.object(apify, "_plafond_max", return_value=25.0), \
+            patch.object(apify, "_plafond_derive", return_value=3.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", 100, None) == 3.0
+    avis.assert_not_called()
+
+
+def test_un_defaut_au_dela_du_maximum_est_ramene_et_le_dit():
+    APPEL["plateforme"] = True
+    with patch.object(apify, "_plafond_max", return_value=4.0), \
+            patch.object(apify, "_plafond_par_defaut", return_value=5.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", None, None) == 4.0
+    assert "partial" in avis.call_args.args[0]
 
 
 def test_un_run_arrive_a_son_plafond_le_dit():

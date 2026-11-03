@@ -261,6 +261,8 @@ _ALLOWED = {
     "db/projects.py": "persistance : la colonne relue et écrite",
     "db/_init.py": "migration : l'ALTER qui pose la colonne",
     "capabilities/projects.py": "contrat d'entrée d'`oto_project` et vue `_view`",
+    "tools/effets.py": "déclaration d'effet : nomme les listes d'`oto_project` qui ne sont "
+                       "pas des lots (`PAS_UN_LOT`), sans juger aucune URL",
 }
 
 # Les modules COUVERTS : chacun appelle le seam. Un outil de recherche filtre sa sortie

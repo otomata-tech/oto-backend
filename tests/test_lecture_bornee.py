@@ -28,6 +28,8 @@ BORNEES = {
     "usage.runs", "org.monitoring.runs", "monitoring.calls", "org.monitoring.calls",
     "me.calls", "monitoring.rest_calls", "monitoring.transport",
     "org.monitoring.adoption", "org.monitoring.view_as_writes", "org.audit_log.export",
+    # Les jetons déclarés par les travaux d'une org.
+    "org.usage.tokens",
 }
 
 

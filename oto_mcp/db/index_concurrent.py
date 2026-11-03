@@ -266,7 +266,8 @@ def declares() -> tuple[IndexConcurrent, ...]:
     return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
             *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE,
             *(cle.index for cle in contraintes_create_table.CLES),
-            *valeurs_servies.INDEX, runner_jobs.INDEX_DECLENCHEURS)
+            *valeurs_servies.INDEX, runner_jobs.INDEX_DECLENCHEURS,
+            runner_jobs.INDEX_CONCLUS)
 
 
 class RevisionSansIndex(ValueError):

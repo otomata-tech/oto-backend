@@ -639,6 +639,8 @@ GET,HEAD /api/orgs/{id}/usage/tools -> _handler
 OPTIONS /api/orgs/{id}/usage/tools -> options_handler
 GET,HEAD /api/orgs/{id}/usage/connections -> _handler
 OPTIONS /api/orgs/{id}/usage/connections -> options_handler
+GET,HEAD /api/orgs/{id}/usage/tokens -> _handler
+OPTIONS /api/orgs/{id}/usage/tokens -> options_handler
 GET,HEAD /api/orgs/{id}/monitoring/calls/{call_id} -> _handler
 OPTIONS /api/orgs/{id}/monitoring/calls/{call_id} -> options_handler
 GET,HEAD /api/orgs/{id}/monitoring/signals -> _handler

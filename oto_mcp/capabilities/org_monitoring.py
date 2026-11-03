@@ -985,6 +985,58 @@ def _connections(ctx: ResolvedCtx, inp: OrgConnectionsInput) -> dict:
         for r in rows]}
 
 
+# ── jetons déclarés par les travaux d'une org, lentille ADMIN ───────────────
+#
+# Combien de jetons les agents hébergés ont consommé, jour par jour : toutes les voies
+# de paiement — la clé de l'org, la clé de la plateforme ET l'abonnement Claude —
+# parce que les jetons d'un abonnement ne coûtent aucun crédit mais restent de la
+# consommation. Ce que le grand livre de crédits ne voit pas. Aucun prix ici : des
+# jetons, comme le worker les a déclarés (`runner_jobs.result`).
+#
+# Admin seulement, comme la page Usage qui la lit : c'est la consommation de toute
+# l'org, agents privés compris (le consommateur nomme ce qu'il connaît, le reste reste
+# un identifiant).
+
+class OrgTokenRow(BaseModel):
+    """Une case : un jour UTC × un agent × un payeur × un modèle."""
+    day: str
+    # None = travail lancé à la main (pas de déclencheur).
+    trigger_id: Optional[int] = None
+    # None = worker d'avant le champ.
+    paid_by: Optional[Literal["cle_org", "cle_plateforme", "abonnement"]] = None
+    model: Optional[str] = None
+    jobs: int
+    # Les nombres que les travaux ont DÉCLARÉS. Un poste manquant n'est pas compté
+    # comme zéro dans `unmeasured` : voir ci-dessous.
+    input: int
+    output: int
+    cache_read: int
+    cache_write: int
+    # Travaux de la case dont l'entrée ou la sortie n'est pas déclarée : leurs jetons
+    # connus sont dans les sommes, mais le total est un minorant.
+    unmeasured: int
+
+
+class OrgTokens(BaseModel):
+    days: int
+    rows: list[OrgTokenRow]
+
+
+class OrgTokensInput(BaseModel):
+    org_id: int
+    days: int = Field(30, ge=1, le=90)
+
+
+def _tokens(ctx: ResolvedCtx, inp: OrgTokensInput) -> dict:
+    rows = db.jetons_des_travaux(inp.org_id, inp.days)
+    return {"days": inp.days, "rows": [
+        {"day": r["jour"], "trigger_id": r["trigger_id"], "paid_by": r["paye_par"],
+         "model": r["modele"], "jobs": r["travaux"], "input": r["entree"],
+         "output": r["sortie"], "cache_read": r["lecture_cache"],
+         "cache_write": r["ecriture_cache"], "unmeasured": r["non_mesures"]}
+        for r in rows]}
+
+
 _MEMBER_OF = ORG_MEMBER_OF("org_id")
 
 class ViewAsWriteRow(BaseModel):
@@ -1056,6 +1108,9 @@ CAPABILITIES += [
                Input=OrgConnectionsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgConnections,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/connections", _ID)),
+    Capability(key="org.usage.tokens", handler=bornee(_tokens), Input=OrgTokensInput,
+               authz=_ADMIN_OF, mcp=None, Output=OrgTokens,
+               rest=RestBinding("GET", "/api/orgs/{id}/usage/tokens", _ID)),
     Capability(key="org.monitoring.call", handler=_call, Input=OrgCallInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCall,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls/{call_id}", _ID)),

@@ -36,6 +36,7 @@ from .. import runner_models
 from . import user_subscriptions
 from ._conn import _connect
 from .index_concurrent import IndexConcurrent
+from .lecture_bornee import lecture_d_agregat
 
 logger = logging.getLogger(__name__)
 
@@ -2190,6 +2191,21 @@ INDEX_DECLENCHEURS = IndexConcurrent(
     revision=REVISION_DECLENCHEURS,
 )
 
+#: La révision qui pose l'index des travaux CONCLUS d'une org.
+REVISION_CONCLUS = "20261104_1200_runner_jobs_finis"
+
+#: Les jetons des travaux (`jetons_des_travaux`, lentille `org.usage.tokens`) lisent
+#: les travaux conclus d'une org sur une fenêtre de `finished_at` : sans index, la
+#: lecture balaye toute la file. Le prédicat est celui de la requête, mot pour mot.
+#: Posé CONCURRENTLY par sa révision, ou par le démarrage d'une base neuve (`_init.py`),
+#: sous le verdict commun (`index_concurrent`).
+INDEX_CONCLUS = IndexConcurrent(
+    nom="idx_runner_jobs_conclus",
+    table="runner_jobs",
+    forme="(org_id, finished_at) WHERE finished_at IS NOT NULL",
+    revision=REVISION_CONCLUS,
+)
+
 
 def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[dict]]:
     """Ce que la page Agents DESSINE, en deux lectures pour toute l'org : par
@@ -2231,6 +2247,60 @@ def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[d
     # `~ '^[0-9]+$'` garantit qu'elle se convertit, côté Python.
     return ([{**r, "trigger_id": int(r["trigger_id"])} for r in cases],
             [{**r, "trigger_id": int(r["trigger_id"])} for r in pannes])
+
+
+def jetons_des_travaux(org_id: int, jours: int) -> list[dict]:
+    """Les jetons que les travaux CONCLUS de l'org ont déclarés, par jour UTC de
+    conclusion, par agent (`payload.trigger_id`, NULL = lancé à la main), par
+    payeur (`result.paye_par` : `cle_org`, `cle_plateforme`, `abonnement`) et par
+    modèle. La lentille `org.usage.tokens` les rend tels quels.
+
+    Le payeur ne filtre rien : un travail d'abonnement consomme des jetons même si
+    aucun crédit n'est débité, et c'est justement ce que l'écran veut montrer.
+
+    ⚠️ Un poste non déclaré n'est PAS un zéro (`runner_fleets` lit de même). Le CASE
+    ne somme que les nombres ; `non_mesures` compte les travaux dont l'entrée ou la
+    sortie n'en est pas un (un run coupé en vol côté abonnement ne déclare pas sa
+    sortie) — l'écran les DIT au lieu de les ranger dans le total.
+
+    Les travaux en cours sont exclus : sans `finished_at`, ils n'ont pas de jour.
+
+    Lecture d'agrégat BORNÉE (`lecture_d_agregat`) : au-delà de sa durée maximale, elle
+    lève `LectureTropLongue`, que la face rend en `503 aggregate_timeout`. Servie par
+    `idx_runner_jobs_conclus` (`INDEX_CONCLUS`), dont elle porte le prédicat."""
+    nombre = "jsonb_typeof(result->'{}') = 'number'"
+
+    def somme(poste: str) -> str:
+        return (f"COALESCE(SUM(CASE WHEN {nombre.format(poste)} "
+                f"THEN (result->'{poste}')::numeric END), 0)::bigint")
+
+    with lecture_d_agregat("jetons des travaux") as conn:
+        rows = conn.execute(
+            f"""
+            SELECT (finished_at AT TIME ZONE 'UTC')::date AS jour,
+                   CASE WHEN payload->>'trigger_id' ~ '^[0-9]+$'
+                        THEN payload->>'trigger_id' END AS trigger_id,
+                   result->>'paye_par' AS paye_par,
+                   COALESCE(result->>'model', payload->>'model') AS modele,
+                   COUNT(*)::int AS travaux,
+                   {somme('usage_input')} AS entree,
+                   {somme('usage_output')} AS sortie,
+                   {somme('usage_cache_read')} AS lecture_cache,
+                   {somme('usage_cache_write')} AS ecriture_cache,
+                   COUNT(*) FILTER (WHERE NOT (COALESCE({nombre.format('usage_input')}, FALSE)
+                                          AND COALESCE({nombre.format('usage_output')}, FALSE)))::int
+                       AS non_mesures
+              FROM runner_jobs
+             WHERE org_id = %s AND finished_at IS NOT NULL
+               AND finished_at >= NOW() - make_interval(days => %s)
+             GROUP BY 1, 2, 3, 4
+             ORDER BY 1, 2, 3, 4
+            """,
+            (org_id, int(jours)),
+        ).fetchall()
+    return [{**r, "jour": str(r["jour"])[:10],
+             "trigger_id": int(r["trigger_id"]) if r["trigger_id"] is not None else None}
+            for r in rows]
 
 
 # --- Le temps gagné des agents : les surcharges d'une org (`time_saved.py`) -----

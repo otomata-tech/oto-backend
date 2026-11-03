@@ -378,6 +378,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # Les travaux d'un déclencheur (page Agents, temps gagné) : régime des index
     # concurrents — une base servie le reçoit de la révision 0067 ou à la main (§5.1).
     index_concurrent.poser_au_demarrage(conn, runner_jobs.INDEX_DECLENCHEURS)
+    # Les travaux conclus d'une org (jetons des travaux) : même régime — révision
+    # `20261104_1200_runner_jobs_finis` ou à la main (§5.1).
+    index_concurrent.poser_au_demarrage(conn, runner_jobs.INDEX_CONCLUS)
     # Chantier runner R4b : l'INTENTION se sépare du FAIT. `armed` (on a demandé
     # que ça tourne) ≠ `running` (un ordonnanceur l'a prise) ; `stopping` (l'arrêt
     # est demandé) ≠ `stopped` (il a été accusé). ⚠️ Un `CREATE TABLE IF NOT

@@ -78,15 +78,20 @@ class AuthzDenied(Exception):
     Rendu par la face REST dans l'enveloppe d'erreur (`{"error", "detail",
     "details"}`), en plus du message, jamais à sa place. La face MCP ne rend que le
     message : son protocole n'a pas d'enveloppe d'erreur structurée, et les seules
-    capacités qui posent `details` aujourd'hui sont REST-only (billing)."""
+    capacités qui posent `details` aujourd'hui sont REST-only (billing).
+
+    `retry_after` = les secondes à attendre avant de réessayer, sur un refus qui passe
+    (429 `sandbox_busy`) : la face REST le pose en en-tête `Retry-After`, la face MCP
+    dans les données de l'erreur (`{code, retry_after_seconds}`)."""
 
     def __init__(self, status: int, code: str, message: str = "",
-                 details: Optional[dict] = None):
+                 details: Optional[dict] = None, retry_after: Optional[int] = None):
         super().__init__(message or code)
         self.status = status
         self.code = code
         self.message = message
         self.details = details
+        self.retry_after = retry_after
 
 
 # Une règle d'autz : (identité brute, input validé) -> contexte résolu, ou lève AuthzDenied.

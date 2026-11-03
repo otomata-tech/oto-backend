@@ -272,7 +272,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "déploiement bleu/vert pose dans l'arbre de chaque couleur ; s'il n'existe "
              "pas non plus, l'instance n'exécute pas de fonction — `oto_function` et les "
              "recettes-code rendent 503 `sandbox_unavailable`, le reste répond.",
-             ("oto_mcp/functions/executor.py:92",)),
+             ("oto_mcp/functions/executor.py:100",)),
     Variable("OTO_FUNCTIONS_ISOLATION", Classe.REGLAGE, "systemd",
              "Isolement du processus du bac à sable des fonctions (`functions/isolement.py`). "
              "`systemd` (défaut) : unité transitoire durcie sous l'utilisateur dédié "
@@ -282,12 +282,20 @@ _REGLAGES: tuple[Variable, ...] = (
              "`direct` : sans isolement système, à DEMANDER (poste de dev, CI) — jamais en "
              "prod. Une autre valeur, ou un outil ou un utilisateur absent, lève : 503 "
              "`sandbox_unavailable`, jamais de repli.",
-             ("oto_mcp/functions/isolement.py:99",)),
+             ("oto_mcp/functions/isolement.py:108",)),
     Variable("OTO_FUNCTIONS_USER", Classe.REGLAGE, "oto-fonctions",
              "L'utilisateur dédié, non privilégié, sous lequel le mode `systemd` lance le "
              "bac à sable. Absent de la machine, ou privilégié : refus (503 "
              "`sandbox_unavailable`).",
-             ("oto_mcp/functions/isolement.py:126",)),
+             ("oto_mcp/functions/isolement.py:135",)),
+    Variable("OTO_FUNCTIONS_MAX_SIMULTANEES", Classe.REGLAGE, "4",
+             "Exécutions SIMULTANÉES du bac à sable (fonctions et recettes-code) dans le "
+             "processus (`functions/places.py`), en plus d'une seule par compte. Au-delà : "
+             "429 `sandbox_busy` avec `Retry-After`, rien n'est lancé. Défaut 4 : 4 × 1 Go "
+             "(`isolement.MEMOIRE_MO`) sous la mémoire libre de la box. PAR PROCESSUS : "
+             "pendant une bascule bleu/vert, les deux couleurs tournent et le plafond "
+             "effectif double. Pas un entier ≥ 1 : refus de démarrer.",
+             ("oto_mcp/functions/places.py:60",)),
     Variable("OTO_ABONNEMENT_OUVERT_A_TOUS", Classe.REGLAGE, "",
              "Agents sur l'abonnement Claude de la personne : ouverts à TOUT compte "
              "de l'instance (`1`, `true`, `yes`, `on`). Absente, vide ou un non = "

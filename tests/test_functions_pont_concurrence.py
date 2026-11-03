@@ -65,7 +65,7 @@ def faux_bac(tmp_path, monkeypatch):
 def _jouer(demandes: list, appeler, abandonne=False, plan: dict | None = None,
            **budget) -> dict:
     return asyncio.run(pont.executer_avec_pont(
-        sources={"r.py": ""}, entrypoint="r:run", appeler=appeler,
+        sources={"r.py": ""}, entrypoint="r:run", appeler=appeler, sub="u",
         budget=pont.Budget(**budget),
         entree={"calls": demandes, "abandonne": abandonne, **(plan or {})}))
 
@@ -223,7 +223,7 @@ def _mesurer(demandes: list, appeler, libere: threading.Event, plan: dict | None
         debut = time.monotonic()
         try:
             sortie = await pont.executer_avec_pont(
-                sources={"r.py": ""}, entrypoint="r:run", appeler=appeler,
+                sources={"r.py": ""}, entrypoint="r:run", appeler=appeler, sub="u",
                 budget=pont.Budget(**budget), entree={"calls": demandes, **(plan or {})})
         except executor.ExecutionEchouee as e:
             sortie = e

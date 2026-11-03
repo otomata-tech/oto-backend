@@ -127,7 +127,12 @@ def _make_tool(cap: Capability):
             # de token, contexte FastMCP) sont lues normalement depuis le thread.
             ctx, result = await execute(cap.handler, _amont)
         except AuthzDenied as d:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code))
+            # Un refus qui passe (`retry_after`) dit aussi QUAND réessayer, en données :
+            # l'équivalent MCP de l'en-tête `Retry-After` de la face REST.
+            donnees = ({"code": d.code, "retry_after_seconds": d.retry_after}
+                       if d.retry_after is not None else None)
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=d.message or d.code,
+                                     data=donnees))
         if isinstance(result, NotModified):
             # MCP n'a pas de code d'état : « rien n'a changé » doit être une DONNÉE,
             # sinon une réponse vide se lit comme un résultat vide. On rend le `rev`

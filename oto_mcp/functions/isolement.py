@@ -15,13 +15,17 @@ tourne jamais avec l'identité, l'environnement, le réseau ni la mémoire du se
 - `bwrap` — pour un service SANS privilège : `bwrap` dans un espace de noms
   utilisateur non privilégié (`--unshare-all` : ni réseau, ni processus, ni IPC de
   l'hôte), un système de fichiers qui ne montre que le système, le bac à sable et les
-  scripts, en lecture seule ; mémoire bornée par `prlimit --data`. Le processus garde
-  l'uid du service, mais ne voit aucun de ses fichiers.
+  scripts, en lecture seule ; mémoire bornée par `prlimit --data`, temps CPU par
+  `prlimit --cpu` (le délai de l'appelant plus `MARGE_S`, en secondes CPU : un filet,
+  le délai mural reste celui de l'appelant). Le processus garde l'uid du service, mais
+  ne voit aucun de ses fichiers.
 - `direct` — Deno lancé tel quel, seulement s'il est DEMANDÉ : poste de dev, CI.
 
 Une valeur inconnue, ou un mode dont l'outil ou l'utilisateur manque, LÈVE
 `IsolementIndisponible` (un `BacASableAbsent` : 503 `sandbox_unavailable`). Jamais de
 repli vers un mode plus faible.
+
+Combien d'exécutions à la fois : `places.py` (un plafond par processus, une par compte).
 """
 from __future__ import annotations
 
@@ -68,6 +72,9 @@ _PROPRIETES = (
     # `@system-service` ne comprend pas — sans lui, Deno est tué à son premier appel.
     "SystemCallFilter=@system-service @pkey", "UMask=0077", "LimitCORE=0",
     f"MemoryMax={MEMOIRE_MO}M", "MemorySwapMax=0", f"TasksMax={TACHES}",
+    # Un cœur au plus par exécution : N exécutions simultanées (`places.py`) ne prennent
+    # pas toute la machine.
+    "CPUQuota=100%",
 )
 
 
@@ -114,7 +121,7 @@ def preparer(commande: list[str], env: dict, racine: Path, lisibles: list[Path],
         return Lancement(argv=commande, env=env, cwd=str(racine))
     if m == "systemd":
         return _systemd(commande, env, racine, duree_max_s)
-    return _bwrap(commande, env, racine, lisibles)
+    return _bwrap(commande, env, racine, lisibles, duree_max_s)
 
 
 def _outil(nom: str) -> str:
@@ -144,8 +151,12 @@ def _systemd(commande: list[str], env: dict, racine: Path, duree_max_s: float) -
     return Lancement(argv=argv, env={"PATH": _PATH}, cwd=None, unite=unite)
 
 
-def _bwrap(commande: list[str], env: dict, racine: Path, lisibles: list[Path]) -> Lancement:
-    argv = [_outil("prlimit"), f"--data={MEMOIRE_MO * 1024 * 1024}", "--core=0", "--",
+def _bwrap(commande: list[str], env: dict, racine: Path, lisibles: list[Path],
+           duree_max_s: float) -> Lancement:
+    # `--cpu` : des secondes de CPU (tous fils confondus), un filet sous le délai mural
+    # de l'appelant — un code qui calcule sur plusieurs fils y arrive avant lui.
+    argv = [_outil("prlimit"), f"--data={MEMOIRE_MO * 1024 * 1024}", "--core=0",
+            f"--cpu={int(duree_max_s) + MARGE_S}", "--",
             _outil("bwrap"), "--unshare-all", "--die-with-parent", "--new-session",
             "--cap-drop", "ALL", "--clearenv", "--ro-bind", "/usr", "/usr"]
     # Les répertoires du système hors de /usr : liens symboliques sur un système à /usr

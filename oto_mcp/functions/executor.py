@@ -21,6 +21,10 @@ pas ; l'isolement borne le processus lui-même.
 
 **La sortie se lit en flux** et s'arrête à `MAX_REPONSE` : au-delà, le processus est tué
 et l'exécution lève `ReponseTropLongue`, sans avoir tout lu en mémoire.
+
+**Combien à la fois** : `places.py`. Chaque exécution (aller simple ici, pont des
+recettes-code dans `pont.py`) prend une place avant de lancer son processus ; plus de
+place, `BacASableOccupe` (429 `sandbox_busy`), rien n'est lancé.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import contract, isolement
+from . import contract, isolement, places
 
 ENV_DIR = "OTO_FUNCTIONS_SANDBOX_DIR"
 _ICI = Path(__file__).resolve().parent
@@ -61,6 +65,10 @@ _ROUES = {"openpyxl": ("openpyxl", "et_xmlfile")}
 
 class BacASableAbsent(RuntimeError):
     """Cette instance n'a pas de bac à sable : elle ne peut pas exécuter de fonction."""
+
+
+#: Plus de place dans le bac à sable (`places.py`) : rien n'est lancé.
+BacASableOccupe = places.BacASableOccupe
 
 
 class ExecutionEchouee(RuntimeError):
@@ -147,12 +155,13 @@ def roues(racine: Path, requirements: list[str]) -> list[str]:
 
 
 def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: str,
-             entree: Optional[dict] = None) -> dict:
+             sub: Optional[str], entree: Optional[dict] = None) -> dict:
     """Joue la fonction (`mode='run'`) ou ses tests (`mode='test'`) dans le bac à sable.
 
     Rend la sortie du harnais — `{ok, result, warnings, files}` ou `{ok, error}` en
     `run`, `{ok, tests}` en `test` — plus `journal` (ce que le code a imprimé) et
-    `duree_ms`. Lève `ExecutionEchouee` si le bac à sable n'a rien rendu d'exploitable.
+    `duree_ms`. Lève `ExecutionEchouee` si le bac à sable n'a rien rendu d'exploitable,
+    `BacASableOccupe` si `sub` ou le processus n'a plus de place (`places.py`).
     """
     if mode not in ("run", "test"):
         raise ValueError(f"mode inconnu : {mode}")
@@ -166,9 +175,10 @@ def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: s
         "job": {"sources": sources, "entrypoint": entrypoint, "mode": mode,
                 "input": entree if entree is not None else {}},
     }
-    debut = time.monotonic()
-    code, sortie, erreurs = _jouer(lancement(racine, _SCRIPT, DELAI_S),
-                                   json.dumps(tache).encode())
+    with places.place(sub):
+        debut = time.monotonic()
+        code, sortie, erreurs = _jouer(lancement(racine, _SCRIPT, DELAI_S),
+                                       json.dumps(tache).encode())
     duree = int((time.monotonic() - debut) * 1000)
     reponse = _lire_reponse(sortie, nonce)
     if reponse is None:

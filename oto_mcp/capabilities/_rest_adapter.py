@@ -283,9 +283,13 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             # imposerait la signature à tous les `json_error` injectés — dont ceux des
             # modules de routes historiques et des stubs de test.
             if d.details:
-                return json_error(request, d.status, d.code, d.message or None,
-                                  details=d.details)
-            return json_error(request, d.status, d.code, d.message or None)
+                reponse = json_error(request, d.status, d.code, d.message or None,
+                                     details=d.details)
+            else:
+                reponse = json_error(request, d.status, d.code, d.message or None)
+            if d.retry_after is not None:
+                reponse.headers["Retry-After"] = str(d.retry_after)
+            return reponse
         finally:
             for reset, jeton in reversed(poses_run):
                 reset(jeton)

@@ -35,7 +35,7 @@ def _doublure(reponses: dict, vus: list):
 
 def _jouer(code: str, appeler, entree=None, **budget):
     return asyncio.run(pont.executer_avec_pont(
-        sources={"r.py": code}, entrypoint="r:run", appeler=appeler,
+        sources={"r.py": code}, entrypoint="r:run", appeler=appeler, sub="u",
         budget=pont.Budget(**budget), entree=entree))
 
 

@@ -154,7 +154,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
         return refus_hors_liste(manque)
     ecritures = pont.compteur_neuf()
     sortie = await pont_bac.executer_avec_pont(
-        sources=corps["sources"], entrypoint=corps["entrypoint"], entree=params,
+        sources=corps["sources"], entrypoint=corps["entrypoint"], entree=params, sub=sub,
         appeler=pont.appeleur_de_recette(
             fastmcp, sub, datastore=datastore, ecrire=ecrire,
             ecritures=frozenset(corps.get("writes") or ()),

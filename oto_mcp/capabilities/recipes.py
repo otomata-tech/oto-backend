@@ -53,7 +53,7 @@ from ..db import recipes as db_recipes
 from ..functions import executor as bac
 from ..functions import pont as pont_bac
 from ..recipes import affichage, code, contrat, moteur
-from . import _code_humain
+from . import _bac_occupe, _code_humain
 from ._authz import (BY_OP, CODE_PLATEFORME_SEULE, ORG_MEMBER_OF, ORG_MEMBER_OPT,
                      PLATFORM_OPERATOR_OPT, SUB_ONLY)
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -402,6 +402,8 @@ async def _executer(ctx: ResolvedCtx, inp: RecipeInput, corps: dict, *, ecrire: 
                                      temoin=temoin)
     except moteur.RecetteRefusee as e:
         raise AuthzDenied(400, e.code, str(e)) from None
+    except bac.BacASableOccupe as e:
+        raise _bac_occupe.refus(e) from None
     except bac.BacASableAbsent:
         raise AuthzDenied(503, "sandbox_unavailable",
                           "This instance has no sandbox: it cannot run a code recipe.") from None
@@ -557,7 +559,8 @@ CAPABILITIES += [
         # la capacité ; déclarée lourde (`routes_lourdes`) : un `run` appelle un outil
         # page après page et tient la requête jusqu'à son reçu.
         rest=RestBinding(verb="POST", path="/api/me/recipes", provisoire=True),
-        errors=(_REFUS_HORS_REST, _REFUS_PLATEFORME, _code_humain.REFUS, _REFUS_DELAI),
+        errors=(_REFUS_HORS_REST, _REFUS_PLATEFORME, _code_humain.REFUS, _REFUS_DELAI,
+                _bac_occupe.REFUS),
     ),
 ]
 

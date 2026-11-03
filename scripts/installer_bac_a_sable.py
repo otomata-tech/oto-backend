@@ -132,7 +132,8 @@ def _controler(cible: Path) -> None:
                              "    tampon = io.BytesIO(); classeur.save(tampon)\n"
                              "    return {'result': entree['a'] * 2, 'files': "
                              "[{'name': 'x.xlsx', 'content': tampon.getvalue()}]}\n"},
-        entrypoint="jouet:executer", requirements=["openpyxl"], mode="run", entree={"a": 21})
+        entrypoint="jouet:executer", requirements=["openpyxl"], mode="run", sub=None,
+        entree={"a": 21})
     if not (sortie.get("ok") and sortie.get("result") == 42 and sortie.get("files")):
         raise SystemExit(f"contrôle en échec : {sortie}")
     print(f"bac à sable prêt dans {cible} (contrôle : {sortie['duree_ms']} ms)")

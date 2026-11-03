@@ -33,7 +33,8 @@ def bac():
 
 def _run(code: str, entree=None, requirements=()):
     return executor.executer(sources={"f.py": code}, entrypoint="f:executer",
-                             requirements=list(requirements), mode="run", entree=entree)
+                             requirements=list(requirements), mode="run", sub="u",
+                             entree=entree)
 
 
 def test_une_fonction_rend_son_resultat_ses_avertissements_et_ses_fichiers(bac):
@@ -63,7 +64,7 @@ def test_les_tests_sont_joues_un_par_un_et_un_rouge_se_voit(bac):
                  "test_f.py": "from f import executer\n\n"
                               "def test_bon():\n    assert executer({'a': 2})['result'] == 4\n\n"
                               "def test_faux():\n    assert executer({'a': 2})['result'] == 5\n"},
-        entrypoint="f:executer", requirements=[], mode="test")
+        entrypoint="f:executer", requirements=[], mode="test", sub="u")
     assert sortie["ok"] is False
     assert {t["test"]: t["ok"] for t in sortie["tests"]} == {
         "test_f.test_bon": True, "test_f.test_faux": False}
@@ -76,7 +77,7 @@ def test_un_test_lit_une_donnee_json_posee_a_cote(bac):
                  "test_f.py": "import json\nfrom f import executer\n\ndef test_cas():\n"
                               "    cas = json.load(open('cas.json'))\n"
                               "    assert executer(cas)['result'] == cas['attendu']\n"},
-        entrypoint="f:executer", requirements=[], mode="test")
+        entrypoint="f:executer", requirements=[], mode="test", sub="u")
     assert sortie["ok"] is True
 
 

@@ -85,7 +85,9 @@ def test_systemd_pose_une_unite_durcie_sous_l_utilisateur_dedie(monkeypatch, out
                      "PrivateTmp=yes", "NoNewPrivileges=yes", "CapabilityBoundingSet=",
                      "RestrictAddressFamilies=AF_UNIX", "SystemCallFilter=@system-service @pkey",
                      f"MemoryMax={isolement.MEMOIRE_MO}M", f"TasksMax={isolement.TACHES}",
-                     f"RuntimeMaxSec={125 + isolement.MARGE_S}"):
+                     f"RuntimeMaxSec={125 + isolement.MARGE_S}",
+                     # Un cœur au plus par exécution (03/11/2026).
+                     "CPUQuota=100%"):
         assert attendue in proprietes, attendue
     # L'environnement du processus est celui, vidé, de l'exécuteur — rien du serveur.
     assert {a for a in argv if a.startswith("--setenv=")} == {
@@ -95,9 +97,12 @@ def test_systemd_pose_une_unite_durcie_sous_l_utilisateur_dedie(monkeypatch, out
 
 def test_bwrap_ne_montre_que_le_systeme_et_le_bac_a_sable(monkeypatch, outils):
     monkeypatch.setenv(isolement.ENV_MODE, "bwrap")
-    lance = _preparer()
+    lance = _preparer(duree=125)
     argv = lance.argv
     assert argv[:2] == ["/usr/bin/prlimit", f"--data={isolement.MEMOIRE_MO * 1024 * 1024}"]
+    # Le filet CPU (03/11/2026) : des secondes de CPU, délai de l'appelant plus la marge,
+    # posé par prlimit AVANT bwrap (donc hérité par Deno).
+    assert f"--cpu={125 + isolement.MARGE_S}" in argv[:argv.index("--")]
     assert {"--unshare-all", "--die-with-parent", "--new-session", "--clearenv"} <= set(argv)
     assert argv[argv.index("--cap-drop") + 1] == "ALL"
     montes = [argv[i + 1] for i, a in enumerate(argv) if a in ("--ro-bind", "--bind")]

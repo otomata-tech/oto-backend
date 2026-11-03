@@ -66,7 +66,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from . import executor
+from . import executor, places
 
 logger = logging.getLogger(__name__)
 
@@ -105,13 +105,25 @@ class Budget:
 
 
 async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler,
-                             budget: Budget = Budget(), requirements: tuple = (),
+                             sub: Optional[str], budget: Budget = Budget(),
+                             requirements: tuple = (),
                              entree: Optional[dict] = None) -> dict:
     """Joue `entrypoint(oto, entree)` dans le bac à sable, en servant ses appels
     d'outils par `appeler`. Rend `{ok, result | error, calls, units, refused, stopped,
     journal, duree_ms}`. Lève `executor.ExecutionEchouee` si le bac à sable n'a rien
     rendu d'exploitable (délai, plantage, protocole), `executor.BacASableAbsent` si
-    l'instance n'en a pas."""
+    l'instance n'en a pas, `executor.BacASableOccupe` si `sub` ou le processus n'a plus
+    de place (`places.py`) — la place est tenue jusqu'à la mort du processus, annulation
+    comprise."""
+    with places.place(sub):
+        return await _executer_avec_pont(sources=sources, entrypoint=entrypoint,
+                                         appeler=appeler, budget=budget,
+                                         requirements=requirements, entree=entree)
+
+
+async def _executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler,
+                              budget: Budget, requirements: tuple,
+                              entree: Optional[dict]) -> dict:
     racine = executor.repertoire()
     roues = executor.roues(racine, list(requirements))
     nonce = secrets.token_hex(16)

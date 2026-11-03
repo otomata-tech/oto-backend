@@ -125,7 +125,7 @@ def test_de_bout_en_bout_le_code_lit_un_outil_et_ne_peut_pas_en_ecrire(serveur):
             "    except oto.ToolError as e:\n"
             "        ecrit = e.code\n"
             "    return {'lus': len(lu['content']), 'ecrit': ecrit}\n")},
-        entrypoint="r:run", appeler=pont.appeleur_en_lecture(m, SUB)))
+        entrypoint="r:run", appeler=pont.appeleur_en_lecture(m, SUB), sub=SUB))
     assert sortie["result"] == {"lus": 2, "ecrit": "recipe_tool_not_read_only"}
     assert appels == ["acme_people"]
 

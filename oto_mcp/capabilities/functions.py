@@ -25,7 +25,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, media_store, ownership
 from ..db import functions as db_functions
 from ..functions import contract, executor
-from . import _code_humain
+from . import _bac_occupe, _code_humain
 from ._authz import BY_OP, ORG_MEMBER_OPT, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -168,20 +168,23 @@ def _version_valide(inp: FunctionInput) -> tuple[dict, str, list[str]]:
     return sources, entrypoint, requirements
 
 
-def _executer(version: dict, mode: str, entree: Optional[dict] = None) -> dict:
-    """Le bac à sable, et ses deux pannes traduites en refus nommés."""
+def _executer(ctx: ResolvedCtx, version: dict, mode: str,
+              entree: Optional[dict] = None) -> dict:
+    """Le bac à sable, et ses pannes traduites en refus nommés."""
     try:
         return executor.executer(sources=version["sources"], entrypoint=version["entrypoint"],
                                  requirements=version["requirements"] or [], mode=mode,
-                                 entree=entree)
+                                 sub=ctx.sub, entree=entree)
+    except executor.BacASableOccupe as e:
+        raise _bac_occupe.refus(e) from None
     except executor.BacASableAbsent as e:
         raise AuthzDenied(503, "sandbox_unavailable", str(e)) from None
     except executor.ExecutionEchouee as e:
         raise AuthzDenied(502, "sandbox_failed", str(e)) from None
 
 
-def _tester(fiche: dict, version: dict) -> dict:
-    sortie = _executer(version, "test")
+def _tester(ctx: ResolvedCtx, fiche: dict, version: dict) -> dict:
+    sortie = _executer(ctx, version, "test")
     return {"function": fiche, "version": {"version": version["version"],
                                            "status": version["status"]},
             "ok": sortie["ok"], "tests": sortie["tests"], "log": sortie["journal"],
@@ -286,7 +289,7 @@ def _dispatch(ctx: ResolvedCtx, inp: FunctionInput) -> dict:
             raise AuthzDenied(409, "not_published",
                               f"La version {numero} de `{fiche['slug']}` n'est pas "
                               "publiée : seule une version publiée s'exécute.")
-        sortie = _executer(version, "run", inp.input or {})
+        sortie = _executer(ctx, version, "run", inp.input or {})
         if not sortie.get("ok"):
             raise AuthzDenied(422, "function_error",
                               f"`{fiche['slug']}` v{numero} a levé une erreur.",
@@ -302,7 +305,7 @@ def _dispatch(ctx: ResolvedCtx, inp: FunctionInput) -> dict:
                                       f"`version` requis pour op={inp.op}."))
 
     if inp.op == "test":
-        return _tester(fiche, version)
+        return _tester(ctx, fiche, version)
 
     if inp.op == "refuse":
         motif = _besoin(inp.note, "missing_note", "`note` requis : le motif du refus.")
@@ -320,7 +323,7 @@ def _dispatch(ctx: ResolvedCtx, inp: FunctionInput) -> dict:
         raise AuthzDenied(409, "refused_version",
                           f"La version {version['version']} a été refusée : propose-en "
                           "une nouvelle.")
-    rapport = _tester(fiche, version)
+    rapport = _tester(ctx, fiche, version)
     if not rapport["tests"]:
         raise AuthzDenied(409, "no_tests",
                           f"La version {version['version']} n'a aucun test (`test_*.py`) : "
@@ -375,6 +378,6 @@ CAPABILITIES += [
             "`scope='user'`. PROVISIONAL surface."),
         mcp="oto_function",
         rest=RestBinding(verb="POST", path="/api/me/functions"),
-        errors=(_code_humain.REFUS,),
+        errors=(_code_humain.REFUS, _bac_occupe.REFUS),
     ),
 ]

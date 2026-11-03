@@ -68,6 +68,7 @@ fichiers EN MÉMOIRE de Pyodide.
 | boucle sans fin | délai (`DELAI_S`), processus tué | `test_une_boucle_sans_fin…` |
 | sortie sans fin | lue EN FLUX, plafond `MAX_REPONSE` : au-delà, processus tué, `ReponseTropLongue` | `test_une_sortie_au_dela_du_plafond…` |
 | identité, réseau, mémoire du serveur | l'isolement système déclaré (`functions/isolement.py`, ci-dessous) | lu sur la commande lancée |
+| trop d'exécutions à la fois | des places comptées par processus et par compte (`functions/places.py`, ci-dessous) : refus immédiat, 429 `sandbox_busy` | `tests/test_functions_places.py` |
 
 ### L'isolement du processus
 
@@ -76,8 +77,8 @@ système, qui ne dépend pas d'elles. Le mode se DÉCLARE par `OTO_FUNCTIONS_ISO
 
 | mode | pour | ce qu'il pose |
 |---|---|---|
-| `systemd` (défaut) | un service qui peut lancer une unité sous un autre uid | une unité transitoire `systemd-run` (`oto-fn-<hasard>.service`) sous l'utilisateur dédié `OTO_FUNCTIONS_USER` (défaut `oto-fonctions`, jamais privilégié) : `PrivateNetwork`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, aucune capacité, `SystemCallFilter=@system-service @pkey`, `RestrictAddressFamilies=AF_UNIX`, `MemoryMax`, `TasksMax`, `RuntimeMaxSec` (délai de l'appelant + marge). L'entrée et la sortie passent par `--pipe` : le pont parle toujours par ses deux flux. |
-| `bwrap` | un service sans privilège | `bwrap --unshare-all` dans un espace de noms utilisateur non privilégié : ni réseau, ni processus, ni IPC de l'hôte ; un système de fichiers qui ne montre que `/usr`, le bac à sable et les scripts, en lecture seule, plus un `/tmp` vide ; environnement vidé ; aucune capacité ; mémoire bornée par `prlimit --data`. Le processus garde l'uid du service mais ne voit aucun de ses fichiers. |
+| `systemd` (défaut) | un service qui peut lancer une unité sous un autre uid | une unité transitoire `systemd-run` (`oto-fn-<hasard>.service`) sous l'utilisateur dédié `OTO_FUNCTIONS_USER` (défaut `oto-fonctions`, jamais privilégié) : `PrivateNetwork`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, aucune capacité, `SystemCallFilter=@system-service @pkey`, `RestrictAddressFamilies=AF_UNIX`, `MemoryMax`, `TasksMax`, `CPUQuota=100%` (un cœur au plus), `RuntimeMaxSec` (délai de l'appelant + marge). L'entrée et la sortie passent par `--pipe` : le pont parle toujours par ses deux flux. |
+| `bwrap` | un service sans privilège | `bwrap --unshare-all` dans un espace de noms utilisateur non privilégié : ni réseau, ni processus, ni IPC de l'hôte ; un système de fichiers qui ne montre que `/usr`, le bac à sable et les scripts, en lecture seule, plus un `/tmp` vide ; environnement vidé ; aucune capacité ; mémoire bornée par `prlimit --data`, temps CPU par `prlimit --cpu` (délai de l'appelant + marge, en secondes CPU : un filet sous le délai mural). Le processus garde l'uid du service mais ne voit aucun de ses fichiers. |
 | `direct` | poste de dev, CI — à DEMANDER | Deno lancé tel quel : seules ses permissions bornent le code. |
 
 Une valeur inconnue, un outil absent (`systemd-run`, `bwrap`, `prlimit`) ou un
@@ -98,6 +99,30 @@ rend, son org le tient de ce que ses membres publient.
 Pyodide ; c'est l'isolement qui borne le processus entier (`isolement.MEMOIRE_MO` :
 `MemoryMax` en mode `systemd`, `prlimit --data` en mode `bwrap`). En mode `direct`, rien
 ne la borne. Plafonds chiffrés : à mesurer sur le pilote (ADR 0073 §5).
+
+### Combien d'exécutions à la fois
+
+Chaque exécution est bornée (1 Go, un cœur, 64 tâches, sa durée) ; leur NOMBRE l'est par
+`functions/places.py` (03/11/2026), au point commun de l'aller simple
+(`executor.executer`) et du pont des recettes-code (`pont.executer_avec_pont`) :
+
+- au plus `OTO_FUNCTIONS_MAX_SIMULTANEES` exécutions simultanées dans le processus
+  (défaut **4** : 4 × 1 Go au pire, sous les ~6 Go que la box laisse libres) ;
+- au plus **une** par compte (`sub`) : un compte ne prend pas toutes les places.
+
+Au-delà, le refus est **immédiat** — jamais une file d'attente — et rien n'est lancé :
+429 `sandbox_busy`, avec l'en-tête `Retry-After` (secondes) et `details.retry_after_seconds`
+en REST, `{code, retry_after_seconds}` dans les données de l'erreur MCP. Déclaré par
+`oto_function` et `oto_recipe`. La place est prise avant le lancement et rendue après la
+mort du processus, quoi qu'il arrive (exception, délai, annulation). Un `threading.Lock`
+et non un sémaphore asyncio : l'aller simple prend sa place dans un fil, le pont dans la
+boucle ; le verrou ne couvre qu'un compte, jamais une attente.
+
+Le réglage se lit au démarrage (`server.main`) : pas un entier ≥ 1, l'instance refuse de
+démarrer.
+
+⚠️ **Le plafond est PAR PROCESSUS.** Pendant une bascule bleu/vert, deux couleurs tournent :
+le plafond effectif de la box double le temps de la bascule (8 × 1 Go au défaut).
 
 ⚠️ **Tester, publier, refuser sont des gestes de PERSONNE** : sous un jeton de délégation
 (un agent hébergé), ils sont refusés en 403 `code_human_only`, comme l'épreuve et la

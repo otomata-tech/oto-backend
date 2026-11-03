@@ -61,6 +61,7 @@ tests = [
   "tests/test_tenant_ne_s_etend_plus.py",
   "tests/test_selection_tests.py",
   "tests/test_convention_act.py",
+  "tests/test_effets_declares.py",
 ]
 
 [complete]
@@ -235,6 +236,8 @@ chemins = [
   "oto_mcp/tools/catalogue.py",
   "oto_mcp/tools/cesures.py",
   "oto_mcp/tools/ecriture_non_cablee.py",
+  # La déclaration des effets d'outil, op par op : elle couvre TOUT le catalogue.
+  "oto_mcp/tools/effets.py",
   "oto_mcp/tools/meta.py",
   "oto_mcp/tools/whoami.py",
   # L'API REST commune.

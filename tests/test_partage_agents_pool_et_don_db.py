@@ -4,8 +4,9 @@
    tourner un agent `sub:*` sur le forfait de son propriétaire : un partage en écriture
    que le PROPRIÉTAIRE a posé à l'org le rend modifiable et rallumable par un membre,
    sans `op=lend` — la pose se juge alors sur le propriétaire, et le modèle reste celui
-   du moment. Ne comptent jamais : un partage d'admin (la séquence de l'admin qui se
-   partage l'agent d'un membre), ceux de la révision 0035 et de `partage_par_defaut`.
+   du moment. Compte aussi le partage d'org de la révision 0035 (posé d'office sur les
+   agents d'avant le 02/10). Ne comptent jamais : un partage d'admin (la séquence de
+   l'admin qui se partage l'agent d'un membre) ni celui de `partage_par_defaut`.
 2. Une org en `personnel`, ou qui n'a rien réglé, garde la règle du prêt : le partage
    collectif du propriétaire, sans `op=lend`, ne donne que la pause.
 3. Sur un agent servi par le pool, un partage en écriture DU PROPRIÉTAIRE ferme ses
@@ -143,21 +144,50 @@ def test_en_pool_un_partage_d_admin_REPOSE_sur_celui_du_proprietaire_le_ferme(or
         "can_edit"] is False
 
 
-@pytest.mark.parametrize("marque", [MARQUE_0035, "reglage:partage_par_defaut"])
-def test_en_pool_un_partage_MARQUE_n_ouvre_pas_l_ecriture(org_reelle, marque):
-    """Ni la révision 0035 (partage `editor` à l'org des agents d'avant), ni le réglage
-    `partage_par_defaut` : aucun n'est un geste du propriétaire."""
+def test_en_pool_le_partage_de_la_revision_0035_ouvre_l_ecriture(org_reelle):
+    """La révision 0035 (partage `editor` à l'org des agents d'avant le 02/10) : en
+    pool, il ouvre l'écriture comme celui du propriétaire (aucun forfait n'est en jeu)."""
     from oto_mcp import db
-    assert marque.startswith("reglage:") is (marque == db.MARQUE_PARTAGE_PAR_DEFAUT)
+    assert db.MARQUES_D_ORG_EN_POOL == (MARQUE_0035,)
     org, _ = org_reelle
     org_subscription_pool.poser_mode(org, FAMILLE, "pool", ADMIN)
+    t = _creer(org, private=True)
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=MARQUE_0035)
+    vu = _appel(org, sub=MEMBRE, op="get", trigger_id=t["id"])["trigger"]
+    assert (vu["my_access"], vu["can_edit"]) == ("editor", True)
+    assert _appel(org, sub=MEMBRE, op="update", trigger_id=t["id"],
+                  input="par un collègue")["trigger"]["updated_by"] == MEMBRE
+
+
+def test_en_pool_le_partage_du_reglage_n_ouvre_pas_l_ecriture(org_reelle):
+    """Le réglage `partage_par_defaut` est un réglage d'admin, pas un geste du
+    propriétaire : même en écriture, son partage ne donne que la pause en pool."""
+    from oto_mcp import db
+    org, _ = org_reelle
+    org_subscription_pool.poser_mode(org, FAMILLE, "pool", ADMIN)
+    t = _creer(org, private=True)
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=db.MARQUE_PARTAGE_PAR_DEFAUT)
+    vu = _appel(org, sub=MEMBRE, op="get", trigger_id=t["id"])["trigger"]
+    assert (vu["my_access"], vu["can_edit"]) == ("editor", False)
+    assert _refus(org, MEMBRE, op="update", trigger_id=t["id"],
+                  input="x").code == "subscription_personal_only"
+    assert db.forfaits_pretes([t["id"]], MEMBRE) == set()
+    assert _appel(org, sub=MEMBRE, op="update", trigger_id=t["id"],
+                  enabled=False)["trigger"]["enabled"] is False, "la pause reste ouverte"
+
+
+@pytest.mark.parametrize("marque", [MARQUE_0035, "reglage:partage_par_defaut"])
+def test_hors_pool_un_partage_d_org_pose_d_avance_n_ouvre_rien(org_reelle, marque):
+    """Hors pool, le forfait du propriétaire est en jeu : seul son consentement compte."""
+    from oto_mcp import db
+    org, _ = org_reelle
     t = _creer(org, private=True)
     db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
                       granted_by=marque)
     vu = _appel(org, sub=MEMBRE, op="get", trigger_id=t["id"])["trigger"]
     assert (vu["my_access"], vu["can_edit"]) == ("editor", False)
-    assert _refus(org, MEMBRE, op="update", trigger_id=t["id"],
-                  input="x").code == "subscription_personal_only"
     assert db.forfaits_pretes([t["id"]], MEMBRE) == set()
 
 
@@ -171,6 +201,47 @@ def test_en_pool_sans_partage_en_ecriture_l_admin_ne_peut_que_l_eteindre(org_ree
                   input="x").code == "subscription_personal_only"
     assert _appel(org, sub=ADMIN, op="update", trigger_id=t["id"],
                   enabled=False)["trigger"]["enabled"] is False
+
+
+def test_un_editeur_ferme_par_le_forfait_demande_le_deblocage_au_proprietaire(org_reelle):
+    """Hors pool, un partage d'org marqué 0035 fait de lui un éditeur FERMÉ (pause seule).
+    Il peut demander à être nommé éditeur (ce qui prête le forfait) ; le propriétaire
+    seul l'accorde — un admin ne prête rien."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import demandes_acces as D
+    org, _ = org_reelle
+    t = _creer(org, private=True)
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=MARQUE_0035)
+    ctx = ResolvedCtx(sub=MEMBRE, org_id=org)
+    cible, cle, demande = D._agent_acces_poser(ctx, D.CreateRequestInput(
+        kind="agent_access", trigger_id=t["id"], role="editor"))
+    assert (cible, cle, demande) == ({"trigger_id": t["id"]}, f"agent_access:{t['id']}",
+                                     {"role": "editor"})
+    d = {"org_id": org, "cible": cible, "requester_sub": MEMBRE}
+    assert D._agent_gouverne(PROPRIO, d) is True
+    assert D._agent_gouverne(ADMIN, d) is False, "un partage d'admin ne prêterait rien"
+    # Un éditeur qui PEUT écrire n'a rien à demander.
+    _appel(org, op="share", trigger_id=t["id"], share_with_sub=MEMBRE, role="editor")
+    with pytest.raises(AuthzDenied) as e:
+        D._agent_acces_poser(ctx, D.CreateRequestInput(
+            kind="agent_access", trigger_id=t["id"], role="editor"))
+    assert (e.value.status, e.value.code) == (409, "already_granted")
+
+
+def test_un_editeur_ferme_par_le_forfait_ne_demande_que_le_role_editor(org_reelle):
+    """Le déblocage est le rôle `editor` : `viewer`, l'éditeur fermé l'a déjà."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import demandes_acces as D
+    org, _ = org_reelle
+    t = _creer(org, private=True)
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=MARQUE_0035)
+    ctx = ResolvedCtx(sub=MEMBRE, org_id=org)
+    with pytest.raises(AuthzDenied) as e:
+        D._agent_acces_poser(ctx, D.CreateRequestInput(
+            kind="agent_access", trigger_id=t["id"], role="viewer"))
+    assert (e.value.status, e.value.code) == (409, "already_granted")
 
 
 # ── 2. hors pool : la règle du prêt ─────────────────────────────────────────────────
@@ -208,6 +279,17 @@ def test_en_pool_le_partage_du_PROPRIETAIRE_ferme_les_outils_plateforme(org_reel
                       granted_by=ADMIN)
     assert db.outils_plateforme_du_travail(travail()) == liste, (
         "un partage d'admin n'ouvre pas l'écriture : la liste reste ouverte")
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=MARQUE_0035)
+    assert db.outils_plateforme_du_travail(travail()) == [], (
+        "pool + partage d'org posé d'avance : il ouvre l'écriture, la liste se ferme")
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=ADMIN)
+    assert db.outils_plateforme_du_travail(travail()) == liste, "reposé par l'admin : rouverte"
+    db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
+                      granted_by=db.MARQUE_PARTAGE_PAR_DEFAUT)
+    assert db.outils_plateforme_du_travail(travail()) == liste, (
+        "le partage du réglage n'ouvre pas l'écriture : la liste reste ouverte")
     db.grant_resource("runner_trigger", str(t["id"]), "org", str(org), role="editor",
                       granted_by=PROPRIO)
     assert db.outils_plateforme_du_travail(travail()) == [], "pool + partage du propriétaire"

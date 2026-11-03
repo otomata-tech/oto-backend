@@ -330,7 +330,14 @@ def _agent_acces_poser(ctx: ResolvedCtx, inp: CreateRequestInput):
     if agent is None:
         raise AuthzDenied(404, "target_not_found", "No such agent in this organization.")
     n = _acces_agent.niveau(ctx.sub, ctx.org_id, agent)
-    if n in _acces_agent.ECRIRE or (role == "viewer" and n == "viewer"):
+    # Un éditeur dont l'agent est FERMÉ par le forfait de son propriétaire (il ne peut
+    # que l'éteindre) demande encore le rôle `editor`, et lui seul : l'accord du
+    # propriétaire le nomme éditeur, ce qui prête le forfait. Sans cela le front ne lui
+    # laissait que « attends que quelqu'un le lise ». Tout autre rôle, il l'a déjà.
+    if n in _acces_agent.ECRIRE:
+        if role != "editor" or not _acces_agent.forfait_ferme(ctx.sub, agent):
+            raise _deja()
+    elif role == "viewer" and n == "viewer":
         raise _deja()
     return {"trigger_id": tid}, f"agent_access:{tid}", {"role": role}
 
@@ -338,8 +345,17 @@ def _agent_acces_poser(ctx: ResolvedCtx, inp: CreateRequestInput):
 def _agent_gouverne(sub: str, d: dict) -> bool:
     """Ce que `runner.triggers` op=share exige : gouverner l'agent (propriétaire, admin)."""
     agent = _agent(d["org_id"], d["cible"]["trigger_id"])
-    return agent is not None and _acces_agent.niveau(
-        sub, int(d["org_id"]), agent) in _acces_agent.GOUVERNER
+    if agent is None or _acces_agent.niveau(
+            sub, int(d["org_id"]), agent) not in _acces_agent.GOUVERNER:
+        return False
+    # Une demande de déblocage (le demandeur écrit déjà l'agent, le forfait le ferme) ne
+    # s'accorde que par le PROPRIÉTAIRE : lui seul prête son forfait, un partage d'admin
+    # ne prête rien.
+    demandeur = d.get("requester_sub")
+    if (demandeur and _acces_agent.niveau(demandeur, int(d["org_id"]), agent)
+            in _acces_agent.ECRIRE and _acces_agent.forfait_ferme(demandeur, agent)):
+        return agent.get("sub") == sub
+    return True
 
 
 def _agent_acces_accorder(d: dict, accorde: dict):

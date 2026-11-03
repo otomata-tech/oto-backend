@@ -43,11 +43,11 @@ propriétaire.
 famille où l'agent tourne, `org_subscription_pool`), ses travaux ne tournent que sur des
 abonnements PRÊTÉS à l'org, jamais sur celui du propriétaire : un partage en écriture
 que le PROPRIÉTAIRE a posé à une équipe ou à l'org le rend modifiable par leurs membres
-sans `op=lend` (`db._forfait_prete_par_le_pool`), et le partage que le don a laissé à
-celui qui donne (`db.MARQUE_GARDE_AU_DON`) le rend modifiable par lui. Les mêmes partages
-qu'ailleurs ne comptent jamais (admin, 0035, `partage_par_defaut`, partages collectifs
-d'un ancien propriétaire) : le pool retire le forfait du jeu, pas l'identité sous
-laquelle l'agent agit. Lié au modèle comme le prêt
+sans `op=lend` (`db._forfait_prete_par_le_pool`), comme le partage d'org que la révision
+0035 a posé d'office (`db.MARQUES_D_ORG_EN_POOL`), et le partage que le don a laissé à
+celui qui donne (`db.MARQUE_GARDE_AU_DON`) le rend modifiable par lui. Ne comptent
+jamais (admin, `partage_par_defaut`, partages collectifs d'un ancien propriétaire) : le
+pool retire le forfait du jeu, pas l'identité sous laquelle l'agent agit. Lié au modèle comme le prêt
 collectif (`collectif` dans `exiger_le_droit_de_modifier`). Le mode non réglé, où le pool
 ne fait que COMPLÉTER, garde la règle du prêt. Quitter le pool éteint et liste les
 agents qu'un autre que leur propriétaire a changés en dernier

@@ -2179,11 +2179,16 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     alors modifiable par leurs membres, sans `op=lend`. Ouvre aussi l'écriture, à lui
     seul, le partage que le DON a laissé à celui qui donne (`MARQUE_GARDE_AU_DON`, voir
     `give`) : qui a construit et donné l'agent continue de le maintenir, tant que le
-    nouveau propriétaire ne le retire pas (`_partage_ouvrant_le_pool`). Ne comptent
-    jamais, comme ailleurs : un partage d'admin, ceux de la révision 0035 et de
-    `partage_par_defaut` (marqués), les partages collectifs d'un ancien propriétaire — le
+    nouveau propriétaire ne le retire pas (`_partage_ouvrant_le_pool`). Compte aussi, en
+    pool seulement (03/11/2026, `MARQUES_D_ORG_EN_POOL`), le partage d'org que la révision
+    0035 a posé d'office sur les agents d'avant le 02/10 — sans quoi un agent d'avant le
+    partage nominatif restait en pause seule pour tous, faute d'un geste du propriétaire
+    sur chacun. Ne comptent jamais : un partage d'ADMIN (la séquence de l'admin qui se
+    partage l'agent d'un membre), celui du réglage `partage_par_defaut` (un réglage
+    d'admin, pas un geste du propriétaire) et les partages collectifs d'un ancien propriétaire — le
     pool retire le forfait du jeu, pas l'identité sous laquelle l'agent agit (ses
-    connexions personnelles). Sans un tel partage, pause seule. Lié au modèle comme le prêt collectif : qui modifie par le pool
+    connexions personnelles). Hors pool, rien ne change : seul le consentement du
+    propriétaire prête son forfait. Sans un tel partage, pause seule. Lié au modèle comme le prêt collectif : qui modifie par le pool
     n'y pose pas un autre modèle d'abonnement, il peut le sortir du forfait. Le mode NON
     réglé (le pool complète) n'y est pas : le propriétaire y paie dès que son abonnement
     sert, et un droit de modifier ne dépend pas de l'état de sa connexion au moment de la
@@ -2237,7 +2242,7 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     sans éditeur nommé par le propriétaire ET sans prêt collectif vivant : dès le geste,
     la liste se ferme, qu'un partage atteigne déjà quelqu'un ou non. Sur un agent que
     l'org sert par son pool exclusif, elle se ferme dès qu'il porte un partage en
-    écriture vivant posé par son propriétaire.
+    écriture vivant posé par son propriétaire ou par la révision 0035.
   - **Qui a modifié** : chaque retouche (`update`) écrit son auteur dans
     `runner_triggers.updated_by` avec `updated_at` — servi sur `get`/`list`, c'est ce que
     le propriétaire lit pour savoir quel éditeur a changé son agent (§Dater un

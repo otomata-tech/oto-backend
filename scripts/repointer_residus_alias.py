@@ -117,7 +117,6 @@ PAR_LOTS: dict[str, tuple[str, ...]] = {
 # toute façon petite : la garde exige une raison pour chacune.
 _REGLAGES = ("réglage par org, équipe, connecteur ou famille : borné par le nombre "
              "d'orgs et de connecteurs, pas par l'activité")
-_UNE_PAR_COMPTE = "au plus quelques lignes par compte, jamais par appel"
 BORNEES: dict[tuple[str, str], str] = {
     ("org_service_accounts", "created_by"): "une ligne par org au plus (clé `org_id`) : "
                                             "bornée par le nombre d'orgs",
@@ -138,12 +137,9 @@ BORNEES: dict[tuple[str, str], str] = {
     ("org_instruction_revisions", "set_by"): "versions des guides d'org : bornées par "
                                              "les éditions humaines, pas par les appels",
     ("connector_credentials", "set_by"): "une ligne par clé posée",
-    ("connector_account_grants", "granted_by"): "prêts de compte : " + _UNE_PAR_COMPTE,
-    ("connector_account_group_grants", "granted_by"): "prêts de compte : " + _UNE_PAR_COMPTE,
     ("resource_grants", "principal_id"): "partages nominatifs : gestes humains",
     ("resource_grants", "granted_by"): "partages nominatifs : gestes humains",
     ("unipile_pending", "sub"): "connexions en attente, purgées à l'aboutissement",
-    ("unipile_operated_accounts", "owner_sub"): _UNE_PAR_COMPTE,
     ("apollo_phone_reveals", "sub"): "commandes en attente, trente jours de vie",
     ("users", "suspended_by"): "une ligne par compte",
     ("tenants", "disabled_by"): "une ligne par tenant",

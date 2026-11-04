@@ -26,7 +26,9 @@ QUOTA_USER, QUOTA_ORG = 3, 2
 # arête `user` (9, 6), arête d'org (17, 4) — l'ancien chemin relu à chaque résolution où
 # la chaîne a un avis, et les deux compteurs comparés à chaque règlement sous arête
 # `user`. Un écart est une régression du chemin chaud, ou une économie à graver ici.
-_REQUETES = {"alice": (8, 4), "bob": (16, 4)}
+# #1499 (bascule des comptes) : arête d'org 16 → 15, la lecture des prêts reçus
+# (`share_side`) a disparu avec eux.
+_REQUETES = {"alice": (8, 4), "bob": (15, 4)}
 
 
 @pytest.fixture(scope="module")

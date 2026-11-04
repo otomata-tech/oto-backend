@@ -230,6 +230,8 @@ class GroupSecretEntry(BaseModel):
     membre qui a sa propre clé, ou dont l'équipe active est une autre, ne verra jamais
     ce credential."""
     provider: str
+    # The team's account of a multi-account connector; None for the mono-account row.
+    account: Optional[str] = None
     set_by: Optional[str] = None
     set_at: Optional[str] = None
     base_url: Optional[str] = None

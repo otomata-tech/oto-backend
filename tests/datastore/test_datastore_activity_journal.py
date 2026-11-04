@@ -585,7 +585,7 @@ def test_trace_only_yields_a_closed_set_of_keys():
     """Le relevé est un seam de service : il ne doit pas devenir une porte par
     laquelle n'importe quel état de résolution finit journalisé.
 
-    DOUZE clés, sept raisons nommées : l'entité datastore résolue (`ns_id`) ;
+    TREIZE clés, huit raisons nommées : l'entité datastore résolue (`ns_id`) ;
     l'EMPREINTE d'un run — la version de procédure exécutée + l'instance de connecteur
     résolue (chantier du run, lot J2), et le PALIER de la procédure exécutée
     (`guide_scope`, #1156 : deux paliers portent le même slug) ; le FORÇAGE d'une colonne verrouillée (#658,
@@ -598,10 +598,12 @@ def test_trace_only_yields_a_closed_set_of_keys():
     02/11/2026, même rôle).
     Et le SLUG de la procédure qu'un run déroule (#1340), sous la clé que lisent la
     reconstruction des runs et l'audit de projet (`usage._ARG_PROCEDURE`).
+    Et le COMPTE qui a servi (`instance_id`, #1499) : l'identifiant stable de l'instance
+    dont la résolution a jugé le niveau, à côté de son ref de coffre (`instance`).
     Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
     from oto_mcp import server
     assert server._TRACED_ARGS == ("ns_id", "doctrine_version", "instance",
-                                   "readonly_forced", "readonly_forced_bilan",
+                                   "instance_id", "readonly_forced", "readonly_forced_bilan",
                                    "found_work_emails", "found_personal_emails",
                                    "found_phones", "apify_run_id",
                                    "higgsfield_request_id", "guide_scope",

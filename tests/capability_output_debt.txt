@@ -45,7 +45,6 @@ admin.signal
 admin.user
 admin.vault_health
 billing.admin_set_plan
-connectors.console.account_access
 connectors.console.activation
 connectors.console.connector
 connectors.console.identity

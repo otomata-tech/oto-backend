@@ -321,7 +321,8 @@ def delete_group_secret(group_id: int, provider: str, account: str = "") -> bool
 def list_group_secrets(group_id: int) -> list[dict]:
     out: list[dict] = []
     for c in credentials_store.list_credentials("group", str(group_id)):
-        entry = {"provider": c["connector"], "set_by": c["set_by"], "set_at": c["set_at"]}
+        entry = {"provider": c["connector"], "set_by": c["set_by"], "set_at": c["set_at"],
+                 "account": c.get("account") or None}
         base_url = (c.get("meta") or {}).get("base_url")
         if base_url:
             entry["base_url"] = base_url

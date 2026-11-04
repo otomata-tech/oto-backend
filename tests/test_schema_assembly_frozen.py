@@ -131,8 +131,10 @@ def test_l_ordre_impose_par_les_fk_est_tenu():
         ("docs", "doc_embeddings", "doc_embeddings.doc_id → docs(id)"),
         ("runner_fleets", "runner_jobs", "runner_jobs.fleet_id → runner_fleets(id)"),
         ("datastore_rows", "datastore_row_embeddings", "FK composite sur la PK"),
-        ("org_groups", "connector_account_group_grants",
-         "connector_account_group_grants.grantee_group_id → org_groups(id)"),
+        ("org_groups", "connector_account_rules",
+         "connector_account_rules.subject_group → org_groups(id)"),
+        ("connector_instances", "connector_account_rules",
+         "connector_account_rules.instance_id → connector_instances(id)"),
     ):
         i = ddl.index(f"CREATE TABLE IF NOT EXISTS {avant}")
         j = ddl.index(f"CREATE TABLE IF NOT EXISTS {apres}")

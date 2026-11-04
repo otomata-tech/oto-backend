@@ -276,14 +276,14 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             data={"code": niveaux.CODE_COMPTE_SUSPENDU, "retryable": False}))
 
     def _etape(entity_type: str, entity_id: str, mprov: str, ou: str, lire):
-        """A TEAM or ORG step: the account its level lets serve (`a_l_etape`); `lire`
-        reads the step's key of an account."""
+        """A TEAM or ORG step: the account its level serves; `lire` reads its key."""
         multi = cascade._is_multi_account(mprov, active_org)
         if multi and named_account is not None:
             lignes = [(named_account, False)] if lire(named_account) else []
-        elif multi:
+        elif multi:   # none listed: the row `''`, as for the member
             lignes = [(a["account"], bool((a.get("meta") or {}).get("is_default")))
-                      for a in credentials_store.list_accounts(entity_type, entity_id, mprov)]
+                      for a in credentials_store.list_accounts(entity_type, entity_id, mprov)
+                      ] or ([("", False)] if lire("") else [])
         else:
             lignes = [("", False)] if lire("") else []
         compte = choix.a_l_etape(entity_type, entity_id, lignes,

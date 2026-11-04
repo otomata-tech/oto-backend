@@ -250,10 +250,18 @@ def outils_permis(v: Optional[Verrou] = None) -> frozenset:
     if deja is not None and deja[0] is v:
         return deja[1]
     from . import db
-    permis = frozenset(n for n in (db.outils_plateforme_du_travail(v.job_id) or ())
-                       if isinstance(n, str) and n.startswith(PREFIXE_ADMIN))
+    permis = outils_d_admin(db.outils_plateforme_du_travail(v.job_id))
     _PERMIS.set((v, permis))
     return permis
+
+
+def outils_d_admin(noms) -> frozenset:
+    """Ce qu'une liste `outils_plateforme` stockée ouvre vraiment : ses `oto_admin_*`,
+    rien d'autre. Seul filtre, pour le travail en cours (`outils_permis`) comme pour
+    celui qu'on s'apprête à lancer (`_outils_plateforme.exiger_un_lancement_sans_role_
+    plateforme`)."""
+    return frozenset(n for n in (noms or ())
+                     if isinstance(n, str) and n.startswith(PREFIXE_ADMIN))
 
 
 class lecture_pour_outil:

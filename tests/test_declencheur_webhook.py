@@ -187,6 +187,58 @@ def test_renouveler_sur_un_agent_PROGRAMME_rend_404(monkeypatch):
     assert (e.value.status, e.value.code) == (404, "trigger_not_found")
 
 
+@pytest.fixture
+def depuis_un_travail(monkeypatch):
+    """Le verrou d'un jeton de délégation : la requête vient d'un agent hébergé du même
+    porteur. Sa liste d'outils (lue en base) est doublée : `a`."""
+    from oto_mcp import outils_du_travail, verrou_org
+    monkeypatch.setattr(outils_du_travail, "permis_du_travail",
+                        lambda job: frozenset({"a"}))
+    t = verrou_org.poser(verrou_org.Verrou(sub="alexis", org_id=ORG, job_id=1))
+    yield
+    verrou_org.lever(t)
+
+
+@pytest.mark.parametrize("op", ["rotate_secret", "rotate_address"])
+def test_un_agent_heberge_ne_touche_pas_a_la_porte(monkeypatch, pose, depuis_un_travail, op):
+    """La porte d'un webhook (#1499) : un travail délégué recevait le porteur en clair par
+    `rotate_secret`, puis réveillait l'agent par sa route — hors de toute liste d'outils et
+    de toute chaîne. Même s'il agit pour le PROPRIÉTAIRE, c'est une personne qui la tient."""
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis"})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op=op, trigger_id=5)
+    assert (e.value.status, e.value.code) == (403, "hook_door_human_only")
+    assert "hash_pose" not in pose, "aucun porteur n'est fabriqué"
+
+
+def test_un_agent_heberge_ne_cree_pas_de_webhook(pose, depuis_un_travail):
+    """La création rend le porteur en clair : la même porte, le même refus."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="create", kind="webhook", procedure="veille", tools=["a"])
+    assert (e.value.status, e.value.code) == (403, "hook_door_human_only")
+    assert not pose, "rien n'est posé"
+
+
+def test_un_agent_heberge_ne_pose_pas_l_authentification(monkeypatch, depuis_un_travail):
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis", "hook_auth": "bearer"})
+    with pytest.raises(AuthzDenied) as e:
+        asyncio.run(RT._hook_auth(_ctx(), RT.HookAuthInput(trigger_id=5,
+                                                           hook_auth="bearer")))
+    assert (e.value.status, e.value.code) == (403, "hook_door_human_only")
+
+
+def test_un_agent_heberge_cree_encore_un_agent_programme(monkeypatch, pose,
+                                                        depuis_un_travail):
+    monkeypatch.setattr(RT.db, "create_trigger",
+                        lambda org, sub, **kw: {"id": 6, "sub": sub, **kw})
+    out = _appel(op="create", procedure="veille", tools=["a"], cron="0 8 * * *")
+    assert "hook_secret" not in out
+
+
 # ── 2. le LISSAGE et la PÉREMPTION ────────────────────────────────────────────
 
 class _Conn:

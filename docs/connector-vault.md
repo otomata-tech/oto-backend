@@ -241,6 +241,15 @@ comme une adresse écrite en clair, et un hôte qui résout à la fois public et
 refusé tout court. Le refus nomme la raison, l'adresse jointe, la carte à corriger, et
 l'entrée exacte à déclarer.
 
+**L'instance elle-même est refusée (#1499)**, quelle que soit la politique et sans
+exception possible : l'hôte de `OTO_MCP_PUBLIC_URL` (`config.public_host()`), ses
+sous-domaines et ses hôtes épinglés par org (`<slug>--<hôte>`). Un agent n'appelle pas
+oto par un connecteur — une carte `http` qui visait l'instance joignait `/api/hooks/…`
+avec un porteur obtenu ailleurs, hors de toute liste d'outils. Sans la variable, la
+garde **lève** (`RuntimeError`, comme `config.public_host`) plutôt que de deviner. ⚠️
+Un autre nom du même service (IP de la machine, domaine de tenant) n'est pas reconnu :
+comparer les adresses résolues refuserait tout site qui partage un frontal avec nous.
+
 **Les exceptions se DÉCLARENT** — variable d'environnement du service :
 
 ```

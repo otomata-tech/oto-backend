@@ -66,10 +66,10 @@ def base(monkeypatch):
     token_scopes.set_current(None)
 
 
-def _req(token: str):
+def _req(token: str, method: str = "GET", path: str = "/api/admin/users"):
     from starlette.requests import Request
     return Request({
-        "type": "http", "method": "GET", "path": "/api/admin/users", "query_string": b"",
+        "type": "http", "method": method, "path": path, "query_string": b"",
         "root_path": "", "scheme": "http", "server": ("test", 80), "http_version": "1.1",
         "headers": [(b"authorization", f"Bearer {token}".encode())],
     })
@@ -85,8 +85,8 @@ class _Verifier:
         return types.SimpleNamespace(claims={"sub": self.sub, "email": "x@y.test"})
 
 
-def _rest(token, sub_du_jwt=None):
-    return asyncio.run(api_routes._authenticate(_req(token),
+def _rest(token, sub_du_jwt=None, route=("GET", "/api/admin/users")):
+    return asyncio.run(api_routes._authenticate(_req(token, *route),
                                                 verifier=_Verifier(sub_du_jwt)))
 
 
@@ -114,7 +114,10 @@ def test_rest_jeton_oto_dun_compte_du_tenant_est_refuse(base, monkeypatch, kind)
 def test_rest_jeton_oto_dun_autre_tenant_passe(base, monkeypatch, kind):
     monkeypatch.setattr(api_routes.db, "verify_api_token",
                         lambda t: {"sub": AUTRE_TENANT, "scopes": None, "token_kind": kind})
-    assert _rest("oto_x") == (AUTRE_TENANT, None)
+    # Un jeton de délégation n'ouvre que les routes du worker (#1499) : on en prend une.
+    route = (("POST", "/api/me/runs/thread") if kind == "delegation"
+             else ("GET", "/api/admin/users"))
+    assert _rest("oto_x", route=route) == (AUTRE_TENANT, None)
 
 
 # ── 3. REST, JWT de l'annuaire du tenant ─────────────────────────────────────

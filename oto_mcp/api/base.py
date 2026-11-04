@@ -304,15 +304,6 @@ async def _authenticate(
         if not row:
             token_scopes.set_current(None)
             return None, _json_error(request, 401, "invalid_api_token")
-        # Jeton d'un TRAVAIL HÉBERGÉ : la face MCP seule tient sa liste d'outils. Hors des
-        # routes que le worker appelle avec lui (`ROUTES_DE_LA_DELEGATION`), refusé.
-        if (row.get("token_kind") == "delegation"
-                and (request.method, request.url.path) not in ROUTES_DE_LA_DELEGATION):
-            token_scopes.set_current(None)
-            return None, _json_error(
-                request, 403, CODE_DELEGATION_REST,
-                "A hosted agent's token does not call the REST API: a hosted agent works "
-                "through MCP, where its tool list is enforced.")
         # Portée du jeton (`token_scopes`) : posée à CHAQUE requête (None comprise),
         # puis gate deny-by-default. Un jeton non porté (`scopes` NULL) est inchangé.
         scopes = row.get("scopes")
@@ -380,6 +371,16 @@ async def _authenticate(
         # registre ne le coupait pas.
         if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"])):
             return None, _json_error(request, 403, *coupe)
+        # Jeton d'un TRAVAIL HÉBERGÉ, APRÈS la coupure d'identité (pause, tenant désactivé :
+        # elle dit la vraie cause) : la face MCP seule tient sa liste d'outils. Hors des
+        # routes que le worker appelle avec lui (`ROUTES_DE_LA_DELEGATION`), refusé.
+        if (row.get("token_kind") == "delegation"
+                and (request.method, request.url.path) not in ROUTES_DE_LA_DELEGATION):
+            token_scopes.set_current(None)
+            return None, _json_error(
+                request, 403, CODE_DELEGATION_REST,
+                "A hosted agent's token does not call the REST API: a hosted agent works "
+                "through MCP, where its tool list is enforced.")
         verrou_org.poser(verrou := verrou_org.depuis_ligne(row))
         _memoriser_porteur(request, cle, row["sub"], scopes=scopes,
                            token_id=row.get("token_id"),

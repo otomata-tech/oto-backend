@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
+from . import (_prerequis, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -916,6 +916,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # recopie, et après `_SCHEMA`, qui crée sa table. Index et déclencheurs posés
     # seulement s'ils manquent — cf. `db/journal_revisions.py`.
     journal_revisions.poser_journal_des_revisions(conn)
+    # Le journal et la garde des RÈGLES de comptes (#1499) : après `_SCHEMA`, qui crée
+    # leurs tables ; déclencheurs posés seulement s'ils manquent — cf.
+    # `db/regles_de_comptes.py`.
+    regles_de_comptes.poser_journal_des_partages(conn)
     # ⚠️ REMONTÉE ICI le 2026-09-01 (#781) — elle vivait plus bas (ADR 0032 §6 /
     # 0029, B6 : mode typé optionnel d'un namespace). La conversion #317 juste
     # après LIT `d.schema` : sur une base qui existe déjà, la colonne n'arrive

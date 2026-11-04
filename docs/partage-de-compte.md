@@ -137,6 +137,50 @@ d'un refus d'ambiguïté.
   pose journalisée (`since: null` pour un prêt antérieur au journal). La lecture par le
   propriétaire reste à exposer (lot 4, avec l'écran).
 
+## Les règles de comptes (oto-backend#1499, étape 3)
+
+Le modèle cible est celui d'oto-core (`access_rules` sur un compte, `droits-d-acces.md` et
+`connecteurs-et-comptes.md` d'oto-core), transposé. **Lot L1 : rien ne lit encore les
+règles.** Les prêts ci-dessus servent toujours ; la bascule est le lot L3.
+
+- **Le compte** est une instance (`connector_instances`). Un compte de messagerie hébergée
+  (`unipile_accounts`, sans ligne de coffre) reçoit une **sous-instance** : `unipile`,
+  propriétaire `member` `<org>:<sub>`, compte `canal:<provider>`, enfant de l'instance de
+  la clé Unipile qui le porte quand elle est unique à son palier (siège plateforme : la clé
+  plateforme ; sinon la clé de la personne dans l'org, puis celle de l'org), sans parent
+  sinon (`db/sous_instances.py`). Elle naît à la connexion du compte
+  (`db.set_unipile_account`) et à la reprise ; elle suit la personne à la fusion de deux
+  comptes ; la maintenance des orphelines l'écarte.
+- **La règle** (`connector_account_rules`) : une par (compte, sujet) ; le sujet est une
+  personne, une équipe ou l'org, exactement un ; un niveau `none` < `read` < `write` <
+  `sensitive` < `manage`. Une règle qui nomme le propriétaire d'un compte personnel est
+  refusée par la base (`connector_account_rules_owner_subject`). `services` (NULL = tout) :
+  la liste des services prêtés d'un compte Google ou Microsoft. `origine` : `reprise`
+  (recalculée) ou `manuelle` (un geste ; la reprise n'y touche jamais).
+- **Le journal** (`connector_account_share_events`) : chaque règle posée, dont le niveau
+  ou les services changent, ou retirée, écrit par un déclencheur dans la transaction du
+  geste ; l'auteur est `oto.acteur`, sinon NULL (geste hors serveur, la reprise).
+- **La reprise** (`db.regles_de_comptes.reprendre_les_prets`, jouée par la révision
+  `20261105_0900_regles_de_comptes`, rejouée par celle de L3 avant le retrait des
+  anciennes tables) RECALCULE les règles reprises : prêts Unipile (personne, équipe) et
+  `share_side` → règles `sensitive`, avec la liste de `share_services` pour un compte
+  Google ou Microsoft ; une cible `org:<id>` → règle d'org. Idempotente ; un prêt retiré
+  depuis retire sa règle reprise. La fusion de deux comptes repointe sujet et auteur ;
+  la suppression d'une org, d'une équipe ou d'une personne emporte ses règles (clés
+  étrangères en cascade).
+
+Écarts assumés avec oto-core :
+
+- **(a)** un compte d'org sert aujourd'hui à tout membre : la reprise lui pose une règle
+  d'org `sensitive` explicite (le défaut d'oto-core serait la lecture) ;
+- **(b)** `services` : un prêt Google ou Microsoft ne prête qu'une liste de services,
+  propre au backend ;
+- **(d)** un prêt à une personne hors de l'org du compte (prêt entre orgs), ou à une équipe
+  ou une org d'une autre org, n'est **pas repris** : la reprise le rend dans son bilan
+  (`non_reprises`) et le journalise ; à trancher avant L3 ;
+- **(e)** une règle d'équipe vaudra pour l'équipe ACTIVE seule, comme la cascade
+  d'aujourd'hui (oto-core lit toutes les équipes de la personne).
+
 ## Ce que deviennent les chemins d'avant
 
 | Chemin | Devient |

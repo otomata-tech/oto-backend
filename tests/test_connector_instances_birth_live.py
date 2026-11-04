@@ -129,7 +129,8 @@ SELECT COALESCE(c.entity_type, i.owner_type) AS owner_type,
        CASE WHEN i.id IS NULL THEN 'coffre sans instance'
             ELSE 'instance sans ligne de coffre' END AS ecart
   FROM connector_credentials c
-  FULL OUTER JOIN (SELECT * FROM connector_instances WHERE revoked_at IS NULL) i
+  FULL OUTER JOIN (SELECT * FROM connector_instances WHERE revoked_at IS NULL
+                     AND NOT (connector = 'unipile' AND starts_with(account, 'canal:'))) i
     ON  i.owner_type = c.entity_type AND i.owner_id = c.entity_id
     AND i.connector  = c.connector   AND i.account  = c.account
  WHERE c.entity_type IS NULL OR i.id IS NULL

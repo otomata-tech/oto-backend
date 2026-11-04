@@ -103,6 +103,14 @@ _LECTEURS_ADMIS = {
     # l'instance par le quadruplet du coffre que l'appelant lui donne — il ne résout
     # rien : la clé servie reste choisie par la cascade, sans lui.
     "connectors/http_operations.py",
+    # #1499 (étape 3, L1) — la SOUS-INSTANCE d'un compte de messagerie : posée à sa
+    # connexion et par la reprise, suivie à la fusion. Écrit des instances sans ligne
+    # de coffre ; ne résout rien.
+    "db/sous_instances.py",
+    # #1499 — les règles d'accès des comptes et la reprise des anciens partages : lit
+    # les instances pour désigner le compte d'un partage. Rien ne lit encore les règles
+    # (la bascule est le lot L3, qui retirera la ligne de L7 avec sa revue).
+    "db/regles_de_comptes.py",
 }
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les

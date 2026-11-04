@@ -415,6 +415,11 @@ _UNIQUE_INDEX_SUB_TABLES = (
     # une). La même demande dans deux orgs n'est pas un doublon : les deux restent.
     ("access_requests", "requester_sub", ("org_id", "kind", "cle_cible"),
      "{a}.status = 'pending'"),
+    # Les règles d'accès des comptes (#1499) : une règle par (compte, sujet),
+    # `connector_account_rules_instance_subject_key` NULLS NOT DISTINCT. Les deux
+    # comptes de la personne nommés sur le même compte ⟹ la règle du survivant reste.
+    ("connector_account_rules", "subject_user",
+     ("instance_id", "subject_group", "subject_org"), None),
 )
 
 # Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :
@@ -659,6 +664,13 @@ _SUB_COLUMNS = [
     # - le journal des prêts : qui a prêté ou repris est une personne, comme l'acteur
     #   des relevés ci-dessus (l'adresse de la ligne prêtée suit, elle, le rechiffrement).
     ("connector_loan_events", "actor_sub"),
+    # Les RÈGLES d'accès des comptes (#1499) : le sujet nommé suit la personne (son
+    # doublon est retiré d'abord, `_UNIQUE_INDEX_SUB_TABLES`), l'auteur aussi ; et
+    # l'auteur d'un geste du journal des partages, comme celui des prêts. Le SUJET d'un
+    # événement du journal (`subject_id`) garde la personne telle qu'elle a été nommée.
+    ("connector_account_rules", "subject_user"),
+    ("connector_account_rules", "created_by"),
+    ("connector_account_share_events", "actor_sub"),
 ]
 
 
@@ -848,6 +860,11 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    (la révocation F-046 — sans elle, le compte fusionné était servi à nouveau) et
     #    `meta.rate_limit_by` (deux quotas qui se rencontrent : le plus restrictif).
     credentials_store.suivre_les_accords_recus(conn, old_sub, new_sub)
+    #    Les SOUS-INSTANCES de ses comptes de messagerie (#1499) : propriétaire
+    #    `'<org>:<sub>'`, sans ligne de coffre, donc hors du rechiffrement ci-dessus ;
+    #    elles suivent `unipile_accounts.sub`, avec les règles qui les visent.
+    from . import sous_instances
+    sous_instances.suivre(conn, old_sub, new_sub)
     # 3 quinquies. Le SOLDE personnel du budget d'unités (`user:<sub>`) : versé par le
     #    commerce à la personne, il la suit, réservations ouvertes comprises. Deux
     #    mouvements `transfer` le disent ; le journal des mouvements ne se réécrit pas.

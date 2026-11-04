@@ -18,6 +18,7 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
+from . import sous_instances
 from ._conn import _connect
 from .users import upsert_user
 
@@ -44,6 +45,9 @@ def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] =
             "entitlement_lost_at = NULL, entitlement_notice_at = NULL",
             (sub, provider, account_id, account_name, org_id, platform_seat),
         )
+        # Sa sous-instance, dans la même transaction : la cible de ses règles d'accès
+        # (#1499, `db/sous_instances`).
+        sous_instances.poser(conn, sub, org_id, provider)
 
 
 def get_unipile_account_id(sub: str, org_id: Optional[int],

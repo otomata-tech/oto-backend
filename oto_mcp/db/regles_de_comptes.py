@@ -213,7 +213,7 @@ def _org_et_proprietaire(cur, entity_type: str, entity_id: str):
 
 
 def _calculer(cur) -> _Voulues:
-    from ..access.prets import PORTEURS_A_SERVICES  # paresseux : `access` importe `db`
+    from ..access import PORTEURS_A_SERVICES  # paresseux : `access` importe `db`
 
     v = _Voulues()
     membres = {(r["org_id"], r["sub"]) for r in cur.execute(

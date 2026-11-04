@@ -27,10 +27,10 @@ pas ; `op=validate` rend cette liste sans rien écrire. Le HTML, lui, se LIT à
 l'écriture sans jamais refuser (`apps_html.py`) : ce qu'il demande hors du manifeste
 revient en `warnings`.
 
-**Écrire une app est réservé à la population bêta** (option `beta`, la même que celle
-qui ouvre `oto_apps` et l'écran du front) : `create`, `update`, `patch`, `archive`,
-`unarchive`, `restore`, `file`, `unfile` refusent 403 `apps_beta_only` aux autres, sur
-les deux faces, fail-closed. Lire une app reste ouvert à qui la lit.
+**Écrire une app est ouvert à toute org** depuis le 2026-11-04 : la porte `beta` sur
+les écritures (403 `apps_beta_only`) et `oto_apps` dans `BETA_TOOLS` sont tombées. Ce qui
+borne une app n'a jamais été l'option : c'est le manifeste jugé contre la portée de
+l'AUTEUR, et à l'appel l'intersection auteur ∩ lecteur.
 
 **Face REST : session interactive seule** (`allow_api_token=False`) — aucun jeton
 `oto_`, délégation d'agent hébergé comprise : une app s'écrit par un humain ou par son
@@ -38,22 +38,19 @@ agent en MCP, pas par un script porteur de clé.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import access, db, ownership
-from ..tool_visibility import BETA_OPTION
+from .. import db, ownership
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
 from .apps_manifeste import auteur, forme, org_de_l_app
 from .orgs import partage_par_defaut
 from .remplacements import RemplacementRefuse, appliquer
 from .registry import CAPABILITIES
 
-logger = logging.getLogger(__name__)
 
 PROJECT_RTYPE = "project"
 APP_RTYPE = "app"
@@ -207,20 +204,6 @@ def _media_base() -> Optional[str]:
         return None
 
 
-def _beta_ou_refus(ctx: ResolvedCtx) -> None:
-    """Écrire une app : la population `beta` seule, celle du front et de `oto_apps`.
-    Fail-CLOSED : une panne du seam des options refuse, et le journal le dit."""
-    try:
-        ok = access.has_option(ctx.sub, BETA_OPTION, org=ctx.org_id)
-    except Exception:
-        logger.warning("apps beta lookup fail-CLOSED for %s in org %s", ctx.sub,
-                       ctx.org_id, exc_info=True)
-        ok = False
-    if not ok:
-        raise AuthzDenied(403, "apps_beta_only",
-                          "Writing apps is open to beta accounts only for now.")
-
-
 def _problemes(sub: str, org_id: Optional[int], raw: Optional[dict]) -> tuple[dict, list[str]]:
     clean, problems = forme(raw if raw is not None else {})
     if not problems:
@@ -338,9 +321,6 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                 if _can(sub, r["id"], "read")]
         return {"apps": _cards(sub, rows)}
 
-    if inp.op in _ECRITURES:
-        _beta_ou_refus(ctx)
-
     if inp.op == "validate":
         # Jugé contre l'org où l'app vit : la sienne, ou l'org active pour une app à
         # créer. Le HTML : celui passé, sinon celui de l'app ; jamais contre un
@@ -404,9 +384,9 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
     if inp.op == "put_file":
         # Un AGENT rend un fichier à l'app, pour le lecteur au nom duquel il tourne (un
         # run hébergé tourne au nom de qui l'a lancé) : le lecteur le retrouve dans
-        # l'app (`oto.files()`, `oto.download`). Hors de la porte bêta des
-        # écritures (`_ECRITURES`) : elle borne qui ÉCRIT une app ; ceci est le geste
-        # d'un lecteur de l'app, borné par sa lecture, `files: true` et son plafond.
+        # l'app (`oto.files()`, `oto.download`). Pas une écriture de l'app
+        # (`_ECRITURES`) : c'est le geste d'un lecteur, borné par sa lecture,
+        # `files: true` et son plafond.
         _require((inp.content is None) != (inp.content_base64 is None), "invalid_file",
                  "Give exactly one of `content` (text) or `content_base64` (bytes).")
         _require(row.get("archived_at") is None, "unknown_app",
@@ -452,7 +432,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
     if inp.op == "patch":
         # Changer une ligne sans renvoyer 40 000 caractères : un agent qui réécrit tout
         # le HTML pour un tri y laisse un tour de modèle entier, ou s'y fait couper.
-        # Les gardes d'update : bêta (`_ECRITURES`), écriture sur l'app, auteur qui lit
+        # Les gardes d'update : écriture sur l'app, auteur qui lit
         # ce que l'app déclare, taille (bornée AVANT de remplacer), révision.
         try:
             html, n = appliquer(row.get("html") or "", inp.edits, max_len=MAX_HTML)
@@ -533,8 +513,7 @@ CAPABILITIES += [
             "always sortable and filterable) — the open app would refuse them, so fix "
             "them first. Every declared "
             "table and agent must be within YOUR reach and in the app's organization: "
-            "otherwise 400 invalid_manifest, each problem listed. Writing apps is open "
-            "to beta accounts only.\n"
+            "otherwise 400 invalid_manifest, each problem listed.\n"
             "In the HTML, `window.oto`: rows(table, {filter, orderBy, limit}) / "
             "aggregate(table, {groupBy, metrics, filter}) / set(table, rowId, field, value) / "
             "add(table, values) / upload(file) → {id, name, mediaType, size} (manifest "
@@ -552,9 +531,6 @@ CAPABILITIES += [
         ),
         mcp="oto_apps",
         rest=RestBinding("POST", "/api/me/apps", allow_api_token=False),
-        errors=(DeclaredError(403, "apps_beta_only",
-                              "create, update, patch, archive, unarchive, restore, "
-                              "file or unfile by an account without the beta option"),),
     ),
 ]
 

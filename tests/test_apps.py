@@ -246,7 +246,7 @@ def test_ranger_et_lire_un_fichier_sont_classes_pour_la_lecture_seule():
     assert "patch" not in _READ_OPS
 
 
-# ── La population bêta ──────────────────────────────────────────────────────
+# ── Écrire une app : toute org, sans l'option `beta` ────────────────────────
 
 _ECRITURES = [
     dict(op="create", title="x", manifest={}),
@@ -261,25 +261,25 @@ _ECRITURES = [
 
 
 @pytest.mark.parametrize("inp", _ECRITURES, ids=lambda d: d["op"])
-def test_ecrire_une_app_exige_la_beta(seams, inp):
+def test_ecrire_une_app_sans_la_beta(seams, inp):
+    """Un compte SANS l'option écrit : la porte est tombée, et l'option n'est même
+    plus lue (rouge sur le commit d'avant : 403 `apps_beta_only`)."""
     seams["beta"] = False
-    e = _refus(lambda: A._app(CTX, A.AppInput(**inp)))
-    assert (e.status, e.code) == (403, "apps_beta_only")
-    assert seams["create"] == [] and seams["update"] == []
-    assert seams["options"] == [("u1", "beta", 42)]
-
-
-@pytest.mark.parametrize("inp", _ECRITURES, ids=lambda d: d["op"])
-def test_ecrire_une_app_avec_la_beta(seams, inp):
     A._app(CTX, A.AppInput(**inp))
+    assert seams["options"] == []
 
 
-def test_beta_fail_closed(seams, monkeypatch):
+def test_ecrire_ne_depend_pas_du_seam_des_options(seams, monkeypatch):
     def panne(*a, **k):
         raise RuntimeError("options en panne")
     monkeypatch.setattr(access, "has_option", panne)
-    e = _refus(lambda: A._app(CTX, A.AppInput(op="create", title="x", manifest={})))
-    assert e.code == "apps_beta_only" and seams["create"] == []
+    A._app(CTX, A.AppInput(op="create", title="x", manifest={}))
+    assert len(seams["create"]) == 1
+
+
+def test_oto_apps_hors_de_la_beta():
+    from oto_mcp.tool_visibility import BETA_TOOLS
+    assert "oto_apps" not in BETA_TOOLS
 
 
 @pytest.mark.parametrize("inp", [dict(op="get", app_id=5), dict(op="revisions", app_id=5),
@@ -293,10 +293,10 @@ def test_lire_ne_demande_pas_la_beta(seams, monkeypatch, inp):
     assert seams["options"] == []
 
 
-def test_refus_beta_declare_et_route_sans_jeton_api():
+def test_plus_de_refus_beta_et_route_sans_jeton_api():
     from oto_mcp.capabilities import registry
     cap = next(c for c in registry.CAPABILITIES if c.key == "me.app")
-    assert ("apps_beta_only", 403) in {(e.code, e.status) for e in cap.errors}
+    assert "apps_beta_only" not in {e.code for e in cap.errors}
     (b,) = cap.rest_bindings()
     assert b.allow_api_token is False and b.allow_issuer_token is False
 

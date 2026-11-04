@@ -479,6 +479,11 @@ _SUB_COLUMNS = [
     # une table morte, et l'y laisser aurait fait échouer un merge de comptes après
     # son DROP.)
     ("nodes", "owner_id"),
+    # Les VERSIONS gardées de ces couches suivent la même clé naturelle (owner_type,
+    # owner_id, slug) : sans repointage, l'historique de la note d'une personne
+    # resterait sous son ancien sub. `edited_by` : qui a remplacé une version —
+    # signature d'auteur, hors PK, indexée, UPDATE nu.
+    ("guide_revisions", "owner_id"), ("guide_revisions", "edited_by"),
     # Les fonctions personnelles (ADR 0073) suivent la personne, comme ses projets.
     # ⚠️ `functions` porte UNIQUE (owner_type, owner_id, slug) : si les deux comptes ont
     # chacun une fonction PERSONNELLE du même slug, l'UPDATE lève et le merge échoue EN

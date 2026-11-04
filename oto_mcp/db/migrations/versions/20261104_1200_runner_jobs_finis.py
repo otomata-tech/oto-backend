@@ -25,7 +25,7 @@ lentement (et sous sa borne de durée).
 Retour arrière : `DROP INDEX CONCURRENTLY IF EXISTS idx_runner_jobs_conclus`.
 
 Révision : 20261104_1200_runner_jobs_finis
-Précédente : 20261103_1000_copilot_slack
+Précédente : 20261103_1400_guide_revisions
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from alembic import op
 from oto_mcp.db import index_concurrent, runner_jobs
 
 revision = "20261104_1200_runner_jobs_finis"
-down_revision = "20261103_1000_copilot_slack"
+down_revision = "20261103_1400_guide_revisions"
 branch_labels = None
 depends_on = None
 

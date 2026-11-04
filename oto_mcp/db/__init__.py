@@ -101,6 +101,8 @@ from . import (
     apify_runs,
     # NON aplati, même raison — `db.higgsfield_jobs.<fn>`.
     higgsfield_jobs,
+    # NON aplati : `lister`/`lire`/`garder` sont trop communs — `db.guide_revisions.<fn>`.
+    guide_revisions,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

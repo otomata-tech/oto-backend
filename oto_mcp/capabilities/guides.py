@@ -16,6 +16,13 @@ Décision 5).
 à l'index que l'agent consulte pour charger de la prose serait un doublon de contexte.
 On lit/écrit un init explicitement (`delivery='init'`).
 
+**Les versions sont gardées** (03/11/2026) : ce qu'une écriture remplace et ce qu'une
+suppression emporte restent relisibles (`op=revisions`, `op=read rev=…`) et
+restaurables (`op=restore rev=…`) — `db/guide_revisions.py`, rétention 30 jours ou
+50 versions par couche. Restaurer = réécrire le contenu d'une version par le chemin
+d'`op=write` (`_ecrire`) : mêmes droits, même garde `expected_rev`, et la restauration
+est elle-même versionnée. Relire l'historique demande le droit de LIRE le guide.
+
 Reste distinct : la **PROCÉDURE** (`org_instructions`, slots/versions — prose avec
 sémantique d'exécution, ADR 0042 Décision 3) et la **fiche profil** (structurée,
 `capabilities/profile.py`, Décision 6).
@@ -85,10 +92,25 @@ class GuideDeleteInput(GuideRefInput):
         "depuis. Omis = supprime ce qui est en place."))
 
 
+class GuideRevisionInput(GuideRefInput):
+    """L'adresse d'un guide, plus le `rev` d'une de ses versions gardées."""
+    rev: str = Field(description=(
+        "The `rev` of a kept version, as listed by the revisions of this guide."))
+
+
+class GuideRestoreInput(GuideRevisionInput):
+    """Restaurer = réécrire cette version : l'adresse, la version, et la garde
+    d'écriture (`expected_rev`, le rev ACTUEL lu — pas celui de la version)."""
+    expected_rev: Optional[str] = Field(None, description=(
+        "The CURRENT `rev` from the read (not the version's): refused 409 `conflict` "
+        "if the guide changed since. `absent` = nothing there now (a deleted guide). "
+        "Omitted = replaces whatever is in place."))
+
+
 class GuideOpInput(BaseModel):
     """Face MCP op-aware (`oto_guide`). `scope` défaut 'user' à l'écriture — un agent
     qui rédige sans préciser écrit POUR SON utilisateur, jamais pour l'org/la plateforme."""
-    op: Literal["list", "read", "write", "patch", "delete"] = "list"
+    op: Literal["list", "read", "write", "patch", "delete", "revisions", "restore"] = "list"
     slug: Optional[str] = None
     scope: Optional[str] = None
     delivery: Delivery = "on-demand"
@@ -108,8 +130,13 @@ class GuideOpInput(BaseModel):
             "op=patch: replace (default) | append | prepend | delete (the target, "
             "heading included; no `body_md`)."))
     expected_rev: Optional[str] = Field(default=None, description=(
-        "op=patch|write|delete: the `rev` from op=read (or a previous write) — refused "
-        "409 `conflict` if the guide changed since; `absent` = nothing there yet."))
+        "op=patch|write|delete|restore: the `rev` from op=read (or a previous write) — "
+        "refused 409 `conflict` if the guide changed since; `absent` = nothing there "
+        "yet."))
+    rev: Optional[str] = Field(default=None, description=(
+        "op=read: the `rev` of a KEPT version (listed by op=revisions) → that version's "
+        "content instead of the current one. op=restore (required): the version to "
+        "write back."))
 
 
 def _target_org(ctx: ResolvedCtx, owner_id: Optional[str]) -> int:
@@ -318,11 +345,49 @@ class GuidePatched(BaseModel):
     warning: Optional[str] = None
 
 
+class GuideRevisionRef(BaseModel):
+    """Une version gardée, sans son corps : le guide tel qu'il était jusqu'à ce que
+    `replaced_by` fasse `reason` (write | init | delete | restore) à `replaced_at`."""
+    rev: str
+    title: str = ""
+    reason: Literal["write", "init", "delete", "restore"]
+    replaced_by: Optional[str] = None
+    replaced_at: str
+    body_md_bytes: int
+
+
+class GuideRevisions(BaseModel):
+    """`op=revisions` : les versions gardées d'un guide, la plus récente d'abord, et
+    `current_rev` (`absent` quand le guide n'existe plus)."""
+    scope: str
+    slug: str
+    delivery: str
+    current_rev: str
+    revisions: list[GuideRevisionRef]
+    retention: str
+
+
+class GuideRevisionView(BaseModel):
+    """`op=read rev=…` : le contenu d'UNE version gardée."""
+    scope: str
+    slug: str
+    delivery: str
+    rev: str
+    title: str = ""
+    description: str = ""
+    body_md: str
+    reason: Literal["write", "init", "delete", "restore"]
+    replaced_by: Optional[str] = None
+    replaced_at: str
+
+
 class GuideOpOut(RootModel):
     """L'union des verbes d'`oto_guide_v2` (`Output` décrit, il ne valide pas) : la
-    liste, la lecture ou l'écriture (`GuideView`, enveloppe commune), la suppression,
-    le patch. `oto_guide` porte la même forme ; il reste à sa dette de sortie."""
-    root: Union[GuideList, GuideView, GuideDeleted, GuidePatched]
+    liste, la lecture ou l'écriture (`GuideView`, enveloppe commune — restauration
+    comprise), la suppression, le patch, l'historique et une version gardée.
+    `oto_guide` porte la même forme ; il reste à sa dette de sortie."""
+    root: Union[GuideList, GuideView, GuideDeleted, GuidePatched, GuideRevisions,
+                GuideRevisionView]
 
 
 def _list(ctx: ResolvedCtx, inp: _NoInput) -> dict:
@@ -407,6 +472,13 @@ def _get(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
 
 
 def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
+    return _ecrire(ctx, inp, restauration=False)
+
+
+def _ecrire(ctx: ResolvedCtx, inp: GuideSetInput, *, restauration: bool) -> dict:
+    """L'écriture d'un guide ou d'un readme — UN chemin pour `op=write` et pour
+    `op=restore` (`restauration=True`, qui ne change que la raison de la version
+    gardée) : mêmes droits, mêmes bornes, même garde `expected_rev`."""
     # Le symétrique de `_get` : le corps est LU aux noms du produit, il s'ÉCRIT au
     # canonique. Sans ça, relire un guide puis le réenregistrer stockait `acme_doc`.
     body = tool_alias.canonical_prose(inp.body_md or "", ctx.sub)
@@ -428,8 +500,10 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         ident, slug = _init_ref(ctx, inp.scope, inp.slug, write=True,
                                 owner_id=inp.owner_id)
         try:
-            state = guide_store.set_init_guide(inp.scope, ident, body,
-                                               expected_rev=inp.expected_rev)
+            state = guide_store.set_init_guide(
+                inp.scope, ident, body, edited_by=ctx.sub,
+                reason="restore" if restauration else "init",
+                expected_rev=inp.expected_rev)
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
         except db.GuideConflict as e:
@@ -447,6 +521,8 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
     try:
         return guide_store.set_guide(inp.scope, owner_id, inp.slug, body,
                                      inp.title or "", inp.description or "",
+                                     edited_by=ctx.sub,
+                                     reason="restore" if restauration else "write",
                                      expected_rev=inp.expected_rev)
     except db.GuideConflict as e:
         raise _conflit(e)
@@ -472,7 +548,8 @@ def _delete(ctx: ResolvedCtx, inp: GuideDeleteInput) -> dict:
         # cette branche il sortirait en 500 « erreur interne » — un refus prévu
         # rendu comme une panne, et l'appelant n'a alors rien à faire de la réponse.
         try:
-            guide_store.set_init_guide(inp.scope, ident, "", expected_rev=inp.expected_rev)
+            guide_store.set_init_guide(inp.scope, ident, "", edited_by=ctx.sub,
+                                       reason="delete", expected_rev=inp.expected_rev)
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
         except db.GuideConflict as e:
@@ -483,6 +560,7 @@ def _delete(ctx: ResolvedCtx, inp: GuideDeleteInput) -> dict:
         raise AuthzDenied(400, "missing_slug", "`slug` is required for an on-demand guide.")
     try:
         deleted = guide_store.delete_guide(inp.scope, owner_id, inp.slug,
+                                           edited_by=ctx.sub,
                                            expected_rev=inp.expected_rev)
     except db.GuideConflict as e:
         raise _conflit(e)
@@ -491,12 +569,103 @@ def _delete(ctx: ResolvedCtx, inp: GuideDeleteInput) -> dict:
     return {"scope": inp.scope, "slug": inp.slug, "deleted": True}
 
 
+# --- Les versions gardées (db/guide_revisions.py) ---------------------------------
+
+_RETENTION = (f"A version is kept while it is less than {db.guide_revisions.GARDER_JOURS} "
+              f"days old OR among the {db.guide_revisions.GARDER_DERNIERES} most recent "
+              "of its guide.")
+
+
+def _couche(ctx: ResolvedCtx, inp: GuideRefInput, *, write: bool) -> tuple[str, str, str]:
+    """`(owner_type, owner_id, slug)` STOCKÉS de la couche visée, droit vérifié AVANT
+    toute lecture de l'historique : celui de LIRE le guide (`write=False`), ou celui de
+    l'écrire (`write=True`, restauration). Un refus ne dit donc jamais à qui n'a pas le
+    droit si une version existe."""
+    if inp.delivery == "init":
+        ident, _slug = _init_ref(ctx, inp.scope, inp.slug, write=write,
+                                 owner_id=inp.owner_id)
+        owner, slug = guide_store.init_key(inp.scope, ident)
+        return inp.scope, owner, slug
+    if not inp.slug:
+        raise AuthzDenied(400, "missing_slug", "`slug` is required for an on-demand guide.")
+    owner = (_owner_for_write(ctx, inp.scope, inp.owner_id, ondemand=True) if write
+             else _owner_for_read(ctx, inp.scope, inp.owner_id))
+    return inp.scope, str(owner), inp.slug
+
+
+def _version(couche: tuple[str, str, str], delivery: str, rev: str) -> dict:
+    """La version `rev` de la couche, ou le refus déclaré `unknown_revision` — jamais
+    une autre version à sa place."""
+    owner_type, owner, slug = couche
+    try:
+        return db.guide_revisions.lire(owner_type, owner, slug, delivery, rev)
+    except db.guide_revisions.RevisionInconnue:
+        raise AuthzDenied(
+            404, "unknown_revision",
+            f"No kept version `{rev}` of guide `{slug}` (scope {owner_type}). List the "
+            f"kept versions with op=revisions. {_RETENTION}")
+
+
+def _iso(at) -> str:
+    """Une date de version en texte ISO, quelle que soit la forme que rend le pilote."""
+    return at if isinstance(at, str) else at.isoformat()
+
+
+def _rev_courant(couche: tuple[str, str, str], delivery: str) -> str:
+    owner_type, owner, slug = couche
+    lu = (db.get_init_guide_db if delivery == "init" else db.get_guide_db)(
+        owner_type, owner, slug)
+    return db.rev_de_couche(lu)
+
+
+def _revisions(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
+    """Les versions gardées d'un guide ou d'un readme, sans leurs corps — droit de
+    lecture du guide. Un guide SUPPRIMÉ se liste encore, par son adresse."""
+    couche = _couche(ctx, inp, write=False)
+    versions = db.guide_revisions.lister(*couche, inp.delivery)
+    return {"scope": couche[0], "slug": couche[2], "delivery": inp.delivery,
+            "current_rev": _rev_courant(couche, inp.delivery),
+            "revisions": [{"rev": v["rev"], "title": v["title"], "reason": v["reason"],
+                           "replaced_by": v["edited_by"],
+                           "replaced_at": _iso(v["created_at"]),
+                           "body_md_bytes": v["body_md_bytes"]} for v in versions],
+            "retention": _RETENTION}
+
+
+def _revision(ctx: ResolvedCtx, inp: GuideRevisionInput) -> dict:
+    """Le contenu d'UNE version gardée — droit de lecture du guide. Les outils cités
+    sont rendus aux noms du produit de ce compte, comme à la lecture (`_get`)."""
+    couche = _couche(ctx, inp, write=False)
+    v = _version(couche, inp.delivery, inp.rev)
+    prefix = tool_alias.prefix_for(ctx.sub)
+    body = tool_alias.rewrite_prose(v["body_md"], prefix) if prefix else v["body_md"]
+    return {"scope": couche[0], "slug": couche[2], "delivery": inp.delivery,
+            "rev": v["rev"], "title": v["title"], "description": v["description"],
+            "body_md": body, "reason": v["reason"], "replaced_by": v["edited_by"],
+            "replaced_at": _iso(v["created_at"])}
+
+
+def _restore(ctx: ResolvedCtx, inp: GuideRestoreInput) -> dict:
+    """Restaurer une version = la RÉÉCRIRE, par le chemin d'`op=write` (`_ecrire`) :
+    droit d'écriture vérifié avant de lire la version, bornes et garde `expected_rev`
+    d'une écriture, et ce qu'elle remplace est gardé à son tour (`reason='restore'`).
+    Un guide supprimé se restaure ainsi : la réécriture le recrée."""
+    couche = _couche(ctx, inp, write=True)
+    v = _version(couche, inp.delivery, inp.rev)
+    return _ecrire(ctx, GuideSetInput(scope=inp.scope, slug=inp.slug,
+                                      delivery=inp.delivery, owner_id=inp.owner_id,
+                                      body_md=v["body_md"], title=v["title"],
+                                      description=v["description"],
+                                      expected_rev=inp.expected_rev),
+                   restauration=True)
+
+
 # Les arguments qui n'ont de sens que pour `op=patch`. Refusés sur toute autre op,
 # jamais avalés. `expected_rev` n'en est plus depuis le signal #1203 : `op=write` et
 # `op=delete` l'honorent — il reste refusé sur les LECTURES (`_ECRITURES`), où il
 # laisserait croire à un contrôle qui n'a pas lieu.
 _PATCH_ONLY = ("section", "region", "mode")
-_ECRITURES = ("patch", "write", "delete")
+_ECRITURES = ("patch", "write", "delete", "restore")
 
 
 def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
@@ -569,6 +738,7 @@ def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
 
     try:
         accuse = guide_store.patch_guide(scope, owner_id, slug, appliquer,
+                                         edited_by=ctx.sub,
                                          expected_rev=inp.expected_rev)
     except db.GuideConflict as e:
         raise AuthzDenied(
@@ -602,8 +772,9 @@ def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
                  else "replaced the WHOLE section")
         out["warning"] = (
             f"mode={mode} on « {inp.section} » {verbe}, so also {len(enfants)} "
-            f"sub-section(s): {', '.join(enfants)}. A guide keeps no revision "
-            "history: if you did not mean to lose them, write them back now.")
+            f"sub-section(s): {', '.join(enfants)}. The previous version is kept: "
+            "if you did not mean to lose them, op=revisions lists it and op=restore "
+            "writes it back.")
     return out
 
 
@@ -647,14 +818,41 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
     if inp.expected_rev is not None and inp.op not in _ECRITURES:
         raise AuthzDenied(
             400, "unsupported_patch_arg",
-            f"`expected_rev`: op=patch, op=write and op=delete only — op={inp.op} "
-            "would ignore it. Remove it.")
+            f"`expected_rev`: op=patch, op=write, op=delete and op=restore only — "
+            f"op={inp.op} would ignore it. Remove it.")
+    if inp.rev is not None and inp.op not in ("read", "restore"):
+        raise AuthzDenied(
+            400, "unsupported_revision_arg",
+            f"`rev`: op=read and op=restore only — op={inp.op} would ignore it. "
+            "Remove it.")
+    if inp.op in ("revisions", "restore"):
+        en_trop = [n for n in ("body_md", "title", "description")
+                   if getattr(inp, n) is not None]
+        if en_trop:
+            raise AuthzDenied(
+                400, "unsupported_revision_arg",
+                f"{', '.join(f'`{n}`' for n in en_trop)}: op={inp.op} takes none — a "
+                "restore writes back the kept version as it was. Remove it.")
     if inp.op == "list":
         return _list(ctx, _NoInput())
     init = inp.delivery == "init"
     if not inp.slug and not init:
         # Un init a un slug canonique par scope — seul un on-demand doit être nommé.
         raise AuthzDenied(400, "missing_slug", "`slug` is required (see op=list).")
+    if inp.op == "revisions" or (inp.op == "read" and inp.rev is not None):
+        ref = dict(scope=_scope_de_l_historique(ctx, inp), slug=inp.slug or "",
+                   delivery=inp.delivery, owner_id=inp.owner_id)
+        if inp.op == "revisions":
+            return _revisions(ctx, GuideRefInput(**ref))
+        return _revision(ctx, GuideRevisionInput(**ref, rev=inp.rev))
+    if inp.op == "restore":
+        if not inp.rev:
+            raise AuthzDenied(400, "missing_rev",
+                              "op=restore requires `rev`: the version to write back, "
+                              "as listed by op=revisions.")
+        return _restore(ctx, GuideRestoreInput(
+            scope=inp.scope or "user", slug=inp.slug or "", delivery=inp.delivery,
+            owner_id=inp.owner_id, rev=inp.rev, expected_rev=inp.expected_rev))
     if inp.op == "read":
         # Lecture on-demand : `scope` est un FILTRE optionnel (le store cherche dans
         # l'ordre de visibilité plateforme → org → user quand il est omis). Un init,
@@ -678,6 +876,25 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
                                    expected_rev=inp.expected_rev))
 
 
+def _scope_de_l_historique(ctx: ResolvedCtx, inp: GuideOpInput) -> str:
+    """Le scope dont on lit l'historique. Donné : celui-là. Omis : `user` pour un
+    readme (comme à la lecture), et pour un guide à charger celui du guide que
+    `op=read` servirait (tenant → plateforme → org → user). Un guide supprimé n'est
+    plus servi : il se nomme alors par son scope."""
+    if inp.scope:
+        return inp.scope
+    if inp.delivery == "init":
+        return "user"
+    lu = guide_store.read_guide_scoped(inp.slug or "", org_id=ctx.org_id, sub=ctx.sub)
+    if lu is None:
+        raise AuthzDenied(
+            400, "missing_scope",
+            f"No guide `{inp.slug}` is served to you now, so its scope cannot be "
+            "guessed: name it (`scope`). A deleted guide keeps its versions under its "
+            "scope.")
+    return lu["scope"]
+
+
 _DESCRIPTION_GUIDE = ("Load or author oto INSTRUCTION PROSE — a how-to loaded when needed, or a readme "
             "injected into every session. Two axes: `scope` = platform | tenant | org | group | "
             "user (who writes it, whom it applies to) and `delivery` = 'on-demand' (default: a "
@@ -697,6 +914,14 @@ _DESCRIPTION_GUIDE = ("Load or author oto INSTRUCTION PROSE — a how-to loaded 
             "op=write / delete take `expected_rev` too (the `rev` of op=read — readmes "
             "included; `absent` when there was nothing): refused 409 `conflict` if "
             "someone changed it since, nothing written. "
+            "VERSIONS: what a write, patch or delete replaces is KEPT (30 days, or the "
+            "50 most recent per guide, whichever keeps more). op=revisions (slug, "
+            "scope) → the kept versions, newest first: `rev`, `replaced_at`, "
+            "`replaced_by`, `reason`, size — a deleted guide included ; op=read with "
+            "`rev` → that version's content ; op=restore (slug, scope, `rev`) → writes "
+            "that version back as a NEW write: same writers and same `expected_rev` "
+            "guard as op=write, and the version it replaces is kept in turn. Reading "
+            "versions takes the right to read the guide. "
             "Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load). "
             "This is PROSE: a repeatable process with slots is a procedure (`oto_procedure`), "
             "and what oto knows about the user is their profile card (`oto_profile`).")
@@ -710,12 +935,16 @@ _ERREUR_CONFLIT = DeclaredError(
     409, "conflict",
     "`expected_rev` n'est plus le rev en place : le guide a changé depuis la lecture "
     "(signal #1203) ; rien n'est écrit")
+_ERREUR_VERSION = DeclaredError(
+    404, "unknown_revision",
+    "aucune version gardée de ce guide ne porte ce `rev` (jamais gardée, ou sortie de "
+    "la rétention) ; aucune autre version n'est servie ni restaurée à sa place")
 
 
 def _guide_op_strict(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
-    """`oto_guide_v2` : `expected_rev` EXIGÉ sur op=write/delete (signal #1203), puis le
+    """`oto_guide_v2` : `expected_rev` EXIGÉ sur op=write/delete/restore (signal #1203), puis le
     MÊME dispatch que la surface héritée — deux handlers seraient deux comportements."""
-    if inp.op in ("write", "delete") and inp.expected_rev is None:
+    if inp.op in ("write", "delete", "restore") and inp.expected_rev is None:
         raise AuthzDenied(
             400, "expected_rev_required",
             f"op={inp.op} requires `expected_rev` on this tool: read the guide first "
@@ -734,10 +963,10 @@ CAPABILITIES += [
     Capability(
         key="me.guide", handler=_guide_op, Input=GuideOpInput, authz=SUB_ONLY,
         description=(_DESCRIPTION_GUIDE + " ⚠️ Here `expected_rev` is OPTIONAL on "
-                     "op=write/delete: omitted, the write REPLACES whatever is there, "
-                     "unseen — the legacy default; oto_guide_v2 requires it."),
+                     "op=write/delete/restore: omitted, the write REPLACES whatever is "
+                     "there, unseen — the legacy default; oto_guide_v2 requires it."),
         mcp="oto_guide",
-        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT),
+        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT, _ERREUR_VERSION),
     ),
     # La surface STRICTE (signal #1203, docs/tool-visibility.md §Un contrat servi ne se
     # durcit pas : il se double) : `expected_rev` y est EXIGÉ sur op=write/delete. Le
@@ -747,16 +976,16 @@ CAPABILITIES += [
     Capability(
         key="me.guide.v2", handler=_guide_op_strict, Input=GuideOpInput, authz=SUB_ONLY,
         description=("BETA. Same surface as oto_guide, with a STRICT write contract: "
-                     "op=write and op=delete REQUIRE `expected_rev` — read first "
+                     "op=write, op=delete and op=restore REQUIRE `expected_rev` — read first "
                      "(op=read returns `rev`), so a guide or readme someone else wrote "
                      "meanwhile is never overwritten unseen. " + _DESCRIPTION_GUIDE),
         mcp="oto_guide_v2",
         Output=GuideOpOut,
-        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT,
+        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT, _ERREUR_VERSION,
                 DeclaredError(400, "expected_rev_required",
-                              "op=write/delete sans `expected_rev` sur la surface "
-                              "stricte — relire (op=read rend `rev`), puis écrire avec "
-                              "lui ; rien n'est écrit")),
+                              "op=write/delete/restore sans `expected_rev` sur la "
+                              "surface stricte — relire (op=read rend `rev`), puis "
+                              "écrire avec lui ; rien n'est écrit")),
     ),
     Capability(
         key="me.guides.list", handler=_list, Input=_NoInput, authz=SUB_ONLY, mcp=None,
@@ -816,7 +1045,57 @@ CAPABILITIES += [
                 _ERREUR_CONFLIT),
         description=("Delete a guide (scope=platform|tenant|org|group|user) — same writers as "
                      "`me.guides.set`: a tenant's on-demand guide by its tenant admin or a "
-                     "platform admin."),
+                     "platform admin. The deleted guide is kept as a version: "
+                     "`me.guides.revisions` lists it, `me.guides.restore` writes it back."),
         rest=RestBinding("DELETE", "/api/me/guides/{scope}/{slug}"),
+    ),
+    # Les versions gardées (db/guide_revisions.py) : mêmes adresses que la lecture et
+    # l'écriture, mêmes cibles explicites (`/api/orgs/{id}/…`, `/api/groups/{id}/…`).
+    Capability(
+        key="me.guides.revisions", handler=_revisions, Input=GuideRefInput,
+        authz=SUB_ONLY, mcp=None, Output=GuideRevisions,
+        description=("List the KEPT versions of a guide or readme (`?delivery=init`), "
+                     "newest first, without their bodies: `rev`, `replaced_at`, "
+                     "`replaced_by`, `reason` (write | init | delete | restore), size. "
+                     "A deleted guide still lists its versions. Same readers as "
+                     "`me.guides.get`. " + _RETENTION),
+        rest=(RestBinding("GET", "/api/me/guides/{scope}/{slug}/revisions"),
+              RestBinding("GET", "/api/orgs/{id}/guides/{scope}/{slug}/revisions",
+                          {"id": "owner_id"}),
+              RestBinding("GET", "/api/groups/{id}/guides/{scope}/{slug}/revisions",
+                          {"id": "owner_id"})),
+    ),
+    Capability(
+        key="me.guides.revision", handler=_revision, Input=GuideRevisionInput,
+        authz=SUB_ONLY, mcp=None, Output=GuideRevisionView, errors=(_ERREUR_VERSION,),
+        description=("Read ONE kept version of a guide or readme by its `rev`. Same "
+                     "readers as `me.guides.get`."),
+        rest=(RestBinding("GET", "/api/me/guides/{scope}/{slug}/revisions/{rev}"),
+              RestBinding("GET", "/api/orgs/{id}/guides/{scope}/{slug}/revisions/{rev}",
+                          {"id": "owner_id"}),
+              RestBinding("GET", "/api/groups/{id}/guides/{scope}/{slug}/revisions/{rev}",
+                          {"id": "owner_id"})),
+    ),
+    Capability(
+        key="me.guides.restore", handler=_restore, Input=GuideRestoreInput,
+        authz=SUB_ONLY, mcp=None, Output=GuideView,
+        errors=(_ERREUR_VERSION, _ERREUR_CONFLIT,
+                DeclaredError(409, "delivery_conflict",
+                              "ce `(scope, slug)` porte une couche de l'AUTRE "
+                              "livraison ; rien n'est écrit"),
+                DeclaredError(409, "family_conflict",
+                              "une PROCÉDURE porte ce slug dans la même portée "
+                              "(oto#100) — un guide supprimé ne s'y recrée pas ; rien "
+                              "n'est écrit")),
+        description=("Write a kept version back (`rev`), as a NEW write: same writers "
+                     "and same `expected_rev` guard as `me.guides.set`, and the version "
+                     "it replaces is kept in turn. Restores a deleted guide too."),
+        rest=(RestBinding("POST", "/api/me/guides/{scope}/{slug}/revisions/{rev}/restore"),
+              RestBinding("POST",
+                          "/api/orgs/{id}/guides/{scope}/{slug}/revisions/{rev}/restore",
+                          {"id": "owner_id"}),
+              RestBinding("POST",
+                          "/api/groups/{id}/guides/{scope}/{slug}/revisions/{rev}/restore",
+                          {"id": "owner_id"})),
     ),
 ]

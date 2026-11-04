@@ -165,7 +165,7 @@ def test_un_guide_relu_puis_reecrit_garde_le_canonique(tenant_acme, registre, mo
     monkeypatch.setattr(guides, "_owner_for_write",
                         lambda ctx, scope, owner_id=None, *, ondemand=False: ctx.sub)
 
-    def _set_guide(scope, owner, slug, body, title, description, *, expected_rev=None):
+    def _set_guide(scope, owner, slug, body, title, description, *, expected_rev=None, **_):
         ecrit["body"] = body
         return {"slug": slug}
 
@@ -184,7 +184,7 @@ def test_un_guide_patche_depuis_le_produit_stocke_le_canonique(tenant_acme, regi
     monkeypatch.setattr(guides, "_owner_for_write",
                         lambda ctx, scope, owner_id=None, *, ondemand=False: ctx.sub)
 
-    def _patch_guide(scope, owner, slug, appliquer, *, expected_rev=None):
+    def _patch_guide(scope, owner, slug, appliquer, *, expected_rev=None, **_):
         stocke["body"] = appliquer(stocke["body"])
         return {"slug": slug, "scope": scope}
 

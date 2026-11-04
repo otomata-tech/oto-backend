@@ -162,7 +162,8 @@ def _set(ctx: ResolvedCtx, inp: SetInput) -> dict:
     # Aucune ne porte `secret_sauce` aujourd'hui, mais un refus prévu qui sort en
     # 500 n'apprend rien à qui le rencontre — et c'est un platform_admin.
     try:
-        guide_store.set_init_guide("platform", key, inp.body_md or "")
+        guide_store.set_init_guide("platform", key, inp.body_md or "",
+                                   edited_by=ctx.sub)
     except guide_store.GuideDeliveryConflict as e:
         raise AuthzDenied(409, "delivery_conflict", str(e))
     return _view(key)

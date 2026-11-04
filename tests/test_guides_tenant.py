@@ -158,13 +158,13 @@ def ecrit(registre, monkeypatch):
     from oto_mcp import db
     faits = []
 
-    def _set(scope, owner, slug, body, title, description, *, expected_rev=None):
+    def _set(scope, owner, slug, body, title, description, *, expected_rev=None, **_):
         faits.append((scope, owner, slug, body))
         return {"title": title, "description": description}
 
     monkeypatch.setattr(db, "set_guide_db", _set)
     monkeypatch.setattr(db, "delete_guide_db",
-                        lambda scope, owner, slug, *, expected_rev=None:
+                        lambda scope, owner, slug, *, expected_rev=None, **_:
                         bool(faits.append(("del", scope, owner, slug))) or True)
     return faits
 

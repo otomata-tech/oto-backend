@@ -15,12 +15,12 @@ def store(monkeypatch):
                         lambda slug, scope=None, org_id=None, sub=None:
                         {"slug": slug, "scope": scope, "body_md": "B"} if slug == "known" else None)
 
-    def _set(scope, owner, slug, body, title="", desc="", *, expected_rev=None):
+    def _set(scope, owner, slug, body, title="", desc="", *, expected_rev=None, **_):
         calls["set"] = (scope, owner, slug, body, title, desc)
         return {"slug": slug, "scope": scope, "title": title, "description": desc}
     monkeypatch.setattr(G.guide_store, "set_guide", _set)
 
-    def _del(scope, owner, slug, *, expected_rev=None):
+    def _del(scope, owner, slug, *, expected_rev=None, **_):
         calls["del"] = (scope, owner, slug)
         return True
     monkeypatch.setattr(G.guide_store, "delete_guide", _del)
@@ -139,7 +139,7 @@ def init_store(monkeypatch):
     def _get_init(scope, ident=None):
         return {"body_md": rows.get((scope, str(ident)), ""), "updated_at": None}
 
-    def _set_init(scope, ident, body_md, *, expected_rev=None):
+    def _set_init(scope, ident, body_md, *, expected_rev=None, **_):
         calls["set_init"] = (scope, str(ident), body_md)
         rows[(scope, str(ident))] = body_md
         return {"body_md": body_md, "updated_at": "2026-07-28 10:00:00"}

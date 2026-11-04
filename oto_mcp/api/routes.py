@@ -245,6 +245,10 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     # Guides, readmes et procédures (perso compris : ils suivent la personne).
     ("GET", "/api/me/guides"): None,
     ("GET", "/api/me/guides/{scope}/{slug}"): None,
+    # Leurs versions gardées : la même adresse, le même droit de lecture
+    # (`capabilities/guides._owner_for_read`, borné à O comme `me.guides.get`).
+    ("GET", "/api/me/guides/{scope}/{slug}/revisions"): None,
+    ("GET", "/api/me/guides/{scope}/{slug}/revisions/{rev}"): None,
     ("GET", "/api/me/guides/{guide_id}"): None,
     ("GET", "/api/me/instructions"): None,
     ("GET", "/api/me/instructions/{slug}"): None,

@@ -106,7 +106,7 @@ def test_la_garde_S_EXECUTE_sur_le_chemin_du_readme(monkeypatch):
     monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: sub in (CHEF, MEMBRE))
     ecrits: dict = {}
 
-    def _pose(scope, ident, body, *, expected_rev=None):
+    def _pose(scope, ident, body, *, expected_rev=None, **_):
         ecrits[(scope, ident)] = body
         return {"body_md": body, "updated_at": "2026-09-01T00:00:00Z"}
 

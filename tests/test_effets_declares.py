@@ -216,11 +216,15 @@ def test_une_ecriture_forcee_des_recettes_n_est_pas_declaree_en_lecture():
     ("oto_org", {"op": "invite"}, "envoyer", None),
     ("oto_fleet", {"op": "launch"}, "envoyer", None),
     ("oto_admin_set_plan", {}, "detruire", None),
-    # Décidé : désactiver un outil écrit (oto_enable_tool le rétablit) ; réécrire un
-    # guide détruit (aucune version précédente n'est gardée).
+    # Décidé : désactiver un outil écrit (oto_enable_tool le rétablit) ; réécrire ou
+    # restaurer un guide écrit (la version remplacée est gardée, restaurable) ; le
+    # supprimer détruit (il quitte le catalogue de tous ses lecteurs).
     ("oto_disable_tool", {}, "ecrire", None),
-    ("oto_guide", {"op": "write"}, "detruire", None),
-    ("oto_guide_v2", {"op": "write"}, "detruire", None),
+    ("oto_guide", {"op": "write"}, "ecrire", None),
+    ("oto_guide_v2", {"op": "write"}, "ecrire", None),
+    ("oto_guide", {"op": "restore"}, "ecrire", None),
+    ("oto_guide", {"op": "revisions"}, "lire", None),
+    ("oto_guide_v2", {"op": "delete"}, "detruire", None),
 ])
 def test_les_cas_de_l_audit(nom, args, classe, cle):
     obtenu, lot = effet(nom, args)

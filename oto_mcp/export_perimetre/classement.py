@@ -171,6 +171,10 @@ CLASSEMENT: dict[str, Table] = {
     "nodes": possedee(ParEntite(), "les nœuds `platform`/`tenant` (guides semés au "
                       "démarrage) sont ceux de l'instance"),
     "blocks": indirecte(Via("nodes", ("node_id",))),
+    # Les versions gardées d'un guide n'ont pas de FK vers son nœud (un guide supprimé
+    # garde les siennes) : elles se rattachent par la même clé de propriétaire.
+    "guide_revisions": possedee(ParEntite(), "les versions des guides `platform`/`tenant` "
+                                "sont celles de l'instance"),
     "org_instructions": possedee(Ou((ParOrg(), ParEntite()))),
     "org_instruction_revisions": possedee(Ou((ParOrg(), ParEntite()))),
     # La bibliothèque publique se nomme par sa VUE, comme partout dans le code (#526 :

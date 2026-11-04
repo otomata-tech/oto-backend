@@ -513,8 +513,9 @@ voyager ni le corps à l'aller, ni le corps au retour.
   l'accusé d'un patch ; aucune colonne, aucune migration.
 - **La réponse est un accusé** : `slug`, `scope`, `title`, `description`, `updated_at`,
   `rev`, `body_md_length`, plus `removed` (replace/delete) et `removed_subsections`
-  quand une section parente emporte ses enfants. ⚠️ Un guide n'a pas d'historique de
-  révisions : ce qu'un `replace` emporte n'est pas restaurable, l'accusé le dit.
+  quand une section parente emporte ses enfants. Le corps d'avant le patch est gardé
+  comme version (§ « Les versions d'un guide ») : ce qu'un `replace` emporte se relit
+  et se restaure, l'accusé le dit.
 - **Pas de readme `init`** (`400 unsupported_delivery`) : il est injecté entier dans
   chaque session, donc tenu court, et se réécrit par `op=write`. Viser son slug
   canonique comme un guide à charger rend `409 delivery_conflict`.
@@ -554,11 +555,65 @@ celui des pages et d'`op=patch` :
   expected_rev_required`) ; même entrée, même dispatch (`_guide_op_strict` ne fait que
   poser l'exigence avant `_guide_op`). L'écriture de la console plateforme
   (`oto_admin_platform_instructions`) n'est pas gardée.
-- ⚠️ **Aucun historique de révision des nœuds n'existe** (vérifié le 23/10/2026 : seuls
-  `doc_revisions`, `org_instruction_revisions` et `datastore_row_revisions` versionnent ;
-  `nodes` n'a ni table de révisions ni colonne de version). La version remplacée d'un
-  guide ou d'un readme n'est donc PAS relisible : la garde empêche l'écrasement à
-  l'aveugle, elle ne rend pas ce qui a été écrasé en connaissance de cause. Un historique
-  des couches serait une table neuve — à décider à part.
+- La garde empêche l'écrasement à l'aveugle ; ce qui a été écrasé en connaissance de
+  cause se retrouve depuis le 03/11/2026 dans les versions gardées (§ suivant).
 - Banc : `tests/test_guide_ecriture_gardee_1203.py` (base réelle : écrasement refusé,
   création concurrente, readme, suppression, surface stricte).
+
+## Les versions d'un guide (03/11/2026)
+
+Jusque-là une écriture de guide REMPLAÇAIT sur place, et une suppression emportait tout :
+la garde `expected_rev` (§ précédent) empêchait d'écraser sans avoir lu, rien ne rendait
+la version d'avant. Désormais **ce qu'une écriture remplace est gardé** :
+
+- **Quand** : avant chaque remplacement — `op=write` d'un guide à charger
+  (`db.set_guide_db`), `op=patch` (`db.patch_guide_db`), l'écriture d'un readme
+  (`db.set_init_guide_db`, console plateforme comprise) — et avant chaque suppression
+  (`db.delete_guide_db`, et vider un readme). L'état PRÉCÉDENT est écrit dans
+  `guide_revisions`, **dans la transaction de l'écriture**, sous son verrou (celui du
+  slug, puis la ligne `FOR UPDATE`, `_exiger_la_version`) : l'écriture et sa version
+  passent ou échouent ensemble. Une première écriture (rien avant), un readme vide ou une
+  réécriture au même contenu (même `rev`) n'en laissent pas. Le semis des guides
+  plateforme et son geste de maintenance n'en laissent pas non plus : ils posent le
+  contenu d'un fichier du dépôt, que git versionne.
+- **Ce qui est gardé** : `title`, `description`, `body_md`, le `rev` de cet état (le même
+  ETag que la lecture sert), `edited_by` (qui a fait le geste qui l'a remplacé, la
+  convention de `doc_revisions`), `created_at`, et `reason` : `write` (guide réécrit ou
+  patché), `init` (readme réécrit), `delete` (guide supprimé, readme vidé), `restore`
+  (une restauration est passée par-dessus).
+- **L'identité est la clé naturelle** `(owner_type, owner_id, slug, delivery)`, pas l'id
+  du nœud — un guide supprimé n'a plus de nœud, et c'est alors que sa dernière version
+  compte. Donc aucune clé étrangère ; la fusion de comptes repointe `owner_id` et
+  `edited_by` (`_SUB_COLUMNS`), l'export de périmètre les classe comme `nodes`
+  (`ParEntite`).
+- **Rétention** : une version reste si elle a **moins de 30 jours OU si elle est parmi
+  les 50 plus récentes** de son guide — le plus généreux des deux. La purge du surplus se
+  fait **au fil de l'écriture**, dans la même transaction, par l'index de la couche
+  (`db/guide_revisions.py::_purger`) : aucune tâche planifiée.
+- **Lire** (droit de LIRE le guide — `_owner_for_read` : un guide plateforme pour tout
+  authentifié, celui d'une org pour ses membres, une note pour son auteur) :
+  `oto_guide op=revisions` (slug, scope) → les versions, la plus récente d'abord, sans
+  corps (`rev`, `title`, `reason`, `replaced_by`, `replaced_at`, `body_md_bytes`) et le
+  `current_rev` (`absent` pour un guide supprimé) ; `op=read` avec `rev` → le contenu
+  d'une version (outils cités aux noms du produit, comme à la lecture). `scope` omis :
+  celui du guide qu'`op=read` servirait ; un guide supprimé se nomme par son scope
+  (`400 missing_scope` sinon). Faces REST : `GET …/guides/{scope}/{slug}/revisions` et
+  `GET …/guides/{scope}/{slug}/revisions/{rev}` (`?delivery=init` pour un readme), sous
+  `/api/me`, `/api/orgs/{id}` et `/api/groups/{id}`.
+- **Restaurer** : `oto_guide op=restore` (slug, scope, `rev`) / `POST …/revisions/{rev}/
+  restore` RÉÉCRIT la version choisie comme une **nouvelle écriture**, par le chemin
+  d'`op=write` (`capabilities/guides.py::_ecrire`) : mêmes droits (vérifiés AVANT de lire
+  la version), mêmes bornes, même garde `expected_rev` (le rev ACTUEL ; `absent` pour un
+  guide supprimé, qui est alors recréé), même refus de famille ; et ce qu'elle remplace est
+  gardé à son tour (`reason='restore'`). `oto_guide_v2` exige `expected_rev` sur
+  `op=restore` comme sur `op=write`.
+- **Effets déclarés** (`tools/effets.py`) : `op=write`, `op=patch` et `op=restore`
+  ÉCRIVENT (la version remplacée est gardée), `op=revisions` lit, `op=delete` reste
+  DESTRUCTIF — le guide quitte le catalogue de tous ses lecteurs, même si sa dernière
+  version se restaure.
+- **Un `rev` inconnu** (jamais gardé, ou sorti de la rétention) rend **`404
+  unknown_revision`**, déclaré : aucune autre version n'est servie ni restaurée à sa
+  place.
+- Banc : `tests/test_guide_versions.py` (base réelle : instantané, première écriture,
+  suppression, rétention, lecture, restauration, droits, rev inconnu) ; migration
+  `20261103_1400_guide_revisions` (`tests/test_migration_20261103_guide_revisions.py`).

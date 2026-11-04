@@ -46,8 +46,8 @@ def monde(live):
     org_store.add_org_member(autre, TIERS, "org_admin", actor=TIERS)
     g = group_store.create_group(o, "Ventes", created_by=ADMIN)
     g_ailleurs = group_store.create_group(autre, "Ailleurs", created_by=TIERS)
-    guide_store.set_init_guide("org", o, "Règles de {{org}} pour {{user}}.")
-    guide_store.set_init_guide("group", g, "Équipe {{équipe}} : on appelle avant.")
+    guide_store.set_init_guide("org", o, "Règles de {{org}} pour {{user}}.", edited_by=None)
+    guide_store.set_init_guide("group", g, "Équipe {{équipe}} : on appelle avant.", edited_by=None)
     a, b = list(providers.REGISTRY)[:2]
     for nom in (a, b):
         connector_activation.set_activation(nom, True)

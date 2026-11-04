@@ -73,7 +73,7 @@ class _FausseBase:
     def get_init_guide_db(self, scope, owner_id, slug):
         return {"body_md": ""} if (scope, str(owner_id), slug) in self.readmes else None
 
-    def patch_guide_db(self, scope, owner_id, slug, appliquer, *, expected_rev=None):
+    def patch_guide_db(self, scope, owner_id, slug, appliquer, *, expected_rev=None, **_):
         self.appels += 1
         row = self.guides.get((scope, str(owner_id), slug))
         if row is None:
@@ -520,7 +520,8 @@ def test_en_base_deux_patchs_simultanes_s_enchainent(monde):
         fini.set()
 
     t1 = threading.Thread(target=guide_store.patch_guide,
-                          args=("user", "u-duo", "journal", premier))
+                          args=("user", "u-duo", "journal", premier),
+                          kwargs={"edited_by": "u-duo"})
     t2 = threading.Thread(target=second)
     t1.start()
     try:

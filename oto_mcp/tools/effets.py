@@ -26,8 +26,9 @@ The classes, from least to most constraining (`CLASSES`):
   publication, a campaign or a sequence that will send (contacts added to an active
   sequence, a list that feeds a sending tool), an agent launched.
 - `detruire`: deletes, removes, merges, acts in bulk, archives, purges, refunds, voids,
-  deactivates, cancels, revokes, or REPLACES (a `set_*` that overwrites, an `oto_guide`
-  `write`, which keeps no prior version). A switch the same person flips back with a
+  deactivates, cancels, revokes, or REPLACES without keeping what it replaced (a `set_*`
+  that overwrites). An `oto_guide` `write` writes: the version it replaces is kept and
+  restorable (`db/guide_revisions.py`). A switch the same person flips back with a
   plain write is not destroyed: `oto_disable_tool` writes (`oto_enable_tool` undoes it).
 
 A relay (`oto_call`) has no class of its own: it takes its target's (`RELAIS`).
@@ -1206,9 +1207,11 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # `run` executes stored pure code (no network, no secret) and stores its files
     "oto_function": {"lire": "list get versions", "ecrire": "create propose run test", "envoyer": "publish", "detruire": "refuse"},
     "oto_group": {"lire": "list get list_invites", "ecrire": "create", "envoyer": "add_member invite", "detruire": "remove_member set_instruction"},
-    # write REPLACES the body in place and keeps no prior version (`db/guides.set_guide_db`)
-    "oto_guide": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
-    "oto_guide_v2": {"lire": "list read", "ecrire": "patch", "detruire": "write delete"},
+    # write/patch/restore REPLACE the body but KEEP the version they replace, restorable
+    # (`db/guide_revisions.py`); delete stays destructive: the guide leaves the catalogue
+    # and every reader, even though its last version is kept
+    "oto_guide": {"lire": "list read revisions", "ecrire": "write patch restore", "detruire": "delete"},
+    "oto_guide_v2": {"lire": "list read revisions", "ecrire": "write patch restore", "detruire": "delete"},
     "oto_identity": {"lire": "list", "ecrire": "rename", "detruire": "set"},
     "oto_import": "ecrire",
     "oto_instance": {"lire": "list verify", "envoyer": "lend"},

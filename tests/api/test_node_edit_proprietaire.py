@@ -220,7 +220,7 @@ def test_le_readme_injecte_dune_victime_nest_pas_ecrivable_par_un_tiers(client, 
     """
     from oto_mcp import guide_store
     victime = org["admin"]
-    guide_store.set_init_guide("user", victime, "Mon readme à moi.")
+    guide_store.set_init_guide("user", victime, "Mon readme à moi.", edited_by=None)
     derive = "nod_" + hashlib.md5(
         f"ctx:user:{victime}:readme".encode()).hexdigest()[:24]
 

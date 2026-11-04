@@ -612,6 +612,7 @@ sources = [
   "oto_mcp/guides/**",
   "oto_mcp/capabilities/guide*.py",
   "oto_mcp/db/guides.py",
+  "oto_mcp/db/guide_revisions.py",
   "oto_mcp/db/schema/guides.py",
   "oto_mcp/tools/guide_run.py",
 ]

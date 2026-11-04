@@ -16,7 +16,7 @@ class _FakeGuides:
         r = self.rows.get((scope, str(owner_id), slug))
         return r if (r and r["delivery"] == "init") else None
 
-    def set_init_guide_db(self, scope, owner_id, slug, body_md, *, expected_rev=None):
+    def set_init_guide_db(self, scope, owner_id, slug, body_md, *, expected_rev=None, **_):
         row = {"scope": scope, "owner_id": str(owner_id), "slug": slug,
                "body_md": body_md or "", "delivery": "init", "updated_at": "T"}
         self.rows[(scope, str(owner_id), slug)] = row
@@ -33,7 +33,7 @@ class _FakeGuides:
                 if s == scope and o == str(owner_id) and v["delivery"] == "on-demand"]
 
     def set_guide_db(self, scope, owner_id, slug, body_md, title="", description="", *,
-                     expected_rev=None):
+                     expected_rev=None, **_):
         row = {"scope": scope, "owner_id": str(owner_id), "slug": slug, "title": title,
                "description": description, "body_md": body_md, "delivery": "on-demand"}
         self.rows[(scope, str(owner_id), slug)] = row
@@ -54,34 +54,34 @@ def test_user_init_roundtrip(db):
     # `rev` (signal #1203) : `absent` tant que la couche n'a pas de contenu.
     assert G.get_init_guide("user", "u1") == {"body_md": "", "updated_at": None,
                                               "rev": "absent"}
-    out = G.set_init_guide("user", "u1", "  hello  ")
+    out = G.set_init_guide("user", "u1", "  hello  ", edited_by=None)
     assert out["body_md"] == "  hello  " and out["updated_at"] == "T"
     assert G.get_init_guide("user", "u1")["body_md"] == "  hello  "
     assert G.init_guide_body("user", "u1") == "hello"                    # strippé
 
 
 def test_platform_init_roundtrip(db):
-    G.set_init_guide("platform", "secret_sauce", "POSTURE")
+    G.set_init_guide("platform", "secret_sauce", "POSTURE", edited_by=None)
     assert db.rows[("platform", "platform", "secret_sauce")]["delivery"] == "init"
     assert G.init_guide_body("platform", "secret_sauce") == "POSTURE"
 
 
 def test_seed_does_not_overwrite(db):
-    G.set_init_guide("user", "u1", "edited")
+    G.set_init_guide("user", "u1", "edited", edited_by=None)
     G.seed_init_guide("user", "u1", "default")
     assert G.init_guide_body("user", "u1") == "edited"                   # seed = DO NOTHING
 
 
 def test_init_readme_absent_from_on_demand_catalog(db):
-    G.set_init_guide("user", "u1", "mon readme init")                    # slug 'readme'
+    G.set_init_guide("user", "u1", "mon readme init", edited_by=None)                    # slug 'readme'
     db.set_guide_db("user", "u1", "howto", "corps how-to")              # on-demand
     slugs = {g["slug"] for g in G.list_guides_for(sub="u1", org_id=None)}
     assert "howto" in slugs and "readme" not in slugs                    # init exclu
 
 
 def test_org_and_group_init_roundtrip(db):
-    G.set_init_guide("org", 42, "readme d'org")
-    G.set_init_guide("group", 7, "readme d'équipe")
+    G.set_init_guide("org", 42, "readme d'org", edited_by=None)
+    G.set_init_guide("group", 7, "readme d'équipe", edited_by=None)
     assert db.rows[("org", "42", "readme")]["delivery"] == "init"
     assert G.init_guide_body("org", 42) == "readme d'org"
     assert G.init_guide_body("group", 7) == "readme d'équipe"
@@ -89,4 +89,4 @@ def test_org_and_group_init_roundtrip(db):
 
 def test_set_init_guide_rejects_unknown_scope(db):
     with pytest.raises(G.GuideError):
-        G.set_init_guide("team", "42", "x")     # scope inexistant
+        G.set_init_guide("team", "42", "x", edited_by=None)     # scope inexistant

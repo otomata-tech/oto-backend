@@ -20,12 +20,12 @@ class _FakeGuidesDB:
         return self.rows.get((scope, str(owner_id), slug))
 
     def set_guide_db(self, scope, owner_id, slug, body_md, title, description, *,
-                     expected_rev=None):
+                     expected_rev=None, **_):
         row = {"slug": slug, "title": title, "description": description, "body_md": body_md}
         self.rows[(scope, str(owner_id), slug)] = row
         return row
 
-    def delete_guide_db(self, scope, owner_id, slug, *, expected_rev=None):
+    def delete_guide_db(self, scope, owner_id, slug, *, expected_rev=None, **_):
         return self.rows.pop((scope, str(owner_id), slug), None) is not None
 
 
@@ -67,18 +67,18 @@ def test_read_scoped_explicit_scope(db):
 
 def test_set_guide_validates(db):
     with pytest.raises(G.GuideError):
-        G.set_guide("group", "7", "s", "b")             # scope inconnu du on-demand
+        G.set_guide("group", "7", "s", "b", edited_by=None)             # scope inconnu du on-demand
     with pytest.raises(G.GuideError):
-        G.set_guide("org", "42", "Bad Slug", "b")       # slug invalide
+        G.set_guide("org", "42", "Bad Slug", "b", edited_by=None)       # slug invalide
     with pytest.raises(G.GuideError):
-        G.set_guide("user", "u1", "ok", "   ")          # corps vide
+        G.set_guide("user", "u1", "ok", "   ", edited_by=None)          # corps vide
     from oto_mcp.db.guides import guide_rev
-    out = G.set_guide("org", "42", "ok-slug", "corps", "T", "D")
+    out = G.set_guide("org", "42", "ok-slug", "corps", "T", "D", edited_by=None)
     # `rev` / `previous_rev` (signal #1203) : ce que l'écriture a posé, et remplacé.
     assert out == {"slug": "ok-slug", "scope": "org", "title": "T", "description": "D",
                    "rev": guide_rev("T", "D", "corps"), "previous_rev": None}
     # platform est désormais éditable au niveau STORE (l'autz vit dans les surfaces)
-    out = G.set_guide("platform", G.PLATFORM_OWNER, "pf-slug", "corps", "T", "D")
+    out = G.set_guide("platform", G.PLATFORM_OWNER, "pf-slug", "corps", "T", "D", edited_by=None)
     assert out["scope"] == "platform"
 
 
@@ -98,11 +98,11 @@ def tool(monkeypatch):
     monkeypatch.setattr(G, "list_guides_for", lambda sub, org: [{"slug": "z", "scope": "user"}])
 
     def _set(scope, owner_id, slug, body_md, title="", description="", *,
-             expected_rev=None):
+             expected_rev=None, **_):
         calls["set"] = ((scope, owner_id, slug, body_md, title, description), {})
         return {"slug": slug, "scope": scope}
 
-    def _del(scope, owner_id, slug, *, expected_rev=None):
+    def _del(scope, owner_id, slug, *, expected_rev=None, **_):
         calls["del"] = (scope, owner_id, slug)
         return True
 

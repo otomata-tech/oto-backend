@@ -234,7 +234,7 @@ def test_R5_une_page_heritee_dit_doc_avec_son_doc_id(client, org):
 def test_R6_un_guide_possede_refuse_l_ecriture_native_corps_intact(client, org):
     from oto_mcp import guide_store
     sub = org["membre"]
-    guide_store.set_guide("user", sub, "prospection", "Corps", title="Prospection")
+    guide_store.set_guide("user", sub, "prospection", "Corps", title="Prospection", edited_by=None)
     nid = _derive(sub, "prospection")
     lu = _get(client, sub, nid)
     assert lu.status_code == 200, lu.text
@@ -253,7 +253,7 @@ def test_R6_un_guide_possede_refuse_l_ecriture_native_corps_intact(client, org):
 def test_R6_le_readme_injecte_s_adresse_sans_slug(client, org):
     from oto_mcp import guide_store
     sub = org["membre"]
-    guide_store.set_init_guide("user", sub, "Mon readme")
+    guide_store.set_init_guide("user", sub, "Mon readme", edited_by=None)
     r = _edit(client, sub, op="update", node_id=_derive(sub, "readme"), body_md="autre")
     assert r.status_code == 409, r.text
     assert "sans slug" in r.json()["detail"]

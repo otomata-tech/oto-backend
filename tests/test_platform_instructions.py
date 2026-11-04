@@ -20,7 +20,7 @@ def store(monkeypatch):
     def _get(scope, owner, slug):
         return rows.get((scope, owner, slug))
 
-    def _set(scope, owner, slug, body_md, *, expected_rev=None):
+    def _set(scope, owner, slug, body_md, *, expected_rev=None, **_):
         row = {"scope": scope, "owner_id": owner, "slug": slug,
                "body_md": body_md or "", "delivery": "init", "updated_at": "2026-06-30"}
         rows[(scope, owner, slug)] = row

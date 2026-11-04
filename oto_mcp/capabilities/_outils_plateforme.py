@@ -65,6 +65,20 @@ def exiger_aucun_outil_hors_du_travail(outils: list[str]) -> None:
     _refuser_l_elargissement(outils, outils_du_travail.permis_du_travail(verrou.job_id))
 
 
+def exiger_un_lancement_sans_elargissement(charge: dict) -> None:
+    """`run_now`, armement d'une campagne : refuse `chain_widens_tools` quand un agent
+    hébergé LANCE un travail dont la liste servie (`charge`, celle qui sera enfilée)
+    déborde de la sienne (`outils_du_travail.en_trop`, #1499). L'enfant tourne avec ses
+    propres outils : sans cette borne, un agent qui a `oto_trigger` lancerait un agent
+    qui a ce qui lui manque. Hors jeton de délégation, rien ne change."""
+    trop = outils_du_travail.en_trop(charge)
+    if trop:
+        raise AuthzDenied(403, "chain_widens_tools",
+                          f"a hosted agent only starts work whose tools fit in its own list: "
+                          f"{', '.join(trop)} are not in it. A person widens an agent's "
+                          "tools, from their own account.")
+
+
 def outils_plateforme_valides(ctx: ResolvedCtx, noms: list[str], actuel: dict,
                               outils: Optional[list[str]]) -> list[str]:
     """La liste BORNÉE des `oto_admin_*` qu'un agent exerce avec le rôle plateforme de

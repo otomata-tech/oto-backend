@@ -3272,6 +3272,18 @@ que soi. La liste jugée est celle qui sera écrite — `tools` fourni, ou, s'il
 liste par défaut, c'est-à-dire les outils que la procédure cite (`<tool:…>`,
 `_outils_de_la_procedure`). Un sous-ensemble passe.
 
+**Lancer n'élargit pas non plus (`chain_widens_tools`, #1499).** Un agent lancé tourne
+avec SA liste : un travail qui a `oto_trigger` sortait de la sienne en une marche, par
+`run_now` vers un agent plus outillé. Sous un jeton de délégation, `run_now` n'enfile que
+si la liste SERVIE de l'enfant (`outils_du_travail.outils_servis` de la charge qui sera
+enfilée, au canonique) tient dans celle du travail appelant ; les outils de l'hôte sont
+hors du calcul, un parent introuvable ne permet que l'hôte. Sinon `403
+chain_widens_tools`, qui nomme les outils en trop, rien n'est enfilé. Même borne à
+l'armement d'une campagne depuis un travail (`oto_fleet op=launch`, chaque travail de la
+campagne tournant avec la liste de la campagne). Seul `outils_du_travail.en_trop` calcule,
+`_outils_plateforme.exiger_un_lancement_sans_elargissement` refuse. Une personne lance
+comme avant.
+
 **Au run.** Une recette-code est jugée avant son premier appel
 (`outils_du_travail.manquants`) : un seul reçu `code: tool_not_in_job`, `missing_tools`
 (tous), `fix` (`{"tool": "oto_trigger", "op": "update", "trigger_id", "tools"}`, `tools` =

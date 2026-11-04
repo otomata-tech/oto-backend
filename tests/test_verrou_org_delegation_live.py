@@ -16,6 +16,9 @@ import pytest
 
 PORTEUR = "sub-verrou-porteur"
 TIERS = "sub-verrou-tiers"
+#: La seule route REST qu'un jeton de délégation appelle encore (`api.base.
+#: ROUTES_DE_LA_DELEGATION`, #1499) : c'est sur elle que le verrou se pose au bord REST.
+FIL = "/api/me/runs/thread"
 
 
 @pytest.fixture(scope="module")
@@ -97,7 +100,7 @@ def test_l_authentification_rest_pose_le_verrou(jeton, orgs):
 
     from oto_mcp import verrou_org
     from oto_mcp.api import base
-    scope = {"type": "http", "method": "GET", "path": "/api/me", "headers": [
+    scope = {"type": "http", "method": "POST", "path": FIL, "headers": [
         (b"authorization", f"Bearer {jeton[0]}".encode())], "query_string": b""}
 
     async def _auth():
@@ -263,7 +266,7 @@ def test_voir_en_tant_que_est_refuse_sous_un_jeton_verrouille(jeton, monkeypatch
 
     from oto_mcp import session_org
     from oto_mcp.api import base
-    scope = {"type": "http", "method": "GET", "path": "/api/me", "headers": [
+    scope = {"type": "http", "method": "POST", "path": FIL, "headers": [
         (b"authorization", f"Bearer {jeton[0]}".encode())], "query_string": b""}
 
     async def _auth():
@@ -365,7 +368,7 @@ def test_x_oto_org_hors_du_travail_est_refuse_nommement(jeton, orgs):
         return {"type": "http.request", "body": b"", "more_body": False}
 
     def scope_pour(org):
-        return {"type": "http", "method": "GET", "path": "/api/me", "query_string": b"",
+        return {"type": "http", "method": "POST", "path": FIL, "query_string": b"",
                 "headers": [(b"authorization", f"Bearer {jeton[0]}".encode()),
                             (b"x-oto-org", str(org).encode())]}
     mw = ViewAsMiddleware(app, verifier=None)

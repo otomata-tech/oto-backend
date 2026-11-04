@@ -89,6 +89,10 @@ class UnipileChannel(BaseModel):
     account_id: Optional[str] = None
     account_name: Optional[str] = None
     connected_at: Optional[str] = None
+    # The account's stable identifier (`inst:<n>` without the prefix): the one its owner
+    # passes to `…/connector-instances/{instance_id}/rules` to open it to others (#1499).
+    # Null when the channel is not connected.
+    instance_id: Optional[int] = None
 
 
 class UnipileElsewhere(BaseModel):

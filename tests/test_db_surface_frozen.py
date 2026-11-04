@@ -135,7 +135,7 @@ _SURFACE = """
     split_layer split_list_path stamp_rank_vector subscription_plan_for_org
     sweep_grace_expired sweep_period_end_cancellations tenants time timezone
     tokens tool_call_stats unipile
-    unipile_account_owners update_account_profile update_billing_payment
+    unipile_account_owners unipile_channel_instance_ids update_account_profile update_billing_payment
     update_doc update_project
     update_project_link_ref upload_tokens upsert_aux_embedding
     upsert_connector_schema upsert_doc_embedding upsert_org_subscription

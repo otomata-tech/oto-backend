@@ -276,6 +276,17 @@ def _comptes_sans_regle_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _sous_instances_unipile_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucun compte Unipile n'a de sous-instance : `channels[].instance_id`
+    vaut null (`tools/unipile._channels_from`, #1499). Un banc qui double les comptes
+    connectés sans base n'a rien à y lire ; un banc sur base réelle lit les vraies."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp import db
+    monkeypatch.setattr(db, "unipile_channel_instance_ids", lambda sub: {})
+
+
+@pytest.fixture(autouse=True)
 def _procedures_rangees_nulle_part_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune procédure n'est rangée dans un projet. La pose et la retouche
     d'un agent, la charge de ses runs et sa lecture lisent les projets de sa procédure

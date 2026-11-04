@@ -267,7 +267,9 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   `GET /api/me/unipile` **réconcilie avant de répondre** (self-heal : c'est LE chemin
   de liaison) — best-effort, jamais fatal pour le statut, no-op sans pending. ⚠️ Son champ `channels` ne montre QUE les comptes liés à l'org **courante** :
   un canal vu déconnecté peut l'être ailleurs, et `elsewhere` dit alors ce qui est
-  adoptable ici en un clic. `DELETE` est une **soft**-déconnexion, par org et par canal
+  adoptable ici en un clic. Chaque canal connecté porte `instance_id`, l'identifiant
+  stable de son compte (`inst:<n>`), celui que son propriétaire passe aux règles
+  (`/api/me/connector-instances/{instance_id}/rules`, #1499) ; `null` hors connexion. `DELETE` est une **soft**-déconnexion, par org et par canal
   (`?channel=`, défaut `linkedin`) : le compte survit chez le fournisseur et la ligne
   survit comme preuve de propriété, ce qui rend la reconnexion déterministe.
   **Pas de face MCP** : la face agent de ce geste est `me.connector_connect`

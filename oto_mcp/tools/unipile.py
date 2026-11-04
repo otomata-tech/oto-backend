@@ -541,8 +541,11 @@ UNIPILE_CHANNELS = {
 }
 
 
-def _channels_from(accts_by_provider: dict) -> dict:
-    """Build the channels dict from the accounts indexed by DB provider."""
+def _channels_from(accts_by_provider: dict, instance_ids: dict) -> dict:
+    """Build the channels dict from the accounts indexed by DB provider. `instance_ids`
+    = `db.unipile_channel_instance_ids(sub)`, read ONCE by the caller: each connected
+    channel carries the id of its sub-instance (`inst:<n>` without the prefix), the one
+    its owner names to set rules on it (#1499); null when not connected."""
     def _ch(provider: str) -> dict:
         a = accts_by_provider.get(provider)
         return {
@@ -550,6 +553,7 @@ def _channels_from(accts_by_provider: dict) -> dict:
             "account_id": a["account_id"] if a else None,
             "account_name": a.get("account_name") if a else None,
             "connected_at": str(a["connected_at"]) if a else None,
+            "instance_id": (instance_ids.get((a.get("org_id"), provider)) if a else None),
         }
     return {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()}
 
@@ -588,7 +592,7 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "subscribed": subscribed,   # option unlocked (BYO or admin comp) — gates "connect"
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origin of the key)
         "byo": byo,
-        "channels": _channels_from(accts),
+        "channels": _channels_from(accts, db.unipile_channel_instance_ids(sub)),
         # per front channel: the sub's account connected ELSEWHERE, adoptable here in one click
         # (the Connect button adopts on the backend side — the UI can announce it).
         "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
@@ -798,6 +802,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
     (`unipile_accounts.org_id`). Accounts attached to an org outside their list fall
     into an "(outside their orgs)" block."""
     accts = db.list_unipile_accounts(sub)
+    ids = db.unipile_channel_instance_ids(sub)
     out = []
     for o in orgs:
         oid = o["org_id"]
@@ -808,7 +813,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
             "subscribed": access.option_open(sub, "unipile", org=oid),  # single source
             "mode": mode, "byo": byo,
-            "channels": _channels_from(by),
+            "channels": _channels_from(by, ids),
             # Through the seam, never through the sources. `org_comp` = the org's declared
             # right (any source). `user_comp` = the person's account mark,
             # shown for the record — it opens nothing. `subscribed` also counts a
@@ -824,7 +829,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         out.append({
             "org_id": None, "org_name": "(outside their orgs)", "is_active": False,
             "subscribed": None, "mode": None, "byo": None,
-            "channels": _channels_from(orphans), "option_source": None,
+            "channels": _channels_from(orphans, ids), "option_source": None,
         })
     return out
 

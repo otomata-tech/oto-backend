@@ -49,6 +49,7 @@ from ._dossier import FOLDER_MAX, dossier_valide
 from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
                                  exiger_aucun_outil_hors_du_travail,
                                  exiger_un_lancement_sans_elargissement,
+                                 exiger_un_lancement_sans_role_plateforme,
                                  outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -1469,6 +1470,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                           "existant.")
     if inp.op == "create":
         webhook = (inp.kind or "schedule") == "webhook"
+        if webhook:
+            # Créer un webhook REND son porteur en clair : c'est poser une porte (#1499).
+            _exiger_une_personne_a_la_porte()
         # Un webhook se pose dans toute org depuis le 24/09/2026 : la porte `beta`
         # qui le fermait tenait parce que ses déroulés tournaient sur NOTRE clé.
         # Désormais un agent déclare son modèle et tourne sur la clé de son org
@@ -1831,6 +1835,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Depuis un agent hébergé, l'enfant ne tourne qu'avec des outils que le parent a
         # (#1499) : jugé sur la charge qui SERA enfilée, au canonique.
         exiger_un_lancement_sans_elargissement(charge)
+        # Ni avec un rôle plateforme qu'il n'exerce pas : l'enfant tourne sous le même
+        # porteur, avec les `oto_admin_*` de SON agent (#1499).
+        exiger_un_lancement_sans_role_plateforme(ctx.org_id, t["id"], ctx.sub)
         res = db.enqueue_job(ctx.org_id, "start", payload=charge, sub=ctx.sub,
                              chaine=chaine)
         logger.info("déclencheur %s (org %s) : run lancé à la demande de %s — job %s%s",
@@ -2455,9 +2462,29 @@ class HookAuthOut(BaseModel):
     hook_url: Optional[str] = None
 
 
+def _exiger_une_personne_a_la_porte() -> None:
+    """La porte d'un webhook ne se touche pas depuis un agent hébergé (#1499) : refus
+    `hook_door_human_only` sous un jeton de délégation, AVANT tout autre jugement.
+
+    ⚠️ Qui tient la porte réveille l'agent par sa route, hors de toute liste d'outils et
+    de toute chaîne (`chain_*`). Un travail qui a `oto_trigger` recevait le porteur en
+    clair (`rotate_secret`, la création d'un webhook) et pouvait ensuite l'appeler —
+    même au nom du propriétaire, ce n'est pas un geste d'agent. Couvre tout ce qui passe
+    par `_exiger_la_porte` (`rotate_secret`, `rotate_address`, `connect_source` /
+    `disconnect_source`, `update private_address`, `hook-auth`) et la création d'un
+    webhook. Une personne fait tout cela comme avant."""
+    if verrou_org.travail_de_la_requete() is not None:
+        raise AuthzDenied(
+            403, "hook_door_human_only",
+            "a hosted agent does not handle a webhook's door (its bearer, address, mode "
+            "or signing secret), nor creates a webhook agent: whoever holds the door wakes "
+            "the agent outside any tool list. A person does it, from their own account.")
+
+
 def _exiger_la_porte(ctx: ResolvedCtx, agent: dict) -> None:
     """Changer la PORTE d'un webhook (son porteur, son adresse, son mode ou son
-    secret de signature) : réservé au propriétaire de l'agent ou à un admin d'org.
+    secret de signature) : réservé au propriétaire de l'agent ou à un admin d'org — et
+    à une PERSONNE (`_exiger_une_personne_a_la_porte`).
 
     ⚠️ Qui tient la porte déclenche l'agent, et l'agent tourne SOUS SON
     PROPRIÉTAIRE — ses connexions, ses clés perso, son abonnement. Ouvert à tout
@@ -2465,6 +2492,7 @@ def _exiger_la_porte(ctx: ResolvedCtx, agent: dict) -> None:
     propre `whsec_`) sur l'agent d'un autre, puis le faire tourner sous l'identité
     de celui-ci. Un admin garde la main, comme pour `take_over` : personne ne doit
     avoir besoin du propriétaire pour refermer une porte qui fuit."""
+    _exiger_une_personne_a_la_porte()
     if agent.get("sub") == ctx.sub or roles.is_org_admin(ctx.sub, ctx.org_id):
         return
     if _acces_agent.niveau(ctx.sub, ctx.org_id, agent) is None:
@@ -2935,6 +2963,10 @@ CAPABILITIES += [
             DeclaredError(403, "chain_widens_tools",
                           "`run_now` d'un agent hébergé vers un agent dont la liste "
                           "d'outils servie déborde de la sienne (#1499)"),
+            DeclaredError(403, "chain_widens_platform_tools",
+                          "`run_now` d'un agent hébergé vers un agent qui exercerait des "
+                          "`oto_admin_*` avec le rôle plateforme du porteur que le sien "
+                          "n'exerce pas (#1499)"),
             DeclaredError(400, "chain_too_deep",
                           f"`run_now` au-delà de {CHAINE_MAX} maillons après l'agent de "
                           "départ"),
@@ -2965,6 +2997,10 @@ CAPABILITIES += [
             DeclaredError(403, "trigger_owner_or_admin_required",
                           "`rotate_secret`, `rotate_address` ou `private_address=true` "
                           "sur le webhook d'un autre, sans être admin de l'org"),
+            DeclaredError(403, "hook_door_human_only",
+                          "`rotate_secret`, `rotate_address`, `connect_source`, "
+                          "`disconnect_source`, `private_address=true` ou `create` d'un "
+                          "webhook depuis un agent hébergé (#1499)"),
             DeclaredError(409, "source_connected",
                           "`rotate_secret` or `rotate_address` on an agent a sender is "
                           "wired to: re-run `connect_source`, or `disconnect_source` first"),

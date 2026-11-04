@@ -483,6 +483,34 @@ def servis_par_le_pool(ids: list[int]) -> set[int]:
     return {int(r["id"]) for r in rows}
 
 
+def _liste_plateforme_tenue(t: str) -> str:
+    """La condition SQL (un paramètre : `MODELES_PERSONNELS`) sous laquelle la liste
+    `outils_plateforme` de l'agent `t` vaut pour un travail qui tourne sous SON porteur
+    dans SON org — l'appelant joint ces deux-là. Seule écriture de la règle, partagée
+    par le travail en cours (`outils_plateforme_du_travail`) et par le travail qu'on
+    s'apprête à enfiler (`outils_plateforme_d_un_lancement`)."""
+    from ._partage_vivant import PARTAGE_VIVANT_G
+    return (f"{t}.model = ANY(%s) "
+            "  AND NOT EXISTS (SELECT 1 FROM resource_grants g "
+            "    WHERE g.resource_type = 'runner_trigger' "
+            f"      AND g.resource_id = {t}.id::text "
+            "      AND g.principal_type = 'user' AND g.permission = 'write' "
+            f"      AND g.granted_by IN ({t}.sub, '{MARQUE_GARDE_AU_DON}') "
+            f"      AND {PARTAGE_VIVANT_G}) "
+            f"  AND NOT {_pret_vivant(t)} "
+            f"  AND NOT ({_servi_par_le_pool(t)} AND EXISTS (SELECT 1 FROM resource_grants g "
+            "    WHERE g.resource_type = 'runner_trigger' "
+            f"      AND g.resource_id = {t}.id::text "
+            "      AND g.permission = 'write' "
+            f"      AND {_poseur_compte_en_pool(t)} "
+            f"      AND {PARTAGE_VIVANT_G}))")
+
+
+def _outils_plateforme_lus(row) -> list[str]:
+    outils = (row or {}).get("outils_plateforme") if row else None
+    return [n for n in outils if isinstance(n, str)] if isinstance(outils, list) else []
+
+
 def outils_plateforme_du_travail(job_id: int) -> list[str]:
     """Les `oto_admin_*` que le travail `job_id` exerce avec le rôle plateforme de son
     porteur (`verrou_org.outils_permis`) : la liste de l'agent de sa charge
@@ -499,28 +527,31 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
     (`_forfait_prete_par_le_pool`) : ce partage suffit alors à le modifier. `[]` pour un travail enfilé à la main ou d'une flotte
     (aucun agent), introuvable, dont l'agent a changé de main, ou qui ne remplit pas la
     condition — ce qui en dépend se ferme."""
-    from ._partage_vivant import PARTAGE_VIVANT_G
     with _connect() as conn:
         row = conn.execute(
             "SELECT t.outils_plateforme FROM runner_jobs j JOIN runner_triggers t "
             "  ON t.id::text = j.payload->>'trigger_id' "
-            "WHERE j.id = %s AND t.org_id = j.org_id AND t.sub = j.sub "
-            "  AND t.model = ANY(%s) "
-            "  AND NOT EXISTS (SELECT 1 FROM resource_grants g "
-            "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "
-            "      AND g.principal_type = 'user' AND g.permission = 'write' "
-            f"      AND g.granted_by IN (t.sub, '{MARQUE_GARDE_AU_DON}') "
-            f"      AND {PARTAGE_VIVANT_G}) "
-            f"  AND NOT {_pret_vivant('t')} "
-            f"  AND NOT ({_servi_par_le_pool('t')} AND EXISTS (SELECT 1 FROM resource_grants g "
-            "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "
-            "      AND g.permission = 'write' "
-            f"      AND {_poseur_compte_en_pool('t')} "
-            f"      AND {PARTAGE_VIVANT_G}))",
+            "WHERE j.id = %s AND t.org_id = j.org_id AND t.sub = j.sub AND "
+            + _liste_plateforme_tenue("t"),
             (job_id, list(runner_models.MODELES_PERSONNELS)),
         ).fetchone()
-    outils = (row or {}).get("outils_plateforme") if row else None
-    return [n for n in outils if isinstance(n, str)] if isinstance(outils, list) else []
+    return _outils_plateforme_lus(row)
+
+
+def outils_plateforme_d_un_lancement(trigger_id: int, org_id: int, sub: str) -> list[str]:
+    """Les `oto_admin_*` qu'un travail de l'agent `trigger_id`, enfilé dans `org_id` sous
+    `sub`, exercerait avec le rôle plateforme de `sub` — ce que
+    `outils_plateforme_du_travail` lui rendra une fois enfilé, jugé AVANT (`run_now`
+    depuis un agent hébergé, #1499). Même condition, mêmes valeurs."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT t.outils_plateforme FROM runner_triggers t "
+            "WHERE t.id = %s AND t.org_id = %s AND t.sub = %s AND "
+            + _liste_plateforme_tenue("t"),
+            (int(trigger_id), int(org_id), str(sub),
+             list(runner_models.MODELES_PERSONNELS)),
+        ).fetchone()
+    return _outils_plateforme_lus(row)
 
 
 def retirer_partages_d_agent(trigger_id: int) -> int:

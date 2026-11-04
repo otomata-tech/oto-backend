@@ -50,18 +50,25 @@ def _gardes_d_execution(monkeypatch):
     monkeypatch.setattr(RT.procedure_retiree, "archivee", lambda *a: None)
 
 
+def _poser_le_travail(org: int, **charge):
+    """Enfile un travail parent de charge `charge`, émet son jeton par le vrai chemin du
+    runner et pose le verrou que rend sa vraie vérification. Rend `(job_id, jeton)`."""
+    from oto_mcp import db, verrou_org
+    from oto_mcp.capabilities import runner_jobs
+    job = db.enqueue_job(org, "start", sub=SUB, payload={"procedure": "p", "input": "x",
+                                                         **charge})
+    jeton = runner_jobs._delegue({"id": job["id"], "sub": SUB, "org_id": org},
+                                 bail_s=60, claimant="test")["delegated_token"]
+    return job["id"], verrou_org.poser(verrou_org.depuis_ligne(db.verify_api_token(jeton)))
+
+
 @pytest.fixture
 def depuis_le_travail(org):
     """Pose, pour la durée du test, le verrou du jeton d'un travail parent dont la liste
     est `PARENT` (et sa procédure, d'où `oto_procedure`)."""
-    from oto_mcp import db, verrou_org
-    from oto_mcp.capabilities import runner_jobs
-    job = db.enqueue_job(org, "start", sub=SUB, payload={
-        "tools": list(PARENT), "procedure": "p", "input": "x"})
-    jeton = runner_jobs._delegue({"id": job["id"], "sub": SUB, "org_id": org},
-                                 bail_s=60, claimant="test")["delegated_token"]
-    t = verrou_org.poser(verrou_org.depuis_ligne(db.verify_api_token(jeton)))
-    yield job["id"]
+    from oto_mcp import verrou_org
+    job, t = _poser_le_travail(org, tools=list(PARENT))
+    yield job
     verrou_org.lever(t)
 
 
@@ -175,3 +182,113 @@ def test_armer_une_campagne_qui_tient_dans_la_liste_passe_la_garde(org, depuis_l
         _armer(org, f)
     except AuthzDenied as e:
         assert e.code != "chain_widens_tools"
+
+
+def _retoucher(org: int, fleet_id: int, outils: list) -> dict:
+    from oto_mcp.capabilities import runner_fleets as RF
+    from oto_mcp.capabilities._types import ResolvedCtx
+    return RF._fleets(ResolvedCtx(sub=SUB, org_id=org),
+                      RF.FleetInput(op="update", fleet_id=fleet_id, tools=outils))
+
+
+def test_un_travail_n_elargit_pas_une_campagne_armee(org, depuis_le_travail):
+    """Chaque passage d'une campagne relit SA liste (`campagne_a_servir`) : une campagne
+    armée par une personne s'élargissait au passage suivant par un simple `update`."""
+    from oto_mcp import db
+    from oto_mcp.capabilities._types import AuthzDenied
+    f = _campagne(org, ["acme_people"])
+    assert db.armer(f, org)["status"] == "armed"   # armée par une personne
+    with pytest.raises(AuthzDenied) as e:
+        _retoucher(org, f, ["acme_people", "acme_siret"])
+    assert (e.value.status, e.value.code) == (403, "tools_human_only")
+    assert "acme_siret" in e.value.message
+    assert db.get_fleet(f, org)["tools"] == ["acme_people"], "rien n'est écrit"
+
+
+def test_un_travail_reduit_ou_repose_la_liste_d_une_campagne(org, depuis_le_travail):
+    from oto_mcp import db
+    f = _campagne(org, ["acme_people", "acme_siret"])
+    db.armer(f, org)
+    assert _retoucher(org, f, ["acme_siret", "acme_people"])["fleet"]["tools"]
+    assert _retoucher(org, f, ["acme_people"])["fleet"]["tools"] == ["acme_people"]
+
+
+def test_une_personne_elargit_une_campagne(org):
+    f = _campagne(org, ["acme_people"])
+    out = _retoucher(org, f, ["acme_people", "acme_siret"])
+    assert out["fleet"]["tools"] == ["acme_people", "acme_siret"]
+
+
+# ── Le rôle plateforme d'un enfant : `outils_plateforme` (#1499) ────────────────
+
+ADMIN = "oto_admin_monitoring"
+
+
+@pytest.fixture
+def famille_d_abonnement_servie(monkeypatch):
+    """Les `oto_admin_*` d'un agent ne valent que sur l'abonnement personnel de son
+    porteur (`db.outils_plateforme_du_travail`) : la famille doit être servie."""
+    from oto_mcp.capabilities import runner_triggers as RT
+    monkeypatch.setattr(RT.db, "runner_arme",
+                        lambda org: {"armed": True, "workers": 1,
+                                     "last_seen": "2026-10-21 07:00:00",
+                                     "families": ["anthropic", "claude_subscription"]})
+
+
+def _agent_admin(org: int, plateforme: list) -> int:
+    """Un agent sur l'abonnement de SUB, seul à pouvoir le changer, qui exerce
+    `plateforme` avec le rôle plateforme de son porteur."""
+    from oto_mcp import db
+    t = db.create_trigger(org, SUB, procedure=f"admin-{uuid.uuid4().hex[:6]}",
+                          cron="5 6 * * *", tz="UTC",
+                          next_due=datetime.datetime.now(datetime.timezone.utc),
+                          tools=["acme_people", ADMIN], model="sub:sonnet")
+    db.update_trigger(int(t["id"]), org, {"outils_plateforme": plateforme})
+    return int(t["id"])
+
+
+def test_un_travail_ne_lance_pas_un_agent_qui_exerce_un_role_plateforme_qu_il_n_a_pas(
+        org, famille_d_abonnement_servie):
+    """L'enfant tourne sous le MÊME porteur : `outils_plateforme_du_travail` lui rendrait
+    les `oto_admin_*` de son agent, que le parent n'exerce pas (`en_trop` ne compare que
+    `tools`)."""
+    from oto_mcp import verrou_org
+    from oto_mcp.capabilities._types import AuthzDenied
+    enfant = _agent_admin(org, [ADMIN])
+    _, t = _poser_le_travail(org, tools=["acme_people", ADMIN])
+    try:
+        assert verrou_org.outils_permis() == frozenset()
+        with pytest.raises(AuthzDenied) as e:
+            _run_now(org, enfant)
+    finally:
+        verrou_org.lever(t)
+    assert (e.value.status, e.value.code) == (403, "chain_widens_platform_tools")
+    assert ADMIN in e.value.message
+    assert _en_file(org, enfant) == 0, "rien n'est enfilé"
+
+
+def test_un_travail_qui_exerce_deja_ces_outils_d_admin_lance_l_agent(
+        org, famille_d_abonnement_servie):
+    from oto_mcp import verrou_org
+    parent = _agent_admin(org, [ADMIN])
+    enfant = _agent_admin(org, [ADMIN])
+    _, t = _poser_le_travail(org, tools=["acme_people", ADMIN], trigger_id=str(parent))
+    try:
+        assert verrou_org.outils_permis() == frozenset({ADMIN})
+        assert _run_now(org, enfant)["ok"]
+    finally:
+        verrou_org.lever(t)
+
+
+def test_un_agent_qui_ne_prete_pas_son_role_se_lance(org, famille_d_abonnement_servie):
+    """La liste servie est celle que le serveur TIENT : un agent dont la liste ne vaut
+    rien (ici, partagé en écriture) ne prête aucun rôle — le lancer n'élargit rien."""
+    from oto_mcp import db, verrou_org
+    enfant = _agent_admin(org, [ADMIN])
+    db.grant_resource("runner_trigger", str(enfant), "user", "un-editeur", role="editor",
+                      granted_by=SUB)
+    _, t = _poser_le_travail(org, tools=["acme_people", ADMIN])
+    try:
+        assert _run_now(org, enfant)["ok"]
+    finally:
+        verrou_org.lever(t)

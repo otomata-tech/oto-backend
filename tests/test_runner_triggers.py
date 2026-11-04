@@ -557,6 +557,9 @@ def agent_lancable(monkeypatch):
     monkeypatch.setattr(RT._cle_exigee, "exiger_a_la_pose", lambda *a, **k: None)
     monkeypatch.setattr(RT.runner_jobs._abonnement, "exiger_a_la_pose", lambda *a, **k: None)
     monkeypatch.setattr(RT.runner_jobs.tool_alias, "canonical_names", lambda noms, sub: noms)
+    # Le rôle plateforme d'un enfant lancé depuis un travail a son banc, en base
+    # (`test_chaine_outils_live.py`) : ici l'agent n'exerce aucun `oto_admin_*`.
+    monkeypatch.setattr(RT.db, "outils_plateforme_d_un_lancement", lambda t, o, s: [])
     monkeypatch.setattr(RT.db, "enqueue_job",
                         lambda org, kind, payload=None, sub=None, **_: enfile.update(
                             org=org, kind=kind, payload=payload, sub=sub)

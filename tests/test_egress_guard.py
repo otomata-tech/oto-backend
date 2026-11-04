@@ -502,6 +502,58 @@ def test_http_laisse_passer_une_carte_publique(monkeypatch):
     assert tool_http._client() is not None
 
 
+# ── 5 bis. oto lui-même n'est pas une destination (#1499) ────────────────────
+# L'adresse publique des bancs est `https://mcp.exemple.test` (conftest). Un hôte
+# PUBLIC : seule la règle de l'instance peut le refuser.
+
+@pytest.mark.parametrize("url", [
+    "https://mcp.exemple.test/api/hooks/h_abc",
+    "https://MCP.exemple.test:443/api/hooks/h_abc",
+    "https://acme.mcp.exemple.test/api/hooks/h_abc",
+    "https://acme--mcp.exemple.test/mcp",
+])
+@pytest.mark.parametrize("exceptions_declarees", [True, False])
+def test_l_instance_elle_meme_est_refusee(monkeypatch, url, exceptions_declarees):
+    """Un agent n'appelle pas oto par un connecteur : `http_post` sur une carte dont la
+    `base_url` vise l'instance joignait `/api/hooks/…` avec un porteur obtenu ailleurs, et
+    réveillait un agent hors de toute liste d'outils."""
+    monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
+    with pytest.raises(egress.EgressRefused) as pris:
+        egress.check_url(url, connector="http",
+                         exceptions_declarees=exceptions_declarees)
+    assert "OTO_MCP_PUBLIC_URL" in str(pris.value)
+
+
+def test_un_hote_qui_ne_fait_que_ressembler_a_l_instance_passe(monkeypatch):
+    monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
+    egress.check_url("https://xmcp.exemple.test/v1", connector="http")
+    egress.check_url("https://exemple.test/v1", connector="http")
+
+
+def test_sans_adresse_publique_declaree_la_garde_leve(monkeypatch):
+    """Pas de défaut deviné (`config.public_host`) : sans la variable, on ne sait pas
+    quel hôte est l'instance — on le dit au lieu de laisser passer."""
+    monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
+    monkeypatch.delenv("OTO_MCP_PUBLIC_URL", raising=False)
+    with pytest.raises(RuntimeError, match="OTO_MCP_PUBLIC_URL"):
+        egress.check_url("https://api.acme.test/v1", connector="http")
+
+
+def test_http_refuse_une_carte_qui_vise_l_instance(monkeypatch):
+    """De bout en bout, le vecteur : la carte `http` de l'org vise oto."""
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import http as tool_http
+
+    monkeypatch.setattr(tool_http, "current_user_sub_from_token", lambda: "u-1")
+    monkeypatch.setattr(tool_http, "_resolve_fields",
+                        lambda: {"base_url": "https://mcp.exemple.test",
+                                 "auth_mode": "bearer", "token": "t"})
+    monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
+    with pytest.raises(McpError) as pris:
+        tool_http._client()
+    assert "OTO_MCP_PUBLIC_URL" in str(pris.value)
+
+
 # ── 6. les épreuves du détecteur du cran 1 ───────────────────────────────────
 #
 # Un détecteur qui ne peut pas rougir sur commande ne garde rien, et personne ne

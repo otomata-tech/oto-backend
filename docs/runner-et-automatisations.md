@@ -3341,6 +3341,33 @@ campagne tournant avec la liste de la campagne). Seul `outils_du_travail.en_trop
 `_outils_plateforme.exiger_un_lancement_sans_elargissement` refuse. Une personne lance
 comme avant.
 
+**Ni par une campagne retouchée (`tools_human_only`, #1499).** Chaque passage d'une
+campagne relit SA liste (`campagne_a_servir`) : un travail qui retouchait `tools` d'une
+campagne qu'une personne avait armée l'élargissait au passage suivant, sans repasser par
+`launch`. Sous un jeton de délégation, `oto_fleet op=update` applique la règle d'un
+agent (`_outils_plateforme.exiger_aucun_ajout_d_agent`) : réduire ou reposer la même
+liste passe, ajouter un outil est refusé. `procedure` d'une campagne est figée
+(`field_not_settable`), et `input` n'ouvre aucun outil : rien d'autre à borner.
+
+**Ni avec un rôle plateforme (`chain_widens_platform_tools`, #1499).** L'enfant d'un
+`run_now` tourne sous le MÊME porteur, donc avec les `oto_admin_*` que son agent exerce au
+rôle plateforme (`db.outils_plateforme_du_travail`) — `en_trop` ne compare que `tools`.
+Sous un jeton de délégation, `run_now` refuse quand la liste que le serveur TIENDRA pour
+l'enfant (`db.outils_plateforme_d_un_lancement`, même condition SQL que le travail en
+cours, filtrée par `verrou_org.outils_d_admin`) n'est pas incluse dans celle que le
+parent exerce (`verrou_org.outils_permis`). Une campagne n'a pas de liste plateforme
+(aucun `trigger_id`) : rien à juger à son armement.
+
+**Ni par la porte d'un webhook (`hook_door_human_only`, #1499).** Qui tient le porteur
+d'un webhook réveille l'agent par `POST /api/hooks/…`, hors de toute liste et de toute
+chaîne. Sous un jeton de délégation, tout ce qui passe par `_exiger_la_porte`
+(`rotate_secret`, `rotate_address`, `connect_source`, `disconnect_source`,
+`update private_address=true`, `hook-auth`) et la création d'un webhook (qui rend son
+porteur en clair) sont refusés, avant tout autre jugement — même pour le propriétaire.
+Et un connecteur n'appelle plus l'instance elle-même (`egress.check_url`, voir
+`connector-vault.md` §Egress) : un porteur obtenu ailleurs ne s'emploie pas par
+`http_post`.
+
 **Au run.** Une recette-code est jugée avant son premier appel
 (`outils_du_travail.manquants`) : un seul reçu `code: tool_not_in_job`, `missing_tools`
 (tous), `fix` (`{"tool": "oto_trigger", "op": "update", "trigger_id", "tools"}`, `tools` =

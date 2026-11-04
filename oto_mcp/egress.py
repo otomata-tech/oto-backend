@@ -45,6 +45,17 @@ moment où le backend construit le client, pas dans le transport d'oto-core.
 Fermer ces deux fenêtres demande d'épingler l'adresse résolue dans le transport,
 côté lib — autre lot, et un bump de pin.
 
+**L'instance elle-même n'est pas une destination (#1499).** Son hôte public
+(`config.public_host()`, lu de `OTO_MCP_PUBLIC_URL`), ses sous-domaines et ses hôtes
+épinglés par org (`<slug>--<hôte>`, `subdomain_org`) sont refusés, quelle que soit la
+politique et sans exception possible : un agent n'appelle pas oto par un connecteur.
+Une carte `http` dont la `base_url` visait l'instance joignait `/api/hooks/…` avec un
+porteur obtenu ailleurs, et réveillait un agent hors de toute liste d'outils. Sans la
+variable, la garde LÈVE (comme `config.public_host`) : on ne devine pas quel hôte est
+le nôtre. ⚠️ Limite : un AUTRE nom du même service (l'adresse IP de la machine, un
+domaine de tenant) n'est pas reconnu — comparer les adresses résolues refuserait tout
+site qui partage un frontal avec nous.
+
 Deux gardes plus anciennes et plus étroites font un travail voisin sans être
 fusionnées ici : `tools/web.py:check_url_public` et
 `file_source._assert_public_host`. Elles appliquent une politique DIFFÉRENTE —
@@ -163,6 +174,17 @@ def declared_exceptions(brut: str | None = None) -> dict[tuple[str, int], str]:
     return exceptions
 
 
+# ── l'instance elle-même ──────────────────────────────────────────────────────
+
+def _vise_l_instance(hote: str) -> bool:
+    """`hote` est l'hôte public de cette instance, l'un de ses sous-domaines, ou un hôte
+    épinglé par org (`<slug>--<hôte public>`). Lève sans `OTO_MCP_PUBLIC_URL`."""
+    from . import config
+    nous = config.public_host().lower().rstrip(".")
+    h = hote.lower().rstrip(".")
+    return h == nous or h.endswith("." + nous) or h.endswith("--" + nous)
+
+
 # ── le contrôle ───────────────────────────────────────────────────────────────
 
 def resolved_addresses(hote: str, port: int) -> set[str]:
@@ -203,6 +225,12 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
         raise EgressRefused(
             f"connecteur `{connector}` : `{field}` est une URL sans hôte.")
     port = morceaux.port or (443 if morceaux.scheme == "https" else 80)
+    if _vise_l_instance(hote):
+        raise EgressRefused(
+            f"`{connector}` : destination refusée. `{hote}` est oto lui-même (l'hôte "
+            "de OTO_MCP_PUBLIC_URL) : un agent n'appelle pas oto par un connecteur, il "
+            "passe par ses outils, où sa liste est tenue. Aucune exception ne s'y "
+            f"applique. (Champ `{field}`.)")
 
     try:
         adresses = resolved_addresses(hote, port)

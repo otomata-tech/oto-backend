@@ -124,21 +124,24 @@ def poser_journal_des_partages(conn) -> list[str]:
 
 # ── La reprise des anciens partages ──────────────────────────────────────────────
 
-_PRETS_UNIPILE = f"""
+# `{instances}` : la relation des instances lue — la table, ou, pour la mesure de la
+# bascule (lot L2), la table complétée des sous-instances que la reprise poserait
+# (`sous_instances.INSTANCES_SIMULEES`), lue sans rien écrire.
+_PRETS_UNIPILE = """
 SELECT g.owner_sub, g.provider, g.grantee_sub AS cible, ua.org_id, si.id AS instance_id
   FROM connector_account_grants g
   LEFT JOIN unipile_accounts ua ON ua.sub = g.owner_sub AND ua.provider = g.provider
-  LEFT JOIN connector_instances si ON {sous_instances.JOINTURE}
+  LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
  ORDER BY 1, 2, 3, 4
 """
 
-_PRETS_UNIPILE_EQUIPE = f"""
+_PRETS_UNIPILE_EQUIPE = """
 SELECT gg.owner_sub, gg.provider, gg.grantee_group_id AS cible, gr.org_id AS org_cible,
        ua.org_id, si.id AS instance_id
   FROM connector_account_group_grants gg
   JOIN org_groups gr ON gr.id = gg.grantee_group_id
   LEFT JOIN unipile_accounts ua ON ua.sub = gg.owner_sub AND ua.provider = gg.provider
-  LEFT JOIN connector_instances si ON {sous_instances.JOINTURE}
+  LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
  ORDER BY 1, 2, 3, 5
 """
 
@@ -149,7 +152,7 @@ SELECT c.entity_type, c.entity_id, c.connector, c.account, t.cible,
  CROSS JOIN LATERAL jsonb_array_elements_text(
        CASE WHEN jsonb_typeof(c.share_side) = 'array' THEN c.share_side
             ELSE '[]'::jsonb END) AS t(cible)
-  LEFT JOIN connector_instances i
+  LEFT JOIN {instances} i
     ON i.owner_type = c.entity_type AND i.owner_id = c.entity_id
    AND i.connector = c.connector AND i.account = c.account AND i.revoked_at IS NULL
  ORDER BY 1, 2, 3, 4, 5
@@ -157,7 +160,7 @@ SELECT c.entity_type, c.entity_id, c.connector, c.account, t.cible,
 
 _COMPTES_D_ORG = """
 SELECT i.id AS instance_id, o.id AS org_id
-  FROM connector_instances i JOIN orgs o ON o.id::text = i.owner_id
+  FROM {instances} i JOIN orgs o ON o.id::text = i.owner_id
  WHERE i.owner_type = 'org' AND i.revoked_at IS NULL
  ORDER BY 1
 """
@@ -198,7 +201,7 @@ def _sujet(cible: str) -> tuple:
     raise ValueError(cible)
 
 
-def _org_et_proprietaire(cur, entity_type: str, entity_id: str):
+def _org_et_proprietaire(groupes: dict, entity_type: str, entity_id: str):
     """L'org d'un compte du coffre et la personne qui le possède (None si collectif)."""
     if entity_type == "member":
         org, _, sub = entity_id.partition(":")
@@ -206,21 +209,42 @@ def _org_et_proprietaire(cur, entity_type: str, entity_id: str):
     if entity_type == "org":
         return (int(entity_id) if entity_id.isdigit() else None), None
     if entity_type == "group" and entity_id.isdigit():
-        r = cur.execute("SELECT org_id FROM org_groups WHERE id = %s",
-                        (int(entity_id),)).fetchone()
-        return (r["org_id"] if r else None), None
+        return groupes.get(int(entity_id)), None
     return None, (entity_id if entity_type == "user" else None)
 
 
+def lire_les_partages(cur, instances: str = "connector_instances") -> dict:
+    """Tout ce que la reprise lit, en LECTURE seule : membres, équipes, prêts Unipile,
+    prêts du coffre, comptes d'org. `instances` : la relation des instances
+    (`sous_instances.INSTANCES_SIMULEES` pour mesurer sans poser les sous-instances)."""
+    return {
+        "membres": {(r["org_id"], r["sub"]) for r in cur.execute(
+            "SELECT m.org_id, m.sub FROM org_members m JOIN users u ON u.sub = m.sub")},
+        "groupes": {r["id"]: r["org_id"]
+                    for r in cur.execute("SELECT id, org_id FROM org_groups")},
+        "prets_unipile": cur.execute(_PRETS_UNIPILE.format(instances=instances)).fetchall(),
+        "prets_unipile_equipe": cur.execute(
+            _PRETS_UNIPILE_EQUIPE.format(instances=instances)).fetchall(),
+        "prets_du_coffre": cur.execute(
+            _PRETS_DU_COFFRE.format(instances=instances)).fetchall(),
+        "comptes_d_org": cur.execute(_COMPTES_D_ORG.format(instances=instances)).fetchall(),
+    }
+
+
 def _calculer(cur) -> _Voulues:
+    return calculer_les_regles(lire_les_partages(cur))
+
+
+def calculer_les_regles(partages: dict) -> _Voulues:
+    """Les règles que les anciens partages donnent — PUR, sur ce que `lire_les_partages`
+    a lu. La reprise l'écrit ; la mesure de la bascule (`scripts/mesure_bascule_comptes_1499`)
+    le compte sans rien écrire."""
     from ..access import PORTEURS_A_SERVICES  # paresseux : `access` importe `db`
 
     v = _Voulues()
-    membres = {(r["org_id"], r["sub"]) for r in cur.execute(
-        "SELECT m.org_id, m.sub FROM org_members m JOIN users u ON u.sub = m.sub")}
-    groupes = {r["id"]: r["org_id"] for r in cur.execute("SELECT id, org_id FROM org_groups")}
+    membres, groupes = partages["membres"], partages["groupes"]
 
-    for r in cur.execute(_PRETS_UNIPILE).fetchall():
+    for r in partages["prets_unipile"]:
         quoi = {"proprietaire": r["owner_sub"], "canal": r["provider"],
                 "org_id": r["org_id"], "instance_id": r["instance_id"]}
         if r["instance_id"] is None:
@@ -232,7 +256,7 @@ def _calculer(cur) -> _Voulues:
         else:
             v.ajouter(r["instance_id"], r["org_id"], (r["cible"], None, False), None)
 
-    for r in cur.execute(_PRETS_UNIPILE_EQUIPE).fetchall():
+    for r in partages["prets_unipile_equipe"]:
         quoi = {"proprietaire": r["owner_sub"], "canal": r["provider"],
                 "org_id": r["org_id"], "instance_id": r["instance_id"]}
         if r["instance_id"] is None:
@@ -242,9 +266,9 @@ def _calculer(cur) -> _Voulues:
         else:
             v.ajouter(r["instance_id"], r["org_id"], (None, r["cible"], False), None)
 
-    for r in cur.execute(_PRETS_DU_COFFRE).fetchall():
+    for r in partages["prets_du_coffre"]:
         cible = r["cible"]
-        org, proprietaire = _org_et_proprietaire(cur, r["entity_type"], r["entity_id"])
+        org, proprietaire = _org_et_proprietaire(groupes, r["entity_type"], r["entity_id"])
         quoi = {"connecteur": r["connector"], "org_id": org, "instance_id": r["instance_id"]}
         try:
             sujet = _sujet(cible)
@@ -275,7 +299,7 @@ def _calculer(cur) -> _Voulues:
         v.ajouter(r["instance_id"], org, sujet, services)
 
     # (a) Un compte d'org sert aujourd'hui à tout membre : une règle d'org le dit.
-    for r in cur.execute(_COMPTES_D_ORG).fetchall():
+    for r in partages["comptes_d_org"]:
         v.ajouter(r["instance_id"], r["org_id"], (None, None, True), None)
     return v
 

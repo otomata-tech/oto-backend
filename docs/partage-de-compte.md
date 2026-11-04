@@ -181,6 +181,17 @@ règles.** Les prêts ci-dessus servent toujours ; la bascule est le lot L3.
 - **(e)** une règle d'équipe vaudra pour l'équipe ACTIVE seule, comme la cascade
   d'aujourd'hui (oto-core lit toutes les équipes de la personne).
 
+**Mesurer la bascule avant L3 (lot L2)** : `lanceur --script
+scripts/mesure_bascule_comptes_1499.py [--jours 30]` (`docs/commands.md` § Un script
+d'entretien par le lanceur), en transaction en lecture seule, avant comme après L1 (les
+règles voulues sont calculées en mémoire par `regles_de_comptes.calculer_les_regles`).
+Il compte, par connecteur et sans aucun identifiant : prêts entre orgs (coffre, Unipile),
+clés personnelles d'une autre org (#172), nouveaux cas `ambiguous_account`, clés
+personnelles suspendues qui ont un repli, pointeurs Unipile vers autrui, équipes héritables
+par un projet partagé (#480), et, au journal d'appels, les paliers servis et les comptes
+appelés par quelqu'un qui n'y aurait plus accès ou plus au niveau exercé ; ce qui dépend de
+l'appel (équipe active, projet, politique de clé perso) est borné et nommé.
+
 ## Ce que deviennent les chemins d'avant
 
 | Chemin | Devient |

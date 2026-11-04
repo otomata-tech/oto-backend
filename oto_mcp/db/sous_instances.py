@@ -71,6 +71,20 @@ JOINTURE = ("si.owner_type = 'member' AND si.owner_id = ua.org_id::text || ':' |
             "AND si.connector = 'unipile' AND si.account = 'canal:' || ua.provider "
             "AND si.revoked_at IS NULL")
 
+# Les instances TELLES QUE `poser_toutes` les laisserait, sans rien écrire : la table,
+# plus une sous-instance SIMULÉE (identifiant négatif, propre à la lecture) pour chaque
+# compte Unipile qui n'en a pas encore. Lue par la mesure de la bascule
+# (`scripts/mesure_bascule_comptes_1499`), qui tourne en transaction en lecture seule.
+INSTANCES_SIMULEES = (
+    "(SELECT id, connector, owner_type, owner_id, account, revoked_at "
+    "FROM connector_instances "
+    "UNION ALL "
+    "SELECT -row_number() OVER (ORDER BY ua.org_id, ua.sub, ua.provider), 'unipile', "
+    "'member', ua.org_id::text || ':' || ua.sub, 'canal:' || ua.provider, "
+    "NULL::timestamptz "
+    "FROM unipile_accounts ua "
+    f"WHERE NOT EXISTS (SELECT 1 FROM connector_instances si WHERE {JOINTURE}))")
+
 
 def _compter(cur) -> dict:
     lignes = cur.fetchall()

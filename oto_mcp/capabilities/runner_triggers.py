@@ -35,7 +35,8 @@ from starlette.concurrency import run_in_threadpool
 from . import preset_agents
 from .orgs import partage_par_defaut
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele, _portee, _projet_de_l_agent, _source_du_hook, runner_jobs)
+               _modele, _portee, _procedure_du_travail, _projet_de_l_agent,
+               _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
                 procedure_retiree, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry, verrou_org)
@@ -1487,6 +1488,10 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 "une automatisation `webhook` n'a pas de cadencement : c'est la source "
                 "qui décide quand. Retire `cron`, ou déclare une automatisation horaire.")
         _valide_le_webhook(inp)
+        # L'agent lira sa procédure par nom, chez son propriétaire puis dans l'org : un slug
+        # connu d'aucun des deux ne se résoudrait pas, ou se résoudrait plus tard chez qui
+        # l'aurait créé ailleurs — au palier équipe, que tout membre écrit (#1499).
+        _procedure_du_travail.exiger_connue(ctx.org_id, ctx.sub, inp.procedure)
         _exiger_projet_de_l_org(ctx, inp.project_id)
         projets = db.projets_des_procedures(ctx.org_id, [inp.procedure]).get(inp.procedure, [])
         projet, a_ranger = _projet_de_la_pose(ctx, inp.procedure, projets, inp.project_id)
@@ -2128,6 +2133,11 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # lit donc ici, juste avant d'écrire.
     if not _actuel():
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    if "procedure" in champs:
+        # Repointer l'agent : la même règle qu'à sa pose, pour son PROPRIÉTAIRE — c'est
+        # sous lui qu'il tourne et lit, quel que soit l'éditeur (#1499).
+        _procedure_du_travail.exiger_connue(ctx.org_id, _actuel().get("sub"),
+                                            champs["procedure"])
     # Une personne qui change la liste ou la procédure voit ce que les outils de l'agent
     # appelleront pour lui et qu'il n'a pas (`tools_to_add`) — rien d'ajouté.
     a_ajouter: list[str] = []
@@ -2850,6 +2860,7 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",
                           "`run_now` d'un agent dont la procédure est archivée"),
+            _procedure_du_travail.REFUS_INCONNUE,
             DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
             DeclaredError(400, "chain_self",
                           "`run_now` d'un agent hébergé sur son propre agent"),

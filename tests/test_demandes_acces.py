@@ -14,6 +14,9 @@ import uuid
 
 import pytest
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 ADMIN = "sub-demandes-admin"
 PROPRIO = "sub-demandes-proprio"
 MOI = "sub-demandes-moi"

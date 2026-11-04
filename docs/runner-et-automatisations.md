@@ -557,6 +557,36 @@ mais la lecture rend « introuvable » — une erreur MCP explicite, pas un text
 L'injection lisait déjà `org_instructions` : ce cas n'est pas une régression du
 retrait. Bancs : `tests/test_runner_jobs.py`, section « La procédure se LIT par MCP ».
 
+### Un agent ne lit QUE la procédure de son travail (#1499, étape 2, 04/11/2026)
+
+Un agent désigne sa procédure par son slug seul ; sans palier, `oto_procedure op=get`
+suit la copie personnelle du porteur (en service) puis celle de l'org. L'équipe n'y entre
+pas — mais l'outil servait tout ce que le porteur lit : `op=list` sans palier cumule
+l'équipe active, `op=get scope='group'` la lit, et tout MEMBRE de l'équipe écrit à ce
+palier (#681). Un slug qui n'existait qu'au palier équipe laissait donc un membre, sans
+aucun droit sur l'agent, réécrire les consignes qu'il exécute avec les comptes de son
+propriétaire. Prouvé sur base réelle avant le correctif
+(`tests/test_procedure_du_travail_1499.py`, section (a)).
+
+Deux bornes (`capabilities/_procedure_du_travail.py`) :
+
+- **à l'exécution** : sous un jeton de délégation, `oto_procedure` ne sert que la
+  procédure du travail (`payload.procedure`, lue en base depuis le travail du jeton,
+  jamais un argument), au palier où la cascade la résout. `op=list` ne rend qu'elle
+  (vide si elle n'existe à aucun des deux paliers) ; un autre slug, un `scope` qui n'est
+  pas son palier (`group` compris), une lecture par `guide_id`, toute écriture
+  (`set`/`create`/`describe`/`rename`/`archive`/`delete`…) et la bibliothèque sont
+  refusés : `procedure_outside_job` (403). Un travail sans procédure n'en lit aucune
+  (l'outil ne lui est d'ailleurs servi que si sa liste le nomme). ⚠️ Les écritures
+  étaient ouvertes : un agent pouvait réécrire la procédure qu'il exécute, et une
+  injection de prompt s'y rendait persistante. Écrire une procédure est un geste de
+  personne, comme élargir les outils d'un agent (`tools_human_only`). Hors délégation,
+  rien ne change ;
+- **à la pose** (`oto_trigger op=create`, et `op=update` qui change `procedure`) : un slug
+  qui n'existe ni au palier org ni dans la copie personnelle du PROPRIÉTAIRE de l'agent
+  (celui sous qui il tourne, pas l'éditeur) est refusé : `unknown_procedure` (400). Les
+  agents déjà posés sur un tel slug ne sont pas touchés ; leur run lit « introuvable ».
+
 ### Le verrou du tick porte sur l'ÉLIGIBILITÉ, pas sur l'échéance relue (#839, 03/09/2026)
 
 Le compare-and-swap qui empêche deux environnements de jouer la même échéance

@@ -20,6 +20,9 @@ from oto_mcp.capabilities import _acces_agent as A
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 ORG = 41
 PROPRIETAIRE, EDITEUR, LECTEUR, AUTRE, ADMIN, DEHORS = (
     "proprio", "editeur", "lecteur", "autre", "admin", "dehors")

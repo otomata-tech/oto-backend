@@ -75,6 +75,9 @@ def org(live):
     oid = org_store.create_org("Org des modèles", created_by=membre)
     org_store.add_org_member(oid, membre, "org_admin")
     org_store.set_active_org(membre, oid)
+    # Un agent ne se pose que sur une procédure que son propriétaire lit par nom (#1499).
+    for slug in ("veille-a", "veille-b", "veille-c"):
+        org_store.set_instruction("org", oid, slug, "Veille.")
     # Un worker de PLATEFORME a sondé, en nommant son dépôt : la file est vide, le
     # sondage n'écrit que la présence — et la famille qu'il sert.
     db.claim_next_job(None, "worker:banc-modele", depot="anthropic")

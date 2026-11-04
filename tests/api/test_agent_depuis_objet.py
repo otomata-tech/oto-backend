@@ -18,6 +18,10 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest) :
+# ses procédures sont des guides (`set_guide_db`), d'où la déduction des outils lit.
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 ROUTE = "/api/me/runner/triggers"
 
 

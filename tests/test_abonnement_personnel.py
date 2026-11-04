@@ -23,6 +23,9 @@ from oto_mcp.capabilities import _abonnement, runner_jobs as RJ
 from oto_mcp.capabilities._types import AuthzDenied
 from oto_mcp.db import user_subscriptions as US
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 
 @pytest.fixture(autouse=True)
 def _aucune_cle_partagee(monkeypatch):

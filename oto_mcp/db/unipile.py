@@ -125,20 +125,6 @@ def list_unipile_accounts(sub: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def unipile_channel_instance_ids(sub: str) -> dict:
-    """`{(org_id, provider): instance_id}` — the live SOUS-INSTANCE of each hosted account
-    of the user (`unipile`, `member` `<org>:<sub>`, `canal:<PROVIDER>`, `db/sous_instances`),
-    in ONE read: the id the owner names to set rules on her own account (#1499)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, owner_id, account FROM connector_instances "
-            "WHERE connector = 'unipile' AND owner_type = 'member' AND revoked_at IS NULL "
-            "AND account LIKE 'canal:%%' AND split_part(owner_id, ':', 2) = %s",
-            (sub,)).fetchall()
-    return {(int(r["owner_id"].partition(":")[0]), r["account"].partition(":")[2]): r["id"]
-            for r in rows}
-
-
 def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINKEDIN") -> None:
     """SOFT-déconnecte le canal dans CETTE org (la ligne survit, `disconnected_at`
     posé) — par-org : le binding est un acte par org (modèle explicite), déconnecter

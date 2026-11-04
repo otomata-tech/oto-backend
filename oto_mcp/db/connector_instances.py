@@ -498,3 +498,16 @@ def configs_for_instance_ids(ids: Sequence[int]) -> dict[int, dict]:
                          "WHERE id = ANY(%s) AND revoked_at IS NULL",
                          (list(ids),)).fetchall()
     return {r["id"]: r["config"] or {} for r in rows}
+
+def unipile_channel_instance_ids(sub: str) -> dict:
+    """`{(org_id, provider): instance_id}` — the live SOUS-INSTANCE of each hosted account
+    of the user (`unipile`, `member` `<org>:<sub>`, `canal:<PROVIDER>`, `db/sous_instances`),
+    in ONE read: the id the owner names to set rules on her own account (#1499)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, owner_id, account FROM connector_instances "
+            "WHERE connector = 'unipile' AND owner_type = 'member' AND revoked_at IS NULL "
+            "AND account LIKE 'canal:%%' AND split_part(owner_id, ':', 2) = %s",
+            (sub,)).fetchall()
+    return {(int(r["owner_id"].partition(":")[0]), r["account"].partition(":")[2]): r["id"]
+            for r in rows}

@@ -29,7 +29,7 @@ from oto_mcp import runner_hook
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
-pytestmark = pytest.mark.usefixtures("agents_sans_partages")
+pytestmark = pytest.mark.usefixtures("agents_sans_partages", "procedures_connues")
 
 ORG = 77
 LINEAR = runner_hook.PREREGLAGES[runner_hook.LINEAR]

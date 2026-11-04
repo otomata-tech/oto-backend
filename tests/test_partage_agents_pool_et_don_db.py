@@ -58,6 +58,8 @@ def org_reelle(live, pg_module_dsn, monkeypatch):
     for m in (PROPRIO, MEMBRE, NOUVEAU):
         org_store.add_org_member(org, m, "org_member")
     org_store.add_org_member(org, ADMIN, "org_admin")
+    # Un agent ne se pose que sur une procédure que son propriétaire lit par nom (#1499).
+    org_store.set_instruction("org", org, "veille", "Veille.")
     return org, poses
 
 

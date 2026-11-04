@@ -34,6 +34,9 @@ from oto_mcp import runner_hook, slack_copilot, slack_events
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 ORG = 77
 SECRET = "8f742231b10e8888abcd99yyyzzz85a5"
 TEAM, APP = "T0TEAM", "A0APP"

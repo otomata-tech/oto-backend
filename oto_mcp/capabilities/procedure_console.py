@@ -21,7 +21,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from . import guide_library, partages_procedure
+from . import _procedure_du_travail, guide_library, partages_procedure
 from .orgs import instructions as orgs_instructions
 from ._authz import (BY_OP, GROUP_ADMIN_OPT, GROUP_MEMBER_OPT, LIBRARY_PUBLISHER,
                      ORG_ADMIN_OPT, ORG_MEMBER, ORG_MEMBER_OPT, SUB_ONLY)
@@ -178,6 +178,17 @@ async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
 
 def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
     oi, lib = orgs_instructions, guide_library
+    # Sous un jeton de délégation, la procédure du travail et rien d'autre (#1499) : lue
+    # au palier où elle se résout, jamais celui de l'équipe, que tout membre écrit.
+    borne = _procedure_du_travail.borner(ctx, inp)
+    if borne is not None and inp.op == "list":
+        slug, palier = borne
+        if palier is None:
+            return _procedure_du_travail.liste_bornee(
+                {"org_id": ctx.org_id, "group_id": None, "guides": []}, slug)
+        return _procedure_du_travail.liste_bornee(oi._list_guides(ctx, oi.GuideListInput(
+            query=inp.query, scope=palier, verbose=inp.verbose,
+            include_archived=inp.include_archived)), slug)
     if inp.op == "get":
         return _avec_le_graphe(ctx, inp, oi._get_guide(ctx, oi.GuideGetInput(
             slug=inp.slug, guide_id=inp.guide_id, doctrine_id=inp.doctrine_id,
@@ -389,6 +400,7 @@ CAPABILITIES += [
             "`body_sha256`, the SHA-256 of the body as STORED (trimmed, tool names "
             "canonical): compare it with your hash of the trimmed body you sent — a "
             "mismatch means the stored text is not what you published."),
+        errors=(_procedure_du_travail.REFUS,),
         mcp=orgs_instructions._GUIDE_GET_TOOL,
     ),
 ]

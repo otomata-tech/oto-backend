@@ -19,6 +19,9 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 SECRET = "whsec_" + base64.b64encode(b"cle de signature du banc rest").decode()
 
 

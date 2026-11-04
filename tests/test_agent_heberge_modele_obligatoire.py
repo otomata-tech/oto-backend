@@ -22,6 +22,9 @@ from oto_mcp.capabilities import runner_jobs as RJ
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 
 @pytest.fixture(autouse=True)
 def _aucune_cle_partagee(monkeypatch):

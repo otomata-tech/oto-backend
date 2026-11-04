@@ -18,6 +18,9 @@ from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.recipes import code, outils_cites
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 _CORPS_CODE = {"kind": "code", "sources": {"recipe.py": (
     "async def run(oto, params):\n"
     "    rows = await oto.call('data_rows', {'datastore': 1})\n"

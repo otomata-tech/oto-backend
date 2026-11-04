@@ -38,6 +38,9 @@ def org_reelle(live, pg_module_dsn, monkeypatch):
         for m in (PROPRIO, COLLEGUE):
             c.execute("INSERT INTO users (sub) VALUES (%s) ON CONFLICT DO NOTHING", (m,))
             c.execute("INSERT INTO org_members (org_id, sub) VALUES (%s, %s)", (org, m))
+    # Un agent ne se pose que sur une procédure que son propriétaire lit par nom (#1499).
+    from oto_mcp import org_store
+    org_store.set_instruction("org", org, "veille", "Veille.")
     return org
 
 

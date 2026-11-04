@@ -19,6 +19,9 @@ from oto_mcp import runner_tick, verrou_org
 from oto_mcp.capabilities import runner_triggers as RT
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
+# Ce banc ne parle pas de l'existence de la procédure d'un agent (#1499, conftest).
+pytestmark = pytest.mark.usefixtures("procedures_connues")
+
 
 def _ctx(sub="membre", org_id=2):
     return ResolvedCtx(sub=sub, org_id=org_id)

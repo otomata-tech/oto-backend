@@ -724,3 +724,17 @@ def agents_sans_partages(monkeypatch):
         vus["visibilites"].append(list(ids))
         or {int(i): {"org": None, "people": 0} for i in ids}))
     return vus
+
+
+@pytest.fixture
+def procedures_connues(monkeypatch):
+    """Pour un banc qui double la base des agents et ne parle pas de l'existence de leur
+    procédure : la pose et le repointage d'un agent la vérifient en base (org, puis copie
+    personnelle du propriétaire — `_procedure_du_travail.exiger_connue`, #1499), une
+    lecture qu'un tel banc n'a pas. La règle a son banc sur base réelle :
+    `test_procedure_du_travail_1499.py`. Rend les slugs vérifiés."""
+    from oto_mcp.capabilities import _procedure_du_travail
+    vus: list = []
+    monkeypatch.setattr(_procedure_du_travail, "exiger_connue",
+                        lambda org, proprietaire, slug: vus.append(slug))
+    return vus

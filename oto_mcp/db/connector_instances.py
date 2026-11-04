@@ -325,6 +325,10 @@ def move_instance_to_owner(conn, owner_type: str, old_owner_id: str,
 # faire archiver au démarrage transformerait un ordonnanceur de maintenance en écrivain
 # de masse sur une base partagée avec la production. C'est une commande EXPLICITE
 # (`scripts/archive_orphan_instances.py`), à sec par défaut, lancée une fois, à la main.
+#
+# ⚠️ La SOUS-INSTANCE d'un compte de messagerie (`db/sous_instances`, account
+# `canal:<provider>`) n'a PAS de ligne de coffre, par construction : elle n'est pas une
+# orpheline, et les deux requêtes ci-dessous l'écartent.
 
 
 def list_orphan_instances(conn=None) -> list[dict]:
@@ -336,6 +340,7 @@ def list_orphan_instances(conn=None) -> list[dict]:
     sql = f"""
     SELECT {_INSTANCE_COLS} FROM connector_instances i
      WHERE i.revoked_at IS NULL
+       AND NOT (i.connector = 'unipile' AND starts_with(i.account, 'canal:'))
        AND NOT EXISTS (
            SELECT 1 FROM connector_credentials c
             WHERE c.entity_type = i.owner_type AND c.entity_id = i.owner_id
@@ -360,6 +365,7 @@ def archive_orphan_instances(conn=None) -> int:
     sql = """
     UPDATE connector_instances i SET revoked_at = NOW(), revoked_reason = %s
      WHERE i.revoked_at IS NULL
+       AND NOT (i.connector = 'unipile' AND starts_with(i.account, 'canal:'))
        AND NOT EXISTS (
            SELECT 1 FROM connector_credentials c
             WHERE c.entity_type = i.owner_type AND c.entity_id = i.owner_id

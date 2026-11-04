@@ -103,6 +103,11 @@ from . import (
     higgsfield_jobs,
     # NON aplati : `lister`/`lire`/`garder` sont trop communs — `db.guide_revisions.<fn>`.
     guide_revisions,
+    # NON aplati : les règles d'accès des comptes et leur reprise (#1499) —
+    # `db.regles_de_comptes.<fn>`.
+    regles_de_comptes,
+    # NON aplati : `poser`/`suivre` sont trop communs — `db.sous_instances.<fn>`.
+    sous_instances,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

@@ -207,6 +207,11 @@ CLASSEMENT: dict[str, Table] = {
     "connector_instances": possedee(ParEntite()),
     "connector_loan_events": possedee(ParEntite("entity_type", "entity_id"),
                                       "le journal des prêts suit la ligne du coffre prêtée"),
+    # Les règles d'accès d'un compte (#1499) sont à l'org du compte ; leur sujet nommé
+    # peut être un ANCIEN membre : la règle est rattachée à son jumeau ou omise.
+    "connector_account_rules": possedee(ParOrg(), comptes=("subject_user",)),
+    "connector_account_share_events": possedee(ParOrg(), "le journal des partages suit "
+                                               "l'org du compte"),
     "connector_availability": possedee(ParEntite("scope_type", "scope_id"),
                                        "les lignes `platform` (semées par `init_db`) et "
                                        "`tenant` sont celles de l'instance",

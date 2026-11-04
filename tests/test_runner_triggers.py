@@ -649,12 +649,17 @@ def _depuis_le_travail(monkeypatch, job_id=77, charge=None, enfants=(), runs=1,
     """L'appel vient d'un agent hébergé : le jeton porte le travail `job_id`, dont la
     charge en base est `charge`, qui a déjà lancé les agents `enfants`, et dont la
     chaîne compte déjà `runs` runs (départ compris). `racines` reçoit le départ que
-    le budget a lu."""
+    le budget a lu.
+
+    Le parent porte une procédure et la liste de l'agent lancé (`data_write`), sauf si
+    `charge` en nomme une : un enfant plus outillé que lui serait refusé (`chain_widens_tools`,
+    banc `test_chaine_outils_live.py`)."""
     from oto_mcp import verrou_org
     jeton = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=job_id))
+    parent = {"tools": ["data_write"], "procedure": "collecte-leads",
+              **(charge if charge is not None else {"trigger_id": 4})}
     monkeypatch.setattr(RT.db, "charge_du_travail",
-                        lambda j: (charge if charge is not None else {"trigger_id": 4})
-                        if j == job_id else None)
+                        lambda j: parent if j == job_id else None)
     monkeypatch.setattr(RT.db, "enfants_du_travail",
                         lambda j, org: [str(e) for e in enfants] if j == job_id else [])
 
@@ -874,10 +879,15 @@ class _FileEnMemoire:
         return [j for j, c in self.travaux.items() if str(c.get("trigger_id")) == str(trigger_id)]
 
 
+#: Ce que porte un travail parent de ces bancs : une procédure et la liste des agents qu'il
+#: lance — un parent moins outillé serait refusé (`chain_widens_tools`, #1499).
+_PARENT = {"procedure": "p", "tools": ["data_write"]}
+
+
 def test_une_flotte_passe_chacun_son_resultat_au_meme_agent(agent_lancable, monkeypatch):
     """Les N travaux d'une flotte de A lancent chacun B avec leur résultat : N runs de B
     en file, aucun 409 — un run qui reçoit un contexte ne double aucun autre."""
-    flotte = {101 + i: {"trigger_id": 4, "label": "A"} for i in range(4)}
+    flotte = {101 + i: {**_PARENT, "trigger_id": 4, "label": "A"} for i in range(4)}
     file = _FileEnMemoire(monkeypatch, flotte)
     for j in flotte:
         file.lance(j, 5, handoff=f"résultat du travail {j}")
@@ -889,7 +899,7 @@ def test_une_flotte_passe_chacun_son_resultat_au_meme_agent(agent_lancable, monk
 def test_un_eventail_met_le_meme_agent_deux_fois_en_file(agent_lancable, monkeypatch):
     """A → B, A → C, puis B → D et C → D : D est en file deux fois, et le budget de la
     chaîne se compte sur la racine A."""
-    file = _FileEnMemoire(monkeypatch, {77: {"trigger_id": 4, "label": "A"}})
+    file = _FileEnMemoire(monkeypatch, {77: {**_PARENT, "trigger_id": 4, "label": "A"}})
     jb = file.lance(77, 5, handoff="pour B")["job"]["id"]
     jc = file.lance(77, 6, handoff="pour C")["job"]["id"]
     racines: list = []

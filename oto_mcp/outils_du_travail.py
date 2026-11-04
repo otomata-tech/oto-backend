@@ -103,6 +103,22 @@ def permis_du_travail(job_id: Optional[int]) -> frozenset:
     return _permis(_charge(job_id)) | OUTILS_DE_L_HOTE
 
 
+def en_trop(charge: dict) -> Optional[list[str]]:
+    """Sync (base) : les outils que la charge `charge` d'un AUTRE travail servirait et que
+    le travail de la requête ne peut pas appeler, au canonique et triés — `None` hors
+    travail hébergé, `[]` si la liste servie de `charge` tient dans la sienne.
+
+    C'est la borne d'un lancement depuis un travail (`run_now`, armement d'une campagne,
+    #1499) : l'enfant tourne avec SA liste, donc un parent qui lance un enfant plus
+    outillé que lui sortirait de la sienne en une marche. Même calcul des deux côtés
+    (`outils_servis`, `deprecations.tool_canonique`) ; les outils de l'hôte sont hors du
+    calcul — le parent les a toujours. Parent introuvable : il ne permet que l'hôte."""
+    verrou = verrou_org.travail_de_la_requete()
+    if verrou is None:
+        return None
+    return sorted(_permis(charge) - permis_du_travail(verrou.job_id))
+
+
 def manquants(noms) -> Optional[dict]:
     """Sync (base) : TOUS les outils de `noms` hors de la liste du travail de la requête,
     en une lecture — `None` hors travail hébergé ou si rien ne manque. Rend

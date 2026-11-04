@@ -146,6 +146,18 @@ Les gestes qui viseraient une autre org sont REFUSÉS (`org_out_of_job`), jamais
 porte une org de travail, pas le défaut de l'humain. Une seule garde pour tous
 (`orgs/core.refuser_maison_sous_verrou`).
 
+**La face REST lui est fermée (#1499).** La liste d'outils d'un travail n'est tenue que
+sur la face MCP (`outils_du_travail`) ; sous `/api/*`, rien ne la regardait et le jeton
+ouvrait tout ce que son porteur peut faire. `api.base._authenticate` le refuse donc juste
+après sa vérification (`403 delegation_rest_forbidden`), sauf sur les routes que le
+worker appelle LUI-MÊME avec ce jeton, nommées avec leur raison dans
+`api.base.ROUTES_DE_LA_DELEGATION` : aujourd'hui le seul fil du run
+(`POST /api/me/runs/thread`, relu à la reprise et apposé à chaque tour). Le reste des
+appels REST du worker (réserver, battre, lier, conclure, campagnes) part avec son secret
+de machine `otow_`, que la garde ne voit pas ; la face `/mcp` vérifie le jeton par son
+propre chemin (`server._verify_api_token`). Une exception de plus se justifie dans la
+constante et se rejoue dans `tests/test_delegation_rest_live.py`.
+
 **Les rôles plateforme du porteur** (super_admin, opérateur) ne passent pas le jeton
 (10/10/2026) : un agent hébergé agit au nom de son porteur, il n'est pas l'opérateur.
 Le verrou d'org ne bornait que le rôle d'ORG ; l'escalade plateforme (`PLATFORM_ADMIN`,

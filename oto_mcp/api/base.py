@@ -178,6 +178,26 @@ def _memoriser_porteur(request: Request, cle: tuple, sub: str, *, scopes=None,
                                   "verrou": verrou}
 
 
+#: Le refus d'un jeton de DÉLÉGATION (`kind='delegation'`) sur la face REST (#1499).
+#:
+#: Ce jeton est celui d'un travail hébergé (`capabilities/runner_jobs._delegue`). Sa liste
+#: d'outils n'est tenue que sur la face MCP (`outils_du_travail`) : sous `/api/*`, rien ne la
+#: regarde, et le jeton y ouvrait tout ce que son porteur peut faire. Il y est donc refusé,
+#: juste après sa vérification, sauf sur les routes que le worker appelle LUI-MÊME avec ce
+#: jeton — chacune nommée avec sa raison.
+CODE_DELEGATION_REST = "delegation_rest_forbidden"
+
+#: `(méthode, chemin) → raison`. Seul ce que le worker (otomata-tech/oto-runner) envoie
+#: avec le jeton DÉLÉGUÉ compte ; tout le reste de ses appels REST (réserver, battre,
+#: lier, conclure un travail, campagnes) part avec SON secret de machine (`otow_`).
+ROUTES_DE_LA_DELEGATION: dict[tuple[str, str], str] = {
+    ("POST", "/api/me/runs/thread"): (
+        "le fil du run : le worker le relit à la reprise et y appose chaque tour "
+        "(`Backend.thread_read` / `thread_append`, `worker.py`) avec le jeton délégué — "
+        "le fil vit dans l'org du déclarant, que le secret du worker n'atteint pas."),
+}
+
+
 def _id_du_tableau(sub: str, adresse: str):
     """L'identifiant du tableau que `adresse` (un nom) désigne pour `sub` — `None` s'il
     n'en désigne aucun, ou plusieurs : un nom qui ne résout pas n'ouvre rien."""
@@ -284,6 +304,15 @@ async def _authenticate(
         if not row:
             token_scopes.set_current(None)
             return None, _json_error(request, 401, "invalid_api_token")
+        # Jeton d'un TRAVAIL HÉBERGÉ : la face MCP seule tient sa liste d'outils. Hors des
+        # routes que le worker appelle avec lui (`ROUTES_DE_LA_DELEGATION`), refusé.
+        if (row.get("token_kind") == "delegation"
+                and (request.method, request.url.path) not in ROUTES_DE_LA_DELEGATION):
+            token_scopes.set_current(None)
+            return None, _json_error(
+                request, 403, CODE_DELEGATION_REST,
+                "A hosted agent's token does not call the REST API: a hosted agent works "
+                "through MCP, where its tool list is enforced.")
         # Portée du jeton (`token_scopes`) : posée à CHAQUE requête (None comprise),
         # puis gate deny-by-default. Un jeton non porté (`scopes` NULL) est inchangé.
         scopes = row.get("scopes")
